@@ -247,6 +247,7 @@ public enum PluginManifestError: Error, Equatable, CustomStringConvertible, Send
     case invalidPrompt(String)
     case invalidRemote
     case invalidWeb(String)
+    case invalidRequires(String)
 
     public var description: String {
         switch self {
@@ -288,13 +289,33 @@ public enum PluginManifestError: Error, Equatable, CustomStringConvertible, Send
             "\"remote\" needs capability \"files.read\", \"files.write\" or \"process.exec\""
         case .invalidWeb(let reason):
             "invalid web page: \(reason)"
+        case .invalidRequires(let reason):
+            "invalid requires: \(reason)"
         }
+    }
+}
+
+/// What a project must be for the plugin to run there (API 17). No requirement means every project.
+public struct PluginRequirements: Equatable, Sendable {
+    /// The project needs a recognized fetch remote on this code host.
+    public var codeHost: CodeHostKind?
+
+    public init(codeHost: CodeHostKind? = nil) {
+        self.codeHost = codeHost
+    }
+
+    /// Whether a project meets the requirement. `codeHosts` are the hosts of its recognized fetch remotes, nil when
+    /// they are not known yet; a plain folder never qualifies, and unknown remotes do not either.
+    public func isMet(codeHosts: Set<CodeHostKind>?, isFolder: Bool) -> Bool {
+        guard let codeHost else { return true }
+        guard !isFolder, let codeHosts else { return false }
+        return codeHosts.contains(codeHost)
     }
 }
 
 /// `plugin.json`. Unknown fields are ignored so newer manifests still load.
 public struct PluginManifest: Equatable, Sendable {
-    public static let supportedAPIVersions = 4...16
+    public static let supportedAPIVersions = 4...17
     public static let maxTabs = 4
     public static let maxTabTitleLength = 40
     public static let maxCommands = 16
@@ -329,6 +350,8 @@ public struct PluginManifest: Equatable, Sendable {
     public var remote = false
     /// The script a `web` tab's page runs, relative to the plugin folder like `entry` (API 12).
     public var web: String?
+    /// Projects the plugin runs in (API 17).
+    public var requires = PluginRequirements()
 
     /// The panel Settings → Plugins opens with Configure… (API 9).
     public var configurePanel: PluginPanelContribution? { panels.first { $0.location == .configure } }
@@ -438,10 +461,22 @@ public struct PluginManifest: Equatable, Sendable {
                 throw .invalidRemote
             }
         }
+        var requires = PluginRequirements()
+        if let rawRequires = raw.requires {
+            guard api >= 17 else { throw .needsNewerAPI("\"requires\"", api: 17) }
+            // Fail closed: an ignored requirement would show the plugin in every project.
+            if let key = rawRequires.unknownKeys.first { throw .invalidRequires("unknown key \"\(key)\"") }
+            if let host = rawRequires.codeHost {
+                guard let kind = CodeHostKind(rawValue: host) else {
+                    throw .invalidRequires("unknown codeHost \"\(host)\"; use \"github\" or \"gitlab\"")
+                }
+                requires.codeHost = kind
+            }
+        }
         return PluginManifest(
             id: id, name: name, version: version, api: api, entry: entry,
             capabilities: capabilities, tabs: tabs, panels: panels, commands: commands, events: events,
-            settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web)
+            settings: settings, network: network, processes: processes, prompts: prompts, remote: remote, web: raw.web, requires: requires)
     }
 
     /// Whether two relative paths can't both be files: the same name, or one a folder the other is in. Compared
@@ -648,7 +683,7 @@ public struct PluginManifest: Equatable, Sendable {
         return tabs
     }
 
-    public init(id: String, name: String, version: String, api: Int, entry: String, capabilities: [PluginCapability], tabs: [PluginTabContribution] = [], panels: [PluginPanelContribution] = [], commands: [PluginCommandContribution] = [], events: [PluginEvent] = [], settings: [PluginSetting] = [], network: [String] = [], processes: [PluginProcessContribution] = [], prompts: [PluginPromptContribution] = [], remote: Bool = false, web: String? = nil) {
+    public init(id: String, name: String, version: String, api: Int, entry: String, capabilities: [PluginCapability], tabs: [PluginTabContribution] = [], panels: [PluginPanelContribution] = [], commands: [PluginCommandContribution] = [], events: [PluginEvent] = [], settings: [PluginSetting] = [], network: [String] = [], processes: [PluginProcessContribution] = [], prompts: [PluginPromptContribution] = [], remote: Bool = false, web: String? = nil, requires: PluginRequirements = PluginRequirements()) {
         self.id = id
         self.name = name
         self.version = version
@@ -665,6 +700,7 @@ public struct PluginManifest: Equatable, Sendable {
         self.prompts = prompts
         self.remote = remote
         self.web = web
+        self.requires = requires
     }
 }
 
@@ -710,6 +746,25 @@ private struct Raw: Decodable {
         let name: String?
         let description: String?
     }
+    struct RawRequires: Decodable {
+        let codeHost: String?
+        /// Sorted, so the error names the same key every time.
+        let unknownKeys: [String]
+
+        private struct AnyKey: CodingKey {
+            let stringValue: String
+            var intValue: Int? { nil }
+            init?(stringValue: String) { self.stringValue = stringValue }
+            init?(intValue: Int) { nil }
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: AnyKey.self)
+            codeHost = try container.contains(AnyKey(stringValue: "codeHost")!)
+                ? container.decode(String.self, forKey: AnyKey(stringValue: "codeHost")!) : nil
+            unknownKeys = container.allKeys.map(\.stringValue).filter { $0 != "codeHost" }.sorted()
+        }
+    }
     struct RawContributes: Decodable {
         let tabs: [RawTab]?
         let commands: [RawCommand]?
@@ -729,10 +784,11 @@ private struct Raw: Decodable {
     let processes: [RawProcess]?
     let remote: Bool?
     let web: String?
+    let requires: RawRequires?
     let contributes: RawContributes?
     let contributesMalformed: Bool
 
-    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, web, contributes }
+    private enum CodingKeys: String, CodingKey { case id, name, version, api, entry, capabilities, events, settings, network, processes, remote, web, requires, contributes }
 
     package init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
@@ -750,6 +806,7 @@ private struct Raw: Decodable {
         processes = container.contains(.processes) ? try container.decode([RawProcess].self, forKey: .processes) : nil
         remote = container.contains(.remote) ? try container.decode(Bool.self, forKey: .remote) : nil
         web = container.contains(.web) ? try container.decode(String.self, forKey: .web) : nil
+        requires = container.contains(.requires) ? try container.decode(RawRequires.self, forKey: .requires) : nil
         // Lenient here so `parse` can tell a malformed `contributes` from a missing one.
         contributes = (try? container.decodeIfPresent(RawContributes.self, forKey: .contributes)) ?? nil
         contributesMalformed = contributes == nil && container.contains(.contributes)

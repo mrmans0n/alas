@@ -63,6 +63,7 @@ you approve separately.
 - **Color buttons** by the kind of action, with a `success` tone (API 13).
 - **Show step progress** as a bar, and center a row's items vertically (API 14).
 - **Show any UI in the right rail**: canvas and web panels, rail badges, commands that open a panel, and images from the plugin's hosts in web pages (API 15).
+- **Limit a plugin to some projects**: `requires.codeHost` starts it only in projects with a GitHub or GitLab remote (API 17).
 
 The roadmap lives in [#1560](https://github.com/mrmans0n/alas/issues/1560).
 
@@ -85,6 +86,7 @@ The roadmap lives in [#1560](https://github.com/mrmans0n/alas/issues/1560).
 | Show done, running and remaining steps; center a row vertically | [API v14](api-v14.md) |
 | Show a canvas or web page in the right rail, badge it, open it from a command, show images in web pages | [API 15](api-v15.md) |
 | Bind capture wrappers to exact run/project/worktree/script identity before execution | [API 16](api-v16.md) |
+| Show a plugin only in projects with a GitHub or GitLab remote | [API 17](api-v17.md) |
 | Look up an exact message, field, or error | [API v1](api-v1.md), [API v2](api-v2.md), [API v3](api-v3.md) message references |
 | Write a plugin: structure, testing, TypeScript | [Writing plugins](writing-plugins.md) |
 | Work out why my plugin does not load or stops | [Troubleshooting](troubleshooting.md) |

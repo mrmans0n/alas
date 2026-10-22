@@ -4,6 +4,7 @@ import AlasFoundation
 import AlasModel
 import AlasPlatform
 import AlasFeatures
+import AlasIntegrations
 import AlasCode
 import AlasACP
 
@@ -87,6 +88,25 @@ public final class PluginManager {
     @ObservationIgnored private var lastOperation: Task<Void, Never> = Task {}
     @ObservationIgnored private var settingsByPlugin: [String: PluginSettings] = [:]
     @ObservationIgnored private let makeSettings: (PluginManifest) -> PluginSettings
+    @ObservationIgnored private let probeCodeHosts: @Sendable (ProjectConfig) async -> Set<CodeHostKind>?
+    @ObservationIgnored private var codeHosts: [String: CodeHostEntry] = [:]
+
+    /// What the manager knows of a project's code hosts, for plugins that declare `requires.codeHost` (API 17).
+    private struct CodeHostEntry {
+        /// The last successful probe; nil until one succeeds, which counts as not met.
+        var kinds: Set<CodeHostKind>?
+        var probedAt: ContinuousClock.Instant?
+        /// Remotes may have changed since `kinds`, which stay in use until the next probe returns.
+        var isStale = false
+        /// At most one per project, shared by every plugin that needs it.
+        var probe: Task<Void, Never>?
+        /// Identifies `probe`, so a result for a project removed (or removed and added again) is dropped.
+        var probeID = UUID()
+    }
+
+    /// How often a probe is repeated without a change event: for SSH projects, whose watcher does not see a remote's
+    /// URL change, and for projects whose probes have all failed so far.
+    public static let codeHostReprobeInterval: Duration = .seconds(60)
 
     public init(
         directory: URL = PluginManager.defaultDirectory,
@@ -96,6 +116,9 @@ public final class PluginManager {
         catalog: PluginCatalog = PluginCatalog(),
         makeSettings: @escaping (PluginManifest) -> PluginSettings = {
             PluginSettings.make(pluginID: $0.id, declared: $0.settings)
+        },
+        codeHostKinds: @escaping @Sendable (ProjectConfig) async -> Set<CodeHostKind>? = {
+            await PluginManager.liveCodeHostKinds($0)
         }
     ) {
         self.directory = directory
@@ -104,6 +127,13 @@ public final class PluginManager {
         self.projects = projects
         self.actions = actions
         self.makeSettings = makeSettings
+        self.probeCodeHosts = codeHostKinds
+    }
+
+    /// The code host of every fetch remote of `project`, or nil when `git remote -v` failed.
+    public nonisolated static func liveCodeHostKinds(_ project: ProjectConfig) async -> Set<CodeHostKind>? {
+        guard let remotes = try? await GitService().remotes(worktreePath: URL(fileURLWithPath: project.path)) else { return nil }
+        return Set(CodeHostRemoteDetector.detectAll(from: remotes).map(\.kind))
     }
 
     /// One per discovered plugin, so the form and every host share it; a change reaches each running host.
@@ -118,6 +148,59 @@ public final class PluginManager {
         }
         settingsByPlugin[plugin.id] = settings
         return settings
+    }
+
+    /// The project's remotes may have changed: probes them again, keeping the last known hosts until it returns, and
+    /// starts or stops the hosts of plugins that require a code host. Returns once that is done. Calls that arrive
+    /// while a probe runs share one probe after it. Costs nothing when no enabled plugin requires a code host.
+    public func invalidateCodeHost(projectID: String) async {
+        codeHosts[projectID]?.isStale = true
+        // A probe already running may have read the remotes before the change.
+        await codeHosts[projectID]?.probe?.value
+        guard !isShutDown,
+              plugins.contains(where: { $0.manifest.requires.codeHost != nil && isEnabled($0) && isApproved($0) }),
+              let project = projects().first(where: { $0.id == projectID }), !project.isFolder
+        else { return }
+        await probeCodeHostsIfDue(project)?.value
+    }
+
+    /// Whether `manifest`'s requirement is met in `project` as far as is known now. Never runs git: a project whose
+    /// hosts are unknown or stale gets a probe in the background, which reconciles when it returns.
+    private func qualifies(_ manifest: PluginManifest, _ project: ProjectConfig) -> Bool {
+        guard manifest.requires.codeHost != nil else { return true }
+        if !project.isFolder { probeCodeHostsIfDue(project) }
+        return manifest.requires.isMet(codeHosts: codeHosts[project.id]?.kinds, isFolder: project.isFolder)
+    }
+
+    /// The running probe of `project`, or a new one if its hosts are unknown, stale, or due for a repeat.
+    @discardableResult
+    private func probeCodeHostsIfDue(_ project: ProjectConfig) -> Task<Void, Never>? {
+        guard !isShutDown else { return nil }
+        var entry = codeHosts[project.id] ?? CodeHostEntry()
+        if let probe = entry.probe { return probe }
+        if let probedAt = entry.probedAt, !entry.isStale {
+            let repeats = project.host != nil || entry.kinds == nil
+            guard repeats, ContinuousClock.now - probedAt >= Self.codeHostReprobeInterval else { return nil }
+        }
+        let probeID = UUID()
+        let probeCodeHosts = probeCodeHosts
+        entry.isStale = false
+        entry.probeID = probeID
+        entry.probe = Task { [weak self] in
+            let kinds = await probeCodeHosts(project)
+            await self?.codeHostsProbed(projectID: project.id, kinds, probeID: probeID)
+        }
+        codeHosts[project.id] = entry
+        return entry.probe
+    }
+
+    private func codeHostsProbed(projectID: String, _ kinds: Set<CodeHostKind>?, probeID: UUID) async {
+        guard !isShutDown, codeHosts[projectID]?.probeID == probeID else { return }
+        codeHosts[projectID]?.probe = nil
+        codeHosts[projectID]?.probedAt = .now
+        // A failed probe keeps what was known, so a flaky connection does not hide plugins.
+        if let kinds { codeHosts[projectID]?.kinds = kinds }
+        await reconcile()
     }
 
     public func isApproved(_ plugin: Plugin) -> Bool {
@@ -437,11 +520,19 @@ public final class PluginManager {
         }
     }
 
-    /// Starts hosts for projects added since the last pass and stops hosts whose project is gone.
+    /// Starts hosts for projects added since the last pass and for plugins whose requirement became met, and stops
+    /// hosts whose project is gone or whose requirement is no longer met.
     public func reconcile() async {
         await serialized {
-            let projectIDs = Set(self.projects().map(\.id))
-            await self.stopHosts { !projectIDs.contains($0.projectID) }
+            let projectsByID = Dictionary(self.projects().map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            for (id, entry) in self.codeHosts where projectsByID[id] == nil {
+                entry.probe?.cancel()
+                self.codeHosts[id] = nil
+            }
+            await self.stopHosts { key in
+                guard let project = projectsByID[key.projectID] else { return true }
+                return self.hostsByKey[key].map { !self.qualifies($0.manifest, project) } ?? false
+            }
             for plugin in self.plugins { await self.start(plugin) }
         }
     }
@@ -455,6 +546,8 @@ public final class PluginManager {
             self.reviewListenersChanged?([])
             self.snapshotTask?.cancel()
             self.tickTask?.cancel()
+            for entry in self.codeHosts.values { entry.probe?.cancel() }
+            self.codeHosts = [:]
             await self.stopHosts { _ in true }
         }
     }
@@ -514,7 +607,7 @@ public final class PluginManager {
 
     private func start(_ plugin: Plugin) async {
         guard !isShutDown, isEnabled(plugin), let approval = approvals.approval(id: plugin.id, hash: plugin.hash) else { return }
-        for project in projects() {
+        for project in projects() where qualifies(plugin.manifest, project) {
             let key = HostKey(pluginID: plugin.id, projectID: project.id)
             guard hostsByKey[key] == nil else { continue }
             let host = PluginHost(

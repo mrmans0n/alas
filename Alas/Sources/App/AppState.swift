@@ -5503,6 +5503,8 @@ final class AppState {
         stopProjectGitWatcher(projectId: project.id)
         // A folder has no git dir to watch and a fixed one-row topology.
         if project.isFolder { return }
+        // Added, moved, or watched again after a while: its remotes may be new.
+        pluginCodeHostMayHaveChanged(projectId: project.id)
         if project.host != nil {
             let watcher = RemoteProjectGitWatcher(projectPath: URL(fileURLWithPath: project.path))
             watcher.onHeadChanged = { [weak self] updates in
@@ -5512,6 +5514,7 @@ final class AppState {
             watcher.onRevisionChanged = { [weak self] in
                 self?.handleProjectRevisionChange(projectId: project.id)
                 self?.rescanRemoteWorktreeStatuses(projectId: project.id)
+                self?.pluginCodeHostMayHaveChanged(projectId: project.id)
             }
             watcher.onTopologyChanged = { [weak self] in
                 self?.handleProjectRevisionChange(projectId: project.id)
@@ -5530,6 +5533,8 @@ final class AppState {
             self?.rescanLocalWorktreeStatuses(projectId: projectId)
         }
         watcher.onRevisionChanged = { [weak self] in
+            // Covers `.git/config`, where remotes live.
+            self?.pluginCodeHostMayHaveChanged(projectId: projectId)
             self?.bumpRevisionGenerationForProject(projectId: projectId)
             self?.rescanLocalWorktreeStatuses(projectId: projectId)
             Task { @MainActor [weak self] in

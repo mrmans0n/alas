@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### ✨ Features
+
+- Let plugins limit themselves to projects with a GitHub or GitLab remote with `requires.codeHost`, new in plugin API 17 (#2174).
+
 ### 🐛 Fixes
 
 - Show a "Preparing to ship…" row in the transcript while Ship reads the branch or gg stack, so the button no longer looks unresponsive before its card appears.
