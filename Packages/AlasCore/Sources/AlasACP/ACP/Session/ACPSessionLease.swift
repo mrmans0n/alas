@@ -74,6 +74,10 @@ public struct ACPSessionRow: Equatable, Sendable {
     /// like `nativeSubagentsDisabled`, so editing the agent's default never
     /// changes a session that already exists. `nil` means none.
     public var sessionInstructions: String? = nil
+    /// Claude session hooks captured when Alas created the session, as
+    /// normalized JSON (`ACPClaudeSessionHooksPolicy`). Written once, like
+    /// `sessionInstructions`. `nil` means none.
+    public var sessionHooks: String? = nil
     /// Slash commands and skills the agent advertised, persisted so their
     /// pills and chips survive an app restart and reach mirror sessions
     /// before any attach happens (see `migrate_to_v20`).
@@ -94,7 +98,7 @@ public struct ACPSessionRow: Equatable, Sendable {
     public var lastOpenedAt: Int64
     public var archived: Bool
 
-    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, sessionInstructions: String? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
+    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, sessionInstructions: String? = nil, sessionHooks: String? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
         self.id = id
         self.agentId = agentId
         self.title = title
@@ -114,6 +118,7 @@ public struct ACPSessionRow: Equatable, Sendable {
         self.configOptionValues = configOptionValues
         self.nativeSubagentsDisabled = nativeSubagentsDisabled
         self.sessionInstructions = sessionInstructions
+        self.sessionHooks = sessionHooks
         self.promptSuggestions = promptSuggestions
         self.ephemeralParentId = ephemeralParentId
         self.ephemeralCleanupPending = ephemeralCleanupPending

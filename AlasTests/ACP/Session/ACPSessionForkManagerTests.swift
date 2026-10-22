@@ -538,7 +538,7 @@ struct ACPSessionForkManagerTests {
         #expect(!session.canForkMessage(at: 3))
     }
 
-    @Test("createFork seeds the target's suggestions and instructions only from a same-agent source")
+    @Test("createFork seeds the target's suggestions, instructions, and hooks only from a same-agent source")
     func forkSuggestionSeeding() async throws {
         // Needs a live attach to seed the source's list; drive it through the
         // runner's own persist path instead of poking store state directly —
@@ -556,9 +556,12 @@ struct ACPSessionForkManagerTests {
         ]
         var defaults = ["claude": "Claude default.", "codex": "Codex default."]
         manager.sessionInstructionsProvider = { defaults[$0] }
+        var hooks = #"{"Stop":[]}"#
+        manager.sessionHooksProvider = { $0 == "claude" ? hooks : nil }
         let source = manager.createSession(agentId: "claude")
         // A same-agent fork keeps what its source runs with, not the edited default.
         defaults["claude"] = "Edited Claude default."
+        hooks = #"{"SessionStart":[]}"#
         await manager.flushPersistence()
         try store.setPromptSuggestions(sessionId: source.id, suggestions: suggestions)
         source.promptSuggestions = suggestions
@@ -602,6 +605,8 @@ struct ACPSessionForkManagerTests {
         #expect(try restoredStore.loadSession(id: crossAgentID)?.promptSuggestions == nil)
         #expect(try restoredStore.loadSession(id: sameAgentID)?.sessionInstructions == "Claude default.")
         #expect(try restoredStore.loadSession(id: crossAgentID)?.sessionInstructions == "Codex default.")
+        #expect(try restoredStore.loadSession(id: sameAgentID)?.sessionHooks == #"{"Stop":[]}"#)
+        #expect(try restoredStore.loadSession(id: crossAgentID)?.sessionHooks == nil)
     }
 
     private func temporaryPath() -> String {

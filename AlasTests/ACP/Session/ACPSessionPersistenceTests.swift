@@ -202,25 +202,28 @@ struct ACPSessionPersistenceTests {
         #expect(try await reader.interruptedQueueSessionIds() == ["reader"])
     }
 
-    @Test("replica metadata imports session instructions, and a publisher without the field keeps them",
+    @Test("replica metadata imports session instructions and hooks, and a publisher without the fields keeps them",
           arguments: [false, true])
     func replicaSessionInstructions(legacyPublisher: Bool) async throws {
         let writer = ACPSessionPersistence(path: temporaryDatabaseURL().path)
         var source = row(id: "writer")
         source.sessionInstructions = "Writer instructions."
+        source.sessionHooks = #"{"Stop":[]}"#
         try await writer.upsertSession(source)
         try await writer.enableReplicaExport(sessionId: "writer", recordId: "record")
         let exported = try #require(try await writer.replicaChanges(sessionId: "writer", limit: 256))
         let reader = ACPSessionPersistence(path: temporaryDatabaseURL().path)
         var local = row(id: "reader")
         local.sessionInstructions = legacyPublisher ? "Captured." : nil
+        local.sessionHooks = legacyPublisher ? #"{"SessionStart":[]}"# : nil
         try await reader.upsertSession(local)
         let entries = try exported.entries.map { entry in
             var payload = entry.payload
-            // A Mac from before session instructions publishes metadata without the key.
+            // A Mac from before these fields publishes metadata without the keys.
             if legacyPublisher, entry.kind == .metadata, let data = payload,
                var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] {
                 object.removeValue(forKey: "sessionInstructions")
+                object.removeValue(forKey: "sessionHooks")
                 payload = try JSONSerialization.data(withJSONObject: object)
             }
             return RemoteSessionReplicaEntry(kind: entry.kind, key: entry.key, payload: payload, revision: 1)
@@ -230,6 +233,8 @@ struct ACPSessionPersistenceTests {
 
         #expect(try await reader.loadSession(id: "reader")?.sessionInstructions
             == (legacyPublisher ? "Captured." : "Writer instructions."))
+        #expect(try await reader.loadSession(id: "reader")?.sessionHooks
+            == (legacyPublisher ? #"{"SessionStart":[]}"# : #"{"Stop":[]}"#))
     }
 
     @Test("acknowledging an older publication retains a newer streamed row")

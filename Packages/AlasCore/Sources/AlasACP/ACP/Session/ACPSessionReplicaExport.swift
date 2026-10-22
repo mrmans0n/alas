@@ -57,6 +57,8 @@ package struct ReplicaMetadata: Codable {
     /// still decodes. Applying nil keeps the stored value: the column is
     /// write-once, so nil only means the publisher did not know the field.
     package let sessionInstructions: String?
+    /// Optional and applied like `sessionInstructions`.
+    package let sessionHooks: String?
     package let promptSuggestions: [ACPPromptSuggestion]?
     package let autoRun: Bool
     package let createdAt: Int64
@@ -77,6 +79,7 @@ package struct ReplicaMetadata: Codable {
         configOptionValues = row.configOptionValues
         nativeSubagentsDisabled = row.nativeSubagentsDisabled
         sessionInstructions = row.sessionInstructions
+        sessionHooks = row.sessionHooks
         promptSuggestions = row.promptSuggestions
         autoRun = row.autoRun
         createdAt = row.createdAt

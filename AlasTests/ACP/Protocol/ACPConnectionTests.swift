@@ -569,7 +569,7 @@ struct ACPConnectionTests {
         ])
     }
 
-    @Test("session meta rides on session/new, load, resume, and fork")
+    @Test("session meta, instructions, and hooks ride on session/new, load, resume, and fork")
     func sessionMetaOnEveryStartupRequest() async throws {
         let mock = ACPMockClient()
         for method in ["session/new", "session/load", "session/resume", "session/fork"] {
@@ -591,8 +591,11 @@ struct ACPConnectionTests {
         ))
         let conn = ACPConnection(client: mock, sessionMeta: meta)
         conn.sessionInstructions = "Review migrations."
+        let hooks = try LSPJSONValue.decode(from: Data(#"{"Stop":[{"hooks":[{"command":"true","type":"command"}]}]}"#.utf8))
+        conn.sessionHooks = hooks
         var expected = meta
         expected.systemPrompt = .init(append: "Review migrations.")
+        expected.claudeCode?.options.settings = .init(hooks: hooks)
 
         _ = try await conn.newSession(cwd: "/tmp", mcpServers: [])
         _ = try await conn.loadSession(cwd: "/tmp", sessionId: "remote", mcpServers: [])
@@ -613,6 +616,21 @@ struct ACPConnectionTests {
         let options = (wireMeta["claudeCode"] as? [String: Any])
             .flatMap { $0["options"] as? [String: Any] }
         #expect(options?["disallowedTools"] as? [String] == meta.claudeCode?.options.disallowedTools)
+        // Always an object: the adapter reads a string as a settings file path.
+        let settings = try #require(options?["settings"] as? [String: Any])
+        #expect(Array(settings.keys) == ["hooks"])
+        #expect((settings["hooks"] as? [String: Any])?["Stop"] != nil)
+        // Without a native-subagent policy the hooks go alone; an empty
+        // `disallowedTools` would change the adapter's session fingerprint.
+        let hooksOnly = ACPConnection(client: mock)
+        hooksOnly.sessionHooks = hooks
+        _ = try await hooksOnly.newSession(cwd: "/tmp", mcpServers: [])
+        let hooksOnlyParams = try #require(mock.sent.last?.params as? ACPSessionNewParams)
+        let hooksOnlyWire = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(hooksOnlyParams)) as? [String: Any]
+        )
+        let hooksOnlyOptions = try #require(((hooksOnlyWire["_meta"] as? [String: Any])?["claudeCode"] as? [String: Any])?["options"] as? [String: Any])
+        #expect(Array(hooksOnlyOptions.keys) == ["settings"])
         // Only the append form: a bare string would replace Claude's whole system prompt.
         #expect(wireMeta["systemPrompt"] as? [String: String] == ["append": "Review migrations."])
         let plain = try #require(

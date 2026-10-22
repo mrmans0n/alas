@@ -176,6 +176,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// (Settings → Agents), or nil. Read once, when Alas creates the session
     /// row; the captured value then rides on every attach of that session.
     public var sessionInstructionsProvider: (@MainActor (_ agentId: String) -> String?)?
+    /// The Claude session hooks (normalized JSON) new sessions of an agent
+    /// start with, or nil. Captured like `sessionInstructionsProvider`.
+    public var sessionHooksProvider: (@MainActor (_ agentId: String) -> String?)?
     /// Whether a session was delegated by a parent Alas session. Read on
     /// every attach, independent of whether Alas tools are exposed, so a
     /// delegated Claude child never gets the tools that message other Claude
@@ -2064,6 +2067,7 @@ public final class ACPSessionManager: ChangeTracking {
             currentModel: nil, currentMode: nil,
             nativeSubagentsDisabled: nativeSubagentsPreference(agentId: agentId),
             sessionInstructions: sessionInstructionsProvider?(agentId),
+            sessionHooks: sessionHooksProvider?(agentId),
             ephemeralParentId: ephemeralParentID,
             autoRun: isEphemeral ? false : autoRunDefault,
             createdAt: now, updatedAt: now, lastOpenedAt: now, archived: false)
@@ -2149,6 +2153,9 @@ public final class ACPSessionManager: ChangeTracking {
             let targetInstructions = targetAgentID == source.agentId
                 ? await capturedSessionInstructions(sessionId: sourceSessionID)
                 : sessionInstructionsProvider?(targetAgentID)
+            let targetHooks = targetAgentID == source.agentId
+                ? await capturedSessionHooks(sessionId: sourceSessionID)
+                : sessionHooksProvider?(targetAgentID)
             let targetTitle = ephemeralTitle ?? (source.title == "New session"
                 ? "New session (fork)"
                 : "\(source.title) (fork)")
@@ -2161,6 +2168,7 @@ public final class ACPSessionManager: ChangeTracking {
                 currentMode: nil,
                 nativeSubagentsDisabled: nativeSubagentsPreference(agentId: targetAgentID),
                 sessionInstructions: targetInstructions,
+                sessionHooks: targetHooks,
                 // Seed the fork's composer suggestions only when the target
                 // agent is the SAME agent: its attach would re-advertise the
                 // identical list. A cross-agent fork gets nothing — the
@@ -4081,6 +4089,13 @@ public final class ACPSessionManager: ChangeTracking {
     private func capturedSessionInstructions(sessionId: ACPSession.ID) async -> String? {
         let stored = try? await persistence.loadSession(id: sessionId)
         return stored?.sessionInstructions ?? persistedRows[sessionId]?.sessionInstructions
+    }
+
+    /// The Claude session hooks this session was created with; see
+    /// `capturedNativeSubagentsPolicy` for the lookup order.
+    private func capturedSessionHooks(sessionId: ACPSession.ID) async -> String? {
+        let stored = try? await persistence.loadSession(id: sessionId)
+        return stored?.sessionHooks ?? persistedRows[sessionId]?.sessionHooks
     }
 
     private func replaceRecentRow(_ row: ACPSessionRow) {
@@ -6661,6 +6676,7 @@ extension ACPSessionManager {
         let agentEnvironment: [String: String]
         let nativeSubagentsDisabled = await capturedNativeSubagentsPolicy(sessionId: sessionId)
         let sessionInstructions = await capturedSessionInstructions(sessionId: sessionId)
+        let sessionHooks = await capturedSessionHooks(sessionId: sessionId)
         let isDelegatedChild = await delegatedChildProvider?(sessionId) ?? false
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
         do {
@@ -6989,6 +7005,14 @@ extension ACPSessionManager {
             try ACPNativeDelegationControls.verifyAdapter(
                 agentID: session.agentId,
                 nativeSubagentsDisabled: nativeSubagentsDisabled,
+                agentInfo: initialized.agentInfo
+            )
+            // Hooks the session was created with but the adapter cannot be
+            // trusted to apply fail the attach, before any session request,
+            // instead of running the session without them.
+            connection.sessionHooks = try ACPClaudeSessionHooksPolicy.sessionHooks(
+                agentID: session.agentId,
+                captured: sessionHooks,
                 agentInfo: initialized.agentInfo
             )
             // Deliberately not reset here (unlike promptCapabilities/authMethods,
