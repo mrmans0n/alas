@@ -161,6 +161,9 @@ public final class ACPSessionManager: ChangeTracking {
     /// through every manager construction call site. Local sessions only;
     /// remote hosts skip it in `attach`.
     public var alasCLIEnvProvider: AlasCLIEnvProvider?
+    /// False for Workspace Checkout managers: their sessions get no computer tools,
+    /// so the first-prompt preamble must not mention them.
+    public var computerUseAvailable = true
     /// Builds the `.external` adapter status (adapter inspection + managed
     /// config sync) for a worktree path. Set post-init, mirroring
     /// `alasCLIEnvProvider`, so AppState can wire it without threading it
@@ -8041,7 +8044,8 @@ extension ACPSessionManager {
                     ggStack: ggStackContext,
                     issue: issuePreambleProvider?(worktreeId),
                     nativeSubagentsDisabled: nativeSubagentsDisabled,
-                    nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism
+                    nativeDelegationMechanism: ACPNativeDelegationSupport.resolve(agentID: session.agentId).mechanism,
+                    computerUseAvailable: computerUseAvailable
                 )
                 if isWriter(for: sessionId) {
                     session.pendingMCPPreamble = preamble

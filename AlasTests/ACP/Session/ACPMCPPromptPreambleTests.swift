@@ -112,6 +112,21 @@ struct ACPMCPPromptPreambleTests {
         #expect(text.contains("Alas delegation tools are not available"))
     }
 
+    @Test(
+        "computer guidance appears only where the session has computer tools",
+        arguments: [ACPMCPPreambleMode.mcp, .cli(serverAvailability: .noServers)]
+    )
+    func computerGuidanceFollowsAvailability(mode: ACPMCPPreambleMode) throws {
+        let full = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: false, userServerNames: [], mode: mode))
+        #expect(full.contains("alas computer"))
+        let checkout = try #require(ACPMCPPromptPreamble.text(
+            builtInTools: .full, isDelegated: false, userServerNames: [], mode: mode, computerUseAvailable: false))
+        #expect(!checkout.contains("computer_"))
+        #expect(!checkout.contains("alas computer"))
+        #expect(checkout.contains("preview"))
+    }
+
     @Test("mcp mode notes the alas CLI fallback for blocked servers")
     func mcpMentionsCLIFallback() {
         let text = ACPMCPPromptPreamble.text(

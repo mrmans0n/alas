@@ -12949,6 +12949,8 @@ final class AppState {
             if self.config.remote.ensureServerId() { self.saveConfig() }
             return self.config.remote.serverId
         }
+        // The router refuses computer calls from checkout owners.
+        manager.computerUseAvailable = false
         manager.alasCLIEnvProvider = { [weak self] worktreePath, sessionId -> [String: String]? in
             guard let self else { return nil }
             let binDirPath = (try? TerminalCLIInjection.installExecutables())?.path
