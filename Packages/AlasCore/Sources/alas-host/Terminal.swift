@@ -91,8 +91,9 @@ enum Terminal {
         if !noticeLines.isEmpty {
             screen += "\r\n" + noticeLines.map { HostSetupViewport.fit(String($0), width: columns) }.joined(separator: "\r\n") + "\r\n"
         }
-        let position = visible.count < view.rows.count ? " · \(view.selected + 1)/\(view.rows.count)" : ""
-        screen += "\r\n\u{1b}[2m\(HostSetupViewport.fit(view.hint + position, width: columns))\u{1b}[0m"
+        // The position leads, so a narrow terminal cuts the hint, not it.
+        let position = visible.count < view.rows.count ? "\(view.selected + 1)/\(view.rows.count) · " : ""
+        screen += "\r\n\u{1b}[2m\(HostSetupViewport.fit(position + view.hint, width: columns))\u{1b}[0m"
         output(screen)
     }
 
