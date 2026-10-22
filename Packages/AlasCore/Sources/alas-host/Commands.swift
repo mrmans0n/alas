@@ -28,7 +28,7 @@ enum HostCommands {
     /// Runs the command `arguments` names and exits; returns when they name
     /// none of these commands.
     static func runIfCommand(_ arguments: [String]) {
-        guard let command = arguments.first, ["config", "project", "restart", "setup"].contains(command) else { return }
+        guard let command = arguments.first, ["config", "project", "registry", "restart", "setup"].contains(command) else { return }
         Task { @MainActor in
             do {
                 try await run(command, Array(arguments.dropFirst()))
@@ -70,6 +70,33 @@ enum HostCommands {
             print(project.id)
         case ("project", "remove", 2):
             try await removeProject(arguments[1])
+        case ("registry", "search", 1), ("registry", "search", 2):
+            let query = arguments.count == 2 ? arguments[1] : ""
+            let installed = Set(readConfig().agents.registry.map(\.registryID))
+            let agents = try await ACPRegistryClient().agents().filter {
+                query.isEmpty || $0.id.localizedCaseInsensitiveContains(query) || $0.name.localizedCaseInsensitiveContains(query)
+            }
+            for agent in agents {
+                print("\(agent.id)  \(agent.name)  \(agent.version)\(installed.contains(agent.id) ? "  (installed)" : "")")
+            }
+        case ("registry", "install", 2):
+            let holder = try writableHolder()
+            guard let agent = try await ACPRegistryClient().agents().first(where: { $0.id == arguments[1] }) else {
+                throw HostCommandError("The ACP registry has no agent \(arguments[1]); see alas-host registry search.")
+            }
+            let installed = try await ACPRegistryInstaller().install(agent)
+            try HostProfileWrite.update { $0.agents.installRegistryAgent(installed) }
+            print("Installed \(agent.name) \(agent.version) as agents.\(agent.id).enabled.")
+            if case .host = holder { print("Restart the host to use it: alas-host restart") }
+        case ("registry", "uninstall", 2):
+            let holder = try writableHolder()
+            guard readConfig().agents.registry.contains(where: { $0.registryID == arguments[1] }) else {
+                throw HostCommandError("No agent \(arguments[1]) is installed from the ACP registry.")
+            }
+            try ACPRegistryInstaller().uninstall(registryID: arguments[1])
+            try HostProfileWrite.update { $0.agents.uninstallRegistryAgent(registryID: arguments[1]) }
+            print("Uninstalled \(arguments[1]).")
+            if case .host = holder { print("Restart the host to apply: alas-host restart") }
         case ("restart", nil, 0):
             try restart()
         case ("setup", nil, 0):

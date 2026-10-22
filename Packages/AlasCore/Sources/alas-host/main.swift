@@ -12,6 +12,7 @@ usage: alas-host [--wait-for-lock]
        alas-host install-agent | uninstall-agent
        alas-host config list | get [<key>] | set <key> <value> [--restart]
        alas-host project list | add <path> [--name <name>] | remove <id|path>
+       alas-host registry search [<query>] | install <id> | uninstall <id>
        alas-host restart
 
 Serves the Alas host protocol for the data directory ALAS_APP_SUPPORT_DIR
@@ -37,7 +38,9 @@ executable with --wait-for-lock at login, and restarts it after a crash;
 `alas-host config` reads and changes the host's settings in the profile's
 app.json; the running host applies a change once restarted. `alas-host project`
 lists, adds and removes the profile's projects, through the running host when
-one serves the profile. `alas-host restart` restarts the launch agent's host.
+one serves the profile. `alas-host registry` searches the ACP agent registry,
+and installs and uninstalls its agents for the profile. `alas-host restart`
+restarts the launch agent's host.
 Changes are refused while the app has the profile open.
 """
 

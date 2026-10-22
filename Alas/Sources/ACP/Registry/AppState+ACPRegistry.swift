@@ -7,13 +7,7 @@ extension AppState {
         _ agent: ACPRegistryAgent,
         installer: ACPRegistryInstaller = ACPRegistryInstaller()
     ) async throws {
-        var record = try await installer.install(agent)
-        if let index = config.agents.registry.firstIndex(where: { $0.registryID == agent.id }) {
-            record.isEnabled = config.agents.registry[index].isEnabled
-            config.agents.registry[index] = record
-        } else {
-            config.agents.registry.append(record)
-        }
+        config.agents.installRegistryAgent(try await installer.install(agent))
         saveConfig()
         rescanAgents()
     }
@@ -24,7 +18,7 @@ extension AppState {
     ) async throws {
         // npm installs can hold large `node_modules` trees; delete off the main actor.
         try await Task.detached { try installer.uninstall(registryID: registryID) }.value
-        config.agents.registry.removeAll { $0.registryID == registryID }
+        config.agents.uninstallRegistryAgent(registryID: registryID)
         saveConfig()
         rescanAgents()
     }

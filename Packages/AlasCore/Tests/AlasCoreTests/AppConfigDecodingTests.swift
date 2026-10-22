@@ -130,4 +130,24 @@ struct AppConfigDecodingTests {
         let registry = (written["agents"] as? [String: Any])?["registry"] as? [[String: Any]]
         #expect(registry?.map { $0["someFutureField"] as? Int } == [1, 1])
     }
+
+    /// Installing a registry agent adds it; reinstalling one, as an update
+    /// does, replaces its record and keeps whether the user turned it off.
+    @Test func installingARegistryAgentAddsItAndAReinstallKeepsItsEnabledState() {
+        func agent(_ version: String, enabled: Bool = true) -> ACPRegistryInstalledAgent {
+            ACPRegistryInstalledAgent(
+                registryID: "acme", displayName: "Acme", version: version,
+                command: "acme-acp", arguments: [], environment: [:], isEnabled: enabled
+            )
+        }
+        var agents = AppConfig.defaults.agents
+        agents.installRegistryAgent(agent("1"))
+        #expect(agents.registry.map(\.version) == ["1"])
+        agents.registry[0].isEnabled = false
+        agents.installRegistryAgent(agent("2"))
+        #expect(agents.registry.map(\.version) == ["2"])
+        #expect(agents.registry.map(\.isEnabled) == [false])
+        agents.uninstallRegistryAgent(registryID: "acme")
+        #expect(agents.registry.isEmpty)
+    }
 }

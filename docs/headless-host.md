@@ -86,6 +86,19 @@ launches adapters with it ahead of its own plus well-known directories such as
 Homebrew's, so adapters installed through nvm, fnm, asdf or mise work, launchd
 agent included.
 
+To install agents from the [ACP registry](https://agentclientprotocol.com) on a
+Mac without the app:
+
+```bash
+alas-host registry search gemini      # id, name, version; installed ones say so
+alas-host registry install gemini     # then agents.gemini.enabled turns it on or off
+alas-host registry uninstall gemini
+```
+
+Agents install into the profile's data directory. Like `config set`, these
+refuse while the app has the profile open, and a running host uses the change
+once restarted.
+
 ## Remote
 
 Remote is served according to `host.reachability`:
