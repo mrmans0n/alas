@@ -38,7 +38,12 @@ struct PluginManifestTests {
         (#"{"id":"io.x.h","name":" ","version":"1","api":4,"entry":"p.js"}"#, .missingField("name")),
         (#"{"id":"io.x.h","name":"H","version":"\n\t ","api":4,"entry":"p.js"}"#, .missingField("version")),
         (#"{"id":"Hello","name":"H","version":"1","api":4,"entry":"p.js"}"#, .invalidID("Hello")),
-        (manifest(api: 17), .unsupportedAPI(17)),
+        (manifest(api: 18), .unsupportedAPI(18)),
+        (manifest(api: 16, #","requires":{"codeHost":"github"}"#), .needsNewerAPI(#""requires""#, api: 17)),
+        (manifest(api: 17, #","requires":{"codeHost":"bitbucket"}"#), .invalidRequires(#"unknown codeHost "bitbucket"; use "github" or "gitlab""#)),
+        (manifest(api: 17, #","requires":{"codeHots":"github"}"#), .invalidRequires(#"unknown key "codeHots""#)),
+        (manifest(api: 17, #","requires":{"codeHost":1}"#), .malformed),
+        (manifest(api: 17, #","requires":"github""#), .malformed),
         (manifest(api: 8, panels(#"{"id":"c","title":"C","location":"configure"}"#)), .needsNewerAPI(#"panel "c" location "configure""#, api: 9)),
         (manifest(api: 9, panels(#"{"id":"c","title":"C","location":"configure"},{"id":"d","title":"D","location":"configure"}"#)),
          .invalidPanel(#"at most one panel with location "configure""#)),
@@ -266,10 +271,39 @@ struct PluginManifestTests {
     }
 
     @Test(arguments: [
-        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 16"),
-        (17, "requires plugin API 17; this Alas supports up to 16"),
+        (2, "built for plugin API 2, the WebAssembly runtime, which Alas no longer supports; rebuild it for API 17"),
+        (18, "requires plugin API 18; this Alas supports up to 17"),
     ])
     func unsupportedAPIMessageSaysWhatToDo(api: Int, message: String) {
         #expect(PluginManifestError.unsupportedAPI(api).description == message)
+    }
+
+    @Test(arguments: [
+        (#","requires":{"codeHost":"github"}"#, CodeHostKind?.some(.github)),
+        (#","requires":{"codeHost":"gitlab"}"#, .gitlab),
+        (#","requires":{}"#, nil),
+        ("", nil),
+    ])
+    func requiresParsesTheCodeHost(extra: String, expected: CodeHostKind?) throws {
+        #expect(try PluginManifest.parse(Data(manifest(api: 17, extra).utf8)).requires.codeHost == expected)
+    }
+
+    @Test(arguments: [
+        // (required host, hosts of the project's remotes, is a plain folder, met)
+        (nil, [.github], false, true),
+        (nil, nil, false, true),
+        (nil, nil, true, true),
+        (.github, [.github], false, true),
+        (.github, [.gitlab], false, false),
+        (.github, [.github, .gitlab], false, true),
+        (.gitlab, [.github, .gitlab], false, true),
+        (.github, [], false, false),
+        (.github, nil, false, false),
+        (.github, [.github], true, false),
+    ] as [(CodeHostKind?, Set<CodeHostKind>?, Bool, Bool)])
+    func requirementIsMetOnlyByAGitProjectWithTheHost(
+        required: CodeHostKind?, hosts: Set<CodeHostKind>?, isFolder: Bool, expected: Bool
+    ) {
+        #expect(PluginRequirements(codeHost: required).isMet(codeHosts: hosts, isFolder: isFolder) == expected)
     }
 }
