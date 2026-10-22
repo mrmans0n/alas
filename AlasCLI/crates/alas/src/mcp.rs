@@ -1149,10 +1149,12 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         }
         "computer_screenshot" => {
             reject_arguments(args, name, &["window_id"])?;
-            Ok(Command::Computer(alas_client::ComputerCommand::Screenshot {
-                window_id: required_window_id(args)?,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Screenshot {
+                    window_id: required_window_id(args)?,
+                    call_id: None,
+                },
+            ))
         }
         "computer_inspect" => {
             reject_arguments(args, name, &["window_id", "query", "limit", "max_depth"])?;
@@ -1861,7 +1863,9 @@ const SESSION_WAIT_SLICE_MS: u64 = 1_000;
 
 /// Dispatches `command`, running a `session_wait` as a series of short
 /// waits so a cancelled request stops within one slice instead of holding a
-/// worker until its timeout. Returns None once `still_pending` turns false.
+/// worker until its timeout. Returns None once `still_pending` turns false,
+/// for any command: a cancelled computer call still runs to its end in the
+/// app's reply, but its result is dropped.
 fn dispatch_session_wait(
     env: &McpEnv,
     command: &Command,
@@ -1872,7 +1876,8 @@ fn dispatch_session_wait(
         timeout_ms,
     } = command
     else {
-        return Some(dispatch(env, command));
+        let result = dispatch(env, command);
+        return still_pending().then_some(result);
     };
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms.unwrap_or(20_000));
@@ -1921,7 +1926,11 @@ fn is_computer_call(command: &Command) -> bool {
 /// Process-unique ids for computer calls, so a cancellation can name one.
 fn next_computer_call_id() -> String {
     static NEXT: AtomicU64 = AtomicU64::new(1);
-    format!("{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// Records a call a cancellation can reach, first tagging a computer call
@@ -1935,7 +1944,9 @@ fn register_pending_call(
         if let Command::Computer(computer) = command {
             computer.set_call_id(next_computer_call_id());
         }
-    } else if preview_id_for_cancel(command).is_none() && !matches!(command, Command::SessionWait { .. }) {
+    } else if preview_id_for_cancel(command).is_none()
+        && !matches!(command, Command::SessionWait { .. })
+    {
         return None;
     }
     let key = request_key(id);
@@ -1995,9 +2006,13 @@ fn cancellation_command_for_message(
         pending.remove(&key);
         return None;
     }
+    // Retired like a wait, so its worker answers nothing (stdio) or the
+    // cancellation error (HTTP) instead of a late result.
     if let Command::Computer(computer) = &command {
+        let call_id = computer.call_id()?.to_string();
+        pending.remove(&key);
         return Some(Command::Computer(alas_client::ComputerCommand::Cancel {
-            call_id: computer.call_id()?.to_string(),
+            call_id,
         }));
     }
     let preview_id = preview_id_for_cancel(&command)?;
@@ -2544,11 +2559,11 @@ fn build_http_response(
 #[cfg(test)]
 mod tests {
     use super::{
-        CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, build_http_response,
-        cancellation_command_for_message, command_for_tool, dispatch, env_from, handle_line,
-        handle_line_with_parent, http_response, initialize_result,
-        parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out, RelayScope,
-        tool_definitions, tool_result, tools_call_command, transport_error_result, ToolScope,
+        CHILD_ONLY_TOOLS, HttpRequest, McpEnv, McpRuntime, PROTOCOL_VERSION, RelayScope, ToolScope,
+        build_http_response, cancellation_command_for_message, command_for_tool, dispatch,
+        env_from, handle_line, handle_line_with_parent, http_response, initialize_result,
+        parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out,
+        tool_definitions, tool_result, tools_call_command, transport_error_result,
     };
     use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
@@ -3459,6 +3474,7 @@ mod tests {
                 call_id: call_id(&first)
             }))
         );
+        assert!(!pending.lock().unwrap().contains_key(&json!(7).to_string()));
     }
 
     #[test]
@@ -3618,17 +3634,35 @@ mod tests {
             ("computer_screenshot", json!({})),
             ("computer_screenshot", json!({ "window_id": -1 })),
             ("computer_screenshot", json!({ "window_id": 4294967296u64 })),
-            ("computer_screenshot", json!({ "window_id": 7, "query": "x" })),
-            ("computer_screenshot", json!({ "window_id": 7, "call_id": "forged" })),
+            (
+                "computer_screenshot",
+                json!({ "window_id": 7, "query": "x" }),
+            ),
+            (
+                "computer_screenshot",
+                json!({ "window_id": 7, "call_id": "forged" }),
+            ),
             ("computer_inspect", json!({})),
             ("computer_inspect", json!({ "window_id": 7, "query": "  " })),
-            ("computer_inspect", json!({ "window_id": 7, "query": long_query })),
+            (
+                "computer_inspect",
+                json!({ "window_id": 7, "query": long_query }),
+            ),
             ("computer_inspect", json!({ "window_id": 7, "limit": 0 })),
             ("computer_inspect", json!({ "window_id": 7, "limit": 3001 })),
-            ("computer_inspect", json!({ "window_id": 7, "max_depth": 0 })),
-            ("computer_inspect", json!({ "window_id": 7, "max_depth": 13 })),
+            (
+                "computer_inspect",
+                json!({ "window_id": 7, "max_depth": 0 }),
+            ),
+            (
+                "computer_inspect",
+                json!({ "window_id": 7, "max_depth": 13 }),
+            ),
         ] {
-            assert!(command_for_tool(tool, &args, "/wt").is_err(), "{tool} {args}");
+            assert!(
+                command_for_tool(tool, &args, "/wt").is_err(),
+                "{tool} {args}"
+            );
         }
     }
 
@@ -3677,7 +3711,10 @@ mod tests {
         .unwrap();
         let tools = reply["result"]["tools"].as_array().unwrap();
         for name in ["computer_apps", "computer_screenshot", "computer_inspect"] {
-            let tool = tools.iter().find(|tool| tool["name"] == json!(name)).unwrap();
+            let tool = tools
+                .iter()
+                .find(|tool| tool["name"] == json!(name))
+                .unwrap();
             assert_eq!(tool["annotations"]["readOnlyHint"], json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {
@@ -3685,7 +3722,10 @@ mod tests {
                 .iter()
                 .map(|tool| tool["name"].as_str().unwrap().to_string())
                 .collect();
-            assert!(names.iter().all(|name| !name.starts_with("computer_")), "{scope:?}");
+            assert!(
+                names.iter().all(|name| !name.starts_with("computer_")),
+                "{scope:?}"
+            );
         }
         let msg: Value = serde_json::from_str(&call("computer_apps", json!({}))).unwrap();
         let err = tools_call_command(&msg, "/wt", ToolScope::Workspace).unwrap_err();
