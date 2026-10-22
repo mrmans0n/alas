@@ -26,6 +26,12 @@ extension AppState {
         }
     }
 
+    /// The project's remotes may have changed, which decides where plugins that require a code host run.
+    func pluginCodeHostMayHaveChanged(projectId: String) {
+        guard let manager = pluginManager else { return }
+        Task { await manager.invalidateCodeHost(projectID: projectId) }
+    }
+
     /// Follows the review status of every listed, unarchived worktree of
     /// `projectIDs` as they come, go and are archived, and stops following
     /// the projects no plugin listens in anymore.

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import Alas
 
@@ -91,20 +92,42 @@ struct PluginManagerDiscoveryTests {
         ProjectConfig(id: id, name: id, path: "/tmp/\(id)", color: "blue", addedAt: Date())
     }
 
+    /// Stands in for `git remote -v`: answers with `kinds` and records which projects it was asked about.
+    final class CodeHostProbe: Sendable {
+        private let state: Mutex<(kinds: Set<CodeHostKind>?, probed: [String])>
+        init(_ kinds: Set<CodeHostKind>?) { state = Mutex((kinds, [])) }
+        var kinds: Set<CodeHostKind>? {
+            get { state.withLock { $0.kinds } }
+            set { state.withLock { $0.kinds = newValue } }
+        }
+        var probed: [String] { state.withLock { $0.probed } }
+        func callAsFunction(_ project: ProjectConfig) -> Set<CodeHostKind>? {
+            state.withLock {
+                $0.probed.append(project.id)
+                return $0.kinds
+            }
+        }
+    }
+
     @MainActor
-    func approvedManager(projects: ProjectList, api: Int = 4) async throws -> (PluginManager, cleanup: () -> Void) {
+    func approvedManager(
+        projects: ProjectList, api: Int = 4, requires codeHost: CodeHostKind? = nil,
+        codeHosts: CodeHostProbe = CodeHostProbe(nil)
+    ) async throws -> (PluginManager, cleanup: () -> Void) {
         let root = FileManager.default.temporaryDirectory.appending(path: "PluginReconcile-\(UUID().uuidString)")
         let suite = "PluginManagerTests.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
         let dir = root.appending(path: "p")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try Data(#"{"id":"io.x.p","name":"P","version":"1","api":\#(api),"entry":"plugin.js"}"#.utf8)
+        let requires = codeHost.map { #","requires":{"codeHost":"\#($0.rawValue)"}"# } ?? ""
+        try Data(#"{"id":"io.x.p","name":"P","version":"1","api":\#(codeHost == nil ? api : 17),"entry":"plugin.js"\#(requires)}"#.utf8)
             .write(to: dir.appending(path: "plugin.json"))
         try PluginJSFixture.source([[.send(#"{"jsonrpc":"2.0","id":0,"result":{}}"#)]])
             .write(to: dir.appending(path: "plugin.js"))
         let manager = PluginManager(
             directory: root, approvals: PluginApprovalStore(defaults: defaults),
-            projects: { projects.projects }, actions: { _ in .inert })
+            projects: { projects.projects }, actions: { _ in .inert },
+            codeHostKinds: { codeHosts($0) })
         await manager.reload()
         await manager.approve(try #require(manager.plugins.first))
         return (manager, {
@@ -205,6 +228,66 @@ struct PluginManagerDiscoveryTests {
         await manager.setEnabled(staleRow, true)
 
         #expect(manager.hostsByKey.isEmpty)
+        await manager.shutdown()
+    }
+
+    /// A plugin that requires a code host runs only in projects with a fetch remote on that host.
+    @MainActor
+    @Test(arguments: [([.gitlab], false), ([.github], true), ([.gitlab, .github], true)] as [(Set<CodeHostKind>, Bool)])
+    func aRequiringPluginRunsOnlyWhereARemoteIsOnItsHost(remotes: Set<CodeHostKind>, runs: Bool) async throws {
+        let projects = ProjectList([Self.project("a")])
+        let (manager, cleanup) = try await approvedManager(projects: projects, requires: .github, codeHosts: CodeHostProbe(remotes))
+        defer { cleanup() }
+        await manager.invalidateCodeHost(projectID: "a")
+        #expect((manager.host(pluginID: "io.x.p", projectID: "a") != nil) == runs)
+        await manager.shutdown()
+    }
+
+    /// A folder never meets a code host requirement, so it is not even probed.
+    @MainActor
+    @Test func aFolderProjectGetsNoRequiringHostAndNoProbe() async throws {
+        var folder = Self.project("f")
+        folder.kind = .folder
+        let projects = ProjectList([Self.project("a"), folder])
+        let probe = CodeHostProbe([.github])
+        let (manager, cleanup) = try await approvedManager(projects: projects, requires: .github, codeHosts: probe)
+        defer { cleanup() }
+        await manager.invalidateCodeHost(projectID: "f")
+        await manager.invalidateCodeHost(projectID: "a")
+        #expect(manager.hostsByKey.keys.map(\.projectID) == ["a"])
+        #expect(!probe.probed.contains("f"))
+        await manager.shutdown()
+    }
+
+    /// After the remotes change, the host follows the new probe; a failed probe (nil) keeps the last known hosts.
+    @MainActor
+    @Test(arguments: [([], false), (nil, true)] as [(Set<CodeHostKind>?, Bool)])
+    func reprobingAfterARemoteChangeFollowsTheResult(reprobed: Set<CodeHostKind>?, keepsRunning: Bool) async throws {
+        let projects = ProjectList([Self.project("a")])
+        let probe = CodeHostProbe([.github])
+        let (manager, cleanup) = try await approvedManager(projects: projects, requires: .github, codeHosts: probe)
+        defer { cleanup() }
+        await manager.invalidateCodeHost(projectID: "a")
+        let first = try #require(manager.host(pluginID: "io.x.p", projectID: "a"))
+        probe.kinds = reprobed
+        await manager.invalidateCodeHost(projectID: "a")
+        #expect((manager.host(pluginID: "io.x.p", projectID: "a") === first) == keepsRunning)
+        #expect((first.state == .active) == keepsRunning)
+        await manager.shutdown()
+    }
+
+    /// A plugin without `requires` starts everywhere at once and never makes the manager run git.
+    @MainActor
+    @Test func aPluginWithoutRequirementsNeverProbes() async throws {
+        let projects = ProjectList([Self.project("a")])
+        let probe = CodeHostProbe([.gitlab])
+        let (manager, cleanup) = try await approvedManager(projects: projects, api: 17, codeHosts: probe)
+        defer { cleanup() }
+        #expect(manager.host(pluginID: "io.x.p", projectID: "a")?.state == .active)
+        await manager.invalidateCodeHost(projectID: "a")
+        await manager.reconcile()
+        #expect(manager.host(pluginID: "io.x.p", projectID: "a")?.state == .active)
+        #expect(probe.probed.isEmpty)
         await manager.shutdown()
     }
 }
