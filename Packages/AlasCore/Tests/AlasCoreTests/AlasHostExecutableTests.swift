@@ -214,6 +214,27 @@ struct AlasHostExecutableTests {
         #expect(try await run("project", "list").output.isEmpty)
     }
 
+    /// A project added before the host started, from the command line or by
+    /// the app, has its worktrees once the host serves, as after a restart.
+    @Test func aHostServesTheWorktreesOfProjectsAddedBeforeItStarted() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-boot-\(UUID().uuidString)")
+        let dataDirectory = root.appendingPathComponent("data")
+        let repo = root.appendingPathComponent("repo")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        try GitTemplate.repository(at: repo)
+        let add = try AlasHostProcess(dataDirectory: dataDirectory, arguments: ["project", "add", repo.path])
+        #expect(try await add.exitStatus() == 0, "\(add.errorOutput)")
+
+        let host = try AlasHostProcess(dataDirectory: dataDirectory)
+        let client = try SocketClient(path: try await host.socketPath())
+        defer { client.close() }
+        try await eventually {
+            guard case .snapshot(let snapshot) = try? await client.request(.snapshot) else { return false }
+            return snapshot.worktrees.contains { $0.worktree.path.standardizedFileURL == repo.standardizedFileURL }
+        }
+    }
+
     /// A port nothing listens on now, for a host to bind.
     private func freePort() throws -> UInt16 {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
