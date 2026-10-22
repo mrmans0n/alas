@@ -55,7 +55,7 @@ struct ACPShepherdButton: View {
         let presentation = pill.presentation
         let badge = presentation.badge
         let symbol = shipsStack && badge == .noRequest ? Self.stackShipSymbol : badge.symbolName
-        let tooltip = turnRunning && badge == .noRequest
+        let tooltip = turnRunning && !pill.invitesShip && badge == .noRequest
             ? "\(presentation.tooltip) after the current turn"
             : presentation.tooltip
         let shipTint = theme.color("add")

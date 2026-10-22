@@ -240,6 +240,10 @@ struct StackShepherdPopover: View {
         let name = context.otherRecord?.id.stackName ?? stack?.name ?? state.shepherdStackName(for: worktree) ?? worktree.branch
         let entries = stack?.entries ?? []
         let published = entries.filter { $0.prNumber != nil }.count
+        // The other session's record knows the host; else the Changes pane's
+        // commit remote, which its stack chips use too.
+        let kind = context.otherRecord?.remote.kind
+            ?? state.rightPaneStore.activeState(worktreeId: worktree.id)?.commitRemote?.kind
         ShipPopoverHeader(
             symbol: ACPShepherdButton.stackShipSymbol,
             title: "Ship stack \(name)",
@@ -249,7 +253,7 @@ struct StackShepherdPopover: View {
         if !entries.isEmpty {
             Divider().background(theme.color("line"))
             VStack(alignment: .leading, spacing: 5) {
-                ForEach(entries.prefix(Self.maxListedEntries)) { unboundEntryRow($0) }
+                ForEach(entries.prefix(Self.maxListedEntries)) { unboundEntryRow($0, kind: kind) }
                 if entries.count > Self.maxListedEntries {
                     Text("\(entries.count - Self.maxListedEntries) more")
                         .font(.system(size: 10.5))
@@ -276,7 +280,7 @@ struct StackShepherdPopover: View {
         }
     }
 
-    private func unboundEntryRow(_ entry: GGStackEntry) -> some View {
+    private func unboundEntryRow(_ entry: GGStackEntry, kind: CodeHostKind?) -> some View {
         HStack(spacing: 8) {
             Text("\(entry.position)")
                 .font(.system(size: 10.5, design: .monospaced))
@@ -289,7 +293,7 @@ struct StackShepherdPopover: View {
                 .truncationMode(.tail)
             Spacer(minLength: 4)
             if let number = entry.prNumber {
-                Text(verbatim: "#\(number)")
+                Text(verbatim: "\((kind ?? .github).reviewRequestNumberPrefix)\(number)")
                     .font(.system(size: 10, design: .monospaced))
                     .foregroundStyle(theme.color("add"))
             } else {
