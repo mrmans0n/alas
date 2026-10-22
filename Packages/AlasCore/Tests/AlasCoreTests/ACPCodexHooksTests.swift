@@ -418,6 +418,15 @@ struct ACPCodexHooksTests {
         #expect(coordinator.reviewToken == "token")
     }
 
+    @Test(arguments: [("/.alas-remote/mini/p", true), ("/.alas-remote/mini/q", false), ("/q", false)])
+    @MainActor func reviewAcceptsTheAgentSidePathOfItsWorktree(context cwd: String, accepted: Bool) async throws {
+        let initial = try snapshot(cwd: "/p")
+        let coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "mini", cwd: cwd), list: { initial }, trust: { _, _ in true })
+        await coordinator.refresh()
+        #expect((coordinator.presentation?.error == nil) == accepted)
+        #expect((coordinator.presentation?.snapshot != nil) == accepted)
+    }
+
     @Test @MainActor func diagnosticsAllowContinueButUnknownDefinitionsRemainVisible() async throws {
         let initial = try snapshot(handler: "future")
         let coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: { initial }, trust: { _, _ in false })
@@ -579,14 +588,14 @@ struct ACPCodexHooksTests {
         #expect(ACPCodexHookReviewError.classify(JSONRPCError(code: 1001, message: "original", data: AnyCodable(["kind": kind, "restartable": true]))) == nil)
     }
 
-    private func snapshot(handler: String = "command", hash: String = "h", status: String = "untrusted", token: String = "token", duplicate: Bool = false, diagnostics: Bool = true, additionalUnknownHook: Bool = false) throws -> ACPCodexHooksList {
+    private func snapshot(handler: String = "command", hash: String = "h", status: String = "untrusted", token: String = "token", duplicate: Bool = false, diagnostics: Bool = true, additionalUnknownHook: Bool = false, cwd: String = "/p") throws -> ACPCodexHooksList {
         let hook = """
         {"key":"k","currentHash":"\(hash)","eventName":"sessionStart","matcher":null,"timeoutSec":10,"statusMessage":null,"sourcePath":"/hooks.json","source":"sessionFlags","pluginId":null,"displayOrder":0,"enabled":true,"isManaged":false,"trustStatus":"\(status)","handlerType":"\(handler)","command":"true","async":false}
         """
         let unknown = hook.replacingOccurrences(of: #""key":"k""#, with: #""key":"new""#)
             .replacingOccurrences(of: #""handlerType":"command""#, with: #""handlerType":"future""#)
         return try JSONDecoder().decode(ACPCodexHooksList.self, from: Data("""
-        {"cwd":"/p","hooks":[\(hook)\(duplicate ? "," + hook : "")\(additionalUnknownHook ? "," + unknown : "")],"warnings":\(diagnostics ? #"["warning"]"# : "[]"),"errors":\(diagnostics ? #"[{"path":"/bad","message":"bad"}]"# : "[]"),"reviewToken":"\(token)"}
+        {"cwd":"\(cwd)","hooks":[\(hook)\(duplicate ? "," + hook : "")\(additionalUnknownHook ? "," + unknown : "")],"warnings":\(diagnostics ? #"["warning"]"# : "[]"),"errors":\(diagnostics ? #"[{"path":"/bad","message":"bad"}]"# : "[]"),"reviewToken":"\(token)"}
         """.utf8))
     }
 }
