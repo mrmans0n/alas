@@ -226,11 +226,9 @@ extension AlasCoreContext {
         guard let stack = try await loadStack(effects, path: context.path), !stack.entries.isEmpty else {
             throw PRShepherdCLIError(message: "gg does not list a stack with commits for this worktree.")
         }
-        let plan = StackShipPlan(shipThroughEntryID: shipThroughEntryID)
-        guard let through = try? plan.shipThroughPosition(in: stack), let heldBack = try? plan.heldBackEntries(of: stack) else {
-            throw Self.missingShipEntryError(stack)
-        }
-        let shipped = stack.entries.filter { $0.position <= through }.sorted { $0.position < $1.position }
+        let heldBack = StackShipPlan(shipThroughEntryID: shipThroughEntryID).heldBackEntries(of: stack)
+        let heldBackIDs = Set(heldBack.map(\.id))
+        let shipped = stack.entries.filter { !heldBackIDs.contains($0.id) }.sorted { $0.position < $1.position }
         if let missing = shipped.first(where: { $0.prNumber == nil }) {
             throw PRShepherdCLIError(
                 message: "Entry \(missing.position) (\"\(missing.title)\") of the gg stack \"\(stack.name)\" has no pull request: \(unpublishedHint)."

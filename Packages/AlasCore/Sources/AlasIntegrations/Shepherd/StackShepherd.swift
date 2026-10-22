@@ -365,9 +365,13 @@ public final class StackShepherd {
     }
 
     /// Remembers what the Ship popover chose for session `sessionID`'s next
-    /// `stack_ship` of stack `id`, replacing an earlier choice.
+    /// `stack_ship` of stack `id`, replacing an earlier choice. A choice is
+    /// kept until a publish carries it out or another replaces it; the whole
+    /// stack is what a missing choice means, so it only clears the earlier one.
     public func setPendingShipPlan(_ plan: StackShipPlan, sessionID: String, id: StackShepherdRecordID) {
-        pendingShipPlans[sessionID] = PendingStackShip(sessionID: sessionID, id: id, plan: plan, chosenAt: now())
+        pendingShipPlans[sessionID] = plan == .wholeStack
+            ? nil
+            : PendingStackShip(sessionID: sessionID, id: id, plan: plan, chosenAt: now())
         persist()
     }
 
@@ -872,10 +876,10 @@ public final class StackShepherd {
                 return now.timeIntervalSince(record.finishedAt ?? record.updatedAt) < ShepherdRecordRetention.finishedLifetime
             }
             records = Dictionary(kept.map { ($0.id, $0) }) { lhs, rhs in lhs.updatedAt >= rhs.updatedAt ? lhs : rhs }
-            // A choice no `stack_ship` took within the retention was abandoned.
-            let pending = file.pendingShips.filter { now.timeIntervalSince($0.chosenAt) < ShepherdRecordRetention.finishedLifetime }
-            pendingShipPlans = Dictionary(pending.map { ($0.sessionID, $0) }) { lhs, rhs in lhs.chosenAt >= rhs.chosenAt ? lhs : rhs }
-            if kept.count != file.records.count || pending.count != file.pendingShips.count {
+            pendingShipPlans = Dictionary(file.pendingShips.map { ($0.sessionID, $0) }) { lhs, rhs in
+                lhs.chosenAt >= rhs.chosenAt ? lhs : rhs
+            }
+            if kept.count != file.records.count {
                 persist()
             }
         } catch {

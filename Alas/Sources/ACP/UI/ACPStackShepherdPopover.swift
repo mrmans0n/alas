@@ -159,8 +159,9 @@ struct StackShepherdPopover: View {
     @ViewBuilder
     private func shipMoreSection(record: StackShepherdRecord) -> some View {
         if Self.canChooseEntries, let stack, stack.name == record.id.stackName,
-           let heldBack = try? (record.shipPlan ?? .wholeStack).heldBackEntries(of: stack), !heldBack.isEmpty {
-            let shipped = heldBack.filter { $0.position <= moreShipThrough }.count
+           case let heldBack = (record.shipPlan ?? .wholeStack).heldBackEntries(of: stack), !heldBack.isEmpty {
+            let through = StackShipPlan.snap(moreShipThrough, to: StackShipPlan.linePositions(in: heldBack))
+            let shipped = heldBack.filter { $0.position <= through }.count
             Divider().background(theme.color("line"))
             VStack(alignment: .leading, spacing: 8) {
                 Text("Held back · \(heldBack.count)")
@@ -174,7 +175,7 @@ struct StackShepherdPopover: View {
                     icon: ACPShepherdButton.stackShipSymbol,
                     fillsWidth: true
                 ) {
-                    shipMore(stack: stack)
+                    shipMore(stack: stack, through: through)
                 }
                 .disabled(isBusy || isShippingMore)
                 .opacity(isBusy || isShippingMore ? 0.45 : 1)
@@ -188,8 +189,10 @@ struct StackShepherdPopover: View {
         }
     }
 
-    private func shipMore(stack: GGStack) {
-        let plan = StackShipPlan(shipThroughPosition: moreShipThrough, of: stack, opensDrafts: moreOpensDrafts)
+    /// `through` is the line's position among the held-back rows, which is
+    /// also where it can stop in the whole stack.
+    private func shipMore(stack: GGStack, through: Int) {
+        let plan = StackShipPlan(shipThroughPosition: through, of: stack, opensDrafts: moreOpensDrafts)
         isShippingMore = true
         Task {
             await state.shipMoreStack(sessionID: session.id, worktree: worktree, plan: plan)
@@ -392,8 +395,9 @@ struct StackShepherdPopover: View {
     private func createContent(reason: String?, picksEntries: Bool) -> some View {
         let entries = stack?.entries ?? []
         let top = entries.map(\.position).max() ?? 0
-        let shipped = entries.filter { $0.position <= shipThrough }.count
-        let shipsAll = !picksEntries || shipThrough >= top
+        let through = StackShipPlan.snap(shipThrough, to: StackShipPlan.linePositions(in: entries))
+        let shipped = entries.filter { $0.position <= through }.count
+        let shipsAll = !picksEntries || through >= top
         let plan = picksEntries
             ? stack.map { StackShipPlan(shipThroughPosition: shipThrough, of: $0, opensDrafts: opensDrafts) } ?? .wholeStack
             : .wholeStack
@@ -468,12 +472,10 @@ struct StackShipLinePicker: View {
     }
 
     private var top: Int { entries.map(\.position).max() ?? 0 }
-    /// The line never goes below an entry that already has a request: gg
-    /// sync cannot take one back.
-    private var bottom: Int {
-        max(entries.map(\.position).min() ?? 0, entries.filter { $0.prNumber != nil }.map(\.position).max() ?? 0)
-    }
-    private var through: Int { min(max(shipThrough, bottom), top) }
+    /// Where the line can stop: never below an entry that already has a
+    /// request, and only above entries with a GG-ID (`StackShipPlan.linePositions`).
+    private var stops: [Int] { StackShipPlan.linePositions(in: entries) }
+    private var through: Int { StackShipPlan.snap(shipThrough, to: stops) }
 
     /// Rows top-first with the line above the first row that ships. The line
     /// keeps one identity wherever it sits, so a drag survives it moving.
@@ -572,7 +574,7 @@ struct StackShipLinePicker: View {
                     let origin = dragOrigin ?? through
                     dragOrigin = origin
                     let rows = Int((-value.translation.height / Self.rowPitch).rounded())
-                    shipThrough = min(max(origin + rows, bottom), top)
+                    shipThrough = min(max(origin + rows, stops.first ?? 0), top)
                 }
                 .onEnded { _ in dragOrigin = nil }
         )
@@ -582,7 +584,7 @@ struct StackShipLinePicker: View {
         .help("Drag to choose what ships: entries below the line ship, entries above it stay local")
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Ship line")
-        .accessibilityValue(Self.lineValue(through: through, bottom: bottom, top: top))
+        .accessibilityValue(Self.lineValue(through: through, bottom: entries.map(\.position).min() ?? 0, top: top))
         .accessibilityAdjustableAction { direction in
             switch direction {
             case .increment: _ = move(1)
@@ -592,8 +594,11 @@ struct StackShipLinePicker: View {
         }
     }
 
-    private func move(_ rows: Int) -> KeyPress.Result {
-        shipThrough = min(max(through + rows, bottom), top)
+    /// Moves the line `stops` stops up (positive) or down.
+    private func move(_ stops: Int) -> KeyPress.Result {
+        let all = self.stops
+        let index = all.firstIndex(of: through) ?? all.count - 1
+        shipThrough = all[min(max(index + stops, 0), all.count - 1)]
         return .handled
     }
 

@@ -267,12 +267,17 @@ struct StackShepherdTests {
         #expect(ready.gatePasses)
     }
 
-    private static func stack(published: [Bool], synced: Int? = nil) -> GGStack {
+    /// Entry IDs are `g<index>`; positions in `shaOnly` have no GG-ID, so their
+    /// ID is `sha<index>`.
+    private static func stack(published: [Bool], synced: Int? = nil, shaOnly: Set<Int> = []) -> GGStack {
         GGStack(
             name: "auth", base: "main", totalCommits: published.count, syncedCommits: synced ?? published.count,
             currentPosition: published.count, behindBase: 0,
             entries: published.enumerated().map { index, isPublished in
-                GGStackEntry(position: index + 1, sha: "sha\(index)", title: "t", prNumber: isPublished ? 40 + index : nil)
+                GGStackEntry(
+                    position: index + 1, sha: "sha\(index)", title: "t",
+                    ggId: shaOnly.contains(index + 1) ? nil : "g\(index)", prNumber: isPublished ? 40 + index : nil
+                )
             }
         )
     }
@@ -318,28 +323,38 @@ struct StackShepherdTests {
     /// alive. An unpublished entry below the boundary still blocks.
     @Test func publicationIgnoresEntriesHeldBackAboveTheShipBoundary() {
         let partial = StackShepherdPolicy.publication(
-            of: Self.stack(published: [true, false], synced: 1), local: Self.local, shipThroughEntryID: "sha0"
+            of: Self.stack(published: [true, false], synced: 1), local: Self.local, shipThroughEntryID: "g0"
         )
         #expect(partial.isPublished && partial.hasUnpublishedEntries == true)
 
         let gap = StackShepherdPolicy.publication(
-            of: Self.stack(published: [false, true], synced: 1), local: Self.local, shipThroughEntryID: "sha1"
+            of: Self.stack(published: [false, true], synced: 1), local: Self.local, shipThroughEntryID: "g1"
         )
         #expect(!gap.isPublished)
     }
 
     /// The line at the top ships the whole stack, so commits the agent adds
-    /// on top ship too; below it, the boundary names the entry, not a
-    /// position, so it survives a rebase. It never sits below an entry that
-    /// already has a request, which gg sync cannot take back. Entry IDs are
-    /// `sha<index>`.
+    /// on top ship too; below it, the boundary names the entry by GG-ID, so
+    /// it survives the agent amending it. It never sits below an entry that
+    /// already has a request, which gg sync cannot take back, nor on an entry
+    /// without a GG-ID: it moves down to the next one, else up.
     @Test(arguments: [
-        ([true, false, false], 3, nil), ([true, false, false], 5, nil), ([true, false, false], 2, "sha1"),
-        ([true, true, false], 1, "sha1"), ([true, true, true], 1, nil),
-    ] as [([Bool], Int, String?)])
-    func shipLineSitsAtTheTopOrAboveEveryPublishedEntry(published: [Bool], position: Int, entryID: String?) {
-        let plan = StackShipPlan(shipThroughPosition: position, of: Self.stack(published: published), opensDrafts: true)
+        ([true, false, false], [], 3, nil), ([true, false, false], [], 5, nil), ([true, false, false], [], 2, "g1"),
+        ([true, true, false], [], 1, "g1"), ([true, true, true], [], 1, nil),
+        ([false, false, false], [2], 2, "g0"), ([false, false, false], [1], 1, "g1"),
+    ] as [([Bool], Set<Int>, Int, String?)])
+    func shipLineStopsOnlyWhereGGSyncCanKeepIt(published: [Bool], shaOnly: Set<Int>, position: Int, entryID: String?) {
+        let stack = Self.stack(published: published, shaOnly: shaOnly)
+        let plan = StackShipPlan(shipThroughPosition: position, of: stack, opensDrafts: true)
         #expect(plan == StackShipPlan(shipThroughEntryID: entryID, opensDrafts: true))
+    }
+
+    /// After Clean removes the merged entries a ship published, its boundary
+    /// is gone; every entry still without a request is then held back, so
+    /// Ship more keeps offering them.
+    @Test func aShipBoundaryGGNoLongerListsHoldsBackEveryUnpublishedEntry() {
+        let heldBack = StackShipPlan(shipThroughEntryID: "cleaned").heldBackEntries(of: Self.stack(published: [true, false, false]))
+        #expect(heldBack.map(\.id) == ["g1", "g2"])
     }
 
     /// `pr_status` reports the stack as gg lists it now, not the record as of
@@ -610,22 +625,25 @@ struct StackShepherdTests {
         shepherd.setPendingShipPlan(chosen, sessionID: "session-1", id: record.id)
         #expect(shepherd.shipPlan(sessionID: "session-1", id: record.id) == chosen)
 
-        shepherd.clearPendingShipPlan(sessionID: "session-1", id: record.id)
+        // Choosing the whole stack drops the earlier choice.
+        shepherd.setPendingShipPlan(.wholeStack, sessionID: "session-1", id: record.id)
         #expect(shepherd.shipPlan(sessionID: "session-1", id: record.id) == kept)
     }
 
     /// A relaunch between the Ship click and the agent's `stack_ship` must
-    /// not widen a partial choice to the whole stack.
-    @Test func aPendingShipChoiceSurvivesARelaunch() {
+    /// not widen a partial choice to the whole stack, however long ago the
+    /// choice was made: the prompt can still be retried.
+    @Test func aPendingShipChoiceSurvivesRelaunchesHoweverOld() throws {
         let store = MemoryStore()
         let stack = Self.stack([41, 42])
         let id = StackShepherdRecordID(worktreeID: "wt-1", stackName: "auth")
         let chosen = StackShipPlan(shipThroughEntryID: "c-41", opensDrafts: true)
         makeShepherd(requests: [], stack: stack, store: store).setPendingShipPlan(chosen, sessionID: "session-1", id: id)
+        #expect(makeShepherd(requests: [], stack: stack, store: store).shipPlan(sessionID: "session-1", id: id) == chosen)
 
-        let relaunched = makeShepherd(requests: [], stack: stack, store: store)
-
-        #expect(relaunched.shipPlan(sessionID: "session-1", id: id) == chosen)
+        let old = PendingStackShip(sessionID: "session-1", id: id, plan: chosen, chosenAt: F.now.addingTimeInterval(-90 * 24 * 60 * 60))
+        try store.write(StackShepherdsFile(pendingShips: [old]), to: URL(fileURLWithPath: "/memory/stack-shepherds.json"))
+        #expect(makeShepherd(requests: [], stack: stack, store: store).shipPlan(sessionID: "session-1", id: id) == chosen)
     }
 
     /// Archive-after-merge hides the worktree, so it only runs while the
@@ -952,7 +970,7 @@ struct StackShepherdTests {
     /// user chose in the popover, a boundary gg no longer lists is refused
     /// rather than widened to the whole stack, and a failed publish keeps the
     /// choice for the retry.
-    @Test(arguments: [("sha1", true), ("gone", false)])
+    @Test(arguments: [("g1", true), ("gone", false)])
     func stackShipSyncsThePopoversChoiceAndKeepsItUntilAPublishSucceeds(boundary: String, syncs: Bool) async {
         let core = makeCore()
         var synced: [StackShipPlan] = []
@@ -1030,12 +1048,12 @@ struct StackShepherdTests {
             archiveWorktreeIfAllowed: { _, _, _ in .declined }
         )
         core.stackShepherd.setPendingShipPlan(
-            StackShipPlan(shipThroughEntryID: "sha0"), sessionID: "session-1",
+            StackShipPlan(shipThroughEntryID: "g0"), sessionID: "session-1",
             id: StackShepherdRecordID(worktreeID: "wt-1", stackName: "auth")
         )
 
         _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
 
-        #expect(synced == [StackShipPlan(shipThroughEntryID: "sha1")])
+        #expect(synced == [StackShipPlan(shipThroughEntryID: "g1")])
     }
 }
