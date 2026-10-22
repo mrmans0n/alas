@@ -114,7 +114,7 @@ struct ComputerUseSystem: Sendable {
     var frontmostPID: @Sendable () -> Int32?
     /// Identity without launching: running app (real pid) or installed app (pid 0); nil when not found.
     var resolveApp: @Sendable (_ name: String?, _ bundleID: String?) async -> ComputerUseAppIdentity?
-    /// Launches or unhides without activating; returns the running identity.
+    /// Launches, or unhides and reopens, without activating; returns the running identity.
     var openApp: @Sendable (ComputerUseAppIdentity) async throws -> ComputerUseAppIdentity
 
     static let live = ComputerUseSystem(
@@ -556,15 +556,23 @@ extension LiveComputerUseSystem {
 
     static func openApp(_ app: ComputerUseAppIdentity) async throws -> ComputerUseAppIdentity {
         let running: ComputerUseAppIdentity
-        let alreadyRunning = await MainActor.run { () -> ComputerUseAppIdentity? in
+        let alreadyRunning = await MainActor.run { () -> (app: ComputerUseAppIdentity, url: URL?)? in
             guard app.pid > 0, let existing = NSRunningApplication(processIdentifier: app.pid),
                   !existing.isTerminated
             else { return nil }
             existing.unhide()
-            return identity(of: existing)
+            return (identity(of: existing), existing.bundleURL)
         }
         if let alreadyRunning {
-            running = alreadyRunning
+            running = alreadyRunning.app
+            // Unhiding shows no window when the app has none; the reopen event an open sends
+            // makes apps like TextEdit show one (or their open panel).
+            if let url = alreadyRunning.url {
+                let configuration = NSWorkspace.OpenConfiguration()
+                configuration.activates = false
+                // It is running either way; a refused reopen only means no new window.
+                _ = try? await NSWorkspace.shared.openApplication(at: url, configuration: configuration).processIdentifier
+            }
         } else {
             running = try await launch(app)
         }
