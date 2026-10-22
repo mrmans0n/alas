@@ -15,9 +15,10 @@ enum ComputerUseAXReader {
     /// Wall-clock budget for one read; the tree gathered so far is returned after it.
     static let deadline: Duration = .seconds(5)
 
-    private static let queue = DispatchQueue(label: "io.nlopez.alas.computer-use.ax", qos: .userInitiated)
+    /// Walks and AX actions share it so an action never runs during a walk.
+    static let queue = DispatchQueue(label: "io.nlopez.alas.computer-use.ax", qos: .userInitiated)
 
-    private final class CancelFlag: Sendable {
+    final class CancelFlag: Sendable {
         private let flag = Atomic<Bool>(false)
         func set() { flag.store(true, ordering: .relaxed) }
         var isSet: Bool { flag.load(ordering: .relaxed) }
@@ -25,8 +26,9 @@ enum ComputerUseAXReader {
 
     /// Throws `CancellationError` when the calling task is cancelled. `complete`
     /// is false when the walk stopped early (node budget, deadline, stalled app).
+    /// `handles` retains every element in the tree, indexed by `ComputerUseAXNode.handle`.
     static func read(_ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int) async throws
-        -> (root: ComputerUseAXNode, complete: Bool) {
+        -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
         let cancel = CancelFlag()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
@@ -56,6 +58,8 @@ enum ComputerUseAXReader {
         let deadline: ContinuousClock.Instant
         let isCancelled: () -> Bool
         var count = 0
+        /// Every element turned into a node; a node's handle is its index here.
+        var elements: [AXUIElement] = []
         /// Set on the first timeout-class AX error: the app is not answering.
         var appStalled = false
         /// Set when children were left unread because the budget ran out or the walk halted.
@@ -72,7 +76,8 @@ enum ComputerUseAXReader {
             appStalled || isCancelled() || ContinuousClock.now >= deadline
         }
 
-        func tree(for window: ComputerUseWindow) throws -> (root: ComputerUseAXNode, complete: Bool) {
+        func tree(for window: ComputerUseWindow) throws
+            -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
             let app = AXUIElementCreateApplication(window.app.pid)
             AXUIElementSetMessagingTimeout(app, ComputerUseAXReader.messagingTimeout)
 
@@ -92,7 +97,7 @@ enum ComputerUseAXReader {
 
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
-            return (root, !cutOff && !isHalted)
+            return (root, !cutOff && !isHalted, ComputerUseAXHandles(elements))
         }
 
         private func notResponding(_ window: ComputerUseWindow) -> ComputerUseSystemError {
@@ -140,8 +145,10 @@ enum ComputerUseAXReader {
                 description: string(of: element, kAXDescriptionAttribute),
                 frame: frame(of: element) ?? .zero,
                 isEnabled: bool(of: element, kAXEnabledAttribute) ?? true,
-                isFocused: bool(of: element, kAXFocusedAttribute) ?? false
+                isFocused: bool(of: element, kAXFocusedAttribute) ?? false,
+                handle: elements.count
             )
+            elements.append(element)
             if depth < maxDepth {
                 if count < budget, !isHalted {
                     for child in childElements(of: element) {

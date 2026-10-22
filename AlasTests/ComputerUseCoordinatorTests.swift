@@ -14,13 +14,23 @@ struct ComputerUseCoordinatorTests {
     ]
 
     private static func system(windows: [UInt32: ComputerUseWindow] = windows, treeComplete: Bool = true) -> ComputerUseSystem {
-        ComputerUseSystem(
+        let notes = notes
+        return ComputerUseSystem(
             runningApps: { windows.values.map { (app: $0.app, windows: [$0]) } },
             window: { windows[$0] },
             screenshot: { _ in ComputerUseScreenshot(png: Data([0x89]), pixelSize: CGSize(width: 800, height: 600), scale: 2) },
             axTree: { _, _, _ in
-                (ComputerUseAXNode(role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Save")]), treeComplete)
-            }
+                (
+                    ComputerUseAXNode(role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Save")]),
+                    treeComplete,
+                    ComputerUseAXHandles()
+                )
+            },
+            perform: { _, _, _, _ in .ax },
+            secondsSinceUserInput: { 60 },
+            frontmostPID: { nil },
+            resolveApp: { _, _ in notes },
+            openApp: { $0 }
         )
     }
 
@@ -114,18 +124,15 @@ struct ComputerUseCoordinatorTests {
 
     @Test func failedCallKeepsTheLockWhileASiblingIsCapturing() async throws {
         let gate = TreeGate()
-        let tree = (root: ComputerUseAXNode(role: "AXWindow", title: "Inbox"), complete: true)
-        let windows = Self.windows
-        let system = ComputerUseSystem(
-            runningApps: { [] },
-            window: { windows[$0] },
-            screenshot: { _ in throw ComputerUseSystemError.captureFailed("unused") },
-            axTree: { window, _, _ in
-                await gate.enter(window.windowID)
-                if window.windowID == 1 { throw ComputerUseSystemError.captureFailed("Notes failed") }
-                return tree
-            }
-        )
+        let tree = (root: ComputerUseAXNode(role: "AXWindow", title: "Inbox"), complete: true, handles: ComputerUseAXHandles())
+        var system = Self.system()
+        system.runningApps = { [] }
+        system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
+        system.axTree = { window, _, _ in
+            await gate.enter(window.windowID)
+            if window.windowID == 1 { throw ComputerUseSystemError.captureFailed("Notes failed") }
+            return tree
+        }
         let f = Self.fixture(system: system)
         f.access.record(.allowForSession, for: Self.notes, session: "s")
         f.access.record(.allowForSession, for: Self.mail, session: "s")
@@ -147,16 +154,13 @@ struct ComputerUseCoordinatorTests {
 
     @Test func stopKeepsTheLockUntilTheCapturingCallExits() async throws {
         let gate = TreeGate()
-        let windows = Self.windows
-        let system = ComputerUseSystem(
-            runningApps: { [] },
-            window: { windows[$0] },
-            screenshot: { _ in throw ComputerUseSystemError.captureFailed("unused") },
-            axTree: { window, _, _ in
-                await gate.enter(window.windowID)
-                return (root: ComputerUseAXNode(role: "AXWindow", title: "Note"), complete: true)
-            }
-        )
+        var system = Self.system()
+        system.runningApps = { [] }
+        system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
+        system.axTree = { window, _, _ in
+            await gate.enter(window.windowID)
+            return (root: ComputerUseAXNode(role: "AXWindow", title: "Note"), complete: true, handles: ComputerUseAXHandles())
+        }
         let f = Self.fixture(system: system)
         f.access.record(.allowForSession, for: Self.notes, session: "s")
         let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 1, callID: "c1"), sessionID: "s") }
@@ -172,16 +176,13 @@ struct ComputerUseCoordinatorTests {
 
     @Test func driverShowsDuringTheFirstCaptureAndClearsWhenItFails() async throws {
         let gate = TreeGate()
-        let windows = Self.windows
-        let system = ComputerUseSystem(
-            runningApps: { [] },
-            window: { windows[$0] },
-            screenshot: { _ in throw ComputerUseSystemError.captureFailed("unused") },
-            axTree: { window, _, _ in
-                await gate.enter(window.windowID)
-                throw ComputerUseSystemError.captureFailed("Notes failed")
-            }
-        )
+        var system = Self.system()
+        system.runningApps = { [] }
+        system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
+        system.axTree = { window, _, _ in
+            await gate.enter(window.windowID)
+            throw ComputerUseSystemError.captureFailed("Notes failed")
+        }
         let f = Self.fixture(system: system)
         f.access.record(.allowForSession, for: Self.notes, session: "s")
         let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s") }
@@ -197,12 +198,9 @@ struct ComputerUseCoordinatorTests {
         let lookups = Counter()
         let notesWindow = Self.windows[1]!
         let recycled = ComputerUseWindow(windowID: 1, title: notesWindow.title, frame: notesWindow.frame, app: Self.mail)
-        let system = ComputerUseSystem(
-            runningApps: { [] },
-            window: { _ in lookups.next() == 1 ? notesWindow : recycled },
-            screenshot: { _ in ComputerUseScreenshot(png: Data([0x89]), pixelSize: CGSize(width: 1, height: 1), scale: 1) },
-            axTree: { _, _, _ in (ComputerUseAXNode(role: "AXWindow"), true) }
-        )
+        var system = Self.system()
+        system.runningApps = { [] }
+        system.window = { _ in lookups.next() == 1 ? notesWindow : recycled }
         let f = Self.fixture(system: system)
         f.access.record(.allowForSession, for: Self.mail, session: "s")
         let call = Task { await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s") }
