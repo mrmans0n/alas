@@ -96,6 +96,18 @@ struct RemoteNetworkTests {
         #expect(fromLocalName.map(\.kind) == [.localhost, .custom])
     }
 
+    /// `.local` completes only a bare Bonjour label: a DNS name, such as the
+    /// tailnet name a reverse lookup returns, never becomes `….ts.net.local`.
+    @Test func aDNSMachineNameIsNeverCompletedWithLocal() {
+        let addresses = RemoteNetwork.advertisedAddresses(
+            port: 8765, interfaces: [], allowedHosts: [], preferredHost: nil, machineHostName: "mini.tail1234.ts.net"
+        )
+        let hosts = RemoteNetwork.allowedHostCandidates(interfaces: [], allowedHosts: [], machineHostName: "mini.tail1234.ts.net")
+
+        #expect(addresses.map(\.host) == ["localhost"])
+        #expect(!hosts.contains("mini.tail1234.ts.net.local"))
+    }
+
     @Test func allowedHostCandidatesIncludeLocalhostDetectedIpsAndMachineNames() {
         let interfaces = [
             RemoteNetworkInterface(name: "en0", host: "192.168.1.23", isLoopback: false),

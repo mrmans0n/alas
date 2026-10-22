@@ -215,7 +215,7 @@ public enum RemoteNetwork: Sendable {
             hosts.insert(normalized)
             if normalized.hasSuffix(".local") {
                 hosts.insert(String(normalized.dropLast(".local".count)))
-            } else {
+            } else if !normalized.contains(".") {
                 hosts.insert("\(normalized).local")
             }
         }
@@ -271,7 +271,10 @@ public enum RemoteNetwork: Sendable {
         guard !normalized.isEmpty,
               !normalized.contains(":"),
               ipv4Octets(normalized) == nil else { return nil }
-        return normalized.hasSuffix(".local") ? normalized : "\(normalized).local"
+        if normalized.hasSuffix(".local") { return normalized }
+        // `.local` completes only a bare Bonjour label, never a DNS name such
+        // as a tailnet's `mini.tail1234.ts.net`.
+        return normalized.contains(".") ? nil : "\(normalized).local"
     }
 
     private static func classification(for host: String) -> AddressClassification? {
