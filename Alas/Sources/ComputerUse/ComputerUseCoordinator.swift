@@ -44,6 +44,9 @@ final class ComputerUseCoordinator {
     @ObservationIgnored private var lock: ComputerUseDriverLock?
     /// The session the lock was taken for; set before the system call, unlike `driver`.
     @ObservationIgnored private var lockSession: String?
+    /// Calls per session past the lock and inside their system call, so a failing
+    /// call never drops the lock under a sibling that is still capturing.
+    @ObservationIgnored private var lockedCalls: [String: Int] = [:]
     @ObservationIgnored private var waiters: [UUID: [UUID: Waiter]] = [:]
     /// Bumped on stop and session end, so an in-flight call notices it was overtaken.
     @ObservationIgnored private var epochs: [String: Int] = [:]
@@ -159,11 +162,9 @@ final class ComputerUseCoordinator {
             }
         }
 
-        let takenLock: ComputerUseDriverLock?
-        switch takeDriverLock(for: sessionID) {
-        case .failure(let failure): return .error(failure.message)
-        case .success(let fresh): takenLock = fresh
-        }
+        if case .failure(let failure) = takeDriverLock(for: sessionID) { return .error(failure.message) }
+        let heldLock = lock
+        lockedCalls[sessionID, default: 0] += 1
 
         let payload: [String: Any]
         do {
@@ -172,11 +173,16 @@ final class ComputerUseCoordinator {
             // A cancelled call discards what it captured.
             try Task.checkCancellation()
         } catch {
-            // Only the lock this call took: a later turn may hold a fresh one by now.
-            if let takenLock, lock === takenLock { releaseDriver() }
+            // The last call out releases, unless one already claimed the role. Only the
+            // lock these calls ran under: a later turn may hold a fresh one by now.
+            if endLockedCall(of: sessionID) == 0, driver?.sessionID != sessionID,
+               let heldLock, lock === heldLock {
+                releaseDriver()
+            }
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
             return .error(Self.message(for: error))
         }
+        endLockedCall(of: sessionID)
         // Stopped or ended mid-call: the lock is already released; don't reclaim the role.
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
         // A turn end (or a failed sibling call) may have released the lock; the
@@ -246,6 +252,13 @@ final class ComputerUseCoordinator {
             return .error(Message.stopped)
         }
         return nil
+    }
+
+    @discardableResult
+    private func endLockedCall(of sessionID: String) -> Int {
+        let remaining = max(lockedCalls[sessionID, default: 0] - 1, 0)
+        lockedCalls[sessionID] = remaining == 0 ? nil : remaining
+        return remaining
     }
 
     private func releaseDriver() {

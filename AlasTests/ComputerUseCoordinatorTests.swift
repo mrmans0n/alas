@@ -112,6 +112,39 @@ struct ComputerUseCoordinatorTests {
         #expect(f.coordinator.pendingApprovals.count == 1)
     }
 
+    @Test func failedCallKeepsTheLockWhileASiblingIsCapturing() async throws {
+        let gate = TreeGate()
+        let tree = (root: ComputerUseAXNode(role: "AXWindow", title: "Inbox"), complete: true)
+        let windows = Self.windows
+        let system = ComputerUseSystem(
+            runningApps: { [] },
+            window: { windows[$0] },
+            screenshot: { _ in throw ComputerUseSystemError.captureFailed("unused") },
+            axTree: { window, _, _ in
+                await gate.enter(window.windowID)
+                if window.windowID == 1 { throw ComputerUseSystemError.captureFailed("Notes failed") }
+                return tree
+            }
+        )
+        let f = Self.fixture(system: system)
+        f.access.record(.allowForSession, for: Self.notes, session: "s")
+        f.access.record(.allowForSession, for: Self.mail, session: "s")
+        let failing = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s") }
+        let sibling = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 2), sessionID: "s") }
+        try await eventually("both calls capturing") { gate.entered == [1, 2] }
+
+        gate.open(1)
+        #expect(await failing.value == .error("computer_capture_failed: Notes failed"))
+        #expect(throws: ComputerUseDriverLock.Refusal.self) { try ComputerUseDriverLock.acquire(at: f.lockURL, label: "Other") }
+
+        gate.open(2)
+        #expect(Self.text(await sibling.value) != nil)
+        #expect(f.coordinator.driver?.sessionID == "s")
+        #expect(throws: ComputerUseDriverLock.Refusal.self) { try ComputerUseDriverLock.acquire(at: f.lockURL, label: "Other") }
+        f.coordinator.turnEnded(sessionID: "s")
+        try ComputerUseDriverLock.acquire(at: f.lockURL, label: "Next").release()
+    }
+
     @Test func busyWhenAnotherHolderHasTheLock() async throws {
         let f = Self.fixture()
         f.access.record(.allowForSession, for: Self.notes, session: "s")
@@ -164,5 +197,35 @@ struct ComputerUseCoordinatorTests {
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 42), sessionID: "s")
         #expect(response == .error("computer_window_not_found: No on-screen window 42. Call computer_apps again."))
         #expect(f.coordinator.pendingApprovals.isEmpty)
+    }
+}
+
+/// Holds each fake tree read until the test opens its window.
+private final class TreeGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var enteredIDs: Set<UInt32> = []
+    private var opened: Set<UInt32> = []
+    private var waiting: [UInt32: CheckedContinuation<Void, Never>] = [:]
+
+    var entered: Set<UInt32> { lock.withLock { enteredIDs } }
+
+    func enter(_ id: UInt32) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumeNow = lock.withLock {
+                enteredIDs.insert(id)
+                if opened.contains(id) { return true }
+                waiting[id] = continuation
+                return false
+            }
+            if resumeNow { continuation.resume() }
+        }
+    }
+
+    func open(_ id: UInt32) {
+        let continuation = lock.withLock {
+            opened.insert(id)
+            return waiting.removeValue(forKey: id)
+        }
+        continuation?.resume()
     }
 }
