@@ -22,7 +22,7 @@ usage: alas workspace show <checkout-uuid>
 usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
-usage: alas computer <apps|screenshot|inspect> ...
+usage: alas computer <apps|screenshot|inspect|click|type|key|scroll|drag|open-app|wait> ...
 usage: alas agent list [--worktree <name-or-branch>]
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
@@ -125,8 +125,238 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
                 call_id: None,
             }))
         }
+        Some(action @ ("click" | "type" | "key" | "scroll" | "drag" | "wait"))
+            if args.len() >= 2 =>
+        {
+            parse_computer_action(action, window_id(args[1])?, &args[2..])
+        }
+        Some("open-app") => {
+            let (mut name, mut bundle_id) = (None, None);
+            let rest = &args[1..];
+            let mut i = 0;
+            while i < rest.len() {
+                let slot = match rest[i] {
+                    "--name" if name.is_none() => &mut name,
+                    "--bundle-id" if bundle_id.is_none() => &mut bundle_id,
+                    _ => return Err(OPEN_APP_USAGE.into()),
+                };
+                i += 1;
+                *slot = Some(limited_raw(
+                    rest.get(i).copied().ok_or(OPEN_APP_USAGE)?,
+                    256,
+                )?);
+                i += 1;
+            }
+            if name.is_some() == bundle_id.is_some() {
+                return Err(OPEN_APP_USAGE.into());
+            }
+            Ok(Command::Computer(alas_client::ComputerCommand::OpenApp {
+                name,
+                bundle_id,
+                call_id: None,
+            }))
+        }
         _ => Err(USAGE.into()),
     }
+}
+
+const OPEN_APP_USAGE: &str = "usage: alas computer open-app (--name <name> | --bundle-id <id>)";
+
+/// A non-blank value of at most `max_bytes`, kept untrimmed.
+fn limited_raw(value: &str, max_bytes: usize) -> Result<String, String> {
+    if value.trim().is_empty() || value.len() > max_bytes {
+        Err(format!(
+            "value must be non-blank and at most {max_bytes} bytes"
+        ))
+    } else {
+        Ok(value.to_string())
+    }
+}
+
+/// `click`, `type`, `key`, `scroll`, `drag` and `wait`: `rest` follows the window id.
+fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<Command, String> {
+    let usage = match action {
+        "click" => {
+            "usage: alas computer click <window-id> (--ref <eN> | --x <px> --y <px>) [--button left|right] [--count 1|2] [--direct]"
+        }
+        "type" => {
+            "usage: alas computer type <window-id> <text> [--ref <eN>] [--replace] [--direct]"
+        }
+        "key" => "usage: alas computer key <window-id> <keys> [--direct]",
+        "scroll" => {
+            "usage: alas computer scroll <window-id> (--ref <eN> | --x <px> --y <px>) [--dx <-100...100>] [--dy <-100...100>]"
+        }
+        "drag" => {
+            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) (--to-ref <eN> | --to-x <px> --to-y <px>)"
+        }
+        _ => {
+            "usage: alas computer wait <window-id> <query> [--disappear] [--timeout-ms <100...20000>]"
+        }
+    };
+    // `type`, `key` and `wait` take one positional value right after the window id.
+    let (positional, flags) = match action {
+        "type" | "key" | "wait" => match rest.split_first() {
+            Some((value, flags)) => (Some(*value), flags),
+            None => return Err(usage.into()),
+        },
+        _ => (None, rest),
+    };
+    let allowed: &[&str] = match action {
+        "click" => &["--ref", "--x", "--y", "--button", "--count", "--direct"],
+        "type" => &["--ref", "--replace", "--direct"],
+        "key" => &["--direct"],
+        "scroll" => &["--ref", "--x", "--y", "--dx", "--dy"],
+        "drag" => &["--ref", "--x", "--y", "--to-ref", "--to-x", "--to-y"],
+        _ => &["--disappear", "--timeout-ms"],
+    };
+    const BOOLEAN_FLAGS: [&str; 3] = ["--direct", "--replace", "--disappear"];
+    let mut values: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    let mut i = 0;
+    while i < flags.len() {
+        let flag = flags[i];
+        if !allowed.contains(&flag) || values.contains_key(flag) {
+            return Err(usage.into());
+        }
+        if BOOLEAN_FLAGS.contains(&flag) {
+            values.insert(flag, "");
+        } else {
+            i += 1;
+            values.insert(flag, flag_value(flags, i).ok_or(usage)?);
+        }
+        i += 1;
+    }
+    let flag = |name: &str| values.get(name).copied();
+    let target = |ref_flag: &str, x_flag: &str, y_flag: &str| {
+        let coordinate = |name: &str| {
+            flag(name)
+                .map(|value| {
+                    value
+                        .parse::<f64>()
+                        .ok()
+                        .filter(|value| value.is_finite() && (0.0..=100_000.0).contains(value))
+                        .ok_or_else(|| usage.to_string())
+                })
+                .transpose()
+        };
+        let element = flag(ref_flag)
+            .map(|value| valid_computer_ref(value).ok_or_else(|| usage.to_string()))
+            .transpose()?;
+        match (element, coordinate(x_flag)?, coordinate(y_flag)?) {
+            (Some(element), None, None) => Ok(alas_client::ComputerTarget::Ref(element)),
+            (None, Some(x), Some(y)) => Ok(alas_client::ComputerTarget::Point { x, y }),
+            _ => Err(usage.to_string()),
+        }
+    };
+    let direct = flag("--direct").is_some();
+    let post = alas_client::ComputerPost::default();
+    use alas_client::ComputerCommand as C;
+    let command = match action {
+        "click" => C::Click {
+            window_id,
+            target: target("--ref", "--x", "--y")?,
+            button: match flag("--button") {
+                None | Some("left") => "left".into(),
+                Some("right") => "right".into(),
+                Some(_) => return Err(usage.into()),
+            },
+            count: flag("--count")
+                .map(|value| bounded_u64(value, 1, 2, usage))
+                .transpose()?
+                .unwrap_or(1),
+            direct,
+            post,
+            call_id: None,
+        },
+        "type" => {
+            let text = positional.unwrap_or_default();
+            if !(1..=10000).contains(&text.chars().count()) || text.len() > 40000 {
+                return Err(usage.into());
+            }
+            let element = flag("--ref")
+                .map(|value| valid_computer_ref(value).ok_or_else(|| usage.to_string()))
+                .transpose()?;
+            let replace = flag("--replace").is_some();
+            if replace && element.is_none() {
+                return Err(usage.into());
+            }
+            C::Type {
+                window_id,
+                text: text.to_string(),
+                element,
+                replace,
+                direct,
+                post,
+                call_id: None,
+            }
+        }
+        "key" => {
+            let keys = positional.unwrap_or_default();
+            if keys.trim().is_empty() || keys.len() > 64 {
+                return Err(usage.into());
+            }
+            C::Key {
+                window_id,
+                keys: keys.to_string(),
+                direct,
+                post,
+                call_id: None,
+            }
+        }
+        "scroll" => {
+            let lines = |name: &str| {
+                flag(name)
+                    .map(|value| {
+                        value
+                            .parse::<i64>()
+                            .ok()
+                            .filter(|value| (-100..=100).contains(value))
+                            .ok_or_else(|| usage.to_string())
+                    })
+                    .transpose()
+                    .map(|value| value.unwrap_or(0))
+            };
+            let (dx, dy) = (lines("--dx")?, lines("--dy")?);
+            if dx == 0 && dy == 0 {
+                return Err(usage.into());
+            }
+            C::Scroll {
+                window_id,
+                target: target("--ref", "--x", "--y")?,
+                dx,
+                dy,
+                post,
+                call_id: None,
+            }
+        }
+        "drag" => C::Drag {
+            window_id,
+            from: target("--ref", "--x", "--y")?,
+            to: target("--to-ref", "--to-x", "--to-y")?,
+            post,
+            call_id: None,
+        },
+        _ => C::Wait {
+            window_id,
+            query: limited_raw(positional.unwrap_or_default(), 256)?,
+            disappear: flag("--disappear").is_some(),
+            timeout_ms: flag("--timeout-ms")
+                .map(|value| bounded_u64(value, 100, 20000, usage))
+                .transpose()?
+                .unwrap_or(5000),
+            limit: 100,
+            call_id: None,
+        },
+    };
+    Ok(Command::Computer(command))
+}
+
+/// An `eN` ref: `^e[1-9][0-9]{0,4}$`.
+fn valid_computer_ref(value: &str) -> Option<String> {
+    let digits = value.strip_prefix('e')?;
+    ((1..=5).contains(&digits.len())
+        && digits.bytes().all(|byte| byte.is_ascii_digit())
+        && !digits.starts_with('0'))
+    .then(|| value.to_string())
 }
 
 fn parse_preview(args: &[&str]) -> Result<Command, String> {
@@ -2061,6 +2291,97 @@ mod tests {
                 call_id: None
             })
         );
+        let post = || alas_client::ComputerPost::default();
+        assert_eq!(
+            p(&[
+                "computer", "click", "7", "--x", "10.5", "--y", "20", "--button", "right",
+                "--count", "2", "--direct"
+            ])
+            .unwrap(),
+            Command::Computer(ComputerCommand::Click {
+                window_id: 7,
+                target: alas_client::ComputerTarget::Point { x: 10.5, y: 20.0 },
+                button: "right".into(),
+                count: 2,
+                direct: true,
+                post: post(),
+                call_id: None
+            })
+        );
+        assert_eq!(
+            p(&["computer", "type", "7", "hello", "--ref", "e3", "--replace"]).unwrap(),
+            Command::Computer(ComputerCommand::Type {
+                window_id: 7,
+                text: "hello".into(),
+                element: Some("e3".into()),
+                replace: true,
+                direct: false,
+                post: post(),
+                call_id: None
+            })
+        );
+        assert_eq!(
+            p(&["computer", "key", "7", "cmd+s", "--direct"]).unwrap(),
+            Command::Computer(ComputerCommand::Key {
+                window_id: 7,
+                keys: "cmd+s".into(),
+                direct: true,
+                post: post(),
+                call_id: None
+            })
+        );
+        assert_eq!(
+            p(&["computer", "scroll", "7", "--ref", "e1", "--dy", "-5"]).unwrap(),
+            Command::Computer(ComputerCommand::Scroll {
+                window_id: 7,
+                target: alas_client::ComputerTarget::Ref("e1".into()),
+                dx: 0,
+                dy: -5,
+                post: post(),
+                call_id: None
+            })
+        );
+        assert_eq!(
+            p(&[
+                "computer", "drag", "7", "--ref", "e1", "--to-x", "3", "--to-y", "4"
+            ])
+            .unwrap(),
+            Command::Computer(ComputerCommand::Drag {
+                window_id: 7,
+                from: alas_client::ComputerTarget::Ref("e1".into()),
+                to: alas_client::ComputerTarget::Point { x: 3.0, y: 4.0 },
+                post: post(),
+                call_id: None
+            })
+        );
+        assert_eq!(
+            p(&["computer", "open-app", "--bundle-id", "com.apple.TextEdit"]).unwrap(),
+            Command::Computer(ComputerCommand::OpenApp {
+                name: None,
+                bundle_id: Some("com.apple.TextEdit".into()),
+                call_id: None
+            })
+        );
+        assert_eq!(
+            p(&[
+                "computer",
+                "wait",
+                "7",
+                "Done",
+                "--disappear",
+                "--timeout-ms",
+                "100"
+            ])
+            .unwrap(),
+            Command::Computer(ComputerCommand::Wait {
+                window_id: 7,
+                query: "Done".into(),
+                disappear: true,
+                timeout_ms: 100,
+                limit: 100,
+                call_id: None
+            })
+        );
         for bad in [
             &["computer"][..],
             &["computer", "apps", "7"],
@@ -2073,6 +2394,35 @@ mod tests {
             &["computer", "inspect", "7", "--max-depth", "13"],
             &["computer", "inspect", "7", "--query", "  "],
             &["computer", "inspect", "7", "--query"],
+            &["computer", "click", "7"],
+            &[
+                "computer", "click", "7", "--ref", "e1", "--x", "1", "--y", "2",
+            ],
+            &["computer", "click", "7", "--x", "1"],
+            &["computer", "click", "7", "--ref", "e0"],
+            &["computer", "click", "7", "--x", "100001", "--y", "1"],
+            &["computer", "click", "7", "--ref", "e1", "--count", "3"],
+            &[
+                "computer", "click", "7", "--ref", "e1", "--button", "middle",
+            ],
+            &[
+                "computer", "click", "7", "--ref", "e1", "--direct", "--direct",
+            ],
+            &["computer", "type", "7"],
+            &["computer", "type", "7", ""],
+            &["computer", "type", "7", "x", "--replace"],
+            &["computer", "type", "7", "x", "--x", "1"],
+            &["computer", "key", "7", "  "],
+            &["computer", "scroll", "7", "--ref", "e1"],
+            &["computer", "scroll", "7", "--ref", "e1", "--dy", "101"],
+            &["computer", "drag", "7", "--ref", "e1"],
+            &["computer", "drag", "7", "--ref", "e1", "--to-x", "1"],
+            &["computer", "open-app"],
+            &["computer", "open-app", "--name", "A", "--bundle-id", "b"],
+            &["computer", "open-app", "--name"],
+            &["computer", "wait", "7"],
+            &["computer", "wait", "7", "x", "--timeout-ms", "99"],
+            &["computer", "wait", "7", "x", "--timeout-ms", "20001"],
         ] {
             assert!(p(bad).is_err(), "{bad:?}");
         }
