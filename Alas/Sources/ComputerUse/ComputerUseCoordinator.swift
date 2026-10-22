@@ -24,7 +24,8 @@ final class ComputerUseCoordinator {
     /// Finds a session's transcript, so a pending approval shows as awaiting permission.
     @ObservationIgnored var transcript: (String) -> ACPTranscript? = { _ in nil }
 
-    private enum ApprovalOutcome { case answered, stopped, timedOut, cancelled }
+    /// `expired`: the turn ended with the card still up, so no answer can apply to it.
+    private enum ApprovalOutcome { case answered, stopped, timedOut, cancelled, expired }
 
     private struct Waiter {
         var continuation: CheckedContinuation<ApprovalOutcome, Never>
@@ -116,7 +117,7 @@ final class ComputerUseCoordinator {
             switch await waitForAnswer(id) {
             case .timedOut: return .error(Message.approvalPending(window.app))
             case .stopped: return .error(Message.stopped)
-            case .cancelled: return .error(Message.cancelled)
+            case .cancelled, .expired: return .error(Message.cancelled)
             case .answered: break
             }
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
@@ -183,9 +184,15 @@ final class ComputerUseCoordinator {
         stoppedSessions.remove(sessionID)
     }
 
+    /// A card still up from this turn expires with it: answering it later would grant the next turn.
     func turnEnded(sessionID: String) {
         access.turnEnded(session: sessionID)
         if lockSession == sessionID { releaseDriver() }
+        for entry in access.pending where entry.session == sessionID {
+            _ = access.resolvePending(entry.id)
+            resumeWaiters(of: entry.id, with: .expired)
+        }
+        syncPending()
     }
 
     /// Idempotent: the manager may report a runtime end more than once (detach, reconnect).

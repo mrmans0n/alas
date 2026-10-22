@@ -89,6 +89,20 @@ struct ComputerUseCoordinatorTests {
         #expect(f.coordinator.pendingApprovals.count == 1)
     }
 
+    @Test func staleApprovalExpiresAtTurnEnd() async throws {
+        let f = Self.fixture(approvalWait: .milliseconds(200))
+        let pending = "computer_approval_pending: Waiting for the user to approve Notes. Try again after they answer."
+        #expect(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s") == .error(pending))
+        let stale = try #require(f.coordinator.pendingApprovals.first)
+        f.coordinator.turnEnded(sessionID: "s")
+        #expect(f.coordinator.pendingApprovals.isEmpty)
+        // Answering the old card can't grant the next turn.
+        f.coordinator.answer(stale.id, .allowForTurn)
+        #expect(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s") == .error(pending))
+        let fresh = try #require(f.coordinator.pendingApprovals.first)
+        #expect(fresh.id != stale.id)
+    }
+
     @Test func busyWhenAnotherHolderHasTheLock() async throws {
         let f = Self.fixture()
         f.access.record(.allowForSession, for: Self.notes, session: "s")
