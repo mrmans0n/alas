@@ -439,6 +439,29 @@ extension ComputerUseAXActions {
         }
     }
 
+    /// The element's own state as an action could change it: value, selection, enabled, title.
+    /// Nil when the element is gone. A secure field's value is never read.
+    static func stateHash(_ handles: ComputerUseAXHandles, _ handle: Int) async -> Int? {
+        try? await onQueue({ false }) {
+            guard let element = handles.element(handle) else { return nil }
+            AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+            var role: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
+            guard result != .invalidUIElement, result != .cannotComplete else { return nil }
+            var hasher = Hasher()
+            if !isSecure(element) {
+                var value: CFTypeRef?
+                if AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success, let value {
+                    hasher.combine((value as? String) ?? (value as? NSNumber)?.stringValue)
+                }
+            }
+            hasher.combine(bool(of: element, kAXSelectedAttribute))
+            hasher.combine(bool(of: element, kAXEnabledAttribute))
+            hasher.combine(string(of: element, kAXTitleAttribute))
+            return hasher.finalize()
+        }
+    }
+
     /// Whether the app's focused element is the one behind `handle`.
     static func isFocused(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled

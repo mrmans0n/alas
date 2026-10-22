@@ -112,9 +112,9 @@ struct ComputerUseSystem: Sendable {
     var runningApps: @Sendable () async -> [(app: ComputerUseAppIdentity, windows: [ComputerUseWindow])]
     var window: @Sendable (UInt32) async -> ComputerUseWindow?
     var screenshot: @Sendable (ComputerUseWindow) async throws -> ComputerUseScreenshot
-    /// `complete` is false when the read stopped early (node budget, deadline, stalled app).
+    /// `complete` is false when the read stopped early (node budget, time limit, stalled app).
     /// `handles` retains the elements behind each node's `handle`.
-    var axTree: @Sendable (ComputerUseWindow, _ maxDepth: Int, _ nodeBudget: Int) async throws
+    var axTree: @Sendable (ComputerUseWindow, _ maxDepth: Int, _ nodeBudget: Int, _ timeLimit: Duration) async throws
         -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles)
     /// Delivers one input. Throws `CancellationError` when `interrupt` reports
     /// `.cancelled` before the first event, or after the event sequence in flight;
@@ -125,6 +125,8 @@ struct ComputerUseSystem: Sendable {
     ) async throws -> ComputerUseDelivered
     /// The target app's focused element, read before and after an input to tell whether it did anything.
     var focusState: @Sendable (ComputerUseWindow) async -> ComputerUseWindowFingerprint.Focus?
+    /// A hash of the element's own state (value, selection, enabled, title); nil when it can't be read.
+    var elementState: @Sendable (ComputerUseAXHandles, Int) async -> Int?
     /// Whether the element behind a handle still has the role and title it was read with.
     var elementMatches: @Sendable (ComputerUseAXHandles, Int, _ role: String, _ title: String?) async -> Bool
     /// Seconds since the last hardware input; events Alas posts don't count.
@@ -139,13 +141,14 @@ struct ComputerUseSystem: Sendable {
         runningApps: { await LiveComputerUseSystem.runningApps() },
         window: { await LiveComputerUseSystem.window($0) },
         screenshot: { try await LiveComputerUseSystem.screenshot($0) },
-        axTree: { window, maxDepth, nodeBudget in
-            try await ComputerUseAXReader.read(window, maxDepth: maxDepth, nodeBudget: nodeBudget)
+        axTree: { window, maxDepth, nodeBudget, timeLimit in
+            try await ComputerUseAXReader.read(window, maxDepth: maxDepth, nodeBudget: nodeBudget, timeLimit: timeLimit)
         },
         perform: { input, window, direct, interrupt in
             try await LiveComputerUseSystem.perform(input, in: window, direct: direct, interrupt: interrupt)
         },
         focusState: { await ComputerUseAXActions.focusState(of: $0.app) },
+        elementState: { await ComputerUseAXActions.stateHash($0, $1) },
         elementMatches: { handles, handle, role, title in
             await ComputerUseAXActions.elementMatches(handles, handle, role: role, title: title)
         },

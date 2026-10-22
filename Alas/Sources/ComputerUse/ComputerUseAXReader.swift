@@ -12,7 +12,7 @@ enum ComputerUseAXReader {
     static let frameTolerance: CGFloat = 2
     /// Per-message timeout, set on every element we query (the global default is about 6 s).
     static let messagingTimeout: Float = 1.0
-    /// Wall-clock budget for one read; the tree gathered so far is returned after it.
+    /// Default wall-clock budget for one read; the tree gathered so far is returned after it.
     static let deadline: Duration = .seconds(5)
 
     /// Walks and AX actions share it so an action never runs during a walk.
@@ -43,7 +43,9 @@ enum ComputerUseAXReader {
     /// Throws `CancellationError` when the calling task is cancelled. `complete`
     /// is false when the walk stopped early (node budget, deadline, stalled app).
     /// `handles` retains every element in the tree, indexed by `ComputerUseAXNode.handle`.
-    static func read(_ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int) async throws
+    static func read(
+        _ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int, timeLimit: Duration = deadline
+    ) async throws
         -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
         let cancel = CancelFlag()
         return try await withTaskCancellationHandler {
@@ -57,7 +59,7 @@ enum ComputerUseAXReader {
                     let walk = Walk(
                         budget: max(1, nodeBudget),
                         maxDepth: maxDepth,
-                        deadline: .now + deadline,
+                        deadline: .now + timeLimit,
                         isCancelled: { cancel.isSet }
                     )
                     continuation.resume(with: Result { try walk.tree(for: window) })

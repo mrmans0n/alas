@@ -27,12 +27,13 @@ struct ComputerUseCoordinatorTests {
             runningApps: { windows.values.map { (app: $0.app, windows: [$0]) } },
             window: { windows[$0] },
             screenshot: { _ in ComputerUseScreenshot(png: Data([0x89]), pixelSize: CGSize(width: 800, height: 600), scale: 2) },
-            axTree: { _, _, _ in (saveTree, treeComplete, ComputerUseAXHandles()) },
+            axTree: { _, _, _, _ in (saveTree, treeComplete, ComputerUseAXHandles()) },
             perform: { input, _, _, _ in
                 recorder?.record(input)
                 return .ax
             },
             focusState: { _ in nil },
+            elementState: { _, _ in nil },
             elementMatches: { _, _, _, _ in true },
             secondsSinceUserInput: { 60 },
             frontmostPID: { nil },
@@ -148,7 +149,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system()
         system.runningApps = { [] }
         system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
-        system.axTree = { window, _, _ in
+        system.axTree = { window, _, _, _ in
             await gate.enter(window.windowID)
             if window.windowID == 1 { throw ComputerUseSystemError.captureFailed("Notes failed") }
             return tree
@@ -177,7 +178,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system()
         system.runningApps = { [] }
         system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
-        system.axTree = { window, _, _ in
+        system.axTree = { window, _, _, _ in
             await gate.enter(window.windowID)
             return (root: ComputerUseAXNode(role: "AXWindow", title: "Note"), complete: true, handles: ComputerUseAXHandles())
         }
@@ -199,7 +200,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system()
         system.runningApps = { [] }
         system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
-        system.axTree = { window, _, _ in
+        system.axTree = { window, _, _, _ in
             await gate.enter(window.windowID)
             throw ComputerUseSystemError.captureFailed("Notes failed")
         }
@@ -315,7 +316,7 @@ struct ComputerUseCoordinatorTests {
         #expect(handle == 1)
     }
 
-    enum WindowChange: CaseIterable { case none, elements, focus }
+    enum WindowChange: CaseIterable { case none, elements, focus, target, truncatedBefore, truncatedAfter }
 
     @Test(arguments: [
         (ComputerUseDelivered.ax, WindowChange.none,
@@ -324,26 +325,35 @@ struct ComputerUseCoordinatorTests {
          #"No change was observed in the window after this action; the app may have ignored it. Retry with delivery: "direct"."#),
         (.event, .elements, nil),
         (.event, .focus, nil),
+        // The clicked element changed although the listing and focus look the same.
+        (.background, .target, nil),
+        // A cut-short read may have missed what changed.
+        (.background, .truncatedBefore, nil),
+        (.background, .truncatedAfter, nil),
     ] as [(ComputerUseDelivered, WindowChange, String?)])
     func actionThatChangedNothingSaysSo(_ delivered: ComputerUseDelivered, change: WindowChange, warning: String?) async throws {
         let reads = Counter()
         let focusReads = Counter()
+        let stateReads = Counter()
         let saveTree = Self.saveTree
         var system = Self.system()
         system.perform = { _, _, _, _ in delivered }
         // Read 1 is the inspect, 2 the window before the input, 3 the one after it.
-        system.axTree = { _, _, _ in
+        system.axTree = { _, _, _, _ in
+            let read = reads.next()
             var tree = saveTree
-            if change == .elements, reads.next() == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
-            return (tree, true, ComputerUseAXHandles())
+            if change == .elements, read == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
+            let cut = (change == .truncatedBefore && read == 2) || (change == .truncatedAfter && read == 3)
+            return (tree, !cut, ComputerUseAXHandles())
         }
         system.focusState = { _ in
             let caret = change == .focus && focusReads.next() == 2 ? 5 : 0
             return ComputerUseWindowFingerprint.Focus(role: "AXTextArea", valueHash: 1, selectedRange: [caret, 0])
         }
+        system.elementState = { _, _ in change == .target && stateReads.next() == 2 ? 2 : 1 }
         let f = Self.fixture(system: system, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .key, windowID: 1, keys: "cmd+b"), sessionID: "s")))
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
         let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         #expect(payload["warning"] as? String == warning)
         #expect(payload["delivery"] as? String == delivered.delivery.rawValue)
@@ -397,7 +407,9 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.isEmpty)
     }
 
-    enum RefExpiry: CaseIterable { case turnEnd, reinspectWithoutTheNode, elementChanged }
+    /// `filteredReadRetitledTheNode`: a read that doesn't list the shown element finds another
+    /// element in its place.
+    enum RefExpiry: CaseIterable { case turnEnd, reinspectWithoutTheNode, elementChanged, filteredReadRetitledTheNode }
 
     @Test(arguments: RefExpiry.allCases)
     func refsExpireWithTheTurnAndOnReinspect(_ expiry: RefExpiry) async throws {
@@ -405,19 +417,29 @@ struct ComputerUseCoordinatorTests {
         let reads = Counter()
         let saveTree = Self.saveTree
         var system = Self.system(recorder: recorder)
+        let retitled = ComputerUseAXNode(
+            role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Delete", handle: 1)], handle: 0)
         // Only the first read still has the Save button.
-        system.axTree = { _, _, _ in
-            (reads.next() == 1 ? saveTree : ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0), true, ComputerUseAXHandles())
+        system.axTree = { _, _, _, _ in
+            guard reads.next() > 1 else { return (saveTree, true, ComputerUseAXHandles()) }
+            let later = expiry == .filteredReadRetitledTheNode ? retitled : ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0)
+            return (later, true, ComputerUseAXHandles())
         }
         // The element behind the handle still exists, but now reads as another button.
         system.elementMatches = { _, handle, role, title in
-            expiry != .elementChanged && handle == 1 && role == "AXButton" && title == "Save"
+            switch expiry {
+            case .elementChanged: false
+            // The live element is the retitled one, so only the ref's expected identity can catch it.
+            case .filteredReadRetitledTheNode: handle == 1 && role == "AXButton" && title == "Delete"
+            case .turnEnd, .reinspectWithoutTheNode: handle == 1 && role == "AXButton" && title == "Save"
+            }
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
         switch expiry {
         case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
         case .reinspectWithoutTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
+        case .filteredReadRetitledTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Note"), sessionID: "s")
         case .elementChanged: break
         }
         let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
@@ -512,7 +534,7 @@ struct ComputerUseCoordinatorTests {
         let saveTree = Self.saveTree
         let window = Self.windows[1]!
         var system = Self.system(recorder: recorder)
-        system.axTree = { _, _, _ in
+        system.axTree = { _, _, _, _ in
             guard reads.next() == 1 || failure == .windowCloses else { throw ComputerUseSystemError.captureFailed("gone") }
             return (saveTree, true, ComputerUseAXHandles())
         }
@@ -594,7 +616,7 @@ struct ComputerUseCoordinatorTests {
         // Lookups 1 and 2 resolve the inspect and the wait; the window closes before the second poll.
         system.window = { _ in waitCase == .windowCloses && lookups.next() > 2 ? nil : window }
         // Read 1 is the inspect. "Done" shows up from read 4 on, never, or is always there.
-        system.axTree = { _, _, _ in
+        system.axTree = { _, _, _, _ in
             let read = reads.next()
             let done = switch waitCase {
             case .appears: read >= 4

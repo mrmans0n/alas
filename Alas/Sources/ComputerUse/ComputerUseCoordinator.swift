@@ -90,12 +90,15 @@ final class ComputerUseCoordinator {
         var lastScreenshot: (frame: CGRect, scale: CGFloat)?
     }
 
-    /// An element the agent was shown, as read: an action re-checks it before using the handle,
-    /// since an app may reuse a row's element for different content.
+    /// An element as read: an action re-checks it before using the handle, since an app may
+    /// reuse a row's element for different content.
     private struct ElementRef {
         var handle: Int
         var role: String
         var title: String?
+        /// Listed to the agent at some point: a later read that doesn't list it must still find
+        /// the element the agent saw there, not whatever took its place.
+        var shown: Bool
     }
 
     /// The session state a call started in.
@@ -604,6 +607,14 @@ final class ComputerUseCoordinator {
         var window = window
         var input = try input(for: command, in: window, context: context)
         let direct = command.delivery == .direct
+        // What the window looked like, so an input the app ignored doesn't pass for one that worked.
+        // Read first, so the takeover wait and the ref re-check are the last steps before the input.
+        var target: (ComputerUseAXHandles, Int)?
+        if let ref = command.ref, let snapshot = snapshot(of: window, context: context), let element = snapshot.refs[ref] {
+            target = (snapshot.handles, element.handle)
+        }
+        let before = await fingerprint(of: window, for: command, target: target, context: context)
+        try checkStillActive(context)
         if try await waitForUserIdle(in: window, direct: direct, context: context) {
             // The window may have moved or closed while the user had it: map points against where it is now.
             guard let current = await system.window(window.windowID), current.app.pid == window.app.pid else {
@@ -614,9 +625,6 @@ final class ComputerUseCoordinator {
         }
         try checkStillActive(context)
         try await recheckRefs(of: command, in: window, context: context)
-        try checkStillActive(context)
-        // What the window looked like, so an input the app ignored doesn't pass for one that worked.
-        let before = await fingerprint(of: window, for: command, context: context)
         try checkStillActive(context)
         let delivered: ComputerUseDelivered
         do {
@@ -647,9 +655,7 @@ final class ComputerUseCoordinator {
                 window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
             payload["truncated"] = read.truncated
             payload["elements"] = read.elements.map(Self.element)
-            let after = await ComputerUseWindowFingerprint(
-                focus: system.focusState(window), windowTitle: window.title,
-                elementsHash: ComputerUseChangeCheck.elementsHash(read.elements))
+            let after = await fingerprint(of: window, read: read, target: target)
             payload["warning"] = ComputerUseChangeCheck.warning(
                 before: before, after: after, deliveredAsEvents: [.event, .background].contains(delivered.delivery))
         } catch is CancellationError {
@@ -680,17 +686,34 @@ final class ComputerUseCoordinator {
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)
 
-    /// The window as the post-action read will see it. A failed read leaves the element list
-    /// unknown, which never counts as unchanged.
+    /// Nodes and time the read before an input may take: it delays the input, and a read cut
+    /// short only turns the change check off.
+    static let fingerprintNodeBudget = 500
+    static let fingerprintTimeLimit: Duration = .seconds(1)
+
+    /// The window as the post-action read will see it. A failed or cut-short read leaves the
+    /// element list unknown, which never counts as unchanged.
     private func fingerprint(
-        of window: ComputerUseWindow, for command: ComputerUseCommand, context: CallContext
+        of window: ComputerUseWindow, for command: ComputerUseCommand, target: (ComputerUseAXHandles, Int)?,
+        context: CallContext
     ) async -> ComputerUseWindowFingerprint {
         let read = try? await readElements(
             window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context,
-            recordRefs: false)
-        return await ComputerUseWindowFingerprint(
-            focus: system.focusState(window), windowTitle: window.title,
-            elementsHash: read.map { ComputerUseChangeCheck.elementsHash($0.elements) })
+            recordRefs: false, nodeBudget: Self.fingerprintNodeBudget, timeLimit: Self.fingerprintTimeLimit)
+        return await fingerprint(of: window, read: read, target: target)
+    }
+
+    /// Built the same way before and after the input, so an unchanged window compares equal.
+    private func fingerprint(
+        of window: ComputerUseWindow, read: ElementRead?, target: (ComputerUseAXHandles, Int)?
+    ) async -> ComputerUseWindowFingerprint {
+        let focus = await system.focusState(window)
+        var targetHash: Int?
+        if let target { targetHash = await system.elementState(target.0, target.1) }
+        return ComputerUseWindowFingerprint(
+            focus: focus, windowTitle: window.title,
+            elementsHash: read.flatMap { $0.truncated ? nil : ComputerUseChangeCheck.elementsHash($0.elements) },
+            targetHash: targetHash)
     }
 
     /// The window as it is now; gone or now another app's → `windowNotFound`.
@@ -840,12 +863,14 @@ final class ComputerUseCoordinator {
     }
 
     /// Reads the window the way computer_inspect does and, unless told not to, replaces its refs.
+    /// `nodeBudget` and `timeLimit` only lower the read's own caps.
     private func readElements(
-        _ window: ComputerUseWindow, query: String?, limit: Int, maxDepth: Int, context: CallContext, recordRefs: Bool = true
+        _ window: ComputerUseWindow, query: String?, limit: Int, maxDepth: Int, context: CallContext, recordRefs: Bool = true,
+        nodeBudget: Int = .max, timeLimit: Duration = ComputerUseAXReader.deadline
     ) async throws -> ElementRead {
         // Without a query the walk only needs one node past the limit to report truncation.
-        let budget = query == nil ? limit + 1 : Self.queryNodeBudget
-        let tree = try await system.axTree(window, maxDepth, budget)
+        let budget = min(query == nil ? limit + 1 : Self.queryNodeBudget, nodeBudget)
+        let tree = try await system.axTree(window, maxDepth, budget, min(timeLimit, ComputerUseAXReader.deadline))
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
@@ -864,11 +889,22 @@ final class ComputerUseCoordinator {
     }
 
     private func record(refs read: ElementRead, of window: ComputerUseWindow, context: CallContext) {
-        // A query or limit only trims what the agent is shown: every element the read named stays usable.
+        // A query or limit only trims what the agent is shown: every element the read named stays
+        // usable. One the agent was shown before but this read doesn't list must still be what it
+        // saw; otherwise the ref now names something it never saw, and is dropped.
+        let previous = snapshot(of: window, context: context)?.refs ?? [:]
+        let listed = Set(read.elements.map(\.ref))
         var refs: [String: ElementRef] = [:]
         for (ref, handle) in read.refs {
             guard let identity = read.identities[handle] else { continue }
-            refs[ref] = ElementRef(handle: handle, role: identity.role, title: identity.title)
+            if listed.contains(ref) {
+                refs[ref] = ElementRef(handle: handle, role: identity.role, title: identity.title, shown: true)
+            } else if let seen = previous[ref], seen.shown {
+                guard seen.role == identity.role, seen.title == identity.title else { continue }
+                refs[ref] = ElementRef(handle: handle, role: seen.role, title: seen.title, shown: true)
+            } else {
+                refs[ref] = ElementRef(handle: handle, role: identity.role, title: identity.title, shown: false)
+            }
         }
         updateSnapshot(of: window, context: context) {
             $0.refs = refs
