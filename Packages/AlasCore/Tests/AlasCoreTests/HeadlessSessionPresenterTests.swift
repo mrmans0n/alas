@@ -68,6 +68,22 @@ struct HeadlessSessionPresenterTests {
         #expect(file.sessions == [fixture.worktree.id: [a]])
     }
 
+    @Test func restoreDropsSessionsOfAnArchivedWorktree() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.storedSession()
+        #expect(await fixture.presenter().openSessionTab(for: id) == .success)
+        fixture.projects.setWorktreeHidden(projectId: "p", path: fixture.worktree.path, hidden: true)
+
+        let core = fixture.makeCore()
+        defer { core.sessionManagers.values.forEach { $0.shutdownBackgroundTasks() } }
+        let restored = fixture.presenter(core: core)
+        await restored.restore()
+
+        #expect(restored.sessionTabIndex(id, owner: fixture.owner) == nil)
+        #expect(core.sessionManagers.isEmpty)
+    }
+
     @Test func racingOpenAndCloseEndInTheLastRequestsState() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }

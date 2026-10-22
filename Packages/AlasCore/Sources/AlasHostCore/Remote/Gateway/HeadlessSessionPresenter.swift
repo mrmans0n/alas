@@ -166,9 +166,12 @@ public final class HeadlessSessionPresenter: RemoteSessionPresenter {
         return nil
     }
 
-    /// The session manager of a configured local worktree, created on first use.
+    /// The session manager of a configured local worktree, created on first
+    /// use. None for an archived worktree, whose sessions stay closed.
     private func localManager(_ worktreeID: String) -> ACPSessionManager? {
-        guard let (project, worktree) = core.projectAndWorktree(withWorktreeId: worktreeID), project.host == nil else { return nil }
+        guard let (project, worktree) = core.projectAndWorktree(withWorktreeId: worktreeID), project.host == nil,
+              !core.projects.isWorktreeHidden(projectId: project.id, path: worktree.path)
+        else { return nil }
         return try? core.sessionManager(for: worktree)
     }
 
