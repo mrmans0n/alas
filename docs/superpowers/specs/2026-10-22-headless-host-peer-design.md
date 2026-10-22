@@ -66,10 +66,12 @@ Work is split in phases:
    local worktree as history. Today only managers already loaded in the
    process are listed, so the host must make each configured local worktree's
    stored sessions listable without anyone opening them first.
-6. **Agents and models.**
-   - `listAgents` reports which agents are actually installed, as the app does.
-   - A model catalog (`ACPAgentModelCatalog`), persisted in the profile, gives
-     the new-session sheet models and efforts once an agent has run once.
+6. **Agents and models.** `listAgents` lists the enabled agents, which is what
+   the app serves too: for local worktrees it does not detect installation
+   either (checked while planning, `AgentAvailabilityStore.state`). A model
+   catalog (`ACPAgentModelCatalog`), persisted in the profile and fed by
+   sessions' advertised models, gives the new-session sheet models and efforts
+   once an agent has run once.
 7. **Honest capabilities.** A headless host does not advertise
    `peerConsole.v1` or `peerConsoleTerminate.v1`. The capability list becomes
    per-server, not a hard-coded constant.
@@ -127,9 +129,6 @@ Work is split in phases:
 - Where the open-session list file lives in the profile, and its format.
 - How worktree session rows become listable at boot: eager manager creation, or
   reading stored rows without a manager.
-- How `listAgents` detects installation: reuse the app's detection if it can
-  move into core; otherwise a PATH-based check with the resolved login-shell
-  PATH.
 - Exact `alas-host pair` output layout.
 - Test selection, per the testing policy. Suggested pins:
   - presenter open, close and create ordering;
