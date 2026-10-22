@@ -36,19 +36,30 @@ enum ComputerUseInputPoster {
         }
     }
 
-    static func drag(from start: CGPoint, to end: CGPoint, target: Target) async throws {
+    /// Throws `userActive` between steps once `userActive` turns true, after
+    /// releasing the button where the drag got to.
+    static func drag(
+        from start: CGPoint, to end: CGPoint, target: Target, userActive: @Sendable () -> Bool
+    ) async throws {
         let points = ComputerUseInputGeometry.interpolate(from: start, to: end, steps: dragSteps)
         // Build everything first so a failure can't leave the button down.
         let down = try mouseEvent(.leftMouseDown, at: start, button: .left, clickState: 1, target: target)
         let moves = try points.map { try mouseEvent(.leftMouseDragged, at: $0, button: .left, clickState: 1, target: target) }
-        let up = try mouseEvent(.leftMouseUp, at: end, button: .left, clickState: 1, target: target)
+        // One release per position, so the drag can stop at any step.
+        let ups = try ([start] + points).map {
+            try mouseEvent(.leftMouseUp, at: $0, button: .left, clickState: 1, target: target)
+        }
         down.postToPid(target.pid)
-        for move in moves {
+        for (index, move) in moves.enumerated() {
             await pause()
+            if userActive() {
+                ups[index].postToPid(target.pid)
+                throw ComputerUseSystemError.userActive
+            }
             move.postToPid(target.pid)
         }
         await pause()
-        up.postToPid(target.pid)
+        ups[moves.count].postToPid(target.pid)
     }
 
     /// Positive `dy` scrolls down and positive `dx` right, like CSS. CG wheel
@@ -87,15 +98,23 @@ enum ComputerUseInputPoster {
     }
 
     /// Posts `text` as unicode keyboard events in chunks of at most
-    /// `textChunkUnits` UTF-16 units, never splitting a character. Throws
-    /// `CancellationError` between chunks once `isCancelled` turns true.
-    static func type(_ text: String, pid: Int32, isCancelled: @Sendable () -> Bool) async throws {
+    /// `textChunkUnits` UTF-16 units, never splitting a character. Between
+    /// chunks, throws `CancellationError` once `interrupt` reports `.cancelled`
+    /// and `userTookOver` with the characters typed once it reports `.userActive`.
+    static func type(_ text: String, pid: Int32, interrupt: @Sendable () -> ComputerUseInputInterrupt?) async throws {
         let source = try source()
+        let total = text.count
+        var typed = 0
         for (index, chunk) in chunks(text).enumerated() {
             if index > 0 {
-                if isCancelled() { throw CancellationError() }
+                switch interrupt() {
+                case .cancelled: throw CancellationError()
+                case .userActive: throw ComputerUseSystemError.userTookOver(typed: typed, of: total)
+                case nil: break
+                }
                 await pause()
             }
+            typed += chunk.count
             let units = Array(chunk.utf16)
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)

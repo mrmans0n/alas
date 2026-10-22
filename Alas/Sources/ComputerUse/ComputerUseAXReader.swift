@@ -52,6 +52,31 @@ enum ComputerUseAXReader {
         }
     }
 
+    /// The AX window whose frame matches the CG bounds; the title breaks ties.
+    /// The readers are the caller's, so a walk can stop on a stalled app.
+    static func matchingWindow(
+        _ candidates: [AXUIElement], for window: ComputerUseWindow,
+        frame: (AXUIElement) -> CGRect?, title: (AXUIElement) -> String?, shouldStop: () -> Bool = { false }
+    ) -> AXUIElement? {
+        var matches: [AXUIElement] = []
+        for candidate in candidates {
+            guard !shouldStop() else { break }
+            AXUIElementSetMessagingTimeout(candidate, messagingTimeout)
+            guard let frame = frame(candidate) else { continue }
+            if abs(frame.minX - window.frame.minX) <= frameTolerance,
+               abs(frame.minY - window.frame.minY) <= frameTolerance,
+               abs(frame.width - window.frame.width) <= frameTolerance,
+               abs(frame.height - window.frame.height) <= frameTolerance {
+                matches.append(candidate)
+            }
+        }
+        if matches.count > 1, let windowTitle = window.title,
+           let titled = matches.first(where: { title($0) == windowTitle }) {
+            return titled
+        }
+        return matches.first
+    }
+
     private final class Walk {
         let budget: Int
         let maxDepth: Int
@@ -90,7 +115,9 @@ enum ComputerUseAXReader {
                 }
                 throw ComputerUseSystemError.captureFailed("Could not read the app's windows (AXError \(result.rawValue))")
             }
-            let target = matchingWindow(axWindows, for: window)
+            let target = ComputerUseAXReader.matchingWindow(
+                axWindows, for: window,
+                frame: { frame(of: $0) }, title: { string(of: $0, kAXTitleAttribute) }, shouldStop: { isHalted })
             if isCancelled() { throw CancellationError() }
             if appStalled || (target == nil && ContinuousClock.now >= deadline) { throw notResponding(window) }
             guard let target else { throw ComputerUseSystemError.windowNotFound(window.windowID) }
@@ -102,28 +129,6 @@ enum ComputerUseAXReader {
 
         private func notResponding(_ window: ComputerUseWindow) -> ComputerUseSystemError {
             .captureFailed("\(window.app.name) is not responding")
-        }
-
-        /// The AX window whose frame matches the CG bounds; the title breaks ties.
-        private func matchingWindow(_ candidates: [AXUIElement], for window: ComputerUseWindow) -> AXUIElement? {
-            var matches: [AXUIElement] = []
-            for candidate in candidates {
-                guard !isHalted else { break }
-                AXUIElementSetMessagingTimeout(candidate, ComputerUseAXReader.messagingTimeout)
-                guard let frame = frame(of: candidate) else { continue }
-                let tolerance = ComputerUseAXReader.frameTolerance
-                if abs(frame.minX - window.frame.minX) <= tolerance,
-                   abs(frame.minY - window.frame.minY) <= tolerance,
-                   abs(frame.width - window.frame.width) <= tolerance,
-                   abs(frame.height - window.frame.height) <= tolerance {
-                    matches.append(candidate)
-                }
-            }
-            if matches.count > 1, let title = window.title,
-               let titled = matches.first(where: { string(of: $0, kAXTitleAttribute) == title }) {
-                return titled
-            }
-            return matches.first
         }
 
         /// The root is depth 0 and counts toward the budget. Once the walk

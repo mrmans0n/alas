@@ -281,8 +281,8 @@ extension LiveComputerUseSystem {
     static let activationWait: Duration = .milliseconds(500)
     /// Lets the target handle direct input before the previous app returns to the front.
     static let activationSettle: Duration = .milliseconds(100)
-    /// Lets the target read the pasteboard before it is restored.
-    static let pasteSettle: Duration = .milliseconds(150)
+    /// The longest a paste waits for the target to read the text before the pasteboard is restored.
+    static let pasteReadWait: Duration = .seconds(2)
     /// Lets a click move focus before the focused element is checked.
     static let focusSettle: Duration = .milliseconds(50)
     /// One direct action at a time: activations and pasteboard swaps must not
@@ -301,8 +301,8 @@ extension LiveComputerUseSystem {
             try await directLock.run {
                 // A Stop while waiting for another direct action performs nothing.
                 if isCancelled() { throw CancellationError() }
-                try await withActivation(of: window.app) {
-                    try await postEvents(input, in: window, paste: true, isCancelled: isCancelled)
+                try await withActivation(of: window.app, isCancelled: isCancelled) {
+                    try await postEvents(input, in: window, paste: true, interrupt: interrupt)
                 }
             }
             return .activation
@@ -330,7 +330,7 @@ extension LiveComputerUseSystem {
         default:
             break
         }
-        try await postEvents(input, in: window, paste: false, isCancelled: isCancelled)
+        try await postEvents(input, in: window, paste: false, interrupt: interrupt)
         return .event
     }
 
@@ -338,14 +338,15 @@ extension LiveComputerUseSystem {
     /// before the first event.
     private static func postEvents(
         _ input: ComputerUseInput, in window: ComputerUseWindow, paste: Bool,
-        isCancelled: @escaping @Sendable () -> Bool
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
         let app = window.app
         let target = ComputerUseInputPoster.Target(pid: app.pid, windowID: window.windowID)
         func point(_ input: ComputerUseInputTarget) async throws -> CGPoint {
             switch input {
             case .element(let handles, let handle):
-                try await ComputerUseAXActions.center(handles, handle, app: app, isCancelled: isCancelled)
+                try await ComputerUseAXActions.center(handles, handle, within: window.frame, app: app, isCancelled: isCancelled)
             case .point(let point):
                 point
             }
@@ -362,13 +363,16 @@ extension LiveComputerUseSystem {
             switch at {
             case .element(let handles, let handle):
                 try await ComputerUseAXActions.focus(handles, handle, app: app, isCancelled: isCancelled)
+                try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
             case .point(let location):
                 try checkCancelled()
                 try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
                 // Let the click move focus before checking what has it.
                 try? await Task.sleep(for: focusSettle)
+                try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case nil:
+                try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             }
             try checkCancelled()
@@ -378,9 +382,14 @@ extension LiveComputerUseSystem {
             if paste {
                 try await self.paste(text, pid: app.pid)
             } else {
-                try await ComputerUseInputPoster.type(text, pid: app.pid, isCancelled: isCancelled)
+                try await ComputerUseInputPoster.type(text, pid: app.pid, interrupt: interrupt)
             }
         case .key(let chord):
+            try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+            // A printable key or ⌘V puts text into the focused field, like typing does.
+            if chord.mayInsertText {
+                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
+            }
             try checkCancelled()
             try ComputerUseInputPoster.key(chord, pid: app.pid)
         case .scroll(let at, let dx, let dy):
@@ -391,7 +400,7 @@ extension LiveComputerUseSystem {
             let start = try await point(from)
             let end = try await point(to)
             try checkCancelled()
-            try await ComputerUseInputPoster.drag(from: start, to: end, target: target)
+            try await ComputerUseInputPoster.drag(from: start, to: end, target: target) { interrupt() == .userActive }
         }
     }
 
@@ -399,7 +408,7 @@ extension LiveComputerUseSystem {
     /// frontmost app to the front, also when `body` throws. Throws without
     /// running `body` when the app does not come to the front in time.
     private static func withActivation(
-        of app: ComputerUseAppIdentity, _ body: () async throws -> Void
+        of app: ComputerUseAppIdentity, isCancelled: @Sendable () -> Bool, _ body: () async throws -> Void
     ) async throws {
         let previousPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
         guard previousPID != app.pid else {
@@ -410,6 +419,11 @@ extension LiveComputerUseSystem {
         let deadline = ContinuousClock.now + activationWait
         var frontmost = false
         while true {
+            // A cancelled task's sleep returns at once, so the loop would spin until the deadline.
+            if isCancelled() || Task.isCancelled {
+                await restoreActivation(previousPID, from: app.pid)
+                throw CancellationError()
+            }
             frontmost = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier } == app.pid
             guard !frontmost, ContinuousClock.now < deadline else { break }
             try? await Task.sleep(for: .milliseconds(25))
@@ -438,9 +452,12 @@ extension LiveComputerUseSystem {
         }
     }
 
-    /// Pastes `text` with ⌘V, then puts the previous pasteboard items back.
+    /// Pastes `text` with ⌘V, then puts the previous pasteboard items back once the
+    /// target has read the text (or after `pasteReadWait`). The text is served on
+    /// request, so the restore can wait for the read instead of guessing a delay.
     private static func paste(_ text: String, pid: Int32) async throws {
-        let saved = await MainActor.run { () -> [[NSPasteboard.PasteboardType: Data]] in
+        let provider = PasteProvider(text: text)
+        let (saved, changeCount) = await MainActor.run { () -> ([[NSPasteboard.PasteboardType: Data]], Int) in
             let pasteboard = NSPasteboard.general
             let saved = (pasteboard.pasteboardItems ?? []).map { item in
                 var types: [NSPasteboard.PasteboardType: Data] = [:]
@@ -451,25 +468,31 @@ extension LiveComputerUseSystem {
             }
             pasteboard.clearContents()
             let item = NSPasteboardItem()
-            item.setString(text, forType: .string)
+            item.setDataProvider(provider, forTypes: [.string])
             // Asks clipboard managers not to record the text.
             item.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
             pasteboard.writeObjects([item])
-            return saved
+            return (saved, pasteboard.changeCount)
         }
         do {
             try ComputerUseInputPoster.postKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand, pid: pid)
         } catch {
-            await MainActor.run { restorePasteboard(saved) }
+            await MainActor.run { restorePasteboard(saved, ifUnchangedSince: changeCount) }
             throw error
         }
-        try? await Task.sleep(for: pasteSettle)
-        await MainActor.run { restorePasteboard(saved) }
+        let deadline = ContinuousClock.now + pasteReadWait
+        while !provider.wasRead.isSet, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        await MainActor.run { restorePasteboard(saved, ifUnchangedSince: changeCount) }
+        withExtendedLifetime(provider) {}
     }
 
+    /// Skipped when the pasteboard changed after Alas wrote to it: the user copied something.
     @MainActor
-    private static func restorePasteboard(_ saved: [[NSPasteboard.PasteboardType: Data]]) {
+    private static func restorePasteboard(_ saved: [[NSPasteboard.PasteboardType: Data]], ifUnchangedSince changeCount: Int) {
         let pasteboard = NSPasteboard.general
+        guard pasteboard.changeCount == changeCount else { return }
         pasteboard.clearContents()
         let items = saved.map { types in
             let item = NSPasteboardItem()
@@ -479,6 +502,21 @@ extension LiveComputerUseSystem {
             return item
         }
         if !items.isEmpty { pasteboard.writeObjects(items) }
+    }
+}
+
+/// Serves a paste's text when the target asks for it, and records that it did.
+private final class PasteProvider: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
+    let text: String
+    let wasRead = ComputerUseAXReader.CancelFlag()
+
+    init(text: String) {
+        self.text = text
+    }
+
+    func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
+        item.setString(text, forType: type)
+        wasRead.set()
     }
 }
 
@@ -541,8 +579,10 @@ extension LiveComputerUseSystem {
         let configuration = NSWorkspace.OpenConfiguration()
         configuration.activates = false
         do {
-            let launched = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration)
-            return await MainActor.run { identity(of: launched) }
+            // Only the pid crosses to the main actor; the app object isn't Sendable on every SDK.
+            let pid = try await NSWorkspace.shared.openApplication(at: url, configuration: configuration).processIdentifier
+            return await MainActor.run { NSRunningApplication(processIdentifier: pid).map(identity(of:)) }
+                ?? ComputerUseAppIdentity(name: app.name, bundleID: app.bundleID, pid: pid)
         } catch {
             throw ComputerUseSystemError.openFailed(error.localizedDescription)
         }
@@ -554,6 +594,9 @@ extension LiveComputerUseSystem {
             URL(fileURLWithPath: "/Applications"),
             FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications"),
             URL(fileURLWithPath: "/System/Applications"),
+            URL(fileURLWithPath: "/Applications/Utilities"),
+            URL(fileURLWithPath: "/System/Applications/Utilities"),
+            URL(fileURLWithPath: "/System/Library/CoreServices/Applications"),
         ]
         return directories
             .map { $0.appendingPathComponent("\(name).app") }

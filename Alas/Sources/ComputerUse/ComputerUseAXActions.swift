@@ -28,8 +28,8 @@ enum ComputerUseAXActions {
     }
 
     /// Replaces the element's value. Refuses secure text fields. Throws
-    /// `Unsupported` when the app refused the value for a reason other than a
-    /// stale element or a stalled app, so typing can be tried instead.
+    /// `Unsupported` when the element doesn't take a value this way, so typing
+    /// can be tried instead.
     static func setValue(
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
         isCancelled: @escaping IsCancelled
@@ -38,7 +38,7 @@ enum ComputerUseAXActions {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
             let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
-            guard result == .success else { throw mapped(result, app: app) ?? Unsupported(error: result) }
+            guard result == .success else { throw failure(result, app: app) }
         }
     }
 
@@ -103,8 +103,10 @@ enum ComputerUseAXActions {
     }
 
     /// The element's centre from its current position and size, global points.
+    /// Throws `outOfBounds` when the centre is outside `window` (the window's current frame).
     static func center(
-        _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
+        _ handles: ComputerUseAXHandles, _ handle: Int, within window: CGRect, app: ComputerUseAppIdentity,
+        isCancelled: @escaping IsCancelled
     ) async throws -> CGPoint {
         try await onQueue(isCancelled) {
             let element = try resolve(handles, handle)
@@ -113,12 +115,61 @@ enum ComputerUseAXActions {
             guard AXValueGetValue(try value(element, kAXPositionAttribute, app: app), .cgPoint, &position),
                   AXValueGetValue(try value(element, kAXSizeAttribute, app: app), .cgSize, &size)
             else { throw noFrame }
-            return ComputerUseInputGeometry.center(of: CGRect(origin: position, size: size))
+            let center = ComputerUseInputGeometry.center(of: CGRect(origin: position, size: size))
+            guard window.contains(center) else { throw ComputerUseSystemError.outOfBounds }
+            return center
         }
     }
 
-    /// Throws `Unsupported` when the app refused the action for a reason other
-    /// than a stale element or a stalled app.
+    /// Keys and typed text go to the app's key window: makes `window` that window, raising it
+    /// if needed, or refuses. Events posted to the pid can't pick a window themselves.
+    static func makeActiveWindow(_ window: ComputerUseWindow, isCancelled: @escaping IsCancelled) async throws {
+        try await onQueue(isCancelled) {
+            let app = window.app
+            let application = AXUIElementCreateApplication(app.pid)
+            AXUIElementSetMessagingTimeout(application, ComputerUseAXReader.messagingTimeout)
+            let notActive = ComputerUseSystemError.actionFailed(
+                "Window \(window.windowID) isn't \(app.name)'s active window. Click in it first or pass delivery: \"direct\".")
+            var windowsRef: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
+            if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
+            guard result == .success, let axWindows = windowsRef as? [AXUIElement],
+                  let target = ComputerUseAXReader.matchingWindow(
+                      axWindows, for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) })
+            else { throw notActive }
+            if isFocusedWindow(target, of: application) { return }
+            AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+            AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
+            guard isFocusedWindow(target, of: application) else { throw notActive }
+        }
+    }
+
+    private static func isFocusedWindow(_ window: AXUIElement, of application: AXUIElement) -> Bool {
+        var focused: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &focused) == .success,
+              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID()
+        else { return false }
+        return CFEqual(focused, window)
+    }
+
+    private static func frame(of element: AXUIElement) -> CGRect? {
+        var position: CFTypeRef?
+        var size: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+              let position, let size,
+              CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID()
+        else { return nil }
+        var point = CGPoint.zero
+        var extent = CGSize.zero
+        guard AXValueGetValue(position as! AXValue, .cgPoint, &point),
+              AXValueGetValue(size as! AXValue, .cgSize, &extent)
+        else { return nil }
+        return CGRect(origin: point, size: extent)
+    }
+
+    /// Throws `Unsupported` when the element doesn't support the action, so an
+    /// event at its centre can be tried instead.
     private static func perform(
         _ action: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
         isCancelled: @escaping IsCancelled
@@ -126,8 +177,25 @@ enum ComputerUseAXActions {
         try await onQueue(isCancelled) {
             let element = try resolve(handles, handle)
             let result = AXUIElementPerformAction(element, action as CFString)
-            guard result == .success else { throw mapped(result, app: app) ?? Unsupported(error: result) }
+            guard result == .success else {
+                // The app timed out answering, which says nothing about whether the press happened.
+                if result == .cannotComplete {
+                    throw ComputerUseSystemError.actionFailed(
+                        "\(app.name) didn't confirm the action; it may have happened. Call computer_inspect before retrying.")
+                }
+                throw failure(result, app: app)
+            }
         }
+    }
+
+    /// Errors that mean "not this way": an event may still get the input through.
+    private static let fallbackErrors: Set<AXError> = [.actionUnsupported, .attributeUnsupported, .noValue, .illegalArgument]
+
+    /// A failed AX action: `Unsupported` for the errors an event may get past, a tool error otherwise.
+    private static func failure(_ result: AXError, app: ComputerUseAppIdentity) -> any Error {
+        if let error = mapped(result, app: app) { return error }
+        if fallbackErrors.contains(result) { return Unsupported(error: result) }
+        return ComputerUseSystemError.actionFailed("\(app.name) refused the action (AXError \(result.rawValue)).")
     }
 
     /// Runs `body` on the reader's queue. A call cancelled or stopped while
