@@ -45,7 +45,8 @@ enum HostCommands {
         switch (command, arguments.first, arguments.count) {
         case ("config", "list", 1), ("config", "get", 1):
             let config = readConfig()
-            for section in HostSettingSection.allCases {
+            for (index, section) in HostSettingSection.allCases.enumerated() {
+                print(index == 0 ? "# \(section.title)" : "\n# \(section.title)")
                 for setting in HostSettingCatalog.all(for: config) where setting.section == section {
                     print("\(setting.key) = \(setting.value(in: config))")
                 }
