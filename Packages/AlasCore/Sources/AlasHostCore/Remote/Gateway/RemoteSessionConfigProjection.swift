@@ -51,17 +51,13 @@ public enum RemoteSessionConfigProjection: Sendable {
         switch setupState {
         case .needsSetup(let reason):
             kind = "needsSetup"
-            // ACPSetupNudgeBannerCopy.idleMessage(mode: .install, ...)
-            setupMessage = managedAdapter ? "\(agentName) requires the ACP adapter to be installed." : reason
+            setupMessage = managedAdapter
+                ? ACPSetupNudgeBannerCopy.idleMessage(mode: .install, agentDisplayName: agentName) : reason
         case .needsAuth(let methods, let reason):
             kind = "needsAuth"
-            // ACPAuthNudgeBannerCopy
-            let reason = reason?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            setupMessage = if !methods.contains(where: { $0.kind == .terminal }) {
-                "\(agentName) requires environment credentials or agent sign-in, and sign-in is not supported yet. Add credentials outside Alas, then reconnect."
-            } else {
-                "\(agentName) needs sign-in before it can continue." + (reason.isEmpty ? "" : " \(reason)")
-            }
+            setupMessage = methods.contains(where: { $0.kind == .terminal })
+                ? ACPAuthNudgeBannerCopy.message(agentDisplayName: agentName, reason: reason)
+                : ACPAuthNudgeBannerCopy.unsupportedMessage(agentDisplayName: agentName)
         case .setupError(let reason):
             kind = "setupError"
             setupMessage = reason
