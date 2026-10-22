@@ -14,6 +14,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Show a "Preparing to ship…" row in the transcript while Ship reads the branch or gg stack, so the button no longer looks unresponsive before its card appears.
 
+### 🎨 Changed
+
+- Make the toolbar Ship pill stand out when shipping can run, with a paper plane for branches and a stack symbol and "Ship stack" label for gg stacks, and show what Ship will do, the shepherd defaults and the stack's entries in its popover.
+
 ## [0.21.11] - 2026-10-22
 
 ### ✨ Features
