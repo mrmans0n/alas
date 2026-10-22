@@ -302,7 +302,7 @@ struct PromptCardRow: View {
     private static func style(for origin: ACPPromptCard.Origin) -> OriginStyle {
         switch origin {
         case .review: OriginStyle(symbol: "text.bubble", label: "Review", tint: "accent")
-        case .ship: OriginStyle(symbol: "arrow.up.circle", label: "Ship", tint: "add")
+        case .ship: OriginStyle(symbol: ShepherdBadgeState.noRequest.symbolName, label: "Ship", tint: "add")
         case .shepherd: OriginStyle(symbol: "arrow.triangle.2.circlepath", label: "PR shepherd", tint: "warn")
         default: OriginStyle(symbol: "sparkles", label: "Alas", tint: "fg-muted")
         }

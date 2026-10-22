@@ -3,7 +3,8 @@ import SwiftUI
 /// PR shepherd control in the ACP toolbar: a pill with a state symbol and
 /// the request number (or "Ship" without one) that opens the shepherd
 /// popover. In a gg stack worktree the pill and popover work on the whole
-/// stack instead of the branch's PR.
+/// stack instead of the branch's PR. While its popover leads to an action
+/// that can run now, the pill takes the Ship tint so it reads as a button.
 ///
 /// `session` is a plain reference on purpose: the pill reads only the
 /// shepherd records and the cached review snapshot, so streaming updates
@@ -15,44 +16,84 @@ struct ACPShepherdButton: View {
     @Environment(\.theme) private var theme
     @State private var open = false
     @State private var hovering = false
+    /// Tracked on its own so a streaming turn re-renders the pill only when
+    /// the turn starts or ends.
+    @State private var turnRunning = false
 
     /// Lit while the pointer is over the button or its popover is up, so the
     /// trigger stays visibly tied to the surface it opened.
     private var isLit: Bool { hovering || open }
 
+    private struct PillState {
+        let presentation: ShepherdPresentation
+        let invitesShip: Bool
+    }
+
+    private func pillState(shipsStack: Bool) -> PillState {
+        if shipsStack {
+            let context = StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
+            return PillState(
+                presentation: context.presentation,
+                invitesShip: StackShipAction.invitesShip(
+                    record: context.record, otherRecord: context.otherRecord, isBusy: turnRunning
+                )
+            )
+        }
+        let context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state)
+        return PillState(
+            presentation: context.presentation,
+            invitesShip: ShepherdShipAction.invitesShip(
+                record: context.record, otherRecord: context.otherRecord, request: context.request,
+                snapshot: context.snapshot, isBusy: turnRunning
+            )
+        )
+    }
+
     var body: some View {
         let shipsStack = state.shipsStack(sessionID: session.id, worktree: worktree)
-        let presentation = shipsStack
-            ? StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state).presentation
-            : ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: state).presentation
+        let pill = pillState(shipsStack: shipsStack)
+        let presentation = pill.presentation
         let badge = presentation.badge
-        let tooltip = presentation.tooltip
+        let symbol = shipsStack && badge == .noRequest ? Self.stackShipSymbol : badge.symbolName
+        let tooltip = turnRunning && badge == .noRequest
+            ? "\(presentation.tooltip) after the current turn"
+            : presentation.tooltip
+        let shipTint = theme.color("add")
         Button {
             open.toggle()
         } label: {
             HStack(spacing: 5) {
-                Image(systemName: badge.symbolName)
+                Image(systemName: symbol)
                     .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(badge.color(theme: theme))
+                    .foregroundStyle(pill.invitesShip ? shipTint : badge.color(theme: theme))
                 if let number = presentation.number {
                     Text(number)
                         .font(.system(size: 11, weight: .semibold, design: .monospaced))
                 } else {
-                    Text("Ship")
-                        .font(.system(size: 11, weight: .medium))
+                    Text(shipsStack ? "Ship stack" : "Ship")
+                        .font(.system(size: 11, weight: pill.invitesShip ? .semibold : .medium))
                 }
             }
-            .foregroundStyle(theme.color(isLit ? "fg" : "fg-dim"))
+            .foregroundStyle(pill.invitesShip ? shipTint : theme.color(isLit ? "fg" : "fg-dim"))
             .lineLimit(1)
-            .padding(.horizontal, 7)
+            .padding(.horizontal, pill.invitesShip ? 8 : 7)
             .frame(height: 22)
-            .background(theme.color("bg-3").opacity(isLit ? 1 : 0.5))
+            .background(
+                pill.invitesShip
+                    ? shipTint.opacity(isLit ? 0.24 : 0.15)
+                    : theme.color("bg-3").opacity(isLit ? 1 : 0.5)
+            )
             .clipShape(RoundedRectangle(cornerRadius: 5))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
+            .overlay(
+                RoundedRectangle(cornerRadius: 5).strokeBorder(
+                    pill.invitesShip ? shipTint.opacity(0.5) : theme.color("line"), lineWidth: 0.5
+                )
+            )
             .aiBeam(isActive: badge.isActive, cornerRadius: 5)
         }
         .buttonStyle(.toolbarControl)
         .onHover { hovering = $0 }
+        .onReceive(session.transcript.$streamingState.map { $0 != .idle }.removeDuplicates()) { turnRunning = $0 }
         .help(tooltip)
         .accessibilityLabel(shipsStack ? "Stack shepherd" : "PR shepherd")
         .accessibilityValue(tooltip)
@@ -76,6 +117,9 @@ struct ACPShepherdButton: View {
             }
         }
     }
+
+    /// Ship's symbol in a gg stack worktree, where it ships every entry.
+    static let stackShipSymbol = "\(GGStackIcon.systemName).fill"
 }
 
 /// What the toolbar knows about one session's PR: the session's own record,
@@ -142,7 +186,7 @@ extension ShepherdBadgeState {
     /// Symbol shared by the toolbar pill and the popover's phase line.
     var symbolName: String {
         switch self {
-        case .noRequest: "arrow.up.circle"
+        case .noRequest: "paperplane.fill"
         case .unshepherded: "arrow.triangle.pull"
         case .waiting: "clock.fill"
         case .fixing: "sparkles"
@@ -466,81 +510,98 @@ private struct ShepherdPopover: View {
     @ViewBuilder
     private func unboundContent(context: ShepherdSessionContext) -> some View {
         let snapshot = context.snapshot
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Image(systemName: "arrow.triangle.branch")
-                    .font(.system(size: 11))
-                    .foregroundStyle(theme.color("fg-muted"))
-                Text(worktree.branch)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(theme.color("fg"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                Spacer(minLength: 4)
-                if let local = snapshot?.local {
-                    Text("\(local.aheadCommitCount) ahead of \(local.baseBranch)")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(theme.color("fg-muted"))
-                        .lineLimit(1)
-                }
-            }
-            .accessibilityElement(children: .combine)
-            if let other = context.otherRecord {
-                adoptRow(
-                    text: "\(other.id.providerKind.reviewRequestLabel) \(other.id.providerKind.reviewRequestNumberPrefix)\(other.id.requestNumber) is shepherded by another session.",
-                    buttonTitle: "Move to this session",
-                    request: context.request
-                )
-            } else if let request = context.request, request.state == .open {
-                let number = "\(request.provider.reviewRequestNumberPrefix)\(request.number)"
-                adoptRow(
-                    text: "\(request.provider.reviewRequestLabel) \(number) is open: \(request.title)",
-                    buttonTitle: "Shepherd \(number) from this session",
-                    request: request
-                )
-            } else {
-                createRow(kind: snapshot?.remote?.kind, reason: ShepherdShipAction.createUnavailableReason(
-                    isBusy: isBusy, snapshot: snapshot, isLoading: isLoading
-                ))
-            }
+        ShipPopoverHeader(
+            symbol: ShepherdBadgeState.noRequest.symbolName,
+            title: "Ship this branch",
+            detail: routeLine(local: snapshot?.local)
+        )
+        Divider().background(theme.color("line"))
+        if let other = context.otherRecord {
+            adoptRow(
+                text: "\(other.id.providerKind.reviewRequestLabel) \(other.id.providerKind.reviewRequestNumberPrefix)\(other.id.requestNumber) is shepherded by another session.",
+                buttonTitle: "Move to this session",
+                request: context.request
+            )
+        } else if let request = context.request, request.state == .open {
+            let number = "\(request.provider.reviewRequestNumberPrefix)\(request.number)"
+            adoptRow(
+                text: "\(request.provider.reviewRequestLabel) \(number) is open: \(request.title)",
+                buttonTitle: "Shepherd \(number) from this session",
+                request: request
+            )
+        } else {
+            createContent(kind: snapshot?.remote?.kind, reason: ShepherdShipAction.createUnavailableReason(
+                isBusy: isBusy, snapshot: snapshot, isLoading: isLoading
+            ))
         }
-        .padding(12)
+    }
+
+    /// "feature → main · 3 commits ahead", or the branch alone before the
+    /// snapshot loads.
+    private func routeLine(local: ReviewLoopLocalState?) -> String {
+        guard let local else { return worktree.branch }
+        let count = local.aheadCommitCount
+        return "\(worktree.branch) → \(local.baseBranch) · \(count) commit\(count == 1 ? "" : "s") ahead"
     }
 
     private func adoptRow(text: String, buttonTitle: String, request: ReviewRequest?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(text)
                 .font(.system(size: 11))
-                .foregroundStyle(theme.color("fg-dim"))
+                .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
-            AlasButton(title: buttonTitle, style: .primary) {
+            AlasButton(title: buttonTitle, style: .primary, fillsWidth: true) {
                 guard let request else { return }
                 onClose()
                 Task { await state.shepherdWithSession(session.id, worktree: worktree, request: request) }
             }
             .disabled(request == nil)
-            .opacity(request == nil ? 0.5 : 1)
+            .opacity(request == nil ? 0.45 : 1)
             .help(request == nil ? "Waiting for the PR status" : "Bind this PR to this session and send it the current problems")
             .accessibilityLabel(buttonTitle)
         }
+        .padding(12)
     }
 
-    private func createRow(kind: CodeHostKind?, reason: String?) -> some View {
-        let title = "Ship with agent"
+    @ViewBuilder
+    private func createContent(kind: CodeHostKind?, reason: String?) -> some View {
         let label = kind?.reviewRequestLabel ?? "PR"
-        return VStack(alignment: .leading, spacing: 6) {
-            AlasButton(title: title, icon: "sparkles", style: .primary) {
-                onClose()
-                state.requestShepherdCreatePR(sessionID: session.id, worktree: worktree)
+        let defaults = state.config.changes.shepherd
+        VStack(alignment: .leading, spacing: 9) {
+            ShipPopoverStep(symbol: "sparkles") {
+                Text("The agent writes the description and opens the \(label) on \(kind?.displayName ?? "the code host").")
             }
-            .disabled(reason != nil)
-            .opacity(reason == nil ? 1 : 0.5)
-            .help(reason ?? "Ask this session to open a \(label) and shepherd it")
-            .accessibilityLabel(title)
-            Text(reason ?? "The agent writes, opens and shepherds the \(label)")
-                .font(.system(size: 10.5))
-                .foregroundStyle(theme.color(reason == nil ? "fg-muted" : "warn"))
-                .fixedSize(horizontal: false, vertical: true)
+            ShipPopoverStep(symbol: "checklist") {
+                Text("Alas watches CI and reviews, and sends failures back to this session.")
+            }
+            ShipPopoverStep(symbol: "slider.horizontal.3") {
+                HStack(spacing: 4) {
+                    ShipPopoverChip(text: "Auto-fix \(defaults.autoFix ? "on" : "off")")
+                    ShipPopoverChip(text: "Auto-merge \(defaults.autoMerge ? "on" : "off")")
+                    ShipPopoverChip(text: "\(defaults.maxFixAttempts) attempt\(defaults.maxFixAttempts == 1 ? "" : "s")")
+                    Button("Defaults…") {
+                        onClose()
+                        NotificationCenter.default.post(name: .alasOpenSettings, object: SettingsSection.changes)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(theme.color("accent"))
+                    .padding(.leading, 2)
+                    .help("Change the shepherd defaults in Settings > Changes")
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        Divider().background(theme.color("line"))
+        ShipPopoverFooter(
+            title: "Ship with agent",
+            symbol: ShepherdBadgeState.noRequest.symbolName,
+            reason: reason,
+            isWaiting: isBusy || isLoading,
+            help: "Ask this session to open a \(label) and shepherd it"
+        ) {
+            onClose()
+            state.requestShepherdCreatePR(sessionID: session.id, worktree: worktree)
         }
     }
 
@@ -556,5 +617,123 @@ private struct ShepherdPopover: View {
         .foregroundStyle(theme.color("fg-dim"))
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
+    }
+}
+
+/// The Ship popovers' header before anything is shepherded: a symbol tile,
+/// a title and a monospaced detail line.
+struct ShipPopoverHeader: View {
+    let symbol: String
+    let title: String
+    let detail: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: symbol)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(theme.color("accent"))
+                .frame(width: 32, height: 32)
+                .background(theme.color("accent").opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text(detail)
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(12)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// One line of what Ship will do, led by an accent symbol.
+struct ShipPopoverStep<Content: View>: View {
+    let symbol: String
+    @ViewBuilder let content: Content
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: symbol)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(theme.color("accent"))
+                .frame(width: 14)
+                .accessibilityHidden(true)
+            content
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg-muted"))
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+struct ShipPopoverChip: View {
+    let text: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10))
+            .foregroundStyle(theme.color("fg-muted"))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(theme.color("bg-3"), in: RoundedRectangle(cornerRadius: 4))
+            .lineLimit(1)
+    }
+}
+
+/// The Ship popovers' footer: why Ship can't run yet, the full-width
+/// button, and the composer command that does the same.
+struct ShipPopoverFooter: View {
+    let title: String
+    let symbol: String
+    let reason: String?
+    /// The reason clears by itself (a running turn or a load), so the
+    /// banner pulses instead of warning.
+    let isWaiting: Bool
+    let help: String
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(spacing: 6) {
+            if let reason {
+                HStack(spacing: 8) {
+                    if isWaiting {
+                        ACPPulseDot(color: theme.color("warn"))
+                    } else {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                    }
+                    Text(reason)
+                        .font(.system(size: 11))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 0)
+                }
+                .foregroundStyle(theme.color("warn"))
+                .padding(.horizontal, 9)
+                .padding(.vertical, 7)
+                .background(theme.color("warn").opacity(0.13), in: RoundedRectangle(cornerRadius: 6))
+                .padding(.bottom, 2)
+            }
+            AlasButton(title: title, icon: symbol, style: .primary, fillsWidth: true, action: action)
+                .disabled(reason != nil)
+                .opacity(reason == nil ? 1 : 0.45)
+                .help(reason ?? help)
+                .accessibilityLabel(title)
+            Text("or type /ship in the composer")
+                .font(.system(size: 10))
+                .foregroundStyle(theme.color("fg-faint"))
+        }
+        .padding(12)
     }
 }

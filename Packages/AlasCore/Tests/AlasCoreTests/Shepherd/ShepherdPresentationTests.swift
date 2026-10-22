@@ -100,6 +100,37 @@ private let presentationCases: [ShepherdPresentationCase] = [
     }
 
     @Test(
+        "the pill stands out only when its action can run now",
+        arguments: [
+            (F.record(), nil, F.request(), false, false, true, false),
+            (nil, F.record(), F.request(), true, false, true, true),
+            (nil, nil, F.request(), true, false, true, true),
+            (nil, nil, F.request(state: .merged), true, false, true, false),
+            (nil, nil, nil, false, false, false, true),
+            (nil, nil, nil, false, false, true, true),
+            (nil, nil, nil, false, true, true, false),
+        ] as [(ShepherdRecord?, ShepherdRecord?, ReviewRequest?, Bool, Bool, Bool, Bool)]
+    )
+    func invitesShip(
+        record: ShepherdRecord?, otherRecord: ShepherdRecord?, request: ReviewRequest?, isBusy: Bool,
+        cliMissing: Bool, snapshotKnown: Bool, expected: Bool
+    ) {
+        var snapshot = F.snapshot(request)
+        if cliMissing {
+            snapshot = ReviewLoopSnapshot(
+                local: snapshot.local, remote: snapshot.remote, reviewRequest: request,
+                providerAvailable: false, providerAuthenticated: false,
+                providerCapabilities: .githubCLI, errorMessage: nil
+            )
+        }
+        let invites = ShepherdShipAction.invitesShip(
+            record: record, otherRecord: otherRecord, request: request,
+            snapshot: snapshotKnown ? snapshot : nil, isBusy: isBusy
+        )
+        #expect(invites == expected)
+    }
+
+    @Test(
         "an agent's closing offer to ship is recognized",
         arguments: [
             ("Done.\n\nWant me to open a PR?", true),

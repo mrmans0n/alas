@@ -8,6 +8,8 @@ struct AlasButton: View {
     var style: AlasButtonStyle = .normal
     /// Replaces the accent a primary button fills with, or the text color of the others.
     var tint: Color? = nil
+    /// Stretches the button to the width its container offers.
+    var fillsWidth = false
     let action: () -> Void
     @Environment(\.theme) var theme
 
@@ -18,6 +20,7 @@ struct AlasButton: View {
                 Text(title).font(.system(size: 12, weight: .medium))
             }
             .padding(.horizontal, 12)
+            .frame(maxWidth: fillsWidth ? .infinity : nil)
             .frame(height: 28)
             .background(background)
             .overlay(

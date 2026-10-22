@@ -233,6 +233,25 @@ public enum ShepherdShipAction: Equatable, Sendable {
         if !snapshot.providerAuthenticated { return "\(cli) isn't signed in. Run \(cli) auth login." }
         return nil
     }
+
+    /// Whether the toolbar pill should stand out: its popover leads to an
+    /// action that can run now. Adopting an open request always can; Ship
+    /// with agent needs an idle session and, when `snapshot` is known, a
+    /// usable code host. An unknown snapshot counts as usable because the
+    /// popover checks again before it acts.
+    public static func invitesShip(
+        record: ShepherdRecord?,
+        otherRecord: ShepherdRecord?,
+        request: ReviewRequest?,
+        snapshot: ReviewLoopSnapshot?,
+        isBusy: Bool
+    ) -> Bool {
+        guard record == nil else { return false }
+        if otherRecord != nil || request?.state == .open { return true }
+        if isBusy { return false }
+        guard let snapshot else { return true }
+        return createUnavailableReason(isBusy: false, snapshot: snapshot, isLoading: false) == nil
+    }
 }
 
 /// Whether an agent's reply ends by offering what Ship does: opening a pull
@@ -314,5 +333,12 @@ public enum StackShipAction: Equatable, Sendable {
         if !stack.entries.isEmpty, stack.entries.allSatisfy({ $0.prNumber != nil }) { return .adopt }
         if isBusy { return .unavailable("Wait for the current turn to finish.") }
         return .create
+    }
+
+    /// Whether the toolbar pill should stand out. The pill doesn't read the
+    /// gg stack, so only a running turn holds back Ship stack.
+    public static func invitesShip(record: StackShepherdRecord?, otherRecord: StackShepherdRecord?, isBusy: Bool) -> Bool {
+        if let record, !record.isFinished { return false }
+        return otherRecord != nil || !isBusy
     }
 }

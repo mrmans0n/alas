@@ -232,66 +232,106 @@ struct StackShepherdPopover: View {
 
     // MARK: Unbound
 
+    /// Entries listed before the rest fold into a "more" line.
+    private static let maxListedEntries = 8
+
     @ViewBuilder
     private func unboundContent(context: StackShepherdSessionContext) -> some View {
         let name = context.otherRecord?.id.stackName ?? stack?.name ?? state.shepherdStackName(for: worktree) ?? worktree.branch
         let entries = stack?.entries ?? []
         let published = entries.filter { $0.prNumber != nil }.count
-        header(
-            name: name,
+        ShipPopoverHeader(
+            symbol: ACPShepherdButton.stackShipSymbol,
+            title: "Ship stack \(name)",
             detail: stack.map { "\($0.base) · \(entries.count) entr\(entries.count == 1 ? "y" : "ies"), \(published) published" }
                 ?? (isLoading ? "Reading the stack…" : "gg lists no stack here")
         )
+        if !entries.isEmpty {
+            Divider().background(theme.color("line"))
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(entries.prefix(Self.maxListedEntries)) { unboundEntryRow($0) }
+                if entries.count > Self.maxListedEntries {
+                    Text("\(entries.count - Self.maxListedEntries) more")
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(theme.color("fg-dim"))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+        }
         Divider().background(theme.color("line"))
-        VStack(alignment: .leading, spacing: 8) {
-            switch StackShipAction.resolve(
-                record: nil, otherRecord: context.otherRecord, stack: stack, isBusy: isBusy, isLoading: isLoading
-            ) {
-            case .adopt where context.otherRecord != nil:
-                adoptRow(text: "The gg stack \(name) is shepherded by another session.", buttonTitle: "Move to this session")
-            case .adopt:
-                adoptRow(text: "Every entry has an open request.", buttonTitle: "Shepherd stack from this session")
-            case .create:
-                createRow(reason: nil)
-            case .unavailable(let reason):
-                createRow(reason: reason)
-            case .shepherding:
-                EmptyView()
+        switch StackShipAction.resolve(
+            record: nil, otherRecord: context.otherRecord, stack: stack, isBusy: isBusy, isLoading: isLoading
+        ) {
+        case .adopt where context.otherRecord != nil:
+            adoptRow(text: "The gg stack \(name) is shepherded by another session.", buttonTitle: "Move to this session")
+        case .adopt:
+            adoptRow(text: "Every entry has an open request.", buttonTitle: "Shepherd stack from this session")
+        case .create:
+            createContent(reason: nil)
+        case .unavailable(let reason):
+            createContent(reason: reason)
+        case .shepherding:
+            EmptyView()
+        }
+    }
+
+    private func unboundEntryRow(_ entry: GGStackEntry) -> some View {
+        HStack(spacing: 8) {
+            Text("\(entry.position)")
+                .font(.system(size: 10.5, design: .monospaced))
+                .foregroundStyle(theme.color("fg-faint"))
+                .frame(minWidth: 10, alignment: .trailing)
+            Text(entry.title)
+                .font(.system(size: 11))
+                .foregroundStyle(theme.color("fg"))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 4)
+            if let number = entry.prNumber {
+                Text(verbatim: "#\(number)")
+                    .font(.system(size: 10, design: .monospaced))
+                    .foregroundStyle(theme.color("add"))
+            } else {
+                ShipPopoverChip(text: "unpublished")
             }
         }
-        .padding(12)
+        .accessibilityElement(children: .combine)
     }
 
     private func adoptRow(text: String, buttonTitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(text)
                 .font(.system(size: 11))
-                .foregroundStyle(theme.color("fg-dim"))
+                .foregroundStyle(theme.color("fg-muted"))
                 .fixedSize(horizontal: false, vertical: true)
-            AlasButton(title: buttonTitle, style: .primary) {
+            AlasButton(title: buttonTitle, style: .primary, fillsWidth: true) {
                 onClose()
                 Task { await state.shepherdStackWithSession(session.id, worktree: worktree) }
             }
             .help("Watch every request in this stack from this session and send it the current problems")
             .accessibilityLabel(buttonTitle)
         }
+        .padding(12)
     }
 
-    private func createRow(reason: String?) -> some View {
-        let title = "Ship stack with agent"
-        return VStack(alignment: .leading, spacing: 6) {
-            AlasButton(title: title, icon: "sparkles", style: .primary) {
-                onClose()
-                state.requestShipStack(sessionID: session.id, worktree: worktree)
-            }
-            .disabled(reason != nil)
-            .opacity(reason == nil ? 1 : 0.5)
-            .help(reason ?? "Ask this session to publish every entry of the stack and shepherd them")
-            .accessibilityLabel(title)
-            Text(reason ?? "The agent folds its work into the stack, publishes every entry with gg sync, and Alas shepherds them all")
-                .font(.system(size: 10.5))
-                .foregroundStyle(theme.color(reason == nil ? "fg-muted" : "warn"))
-                .fixedSize(horizontal: false, vertical: true)
+    @ViewBuilder
+    private func createContent(reason: String?) -> some View {
+        ShipPopoverStep(symbol: "sparkles") {
+            Text("The agent folds its work into the stack and publishes every entry with gg sync; Alas shepherds them all.")
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        Divider().background(theme.color("line"))
+        ShipPopoverFooter(
+            title: "Ship stack with agent",
+            symbol: ACPShepherdButton.stackShipSymbol,
+            reason: reason,
+            isWaiting: isBusy || isLoading,
+            help: "Ask this session to publish every entry of the stack and shepherd them"
+        ) {
+            onClose()
+            state.requestShipStack(sessionID: session.id, worktree: worktree)
         }
     }
 }
