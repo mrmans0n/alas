@@ -105,6 +105,7 @@ final class ComputerUseCoordinator {
         static func windowNotFound(_ id: UInt32) -> String {
             "computer_window_not_found: No on-screen window \(id). Call computer_apps again."
         }
+        static let notAvailableYet = "computer_action_failed: This action is not available yet."
         static func captureFailed(_ reason: String) -> String { "computer_capture_failed: \(reason)" }
     }
 
@@ -133,6 +134,11 @@ final class ComputerUseCoordinator {
         if let error = readiness().toolError { return .error(error) }
         if access.isStopped(session: sessionID) { return .error(Message.stopped) }
         if command.action == .apps { return await listApps(sessionID: sessionID) }
+        // Temporary: the seven input actions land with the coordinator work.
+        switch command.action {
+        case .click, .type, .key, .scroll, .drag, .openApp, .wait: return .error(Message.notAvailableYet)
+        case .apps, .screenshot, .inspect, .cancel: break
+        }
 
         guard let windowID = command.windowID else { return .error(Message.windowNotFound(0)) }
         let epoch = epochs[sessionID, default: 0]
@@ -423,6 +429,8 @@ final class ComputerUseCoordinator {
         switch command.action {
         case .apps, .cancel:
             preconditionFailure("computer_apps and computer_cancel return before window resolution")
+        case .click, .type, .key, .scroll, .drag, .openApp, .wait:
+            preconditionFailure("input actions return before window resolution until they are implemented")
         case .screenshot:
             let shot = try await system.screenshot(window)
             var windowInfo: [String: Any] = ["frame": Self.frame(window.frame)]
