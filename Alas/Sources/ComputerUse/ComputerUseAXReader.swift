@@ -31,6 +31,11 @@ enum ComputerUseAXReader {
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 queue.async {
+                    // A call cancelled while queued behind another walk makes no AX request.
+                    if cancel.isSet {
+                        continuation.resume(throwing: CancellationError())
+                        return
+                    }
                     let walk = Walk(
                         budget: max(1, nodeBudget),
                         maxDepth: maxDepth,
