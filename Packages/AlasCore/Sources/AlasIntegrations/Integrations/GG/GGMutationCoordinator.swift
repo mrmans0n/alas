@@ -274,7 +274,7 @@ public final class GGMutationCoordinator {
             didReleaseAction = true
             activeRequest = nil
             actionState.endAction(request.actionKind)
-            if request == .sync,
+            if request.actionKind == .sync,
                actionState.lastError == nil,
                GGStackActionState.syncSummaryLine(from: actionState.syncProgress) != nil {
                 actionState.clearSyncProgress()
@@ -370,7 +370,7 @@ public final class GGMutationCoordinator {
                 },
                 onLandEvent: context.publishLandEvent
             )
-            if request == .sync, actionState.syncProgress.contains(where: {
+            if request.actionKind == .sync, actionState.syncProgress.contains(where: {
                 if case .error = $0 { return true }
                 return false
             }) {
@@ -388,7 +388,7 @@ public final class GGMutationCoordinator {
             )
             recordSummary(for: request, result: result)
             reconcilePausedState(after: request, error: nil)
-            if request == .sync {
+            if request.actionKind == .sync {
                 await refresh(after: request, result: result)
                 releaseAction()
             } else {
@@ -400,7 +400,7 @@ public final class GGMutationCoordinator {
             }
         } catch where Task.isCancelled || error is CancellationError {
             reconcilePausedState(after: request, error: nil)
-            if request == .sync {
+            if request.actionKind == .sync {
                 await refresh(after: request, result: .none)
                 releaseAction()
             } else {
@@ -411,13 +411,13 @@ public final class GGMutationCoordinator {
         } catch let error as GGServiceError {
             reconcilePausedState(after: request, error: error)
             let toleratesMalformedRemoteOutput: Bool
-            if request != .sync, !isLiveLand, request.touchesRemote, case .malformedOutput = error {
+            if request.actionKind != .sync, !isLiveLand, request.touchesRemote, case .malformedOutput = error {
                 toleratesMalformedRemoteOutput = true
             } else {
                 toleratesMalformedRemoteOutput = false
             }
             if !toleratesMalformedRemoteOutput {
-                if request == .sync {
+                if request.actionKind == .sync {
                     actionState.markSyncTerminalFailure()
                     if case .malformedOutput = error {
                         actionState.setError(error.userMessage, for: request.actionKind)
@@ -427,7 +427,7 @@ public final class GGMutationCoordinator {
                     actionState.setError(error.userMessage, for: request.actionKind)
                 }
             }
-            if request == .sync {
+            if request.actionKind == .sync {
                 await refresh(after: request, result: .none)
                 releaseAction()
             } else {
@@ -438,9 +438,9 @@ public final class GGMutationCoordinator {
             throw error
         } catch {
             reconcilePausedState(after: request, error: error)
-            if request == .sync { actionState.markSyncTerminalFailure() }
+            if request.actionKind == .sync { actionState.markSyncTerminalFailure() }
             actionState.setError(error.localizedDescription, for: request.actionKind)
-            if request == .sync {
+            if request.actionKind == .sync {
                 await refresh(after: request, result: .none)
                 releaseAction()
             } else {
@@ -688,7 +688,7 @@ public final class GGMutationCoordinator {
             )
             actionState.setActionSummary("New stack created without a worktree")
         default:
-            if request == .sync,
+            if request.actionKind == .sync,
                actionState.lastError == nil,
                let summary = GGStackActionState.syncSummaryLine(from: actionState.syncProgress) {
                 actionState.setActionSummary(summary)
@@ -773,7 +773,7 @@ private extension GGMutationRequest {
 
     var touchesRemote: Bool {
         switch self {
-        case .sync, .land, .clean: true
+        case .sync, .syncUntil, .land, .clean: true
         default: false
         }
     }
@@ -866,6 +866,15 @@ extension GGService: GGMutationExecuting {
             for try await event in service.sync(
                 worktreePath: worktreePath,
                 supportsJSONL: supportsSyncJSONL
+            ) {
+                onSyncEvent(event)
+            }
+        case .syncUntil(let target, let draft):
+            for try await event in service.sync(
+                worktreePath: worktreePath,
+                supportsJSONL: supportsSyncJSONL,
+                until: target,
+                draft: draft
             ) {
                 onSyncEvent(event)
             }

@@ -2833,20 +2833,22 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
+    /// `request` is `.sync` or a scoped `.syncUntil`.
     func syncGGForCommitPublish(
+        _ request: GGMutationRequest = .sync,
         target: GGStackTargetIdentity? = nil,
         markExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
         try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         guard let operation = ggMutationCoordinator.startApplying(
-            .sync,
+            request,
             confirmedAgainst: nil,
             expectedTarget: target,
             onExecutionStarted: markExecutionStarted
         ) else {
             throw GGMutationError.operationInFlight
         }
-        try await completeGGMutation(operation, request: .sync).value
+        try await completeGGMutation(operation, request: request).value
         if ggActionState.syncHasTerminalFailure {
             throw GGMutationError.syncTerminalFailure(message: ggActionState.lastError ?? "GG sync failed.")
         }

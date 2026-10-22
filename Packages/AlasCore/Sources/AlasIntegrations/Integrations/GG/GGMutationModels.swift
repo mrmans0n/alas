@@ -27,15 +27,18 @@ public struct GGCapabilities: Equatable, Sendable {
     public var clientOperationID: Bool = false
     public var stagedOnlyAmend: Bool = false
     public var syncJSONL: Bool = false
+    /// `gg sync --until` and `--draft`: Ship can publish part of a stack.
+    public var syncUntilDraft: Bool = false
     public var landJSONL: Bool = false
     public var localStackSnapshot: Bool = false
 
-    public init(structuredSplit: Bool, keepCurrentUnstack: Bool, clientOperationID: Bool = false, stagedOnlyAmend: Bool = false, syncJSONL: Bool = false, landJSONL: Bool = false, localStackSnapshot: Bool = false) {
+    public init(structuredSplit: Bool, keepCurrentUnstack: Bool, clientOperationID: Bool = false, stagedOnlyAmend: Bool = false, syncJSONL: Bool = false, syncUntilDraft: Bool = false, landJSONL: Bool = false, localStackSnapshot: Bool = false) {
         self.structuredSplit = structuredSplit
         self.keepCurrentUnstack = keepCurrentUnstack
         self.clientOperationID = clientOperationID
         self.stagedOnlyAmend = stagedOnlyAmend
         self.syncJSONL = syncJSONL
+        self.syncUntilDraft = syncUntilDraft
         self.landJSONL = landJSONL
         self.localStackSnapshot = localStackSnapshot
     }
@@ -65,6 +68,8 @@ public enum GGMutationRequest: Equatable, Sendable {
     case restack
     case rebase(target: String?)
     case sync
+    /// `gg sync --until target [--draft]`; a nil target syncs the whole stack.
+    case syncUntil(target: String?, draft: Bool)
     case land(target: String)
     case clean
     case continueOperation
@@ -82,7 +87,7 @@ public enum GGMutationRequest: Equatable, Sendable {
         case .reorder: .reorder
         case .restack: .restack
         case .rebase: .rebase
-        case .sync: .sync
+        case .sync, .syncUntil: .sync
         case .land: .land
         case .clean: .clean
         case .continueOperation: .continueOp
@@ -210,6 +215,8 @@ public enum GGMutationError: Error, Equatable, Sendable {
     case blockingGitOperation
     case stagingFailed
     case syncTerminalFailure(message: String)
+    /// The installed gg lacks `gg sync --until` or `--draft`.
+    case scopedSyncUnsupported
 }
 
 extension GGMutationError: LocalizedError {
@@ -222,6 +229,7 @@ extension GGMutationError: LocalizedError {
         case .blockingGitOperation: "Finish the current Git operation first."
         case .stagingFailed: "Staging failed. Fix the staging error and try again."
         case .syncTerminalFailure(let message): message
+        case .scopedSyncUnsupported: "The installed gg cannot publish part of a stack or open drafts. Update gg, then try again."
         }
     }
 }

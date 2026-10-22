@@ -49,6 +49,13 @@ struct StackShepherdPopover: View {
     @State private var isLoading = true
     @State private var rules: ShepherdRules = .none
     @State private var rulesUnreadable = false
+    /// Ship stack's line: ships through this position; `.max` ships it all.
+    @State private var shipThrough = Int.max
+    @State private var opensDrafts = false
+    /// Ship more's line over the held-back entries.
+    @State private var moreShipThrough = Int.max
+    @State private var moreOpensDrafts = false
+    @State private var isShippingMore = false
 
     private var isBusy: Bool { transcript.streamingState != .idle }
 
@@ -95,6 +102,7 @@ struct StackShepherdPopover: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
+        shipMoreSection(record: record)
         Divider().background(theme.color("line"))
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -143,6 +151,55 @@ struct StackShepherdPopover: View {
         .padding(.vertical, 10)
         Divider().background(theme.color("line"))
         footer(record: record)
+    }
+
+    /// The entries the shepherded stack holds back, with the same line as
+    /// Ship stack. Ship more syncs them straight away: they are committed
+    /// already, so no agent turn is needed.
+    @ViewBuilder
+    private func shipMoreSection(record: StackShepherdRecord) -> some View {
+        if Self.canChooseEntries, let stack, stack.name == record.id.stackName,
+           case let heldBack = (record.shipPlan ?? .wholeStack).heldBackEntries(of: stack), !heldBack.isEmpty {
+            let through = StackShipPlan.snap(moreShipThrough, to: StackShipPlan.linePositions(in: heldBack))
+            let shipped = heldBack.filter { $0.position <= through }.count
+            Divider().background(theme.color("line"))
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Held back · \(heldBack.count)")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(theme.color("fg-dim"))
+                    .textCase(.uppercase)
+                StackShipLinePicker(entries: heldBack, kind: record.remote.kind, shipThrough: $moreShipThrough, opensDrafts: moreOpensDrafts)
+                draftsSwitch(isOn: $moreOpensDrafts)
+                AlasButton(
+                    title: isShippingMore ? "Shipping…" : "Ship \(shipped) more",
+                    icon: ACPShepherdButton.stackShipSymbol,
+                    fillsWidth: true
+                ) {
+                    shipMore(stack: stack, through: through)
+                }
+                .disabled(isBusy || isShippingMore)
+                .opacity(isBusy || isShippingMore ? 0.45 : 1)
+                .help(isBusy
+                    ? "Wait for this session's turn to end: the agent may still be changing the stack"
+                    : "Publish these entries with gg sync now and shepherd them with the rest")
+                .accessibilityLabel("Ship \(shipped) more entries")
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+        }
+    }
+
+    /// `through` is the line's position among the held-back rows, which is
+    /// also where it can stop in the whole stack.
+    private func shipMore(stack: GGStack, through: Int) {
+        let plan = StackShipPlan(shipThroughPosition: through, of: stack, opensDrafts: moreOpensDrafts)
+        isShippingMore = true
+        Task {
+            await state.shipMoreStack(sessionID: session.id, worktree: worktree, plan: plan)
+            self.stack = try? await state.stackShepherd.effects?.loadStack(worktree.path)
+            moreShipThrough = .max
+            isShippingMore = false
+        }
     }
 
     private func header(name: String, detail: String) -> some View {
@@ -235,6 +292,9 @@ struct StackShepherdPopover: View {
     /// Entries listed before the rest fold into a "more" line.
     private static let maxListedEntries = 8
 
+    /// The installed gg can publish part of a stack and open drafts.
+    private static var canChooseEntries: Bool { GGAvailability.shared.capabilities.syncUntilDraft }
+
     @ViewBuilder
     private func unboundContent(context: StackShepherdSessionContext) -> some View {
         let name = context.otherRecord?.id.stackName ?? stack?.name ?? state.shepherdStackName(for: worktree) ?? worktree.branch
@@ -244,6 +304,14 @@ struct StackShepherdPopover: View {
         // commit remote, which its stack chips use too.
         let kind = context.otherRecord?.remote.kind
             ?? state.rightPaneStore.activeState(worktreeId: worktree.id)?.commitRemote?.kind
+        let action = StackShipAction.resolve(
+            record: nil, otherRecord: context.otherRecord, stack: stack, isBusy: isBusy, isLoading: isLoading
+        )
+        let offersShip: Bool = switch action {
+        case .create, .unavailable: true
+        case .adopt, .shepherding: false
+        }
+        let picksEntries = offersShip && Self.canChooseEntries && !entries.isEmpty
         ShipPopoverHeader(
             symbol: ACPShepherdButton.stackShipSymbol,
             title: "Ship stack \(name)",
@@ -252,29 +320,33 @@ struct StackShepherdPopover: View {
         )
         if !entries.isEmpty {
             Divider().background(theme.color("line"))
-            VStack(alignment: .leading, spacing: 5) {
-                ForEach(entries.prefix(Self.maxListedEntries)) { unboundEntryRow($0, kind: kind) }
-                if entries.count > Self.maxListedEntries {
-                    Text("\(entries.count - Self.maxListedEntries) more")
-                        .font(.system(size: 10.5))
-                        .foregroundStyle(theme.color("fg-dim"))
+            Group {
+                if picksEntries {
+                    StackShipLinePicker(entries: entries, kind: kind, shipThrough: $shipThrough, opensDrafts: opensDrafts)
+                } else {
+                    VStack(alignment: .leading, spacing: 5) {
+                        ForEach(entries.sorted { $0.position > $1.position }.prefix(Self.maxListedEntries)) { unboundEntryRow($0, kind: kind) }
+                        if entries.count > Self.maxListedEntries {
+                            Text("\(entries.count - Self.maxListedEntries) more")
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(theme.color("fg-dim"))
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
         }
         Divider().background(theme.color("line"))
-        switch StackShipAction.resolve(
-            record: nil, otherRecord: context.otherRecord, stack: stack, isBusy: isBusy, isLoading: isLoading
-        ) {
+        switch action {
         case .adopt where context.otherRecord != nil:
             adoptRow(text: "The gg stack \(name) is shepherded by another session.", buttonTitle: "Move to this session")
         case .adopt:
             adoptRow(text: "Every entry has an open request.", buttonTitle: "Shepherd stack from this session")
         case .create:
-            createContent(reason: nil)
+            createContent(reason: nil, picksEntries: picksEntries)
         case .unavailable(let reason):
-            createContent(reason: reason)
+            createContent(reason: reason, picksEntries: picksEntries)
         case .shepherding:
             EmptyView()
         }
@@ -320,22 +392,223 @@ struct StackShepherdPopover: View {
     }
 
     @ViewBuilder
-    private func createContent(reason: String?) -> some View {
-        ShipPopoverStep(symbol: "sparkles") {
-            Text("The agent folds its work into the stack and publishes every entry with gg sync; Alas shepherds them all.")
+    private func createContent(reason: String?, picksEntries: Bool) -> some View {
+        let entries = stack?.entries ?? []
+        let top = entries.map(\.position).max() ?? 0
+        let through = StackShipPlan.snap(shipThrough, to: StackShipPlan.linePositions(in: entries))
+        let shipped = entries.filter { $0.position <= through }.count
+        let shipsAll = !picksEntries || through >= top
+        let plan = picksEntries
+            ? stack.map { StackShipPlan(shipThroughPosition: shipThrough, of: $0, opensDrafts: opensDrafts) } ?? .wholeStack
+            : .wholeStack
+        VStack(alignment: .leading, spacing: 10) {
+            ShipPopoverStep(symbol: "sparkles") {
+                Text(shipsAll
+                    ? "The agent folds its work into the stack and publishes every entry with gg sync; Alas shepherds them all."
+                    : "The agent folds its work into the stack and publishes the entries below the line with gg sync; Alas shepherds them. Entries above it, and commits the agent adds on top, stay local.")
+            }
+            if picksEntries {
+                draftsSwitch(isOn: $opensDrafts)
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
         Divider().background(theme.color("line"))
         ShipPopoverFooter(
-            title: "Ship stack with agent",
+            title: shipsAll ? "Ship stack with agent" : "Ship \(shipped) of \(entries.count) entries with agent",
             symbol: ACPShepherdButton.stackShipSymbol,
             reason: reason,
             isWaiting: isBusy || isLoading,
-            help: "Ask this session to publish every entry of the stack and shepherd them"
+            help: shipsAll
+                ? "Ask this session to publish every entry of the stack and shepherd them"
+                : "Ask this session to publish the entries below the line and shepherd them"
         ) {
             onClose()
-            state.requestShipStack(sessionID: session.id, worktree: worktree)
+            state.requestShipStack(sessionID: session.id, worktree: worktree, plan: plan)
         }
+    }
+
+    private func draftsSwitch(isOn: Binding<Bool>) -> some View {
+        ShepherdSwitchRow(
+            title: "Open new requests as drafts",
+            detail: "Entries that already have a request keep it as it is",
+            isOn: isOn.wrappedValue,
+            isDisabled: false
+        ) { isOn.wrappedValue = $0 }
+    }
+}
+
+/// The Ship stack entry list with one line: entries below it ship, entries
+/// above it stay local. Drag the line or click a row to ship through it; the
+/// focused line also moves with the arrow keys, and VoiceOver adjusts it.
+struct StackShipLinePicker: View {
+    /// Contiguous positions, in any order; listed top of the stack first.
+    let entries: [GGStackEntry]
+    /// Prefixes request numbers; nil reads as GitHub's `#`.
+    let kind: CodeHostKind?
+    /// Ships through this position; at or above the top row ships every row.
+    @Binding var shipThrough: Int
+    let opensDrafts: Bool
+    @Environment(\.theme) private var theme
+    @State private var dragOrigin: Int?
+    @State private var hovered: Int?
+
+    /// A row's height plus the spacing: how far the line moves per entry.
+    private static let rowPitch: CGFloat = 25
+    private static let maxVisibleRows = 8
+    private static let lineID = "ship-line"
+    private static let space = "ship-line-picker"
+
+    private enum Item: Identifiable {
+        case entry(GGStackEntry)
+        case line
+
+        var id: String {
+            switch self {
+            case .entry(let entry): entry.id
+            case .line: StackShipLinePicker.lineID
+            }
+        }
+    }
+
+    private var top: Int { entries.map(\.position).max() ?? 0 }
+    /// Where the line can stop: never below an entry that already has a
+    /// request, and only above entries with a GG-ID (`StackShipPlan.linePositions`).
+    private var stops: [Int] { StackShipPlan.linePositions(in: entries) }
+    private var through: Int { StackShipPlan.snap(shipThrough, to: stops) }
+
+    /// Rows top-first with the line above the first row that ships. The line
+    /// keeps one identity wherever it sits, so a drag survives it moving.
+    private var items: [Item] {
+        var items: [Item] = []
+        for entry in entries.sorted(by: { $0.position > $1.position }) {
+            if entry.position == through { items.append(.line) }
+            items.append(.entry(entry))
+        }
+        return items
+    }
+
+    var body: some View {
+        let list = VStack(alignment: .leading, spacing: 5) {
+            ForEach(items) { item in
+                switch item {
+                case .entry(let entry): row(entry)
+                case .line: line
+                }
+            }
+        }
+        .coordinateSpace(.named(Self.space))
+        if entries.count > Self.maxVisibleRows {
+            ScrollView { list }
+                .frame(height: CGFloat(Self.maxVisibleRows) * Self.rowPitch)
+        } else {
+            list
+        }
+    }
+
+    private func row(_ entry: GGStackEntry) -> some View {
+        let ships = entry.position <= through
+        let state = Self.stateLabel(entry, prefix: (kind ?? .github).reviewRequestNumberPrefix, ships: ships, opensDrafts: opensDrafts)
+        return Button {
+            shipThrough = entry.position
+        } label: {
+            HStack(spacing: 8) {
+                Text("\(entry.position)")
+                    .font(.system(size: 10.5, design: .monospaced))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .frame(minWidth: 10, alignment: .trailing)
+                Text(entry.title)
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg"))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 4)
+                if entry.prNumber != nil {
+                    Text(verbatim: state)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(theme.color("add"))
+                } else {
+                    ShipPopoverChip(text: state, tone: ships ? (opensDrafts ? "warn" : "accent") : nil)
+                }
+            }
+            .opacity(ships ? 1 : 0.5)
+            .frame(height: 20)
+            .padding(.horizontal, 4)
+            .background(
+                hovered == entry.position ? theme.color("bg-3") : .clear,
+                in: RoundedRectangle(cornerRadius: 4)
+            )
+            .padding(.horizontal, -4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { inside in
+            if inside { hovered = entry.position } else if hovered == entry.position { hovered = nil }
+        }
+        .help("Ship through entry \(entry.position)")
+        .accessibilityLabel("Entry \(entry.position), \(entry.title), \(state)")
+        .accessibilityHint("Ships this entry and every entry below it")
+    }
+
+    private var line: some View {
+        HStack(spacing: 6) {
+            Rectangle().frame(height: 1.5)
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.up.and.down")
+                    .font(.system(size: 8, weight: .semibold))
+                Text("ship below")
+                    .font(.system(size: 9.5, weight: .medium))
+            }
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .overlay(Capsule().strokeBorder(theme.color("accent"), lineWidth: 1))
+            Rectangle().frame(height: 1.5)
+        }
+        .foregroundStyle(theme.color("accent"))
+        .frame(height: 14)
+        .contentShape(Rectangle())
+        .pointerStyle(.rowResize)
+        .gesture(
+            DragGesture(minimumDistance: 2, coordinateSpace: .named(Self.space))
+                .onChanged { value in
+                    let origin = dragOrigin ?? through
+                    dragOrigin = origin
+                    let rows = Int((-value.translation.height / Self.rowPitch).rounded())
+                    shipThrough = min(max(origin + rows, stops.first ?? 0), top)
+                }
+                .onEnded { _ in dragOrigin = nil }
+        )
+        .focusable()
+        .onKeyPress(.upArrow) { move(1) }
+        .onKeyPress(.downArrow) { move(-1) }
+        .help("Drag to choose what ships: entries below the line ship, entries above it stay local")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Ship line")
+        .accessibilityValue(Self.lineValue(through: through, bottom: entries.map(\.position).min() ?? 0, top: top))
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: _ = move(1)
+            case .decrement: _ = move(-1)
+            @unknown default: break
+            }
+        }
+    }
+
+    /// Moves the line `stops` stops up (positive) or down.
+    private func move(_ stops: Int) -> KeyPress.Result {
+        let all = self.stops
+        let index = all.firstIndex(of: through) ?? all.count - 1
+        shipThrough = all[min(max(index + stops, 0), all.count - 1)]
+        return .handled
+    }
+
+    private static func stateLabel(_ entry: GGStackEntry, prefix: String, ships: Bool, opensDrafts: Bool) -> String {
+        if let number = entry.prNumber { return "\(prefix)\(number)" }
+        if !ships { return "held back" }
+        return opensDrafts ? "draft" : "new"
+    }
+
+    private static func lineValue(through: Int, bottom: Int, top: Int) -> String {
+        through >= top ? "Ships every entry" : "Ships entries \(bottom) to \(through), holds back \(through + 1) to \(top)"
     }
 }

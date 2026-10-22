@@ -8,12 +8,14 @@ import AlasAgents
 import AlasIntegrations
 import AlasACP
 
-/// A gg stack whose every entry has a pull or merge request, with those
-/// requests freshly read.
+/// A gg stack whose every shipped entry has a pull or merge request, with
+/// those requests freshly read.
 public struct PublishedGGStack: Sendable {
     public let stack: GGStack
     public let remote: CodeHostRemote
     public let requests: [Int: ReviewRequest]
+    /// Entries above the ship boundary, bottom-up; they have no request yet.
+    public let heldBack: [GGStackEntry]
     public let hasUncommittedChanges: Bool
 }
 
@@ -23,15 +25,21 @@ public struct PublishedGGStack: Sendable {
 extension AlasCoreContext {
     /// Publishes the worktree's gg stack with `gg sync`, the same guarded path
     /// as the stack drawer's Sync, then binds the stack shepherd to session
-    /// `sessionID`. Runs one at a time with `pr_create` per worktree.
-    func shipStack(sessionID: String, worktreeID: String) async -> AlasCLIResponse {
+    /// `sessionID`. Runs one at a time with `pr_create` per worktree. `plan`
+    /// is what to publish, as the Ship popover's Ship more passes it; nil
+    /// takes `StackShepherd.shipPlan`, as the agent's `stack_ship` does.
+    public func shipStack(sessionID: String, worktreeID: String, plan: StackShipPlan? = nil) async -> AlasCLIResponse {
         await serializedPublish(worktreeID: worktreeID) {
-            let result = try await self.publishShepherdedStack(sessionID: sessionID, worktreeID: worktreeID)
+            let result = try await self.publishShepherdedStack(sessionID: sessionID, worktreeID: worktreeID, plan: plan)
             return ReviewCommentWireDTO.jsonLine(result)
         }
     }
 
-    private func publishShepherdedStack(sessionID: String, worktreeID: String) async throws -> StackShipResultWire {
+    private func publishShepherdedStack(
+        sessionID: String,
+        worktreeID: String,
+        plan explicitPlan: StackShipPlan?
+    ) async throws -> StackShipResultWire {
         let (effects, context) = try stackShepherdTarget(worktreeID, sessionID: sessionID)
         guard let stack = try await loadStack(effects, path: context.path) else {
             throw PRShepherdCLIError(message: "gg does not list a stack for this worktree. Check out the stack's branch, then call stack_ship again.")
@@ -54,9 +62,19 @@ extension AlasCoreContext {
                 message: "This worktree is on entry \(position) of \(stack.totalCommits). Run `gg last` to return to the top of the stack, then call stack_ship again."
             )
         }
+        let id = StackShepherdRecordID(worktreeID: worktreeID, stackName: stack.name)
+        // A choice made on another stack must not fall back to shipping all
+        // of this one: the worktree moved on before the agent got here.
+        if explicitPlan == nil, let pending = stackShepherd.pendingShipPlans[sessionID], pending.id != id {
+            throw PRShepherdCLIError(
+                message: "The user chose what to ship from the gg stack \"\(pending.id.stackName)\", but this worktree is on \"\(stack.name)\". "
+                    + "Check out \"\(pending.id.stackName)\" and call stack_ship again, or ask the user to choose again in the Ship popover."
+            )
+        }
         // Landed entries go first: synced as they are, the landed commits
         // would be pushed again, and one `gg land` already forgot would get
         // a new request.
+        var toSync = stack
         let landed = try await landedEntries(of: stack, worktreeID: worktreeID, path: context.path)
         if !landed.isEmpty, let top = stack.entries.max(by: { $0.position < $1.position }) {
             // The checks above read this stack; the rebase refuses to run on
@@ -78,17 +96,39 @@ extension AlasCoreContext {
             guard let rebased = try await loadStack(effects, path: context.path), !rebased.entries.isEmpty else {
                 throw PRShepherdCLIError(message: "Every entry of the gg stack \"\(stack.name)\" has landed on \(stack.base). Nothing is left to publish.")
             }
+            toSync = rebased
+        }
+        let isUsersChoice = explicitPlan != nil || stackShepherd.pendingShipPlans[sessionID] != nil
+        let chosen = explicitPlan ?? stackShepherd.shipPlan(sessionID: sessionID, id: id)
+        // Resolved on the stack about to sync, rebased or not. A boundary
+        // below a published entry rises to it. One gg no longer lists never
+        // widens a fresh choice; the record's, gone after Clean or a landing,
+        // ships what already has a request, as Held back reads it.
+        guard let plan = (try? chosen.resolved(in: toSync)) ?? (isUsersChoice ? nil : chosen.recovered(in: toSync)) else {
+            throw Self.missingShipEntryError(toSync)
         }
         do {
-            try await effects.syncStack(worktreeID)
+            try await effects.syncStack(worktreeID, plan)
         } catch {
             throw PRShepherdCLIError(message: "gg sync did not finish: \(Self.prShepherdErrorMessage(error))")
         }
-        let published = try await publishedStack(effects, context: context, unpublishedHint: "gg sync did not open one")
-        let record = await bindStackShepherd(sessionID: sessionID, worktreeID: worktreeID, published: published, contextRules: nil)
+        let published = try await publishedStack(
+            effects, context: context, shipThroughEntryID: plan.shipThroughEntryID, unpublishedHint: "gg sync did not open one"
+        )
+        let record = await bindStackShepherd(
+            sessionID: sessionID, worktreeID: worktreeID, published: published, shipPlan: plan, contextRules: nil
+        )
+        stackShepherd.clearPendingShipPlan(sessionID: sessionID, id: id)
         return StackShipResultWire(
-            record: record, requests: published.requests,
+            record: record, requests: published.requests, heldBack: published.heldBack,
             uncommittedChanges: published.hasUncommittedChanges, restacked: !landed.isEmpty
+        )
+    }
+
+    private static func missingShipEntryError(_ stack: GGStack) -> PRShepherdCLIError {
+        PRShepherdCLIError(
+            message: "The entry the user chose to ship through in the Ship popover is no longer in the gg stack \"\(stack.name)\". "
+                + "Ask the user to choose what to ship again in the Ship popover."
         )
     }
 
@@ -124,16 +164,24 @@ extension AlasCoreContext {
     }
 
     /// Binds the worktree's already published stack to `sessionID` without
-    /// syncing it, as the toolbar's "Shepherd stack" does. `contextRules`
-    /// sends the session the context prompt.
+    /// syncing it, as the toolbar's "Shepherd stack" does. Taking the stack
+    /// over from another session keeps its ship plan. `contextRules` sends
+    /// the session the context prompt.
     public func shepherdPublishedStack(
         sessionID: String,
         worktreeID: String,
         contextRules: ShepherdRules?
     ) async throws -> StackShepherdRecord {
         let (effects, context) = try stackShepherdTarget(worktreeID, sessionID: sessionID)
-        let published = try await publishedStack(effects, context: context, unpublishedHint: "Ship the stack to open it")
-        return await bindStackShepherd(sessionID: sessionID, worktreeID: worktreeID, published: published, contextRules: contextRules)
+        let plan = context.stackName.flatMap {
+            stackShepherd.liveRecord(forWorktree: worktreeID, stackName: $0)?.shipPlan
+        } ?? .wholeStack
+        let published = try await publishedStack(
+            effects, context: context, shipThroughEntryID: plan.shipThroughEntryID, unpublishedHint: "Ship the stack to open it"
+        )
+        return await bindStackShepherd(
+            sessionID: sessionID, worktreeID: worktreeID, published: published, shipPlan: plan, contextRules: contextRules
+        )
     }
 
     /// Before a standalone PR bind: stops the session's live stack record (a
@@ -171,6 +219,7 @@ extension AlasCoreContext {
         sessionID: String,
         worktreeID: String,
         published: PublishedGGStack,
+        shipPlan: StackShipPlan,
         contextRules: ShepherdRules?
     ) async -> StackShepherdRecord {
         let id = StackShepherdRecordID(worktreeID: worktreeID, stackName: published.stack.name)
@@ -187,6 +236,7 @@ extension AlasCoreContext {
             remote: published.remote,
             autoFix: current?.autoFix ?? environment.configuration().changes.shepherd.autoFix,
             maxFixAttempts: current?.fixAttemptBudget ?? environment.configuration().changes.shepherd.maxFixAttempts,
+            shipPlan: shipPlan,
             contextRules: contextRules
         )
     }
@@ -228,16 +278,21 @@ extension AlasCoreContext {
     }
 
     /// The worktree's stack with every entry's request read. Throws when an
-    /// entry has none yet; `unpublishedHint` says what to do about it.
+    /// entry up to `shipThroughEntryID` has none yet; `unpublishedHint` says
+    /// what to do about it.
     private func publishedStack(
         _ effects: StackShepherd.Effects,
         context: StackShepherd.WorktreeContext,
+        shipThroughEntryID: String?,
         unpublishedHint: String
     ) async throws -> PublishedGGStack {
         guard let stack = try await loadStack(effects, path: context.path), !stack.entries.isEmpty else {
             throw PRShepherdCLIError(message: "gg does not list a stack with commits for this worktree.")
         }
-        if let missing = stack.entries.sorted(by: { $0.position < $1.position }).first(where: { $0.prNumber == nil }) {
+        let heldBack = StackShipPlan(shipThroughEntryID: shipThroughEntryID).heldBackEntries(of: stack)
+        let heldBackIDs = Set(heldBack.map(\.id))
+        let shipped = stack.entries.filter { !heldBackIDs.contains($0.id) }.sorted { $0.position < $1.position }
+        if let missing = shipped.first(where: { $0.prNumber == nil }) {
             throw PRShepherdCLIError(
                 message: "Entry \(missing.position) (\"\(missing.title)\") of the gg stack \"\(stack.name)\" has no pull request: \(unpublishedHint)."
             )
@@ -256,6 +311,7 @@ extension AlasCoreContext {
             stack: stack,
             remote: remote,
             requests: requests,
+            heldBack: heldBack,
             hasUncommittedChanges: snapshot.local.hasWorkingTreeChanges || snapshot.local.hasStagedChanges
         )
     }
