@@ -46,8 +46,7 @@ enum ComputerUseAXActions {
     /// Proceeds when the focused element can't be read.
     static func refuseSecureFocus(app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled) async throws {
         try await onQueue(isCancelled) {
-            let application = AXUIElementCreateApplication(app.pid)
-            AXUIElementSetMessagingTimeout(application, ComputerUseAXReader.messagingTimeout)
+            let application = ComputerUseAXReader.application(app.pid)
             var focused: CFTypeRef?
             guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused)
                 == .success,
@@ -126,8 +125,7 @@ enum ComputerUseAXActions {
     static func makeActiveWindow(_ window: ComputerUseWindow, isCancelled: @escaping IsCancelled) async throws {
         try await onQueue(isCancelled) {
             let app = window.app
-            let application = AXUIElementCreateApplication(app.pid)
-            AXUIElementSetMessagingTimeout(application, ComputerUseAXReader.messagingTimeout)
+            let application = ComputerUseAXReader.application(app.pid)
             let notActive = ComputerUseSystemError.actionFailed(
                 "Window \(window.windowID) isn't \(app.name)'s active window. Click in it first or pass delivery: \"direct\".")
             var windowsRef: CFTypeRef?
@@ -283,6 +281,8 @@ extension ComputerUseAXActions {
     static let maxScrollSteps = 100
     /// Scroll bar value moved per line when the bar takes no increment action.
     static let scrollValuePerLine = 0.05
+    /// Characters set per AX insert, so a stop or takeover can land between them.
+    static let insertChunkCharacters = 200
 
     /// Presses the enabled menu item whose shortcut is `chord`; false when no menu item has it.
     /// Skips the Apple menu: its shortcuts (log out, force quit) belong to the system.
@@ -307,8 +307,7 @@ extension ComputerUseAXActions {
                     mask: number(of: item, kAXMenuItemCmdModifiersAttribute) ?? 0, chordVirtualKey: chordVirtualKey)
                     && bool(of: item, kAXEnabledAttribute) == true
             }
-            let application = AXUIElementCreateApplication(app.pid)
-            AXUIElementSetMessagingTimeout(application, ComputerUseAXReader.messagingTimeout)
+            let application = ComputerUseAXReader.application(app.pid)
             guard let menuBar = elementAttribute(application, kAXMenuBarAttribute) else { return false }
             let deadline = ContinuousClock.now + ComputerUseAXReader.deadline
             var items = 0
@@ -346,32 +345,47 @@ extension ComputerUseAXActions {
     }
 
     /// Inserts `text` at the element's caret, replacing its selection. Refuses secure text fields.
+    /// Focuses the element first, keeping its selection; see `insert` for chunking and interrupts.
     static func insertText(
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
-        isCancelled: @escaping IsCancelled
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
-        try await onQueue(isCancelled) {
+        try await onQueue({ interrupt() == .cancelled }) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
-            try insert(text, into: element, app: app)
+            focusKeepingSelection(element, app: app)
+            try insert(text, into: element, app: app, interrupt: interrupt)
         }
     }
 
     /// Types into the app's focused element: replaces its value or inserts at its caret.
     /// Refuses secure text fields; `Unsupported` when nothing has focus.
     static func typeIntoFocused(
-        _ text: String, replace: Bool, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
+        _ text: String, replace: Bool, app: ComputerUseAppIdentity,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
-        try await onQueue(isCancelled) {
+        try await onQueue({ interrupt() == .cancelled }) {
             guard let element = focusedElement(of: app) else { throw Unsupported(error: .noValue) }
             try refuseSecure(element, app: app)
             if replace {
                 let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
                 guard result == .success else { throw failure(result, app: app) }
             } else {
-                try insert(text, into: element, app: app)
+                try insert(text, into: element, app: app, interrupt: interrupt)
             }
         }
+    }
+
+    /// Focusing a text view may move its caret or drop its selection (an earlier ⌘A), so the
+    /// range from before is put back. An element that already has focus is left alone.
+    /// Best effort: the insert that follows reports what fails.
+    private static func focusKeepingSelection(_ element: AXUIElement, app: ComputerUseAppIdentity) {
+        if let focused = focusedElement(of: app), CFEqual(focused, element) { return }
+        let range = selectedRange(of: element)
+        guard AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue) == .success,
+              var range, let value = AXValueCreate(.cfRange, &range)
+        else { return }
+        AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
     }
 
     /// Whether the app's focused element is the one behind `handle`.
@@ -400,8 +414,7 @@ extension ComputerUseAXActions {
             case .element(let handles, let handle):
                 start = try resolve(handles, handle)
             case .point(let point):
-                let application = AXUIElementCreateApplication(app.pid)
-                AXUIElementSetMessagingTimeout(application, ComputerUseAXReader.messagingTimeout)
+                let application = ComputerUseAXReader.application(app.pid)
                 var hit: AXUIElement?
                 let result = AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit)
                 if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
@@ -532,9 +545,30 @@ extension ComputerUseAXActions {
     /// No header constant exists for it.
     private static let openAction = "AXOpen"
 
+    /// Selects the row through its table or outline (`AXSelectedRows`), else the row's own
+    /// `AXSelected`, then reads it back: some apps report success and select nothing, which is
+    /// `Unsupported` so the click goes as events instead.
     private static func select(_ row: AXUIElement, app: ComputerUseAppIdentity) throws {
-        let result = AXUIElementSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
-        guard result == .success else { throw failure(result, app: app) }
+        let container = elementAttribute(row, kAXParentAttribute)
+        var result = AXError.attributeUnsupported
+        if let container, isSettable(container, kAXSelectedRowsAttribute) {
+            result = AXUIElementSetAttributeValue(container, kAXSelectedRowsAttribute as CFString, [row] as CFArray)
+        }
+        if result != .success {
+            result = AXUIElementSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+        }
+        if let error = mapped(result, app: app) { throw error }
+        guard isSelected(row, in: container) else { throw Unsupported(error: result == .success ? .actionUnsupported : result) }
+    }
+
+    private static func isSelected(_ row: AXUIElement, in container: AXUIElement?) -> Bool {
+        if bool(of: row, kAXSelectedAttribute) == true { return true }
+        guard let container else { return false }
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(container, kAXSelectedRowsAttribute as CFString, &value) == .success,
+              let rows = value as? [AXUIElement]
+        else { return false }
+        return rows.contains { CFEqual($0, row) }
     }
 
     private static func press(_ element: AXUIElement, action: String = kAXPressAction, app: ComputerUseAppIdentity) throws {
@@ -549,23 +583,48 @@ extension ComputerUseAXActions {
         }
     }
 
-    /// Sets the selected text and checks the app took it: some report success and insert nothing.
-    private static func insert(_ text: String, into element: AXUIElement, app: ComputerUseAppIdentity) throws {
+    /// Sets the selected text `insertChunkCharacters` characters at a time, checking `interrupt`
+    /// between chunks: a stop throws `CancellationError` and a takeover `userTookOver` with the
+    /// characters inserted so far. Checks the first chunk went in, since some apps report success
+    /// and insert nothing; that first failure is `Unsupported`, so events may type the text instead.
+    /// Any later failure is a tool error, so nothing already inserted gets typed twice.
+    private static func insert(
+        _ text: String, into element: AXUIElement, app: ComputerUseAppIdentity,
+        interrupt: @Sendable () -> ComputerUseInputInterrupt?
+    ) throws {
         guard isSettable(element, kAXSelectedTextAttribute) else { throw Unsupported(error: .attributeUnsupported) }
-        let countBefore = number(of: element, kAXNumberOfCharactersAttribute)
-        let selectionWasEmpty = selectedRange(of: element).map { $0.length == 0 }
-        let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, text as CFString)
-        guard result == .success else { throw failure(result, app: app) }
-        // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
-        if !text.isEmpty, selectionWasEmpty == true, let countBefore,
-           number(of: element, kAXNumberOfCharactersAttribute) == countBefore {
-            throw Unsupported(error: .attributeUnsupported)
-        }
+        let total = text.count
+        var rest = Substring(text)
+        var typed = 0
+        repeat {
+            let chunk = String(rest.prefix(insertChunkCharacters))
+            rest = rest.dropFirst(chunk.count)
+            if typed > 0 {
+                switch interrupt() {
+                case .cancelled: throw CancellationError()
+                case .userActive: throw ComputerUseSystemError.userTookOver(typed: typed, of: total)
+                case nil: break
+                }
+            }
+            let countBefore = typed == 0 ? number(of: element, kAXNumberOfCharactersAttribute) : nil
+            let selectionWasEmpty = typed == 0 ? selectedRange(of: element).map { $0.length == 0 } : nil
+            let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, chunk as CFString)
+            guard result == .success else {
+                if typed == 0 { throw failure(result, app: app) }
+                throw ComputerUseSystemError.actionFailed(
+                    "\(app.name) stopped taking the text after \(typed) of \(total) characters (AXError \(result.rawValue)).")
+            }
+            // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
+            if typed == 0, !chunk.isEmpty, selectionWasEmpty == true, let countBefore,
+               number(of: element, kAXNumberOfCharactersAttribute) == countBefore {
+                throw Unsupported(error: .attributeUnsupported)
+            }
+            typed += chunk.count
+        } while !rest.isEmpty
     }
 
     private static func focusedElement(of app: ComputerUseAppIdentity) -> AXUIElement? {
-        let application = AXUIElementCreateApplication(app.pid)
-        AXUIElementSetMessagingTimeout(application, ComputerUseAXReader.messagingTimeout)
+        let application = ComputerUseAXReader.application(app.pid)
         return elementAttribute(application, kAXFocusedUIElementAttribute)
     }
 

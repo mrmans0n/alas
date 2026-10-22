@@ -18,6 +18,22 @@ enum ComputerUseAXReader {
     /// Walks and AX actions share it so an action never runs during a walk.
     static let queue = DispatchQueue(label: "io.nlopez.alas.computer-use.ax", qos: .userInitiated)
 
+    /// Pids already asked to expose their tree; one ask per process is enough.
+    private static let manualAccessibilityPIDs = Mutex<Set<pid_t>>([])
+
+    /// The app element, with the messaging timeout set. The first time a pid is seen, asks it to
+    /// build its Accessibility tree (`AXManualAccessibility`): Chromium and Electron apps expose
+    /// little more than nested groups until asked. Other apps refuse the attribute; that's fine.
+    /// Call on `queue`.
+    static func application(_ pid: pid_t) -> AXUIElement {
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, messagingTimeout)
+        if manualAccessibilityPIDs.withLock({ $0.insert(pid).inserted }) {
+            _ = AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+        }
+        return application
+    }
+
     final class CancelFlag: Sendable {
         private let flag = Atomic<Bool>(false)
         func set() { flag.store(true, ordering: .relaxed) }
@@ -103,8 +119,7 @@ enum ComputerUseAXReader {
 
         func tree(for window: ComputerUseWindow) throws
             -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
-            let app = AXUIElementCreateApplication(window.app.pid)
-            AXUIElementSetMessagingTimeout(app, ComputerUseAXReader.messagingTimeout)
+            let app = ComputerUseAXReader.application(window.app.pid)
 
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)

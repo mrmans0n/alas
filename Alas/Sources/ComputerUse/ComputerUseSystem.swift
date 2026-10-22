@@ -348,7 +348,7 @@ extension LiveComputerUseSystem {
                 if replace {
                     try await ComputerUseAXActions.setValue(text, handles, handle, app: app, isCancelled: isCancelled)
                 } else {
-                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, isCancelled: isCancelled)
+                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
                 }
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
@@ -358,7 +358,7 @@ extension LiveComputerUseSystem {
             // Typing goes to the focused element of the target window only.
             try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
             do {
-                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, isCancelled: isCancelled)
+                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // Nothing focused takes text this way; type it instead.
