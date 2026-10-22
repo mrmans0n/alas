@@ -13,6 +13,10 @@ final class UpdateController {
     /// Last successfully detected update, independent of sheet presentation.
     private(set) var availableUpdate: ReleaseInfo?
 
+    /// The available update is installed on disk and takes effect on relaunch.
+    /// Not persisted: the next launch already runs the new version.
+    var isReadyToRelaunch = false
+
     private let identity: BuildIdentity
     private let checker: ReleaseChecker
     private let installSource: InstallSource

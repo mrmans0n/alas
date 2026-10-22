@@ -13,6 +13,7 @@ struct SidebarHeaderView: View {
     var peerAttentionRows: [RemoteSessionSummary] = []
     var pluginUpdates: [PluginManager.CatalogUpdate] = []
     var appUpdate: ReleaseInfo? = nil
+    var appUpdateReadyToRelaunch = false
     var cleanupReminders: [WorktreeCleanupReminder] = []
     var attentionLoadError: String? = nil
     var attentionWriteError: String? = nil
@@ -37,6 +38,7 @@ struct SidebarHeaderView: View {
          peerAttentionRows: [RemoteSessionSummary] = [],
          pluginUpdates: [PluginManager.CatalogUpdate] = [],
          appUpdate: ReleaseInfo? = nil,
+         appUpdateReadyToRelaunch: Bool = false,
          cleanupReminders: [WorktreeCleanupReminder] = [],
          attentionLoadError: String? = nil,
          attentionWriteError: String? = nil,
@@ -61,6 +63,7 @@ struct SidebarHeaderView: View {
         self.peerAttentionRows = peerAttentionRows
         self.pluginUpdates = pluginUpdates
         self.appUpdate = appUpdate
+        self.appUpdateReadyToRelaunch = appUpdateReadyToRelaunch
         self.cleanupReminders = cleanupReminders
         self.attentionLoadError = attentionLoadError
         self.attentionWriteError = attentionWriteError
@@ -115,6 +118,7 @@ struct SidebarHeaderView: View {
                 peerRows: peerAttentionRows,
                 pluginUpdates: pluginUpdates,
                 appUpdate: appUpdate,
+                appUpdateReadyToRelaunch: appUpdateReadyToRelaunch,
                 cleanupReminders: cleanupReminders,
                 loadError: attentionLoadError,
                 writeError: attentionWriteError,

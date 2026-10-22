@@ -2,7 +2,7 @@ import AlasCore
 import AppKit
 
 /// Quits Alas and opens a fresh copy, for permissions macOS only applies at
-/// launch (Screen Recording).
+/// launch (Screen Recording) and for switching to a freshly installed update.
 @MainActor
 enum AppRelaunch {
     /// Set once the user goes to grant Screen Recording, for the rest of

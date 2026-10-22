@@ -1456,6 +1456,13 @@ final class AppState {
     /// conflict while the first one is still animating out.
     var pendingSelfUpdate = false
 
+    func runSelfUpdate() async {
+        try? await selfUpdater.start(command: .homebrew)
+        if selfUpdater.state == .finished(exitCode: 0) {
+            updates.isReadyToRelaunch = true
+        }
+    }
+
     private(set) var installerHost: InstallerHost = .detect()
 
     /// Re-detect installers after an install completes so that, e.g., installing
