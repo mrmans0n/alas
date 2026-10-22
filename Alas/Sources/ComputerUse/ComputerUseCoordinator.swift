@@ -308,6 +308,8 @@ final class ComputerUseCoordinator {
         }
         return await withDriverLock(sessionID: sessionID, app: identity, epoch: context.epoch) {
             let running = try await system.openApp(identity)
+            // What launched may not be what was approved; a blocked app's windows stay private.
+            if access.access(for: running, session: sessionID) == .blocked { throw Refusal(Message.blocked(running)) }
             let windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? []
             let payload: [String: Any] = ["version": 1, "app": Self.app(running), "windows": windows.map(Self.windowEntry)]
             return (payload, running)
@@ -346,6 +348,8 @@ final class ComputerUseCoordinator {
     /// A card still up from this turn expires with it: answering it later would grant the next turn.
     func turnEnded(sessionID: String) {
         access.turnEnded(session: sessionID)
+        // An input from the ended turn stops between its events.
+        for flag in inputFlags[sessionID] ?? [] { flag.set() }
         forgetSnapshots(of: sessionID)
         releaseLock(of: sessionID)
         for entry in access.pending where entry.session == sessionID {
@@ -572,9 +576,18 @@ final class ComputerUseCoordinator {
     private func act(
         _ command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext, payload: inout [String: Any]
     ) async throws {
-        let input = try input(for: command, in: window, context: context)
+        var window = window
+        var input = try input(for: command, in: window, context: context)
         let direct = command.delivery == .direct
-        try await waitForUserIdle(in: window, direct: direct, context: context)
+        if try await waitForUserIdle(in: window, direct: direct, context: context) {
+            // The window may have moved or closed while the user had it: map points against where it is now.
+            guard let current = await system.window(window.windowID), current.app.pid == window.app.pid else {
+                throw ComputerUseSystemError.windowNotFound(window.windowID)
+            }
+            window = current
+            input = try self.input(for: command, in: window, context: context)
+        }
+        try checkStillActive(context)
         let delivery: ComputerUseDelivery
         do {
             delivery = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
@@ -664,8 +677,8 @@ final class ComputerUseCoordinator {
         return .point(point)
     }
 
-    /// Holds input back while the user is typing or clicking in the target app.
-    private func waitForUserIdle(in window: ComputerUseWindow, direct: Bool, context: CallContext) async throws {
+    /// Holds input back while the user is typing or clicking in the target app; true when it waited.
+    private func waitForUserIdle(in window: ComputerUseWindow, direct: Bool, context: CallContext) async throws -> Bool {
         var waited = Duration.zero
         while true {
             let decision = ComputerUseTakeover.decide(
@@ -675,7 +688,7 @@ final class ComputerUseCoordinator {
                 waited: Self.seconds(waited)
             )
             switch decision {
-            case .proceed: return
+            case .proceed: return waited > .zero
             case .refuse: throw Refusal(Message.userActive(window.app))
             case .wait:
                 await sleep(Self.takeoverPoll)
@@ -712,11 +725,17 @@ final class ComputerUseCoordinator {
         let start = clock.now
         var slept = Duration.zero
         while true {
+            // Only the read returned to the agent replaces its refs.
             let read = try await readElements(
-                window, query: query, limit: command.limit, maxDepth: command.maxDepth, context: context)
-            if read.elements.isEmpty == (command.condition == .disappear) { return read }
+                window, query: query, limit: command.limit, maxDepth: command.maxDepth, context: context, recordRefs: false)
+            if read.elements.isEmpty == (command.condition == .disappear) {
+                record(refs: read, of: window, context: context)
+                return (read.truncated, read.elements)
+            }
             // Slow reads count too, so a stalled app can't stretch the wait.
             if slept >= timeout || clock.now - start >= timeout {
+                // The window changed while the agent waited; the refs it holds may point elsewhere now.
+                updateSnapshot(of: window, context: context) { $0.refs = [:] }
                 throw Refusal(Message.waitTimeout(query, command.condition, windowID: window.windowID, ms: command.timeoutMS))
             }
             await sleep(Self.waitPoll)
@@ -725,26 +744,37 @@ final class ComputerUseCoordinator {
         }
     }
 
-    /// Reads the window the way computer_inspect does and replaces its refs.
+    private struct ElementRead {
+        var truncated: Bool
+        var elements: [ComputerUseInspectElement]
+        var handles: ComputerUseAXHandles
+    }
+
+    /// Reads the window the way computer_inspect does and, unless told not to, replaces its refs.
     private func readElements(
-        _ window: ComputerUseWindow, query: String?, limit: Int, maxDepth: Int, context: CallContext
-    ) async throws -> (truncated: Bool, elements: [ComputerUseInspectElement]) {
+        _ window: ComputerUseWindow, query: String?, limit: Int, maxDepth: Int, context: CallContext, recordRefs: Bool = true
+    ) async throws -> ElementRead {
         // Without a query the walk only needs one node past the limit to report truncation.
         let budget = query == nil ? limit + 1 : Self.queryNodeBudget
         let tree = try await system.axTree(window, maxDepth, budget)
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
+        // A partial read may have missed elements even when the limit was not reached.
+        let read = ElementRead(truncated: flat.truncated || !tree.complete, elements: flat.elements, handles: tree.handles)
+        if recordRefs { record(refs: read, of: window, context: context) }
+        return read
+    }
+
+    private func record(refs read: ElementRead, of window: ComputerUseWindow, context: CallContext) {
         var refs: [String: Int] = [:]
-        for element in flat.elements {
+        for element in read.elements {
             if let handle = element.handle { refs[element.ref] = handle }
         }
         updateSnapshot(of: window, context: context) {
             $0.refs = refs
-            $0.handles = tree.handles
+            $0.handles = read.handles
         }
-        // A partial read may have missed elements even when the limit was not reached.
-        return (flat.truncated || !tree.complete, flat.elements)
     }
 
     private func record(screenshot: ComputerUseScreenshot, of window: ComputerUseWindow, context: CallContext) throws {
@@ -774,6 +804,8 @@ final class ComputerUseCoordinator {
         if epochs[context.sessionID, default: 0] != context.epoch || access.isStopped(session: context.sessionID) {
             throw CancellationError()
         }
+        // The turn this call belongs to ended: its grant and refs are gone.
+        if generations[context.sessionID, default: 0] != context.generation { throw Refusal(Message.cancelled) }
     }
 
     private static func seconds(_ duration: Duration) -> TimeInterval {

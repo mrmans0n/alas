@@ -56,7 +56,8 @@ struct ComputerUseCoordinatorTests {
     /// `recorder` also records the coordinator's sleeps, which return at once.
     private static func fixture(
         system: ComputerUseSystem = system(), approvalWait: Duration = .seconds(60),
-        recorder: Recorder = Recorder(), allowed: [ComputerUseAppIdentity] = []
+        recorder: Recorder = Recorder(), allowed: [ComputerUseAppIdentity] = [],
+        sleep: (@Sendable (Duration) async -> Void)? = nil
     ) -> Fixture {
         let lockURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-computer-use-\(UUID().uuidString)/computer-use.lock")
@@ -70,7 +71,7 @@ struct ComputerUseCoordinatorTests {
             interrupt: { calls.interrupts.append($0) },
             lockURL: lockURL,
             approvalWait: approvalWait,
-            sleep: { recorder.recordSleep($0) }
+            sleep: sleep ?? { recorder.recordSleep($0) }
         )
         for app in allowed {
             access.record(.allowForSession, for: app, session: "s")
@@ -369,7 +370,65 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.sleeps.isEmpty && recorder.inputs.isEmpty)
     }
 
-    @Test func stopDuringTypingSendsNoFurtherChunks() async throws {
+    @Test func turnEndDuringTheTakeoverWaitSendsNothing() async throws {
+        let gate = TreeGate()
+        let recorder = Recorder()
+        let polls = Counter()
+        var system = Self.system(recorder: recorder)
+        system.frontmostPID = { 101 }
+        // Busy for the first poll, idle after it.
+        system.secondsSinceUserInput = { polls.next() == 1 ? 0.5 : 60 }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes]) { _ in await gate.enter(1) }
+        let call = Task { await f.coordinator.perform(.init(action: .key, windowID: 1, keys: "cmd+s"), sessionID: "s") }
+        try await eventually("takeover wait") { gate.entered == [1] }
+        f.coordinator.turnEnded(sessionID: "s")
+        gate.open(1)
+        #expect(await call.value == .error("computer_cancelled: The call was cancelled."))
+        #expect(recorder.inputs.isEmpty)
+    }
+
+    @Test func pointTargetIsRemappedWhenTheWindowMovedDuringTheTakeoverWait() async throws {
+        let recorder = Recorder()
+        let lookups = Counter()
+        let polls = Counter()
+        let original = ComputerUseWindow(windowID: 1, title: "Note", frame: CGRect(x: 100, y: 50, width: 400, height: 300), app: Self.notes)
+        var moved = original
+        moved.frame.origin = CGPoint(x: 1000, y: 1000)
+        var system = Self.system(recorder: recorder)
+        // The screenshot and the click resolve the original frame; the window moves while the user is busy.
+        system.window = { [moved] _ in lookups.next() <= 2 ? original : moved }
+        system.frontmostPID = { 101 }
+        system.secondsSinceUserInput = { polls.next() == 1 ? 0.5 : 60 }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let response = await f.coordinator.perform(.init(action: .click, windowID: 1, x: 200, y: 100), sessionID: "s")
+        #expect(response == .error("computer_out_of_bounds: The point is outside window 1."))
+        #expect(recorder.inputs.isEmpty)
+    }
+
+    @Test func failedPostActionReadStillReportsTheActionAndDropsRefs() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let saveTree = Self.saveTree
+        var system = Self.system(recorder: recorder)
+        system.axTree = { _, _, _ in
+            guard reads.next() == 1 else { throw ComputerUseSystemError.captureFailed("gone") }
+            return (saveTree, true, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
+        let click = ComputerUseCommand(action: .click, windowID: 1, ref: "e1")
+        let json = try #require(Self.text(await f.coordinator.perform(click, sessionID: "s")))
+        #expect(json.contains(#""post_state_error":"Capture failed: gone""#) && json.contains(#""elements":[]"#))
+        #expect(await f.coordinator.perform(click, sessionID: "s")
+            == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
+        #expect(recorder.inputs.count == 1)
+    }
+
+    enum Interruption: CaseIterable { case stop, turnEnd }
+
+    @Test(arguments: Interruption.allCases)
+    func stopDuringTypingSendsNoFurtherChunks(_ interruption: Interruption) async throws {
         let gate = TreeGate()
         let checks = Recorder()
         var system = Self.system()
@@ -385,9 +444,13 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, allowed: [Self.notes])
         let call = Task { await f.coordinator.perform(.init(action: .type, windowID: 1, text: "hello world"), sessionID: "s") }
         try await eventually("typing") { gate.entered == [1] }
-        await f.coordinator.stop(sessionID: "s")
+        switch interruption {
+        case .stop: await f.coordinator.stop(sessionID: "s")
+        case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
+        }
         gate.open(1)
-        #expect(await call.value == .error(ComputerUseCoordinator.Message.stopped))
+        let expected = interruption == .stop ? ComputerUseCoordinator.Message.stopped : ComputerUseCoordinator.Message.cancelled
+        #expect(await call.value == .error(expected))
         #expect(checks.checks == [false, true])
     }
 
@@ -402,26 +465,54 @@ struct ComputerUseCoordinatorTests {
         #expect(f.coordinator.pendingApprovals.isEmpty)
     }
 
-    @Test(arguments: [true, false])
-    func waitReturnsWhenTheQueryAppearsOrTimesOut(_ appears: Bool) async throws {
+    @Test func openAppRefusesALaunchedAppThatTurnsOutBlocked() async throws {
+        let keychain = Self.keychain
+        var system = Self.system()
+        system.openApp = { _ in keychain }
+        let f = Self.fixture(system: system, allowed: [Self.notes])
+        let response = await f.coordinator.perform(.init(action: .openApp, name: "Notes"), sessionID: "s")
+        #expect(response == .error("computer_blocked: Keychain Access can't be used by agents."))
+    }
+
+    enum WaitCase: CaseIterable { case appears, neverAppears, disappears, neverDisappears }
+
+    @Test(arguments: WaitCase.allCases)
+    func waitReturnsWhenTheQueryAppearsOrTimesOut(_ waitCase: WaitCase) async throws {
         let recorder = Recorder()
         let reads = Counter()
         var system = Self.system(recorder: recorder)
-        // "Done" shows up on the third read, or never.
+        // Read 1 is the inspect. "Done" shows up from read 4 on, never, or is always there.
         system.axTree = { _, _, _ in
-            let done = appears && reads.next() >= 3
+            let read = reads.next()
+            let done = switch waitCase {
+            case .appears: read >= 4
+            case .neverAppears, .disappears: false
+            case .neverDisappears: read > 1
+            }
             let children = done ? [ComputerUseAXNode(role: "AXStaticText", title: "Done", handle: 1)] : []
             return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), true, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
-        let response = await f.coordinator.perform(.init(action: .wait, windowID: 1, query: "done", timeoutMS: 1000), sessionID: "s")
-        if appears {
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let condition: ComputerUseCommand.WaitCondition = waitCase == .appears || waitCase == .neverAppears ? .appear : .disappear
+        let wait = ComputerUseCommand(action: .wait, windowID: 1, query: "done", condition: condition, timeoutMS: 1000)
+        let response = await f.coordinator.perform(wait, sessionID: "s")
+        switch waitCase {
+        case .appears:
             let json = try #require(Self.text(response))
             #expect(json.contains(#""ref":"e1""#) && json.contains(#""title":"Done""#))
             #expect(recorder.sleeps == [.milliseconds(250), .milliseconds(250)])
-        } else {
-            #expect(response == .error(#"computer_wait_timeout: Nothing matching "done" appeared in window 1 within 1000 ms."#))
+        case .disappears:
+            #expect(try #require(Self.text(response)).contains(#""elements":[]"#))
+            #expect(recorder.sleeps.isEmpty)
+        case .neverAppears, .neverDisappears:
+            let verb = condition == .appear ? "appeared" : "disappeared"
+            #expect(response == .error(#"computer_wait_timeout: Nothing matching "done" \#(verb) in window 1 within 1000 ms."#))
             #expect(recorder.sleeps.reduce(.zero, +) == .seconds(1))
+            // The polls the agent never saw don't leave refs behind, nor do the inspect's survive.
+            #expect(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")
+                == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."))
+            #expect(recorder.inputs.isEmpty)
         }
     }
 }
