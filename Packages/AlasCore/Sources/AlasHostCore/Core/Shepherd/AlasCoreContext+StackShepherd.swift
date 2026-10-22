@@ -57,7 +57,7 @@ extension AlasCoreContext {
         // Landed entries go first: synced as they are, the landed commits
         // would be pushed again, and one `gg land` already forgot would get
         // a new request.
-        let landed = await landedEntries(of: stack, worktreeID: worktreeID, path: context.path)
+        let landed = try await landedEntries(of: stack, worktreeID: worktreeID, path: context.path)
         if !landed.isEmpty, let top = stack.entries.max(by: { $0.position < $1.position }) {
             // The checks above read this stack; the rebase refuses to run on
             // whatever the worktree moved to while they ran.
@@ -97,17 +97,27 @@ extension AlasCoreContext {
     /// whose change the freshly fetched base already has. The last covers a
     /// landing no record saw, including a `gg land` that forgot the entry's
     /// request. gg's own merged state is not enough: an upper entry merged
-    /// into the entry below it has not reached the base.
-    private func landedEntries(of stack: GGStack, worktreeID: String, path: URL) async -> [GGStackEntry] {
+    /// into the entry below it has not reached the base. Throws when the
+    /// base can't be fetched or compared: syncing without knowing would push
+    /// a landed commit again.
+    private func landedEntries(of stack: GGStack, worktreeID: String, path: URL) async throws -> [GGStackEntry] {
         let seenMerged = stackShepherd.records.values
             .filter { $0.id.worktreeID == worktreeID }
             .reduce(into: Set<String>()) { $0.formUnion(StackShepherdPolicy.landedEntryIDs(of: $1, in: stack)) }
         let git = GitService()
         // gg rebases onto origin's base, so that is what decides.
-        _ = try? await git.fetchRef(worktreePath: path, remote: "origin", branch: stack.base)
-        let onBase = (try? await git.commitsAlreadyIn(
-            upstream: "origin/\(stack.base)", shas: stack.entries.map(\.sha), worktreePath: path
-        )) ?? []
+        let onBase: Set<String>
+        do {
+            try await git.fetchRef(worktreePath: path, remote: "origin", branch: stack.base)
+            onBase = try await git.commitsAlreadyIn(
+                upstream: "origin/\(stack.base)", shas: stack.entries.map(\.sha), worktreePath: path
+            )
+        } catch {
+            throw PRShepherdCLIError(
+                message: "Alas could not check origin/\(stack.base) for entries that already landed, so it did not sync: \(error.localizedDescription). "
+                    + "Check that origin is reachable and has \(stack.base), then call stack_ship again."
+            )
+        }
         return stack.entries
             .filter { seenMerged.contains($0.id) || onBase.contains($0.sha) }
             .sorted { $0.position < $1.position }
