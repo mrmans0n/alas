@@ -11803,9 +11803,14 @@ final class AppState {
     /// source-compatible through the accessors below; checkout UUID/location
     /// pairs cannot collide with them or with each other.
     @ObservationIgnored
-    var acpManagers: [SessionOwnerID: ACPSessionManager] {
+    private var acpManagers: [SessionOwnerID: ACPSessionManager] {
         get { core.sessionManagers }
         set { core.sessionManagers = newValue }
+    }
+
+    /// The owner whose manager holds live ACP session `id`.
+    func acpOwner(forSession id: String) -> SessionOwnerID? {
+        acpManagers.first { $0.value.liveSession(for: id) != nil }?.key
     }
     /// The project each worktree manager was built for, to notice a directory
     /// that later moved to another project.

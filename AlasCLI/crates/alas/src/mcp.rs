@@ -1602,9 +1602,11 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
 /// `gh`/`glab` before replying; on an SSH worktree each of those runs over
 /// ssh, so it gets far longer than the default 30-second reply bound. The
 /// remote helper's relay waits slightly longer than this.
-/// The first use of an app waits on the user's approval prompt.
-const COMPUTER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 const PR_CREATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// `computer_*` calls may wait on the user's approval prompt the first time
+/// an app is used, so they get longer than the default reply bound.
+const COMPUTER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Unknown tools and invalid arguments are JSON-RPC protocol errors
 /// (-32602); failures while executing a valid call are tool results with

@@ -59,9 +59,7 @@ extension AppState {
     }
 
     func showComputerUseSession(_ sessionID: String) {
-        guard let owner = acpManagers.first(where: { _, manager in
-            manager.liveSession(for: sessionID) != nil
-        })?.key else { return }
+        guard let owner = acpOwner(forSession: sessionID) else { return }
         switch owner {
         case .worktree:
             guard let location = harnessSessionLocation(sessionId: sessionID) else { return }

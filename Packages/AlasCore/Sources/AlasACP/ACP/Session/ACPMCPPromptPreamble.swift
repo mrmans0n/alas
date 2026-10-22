@@ -240,7 +240,7 @@ public enum ACPMCPPromptPreamble: Sendable {
                 + "restrict MCP servers by policy), the same actions are available via "
                 + "the `alas` CLI in your shell: `alas open`, `alas notify`, "
                 + "`alas wt …`, `alas review …` (comments/reply/resolve/finish), "
-                + "`alas session …`, and `alas preview …`. "
+                + "`alas session …`, `alas preview …`, and `alas computer …`. "
                 + "pr_create, pr_status and stack_ship are MCP-only.")
         }
         if !userServerNames.isEmpty {
