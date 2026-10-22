@@ -84,6 +84,10 @@ public final class StackShepherd {
         public var loadStack: @MainActor (_ path: URL) async throws -> GGStack?
         /// `gg sync` through the guarded path the stack drawer's Sync uses.
         public var syncStack: @MainActor (_ worktreeID: String) async throws -> Void
+        /// `gg rebase` onto the stack's base through the guarded path the
+        /// stack drawer's Rebase uses. Drops entries that already landed.
+        /// Refuses unless the worktree is still on `expected` when it runs.
+        public var rebaseStack: @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void
         public var sessionState: @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState
         /// Queues `prompt` on the session; `isStillWanted` is checked right
         /// before the session's queue changes.
@@ -105,6 +109,7 @@ public final class StackShepherd {
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             loadStack: @escaping @MainActor (_ path: URL) async throws -> GGStack?,
             syncStack: @escaping @MainActor (_ worktreeID: String) async throws -> Void,
+            rebaseStack: @escaping @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,
             deliverPrompt: @escaping @MainActor (
                 _ sessionID: String,
@@ -123,6 +128,7 @@ public final class StackShepherd {
             self.worktreeContext = worktreeContext
             self.loadStack = loadStack
             self.syncStack = syncStack
+            self.rebaseStack = rebaseStack
             self.sessionState = sessionState
             self.deliverPrompt = deliverPrompt
             self.rules = rules
@@ -258,9 +264,10 @@ public final class StackShepherd {
         var current = StackShepherdPolicy.reconcile(latest, with: stack, now: now())
         let listed = Set(stack.entries.filter { $0.prNumber != nil }.map(\.id))
         current.entries.removeAll { !listed.contains($0.entryID) && $0.shepherd.phase != .merged }
+        let landed = StackShepherdPolicy.landedEntryIDs(of: current, in: stack)
         return StackShepherdPolicy.isReady(
             current, requests: freshRequests,
-            isStackPublished: StackShepherdPolicy.publication(of: stack, local: probed.local).isPublished,
+            isStackPublished: StackShepherdPolicy.publication(of: stack, local: probed.local, landed: landed).isPublished,
             capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now()
         )
     }
@@ -313,6 +320,14 @@ public final class StackShepherd {
         record.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
         record.finishedAt = nil
         record = StackShepherdPolicy.reconcile(record, with: stack, now: now)
+        // A publish that rebased the landed entries away settles them now,
+        // not on the next poll; a new owner is told about a landing again.
+        if StackShepherdPolicy.landedEntryIDs(of: record, in: stack).isEmpty {
+            record.landedEntryIDs = nil
+            record.restackRequestedFor = nil
+        } else if newOwner {
+            record.restackRequestedFor = nil
+        }
         // Every entry that has not merged takes the owner and settings, a
         // closed one included: a reopen later brings it back under them. Only
         // a live entry starts over; a closed one keeps its phase until then.
@@ -573,10 +588,14 @@ public final class StackShepherd {
         // decide on the current record, and not at all for another owner.
         guard let current = records[id], current.sessionID == owner, !current.isFinished else { return }
         failureCounts[id] = nil
-        let publication = StackShepherdPolicy.publication(of: onStack, local: probed.local)
+        let publication = StackShepherdPolicy.publication(
+            of: onStack, local: probed.local,
+            landed: onStack.map { StackShepherdPolicy.landedEntryIDs(of: current, in: $0) } ?? []
+        )
         let observation = StackShepherdObservation(
             requests: fetched,
             presentEntryIDs: onStack.map { Set($0.entries.filter { $0.prNumber != nil }.map(\.id)) },
+            listedEntryIDs: onStack.map { Set($0.entries.map(\.id)) },
             local: probed.local,
             capabilities: provider.capabilities,
             headReviewers: reviewers,
@@ -633,7 +652,7 @@ public final class StackShepherd {
             if outcome == .merged { await archiveAfterMerge(id) }
             return
         }
-        guard !decision.fixes.isEmpty else { return }
+        guard !decision.fixes.isEmpty || !decision.restack.isEmpty else { return }
         deliveringFix[id] = generation
         defer {
             if deliveringFix[id] == generation { deliveringFix[id] = nil }
@@ -643,7 +662,9 @@ public final class StackShepherd {
             logs[fix.entry.requestNumber] = await checkLogs(for: fix, path: path)
         }
         guard isCurrent(id, generation, before: "fix delivery") else { return }
-        let prompt = StackShepherdPromptBuilder.fixPrompt(record: record, fixes: decision.fixes, logs: logs, rules: rules)
+        let prompt = StackShepherdPromptBuilder.fixPrompt(
+            record: record, fixes: decision.fixes, landed: decision.restack, logs: logs, rules: rules
+        )
         let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
             self?.isCurrent(id, generation, before: "fix delivery") ?? false
         }
@@ -658,8 +679,10 @@ public final class StackShepherd {
             failed.entries[index].shepherd.lastDispatchedFingerprint = previous.lastDispatchedFingerprint
             failed.entries[index].shepherd.viewerCommentIDsAtDispatch = previous.viewerCommentIDsAtDispatch
         }
+        // Nor was the landing announced: the next poll after Resume says it.
+        failed.restackRequestedFor = before.restackRequestedFor
         put(failed)
-        escalate(id, entries: decision.fixes.map(\.entry), reason: .deliveryFailed)
+        escalate(id, entries: decision.fixes.isEmpty ? failed.openEntries : decision.fixes.map(\.entry), reason: .deliveryFailed)
     }
 
     /// Logs for at most `ShepherdPromptBuilder.maxCheckLogs` failing checks

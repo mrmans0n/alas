@@ -20,6 +20,7 @@ struct StackShepherdTests {
     private static func request(
         _ number: Int,
         state: ReviewRequestState = .open,
+        base: String = "main",
         head: String = F.head,
         checks: [ReviewCheck] = [F.check("build", .pass)],
         threads: [ReviewThread] = []
@@ -27,7 +28,7 @@ struct StackShepherdTests {
         let remote = F.remote()
         return ReviewRequest(
             remote: remote, number: number, title: "Entry \(number)", url: remote.reviewRequestURL(number: number),
-            state: state, isDraft: false, headRefName: "nacho/auth--c-\(number)", baseRefName: "main",
+            state: state, isDraft: false, headRefName: "nacho/auth--c-\(number)", baseRefName: base,
             headSHA: head, reviewDecision: .approved, mergeState: .clean,
             checks: checks, threads: threads, areThreadsComplete: true
         )
@@ -55,6 +56,7 @@ struct StackShepherdTests {
     private static func observation(
         _ requests: [ReviewRequest],
         present: Set<String>? = nil,
+        listed: Set<String>? = nil,
         canDispatch: Bool = true,
         isStackPublished: Bool = true,
         hasUnpublishedEntries: Bool? = nil,
@@ -63,6 +65,7 @@ struct StackShepherdTests {
         StackShepherdObservation(
             requests: Dictionary(uniqueKeysWithValues: requests.map { ($0.number, $0) }),
             presentEntryIDs: present,
+            listedEntryIDs: listed,
             local: local,
             capabilities: .githubCLI,
             headReviewers: [:],
@@ -267,6 +270,41 @@ struct StackShepherdTests {
         #expect(ready.gatePasses)
     }
 
+    /// After the bottom lands, gg still lists its commit until the stack is
+    /// rebased: the owner is asked once to restack with stack_ship, and the
+    /// rest is not ready to land until gg drops the landed commit.
+    @Test func aLandingGGStillListsAsksTheOwnerOnceToRestack() {
+        let requests = [Self.request(41, state: .merged), Self.request(42)]
+        // `gg land` forgot #41, so only #42 is published.
+        let landed = StackShepherdPolicy.decide(
+            Self.record([41, 42]),
+            Self.observation(requests, present: ["c-42"], listed: ["c-41", "c-42"], now: F.earlier)
+        )
+        #expect(landed.record.entries[0].shepherd.phase == .merged)
+        #expect(landed.restack.map(\.entryID) == ["c-41"])
+
+        let again = StackShepherdPolicy.decide(landed.record, Self.observation(requests, present: ["c-42"], listed: ["c-41", "c-42"]))
+        #expect(again.restack.isEmpty)
+        #expect(!again.gatePasses)
+
+        let rebased = StackShepherdPolicy.decide(again.record, Self.observation(requests, present: ["c-42"], listed: ["c-42"]))
+        #expect(rebased.record.landedEntryIDs == nil && rebased.record.restackRequestedFor == nil)
+        #expect(rebased.gatePasses)
+    }
+
+    /// An upper entry merged into the entry below it has not reached the
+    /// base: a rebase would keep it, so it must not ask for one, or every
+    /// stack_ship would rebase again.
+    @Test func anEntryMergedIntoItsParentIsNotLanded() {
+        let requests = [Self.request(41), Self.request(42, state: .merged, base: "nacho/auth--c-41")]
+
+        let decision = StackShepherdPolicy.decide(Self.record([41, 42]), Self.observation(requests, listed: ["c-41", "c-42"]))
+
+        #expect(decision.record.entries[1].shepherd.phase == .merged)
+        #expect(decision.restack.isEmpty && decision.record.landedEntryIDs == nil)
+        #expect(StackShepherdPolicy.landedEntryIDs(of: decision.record, in: Self.stack([41, 42])).isEmpty)
+    }
+
     private static func stack(published: [Bool], synced: Int? = nil) -> GGStack {
         GGStack(
             name: "auth", base: "main", totalCommits: published.count, syncedCommits: synced ?? published.count,
@@ -304,6 +342,11 @@ struct StackShepherdTests {
             let edited = StackShepherdPolicy.publication(of: Self.stack(published: [true, true]), local: local)
             #expect(!edited.isPublished && edited.hasUnpublishedEntries == true)
         }
+
+        // `gg land` forgets a landed entry's request: until a rebase drops
+        // it, it is neither unpublished work nor part of a published stack.
+        let landed = StackShepherdPolicy.publication(of: Self.stack(published: [false, true], synced: 1), local: clean, landed: ["sha0"])
+        #expect(!landed.isPublished && landed.hasUnpublishedEntries == false)
 
         // On another stack nothing is known about this one: not ready, and no
         // verdict on unpublished work, so a stack last seen with an
@@ -542,6 +585,7 @@ struct StackShepherdTests {
             },
             loadStack: { _ in stack },
             syncStack: { _ in },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, prompt, _ in
                 deliverPrompt(prompt.text)
@@ -722,6 +766,7 @@ struct StackShepherdTests {
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: nil, isEligible: true) },
             loadStack: { _ in nil },
             syncStack: { _ in },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
             rules: { _ in .none },
@@ -866,6 +911,7 @@ struct StackShepherdTests {
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "b", isEligible: true) },
             loadStack: { _ in otherStack },
             syncStack: { _ in synced += 1 },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
             rules: { _ in .none },

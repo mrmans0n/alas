@@ -2246,6 +2246,29 @@ extension GitService {
         return Date()
     }
 
+    /// The commits among `shas` (all reachable from `head`) whose change
+    /// `upstream` already has: reachable from it, or matched by a
+    /// patch-equivalent commit on it, as the squash merge of a one-commit
+    /// request is. `git cherry` semantics, the same test `git rebase` uses to
+    /// drop a commit.
+    public func commitsAlreadyIn(
+        upstream: String,
+        head: String = "HEAD",
+        shas: [String],
+        worktreePath: URL
+    ) async throws -> Set<String> {
+        let result = try await Process.git(["cherry", upstream, head], cwd: worktreePath)
+        guard result.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(result.exitCode, result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        // `+` marks a commit upstream lacks; `-` one it has an equivalent of.
+        // A commit not listed at all is reachable from upstream.
+        let missing = result.stdout.split(separator: "\n").compactMap { line -> Substring? in
+            line.hasPrefix("+ ") ? line.dropFirst(2) : nil
+        }
+        return Set(shas.filter { sha in !sha.isEmpty && !missing.contains { $0.hasPrefix(sha) || sha.hasPrefix($0) } })
+    }
+
     /// Returns the remote and branch to fetch if `ref` is a remote-tracking
     /// ref (e.g. `origin/main`). Returns `nil` for local refs, SHAs, or
     /// anything without a known `<remote>/` prefix.

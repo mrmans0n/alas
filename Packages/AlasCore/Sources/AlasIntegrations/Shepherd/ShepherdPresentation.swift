@@ -158,6 +158,12 @@ public struct ShepherdPresentation: Equatable, Sendable {
         case .awaitingPush: return (.waiting, "waiting for stack_ship")
         case .merging, .queued, .watching: break
         }
+        if let landedIDs = record.landedEntryIDs {
+            let landed = entryList(record.entries.filter { landedIDs.contains($0.entryID) })
+            return record.autoFix
+                ? (.waiting, "\(landed) landed: waiting for stack_ship to restack")
+                : (.attention, "auto-fix off: \(landed) landed, restack with stack_ship")
+        }
         if gatePasses { return (.ready, "ready to land") }
         let open = record.openEntries
         let openRequests = open.compactMap { requests[$0.requestNumber] }

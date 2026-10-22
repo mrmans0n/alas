@@ -2852,6 +2852,20 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
+    /// `gg rebase` onto the stack's base, the drawer's Rebase, for
+    /// `stack_ship` to drop entries that already landed before it syncs.
+    /// gg fetches the base and rebases onto its origin. Throws
+    /// `staleConfirmation` unless the worktree is still on `expected` right
+    /// before gg runs, and throws when gg stops, a conflict included; the
+    /// paused operation is left for `gg continue`.
+    func rebaseGGForShip(expected: GGStackIdentity) async throws {
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
+        guard let operation = ggMutationCoordinator.startApplying(.rebase(target: nil), confirmedAgainst: expected) else {
+            throw GGMutationError.operationInFlight
+        }
+        try await completeGGMutation(operation, request: .rebase(target: nil)).value
+    }
+
     private func completeGGMutation(
         _ operation: Task<Void, Error>,
         request: GGMutationRequest
