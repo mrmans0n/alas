@@ -300,5 +300,10 @@ private final class Counter: @unchecked Sendable {
     private let lock = NSLock()
     private var count = 0
 
-    func next() -> Int { lock.withLock { count += 1; return count } }
+    func next() -> Int {
+        lock.withLock {
+            count += 1
+            return count
+        }
+    }
 }

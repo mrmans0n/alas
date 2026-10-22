@@ -1955,7 +1955,10 @@ mod tests {
             None,
         );
         assert_eq!(cancel.command, "computer_cancel");
-        assert_eq!(cancel.params, Some(serde_json::json!({ "call_id": "42-1" })));
+        assert_eq!(
+            cancel.params,
+            Some(serde_json::json!({ "call_id": "42-1" }))
+        );
     }
 
     #[test]

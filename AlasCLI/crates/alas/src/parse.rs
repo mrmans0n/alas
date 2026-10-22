@@ -71,9 +71,11 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
             .map_err(|_| "window-id must be a non-negative integer".to_string())
     };
     match args.first().copied() {
-        Some("apps") if args.len() == 1 => Ok(Command::Computer(
-            alas_client::ComputerCommand::Apps { call_id: None },
-        )),
+        Some("apps") if args.len() == 1 => {
+            Ok(Command::Computer(alas_client::ComputerCommand::Apps {
+                call_id: None,
+            }))
+        }
         Some("screenshot") if args.len() == 2 => Ok(Command::Computer(
             alas_client::ComputerCommand::Screenshot {
                 window_id: window_id(args[1])?,
@@ -2040,7 +2042,14 @@ mod tests {
         );
         assert_eq!(
             p(&[
-                "computer", "inspect", "7", "--query", "Save", "--limit", "3000", "--max-depth",
+                "computer",
+                "inspect",
+                "7",
+                "--query",
+                "Save",
+                "--limit",
+                "3000",
+                "--max-depth",
                 "1"
             ])
             .unwrap(),
