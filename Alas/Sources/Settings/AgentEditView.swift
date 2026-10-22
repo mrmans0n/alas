@@ -9,6 +9,7 @@ struct AgentEditView: View {
     @State private var draft: AgentDefinition
     @State private var nativeSubagentsDisabled: Bool
     @State private var sessionInstructions: String
+    @State private var sessionHooks: String
     @State private var deleteConfirmShown = false
     /// Pi only: what the installed Pi extensions leave uncovered. Read once
     /// when the sheet opens.
@@ -26,6 +27,9 @@ struct AgentEditView: View {
         } ?? false)
         _sessionInstructions = State(initialValue: targetID.flatMap {
             state.config.agents.builtinState[$0]?.sessionInstructions
+        } ?? "")
+        _sessionHooks = State(initialValue: targetID.flatMap {
+            state.config.agents.builtinState[$0]?.sessionHooks
         } ?? "")
         _piExtensionCoverage = State(initialValue: targetID == ACPManagedAdapterDescriptor.pi.agentID
             ? ACPPiSubagentExtensions.coverage(
@@ -171,6 +175,31 @@ struct AgentEditView: View {
                             .strokeBorder(theme.color("line"), lineWidth: 0.5))
                 }
             }
+            if supportsSessionHooks {
+                SettingsRow(
+                    name: "Session hooks",
+                    desc: "Advanced. Claude Code hooks JSON, like {\"PostToolUse\": [...]}. "
+                        + "Runs alongside your user and project hooks, on the agent's host "
+                        + "in the session's worktree. Applies to new sessions."
+                ) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        TextEditor(text: $sessionHooks)
+                            .font(.system(size: 11, design: .monospaced))
+                            .scrollContentBackground(.hidden)
+                            .frame(height: 72)
+                            .padding(8)
+                            .background(theme.color("bg-0"))
+                            .overlay(RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(theme.color(sessionHooksError == nil ? "line" : "del"), lineWidth: 0.5))
+                        if let sessionHooksError {
+                            Text(sessionHooksError)
+                                .font(.system(size: 11))
+                                .foregroundColor(theme.color("del"))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
 
             HStack(spacing: 8) {
                 if !draft.isBuiltin && !isNew {
@@ -235,6 +264,20 @@ struct AgentEditView: View {
         draft.isBuiltin && ACPSessionInstructionsPolicy.isConfigurable(agentID: draft.id)
     }
 
+    private var supportsSessionHooks: Bool {
+        draft.isBuiltin && ACPClaudeSessionHooksPolicy.isConfigurable(agentID: draft.id)
+    }
+
+    private var sessionHooksError: String? {
+        guard supportsSessionHooks else { return nil }
+        do {
+            _ = try ACPClaudeSessionHooksPolicy.normalized(sessionHooks)
+            return nil
+        } catch {
+            return error.errorDescription
+        }
+    }
+
     private var isNew: Bool {
         if case .new = target { return true } else { return false }
     }
@@ -245,7 +288,7 @@ struct AgentEditView: View {
     }
 
     private var canSave: Bool {
-        if draft.isBuiltin { return true }
+        if draft.isBuiltin { return sessionHooksError == nil }
         return !draft.displayName.trimmingCharacters(in: .whitespaces).isEmpty
             && !draft.binary.trimmingCharacters(in: .whitespaces).isEmpty
     }
@@ -264,6 +307,9 @@ struct AgentEditView: View {
             }
             if supportsSessionInstructions {
                 entry.sessionInstructions = ACPSessionInstructionsPolicy.normalized(sessionInstructions)
+            }
+            if supportsSessionHooks {
+                entry.sessionHooks = try? ACPClaudeSessionHooksPolicy.normalized(sessionHooks)
             }
             state.config.agents.builtinState[draft.id] = entry
         } else if isNew {

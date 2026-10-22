@@ -15,18 +15,23 @@ public struct BuiltinAgentState: Codable, Equatable, Sendable {
     /// "Session instructions" for new ACP sessions of this agent. Absent
     /// (nil) means none. See `ACPSessionInstructionsPolicy`.
     public var sessionInstructions: String?
+    /// "Session hooks" (Claude Code hooks JSON) for new ACP sessions of this
+    /// agent. Absent (nil) means none. See `ACPClaudeSessionHooksPolicy`.
+    public var sessionHooks: String?
 
     public init(
         isEnabled: Bool,
         binaryOverride: String? = nil,
         extraTerminalArgs: [String]? = nil,
         nativeSubagentsDisabled: Bool? = nil,
-        sessionInstructions: String? = nil
+        sessionInstructions: String? = nil,
+        sessionHooks: String? = nil
     ) {
         self.isEnabled = isEnabled
         self.binaryOverride = binaryOverride
         self.extraTerminalArgs = extraTerminalArgs
         self.nativeSubagentsDisabled = nativeSubagentsDisabled
         self.sessionInstructions = sessionInstructions
+        self.sessionHooks = sessionHooks
     }
 }

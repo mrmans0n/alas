@@ -170,6 +170,10 @@ public final class ACPConnection: @unchecked Sendable {
     /// Set after `initialize` from `ACPSessionInstructionsPolicy`. Sent as
     /// `_meta.systemPrompt.append` on session/new, load, resume, and fork.
     public var sessionInstructions: String?
+    /// Set after `initialize` from `ACPClaudeSessionHooksPolicy`. Sent as
+    /// `_meta.claudeCode.options.settings.hooks` on session/new, load,
+    /// resume, and fork.
+    public var sessionHooks: LSPJSONValue?
     private struct CodexHooksState {
         var enabled = false
         var negotiated = false
@@ -289,6 +293,12 @@ public final class ACPConnection: @unchecked Sendable {
         }
         if let sessionInstructions {
             meta.systemPrompt = .init(append: sessionInstructions)
+        }
+        if let sessionHooks {
+            // Joins the native-subagent `disallowedTools` instead of replacing them.
+            var options = meta.claudeCode?.options ?? .init()
+            options.settings = .init(hooks: sessionHooks)
+            meta.claudeCode = .init(options: options)
         }
         return meta == ACPSessionMeta() ? sessionMeta : meta
     }

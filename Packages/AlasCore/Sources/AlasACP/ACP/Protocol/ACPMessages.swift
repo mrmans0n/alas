@@ -724,15 +724,32 @@ public struct ACPSessionMeta: Codable, Equatable, Sendable {
     /// Read by `claude-agent-acp`, which merges `options` into the Claude
     /// Agent SDK options for the session's query process.
     public struct ClaudeCode: Codable, Equatable, Sendable {
+        /// Only the options Alas sets; nil fields are omitted, so the adapter
+        /// keeps its own defaults for them.
         public struct Options: Codable, Equatable, Sendable {
-            public let disallowedTools: [String]
+            /// The programmatic (flag) settings tier. Claude Code merges its
+            /// hooks with the user, project, and local tiers, and the adapter
+            /// merges the object over `CLAUDE_MODEL_CONFIG`. Always an object:
+            /// the adapter reads a string as a settings file path.
+            public struct Settings: Codable, Equatable, Sendable {
+                public let hooks: LSPJSONValue
 
-            public init(disallowedTools: [String]) {
+                public init(hooks: LSPJSONValue) {
+                    self.hooks = hooks
+                }
+            }
+
+            public var disallowedTools: [String]?
+            /// See `ACPClaudeSessionHooksPolicy`.
+            public var settings: Settings?
+
+            public init(disallowedTools: [String]? = nil, settings: Settings? = nil) {
                 self.disallowedTools = disallowedTools
+                self.settings = settings
             }
         }
 
-        public let options: Options
+        public var options: Options
 
         public init(options: Options) {
             self.options = options
