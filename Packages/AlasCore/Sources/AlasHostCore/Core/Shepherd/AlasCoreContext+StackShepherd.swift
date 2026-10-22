@@ -71,9 +71,10 @@ extension AlasCoreContext {
                     + "Check out \"\(pending.id.stackName)\" and call stack_ship again, or ask the user to choose again in the Ship popover."
             )
         }
-        let plan = explicitPlan ?? stackShepherd.shipPlan(sessionID: sessionID, id: id)
-        // A boundary gg no longer lists must not widen into the whole stack.
-        guard (try? plan.shipThroughPosition(in: stack)) != nil else { throw Self.missingShipEntryError(stack) }
+        let chosen = explicitPlan ?? stackShepherd.shipPlan(sessionID: sessionID, id: id)
+        // A boundary gg no longer lists must not widen into the whole stack;
+        // one below a published entry rises to it.
+        guard let plan = try? chosen.resolved(in: stack) else { throw Self.missingShipEntryError(stack) }
         do {
             try await effects.syncStack(worktreeID, plan)
         } catch {

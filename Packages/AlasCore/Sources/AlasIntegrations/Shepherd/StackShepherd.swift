@@ -8,31 +8,35 @@ import AlasPlatform
 private let stackShepherdLogger = Logger(subsystem: "io.nlopez.alas", category: "StackShepherd")
 
 /// The stack shepherd's records on disk, at `Paths.stackShepherdsFile`,
-/// decoded per record like `ReviewShepherdsFile`.
+/// decoded per record like `ReviewShepherdsFile`, with the Ship popover
+/// choices still waiting for a `stack_ship`.
 public struct StackShepherdsFile: Codable, Equatable, Sendable {
     public var version: Int = 1
     public var records: [StackShepherdRecord] = []
+    public var pendingShips: [PendingStackShip] = []
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case version, records
+        case version, records, pendingShips
     }
 
-    public init(records: [StackShepherdRecord] = []) {
+    public init(records: [StackShepherdRecord] = [], pendingShips: [PendingStackShip] = []) {
         self.records = records
+        self.pendingShips = pendingShips
     }
 
-    private struct LenientRecord: Decodable {
-        let record: StackShepherdRecord?
+    private struct Lenient<Value: Decodable>: Decodable {
+        let value: Value?
 
         init(from decoder: Decoder) throws {
-            record = try? StackShepherdRecord(from: decoder)
+            value = try? Value(from: decoder)
         }
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = (try? c.decode(Int.self, forKey: .version)) ?? 1
-        records = ((try? c.decode([LenientRecord].self, forKey: .records)) ?? []).compactMap(\.record)
+        records = ((try? c.decode([Lenient<StackShepherdRecord>].self, forKey: .records)) ?? []).compactMap(\.value)
+        pendingShips = ((try? c.decode([Lenient<PendingStackShip>].self, forKey: .pendingShips)) ?? []).compactMap(\.value)
     }
 }
 
@@ -363,7 +367,8 @@ public final class StackShepherd {
     /// Remembers what the Ship popover chose for session `sessionID`'s next
     /// `stack_ship` of stack `id`, replacing an earlier choice.
     public func setPendingShipPlan(_ plan: StackShipPlan, sessionID: String, id: StackShepherdRecordID) {
-        pendingShipPlans[sessionID] = PendingStackShip(id: id, plan: plan)
+        pendingShipPlans[sessionID] = PendingStackShip(sessionID: sessionID, id: id, plan: plan, chosenAt: now())
+        persist()
     }
 
     /// The plan session `sessionID`'s next `stack_ship` of stack `id`
@@ -378,7 +383,9 @@ public final class StackShepherd {
     /// Drops session `sessionID`'s pending plan for stack `id` once a
     /// publish carried it out.
     public func clearPendingShipPlan(sessionID: String, id: StackShepherdRecordID) {
-        if pendingShipPlans[sessionID]?.id == id { pendingShipPlans[sessionID] = nil }
+        guard pendingShipPlans[sessionID]?.id == id else { return }
+        pendingShipPlans[sessionID] = nil
+        persist()
     }
 
     public func setAutoFix(_ on: Bool, for id: StackShepherdRecordID) {
@@ -865,7 +872,10 @@ public final class StackShepherd {
                 return now.timeIntervalSince(record.finishedAt ?? record.updatedAt) < ShepherdRecordRetention.finishedLifetime
             }
             records = Dictionary(kept.map { ($0.id, $0) }) { lhs, rhs in lhs.updatedAt >= rhs.updatedAt ? lhs : rhs }
-            if kept.count != file.records.count {
+            // A choice no `stack_ship` took within the retention was abandoned.
+            let pending = file.pendingShips.filter { now.timeIntervalSince($0.chosenAt) < ShepherdRecordRetention.finishedLifetime }
+            pendingShipPlans = Dictionary(pending.map { ($0.sessionID, $0) }) { lhs, rhs in lhs.chosenAt >= rhs.chosenAt ? lhs : rhs }
+            if kept.count != file.records.count || pending.count != file.pendingShips.count {
                 persist()
             }
         } catch {
@@ -874,7 +884,10 @@ public final class StackShepherd {
     }
 
     private func persist() {
-        let file = StackShepherdsFile(records: records.values.sorted { $0.createdAt < $1.createdAt })
+        let file = StackShepherdsFile(
+            records: records.values.sorted { $0.createdAt < $1.createdAt },
+            pendingShips: pendingShipPlans.values.sorted { $0.chosenAt < $1.chosenAt }
+        )
         do {
             try store.write(file, to: fileURL)
         } catch {

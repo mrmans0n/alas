@@ -468,7 +468,11 @@ struct StackShipLinePicker: View {
     }
 
     private var top: Int { entries.map(\.position).max() ?? 0 }
-    private var bottom: Int { entries.map(\.position).min() ?? 0 }
+    /// The line never goes below an entry that already has a request: gg
+    /// sync cannot take one back.
+    private var bottom: Int {
+        max(entries.map(\.position).min() ?? 0, entries.filter { $0.prNumber != nil }.map(\.position).max() ?? 0)
+    }
     private var through: Int { min(max(shipThrough, bottom), top) }
 
     /// Rows top-first with the line above the first row that ships. The line
