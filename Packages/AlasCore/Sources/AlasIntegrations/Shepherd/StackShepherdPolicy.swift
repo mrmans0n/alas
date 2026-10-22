@@ -138,15 +138,22 @@ public enum StackShepherdPolicy {
         return (!hasUnpublished && isSynced && landed.isEmpty, hasUnpublished)
     }
 
-    /// The entries of `record` whose request merged while `stack` still
-    /// lists their commits: they landed, and the local stack was not rebased
-    /// since. Until it is, `gg sync` would push the landed commits again
-    /// (and open a new request for one `gg land` already forgot), and the
-    /// entries above keep the landed change in their history.
+    /// The entries of `record` whose request merged into the stack's base
+    /// while `stack` still lists their commits: they landed, and the local
+    /// stack was not rebased since. Until it is, `gg sync` would push the
+    /// landed commits again (and open a new request for one `gg land`
+    /// already forgot), and the entries above keep the landed change in
+    /// their history.
     public static func landedEntryIDs(of record: StackShepherdRecord, in stack: GGStack) -> Set<String> {
         guard stack.name == record.id.stackName else { return [] }
         let listed = Set(stack.entries.map(\.id))
-        return Set(record.entries.filter { $0.shepherd.phase == .merged && listed.contains($0.entryID) }.map(\.entryID))
+        return Set(record.entries.filter { hasLanded($0, in: record) && listed.contains($0.entryID) }.map(\.entryID))
+    }
+
+    /// Merged into the stack's base. An upper entry merged into the entry
+    /// below it has merged without landing: a rebase onto the base keeps it.
+    private static func hasLanded(_ entry: StackShepherdEntry, in record: StackShepherdRecord) -> Bool {
+        entry.shepherd.phase == .merged && entry.shepherd.baseBranch == record.base
     }
 
     /// The record's entries in step with `stack`'s published entries,
@@ -289,7 +296,7 @@ public enum StackShepherdPolicy {
         // `stack_ship` does the rebase. Off the stack the record keeps what
         // it last saw.
         if let listed = observation.listedEntryIDs {
-            let landed = open.isEmpty ? [] : next.entries.filter { $0.shepherd.phase == .merged && listed.contains($0.entryID) }
+            let landed = open.isEmpty ? [] : next.entries.filter { hasLanded($0, in: next) && listed.contains($0.entryID) }
             next.landedEntryIDs = landed.isEmpty ? nil : landed.map(\.entryID)
         }
         if let landed = next.landedEntryIDs {

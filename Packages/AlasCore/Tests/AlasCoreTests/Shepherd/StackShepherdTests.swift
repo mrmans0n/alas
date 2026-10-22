@@ -20,6 +20,7 @@ struct StackShepherdTests {
     private static func request(
         _ number: Int,
         state: ReviewRequestState = .open,
+        base: String = "main",
         head: String = F.head,
         checks: [ReviewCheck] = [F.check("build", .pass)],
         threads: [ReviewThread] = []
@@ -27,7 +28,7 @@ struct StackShepherdTests {
         let remote = F.remote()
         return ReviewRequest(
             remote: remote, number: number, title: "Entry \(number)", url: remote.reviewRequestURL(number: number),
-            state: state, isDraft: false, headRefName: "nacho/auth--c-\(number)", baseRefName: "main",
+            state: state, isDraft: false, headRefName: "nacho/auth--c-\(number)", baseRefName: base,
             headSHA: head, reviewDecision: .approved, mergeState: .clean,
             checks: checks, threads: threads, areThreadsComplete: true
         )
@@ -289,6 +290,19 @@ struct StackShepherdTests {
         let rebased = StackShepherdPolicy.decide(again.record, Self.observation(requests, present: ["c-42"], listed: ["c-42"]))
         #expect(rebased.record.landedEntryIDs == nil && rebased.record.restackRequestedFor == nil)
         #expect(rebased.gatePasses)
+    }
+
+    /// An upper entry merged into the entry below it has not reached the
+    /// base: a rebase would keep it, so it must not ask for one, or every
+    /// stack_ship would rebase again.
+    @Test func anEntryMergedIntoItsParentIsNotLanded() {
+        let requests = [Self.request(41), Self.request(42, state: .merged, base: "nacho/auth--c-41")]
+
+        let decision = StackShepherdPolicy.decide(Self.record([41, 42]), Self.observation(requests, listed: ["c-41", "c-42"]))
+
+        #expect(decision.record.entries[1].shepherd.phase == .merged)
+        #expect(decision.restack.isEmpty && decision.record.landedEntryIDs == nil)
+        #expect(StackShepherdPolicy.landedEntryIDs(of: decision.record, in: Self.stack([41, 42])).isEmpty)
     }
 
     private static func stack(published: [Bool], synced: Int? = nil) -> GGStack {

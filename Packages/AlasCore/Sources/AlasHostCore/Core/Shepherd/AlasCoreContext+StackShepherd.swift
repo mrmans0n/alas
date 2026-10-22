@@ -86,10 +86,11 @@ extension AlasCoreContext {
     }
 
     /// The entries of `stack` that already landed on its base while gg still
-    /// lists them: those a shepherd record saw merge, those gg reports
-    /// merged, and those whose change the freshly fetched base already has.
-    /// The last covers a landing no record saw, including a `gg land` that
-    /// forgot the entry's request.
+    /// lists them: those a shepherd record saw merge into the base, and those
+    /// whose change the freshly fetched base already has. The last covers a
+    /// landing no record saw, including a `gg land` that forgot the entry's
+    /// request. gg's own merged state is not enough: an upper entry merged
+    /// into the entry below it has not reached the base.
     private func landedEntries(of stack: GGStack, worktreeID: String, path: URL) async -> [GGStackEntry] {
         let seenMerged = stackShepherd.records.values
             .filter { $0.id.worktreeID == worktreeID }
@@ -101,7 +102,7 @@ extension AlasCoreContext {
             upstream: "origin/\(stack.base)", shas: stack.entries.map(\.sha), worktreePath: path
         )) ?? []
         return stack.entries
-            .filter { seenMerged.contains($0.id) || $0.prState == .merged || onBase.contains($0.sha) }
+            .filter { seenMerged.contains($0.id) || onBase.contains($0.sha) }
             .sorted { $0.position < $1.position }
     }
 
