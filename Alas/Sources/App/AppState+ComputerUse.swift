@@ -43,4 +43,31 @@ extension AppState {
         config.computerUse.alwaysAllowedBundleIDs.append(bundleID)
         saveConfig()
     }
+
+    /// Installs the menu-bar item that follows `computerUse.driver`.
+    func startComputerUseStatusItem() {
+        let item = ComputerUseStatusItem(
+            coordinator: computerUse,
+            agentName: { [weak self] id in
+                guard let self, let session = self.session(for: id) else { return "An agent" }
+                return self.agent(id: session.agentId)?.displayName ?? session.agentId
+            },
+            showSession: { [weak self] in self?.showComputerUseSession($0) }
+        )
+        computerUseStatusItem = item
+        item.start()
+    }
+
+    func showComputerUseSession(_ sessionID: String) {
+        guard let owner = acpManagers.first(where: { _, manager in
+            manager.liveSession(for: sessionID) != nil
+        })?.key else { return }
+        switch owner {
+        case .worktree:
+            guard let location = harnessSessionLocation(sessionId: sessionID) else { return }
+            activateHarnessSession(projectId: location.projectId, worktreeId: location.worktreeId, sessionId: sessionID)
+        case .workspaceCheckout:
+            activateHarnessSession(owner: owner, sessionId: sessionID)
+        }
+    }
 }

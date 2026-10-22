@@ -38,6 +38,29 @@ struct ComputerUsePane: View {
                     }
                 }
 
+                SettingsGroup(title: "Always allowed apps") {
+                    Text("If Codex also has OpenAI's Computer Use plugin turned on, agents there see both sets of tools.")
+                        .font(.system(size: 12))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.bottom, 8)
+                    let bundleIDs = state.config.computerUse.alwaysAllowedBundleIDs
+                    if bundleIDs.isEmpty {
+                        Text("No apps yet. Choose \"Always allow\" when an agent asks.")
+                            .font(.system(size: 12.5))
+                            .foregroundColor(theme.color("fg-dim"))
+                    } else {
+                        ForEach(bundleIDs, id: \.self) { bundleID in
+                            SettingsRow(name: bundleID) {
+                                AlasButton(title: "Remove") {
+                                    state.config.computerUse.alwaysAllowedBundleIDs.removeAll { $0 == bundleID }
+                                    state.saveConfig()
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if isAdHoc {
                     SettingsGroup(title: "Development build") {
                         Text("This build is ad-hoc signed, so macOS forgets these permissions every time it is rebuilt. See \"Local signing for dev builds\" in AGENTS.md.")

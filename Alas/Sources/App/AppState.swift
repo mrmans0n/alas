@@ -318,6 +318,7 @@ final class AppState {
     let scheduledAgentTurns = ScheduledAgentTurns()
     /// Serves computer_* calls: approvals, the driver lock, stop/resume.
     let computerUse: ComputerUseCoordinator
+    @ObservationIgnored var computerUseStatusItem: ComputerUseStatusItem?
     /// The models each ACP agent last advertised, for surfaces that configure
     /// a session before it exists (the schedule editor's model picker).
     let acpModelCatalog: ACPAgentModelCatalog
@@ -1691,6 +1692,7 @@ final class AppState {
         }
         // All stored properties are initialized; we can safely capture `self`.
         computerUseLink.state = self
+        startComputerUseStatusItem()
         // Wire the live default-ordering source so the manager reads the
         // current `config.worktrees.defaultOrdering` on every sort.
         self.projectsManager.setDefaultOrdering { [weak self] in
@@ -11801,7 +11803,7 @@ final class AppState {
     /// source-compatible through the accessors below; checkout UUID/location
     /// pairs cannot collide with them or with each other.
     @ObservationIgnored
-    private var acpManagers: [SessionOwnerID: ACPSessionManager] {
+    var acpManagers: [SessionOwnerID: ACPSessionManager] {
         get { core.sessionManagers }
         set { core.sessionManagers = newValue }
     }
