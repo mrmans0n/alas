@@ -137,6 +137,32 @@ public final class RemoteKeychainSecretStore: RemoteSecretStore, @unchecked Send
     }
 }
 
+/// The headless host's store: reads like the app does, but writes only to the
+/// file store. An app and a host taking turns on one profile must keep the same
+/// identity key, and `RemoteKeychainSecretStore` deletes the file copy whenever
+/// it writes to the Keychain, so the host never goes through it to write.
+public final class RemoteHostSecretStore: RemoteSecretStore, Sendable {
+    private let reading: any RemoteSecretStore
+    private let writing: any RemoteSecretStore
+
+    public init(
+        reading: any RemoteSecretStore = RemoteKeychainSecretStore(fallback: RemoteFileSecretStore()),
+        writing: any RemoteSecretStore = RemoteFileSecretStore()
+    ) {
+        self.reading = reading
+        self.writing = writing
+    }
+
+    public func secret(for account: String) -> Data? {
+        reading.secret(for: account)
+    }
+
+    @discardableResult
+    public func setSecret(_ data: Data?, for account: String) -> Bool {
+        writing.setSecret(data, for: account)
+    }
+}
+
 /// Owner-only (0600) files under Application Support. The fallback for builds
 /// the data protection keychain refuses, and the source a pre-Keychain secret
 /// is migrated out of.
