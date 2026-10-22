@@ -23,20 +23,19 @@ struct ShellEnvResolverTests {
         exit 1
         """)
         defer { try? FileManager.default.removeItem(at: shell) }
-        #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path], interactive: true) == "/nvm/bin:/usr/bin")
+        #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path]) == "/nvm/bin:/usr/bin")
     }
 
-    /// With a terminal, an interactive shell's startup files can take it over
-    /// and stall; the process was started from the user's shell anyway, so
-    /// its own PATH, kept by `ACPProcessEnvironment.baseEnvironment`, has
-    /// what `.zshrc` added.
-    @Test func aProcessWithATerminalAsksOnlyALoginShell() async throws {
+    /// An interactive shell's startup files must not reach the terminal the
+    /// caller runs in (`alas-host setup` over SSH): the shell leads a session
+    /// of its own, which has no terminal.
+    @Test func theShellRunsInASessionOfItsOwn() async throws {
         let shell = try fakeShell("""
-        case "$1" in -i) printf '%s' "___ALAS_PATH___/interactive___ALAS_END___"; exit 0 ;; esac
-        printf '%s' "___ALAS_PATH___/login___ALAS_END___"
+        if /usr/bin/python3 -c "import os,sys; sys.exit(0 if os.getsid($$) == $$ else 1)"; then where=/own-session; else where=/callers-session; fi
+        printf '%s' "___ALAS_PATH___${where}___ALAS_END___"
         """)
         defer { try? FileManager.default.removeItem(at: shell) }
-        #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path], interactive: false) == "/login")
+        #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path]) == "/own-session")
     }
 
     @Test func aLoginShellAnswersWhenTheInteractiveOneGivesNothing() async throws {
@@ -45,6 +44,6 @@ struct ShellEnvResolverTests {
         printf '%s' "___ALAS_PATH___/login/bin___ALAS_END___"
         """)
         defer { try? FileManager.default.removeItem(at: shell) }
-        #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path], interactive: true) == "/login/bin")
+        #expect(await ShellEnvResolver.discoverShellPath(candidates: [shell.path]) == "/login/bin")
     }
 }

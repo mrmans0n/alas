@@ -35,19 +35,23 @@ public final class SpawnedProcess: @unchecked Sendable {
     public var termination: Termination? { lock.withLock { _termination } }
     public var isRunning: Bool { termination == nil }
 
+    /// `newSession` starts the child in a session of its own, with no controlling terminal, so nothing it runs can
+    /// read from or take over the terminal of this process; it then leads its own process group too.
     /// A nil `stdin` reads `/dev/null`. The child's ends of the pipes are closed here once it has them, so the
     /// readers see EOF when it and whatever inherited them are gone. `onExit` gets the pid and how it ended, once,
     /// on the reaper thread, before the child is reaped, so its pid is still its own.
     public init(
         executable: URL, arguments: [String], environment: [String: String], directory: URL? = nil,
-        newProcessGroup: Bool = true, stdin: Pipe?, stdout: Pipe, stderr: Pipe,
+        newProcessGroup: Bool = true, newSession: Bool = false, stdin: Pipe?, stdout: Pipe, stderr: Pipe,
         onExit: @escaping @Sendable (pid_t, Termination) -> Void
     ) throws {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
         var flags = POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK
-        if newProcessGroup {
+        if newSession {
+            flags |= POSIX_SPAWN_SETSID
+        } else if newProcessGroup {
             flags |= POSIX_SPAWN_SETPGROUP
             posix_spawnattr_setpgroup(&attributes, 0)
         }
