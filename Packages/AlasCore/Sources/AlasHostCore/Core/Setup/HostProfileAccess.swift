@@ -47,11 +47,19 @@ public enum HostProfileWrite {
     /// Reads the profile (defaults when absent), applies `change`, writes it back.
     /// Only what `change` touched is rewritten: keys this build does not model
     /// (a newer app's settings, values it cannot decode) stay as they were.
+    /// Writers take turns on a lock beside the file, so two `alas-host`
+    /// commands writing at once each keep their change.
     public static func update(
         _ change: (inout AppConfig) throws -> Void,
         file: URL = Paths.appConfigFile,
         store: PersistenceStore = .init()
     ) throws {
+        let lock = open(file.path + ".lock", O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
+        guard lock >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(lock) }
+        while flock(lock, LOCK_EX) != 0 {
+            guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        }
         let raw = (try? Data(contentsOf: file)).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } ?? [:]
         var config = try store.readIfExists(AppConfig.self, from: file) ?? .defaults
         let before = try jsonObject(store.encode(config))
