@@ -135,14 +135,13 @@ enum ComputerUseAXActions {
             let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
             if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
             guard result == .success, let axWindows = windowsRef as? [AXUIElement],
-                  let target = ComputerUseAXReader.matchingWindow(
-                      axWindows, for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) })
+                  let target = axWindow(axWindows, for: window)
             else { throw notActive }
-            if isFocusedWindow(target, of: application) { return }
+            if isFocusedWindow(target, window, of: application) { return }
             guard raise else { throw notActive }
             AXUIElementPerformAction(target, kAXRaiseAction as CFString)
             AXUIElementSetAttributeValue(target, kAXMainAttribute as CFString, kCFBooleanTrue)
-            guard isFocusedWindow(target, of: application) else { throw notActive }
+            guard isFocusedWindow(target, window, of: application) else { throw notActive }
         }
     }
 
@@ -161,21 +160,35 @@ enum ComputerUseAXActions {
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
             if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
-            guard bool(of: application, kAXFrontmostAttribute) == true, let focused,
-                  let axWindows = windowsRef as? [AXUIElement],
-                  let target = ComputerUseAXReader.matchingWindow(
-                      axWindows, for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) })
+            guard bool(of: application, kAXFrontmostAttribute) == true, let focused else { return (false, focusedID) }
+            // Two windows can share a frame and title (a duplicated document); the window id can't.
+            if ComputerUseSkyLight.canIdentifyWindows { return (focusedID == window.windowID, focusedID) }
+            guard let axWindows = windowsRef as? [AXUIElement],
+                  let target = axWindow(axWindows, for: window)
             else { return (false, focusedID) }
             return (CFEqual(focused, target), focusedID)
         }
     }
 
-    private static func isFocusedWindow(_ window: AXUIElement, of application: AXUIElement) -> Bool {
-        var focused: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(application, kAXFocusedWindowAttribute as CFString, &focused) == .success,
-              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID()
-        else { return false }
-        return CFEqual(focused, window)
+    /// The AX window behind `window`: by its CG window id where AX can name it, else by frame,
+    /// with the title breaking ties.
+    private static func axWindow(_ candidates: [AXUIElement], for window: ComputerUseWindow) -> AXUIElement? {
+        guard ComputerUseSkyLight.canIdentifyWindows else {
+            return ComputerUseAXReader.matchingWindow(
+                candidates, for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) })
+        }
+        return candidates.first { candidate in
+            AXUIElementSetMessagingTimeout(candidate, ComputerUseAXReader.messagingTimeout)
+            return ComputerUseSkyLight.windowID(of: candidate) == window.windowID
+        }
+    }
+
+    /// Whether the app's focused window is `target`, the AX window of `window`: by window id where
+    /// AX can name it, else by element equality.
+    private static func isFocusedWindow(_ target: AXUIElement, _ window: ComputerUseWindow, of application: AXUIElement) -> Bool {
+        guard let focused = elementAttribute(application, kAXFocusedWindowAttribute) else { return false }
+        if ComputerUseSkyLight.canIdentifyWindows { return ComputerUseSkyLight.windowID(of: focused) == window.windowID }
+        return CFEqual(focused, target)
     }
 
     private static func frame(of element: AXUIElement) -> CGRect? {
@@ -382,12 +395,13 @@ extension ComputerUseAXActions {
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
-        try await onQueue({ interrupt() == .cancelled }) {
+        let element = try await onQueue({ interrupt() == .cancelled }) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
             focusKeepingSelection(element, app: app)
-            try insert(text, into: element, app: app, interrupt: interrupt)
+            return Retained(element)
         }
+        try await insert(text, into: element, app: app, interrupt: interrupt)
     }
 
     /// Types into the app's focused element: replaces its value or inserts at its caret.
@@ -396,16 +410,21 @@ extension ComputerUseAXActions {
         _ text: String, replace: Bool, app: ComputerUseAppIdentity,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
-        try await onQueue({ interrupt() == .cancelled }) {
+        let element = try await onQueue({ interrupt() == .cancelled }) { () -> Retained? in
             guard let element = focusedElement(of: app) else { throw Unsupported(error: .noValue) }
             try refuseSecure(element, app: app)
-            if replace {
-                let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
-                guard result == .success else { throw failure(result, app: app) }
-            } else {
-                try insert(text, into: element, app: app, interrupt: interrupt)
-            }
+            guard replace else { return Retained(element) }
+            let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+            guard result == .success else { throw failure(result, app: app) }
+            return nil
         }
+        if let element { try await insert(text, into: element, app: app, interrupt: interrupt) }
+    }
+
+    /// An element carried from one block on the AX queue to the next; only messaged there.
+    private struct Retained: @unchecked Sendable {
+        let element: AXUIElement
+        init(_ element: AXUIElement) { self.element = element }
     }
 
     /// Focusing a text view may move its caret or drop its selection (an earlier ⌘A), so the
@@ -495,9 +514,7 @@ extension ComputerUseAXActions {
                 guard result == .success, let hit else { throw Unsupported(error: result) }
                 AXUIElementSetMessagingTimeout(hit, ComputerUseAXReader.messagingTimeout)
                 // Another of the app's windows may be on top at that point.
-                guard let hitWindow = elementAttribute(hit, kAXWindowAttribute),
-                      ComputerUseAXReader.matchingWindow(
-                          [hitWindow], for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) }) != nil
+                guard let hitWindow = elementAttribute(hit, kAXWindowAttribute), axWindow([hitWindow], for: window) != nil
                 else { throw Unsupported(error: .illegalArgument) }
                 start = hit
             }
@@ -587,7 +604,7 @@ extension ComputerUseAXActions {
         _ handles: ComputerUseAXHandles, _ handle: Int, count: Int, app: ComputerUseAppIdentity,
         isCancelled: @escaping IsCancelled
     ) async throws {
-        try await onQueue(isCancelled) {
+        let sidebar = try await onQueue(isCancelled) { () -> SidebarOpen? in
             let element = try resolve(handles, handle)
             var elements = [element]
             var links = [(role: string(of: element, kAXRoleAttribute) ?? "AXUnknown", actions: actionNames(of: element))]
@@ -601,40 +618,63 @@ extension ComputerUseAXActions {
             switch ComputerUseClickTarget.choose(chain: links) {
             case .press(let index) where count == 1:
                 try press(elements[index], app: app)
+                return nil
             case .selectRow(let index):
                 let row = elements[index]
+                let sidebar = count == 1 ? sourceListOpen(row, below: elements[..<index], app: app) : nil
                 try select(row, app: app)
-                guard count == 2 else {
-                    openInSourceList(row, below: elements[..<index], app: app)
-                    return
-                }
+                guard count == 2 else { return sidebar }
                 // Selected but not opened: the double click as events finishes it.
                 guard let open = [openAction, kAXPressAction].first(where: links[index].actions.contains) else {
                     throw Unsupported(error: .actionUnsupported)
                 }
                 try press(row, action: open, app: app)
+                return nil
             case .press, .none:
                 throw Unsupported(error: .actionUnsupported)
             }
         }
+        // The selection may navigate by itself; opening the cell as well would navigate twice.
+        guard let sidebar, (try? await Task.sleep(for: sidebarNavigationWait)) != nil else { return }
+        _ = try? await onQueue(isCancelled) {
+            guard string(of: sidebar.window.element, kAXTitleAttribute) == sidebar.title else { return }
+            _ = try? press(sidebar.cell.element, action: openAction, app: app)
+        }
     }
+
+    /// A sidebar cell to open once the row is selected, unless the window navigated by itself.
+    private struct SidebarOpen: @unchecked Sendable {
+        var cell: Retained
+        var window: Retained
+        /// The window's title before the selection.
+        var title: String?
+    }
+
+    /// How long a sidebar selection gets to navigate its window before the cell is opened.
+    static let sidebarNavigationWait: Duration = .milliseconds(150)
+    private static let finderBundleID = "com.apple.finder"
 
     /// No header constant exists for it.
     private static let openAction = "AXOpen"
     private static let sourceListSubrole = "AXSourceList"
 
-    /// A sidebar (a source list, like Finder's) navigates on a single click, which selecting the
-    /// row doesn't do: opens the cell that was clicked, else the row's first cell that opens.
+    /// Finder's sidebar (a source list) navigates on a single click, which selecting the row may
+    /// not do: the cell that was clicked, else the row's first cell that opens, with the window's
+    /// title before the selection. Read before selecting; nil for any other app or table.
     /// Best effort, since the row is selected either way.
-    private static func openInSourceList(_ row: AXUIElement, below chain: ArraySlice<AXUIElement>, app: ComputerUseAppIdentity) {
-        guard let outline = elementAttribute(row, kAXParentAttribute),
+    private static func sourceListOpen(
+        _ row: AXUIElement, below chain: ArraySlice<AXUIElement>, app: ComputerUseAppIdentity
+    ) -> SidebarOpen? {
+        guard app.bundleID == finderBundleID,
+              let outline = elementAttribute(row, kAXParentAttribute),
               string(of: outline, kAXRoleAttribute) == kAXOutlineRole,
-              string(of: outline, kAXSubroleAttribute) == sourceListSubrole
-        else { return }
+              string(of: outline, kAXSubroleAttribute) == sourceListSubrole,
+              let window = elementAttribute(row, kAXWindowAttribute)
+        else { return nil }
         let opens = { (element: AXUIElement) in actionNames(of: element).contains(openAction) }
         // The chain runs from the clicked element up to the row: the last entry is the row's child.
-        guard let cell = chain.last.flatMap({ opens($0) ? $0 : nil }) ?? children(of: row).first(where: opens) else { return }
-        _ = try? press(cell, action: openAction, app: app)
+        guard let cell = chain.last.flatMap({ opens($0) ? $0 : nil }) ?? children(of: row).first(where: opens) else { return nil }
+        return SidebarOpen(cell: Retained(cell), window: Retained(window), title: string(of: window, kAXTitleAttribute))
     }
 
     /// Selects the row through its table or outline (`AXSelectedRows`), else the row's own
@@ -680,39 +720,78 @@ extension ComputerUseAXActions {
     /// characters inserted so far. Checks the first chunk went in, since some apps report success
     /// and insert nothing; that first failure is `Unsupported`, so events may type the text instead.
     /// Any later failure is a tool error, so nothing already inserted gets typed twice.
+    /// Each chunk goes at the caret the text so far left (from the selection read before the first
+    /// one): the user or the app moving the caret in between stops the input rather than splitting
+    /// the text across two places. Without a readable selection the chunks go wherever the caret is.
     private static func insert(
-        _ text: String, into element: AXUIElement, app: ComputerUseAppIdentity,
-        interrupt: @Sendable () -> ComputerUseInputInterrupt?
-    ) throws {
-        guard isSettable(element, kAXSelectedTextAttribute) else { throw Unsupported(error: .attributeUnsupported) }
+        _ text: String, into target: Retained, app: ComputerUseAppIdentity,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws {
         let total = text.count
+        var chunks: [String] = []
         var rest = Substring(text)
-        var typed = 0
         repeat {
             let chunk = String(rest.prefix(insertChunkCharacters))
             rest = rest.dropFirst(chunk.count)
-            if typed > 0 {
-                switch interrupt() {
-                case .cancelled: throw CancellationError()
-                case .userActive: throw ComputerUseSystemError.userTookOver(typed: typed, of: total)
-                case nil: break
+            chunks.append(chunk)
+        } while !rest.isEmpty
+        var typed = 0
+        var typedUTF16 = 0
+        var start: Int?
+        for (index, chunk) in chunks.enumerated() {
+            if index > 0 { await Task.yield() }
+            let (typedSoFar, utf16SoFar, startLocation) = (typed, typedUTF16, start)
+            let isLast = index == chunks.count - 1
+            start = try await onQueue({ interrupt() == .cancelled }) { () -> Int? in
+                let element = target.element
+                let moved = ComputerUseSystemError.actionFailed(
+                    "\(app.name) moved the text cursor; stopped after typing \(typedSoFar) of \(total) characters.")
+                var startLocation = startLocation
+                var countBefore: Int?
+                var selectionWasEmpty: Bool?
+                if typedSoFar == 0 {
+                    guard isSettable(element, kAXSelectedTextAttribute) else { throw Unsupported(error: .attributeUnsupported) }
+                    countBefore = number(of: element, kAXNumberOfCharactersAttribute)
+                    let range = selectedRange(of: element)
+                    selectionWasEmpty = range.map { $0.length == 0 }
+                    startLocation = range?.location
+                } else {
+                    switch interrupt() {
+                    case .cancelled: throw CancellationError()
+                    case .userActive: throw ComputerUseSystemError.userTookOver(typed: typedSoFar, of: total)
+                    case nil: break
+                    }
+                    if let startLocation {
+                        var caret = CFRange(location: startLocation + utf16SoFar, length: 0)
+                        guard let value = AXValueCreate(.cfRange, &caret),
+                              AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
+                        else { throw moved }
+                    }
                 }
-            }
-            let countBefore = typed == 0 ? number(of: element, kAXNumberOfCharactersAttribute) : nil
-            let selectionWasEmpty = typed == 0 ? selectedRange(of: element).map { $0.length == 0 } : nil
-            let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, chunk as CFString)
-            guard result == .success else {
-                if typed == 0 { throw failure(result, app: app) }
-                throw ComputerUseSystemError.actionFailed(
-                    "\(app.name) stopped taking the text after \(typed) of \(total) characters (AXError \(result.rawValue)).")
-            }
-            // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
-            if typed == 0, !chunk.isEmpty, selectionWasEmpty == true, let countBefore,
-               number(of: element, kAXNumberOfCharactersAttribute) == countBefore {
-                throw Unsupported(error: .attributeUnsupported)
+                let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, chunk as CFString)
+                guard result == .success else {
+                    if typedSoFar == 0 { throw failure(result, app: app) }
+                    throw ComputerUseSystemError.actionFailed(
+                        "\(app.name) stopped taking the text after \(typedSoFar) of \(total) characters (AXError \(result.rawValue)).")
+                }
+                // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
+                if typedSoFar == 0, !chunk.isEmpty, selectionWasEmpty == true, let countBefore,
+                   number(of: element, kAXNumberOfCharactersAttribute) == countBefore {
+                    throw Unsupported(error: .attributeUnsupported)
+                }
+                // Where the next chunk would go; after the last one there is nothing left to misplace.
+                if !isLast, let startLocation {
+                    let expected = startLocation + utf16SoFar + chunk.utf16.count
+                    guard let caret = selectedRange(of: element), caret.location == expected, caret.length == 0 else {
+                        throw ComputerUseSystemError.actionFailed(
+                            "\(app.name) moved the text cursor; stopped after typing \(typedSoFar + chunk.count) of \(total) characters.")
+                    }
+                }
+                return startLocation
             }
             typed += chunk.count
-        } while !rest.isEmpty
+            typedUTF16 += chunk.utf16.count
+        }
     }
 
     private static func focusedElement(of app: ComputerUseAppIdentity) -> AXUIElement? {
