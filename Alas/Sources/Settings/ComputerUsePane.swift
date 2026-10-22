@@ -7,6 +7,7 @@ struct ComputerUsePane: View {
     @Environment(\.theme) var theme
     @State private var granted: Set<ComputerUsePermission>
     @State private var isAdHoc: Bool
+    @State private var requestedScreenRecording = AppRelaunch.screenRecordingRequested
 
     init(state: AppState) {
         self.state = state
@@ -57,12 +58,13 @@ struct ComputerUsePane: View {
     @ViewBuilder
     private func permissionRow(_ permission: ComputerUsePermission) -> some View {
         let isGranted = granted.contains(permission)
+        let needsRelaunch = permission == .screenRecording && !isGranted && requestedScreenRecording
         SettingsRow(
             name: permission.displayName,
             desc: description(for: permission),
             detail: {
-                if permission == .screenRecording && !isGranted {
-                    Text("If it still shows as not granted after you allow it, quit and reopen Alas.")
+                if needsRelaunch {
+                    Text("macOS applies Screen Recording after \(AppRelaunch.appName) restarts.")
                         .font(.system(size: 11.5))
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
@@ -73,10 +75,18 @@ struct ComputerUsePane: View {
                 Text("Granted")
                     .font(.system(size: 12.5))
                     .foregroundColor(theme.color("fg-dim"))
+            } else if needsRelaunch {
+                AlasButton(title: "Relaunch \(AppRelaunch.appName)") {
+                    AppRelaunch.relaunch()
+                }
             } else {
                 AlasButton(title: "Grant…") {
                     ComputerUsePlatform.shared.request(permission)
                     URLOpening.shared.open(permission.settingsURL)
+                    if permission == .screenRecording {
+                        AppRelaunch.screenRecordingRequested = true
+                        requestedScreenRecording = true
+                    }
                 }
             }
         }

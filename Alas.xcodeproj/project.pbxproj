@@ -373,6 +373,7 @@
 		33A0FC862C45CDFF47053A04 /* ACPComposerActionButtonMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B7ADCB7C4178FE036A31214 /* ACPComposerActionButtonMetricsTests.swift */; };
 		33A617BC5DE8DAA9F67E239D /* DiffPaneDocumentCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B98E7424CBFF07A59BCB703A /* DiffPaneDocumentCacheTests.swift */; };
 		33DA30A13B15E23387FDCD13 /* AppState+WorktreeCleanupReminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = E327960BBFE5331FAA5AC507 /* AppState+WorktreeCleanupReminders.swift */; };
+		33E3F489BC3B030DAEF0AEDF /* AppRelaunch.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7AC12F3686BFA7E2DE0B1E71 /* AppRelaunch.swift */; };
 		33FB1D7405DF1866B0FCE2DA /* AttentionInboxViewTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B94718853C122C45B52E1859 /* AttentionInboxViewTests.swift */; };
 		345BA9A61C85E3B5CC6E3C12 /* DiagnosticDetailsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DDD250A71C3AF0940B893945 /* DiagnosticDetailsTests.swift */; };
 		34C1617B1FD67848A9BF859E /* RemoteFederatedSessionIDTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E032F7E66585D9762C6BFEBE /* RemoteFederatedSessionIDTests.swift */; };
@@ -2719,6 +2720,7 @@
 		79F544A8DC56D0D4166E0A4F /* CommitContextBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitContextBuilderTests.swift; sourceTree = "<group>"; };
 		7A240CD3EF074300828A1214 /* CommitReviewLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitReviewLoader.swift; sourceTree = "<group>"; };
 		7A2B4B719D9F4EAAE84B14D1 /* ProjectAvatarPresetProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectAvatarPresetProvider.swift; sourceTree = "<group>"; };
+		7AC12F3686BFA7E2DE0B1E71 /* AppRelaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRelaunch.swift; sourceTree = "<group>"; };
 		7B5260A5CDFBC249F1C17D2C /* CheckpointRestorePreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRestorePreviewTests.swift; sourceTree = "<group>"; };
 		7BA6DF8E37E9B38C627B030A /* ACPTranscriptRowHostingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowHostingView.swift; sourceTree = "<group>"; };
 		7BC08F10E9CC09E8DCE84E15 /* VisualAidTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualAidTabView.swift; sourceTree = "<group>"; };
@@ -4477,6 +4479,7 @@
 		2BECE0AE6AD8C87F45E90678 /* ComputerUse */ = {
 			isa = PBXGroup;
 			children = (
+				7AC12F3686BFA7E2DE0B1E71 /* AppRelaunch.swift */,
 				5CDEAC65AC925A6190EEBCB5 /* ComputerUseSystemPermissions.swift */,
 			);
 			path = ComputerUse;
@@ -7151,6 +7154,7 @@
 				A3655FEDF6C5E3C128401DA7 /* AppKitDiffScrollerReconciler.swift in Sources */,
 				A0012CF058E580908B5348BC /* AppKitDiffTilingController.swift in Sources */,
 				584066607B7E7E97A736213A /* AppQuitAction.swift in Sources */,
+				33E3F489BC3B030DAEF0AEDF /* AppRelaunch.swift in Sources */,
 				1D597B516E3D9AFED501B0B1 /* AppState+ACPRegistry.swift in Sources */,
 				FD5659886908E19C5156D657 /* AppState+Attention.swift in Sources */,
 				1DDDC6B80D519E9EFD5DAAB7 /* AppState+LocalText.swift in Sources */,
