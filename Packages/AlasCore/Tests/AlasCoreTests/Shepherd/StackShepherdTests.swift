@@ -585,7 +585,7 @@ struct StackShepherdTests {
             },
             loadStack: { _ in stack },
             syncStack: { _ in },
-            rebaseStack: { _ in },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, prompt, _ in
                 deliverPrompt(prompt.text)
@@ -766,7 +766,7 @@ struct StackShepherdTests {
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: nil, isEligible: true) },
             loadStack: { _ in nil },
             syncStack: { _ in },
-            rebaseStack: { _ in },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
             rules: { _ in .none },
@@ -911,7 +911,7 @@ struct StackShepherdTests {
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "b", isEligible: true) },
             loadStack: { _ in otherStack },
             syncStack: { _ in synced += 1 },
-            rebaseStack: { _ in },
+            rebaseStack: { _, _ in },
             sessionState: { _, _ in .idle },
             deliverPrompt: { _, _, _, _ in .delivered },
             rules: { _ in .none },

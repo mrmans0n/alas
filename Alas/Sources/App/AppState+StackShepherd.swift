@@ -22,9 +22,9 @@ extension AppState {
                 guard let self else { throw GGMutationError.staleConfirmation }
                 try await self.syncStackForShip(worktreeID: worktreeID)
             },
-            rebaseStack: { [weak self] worktreeID in
+            rebaseStack: { [weak self] worktreeID, expected in
                 guard let self else { throw GGMutationError.staleConfirmation }
-                try await self.ggPane(worktreeID: worktreeID).rebaseGGForShip()
+                try await self.ggPane(worktreeID: worktreeID).rebaseGGForShip(expected: expected)
             },
             sessionState: { [weak self] sessionID, worktreeID in
                 await self?.shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) ?? .missing

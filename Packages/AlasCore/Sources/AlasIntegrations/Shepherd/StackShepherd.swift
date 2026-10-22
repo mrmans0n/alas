@@ -86,7 +86,8 @@ public final class StackShepherd {
         public var syncStack: @MainActor (_ worktreeID: String) async throws -> Void
         /// `gg rebase` onto the stack's base through the guarded path the
         /// stack drawer's Rebase uses. Drops entries that already landed.
-        public var rebaseStack: @MainActor (_ worktreeID: String) async throws -> Void
+        /// Refuses unless the worktree is still on `expected` when it runs.
+        public var rebaseStack: @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void
         public var sessionState: @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState
         /// Queues `prompt` on the session; `isStillWanted` is checked right
         /// before the session's queue changes.
@@ -108,7 +109,7 @@ public final class StackShepherd {
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             loadStack: @escaping @MainActor (_ path: URL) async throws -> GGStack?,
             syncStack: @escaping @MainActor (_ worktreeID: String) async throws -> Void,
-            rebaseStack: @escaping @MainActor (_ worktreeID: String) async throws -> Void,
+            rebaseStack: @escaping @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,
             deliverPrompt: @escaping @MainActor (
                 _ sessionID: String,

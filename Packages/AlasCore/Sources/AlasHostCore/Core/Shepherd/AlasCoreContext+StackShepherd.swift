@@ -58,9 +58,16 @@ extension AlasCoreContext {
         // would be pushed again, and one `gg land` already forgot would get
         // a new request.
         let landed = await landedEntries(of: stack, worktreeID: worktreeID, path: context.path)
-        if !landed.isEmpty {
+        if !landed.isEmpty, let top = stack.entries.max(by: { $0.position < $1.position }) {
+            // The checks above read this stack; the rebase refuses to run on
+            // whatever the worktree moved to while they ran.
+            let inspected = GGStackIdentity(stackName: stack.name, base: stack.base, headSHA: top.sha)
             do {
-                try await effects.rebaseStack(worktreeID)
+                try await effects.rebaseStack(worktreeID, inspected)
+            } catch GGMutationError.staleConfirmation {
+                throw PRShepherdCLIError(
+                    message: "The gg stack \"\(stack.name)\" changed while Alas was checking it for landed entries, so it did not rebase. Return to the top of the stack you want to publish and call stack_ship again."
+                )
             } catch {
                 throw PRShepherdCLIError(
                     message: "Entr\(landed.count == 1 ? "y" : "ies") \(landed.map { String($0.position) }.joined(separator: ", ")) of the gg stack \"\(stack.name)\" already landed on \(stack.base), "
