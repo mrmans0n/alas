@@ -29,6 +29,8 @@ final class NativePeerSessions {
         var replayEpoch: Int?
         var needsResubscribe = false
         let completion: (@MainActor (Bool) -> Void)?
+        /// The session's latest agent issue, for the rejection's reason.
+        var agentIssue: RemoteAgentIssue?
 
         func isConfirmed(by message: RemoteServerMessage) -> Bool {
             switch message {
@@ -508,7 +510,7 @@ final class NativePeerSessions {
                 prompt: pendingPrompt, expectedIndex: pendingPromptExpectedIndex,
                 priorQueueIds: pendingPromptPriorQueueIds, replayEpoch: transcript?.epoch ?? pendingPrompt.epoch,
                 needsResubscribe: transcript?.isClosed != false,
-                completion: promptCompletion)
+                completion: promptCompletion, agentIssue: transcript?.config?.agentIssue)
         }
         if let selectedSessionId, let downstream, pendingPrompt == nil {
             _ = federation.route(.unsubscribe(sessionId: selectedSessionId), from: downstream)
@@ -1051,6 +1053,12 @@ final class NativePeerSessions {
         draft.isEmpty ? text : draft + "\n" + text
     }
 
+    /// The host refuses prompts while its agent cannot run; say why.
+    private static func promptRejectedMessage(_ issue: RemoteAgentIssue?) -> String {
+        guard let issue else { return "Prompt was not delivered. Your draft was kept." }
+        return "Prompt was not delivered: \(issue.message.trimmingCharacters(in: CharacterSet(charactersIn: ". "))). Your draft was kept."
+    }
+
     private static let unconfirmedDeliveryMessage = "Peer session changed before delivery could be confirmed. Your draft was kept."
 
     /// Pending sends keep their subscription until delivery settles, even
@@ -1064,6 +1072,8 @@ final class NativePeerSessions {
             suspended.replayEpoch = epoch
         case .sessionClosed:
             suspended.needsResubscribe = true
+        case .sessionConfig(let config):
+            suspended.agentIssue = config.agentIssue
         default: break
         }
         let rejected: Bool = if case .promptRejected = message { true } else { false }
@@ -1084,7 +1094,8 @@ final class NativePeerSessions {
             if composer.revision == suspended.prompt.composerRevision,
                composer.draft == suspended.prompt.composerDraft { composer.replaceDraft(.empty) }
         } else {
-            composerErrors[sessionId] = superseded ? Self.unconfirmedDeliveryMessage : "Prompt was not delivered. Your draft was kept."
+            composerErrors[sessionId] = superseded
+                ? Self.unconfirmedDeliveryMessage : Self.promptRejectedMessage(suspended.agentIssue)
         }
         if let downstream { _ = federation.route(.unsubscribe(sessionId: sessionId), from: downstream) }
         if confirmed {
@@ -1178,11 +1189,7 @@ final class NativePeerSessions {
             return
         }
         if case .promptRejected = message {
-            // The host refuses prompts while its agent cannot run; say why.
-            let reason = transcript?.config?.agentIssue.map {
-                "Prompt was not delivered: \($0.message.trimmingCharacters(in: CharacterSet(charactersIn: ". "))). Your draft was kept."
-            }
-            rejectPendingPrompt(message: reason ?? "Prompt was not delivered. Your draft was kept.")
+            rejectPendingPrompt(message: Self.promptRejectedMessage(transcript?.config?.agentIssue))
             return
         }
         let isChangesReply: Bool = switch message {
