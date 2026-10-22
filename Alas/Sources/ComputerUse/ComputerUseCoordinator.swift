@@ -16,7 +16,8 @@ struct ComputerUsePendingApproval: Identifiable, Equatable {
 @Observable
 final class ComputerUseCoordinator {
     private(set) var pendingApprovals: [ComputerUsePendingApproval] = []
-    /// This process's active driver: set by a successful screenshot or inspect.
+    /// This process's active driver: published once a call holds the lock, so Stop shows
+    /// during the first capture; kept by a successful screenshot or inspect.
     private(set) var driver: (sessionID: String, app: ComputerUseAppIdentity)?
     /// Sessions the user stopped; only a resume clears them, not a session end or reconnect.
     private(set) var stoppedSessions: Set<String> = []
@@ -42,7 +43,7 @@ final class ComputerUseCoordinator {
     private let approvalWait: Duration
 
     @ObservationIgnored private var lock: ComputerUseDriverLock?
-    /// The session the lock was taken for; set before the system call, unlike `driver`.
+    /// The session the lock was taken for; set before the system call, like `driver`.
     @ObservationIgnored private var lockSession: String?
     /// Calls per session past the lock and inside their system call, so a failing
     /// call never drops the lock under a sibling that is still capturing.
@@ -50,6 +51,8 @@ final class ComputerUseCoordinator {
     /// A release asked for while the holder still had calls capturing: it happens when
     /// the last one exits, so nobody else captures while a stopped call still reads the screen.
     @ObservationIgnored private var deferredRelease: ComputerUseDriverLock?
+    /// The app of the lock holder's last successful call; a failed call falls back to it.
+    @ObservationIgnored private var confirmedApp: ComputerUseAppIdentity?
     @ObservationIgnored private var waiters: [UUID: [UUID: Waiter]] = [:]
     /// Bumped on stop and session end, so an in-flight call notices it was overtaken.
     @ObservationIgnored private var epochs: [String: Int] = [:]
@@ -168,6 +171,7 @@ final class ComputerUseCoordinator {
         if case .failure(let failure) = takeDriverLock(for: sessionID) { return .error(failure.message) }
         let heldLock = lock
         lockedCalls[sessionID, default: 0] += 1
+        driver = (sessionID, window.app)
 
         let payload: [String: Any]
         do {
@@ -178,9 +182,8 @@ final class ComputerUseCoordinator {
         } catch {
             // The last call out releases, unless one already claimed the role. Only the
             // lock these calls ran under: a later turn may hold a fresh one by now.
-            if endLockedCall(of: sessionID) == 0, driver?.sessionID != sessionID,
-               let heldLock, lock === heldLock {
-                releaseDriver()
+            if endLockedCall(of: sessionID) == 0, let heldLock, lock === heldLock {
+                if let confirmedApp { driver = (sessionID, confirmedApp) } else { releaseDriver() }
             }
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
             return .error(Self.message(for: error))
@@ -190,7 +193,10 @@ final class ComputerUseCoordinator {
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
         // A turn end (or a failed sibling call) may have released the lock; the
         // result still stands, but the role is only claimed while the lock is held.
-        if lockSession == sessionID { driver = (sessionID, window.app) }
+        if lockSession == sessionID {
+            driver = (sessionID, window.app)
+            confirmedApp = window.app
+        }
         return Self.serialize(payload)
     }
 
@@ -292,6 +298,7 @@ final class ComputerUseCoordinator {
         lockSession = nil
         driver = nil
         deferredRelease = nil
+        confirmedApp = nil
     }
 
     /// The lock this call took, or nil when the session already held it.

@@ -170,6 +170,29 @@ struct ComputerUseCoordinatorTests {
         try ComputerUseDriverLock.acquire(at: f.lockURL, label: "Other").release()
     }
 
+    @Test func driverShowsDuringTheFirstCaptureAndClearsWhenItFails() async throws {
+        let gate = TreeGate()
+        let windows = Self.windows
+        let system = ComputerUseSystem(
+            runningApps: { [] },
+            window: { windows[$0] },
+            screenshot: { _ in throw ComputerUseSystemError.captureFailed("unused") },
+            axTree: { window, _, _ in
+                await gate.enter(window.windowID)
+                throw ComputerUseSystemError.captureFailed("Notes failed")
+            }
+        )
+        let f = Self.fixture(system: system)
+        f.access.record(.allowForSession, for: Self.notes, session: "s")
+        let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s") }
+        try await eventually("call capturing") { gate.entered == [1] }
+        #expect(f.coordinator.driver?.sessionID == "s")
+
+        gate.open(1)
+        #expect(await call.value == .error("computer_capture_failed: Notes failed"))
+        #expect(f.coordinator.driver == nil)
+    }
+
     @Test func busyWhenAnotherHolderHasTheLock() async throws {
         let f = Self.fixture()
         f.access.record(.allowForSession, for: Self.notes, session: "s")
