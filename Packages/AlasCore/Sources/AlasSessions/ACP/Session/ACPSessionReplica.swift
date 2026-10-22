@@ -33,8 +33,8 @@ extension ACPSessionStore {
                 let itemKey = key.replacingOccurrences(of: "ROW", with: row)
                 var predicate = "EXISTS(SELECT 1 FROM session_replica_exports WHERE session_id=\(row).\(sessionColumn)) AND EXISTS(SELECT 1 FROM sessions WHERE id=\(row).\(sessionColumn))"
                 if table == "sessions", action == "UPDATE" {
-                    // `session_instructions` is absent on purpose: it is written once at
-                    // insert, which the INSERT trigger already publishes.
+                    // `session_instructions` and `session_hooks` are absent on purpose: they are
+                    // written once at insert, which the INSERT trigger already publishes.
                     let columns = ["title", "title_source", "origin", "context_recovery_pending", "mcp_preamble_pending", "mcp_preamble_sent", "usage_limit", "direct_turn_in_flight", "auth_status", "current_model", "current_mode", "config_option_values", "native_subagents_disabled", "prompt_suggestions", "auto_run", "updated_at", "ephemeral_parent_id"]
                     predicate += " AND (" + columns.map { "NEW.\($0) IS NOT OLD.\($0)" }.joined(separator: " OR ") + ")"
                 }
@@ -342,7 +342,7 @@ extension ACPSessionStore {
             // Replica metadata is authoritative even for fields preserved by local upserts.
             let authStatus = try m.authStatus.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
             let usageLimit = try m.usageLimit.map { String(decoding: try JSONEncoder().encode($0), as: UTF8.self) }
-            try db.exec("UPDATE sessions SET context_recovery_pending=?,mcp_preamble_pending=?,mcp_preamble_sent=?,usage_limit=?,direct_turn_in_flight=?,auth_status=?,native_subagents_disabled=?,session_instructions=COALESCE(?,session_instructions),created_at=? WHERE id=?", bindings: [m.contextRecoveryPending ? 1 : 0, m.mcpPreamblePending, m.mcpPreambleSent ? 1 : 0, usageLimit, (m.directTurnInFlight ?? false) ? 1 : 0, authStatus, m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.sessionInstructions, m.createdAt, sessionId])
+            try db.exec("UPDATE sessions SET context_recovery_pending=?,mcp_preamble_pending=?,mcp_preamble_sent=?,usage_limit=?,direct_turn_in_flight=?,auth_status=?,native_subagents_disabled=?,session_instructions=COALESCE(?,session_instructions),session_hooks=COALESCE(?,session_hooks),created_at=? WHERE id=?", bindings: [m.contextRecoveryPending ? 1 : 0, m.mcpPreamblePending, m.mcpPreambleSent ? 1 : 0, usageLimit, (m.directTurnInFlight ?? false) ? 1 : 0, authStatus, m.nativeSubagentsDisabled.map { $0 ? 1 : 0 }, m.sessionInstructions, m.sessionHooks, m.createdAt, sessionId])
         case "message", "subagent":
             let relationKey = kind + ":" + key
             guard let payload else {

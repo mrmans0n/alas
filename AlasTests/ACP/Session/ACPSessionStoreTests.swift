@@ -65,25 +65,27 @@ struct ACPSessionStoreSchemaTests {
         #expect(try store.loadSession(id: "configured")?.configOptionValues == values)
     }
 
-    @Test("native subagent policy and session instructions are captured once and survive later upserts")
+    @Test("native subagent policy, session instructions, and session hooks are captured once and survive later upserts")
     func capturedSessionPoliciesAreWriteOnce() throws {
         let store = try tmpStore()
-        func row(_ policy: Bool?, _ instructions: String?) -> ACPSessionRow {
+        func row(_ policy: Bool?, _ instructions: String?, _ hooks: String? = nil) -> ACPSessionRow {
             .init(
                 id: "policy", agentId: "claude", title: "Policy",
                 currentModel: nil, currentMode: nil,
                 nativeSubagentsDisabled: policy,
                 sessionInstructions: instructions,
+                sessionHooks: hooks,
                 autoRun: false, createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false
             )
         }
-        try store.upsertSession(row(true, "Review migrations."))
+        try store.upsertSession(row(true, "Review migrations.", "{\"Stop\":[]}"))
         // Rows rebuilt without the field, or with a different value, never
         // change the policy the session started with.
         try store.upsertSession(row(nil, nil))
-        try store.upsertSession(row(false, "Edited default."))
+        try store.upsertSession(row(false, "Edited default.", "{\"SessionStart\":[]}"))
         #expect(try store.loadSession(id: "policy")?.nativeSubagentsDisabled == true)
         #expect(try store.loadSession(id: "policy")?.sessionInstructions == "Review migrations.")
+        #expect(try store.loadSession(id: "policy")?.sessionHooks == "{\"Stop\":[]}")
 
         try store.upsertSession(.init(
             id: "legacy", agentId: "codex", title: "Legacy",
@@ -92,6 +94,7 @@ struct ACPSessionStoreSchemaTests {
         ))
         #expect(try store.loadSession(id: "legacy")?.nativeSubagentsDisabled == nil)
         #expect(try store.loadSession(id: "legacy")?.sessionInstructions == nil)
+        #expect(try store.loadSession(id: "legacy")?.sessionHooks == nil)
     }
 
     @Test("a conditional rename applies only while the stored title and source still match")

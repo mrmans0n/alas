@@ -55,13 +55,15 @@ struct AppConfigAgentsCodingTests {
     @Test func roundTripsBuiltinStateAndCustoms() throws {
         var cfg = AppConfig.defaults
         cfg.agents.builtinState = [
-            "codex": BuiltinAgentState(isEnabled: false, binaryOverride: nil, sessionInstructions: " Review migrations.\n"),
+            "codex": BuiltinAgentState(isEnabled: false, binaryOverride: nil, sessionInstructions: " Review migrations.\n",
+                                       sessionHooks: #"{"Stop":[]}"#),
             "pi": BuiltinAgentState(isEnabled: true, sessionInstructions: "Not offered for Pi."),
             "claude": BuiltinAgentState(
                 isEnabled: true,
                 binaryOverride: "/opt/local/bin/claude",
                 extraTerminalArgs: ["--model", "sonnet"],
-                nativeSubagentsDisabled: true
+                nativeSubagentsDisabled: true,
+                sessionHooks: #"{"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "true"}]}]}}"#
             ),
         ]
         cfg.agents.custom = [
@@ -93,6 +95,8 @@ struct AppConfigAgentsCodingTests {
         #expect(decoded.agents.sessionInstructions(for: "codex") == "Review migrations.")
         #expect(decoded.agents.sessionInstructions(for: "claude") == nil)
         #expect(decoded.agents.sessionInstructions(for: "pi") == nil)
+        #expect(decoded.agents.sessionHooks(for: "claude") == #"{"Stop":[{"hooks":[{"command":"true","type":"command"}]}]}"#)
+        #expect(decoded.agents.sessionHooks(for: "codex") == nil)
         #expect(decoded.agents.custom.first?.extraTerminalArgs == ["--verbose"])
     }
 

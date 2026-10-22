@@ -172,6 +172,10 @@ guard let socket = HostSocketServer(server: protocolServer) else {
     fail("cannot serve \(HostSocketServer.defaultPath()): another host serves it, or its directory is not this user's own")
 }
 
+// Projects added before the host started, by the app or `project add`, have
+// worktrees only once they are listed; the app lists them at launch too.
+Task { await host.loadProjectWorktrees() }
+
 // One shutdown: a second signal must not exit while the first still flushes.
 var isStopping = false
 

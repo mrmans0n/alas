@@ -188,6 +188,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public private(set) var retryStatus: ACPRetryStatus? { willSet { nextPromptActivity.send() } }
     @Tracked public var contextRestoreWarning: ContextRestoreWarning? { willSet { nextPromptActivity.send() } }
     @Tracked public var contextRecoveryStatus: ContextRecoveryStatus? { willSet { nextPromptActivity.send() } }
+    /// Runtime-only status line for an Alas action (Ship) that is still
+    /// resolving before its prompt reaches this session. The transcript shows
+    /// it with a spinner until the prompt lands or the action gives up.
+    @Tracked public var preparingAppActionStatus: String?
     /// Runtime-only ACP `notice` update — a fire-and-forget out-of-band
     /// event (MCP server dropped, rate limit, model fallback…). Live state
     /// only: never written into the persisted transcript, never restored

@@ -50,7 +50,7 @@ public final class ShellEnvResolver: @unchecked Sendable {
     static func discoverShellPath(candidates: [String] = shellCandidates()) async -> String? {
         for shell in candidates {
             for interactive in [true, false] {
-                if let path = try? await runShellAndGetPATH(shell: shell, interactive: interactive) {
+                if let path = await runShellAndGetPATH(shell: shell, interactive: interactive) {
                     let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !trimmed.isEmpty { return trimmed }
                 }
@@ -70,26 +70,92 @@ public final class ShellEnvResolver: @unchecked Sendable {
     private static let sentinelStart = "___ALAS_PATH___"
     private static let sentinelEnd = "___ALAS_END___"
 
-    private static func runShellAndGetPATH(shell: String, interactive: Bool) async throws -> String {
-        // An interactive shell's startup files may print, fail a command or
-        // take seconds (nvm); the sentinels find PATH in whatever it prints,
-        // whatever its exit status, and an empty stdin keeps it from waiting
-        // for input.
-        let result = try await Process.run(
-            shell,
-            args: (interactive ? ["-i", "-l", "-c"] : ["-l", "-c"]) + [
-                #"printf '%s' "\#(sentinelStart)"; printenv PATH; printf '%s' "\#(sentinelEnd)""#
-            ],
-            stdin: "",
-            timeout: interactive ? 10 : 2
-        )
-        let raw = result.stdout
-        guard let start = raw.range(of: sentinelStart)?.upperBound,
-              let end = raw.range(of: sentinelEnd, range: start..<raw.endIndex)?.lowerBound,
+    /// Runs the shell in a session of its own, without a terminal: an
+    /// interactive shell's startup files could otherwise read from or take
+    /// over the terminal this process runs in (`alas-host setup` over SSH)
+    /// and stall. They may still print, fail a command, take seconds (nvm) or
+    /// leave a helper behind that holds the output open; the read ends at the
+    /// end sentinel, whatever the shell's exit status, or past `timeout`, and
+    /// then everything left in the shell's session is killed.
+    private static func runShellAndGetPATH(shell: String, interactive: Bool) async -> String? {
+        let output = Pipe()
+        let errors = Pipe()
+        let script = #"printf '%s' "\#(sentinelStart)"; printenv PATH; printf '%s' "\#(sentinelEnd)""#
+        guard let child = try? SpawnedProcess(
+            executable: URL(fileURLWithPath: shell),
+            arguments: (interactive ? ["-i", "-l", "-c"] : ["-l", "-c"]) + [script],
+            environment: ProcessInfo.processInfo.environment,
+            newSession: true, stdin: nil, stdout: output, stderr: errors,
+            onExit: { _, _ in }
+        ) else { return nil }
+        let read = ShellOutput(endMarker: Data(sentinelEnd.utf8))
+        errors.fileHandleForReading.readabilityHandler = { _ = $0.availableData }
+        let raw = await withCheckedContinuation { continuation in
+            read.onFinish = { continuation.resume(returning: $0) }
+            output.fileHandleForReading.readabilityHandler = { read.append($0.availableData) }
+            Task.detached {
+                try? await Task.sleep(for: .seconds(interactive ? 10 : 2))
+                read.finish()
+            }
+        }
+        output.fileHandleForReading.readabilityHandler = nil
+        errors.fileHandleForReading.readabilityHandler = nil
+        // Whatever the shell left behind, a stalled shell itself or helpers
+        // its startup files started, is in its session: end all of it.
+        killSession(child.pid)
+        let text = String(decoding: raw, as: UTF8.self)
+        guard let start = text.range(of: sentinelStart)?.upperBound,
+              let end = text.range(of: sentinelEnd, range: start..<text.endIndex)?.lowerBound,
               start < end else { return "" }
-        let path = raw[start..<end].trimmingCharacters(in: .newlines)
-        return path
+        return text[start..<end].trimmingCharacters(in: .newlines)
+    }
+
+    /// Kills every process in session `id`. A shell's background jobs get
+    /// process groups of their own, but stay in its session.
+    private static func killSession(_ id: pid_t) {
+        let capacity = Int(proc_listallpids(nil, 0)) + 64
+        var pids = [pid_t](repeating: 0, count: capacity)
+        let count = Int(proc_listallpids(&pids, Int32(capacity * MemoryLayout<pid_t>.size)))
+        for pid in pids.prefix(max(0, count)) where pid > 0 && getsid(pid) == id {
+            kill(pid, SIGKILL)
+        }
     }
 
     public init() {}
+}
+
+/// What a shell printed, until the end marker, end of file or a timeout.
+private final class ShellOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private let endMarker: Data
+    private var data = Data()
+    private var finished = false
+    var onFinish: ((Data) -> Void)?
+
+    init(endMarker: Data) {
+        self.endMarker = endMarker
+    }
+
+    /// Adds a chunk; an empty one is end of file. Finishes at the end marker.
+    func append(_ chunk: Data) {
+        lock.lock()
+        if !chunk.isEmpty { data.append(chunk) }
+        let done = chunk.isEmpty || data.range(of: endMarker) != nil
+        lock.unlock()
+        if done { finish() }
+    }
+
+    /// Finishes once; later calls do nothing.
+    func finish() {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let result = data
+        let callback = onFinish
+        lock.unlock()
+        callback?(result)
+    }
 }

@@ -18,6 +18,22 @@ extension AppConfig.Agents {
         guard ACPSessionInstructionsPolicy.isConfigurable(agentID: agentID) else { return nil }
         return ACPSessionInstructionsPolicy.normalized(builtinState[agentID]?.sessionInstructions)
     }
+
+    /// The hooks new ACP sessions of `agentID` start with, as normalized JSON,
+    /// or nil. Text that does not validate (a hand-edited config) is captured
+    /// as written, so the session's attach reports the problem instead of
+    /// starting without the hooks.
+    public func sessionHooks(for agentID: String) -> String? {
+        guard ACPClaudeSessionHooksPolicy.isConfigurable(agentID: agentID),
+              let text = builtinState[agentID]?.sessionHooks?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !text.isEmpty
+        else { return nil }
+        do {
+            return try ACPClaudeSessionHooksPolicy.normalized(text)
+        } catch {
+            return text
+        }
+    }
 }
 
 /// Runtime view over the agent catalog. Built-ins come first (in catalog

@@ -188,34 +188,54 @@ extension AppState {
         return queue.contains { Self.shepherdQueueItemIsDue($0, now: Date()) } ? .busy : .idle
     }
 
+    /// Runs `work` behind the transcript's "Preparing to ship…" row: Ship
+    /// reads git, gg or the code host before its card lands, and without the
+    /// row the click looks ignored. A Ship already preparing for the session
+    /// absorbs a repeat instead of sending a second prompt.
+    func preparingShip(session: ACPSession?, _ work: () async -> Void) async {
+        guard session?.preparingAppActionStatus == nil else { return }
+        session?.preparingAppActionStatus = "Preparing to ship…"
+        defer { session?.preparingAppActionStatus = nil }
+        await work()
+    }
+
     /// The popover's Ship with agent button records an Alas action while
     /// asking the agent to commit what belongs to the work and call `pr_create`.
     func requestShepherdCreatePR(sessionID: String, worktree: Worktree) {
-        guard let manager = acpManager(for: worktree) else { return }
+        let session = acpManager(for: worktree)?.liveSession(for: sessionID)
         Task { @MainActor [weak self] in
-            let remotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
-            guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
-                self?.inAppNotifications.post(
-                    "No GitHub or GitLab remote for \(worktree.branch).",
-                    severity: .error,
-                    worktreeID: worktree.id
-                )
-                return
+            guard let self else { return }
+            await preparingShip(session: session) {
+                await sendShepherdCreatePrompt(sessionID: sessionID, worktree: worktree)
             }
-            await manager.sendPrompt(
-                for: sessionID,
-                text: ShepherdPromptBuilder.createPrompt(kind: kind),
-                attachments: [],
-                delegatedSource: .shipCreate(kind: kind, branch: worktree.branch, messageID: UUID()),
-                normalUserTurn: false
-            ) { [weak self] sent in
-                guard !sent else { return }
-                self?.inAppNotifications.post(
-                    "Could not send the Ship with agent prompt to this session.",
-                    severity: .error,
-                    worktreeID: worktree.id
-                )
-            }
+        }
+    }
+
+    /// Returns once the session took the prompt or it was refused.
+    private func sendShepherdCreatePrompt(sessionID: String, worktree: Worktree) async {
+        guard let manager = acpManager(for: worktree) else { return }
+        let remotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
+        guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
+            inAppNotifications.post(
+                "No GitHub or GitLab remote for \(worktree.branch).",
+                severity: .error,
+                worktreeID: worktree.id
+            )
+            return
+        }
+        await manager.sendPrompt(
+            for: sessionID,
+            text: ShepherdPromptBuilder.createPrompt(kind: kind),
+            attachments: [],
+            delegatedSource: .shipCreate(kind: kind, branch: worktree.branch, messageID: UUID()),
+            normalUserTurn: false
+        ) { [weak self] sent in
+            guard !sent else { return }
+            self?.inAppNotifications.post(
+                "Could not send the Ship with agent prompt to this session.",
+                severity: .error,
+                worktreeID: worktree.id
+            )
         }
     }
 
@@ -223,10 +243,16 @@ extension AppState {
     /// the branch's status first when nothing has it cached. In a gg stack
     /// worktree that is the stack's Ship.
     func shipFromCommand(session: ACPSession, worktree: Worktree) async {
-        if shipsStack(sessionID: session.id, worktree: worktree) {
-            await shipStackFromCommand(session: session, worktree: worktree)
-            return
+        await preparingShip(session: session) {
+            if shipsStack(sessionID: session.id, worktree: worktree) {
+                await shipStackFromCommand(session: session, worktree: worktree)
+            } else {
+                await shipPRFromCommand(session: session, worktree: worktree)
+            }
         }
+    }
+
+    private func shipPRFromCommand(session: ACPSession, worktree: Worktree) async {
         var context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self)
         if context.request == nil, let bound = context.record ?? context.otherRecord {
             let fetched = await reviewShepherd.statusSnapshot(for: bound.id)
@@ -250,7 +276,7 @@ extension AppState {
         case .adopt(let request):
             await shepherdWithSession(session.id, worktree: worktree, request: request)
         case .create:
-            requestShepherdCreatePR(sessionID: session.id, worktree: worktree)
+            await sendShepherdCreatePrompt(sessionID: session.id, worktree: worktree)
         case .unavailable(let reason):
             session.lastError = reason
         }

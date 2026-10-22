@@ -154,7 +154,7 @@ import Foundation
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
                 agentCapabilities: .init(loadSession: true), authMethods: [],
-                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.90.0")))
         }
         client.script(method: "session/load") { _ in Data("{}".utf8) }
         let reader = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store,
@@ -239,12 +239,12 @@ import Foundation
         #expect(acquired.fence != nil)
     }
 
-    @Test("SSH takeover preserves delegation guidance and the captured session instructions", arguments: [false, true])
+    @Test("SSH takeover preserves delegation guidance and the captured session instructions and hooks", arguments: [false, true])
     func remoteTakeoverPreservesOneTimePreamble(sent: Bool) async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }
         let (writer, source, store, publisher, _, endpoint) = try await remoteWriter(
-            in: folder, nativeSubagentsDisabled: true, sessionInstructions: "Review migrations.")
+            in: folder, nativeSubagentsDisabled: true, sessionInstructions: "Review migrations.", sessionHooks: Self.hooks)
         defer {
             writer.shutdownBackgroundTasks()
             publisher.shutdown()
@@ -264,7 +264,7 @@ import Foundation
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
                 agentCapabilities: .init(loadSession: true), authMethods: [],
-                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.90.0")))
         }
         client.script(method: "session/load") { _ in Data("{}".utf8) }
         let reader = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: mirrorStore,
@@ -289,7 +289,10 @@ import Foundation
         #expect(session.pendingMCPPreamble == pending)
         let load = try #require(client.sent.first { $0.method == "session/load" }?.params as? ACPSessionLoadParams)
         #expect(load.meta?.systemPrompt == .init(append: "Review migrations."))
+        #expect(load.meta?.claudeCode?.options.settings?.hooks == (try LSPJSONValue.decode(from: Data(Self.hooks.utf8))))
     }
+
+    private static let hooks = #"{"Stop":[{"hooks":[{"command":"true","type":"command"}]}]}"#
 
     @Test("remote agent-history deletion stays busy through the deletion RPC")
     func remoteHistoryDeletionBlocksProjectRebinding() async throws {
@@ -330,6 +333,7 @@ import Foundation
         in folder: URL,
         nativeSubagentsDisabled: Bool? = nil,
         sessionInstructions: String? = nil,
+        sessionHooks: String? = nil,
         client injectedClient: ACPMockClient? = nil
     ) async throws -> (
         ACPSessionManager, ACPSession, ACPSessionStore, ACPRemoteSessionCoordinator, ACPSessionRunner, ReplicaEndpoint
@@ -337,7 +341,7 @@ import Foundation
         let store = try ACPSessionStore(path: folder.appendingPathComponent("writer.sqlite").path)
         try store.upsertSession(.init(id: "session", agentId: "claude", title: "Session",
             remoteSessionId: "conversation", currentModel: nil, currentMode: nil, nativeSubagentsDisabled: nativeSubagentsDisabled,
-            sessionInstructions: sessionInstructions, autoRun: false,
+            sessionInstructions: sessionInstructions, sessionHooks: sessionHooks, autoRun: false,
             createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
         let endpoint = ReplicaEndpoint()
         let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) {
@@ -347,7 +351,7 @@ import Foundation
         client.script(method: "initialize") { _ in
             try JSONEncoder().encode(ACPInitializeResult(protocolVersion: 1,
                 agentCapabilities: .init(loadSession: true), authMethods: [],
-                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.81.2")))
+                agentInfo: .init(name: "@agentclientprotocol/claude-agent-acp", version: "0.90.0")))
         }
         client.script(method: "session/load") { _ in Data("{}".utf8) }
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/work", store: store,

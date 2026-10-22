@@ -1486,6 +1486,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
+            if let status = session.preparingAppActionStatus {
+                specs.append(ACPTranscriptRowSpec(
+                    id: "__preparing_app_action__",
+                    equalityToken: token(status, host: host),
+                    build: {
+                        wrapRow(host: host) {
+                            PreparingAppActionRow(status: status)
+                        }
+                    }
+                ))
+            }
+
             // Invisible tail spacer the tail-follow scroll pins to the
             // viewport bottom; guarantees the streaming caret / last
             // message sits above the composer pill. Its content is a
@@ -2358,5 +2370,34 @@ private struct ContextRecoveryRow: View {
         case .failed(let message):
             return message
         }
+    }
+}
+
+/// An Alas action still resolving before its prompt card lands, such as Ship
+/// reading the branch or stack.
+private struct PreparingAppActionRow: View {
+    let status: String
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Spinner(lineWidth: 1.5)
+                .frame(width: 12, height: 12)
+            Text(status)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg-muted"))
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(theme.color("bg-1").opacity(0.65))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(theme.color("line").opacity(0.8), lineWidth: 0.5)
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }

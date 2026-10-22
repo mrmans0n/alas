@@ -2101,10 +2101,11 @@ struct ACPSessionManagerAttachRestoreTests {
         #expect(session.terminalHost.sessionEnv["PATH"] == "/managed/bin:/usr/bin")
     }
 
-    @Test("the native subagent policy and instructions captured at creation govern fresh and restored Claude attaches")
+    @Test("the native subagent policy, instructions, and hooks captured at creation govern fresh and restored Claude attaches")
     func nativeSubagentsPolicyAppliesOnFreshAndRestoredAttach() async throws {
         let store = try ACPSessionStore(path: tmpStorePath())
         var clients: [ACPMockClient] = []
+        var adapterVersion = "0.94.0-alas.1"
         let manager = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
@@ -2112,7 +2113,7 @@ struct ACPSessionManagerAttachRestoreTests {
             setupEvaluator: { _ in .ready },
             connectionFactory: { _, _, _ in
                 let client = ACPMockClient()
-                self.scriptNativeDelegationInitialize(client, agentID: "claude", adapterVersion: "0.81.2")
+                self.scriptNativeDelegationInitialize(client, agentID: "claude", adapterVersion: adapterVersion)
                 self.scriptSessionResult(client, method: "session/new", sessionId: "remote-new")
                 self.scriptSessionResult(client, method: "session/load", sessionId: "remote-new")
                 clients.append(client)
@@ -2123,6 +2124,9 @@ struct ACPSessionManagerAttachRestoreTests {
         var instructions: String? = "Review migrations."
         manager.nativeSubagentsPreferenceProvider = { _ in preference }
         manager.sessionInstructionsProvider = { _ in instructions }
+        let capturedHooks = #"{"Stop":[{"hooks":[{"command":"true","type":"command"}]}]}"#
+        var hooks: String? = capturedHooks
+        manager.sessionHooksProvider = { _ in hooks }
         let session = manager.createSession(agentId: "claude")
         await manager.attach(to: session.id, freshlyCreated: true)
         await manager.flushAllPersistence()
@@ -2131,6 +2135,7 @@ struct ACPSessionManagerAttachRestoreTests {
         // Changing the settings later does not change the running session.
         preference = false
         instructions = "Edited default."
+        hooks = nil
         await manager.detach(sessionId: session.id)
         let reopened = try #require(manager.placeholderSession(id: session.id))
         await manager.hydrateIfNeeded(id: reopened.id)
@@ -2142,7 +2147,18 @@ struct ACPSessionManagerAttachRestoreTests {
         let loadMeta = (requests.last?.params as? ACPSessionLoadParams)?.meta
         #expect(newMeta?.claudeCode?.options.disallowedTools == ["Agent", "Task", "Workflow", "SendMessage", "ListAgents"])
         #expect(newMeta?.systemPrompt == .init(append: "Review migrations."))
+        #expect(newMeta?.claudeCode?.options.settings?.hooks == (try LSPJSONValue.decode(from: Data(capturedHooks.utf8))))
         #expect(loadMeta == newMeta)
+
+        // An adapter that cannot apply the captured hooks fails the restore
+        // visibly instead of running the session without them.
+        adapterVersion = "0.89.1"
+        await manager.detach(sessionId: session.id)
+        let downgraded = try #require(manager.placeholderSession(id: session.id))
+        await manager.hydrateIfNeeded(id: downgraded.id)
+        await manager.attach(to: downgraded.id, freshlyCreated: false)
+        #expect(downgraded.lastError?.contains("session hooks need 0.90.0") == true)
+        #expect(clients.last?.sent.contains { $0.method.hasPrefix("session/") } == false)
         await manager.detach(sessionId: session.id)
     }
 

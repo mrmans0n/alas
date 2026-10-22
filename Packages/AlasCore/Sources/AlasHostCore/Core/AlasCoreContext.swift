@@ -223,6 +223,16 @@ public final class AlasCoreContext {
         try store.write(ProjectsFile(projects: projects.projects), to: projectsFile)
     }
 
+    /// Lists every project's worktrees from what `projects.json` cached, then
+    /// reads them from git and saves what changed, as the app does at launch.
+    /// A host that serves starts with this; until then its projects have none.
+    public func loadProjectWorktrees() async {
+        projects.populateConfiguredProjectWorktreesForRecovery()
+        if await projects.refreshAll() {
+            try? saveProjects()
+        }
+    }
+
     /// Registers the repository or folder at `path` and persists it. Nothing
     /// is kept if the save fails.
     @discardableResult
@@ -361,13 +371,14 @@ public final class AlasCoreContext {
         )
     }
 
-    /// `defaultSessionManager`, resuming after a usage limit and continuing
-    /// interrupted sessions as `config` says when each is decided.
+    /// `defaultSessionManager`, resuming after a usage limit, continuing
+    /// interrupted sessions, and capturing Claude session hooks as `config`
+    /// says when each is decided.
     public static func sessionManagerFactory(
         config: @escaping @MainActor () -> AppConfig
     ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
         { owner, worktree in
-            ACPSessionManager(
+            let manager = ACPSessionManager(
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
                 owner: owner,
@@ -375,6 +386,8 @@ public final class AlasCoreContext {
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
                 continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions }
             )
+            manager.sessionHooksProvider = { config().agents.sessionHooks(for: $0) }
+            return manager
         }
     }
 

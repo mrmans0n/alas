@@ -12596,6 +12596,9 @@ final class AppState {
         mgr.sessionInstructionsProvider = { [weak self] agentId in
             self?.config.agents.sessionInstructions(for: agentId)
         }
+        mgr.sessionHooksProvider = { [weak self] agentId in
+            self?.config.agents.sessionHooks(for: agentId)
+        }
         mgr.delegatedChildProvider = { [weak self] sessionId in
             await self?.delegatedParentSessionID(for: sessionId) != nil
         }
@@ -12946,6 +12949,9 @@ final class AppState {
         }
         manager.sessionInstructionsProvider = { [weak self] agentId in
             self?.config.agents.sessionInstructions(for: agentId)
+        }
+        manager.sessionHooksProvider = { [weak self] agentId in
+            self?.config.agents.sessionHooks(for: agentId)
         }
         manager.externalMCPStatusProvider = { [weak self] worktreePath -> (
             adapterState: PiMCPAdapterInspector.State,

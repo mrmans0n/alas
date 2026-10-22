@@ -4,6 +4,15 @@ import Foundation
 
 public enum HostSettingSection: String, CaseIterable, Sendable {
     case reachability, agents, behavior, worktrees
+
+    public var title: String {
+        switch self {
+        case .reachability: "Reachability"
+        case .agents: "Agents"
+        case .behavior: "Unattended behavior"
+        case .worktrees: "Worktrees"
+        }
+    }
 }
 
 public enum HostSettingKind: Equatable, Sendable {
