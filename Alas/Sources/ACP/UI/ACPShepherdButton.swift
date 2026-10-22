@@ -35,7 +35,10 @@ struct ACPShepherdButton: View {
             return PillState(
                 presentation: context.presentation,
                 invitesShip: StackShipAction.invitesShip(
-                    record: context.record, otherRecord: context.otherRecord, isBusy: turnRunning
+                    record: context.record, otherRecord: context.otherRecord,
+                    // The Changes pane's cached read; the popover reads gg again.
+                    stack: state.rightPaneStore.activeState(worktreeId: worktree.id)?.ggStack,
+                    isBusy: turnRunning
                 )
             )
         }

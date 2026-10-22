@@ -418,16 +418,21 @@ struct StackShepherdTests {
         #expect(action == expected)
     }
 
-    /// A finished record still opens the popover on its bound view, which has
-    /// no Ship, so the pill must not invite a click with it.
+    /// The pill matches the popover's action: a finished record still opens
+    /// the bound view, which has no Ship; adopting a published stack runs
+    /// mid-turn; an unknown stack counts as shippable once the turn ends.
+    /// `stack` is nil (unknown), "published" or "unpublished".
     @Test(arguments: [
-        ("live", false, false),
-        ("finished", false, false),
-        ("none", false, true),
-        ("none", true, false),
-        ("other", true, true),
-    ])
-    func stackPillInvitesShipOnlyWithoutARecord(record kind: String, isBusy: Bool, expected: Bool) {
+        ("live", nil, false, false),
+        ("finished", nil, false, false),
+        ("none", nil, false, true),
+        ("none", nil, true, false),
+        ("none", "published", true, true),
+        ("none", "unpublished", true, false),
+        ("none", "unpublished", false, true),
+        ("other", nil, true, true),
+    ] as [(String, String?, Bool, Bool)])
+    func stackPillInvitesShipWhenThePopoverActionCanRun(record kind: String, stack: String?, isBusy: Bool, expected: Bool) {
         let live = Self.record([41])
         let finished = StackShepherdPolicy.decide(
             live, Self.observation([Self.request(41, state: .merged)], hasUnpublishedEntries: false)
@@ -435,10 +440,16 @@ struct StackShepherdTests {
         #expect(finished.isFinished)
         var other = live
         other.sessionID = "session-2"
+        let published = Self.stack([41, 42])
+        let unpublished = GGStack(
+            name: "auth", base: "main", totalCommits: 2, syncedCommits: 1, currentPosition: 2, behindBase: 0,
+            entries: [published.entries[0], GGStackEntry(position: 2, sha: "sha42", title: "Entry 42")]
+        )
 
         let invites = StackShipAction.invitesShip(
             record: kind == "live" ? live : kind == "finished" ? finished : nil,
             otherRecord: kind == "other" ? other : nil,
+            stack: stack == "published" ? published : stack == "unpublished" ? unpublished : nil,
             isBusy: isBusy
         )
 

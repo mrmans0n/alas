@@ -337,12 +337,19 @@ public enum StackShipAction: Equatable, Sendable {
         return .create
     }
 
-    /// Whether the toolbar pill should stand out. Any record of this session,
-    /// finished ones included, puts the popover on its bound view, which
-    /// offers no Ship. The pill doesn't read the gg stack, so otherwise only a
-    /// running turn holds back Ship stack.
-    public static func invitesShip(record: StackShepherdRecord?, otherRecord: StackShepherdRecord?, isBusy: Bool) -> Bool {
+    /// Whether the toolbar pill should stand out: the popover's action can
+    /// run now. Any record of this session, finished ones included, puts the
+    /// popover on its bound view, which offers no Ship. Otherwise it follows
+    /// `resolve`, except that an unknown `stack` counts as shippable once the
+    /// turn ends because the popover reads gg again before it acts.
+    public static func invitesShip(
+        record: StackShepherdRecord?, otherRecord: StackShepherdRecord?, stack: GGStack?, isBusy: Bool
+    ) -> Bool {
         guard record == nil else { return false }
-        return otherRecord != nil || !isBusy
+        switch resolve(record: nil, otherRecord: otherRecord, stack: stack, isBusy: isBusy) {
+        case .adopt, .create: return true
+        case .unavailable: return stack == nil && !isBusy
+        case .shepherding: return false
+        }
     }
 }
