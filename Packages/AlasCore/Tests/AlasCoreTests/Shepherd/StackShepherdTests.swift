@@ -418,6 +418,33 @@ struct StackShepherdTests {
         #expect(action == expected)
     }
 
+    /// A finished record still opens the popover on its bound view, which has
+    /// no Ship, so the pill must not invite a click with it.
+    @Test(arguments: [
+        ("live", false, false),
+        ("finished", false, false),
+        ("none", false, true),
+        ("none", true, false),
+        ("other", true, true),
+    ])
+    func stackPillInvitesShipOnlyWithoutARecord(record kind: String, isBusy: Bool, expected: Bool) {
+        let live = Self.record([41])
+        let finished = StackShepherdPolicy.decide(
+            live, Self.observation([Self.request(41, state: .merged)], hasUnpublishedEntries: false)
+        ).record
+        #expect(finished.isFinished)
+        var other = live
+        other.sessionID = "session-2"
+
+        let invites = StackShipAction.invitesShip(
+            record: kind == "live" ? live : kind == "finished" ? finished : nil,
+            otherRecord: kind == "other" ? other : nil,
+            isBusy: isBusy
+        )
+
+        #expect(invites == expected)
+    }
+
     /// Pins the agent-facing `pr_status` keys for a stack, including the
     /// explicit nulls agents rely on.
     @Test func stackStatusWireKeepsEveryKey() {

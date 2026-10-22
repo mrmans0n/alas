@@ -335,10 +335,12 @@ public enum StackShipAction: Equatable, Sendable {
         return .create
     }
 
-    /// Whether the toolbar pill should stand out. The pill doesn't read the
-    /// gg stack, so only a running turn holds back Ship stack.
+    /// Whether the toolbar pill should stand out. Any record of this session,
+    /// finished ones included, puts the popover on its bound view, which
+    /// offers no Ship. The pill doesn't read the gg stack, so otherwise only a
+    /// running turn holds back Ship stack.
     public static func invitesShip(record: StackShepherdRecord?, otherRecord: StackShepherdRecord?, isBusy: Bool) -> Bool {
-        if let record, !record.isFinished { return false }
+        guard record == nil else { return false }
         return otherRecord != nil || !isBusy
     }
 }
