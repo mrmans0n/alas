@@ -4,7 +4,33 @@ import AlasACP
 /// A `computer_*` request from the CLI/MCP bridge. Bounds mirror the Rust side.
 public struct ComputerUseCommand: Equatable, Sendable {
     /// `cancel` stops the in-flight call with `callID`; the MCP bridge sends it when the agent cancels.
-    public enum Action: String, CaseIterable, Sendable { case apps, screenshot, inspect, cancel }
+    /// The tool name is `computer_<rawValue>`.
+    public enum Action: String, CaseIterable, Sendable {
+        case apps, screenshot, inspect, cancel
+        case click, type, key, scroll, drag
+        case openApp = "open_app"
+        case wait
+
+        /// Actions that operate a window and return a fresh read of it.
+        var isInput: Bool {
+            switch self {
+            case .click, .type, .key, .scroll, .drag: true
+            default: false
+            }
+        }
+
+        var defaultLimit: Int {
+            switch self {
+            case .apps, .screenshot, .inspect, .cancel: 300
+            case .click, .type, .key, .scroll, .drag, .openApp, .wait: 100
+            }
+        }
+    }
+
+    public enum Button: String, Sendable, Decodable { case left, right }
+    public enum TypeMode: String, Sendable, Decodable { case insert, replace }
+    public enum Delivery: String, Sendable, Decodable { case background, direct }
+    public enum WaitCondition: String, Sendable, Decodable { case appear, disappear }
 
     public var action: Action
     public var windowID: UInt32?
@@ -14,16 +40,62 @@ public struct ComputerUseCommand: Equatable, Sendable {
     /// Set by the MCP bridge so a cancellation can find the call; the CLI omits it.
     public var callID: String?
 
+    /// Element ref (`eN`) or window-screenshot pixels; exactly one form per target.
+    public var ref: String?
+    public var x: Double?
+    public var y: Double?
+    /// Drag destination, same two forms.
+    public var toRef: String?
+    public var toX: Double?
+    public var toY: Double?
+    public var button: Button
+    public var count: Int
+    public var text: String?
+    public var mode: TypeMode
+    public var keys: String?
+    public var dx: Int
+    public var dy: Int
+    public var delivery: Delivery
+    public var name: String?
+    public var bundleID: String?
+    public var condition: WaitCondition
+    public var timeoutMS: Int
+    public var includeScreenshot: Bool
+
     public init(
-        action: Action, windowID: UInt32? = nil, query: String? = nil, limit: Int = 300, maxDepth: Int = 12,
-        callID: String? = nil
+        action: Action, windowID: UInt32? = nil, query: String? = nil, limit: Int? = nil, maxDepth: Int = 12,
+        callID: String? = nil, ref: String? = nil, x: Double? = nil, y: Double? = nil,
+        toRef: String? = nil, toX: Double? = nil, toY: Double? = nil,
+        button: Button = .left, count: Int = 1, text: String? = nil, mode: TypeMode = .insert,
+        keys: String? = nil, dx: Int = 0, dy: Int = 0, delivery: Delivery = .background,
+        name: String? = nil, bundleID: String? = nil, condition: WaitCondition = .appear,
+        timeoutMS: Int = 5000, includeScreenshot: Bool = false
     ) {
         self.action = action
         self.windowID = windowID
         self.query = query
-        self.limit = limit
+        self.limit = limit ?? action.defaultLimit
         self.maxDepth = maxDepth
         self.callID = callID
+        self.ref = ref
+        self.x = x
+        self.y = y
+        self.toRef = toRef
+        self.toX = toX
+        self.toY = toY
+        self.button = button
+        self.count = count
+        self.text = text
+        self.mode = mode
+        self.keys = keys
+        self.dx = dx
+        self.dy = dy
+        self.delivery = delivery
+        self.name = name
+        self.bundleID = bundleID
+        self.condition = condition
+        self.timeoutMS = timeoutMS
+        self.includeScreenshot = includeScreenshot
     }
 
     private struct Params: Decodable {
@@ -32,17 +104,92 @@ public struct ComputerUseCommand: Equatable, Sendable {
         var limit: Int?
         var max_depth: Int?
         var call_id: String?
+        var ref: String?
+        var x: Double?
+        var y: Double?
+        var to_ref: String?
+        var to_x: Double?
+        var to_y: Double?
+        var button: Button?
+        var count: Int?
+        var text: String?
+        var mode: TypeMode?
+        var keys: String?
+        var dx: Int?
+        var dy: Int?
+        var delivery: Delivery?
+        var name: String?
+        var bundle_id: String?
+        var condition: WaitCondition?
+        var timeout_ms: Int?
+        var include_screenshot: Bool?
+
+        /// Wire keys present in the request, for rejecting params an action does not take.
+        var present: Set<String> {
+            var keys = Set<String>()
+            func note(_ key: String, _ value: Any?) { if value != nil { keys.insert(key) } }
+            note("window_id", window_id)
+            note("query", query)
+            note("limit", limit)
+            note("max_depth", max_depth)
+            note("call_id", call_id)
+            note("ref", ref)
+            note("x", x)
+            note("y", y)
+            note("to_ref", to_ref)
+            note("to_x", to_x)
+            note("to_y", to_y)
+            note("button", button)
+            note("count", count)
+            note("text", text)
+            note("mode", mode)
+            note("keys", self.keys)
+            note("dx", dx)
+            note("dy", dy)
+            note("delivery", delivery)
+            note("name", name)
+            note("bundle_id", bundle_id)
+            note("condition", condition)
+            note("timeout_ms", timeout_ms)
+            note("include_screenshot", include_screenshot)
+            return keys
+        }
+    }
+
+    private static let postAction: Set<String> = ["window_id", "limit", "query", "include_screenshot", "call_id"]
+    private static let pointTarget: Set<String> = ["ref", "x", "y"]
+
+    private static func allowedParams(for action: Action) -> Set<String> {
+        switch action {
+        case .apps, .screenshot, .inspect: ["window_id", "query", "limit", "max_depth", "call_id"]
+        // A cancel names only the call it stops.
+        case .cancel: ["window_id", "query", "call_id"]
+        case .click: postAction.union(pointTarget).union(["button", "count", "delivery"])
+        case .type: postAction.union(["text", "ref", "mode", "delivery"])
+        case .key: postAction.union(["keys", "delivery"])
+        case .scroll: postAction.union(pointTarget).union(["dx", "dy"])
+        case .drag: postAction.union(pointTarget).union(["to_ref", "to_x", "to_y"])
+        case .openApp: ["name", "bundle_id", "call_id"]
+        case .wait: ["window_id", "query", "condition", "timeout_ms", "limit", "call_id"]
+        }
     }
 
     public static func decode(action: Action, data: Data) throws -> Self {
         let params = try AlasCLIRequest.decodeParamsIfPresent(Params.self, from: data)
-        // A cancel names only the call it stops.
-        if action == .cancel, params?.limit != nil || params?.max_depth != nil {
+        if let params, !params.present.isSubset(of: allowedParams(for: action)) {
             throw AlasCLIRequestError.malformed
         }
         let command = Self(
             action: action, windowID: params?.window_id, query: params?.query,
-            limit: params?.limit ?? 300, maxDepth: params?.max_depth ?? 12, callID: params?.call_id
+            limit: params?.limit, maxDepth: params?.max_depth ?? 12, callID: params?.call_id,
+            ref: params?.ref, x: params?.x, y: params?.y,
+            toRef: params?.to_ref, toX: params?.to_x, toY: params?.to_y,
+            button: params?.button ?? .left, count: params?.count ?? 1,
+            text: params?.text, mode: params?.mode ?? .insert, keys: params?.keys,
+            dx: params?.dx ?? 0, dy: params?.dy ?? 0, delivery: params?.delivery ?? .background,
+            name: params?.name, bundleID: params?.bundle_id,
+            condition: params?.condition ?? .appear, timeoutMS: params?.timeout_ms ?? 5000,
+            includeScreenshot: params?.include_screenshot ?? false
         )
         try command.validate()
         return command
@@ -52,9 +199,35 @@ public struct ComputerUseCommand: Equatable, Sendable {
         func require(_ condition: Bool) throws {
             guard condition else { throw AlasCLIRequestError.malformed }
         }
-        if let callID {
-            try require(!callID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && callID.utf8.count <= 128)
+        func isBlank(_ value: String) -> Bool { value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        func validQuery() throws {
+            if let query { try require(!isBlank(query) && query.utf8.count <= 256) }
         }
+        func validRef(_ ref: String) -> Bool {
+            let digits = Array(ref.utf8.dropFirst())
+            guard ref.utf8.first == UInt8(ascii: "e"), (1...5).contains(digits.count),
+                  digits.allSatisfy({ (UInt8(ascii: "0")...UInt8(ascii: "9")).contains($0) }),
+                  digits[0] != UInt8(ascii: "0")
+            else { return false }
+            return true
+        }
+        func validCoordinate(_ value: Double) -> Bool { value.isFinite && (0...100_000).contains(value) }
+        /// Exactly one of a ref or an x+y pair.
+        func validTarget(ref: String?, x: Double?, y: Double?) -> Bool {
+            switch (ref, x, y) {
+            case let (ref?, nil, nil): validRef(ref)
+            case let (nil, x?, y?): validCoordinate(x) && validCoordinate(y)
+            default: false
+            }
+        }
+        if let callID {
+            try require(!isBlank(callID) && callID.utf8.count <= 128)
+        }
+        if action.isInput || action == .wait {
+            try require(windowID != nil)
+            try require((1...3000).contains(limit))
+        }
+        if action.isInput { try validQuery() }
         switch action {
         case .cancel:
             try require(callID != nil && windowID == nil && query == nil)
@@ -64,10 +237,36 @@ public struct ComputerUseCommand: Equatable, Sendable {
             try require(windowID != nil && query == nil)
         case .inspect:
             try require(windowID != nil)
-            if let query {
-                try require(!query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && query.utf8.count <= 256)
-            }
+            try validQuery()
             try require((1...3000).contains(limit) && (1...12).contains(maxDepth))
+        case .click:
+            try require(validTarget(ref: ref, x: x, y: y))
+            try require((1...2).contains(count))
+        case .type:
+            guard let text else { throw AlasCLIRequestError.malformed }
+            try require((1...10000).contains(text.unicodeScalars.count) && text.utf8.count <= 40000)
+            if let ref { try require(validRef(ref)) }
+            try require(x == nil && y == nil)
+            try require(mode == .insert || ref != nil)
+        case .key:
+            guard let keys else { throw AlasCLIRequestError.malformed }
+            // The chord syntax is parsed where the keys are posted.
+            try require(!isBlank(keys) && keys.utf8.count <= 64)
+        case .scroll:
+            try require(validTarget(ref: ref, x: x, y: y))
+            try require((-100...100).contains(dx) && (-100...100).contains(dy) && (dx != 0 || dy != 0))
+        case .drag:
+            try require(validTarget(ref: ref, x: x, y: y))
+            try require(validTarget(ref: toRef, x: toX, y: toY))
+        case .openApp:
+            switch (name, bundleID) {
+            case let (value?, nil), let (nil, value?): try require(!isBlank(value) && value.utf8.count <= 256)
+            default: throw AlasCLIRequestError.malformed
+            }
+        case .wait:
+            guard let query else { throw AlasCLIRequestError.malformed }
+            try require(!isBlank(query) && query.utf8.count <= 256)
+            try require((100...20000).contains(timeoutMS))
         }
     }
 }
