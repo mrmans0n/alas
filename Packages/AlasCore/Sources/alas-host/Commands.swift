@@ -126,8 +126,13 @@ enum HostCommands {
             guard readConfig().agents.registry.contains(where: { $0.registryID == arguments[1] }) else {
                 throw HostCommandError("No agent \(arguments[1]) is installed from the ACP registry.")
             }
+            // The record goes first, while the holder just checked still
+            // holds: removing a large npm install can take long enough for
+            // the app to open the profile in between.
+            try withExtendedLifetime(holder) {
+                try HostProfileWrite.update { $0.agents.uninstallRegistryAgent(registryID: arguments[1]) }
+            }
             try ACPRegistryInstaller().uninstall(registryID: arguments[1])
-            try HostProfileWrite.update { $0.agents.uninstallRegistryAgent(registryID: arguments[1]) }
             print("Uninstalled \(arguments[1]).")
             if case .host = holder { print("Restart the host to apply: alas-host restart") }
         case ("restart", nil, 0):
