@@ -100,6 +100,36 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// a host that serves Remote headlessly and to a local client only. A
     /// host that serves no Remote, or the app, refuses it.
     case remotePairingCode
+    /// The Macs paired with a host that serves Remote headlessly, to a local
+    /// client only. A host that serves no Remote, or the app, refuses it.
+    case listPeers
+    /// Forgets a paired Mac and revokes its token; local client only.
+    case forgetPeer(peerID: String)
+}
+
+/// A paired Mac as `alas-host peers list` shows it; never its token.
+public struct HostPeerSummary: Codable, Equatable, Sendable {
+    public var id: String
+    public var serverId: String
+    public var name: String
+    public var origins: [String]
+
+    public init(id: String, serverId: String, name: String, origins: [String]) {
+        self.id = id
+        self.serverId = serverId
+        self.name = name
+        self.origins = origins
+    }
+
+    /// The peer `query` names: its id or server id, else a name only one peer has.
+    public static func resolve(_ query: String, in peers: [HostPeerSummary]) throws -> HostPeerSummary {
+        if let peer = peers.first(where: { $0.id == query || $0.serverId == query }) { return peer }
+        let named = peers.filter { $0.name == query }
+        if named.count == 1 { return named[0] }
+        if named.isEmpty { throw HostError.failed(message: "No paired Mac has the id, name or server id \(query).") }
+        let candidates = named.map { "  \($0.id)  \($0.name)" }.joined(separator: "\n")
+        throw HostError.failed(message: "More than one paired Mac is named \(query); remove one by id:\n\(candidates)")
+    }
 }
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
@@ -124,7 +154,9 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case session(session: HostSessionSummary)
     case capabilities(capabilities: [String])
     case runOutput(output: HostRunOutput)
-    case remotePairingCode(code: String, expiresAt: Date)
+    /// `link` is absent from an older host, and where the host has no address for one.
+    case remotePairingCode(code: String, expiresAt: Date, link: String?)
+    case peers(peers: [HostPeerSummary])
     case failure(error: HostError)
 }
 

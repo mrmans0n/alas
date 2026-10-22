@@ -59,7 +59,7 @@ struct HostProtocolTests {
         .response(id: 7, result: .capabilities(capabilities: ["host.v1", "host.events.v1"])),
         .response(id: 8, result: .runOutput(output: .text("hello\n", truncated: true))),
         .response(id: 9, result: .runOutput(output: .notFinished)),
-        .response(id: 10, result: .remotePairingCode(code: "ABC123", expiresAt: Date(timeIntervalSince1970: 1_800_000_000))),
+        .response(id: 10, result: .remotePairingCode(code: "ABC123", expiresAt: Date(timeIntervalSince1970: 1_800_000_000), link: nil)),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),
@@ -104,5 +104,33 @@ struct HostProtocolTests {
             #"{"events":{"cursor":{"generation":"6F9619FF-8B86-D011-B42D-00CF4FC964FF","sequence":3},"events":[{"sessionRemoved":{"id":"s","owner":{"worktree":{"id":"w"}}}},{"runRemoved":{"id":"r"}},{"resync":{}}]}}"#)
         #expect(try json(HostServerMessage.response(id: 2, result: .failure(error: .worktreeDeletion(refusal: .needsForce("dirty"))))) ==
             #"{"response":{"id":2,"result":{"failure":{"error":{"worktreeDeletion":{"refusal":{"needsForce":{"message":"dirty"}}}}}}}}"#)
+    }
+
+    @Test func helloOmitsConsoleCapabilitiesForAServerWithoutConsoles() {
+        guard case .hello(_, _, _, _, _, let caps) = RemoteServerMessage.hello(
+            RemoteServerIdentity(serverId: "s", name: "n", servesPeerConsoles: false)) else {
+            Issue.record("expected hello")
+            return
+        }
+        #expect(!caps.contains(PeerConsoleCapability.v1))
+        #expect(!caps.contains(PeerConsoleCapability.terminateV1))
+        #expect(caps.contains(PeerSessionTabsCapability.v1))
+    }
+
+    /// `peers remove` takes an id or server id as is, and a name only when
+    /// one peer has it.
+    @Test(arguments: [
+        ("p1", "p1"), ("srv-2", "p2"), ("Desk", "p3"), ("p2", "p2"),
+        ("Laptop", nil), ("nobody", nil),
+    ] as [(String, String?)])
+    func aPeerIsResolvedByIdServerIdOrUniqueName(query: String, expected: String?) {
+        // p4 is named after p2's id: the exact id wins over the name.
+        let peers = [
+            HostPeerSummary(id: "p1", serverId: "srv-1", name: "Laptop", origins: []),
+            HostPeerSummary(id: "p2", serverId: "srv-2", name: "Laptop", origins: []),
+            HostPeerSummary(id: "p3", serverId: "srv-3", name: "Desk", origins: []),
+            HostPeerSummary(id: "p4", serverId: "srv-4", name: "p2", origins: []),
+        ]
+        #expect((try? HostPeerSummary.resolve(query, in: peers))?.id == expected)
     }
 }

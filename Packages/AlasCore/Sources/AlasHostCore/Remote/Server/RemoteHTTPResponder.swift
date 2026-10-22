@@ -61,9 +61,6 @@ public struct RemoteHTTPResponder: Sendable {
     /// Shared with the socket's own proof, so both prove the same key.
     public var identityProof: (@MainActor (String) -> RemoteIdentityProof?)?
     public var approval: RemotePairingApprovalHTTP?
-    /// False where other Macs must not pair: a peer's code redeem is refused
-    /// before the code is consumed.
-    public var admitsPeers = true
     public var onApprovedPeerPaired: (@MainActor (RemotePeerPairingRequest, String, ApprovalPeer) -> Void)?
 
     public func response(for req: HTTPRequest, body: Data) -> Data {
@@ -198,7 +195,6 @@ public struct RemoteHTTPResponder: Sendable {
         guard let code = pr.code else { return unauthorized }
         let token: String
         if let peer = pr.peer {
-            guard admitsPeers else { return forbidden("peer rejected") }
             // Everything in `peer` is attacker-controlled and only the 1 MB
             // body cap bounds it. Reject an implausible advertisement BEFORE
             // redeeming, so a rejected request leaves the pairing code

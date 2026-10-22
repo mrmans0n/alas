@@ -5525,6 +5525,10 @@ extension ACPSessionManager {
     @discardableResult
     public func takeOver(sessionId: ACPSession.ID) async -> Bool {
         guard !isDisposed, let takeoverSession = sessions[sessionId] else { return false }
+        // A client with a stale view can ask to take over what this instance
+        // already drives. Seizing again would tear down the live agent and
+        // re-attach, stranding a prompt sent meanwhile.
+        if isWriter(for: sessionId), await confirmedWriterLease(for: sessionId) { return true }
         takeoverSession.nextPromptWorkCount += 1
         defer { takeoverSession.nextPromptWorkCount -= 1 }
         let takeoverAttemptID = UUID()

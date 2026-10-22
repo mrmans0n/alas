@@ -77,7 +77,17 @@ extension AlasHost {
         return AlasHost(core: AlasCoreContext(
             projects: ProjectsManager(persistedProjects: projects.projects, defaultOrdering: { ordering }),
             store: store,
-            makeSessionManager: AlasCoreContext.sessionManagerFactory(config: { environment.config }),
+            makeSessionManager: AlasCoreContext.sessionManagerFactory(
+                config: { environment.config },
+                onChipsObserved: { agentID, host, chips in
+                    environment.modelCatalog?.record(
+                        agentID: agentID,
+                        models: (chips.models?.options ?? []).map { ACPAgentModelCatalog.Model(id: $0.id, name: $0.name) },
+                        host: host
+                    )
+                    environment.modelCatalog?.recordEffort(agentID: agentID, thinking: chips.thinking)
+                }
+            ),
             environment: environment,
             usageHistory: try? UsageHistoryStore()
         ))

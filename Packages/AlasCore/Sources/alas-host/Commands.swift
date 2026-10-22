@@ -21,7 +21,7 @@ func launchctl(_ arguments: String...) -> Int32 {
     return process.terminationStatus
 }
 
-/// The `config`, `project`, `restart` and `setup` commands. The project operations
+/// The `config`, `peers`, `project`, `restart` and `setup` commands. The project operations
 /// go through the running host's socket when one serves the profile, and
 /// through a host booted in this process when none does.
 @MainActor
@@ -29,7 +29,7 @@ enum HostCommands {
     /// Runs the command `arguments` names and exits; returns when they name
     /// none of these commands.
     static func runIfCommand(_ arguments: [String]) {
-        guard let command = arguments.first, ["config", "project", "registry", "restart", "setup"].contains(command) else { return }
+        guard let command = arguments.first, ["config", "peers", "project", "registry", "restart", "setup"].contains(command) else { return }
         Task { @MainActor in
             do {
                 try await run(command, Array(arguments.dropFirst()))
@@ -72,6 +72,14 @@ enum HostCommands {
             print(project.id)
         case ("project", "remove", 2):
             try await removeProject(arguments[1])
+        case ("peers", "list", 1):
+            for peer in try await listPeers() {
+                print("\(peer.id)  \(peer.name)  \(peer.serverId)")
+            }
+        case ("peers", "remove", 2):
+            let peer = try HostPeerSummary.resolve(arguments[1], in: try await listPeers())
+            try await forgetPeer(peer.id)
+            print("\(peer.id)  \(peer.name)")
         case ("registry", "search", 1), ("registry", "search", 2):
             let query = arguments.count == 2 ? arguments[1] : ""
             let installed = readConfig().agents.registry
@@ -215,6 +223,33 @@ enum HostCommands {
         try await perform(.removeProject(projectID: project.id)) { $0 == .done ? () : nil } inProcess: { host in
             try await host.projects.remove(projectID: project.id, caller: .localUser(uid: getuid()))
         }
+    }
+
+    // MARK: - Peers
+
+    /// The Macs paired with this host. Booted in process, no host serves them,
+    /// so the files are read and written here, under the lock `perform` holds.
+    static func listPeers() async throws -> [HostPeerSummary] {
+        try await perform(.listPeers) {
+            if case .peers(let peers) = $0 { peers } else { nil }
+        } inProcess: { _ in
+            localPeerManager().peers.map { HostPeerSummary(id: $0.id, serverId: $0.serverId, name: $0.name, origins: $0.origins) }
+        }
+    }
+
+    static func forgetPeer(_ id: String) async throws {
+        try await perform(.forgetPeer(peerID: id)) { $0 == .done ? () : nil } inProcess: { _ in
+            // The pairing service's revoke persists the device revocation.
+            localPeerManager().forget(peerId: id)
+        }
+    }
+
+    private static func localPeerManager() -> RemotePeerManager {
+        RemotePeerManager(
+            store: FilePeerStore(secrets: RemoteHostSecretStore()),
+            pairing: RemotePairingService(store: FileDeviceStore()),
+            localIdentity: { .init(serverId: "", name: "", origins: []) }
+        )
     }
 
     /// Sends `request` to the running host, or runs `inProcess` on a host

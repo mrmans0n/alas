@@ -393,6 +393,57 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// Forgetting a Mac revokes the token it uses here, so only the local user
+    /// may: never a paired device, which a stolen one could use to keep a peer.
+    @Test(arguments: [true, false])
+    func forgettingAPeerRevokesItsDeviceOnlyForTheLocalUser(isLocalUser: Bool) async throws {
+        let fixture = try Fixture()
+        let peer = RemotePeer(
+            id: "peer-1", serverId: "mac-1", name: "Laptop", origins: ["http://laptop:1"], token: "t", addedAt: .distantPast
+        )
+        let device = RemoteDevice(
+            id: "device-1", name: "Laptop", tokenHash: "h", createdAt: .distantPast, lastSeenAt: nil,
+            kind: .alasInstance, peerServerId: "mac-1"
+        )
+        let peerStore = MemoryPeerStore(peers: [peer])
+        let pairing = RemotePairingService(store: MemoryDeviceStore(devices: [device]))
+        fixture.server.remotePeers = RemotePeerManager(
+            store: peerStore, pairing: pairing, localIdentity: { .init(serverId: "", name: "", origins: []) }
+        )
+        let client = Client()
+        let caller: HostCaller = isLocalUser ? .localUser(uid: 501) : .remotePeer(deviceID: "device-1")
+        let connection = fixture.server.connect(caller: caller, send: client.receive)
+
+        await connection.receive(HostClientMessage(id: 1, request: .forgetPeer(peerID: "peer-1")))
+
+        if isLocalUser {
+            #expect(client.messages == [.response(id: 1, result: .done)])
+            #expect(peerStore.peers.isEmpty)
+            #expect(pairing.devices.isEmpty)
+        } else {
+            guard case .response(_, .failure)? = client.messages.first else {
+                Issue.record("expected a failure, got \(client.messages)")
+                return
+            }
+            #expect(peerStore.peers == [peer])
+            #expect(pairing.devices == [device])
+        }
+    }
+
+    private final class MemoryPeerStore: RemotePeerStore {
+        var peers: [RemotePeer]
+        init(peers: [RemotePeer]) { self.peers = peers }
+        func load() -> [RemotePeer] { peers }
+        func save(_ peers: [RemotePeer]) { self.peers = peers }
+    }
+
+    private final class MemoryDeviceStore: RemoteDeviceStore {
+        var devices: [RemoteDevice]
+        init(devices: [RemoteDevice]) { self.devices = devices }
+        func load() -> [RemoteDevice] { devices }
+        func save(_ devices: [RemoteDevice]) { self.devices = devices }
+    }
+
     @MainActor
     private struct Fixture {
         let projects: ProjectsManager
