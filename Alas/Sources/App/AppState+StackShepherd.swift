@@ -22,6 +22,10 @@ extension AppState {
                 guard let self else { throw GGMutationError.staleConfirmation }
                 try await self.syncStackForShip(worktreeID: worktreeID)
             },
+            rebaseStack: { [weak self] worktreeID in
+                guard let self else { throw GGMutationError.staleConfirmation }
+                try await self.ggPane(worktreeID: worktreeID).rebaseGGForShip()
+            },
             sessionState: { [weak self] sessionID, worktreeID in
                 await self?.shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) ?? .missing
             },
@@ -79,14 +83,18 @@ extension AppState {
     /// stack drawer's Sync and Commit & sync use: the same preflight, paused
     /// operation guard, progress and refresh.
     private func syncStackForShip(worktreeID: String) async throws {
+        try await ggPane(worktreeID: worktreeID).syncGGForCommitPublish()
+    }
+
+    /// The worktree's Changes pane state, which runs its gg mutations.
+    private func ggPane(worktreeID: String) throws -> RightPaneState {
         guard let worktree = worktree(withId: worktreeID) else { throw GGMutationError.staleConfirmation }
-        let pane = rightPaneStore.state(
+        return rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
             comparisonMode: config.changes.comparisonMode,
             activates: false
         )
-        try await pane.syncGGForCommitPublish()
     }
 
     // MARK: - Ship

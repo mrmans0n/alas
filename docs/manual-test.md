@@ -292,6 +292,7 @@ Use a disposable gg stack (two or three commits) on a GitHub repository you can 
 6. Check out another stack in the worktree while a problem is open. Confirm no fix turn is sent until the worktree is back on the shepherded stack.
 7. Once every entry is green with no open threads, confirm a "Stack ready to land" notification arrives once and the pill shows the ready badge. Land the stack from the stack drawer and confirm a "Stack landed" notification after the last entry merges.
 8. With a stack already published by `gg sync`, open Ship in a fresh session. Confirm it offers "Shepherd stack from this session", and pressing it sends a context prompt and moves the stack to that session.
+9. With a shepherded stack of at least two entries, land only the bottom one from the stack drawer. Confirm the pill reads "entry 1 landed: waiting for stack_ship to restack", the session receives one prompt with a "Landed on main" section, and its `stack_ship` call returns `"restacked":true`: the landed commit is gone from the stack drawer, no new pull request was opened for it, and the next entry's pull request targets `main` without the landed change. Repeat with the bottom pull request merged on GitHub instead of through gg.
 
 ## Peer pairing by approval
 
