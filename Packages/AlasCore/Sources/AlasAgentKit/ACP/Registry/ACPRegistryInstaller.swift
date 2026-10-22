@@ -77,7 +77,13 @@ public struct ACPRegistryInstaller: Sendable {
         self.findExecutable = findExecutable
     }
 
-    public func install(_ agent: ACPRegistryAgent) async throws -> ACPRegistryInstalledAgent {
+    /// `beforeReplacing` runs once the new files are ready, just before they
+    /// replace the agent's installed ones; throwing from it leaves those as
+    /// they were.
+    public func install(
+        _ agent: ACPRegistryAgent,
+        beforeReplacing: @Sendable () throws -> Void = {}
+    ) async throws -> ACPRegistryInstalledAgent {
         // Validate before any filesystem work: the id names the install directory.
         _ = try installDirectory(registryID: agent.id)
         guard let plan = agent.installPlan(platform: platform) else {
@@ -89,11 +95,11 @@ public struct ACPRegistryInstaller: Sendable {
         let environment: [String: String]
         switch plan {
         case .binary(let target):
-            command = try await installBinary(target, registryID: agent.id)
+            command = try await installBinary(target, registryID: agent.id, beforeReplacing: beforeReplacing)
             arguments = target.args ?? []
             environment = target.env ?? [:]
         case .npm(let package):
-            command = try await installNpm(package, registryID: agent.id)
+            command = try await installNpm(package, registryID: agent.id, beforeReplacing: beforeReplacing)
             arguments = package.args ?? []
             environment = package.env ?? [:]
         case .uvx(let package):
@@ -101,6 +107,7 @@ public struct ACPRegistryInstaller: Sendable {
             // Builds the same cached environment `uvx <package>` launches,
             // without starting the agent.
             try await run("uvx", ["--from", package.package, "python", "-c", "pass"])
+            try beforeReplacing()
             try uninstall(registryID: agent.id)
             command = "uvx"
             arguments = [package.package] + (package.args ?? [])
@@ -140,9 +147,11 @@ public struct ACPRegistryInstaller: Sendable {
 
     // MARK: - Distributions
 
-    private func installBinary(_ target: ACPRegistryAgent.BinaryTarget, registryID: String) async throws -> String {
+    private func installBinary(
+        _ target: ACPRegistryAgent.BinaryTarget, registryID: String, beforeReplacing: @Sendable () throws -> Void
+    ) async throws -> String {
         let relative = try Self.relativeCommandPath(target.cmd)
-        return try await installStaged(registryID: registryID) { staging in
+        return try await installStaged(registryID: registryID, beforeReplacing: beforeReplacing) { staging in
             let archive = try await download(target.archive)
             defer { try? FileManager.default.removeItem(at: archive) }
             if let expected = target.sha256,
@@ -164,9 +173,11 @@ public struct ACPRegistryInstaller: Sendable {
         }
     }
 
-    private func installNpm(_ package: ACPRegistryAgent.Package, registryID: String) async throws -> String {
+    private func installNpm(
+        _ package: ACPRegistryAgent.Package, registryID: String, beforeReplacing: @Sendable () throws -> Void
+    ) async throws -> String {
         let name = Self.npmPackageName(fromSpec: package.package)
-        return try await installStaged(registryID: registryID) { staging in
+        return try await installStaged(registryID: registryID, beforeReplacing: beforeReplacing) { staging in
             try await run("npm", [
                 "install", "--prefix", staging.path,
                 "--no-audit", "--no-fund", "--loglevel=error",
@@ -190,6 +201,7 @@ public struct ACPRegistryInstaller: Sendable {
     /// relative to the directory; the result is its final absolute path.
     private func installStaged(
         registryID: String,
+        beforeReplacing: @Sendable () throws -> Void,
         populate: (URL) async throws -> String
     ) async throws -> String {
         let fm = FileManager.default
@@ -198,6 +210,7 @@ public struct ACPRegistryInstaller: Sendable {
         var promoted = false
         defer { if !promoted { try? fm.removeItem(at: staging) } }
         let relative = try await populate(staging)
+        try beforeReplacing()
         let destination = try installDirectory(registryID: registryID)
         if fm.fileExists(atPath: destination.path) {
             _ = try fm.replaceItemAt(destination, withItemAt: staging)

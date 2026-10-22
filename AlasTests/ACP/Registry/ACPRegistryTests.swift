@@ -183,6 +183,18 @@ struct ACPRegistryTests {
         }
         #expect(FileManager.default.isExecutableFile(atPath: expectedCommand))
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["goose"])
+
+        // A caller that refuses just before the swap, as `alas-host registry
+        // install` does when the app opened the profile meanwhile, keeps the
+        // installed files as they were.
+        struct Refused: Error {}
+        let marker = root.appendingPathComponent("goose/installed-before")
+        try Data().write(to: marker)
+        await #expect(throws: Refused.self) {
+            try await installer.install(Self.binaryAgent(sha256: checksum), beforeReplacing: { throw Refused() })
+        }
+        #expect(FileManager.default.fileExists(atPath: marker.path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path) == ["goose"])
     }
 
     @Test func npmInstallLaunchesThePackageBinFromItsOwnPrefix() async throws {

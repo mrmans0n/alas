@@ -1,5 +1,6 @@
 import AlasCore
 import Foundation
+import Synchronization
 
 /// A command's failure, printed as is.
 struct HostCommandError: LocalizedError {
@@ -28,7 +29,7 @@ enum HostCommands {
     /// Runs the command `arguments` names and exits; returns when they name
     /// none of these commands.
     static func runIfCommand(_ arguments: [String]) {
-        guard let command = arguments.first, ["config", "project", "restart", "setup"].contains(command) else { return }
+        guard let command = arguments.first, ["config", "project", "registry", "restart", "setup"].contains(command) else { return }
         Task { @MainActor in
             do {
                 try await run(command, Array(arguments.dropFirst()))
@@ -71,6 +72,82 @@ enum HostCommands {
             print(project.id)
         case ("project", "remove", 2):
             try await removeProject(arguments[1])
+        case ("registry", "search", 1), ("registry", "search", 2):
+            let query = arguments.count == 2 ? arguments[1] : ""
+            let installed = readConfig().agents.registry
+            let registry = try await ACPRegistryClient().agents()
+            let matches = { (id: String, name: String) in
+                query.isEmpty || id.localizedCaseInsensitiveContains(query) || name.localizedCaseInsensitiveContains(query)
+            }
+            for agent in registry where matches(agent.id, agent.name) {
+                let note = switch ACPRegistryEntryStatus.resolve(agent: agent, installed: installed) {
+                case .builtin(let agentID): "  (built in: agents.\(agentID).enabled)"
+                case .installed: "  (installed)"
+                case .updateAvailable(let version): "  (installed \(version); install updates it)"
+                case .unsupported: "  (no build for this Mac)"
+                case .notInstalled: ""
+                }
+                print("\(agent.id)  \(agent.name)  \(agent.version)\(note)")
+            }
+            // Installed agents the registry no longer lists, which only
+            // `registry uninstall` removes now.
+            for agent in ACPRegistryInstalledAgent.unlisted(installed, registry: registry)
+                where matches(agent.registryID, agent.displayName) {
+                print("\(agent.registryID)  \(agent.displayName)  \(agent.version)  (installed; no longer in the registry)")
+            }
+        case ("registry", "install", 2):
+            // Fail early, before the download; the write below asks again.
+            _ = try writableHolder()
+            guard let agent = try await ACPRegistryClient().agents().first(where: { $0.id == arguments[1] }) else {
+                throw HostCommandError("The ACP registry has no agent \(arguments[1]); see alas-host registry search.")
+            }
+            // As the app's registry browser: built-ins and agents without a
+            // build for this Mac are not installed from the registry.
+            switch ACPRegistryEntryStatus.resolve(agent: agent, installed: readConfig().agents.registry) {
+            case .builtin(let agentID):
+                throw HostCommandError("\(agent.name) ships with Alas; turn it on or off with agents.\(agentID).enabled.")
+            case .unsupported:
+                throw HostCommandError("\(agent.name) has no build for this Mac.")
+            case .installed:
+                print("\(agent.name) \(agent.version) is already installed.")
+                return
+            case .notInstalled, .updateAvailable:
+                break
+            }
+            // The download can take a while, and who holds the profile may
+            // have changed since: ask again before the new files replace any
+            // installed ones, and hold that, its lock included, while writing.
+            let checked = Mutex<DataDirectoryHolder?>(nil)
+            let installed = try await ACPRegistryInstaller().install(agent) {
+                let holder = try writableHolder()
+                checked.withLock { $0 = holder }
+            }
+            let writer = try checked.withLock { $0 } ?? writableHolder()
+            try withExtendedLifetime(writer) {
+                try HostProfileWrite.update { $0.agents.installRegistryAgent(installed) }
+            }
+            print("Installed \(agent.name) \(agent.version) as agents.\(agent.id).enabled.")
+            if case .host = writer { print("Restart the host to use it: alas-host restart") }
+        case ("registry", "uninstall", 2):
+            let holder = try writableHolder()
+            guard let record = readConfig().agents.registry.first(where: { $0.registryID == arguments[1] }) else {
+                throw HostCommandError("No agent \(arguments[1]) is installed from the ACP registry.")
+            }
+            // The record goes first, while the holder just checked still
+            // holds: removing a large npm install can take long enough for
+            // the app to open the profile in between. Files that fail to go
+            // get their record back, so a later uninstall still finds them.
+            try withExtendedLifetime(holder) {
+                try HostProfileWrite.update { $0.agents.uninstallRegistryAgent(registryID: arguments[1]) }
+                do {
+                    try ACPRegistryInstaller().uninstall(registryID: arguments[1])
+                } catch {
+                    try? HostProfileWrite.update { $0.agents.installRegistryAgent(record) }
+                    throw error
+                }
+            }
+            print("Uninstalled \(arguments[1]).")
+            if case .host = holder { print("Restart the host to apply: alas-host restart") }
         case ("restart", nil, 0):
             try restart()
         case ("setup", nil, 0):
@@ -98,7 +175,7 @@ enum HostCommands {
 
     /// Who holds the profile, for a command that writes it: the app and an
     /// unknown process keep it in memory and would overwrite the change.
-    static func writableHolder() throws -> DataDirectoryHolder {
+    nonisolated static func writableHolder() throws -> DataDirectoryHolder {
         let holder = DataDirectoryHolder.current()
         switch holder {
         case .app: throw HostProfileRefusal()

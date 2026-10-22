@@ -130,4 +130,45 @@ struct AppConfigDecodingTests {
         let registry = (written["agents"] as? [String: Any])?["registry"] as? [[String: Any]]
         #expect(registry?.map { $0["someFutureField"] as? Int } == [1, 1])
     }
+
+    /// Installing a registry agent adds it; reinstalling one, as an update
+    /// does, replaces its record and keeps whether the user turned it off.
+    @Test func installingARegistryAgentAddsItAndAReinstallKeepsItsEnabledState() {
+        func agent(_ version: String, enabled: Bool = true) -> ACPRegistryInstalledAgent {
+            ACPRegistryInstalledAgent(
+                registryID: "acme", displayName: "Acme", version: version,
+                command: "acme-acp", arguments: [], environment: [:], isEnabled: enabled
+            )
+        }
+        var agents = AppConfig.defaults.agents
+        agents.installRegistryAgent(agent("1"))
+        #expect(agents.registry.map(\.version) == ["1"])
+        agents.registry[0].isEnabled = false
+        agents.installRegistryAgent(agent("2"))
+        #expect(agents.registry.map(\.version) == ["2"])
+        #expect(agents.registry.map(\.isEnabled) == [false])
+        agents.uninstallRegistryAgent(registryID: "acme")
+        #expect(agents.registry.isEmpty)
+    }
+
+    /// Two `alas-host` commands writing at once, such as two `registry
+    /// install`s, each keep their change: a write reads the profile only once
+    /// the previous one has saved it.
+    @Test func concurrentProfileWritesKeepEveryChange() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("profile-write-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let file = directory.appendingPathComponent("app.json")
+        let writers = 16
+        DispatchQueue.concurrentPerform(iterations: writers) { index in
+            try? HostProfileWrite.update({
+                $0.agents.installRegistryAgent(ACPRegistryInstalledAgent(
+                    registryID: "agent-\(index)", displayName: "Agent \(index)", version: "1",
+                    command: "agent", arguments: [], environment: [:], isEnabled: true
+                ))
+            }, file: file)
+        }
+        let saved = try #require(try PersistenceStore().readIfExists(AppConfig.self, from: file))
+        #expect(Set(saved.agents.registry.map(\.registryID)) == Set((0 ..< writers).map { "agent-\($0)" }))
+    }
 }

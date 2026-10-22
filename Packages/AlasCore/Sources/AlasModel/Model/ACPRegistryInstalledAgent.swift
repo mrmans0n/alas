@@ -80,3 +80,22 @@ extension AppConfig.Agents {
         custom + registry.map(\.agentDefinition)
     }
 }
+
+extension AppConfig.Agents {
+    /// Adds an agent installed from the ACP registry, or replaces its record
+    /// when it was installed before, as an update does, keeping whether the
+    /// user turned it off.
+    public mutating func installRegistryAgent(_ installed: ACPRegistryInstalledAgent) {
+        var installed = installed
+        if let index = registry.firstIndex(where: { $0.registryID == installed.registryID }) {
+            installed.isEnabled = registry[index].isEnabled
+            registry[index] = installed
+        } else {
+            registry.append(installed)
+        }
+    }
+
+    public mutating func uninstallRegistryAgent(registryID: String) {
+        registry.removeAll { $0.registryID == registryID }
+    }
+}
