@@ -54,6 +54,16 @@ public struct StackShipPlan: Codable, Equatable, Sendable {
         StackShipPlan(shipThroughPosition: try shipThroughPosition(in: stack), of: stack, opensDrafts: opensDrafts)
     }
 
+    /// What a stored plan ships once gg no longer lists its boundary, as
+    /// after Clean removed the merged entries it shipped: the entries that
+    /// already have a request, which is what `heldBackEntries` leaves out,
+    /// so the whole stack once every entry has one. Nil when none has one.
+    public func recovered(in stack: GGStack) -> StackShipPlan? {
+        let through = Self.highestPublishedPosition(in: stack)
+        guard through > 0 else { return nil }
+        return StackShipPlan(shipThroughPosition: through, of: stack, opensDrafts: opensDrafts)
+    }
+
     /// The entries the plan leaves unpublished, bottom-up. A boundary gg no
     /// longer lists, as after Clean removes the merged entries it shipped,
     /// holds back every entry without a request.

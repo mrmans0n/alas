@@ -1056,4 +1056,32 @@ struct StackShepherdTests {
 
         #expect(synced == [StackShipPlan(shipThroughEntryID: "g1")])
     }
+
+    /// After Clean removes the boundary the record shipped through, a fix
+    /// push ships what already has a request: the whole stack once the rest
+    /// was published with Sync, else everything but the held-back entries.
+    @Test(arguments: [([true, true], nil), ([true, false], "g0")] as [([Bool], String?)])
+    func stackShipRecoversARecordBoundaryCleanRemoved(published: [Bool], boundary: String?) async {
+        let core = makeCore()
+        var synced: [StackShipPlan] = []
+        let stack = Self.stack(published: published)
+        core.stackShepherd.effects = StackShepherd.Effects(
+            worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
+            loadStack: { _ in stack },
+            syncStack: { _, plan in synced.append(plan) },
+            sessionState: { _, _ in .idle },
+            deliverPrompt: { _, _, _, _ in .delivered },
+            rules: { _ in .none },
+            notify: { _ in },
+            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+        )
+        await core.stackShepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", stack: stack, requests: [:], remote: F.remote(),
+            autoFix: true, maxFixAttempts: 3, shipPlan: StackShipPlan(shipThroughEntryID: "cleaned"), contextRules: nil
+        )
+
+        _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
+
+        #expect(synced == [StackShipPlan(shipThroughEntryID: boundary)])
+    }
 }
