@@ -283,6 +283,8 @@ extension LiveComputerUseSystem {
     static let activationSettle: Duration = .milliseconds(100)
     /// The longest a paste waits for the target to read the text before the pasteboard is restored.
     static let pasteReadWait: Duration = .seconds(2)
+    /// The earliest a paste restores the pasteboard after ⌘V, even once the text was read.
+    static let pasteRestoreFloor: Duration = .milliseconds(200)
     /// Lets a click move focus before the focused element is checked.
     static let focusSettle: Duration = .milliseconds(50)
     /// One direct action at a time: activations and pasteboard swaps must not
@@ -453,8 +455,9 @@ extension LiveComputerUseSystem {
     }
 
     /// Pastes `text` with ⌘V, then puts the previous pasteboard items back once the
-    /// target has read the text (or after `pasteReadWait`). The text is served on
-    /// request, so the restore can wait for the read instead of guessing a delay.
+    /// text was read after ⌘V and `pasteRestoreFloor` passed (at most `pasteReadWait`).
+    /// A read before ⌘V (a clipboard manager) doesn't count: restoring then would
+    /// let the target paste the user's own clipboard.
     private static func paste(_ text: String, pid: Int32) async throws {
         let provider = PasteProvider(text: text)
         let (saved, changeCount) = await MainActor.run { () -> ([[NSPasteboard.PasteboardType: Data]], Int) in
@@ -474,14 +477,17 @@ extension LiveComputerUseSystem {
             pasteboard.writeObjects([item])
             return (saved, pasteboard.changeCount)
         }
+        provider.keyPosted.set()
         do {
             try ComputerUseInputPoster.postKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand, pid: pid)
         } catch {
             await MainActor.run { restorePasteboard(saved, ifUnchangedSince: changeCount) }
             throw error
         }
-        let deadline = ContinuousClock.now + pasteReadWait
-        while !provider.wasRead.isSet, ContinuousClock.now < deadline {
+        let posted = ContinuousClock.now
+        let floor = posted + pasteRestoreFloor
+        let deadline = posted + pasteReadWait
+        while ContinuousClock.now < deadline, ContinuousClock.now < floor || !provider.wasRead.isSet {
             try? await Task.sleep(for: .milliseconds(20))
         }
         await MainActor.run { restorePasteboard(saved, ifUnchangedSince: changeCount) }
@@ -505,9 +511,11 @@ extension LiveComputerUseSystem {
     }
 }
 
-/// Serves a paste's text when the target asks for it, and records that it did.
+/// Serves a paste's text when asked, and records a read that came after ⌘V.
 private final class PasteProvider: NSObject, NSPasteboardItemDataProvider, @unchecked Sendable {
     let text: String
+    /// Set right before ⌘V is posted; earlier reads are someone else's.
+    let keyPosted = ComputerUseAXReader.CancelFlag()
     let wasRead = ComputerUseAXReader.CancelFlag()
 
     init(text: String) {
@@ -516,7 +524,7 @@ private final class PasteProvider: NSObject, NSPasteboardItemDataProvider, @unch
 
     func pasteboard(_ pasteboard: NSPasteboard?, item: NSPasteboardItem, provideDataForType type: NSPasteboard.PasteboardType) {
         item.setString(text, forType: type)
-        wasRead.set()
+        if keyPosted.isSet { wasRead.set() }
     }
 }
 
