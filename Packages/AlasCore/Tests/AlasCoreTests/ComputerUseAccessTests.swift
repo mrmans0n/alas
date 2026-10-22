@@ -14,17 +14,18 @@ struct ComputerUseAccessTests {
     }
 
     @Test(arguments: [
-        ComputerUseAppIdentity(name: "Host", bundleID: "io.nlopez.alas", pid: 100),
-        ComputerUseAppIdentity(name: "Keychain", bundleID: "com.apple.keychainaccess", pid: 5),
+        (ComputerUseAppIdentity(name: "Host", bundleID: "io.nlopez.alas", pid: 100), true),
+        (ComputerUseAppIdentity(name: "Keychain", bundleID: "com.apple.keychainaccess", pid: 5), true),
+        (ComputerUseAppIdentity(name: "Alas", bundleID: "io.nlopez.alas", pid: 200), false),
     ])
-    func blockedAppsStayBlockedDespiteGrants(app: ComputerUseAppIdentity) {
+    func onlyBlocklistedAppsAreBlocked(app: ComputerUseAppIdentity, blocked: Bool) {
         let access = makeAccess(always: ["com.apple.keychainaccess"])
-        access.record(.allowForSession, for: app, session: "s")
-        #expect(access.access(for: app, session: "s") == .blocked)
-    }
-
-    @Test func otherAppsNeedApproval() {
-        #expect(makeAccess().access(for: alas, session: "s") == .needsApproval)
+        if blocked {
+            access.record(.allowForSession, for: app, session: "s")
+            #expect(access.access(for: app, session: "s") == .blocked)
+        } else {
+            #expect(access.access(for: app, session: "s") == .needsApproval)
+        }
     }
 
     @Test func grantScopesExpireAtTheirBoundary() {
@@ -66,15 +67,16 @@ struct ComputerUseAccessTests {
         #expect(access.resolvePending(first) == nil)
     }
 
-    @Test func stopIsPerSessionAndClearedByResumeOrSessionEnd() {
+    @Test func stopIsPerSessionAndClearedOnlyByResume() {
         let access = makeAccess()
+        access.record(.allowForSession, for: alas, session: "a")
         access.stop(session: "a")
         #expect(access.isStopped(session: "a"))
         #expect(!access.isStopped(session: "b"))
-        access.resume(session: "a")
-        #expect(!access.isStopped(session: "a"))
-        access.stop(session: "a")
         access.sessionEnded(session: "a")
+        #expect(access.isStopped(session: "a"))
+        #expect(access.access(for: alas, session: "a") == .needsApproval)
+        access.resume(session: "a")
         #expect(!access.isStopped(session: "a"))
     }
 }

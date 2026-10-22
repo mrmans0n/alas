@@ -106,8 +106,10 @@ public final class ComputerUseAccess {
         sessions[session] = state
     }
 
+    /// Drops grants and pending approvals but keeps a stop: it holds until the user resumes.
     public func sessionEnded(session: String) {
-        sessions[session] = nil
+        let stopped = sessions[session]?.stopped ?? false
+        sessions[session] = stopped ? SessionState(stopped: true) : nil
         pendingEntries.removeAll { $0.session == session }
     }
 

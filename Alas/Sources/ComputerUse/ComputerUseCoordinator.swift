@@ -18,6 +18,8 @@ final class ComputerUseCoordinator {
     private(set) var pendingApprovals: [ComputerUsePendingApproval] = []
     /// This process's active driver: set by a successful screenshot or inspect.
     private(set) var driver: (sessionID: String, app: ComputerUseAppIdentity)?
+    /// Sessions the user stopped; only a resume clears them, not a session end or reconnect.
+    private(set) var stoppedSessions: Set<String> = []
 
     /// Finds a session's transcript, so a pending approval shows as awaiting permission.
     @ObservationIgnored var transcript: (String) -> ACPTranscript? = { _ in nil }
@@ -98,7 +100,7 @@ final class ComputerUseCoordinator {
 
         guard let windowID = command.windowID else { return .error(Message.windowNotFound(0)) }
         let epoch = epochs[sessionID, default: 0]
-        guard let window = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
+        guard var window = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
 
         switch access.access(for: window.app, session: sessionID) {
@@ -118,6 +120,10 @@ final class ComputerUseCoordinator {
             case .answered: break
             }
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
+            // The window may have closed or moved while the card was up.
+            guard let current = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
+            window = current
+            if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
             switch access.access(for: window.app, session: sessionID) {
             case .allowed: break
             case .denied: return .error(Message.denied(window.app))
@@ -126,17 +132,18 @@ final class ComputerUseCoordinator {
             }
         }
 
-        let tookLock: Bool
+        let takenLock: ComputerUseDriverLock?
         switch takeDriverLock(for: sessionID) {
         case .failure(let failure): return .error(failure.message)
-        case .success(let fresh): tookLock = fresh
+        case .success(let fresh): takenLock = fresh
         }
 
         let payload: [String: Any]
         do {
             payload = try await run(command, window: window)
         } catch {
-            if tookLock, lockSession == sessionID { releaseDriver() }
+            // Only the lock this call took: a later turn may hold a fresh one by now.
+            if let takenLock, lock === takenLock { releaseDriver() }
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
             return .error(Self.message(for: error))
         }
@@ -157,10 +164,11 @@ final class ComputerUseCoordinator {
         syncPending()
     }
 
-    func isStopped(sessionID: String) -> Bool { access.isStopped(session: sessionID) }
+    func isStopped(sessionID: String) -> Bool { stoppedSessions.contains(sessionID) }
 
     func stop(sessionID: String) async {
         access.stop(session: sessionID)
+        stoppedSessions.insert(sessionID)
         endActivity(of: sessionID)
         for entry in access.pending where entry.session == sessionID {
             _ = access.resolvePending(entry.id)
@@ -172,6 +180,7 @@ final class ComputerUseCoordinator {
 
     func resume(sessionID: String) {
         access.resume(session: sessionID)
+        stoppedSessions.remove(sessionID)
     }
 
     func turnEnded(sessionID: String) {
@@ -180,6 +189,7 @@ final class ComputerUseCoordinator {
     }
 
     /// Idempotent: the manager may report a runtime end more than once (detach, reconnect).
+    /// A stop outlives it, so a reconnected session stays stopped until the user resumes.
     func sessionEnded(sessionID: String) {
         let ids = access.pending.filter { $0.session == sessionID }.map(\.id)
         access.sessionEnded(session: sessionID)
@@ -209,14 +219,15 @@ final class ComputerUseCoordinator {
         driver = nil
     }
 
-    /// `.success(true)` when this call took the lock, `.success(false)` when the session already held it.
-    private func takeDriverLock(for sessionID: String) -> Result<Bool, LockFailure> {
-        if lockSession == sessionID { return .success(false) }
+    /// The lock this call took, or nil when the session already held it.
+    private func takeDriverLock(for sessionID: String) -> Result<ComputerUseDriverLock?, LockFailure> {
+        if lockSession == sessionID { return .success(nil) }
         if let holder = lockSession { return .failure(LockFailure(Message.busy(sessionLabel(holder)))) }
         do {
-            lock = try ComputerUseDriverLock.acquire(at: lockURL, label: sessionLabel(sessionID))
+            let taken = try ComputerUseDriverLock.acquire(at: lockURL, label: sessionLabel(sessionID))
+            lock = taken
             lockSession = sessionID
-            return .success(true)
+            return .success(taken)
         } catch {
             switch error {
             case .held(let label):
@@ -233,6 +244,9 @@ final class ComputerUseCoordinator {
     }
 
     // MARK: - Approvals
+
+    /// Calls currently waiting on an approval card.
+    var waitingCallCount: Int { waiters.values.reduce(0) { $0 + $1.count } }
 
     private func waitForAnswer(_ id: UUID) async -> ApprovalOutcome {
         let token = UUID()
@@ -297,19 +311,17 @@ final class ComputerUseCoordinator {
     private func listApps(sessionID: String) async -> AlasCLIResponse {
         let apps = await system.runningApps()
         let entries: [[String: Any]] = apps.map { entry in
-            [
-                "name": entry.app.name,
-                "bundle_id": entry.app.bundleID.map { $0 as Any } ?? NSNull(),
-                "pid": Int(entry.app.pid),
-                "approval": Self.approvalName(access.access(for: entry.app, session: sessionID)),
-                "windows": entry.windows.map { window -> [String: Any] in
-                    [
-                        "window_id": Int(window.windowID),
-                        "title": window.title.map { $0 as Any } ?? NSNull(),
-                        "frame": Self.frame(window.frame),
-                    ]
-                },
-            ]
+            let appAccess = access.access(for: entry.app, session: sessionID)
+            var object = Self.app(entry.app)
+            object["approval"] = Self.approvalName(appAccess)
+            // A blocked app's window titles and frames stay private.
+            let windows: [[String: Any]] = appAccess == .blocked ? [] : entry.windows.map { window in
+                var info: [String: Any] = ["window_id": Int(window.windowID), "frame": Self.frame(window.frame)]
+                info["title"] = window.title
+                return info
+            }
+            object["windows"] = windows
+            return object
         }
         return Self.serialize(["version": 1, "apps": entries])
     }

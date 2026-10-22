@@ -6,9 +6,11 @@ import Testing
 struct ComputerUseCoordinatorTests {
     private static let notes = ComputerUseAppIdentity(name: "Notes", bundleID: "com.apple.Notes", pid: 101)
     private static let mail = ComputerUseAppIdentity(name: "Mail", bundleID: "com.apple.mail", pid: 102)
+    private static let keychain = ComputerUseAppIdentity(name: "Keychain Access", bundleID: "com.apple.keychainaccess", pid: 103)
     private static let windows: [UInt32: ComputerUseWindow] = [
         1: ComputerUseWindow(windowID: 1, title: "Note", frame: CGRect(x: 0, y: 0, width: 400, height: 300), app: notes),
         2: ComputerUseWindow(windowID: 2, title: "Inbox", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: mail),
+        3: ComputerUseWindow(windowID: 3, title: "Login", frame: CGRect(x: 20, y: 20, width: 600, height: 500), app: keychain),
     ]
 
     private static func system(windows: [UInt32: ComputerUseWindow] = windows, treeComplete: Bool = true) -> ComputerUseSystem {
@@ -33,7 +35,8 @@ struct ComputerUseCoordinatorTests {
         let calls: Calls
     }
 
-    private static func fixture(system: ComputerUseSystem = system()) -> Fixture {
+    /// The wait is long by default so a slow runner never times out an approval a test answers.
+    private static func fixture(system: ComputerUseSystem = system(), approvalWait: Duration = .seconds(60)) -> Fixture {
         let lockURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-computer-use-\(UUID().uuidString)/computer-use.lock")
         let access = ComputerUseAccess(hostPID: 1, alwaysAllowed: { [] })
@@ -45,7 +48,7 @@ struct ComputerUseCoordinatorTests {
             persistAlwaysAllowed: { _ in },
             interrupt: { calls.interrupts.append($0) },
             lockURL: lockURL,
-            approvalWait: .milliseconds(200)
+            approvalWait: approvalWait
         )
         return Fixture(coordinator: coordinator, access: access, lockURL: lockURL, calls: calls)
     }
@@ -55,16 +58,20 @@ struct ComputerUseCoordinatorTests {
         return lines.first
     }
 
-    @Test func approvalResumesTheWaitingCall() async throws {
+    @Test func approvalResumesTheWaitingCalls() async throws {
         let f = Self.fixture()
-        let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s") }
-        try await eventually("approval card") { f.coordinator.pendingApprovals.count == 1 }
+        let first = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s") }
+        let second = Task { await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s") }
+        try await eventually("both calls waiting on one card") {
+            f.coordinator.pendingApprovals.count == 1 && f.coordinator.waitingCallCount == 2
+        }
         let pending = try #require(f.coordinator.pendingApprovals.first)
         #expect(pending.sessionID == "s" && pending.app == Self.notes)
         f.coordinator.answer(pending.id, .allowForTurn)
-        let json = try #require(Self.text(await call.value))
+        let json = try #require(Self.text(await first.value))
         #expect(json.contains(#""elements""#) && json.contains(#""title":"Save""#))
         #expect(json.contains(#""truncated":false"#))
+        #expect(try #require(Self.text(await second.value)).contains(#""image""#))
         #expect(f.coordinator.pendingApprovals.isEmpty)
     }
 
@@ -76,7 +83,7 @@ struct ComputerUseCoordinatorTests {
     }
 
     @Test func unansweredApprovalReturnsPendingAndKeepsTheCard() async {
-        let f = Self.fixture()
+        let f = Self.fixture(approvalWait: .milliseconds(200))
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         #expect(response == .error("computer_approval_pending: Waiting for the user to approve Notes. Try again after they answer."))
         #expect(f.coordinator.pendingApprovals.count == 1)
@@ -110,15 +117,23 @@ struct ComputerUseCoordinatorTests {
         next.release()
     }
 
-    @Test func stopInterruptsAndBlocksFurtherCalls() async {
+    @Test func stopHoldsAcrossSessionEndUntilResume() async throws {
         let f = Self.fixture()
         await f.coordinator.stop(sessionID: "s")
         #expect(f.calls.interrupts == ["s"])
-        #expect(f.coordinator.isStopped(sessionID: "s"))
+        f.coordinator.sessionEnded(sessionID: "s")
+        #expect(f.coordinator.stoppedSessions == ["s"])
         let stopped = "computer_stopped: The user stopped computer use for this session. Ask them to resume it from the session's computer use badge."
         #expect(await f.coordinator.perform(.init(action: .apps), sessionID: "s") == .error(stopped))
         f.coordinator.resume(sessionID: "s")
-        #expect(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")) != nil)
+        #expect(!f.coordinator.isStopped(sessionID: "s"))
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])["apps"] as? [[String: Any]]
+        let byName = Dictionary(uniqueKeysWithValues: try #require(apps).map { ($0["name"] as? String ?? "", $0) })
+        // A blocked app keeps its row, but its window titles and frames stay private.
+        #expect(byName["Keychain Access"]?["approval"] as? String == "blocked")
+        #expect((byName["Keychain Access"]?["windows"] as? [Any])?.isEmpty == true)
+        #expect((byName["Notes"]?["windows"] as? [[String: Any]])?.first?["title"] as? String == "Note")
     }
 
     @Test func screenshotOfVanishedWindowReportsNotFound() async {

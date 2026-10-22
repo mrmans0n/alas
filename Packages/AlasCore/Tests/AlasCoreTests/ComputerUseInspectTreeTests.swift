@@ -45,8 +45,9 @@ struct ComputerUseInspectTreeTests {
         #expect(result.elements.first?.depth == 2)
     }
 
-    @Test func secureFieldsNeverExposeValue() {
-        let secure = node("AXTextField", value: "hunter2", subrole: "AXSecureTextField")
+    @Test(arguments: [("AXTextField", "AXSecureTextField"), ("AXSecureTextField", nil)] as [(String, String?)])
+    func secureFieldsNeverExposeValue(role: String, subrole: String?) {
+        let secure = node(role, value: "hunter2", subrole: subrole)
         let root = node("AXWindow", [secure])
         let all = ComputerUseInspectTree.flatten(root, query: nil, limit: 10, maxDepth: 10)
         #expect(all.elements.last?.value == nil)
