@@ -21,10 +21,15 @@ public struct StackShipPlan: Codable, Equatable, Sendable {
     /// line can stop (`linePositions`); the top entry, or one above it, ships
     /// the whole stack, so commits the agent adds on top ship too.
     public init(shipThroughPosition position: Int, of stack: GGStack, opensDrafts: Bool) {
-        let through = Self.snap(position, to: Self.linePositions(in: stack.entries))
-        let isTop = through >= (stack.entries.map(\.position).max() ?? 0)
+        self.init(exactly: Self.snap(position, to: Self.linePositions(in: stack.entries)), of: stack, opensDrafts: opensDrafts)
+    }
+
+    /// Ships through the entry at `position` as it is, SHA-only or not: for
+    /// a sync about to run, where no rewrite can come in between.
+    private init(exactly position: Int, of stack: GGStack, opensDrafts: Bool) {
+        let isTop = position >= (stack.entries.map(\.position).max() ?? 0)
         self.init(
-            shipThroughEntryID: isTop ? nil : stack.entries.first { $0.position == through }?.id,
+            shipThroughEntryID: isTop ? nil : stack.entries.first { $0.position == position }?.id,
             opensDrafts: opensDrafts
         )
     }
@@ -49,9 +54,11 @@ public struct StackShipPlan: Codable, Equatable, Sendable {
     }
 
     /// The plan with its boundary on the entry it actually ships through, as
-    /// `gg sync --until` needs it.
+    /// `gg sync --until` needs it right before running. Not snapped: a raised
+    /// boundary on a SHA-only published entry must not move up and publish
+    /// a held-back one.
     public func resolved(in stack: GGStack) throws(MissingEntry) -> StackShipPlan {
-        StackShipPlan(shipThroughPosition: try shipThroughPosition(in: stack), of: stack, opensDrafts: opensDrafts)
+        StackShipPlan(exactly: try shipThroughPosition(in: stack), of: stack, opensDrafts: opensDrafts)
     }
 
     /// What a stored plan ships once gg no longer lists its boundary, as
@@ -61,7 +68,7 @@ public struct StackShipPlan: Codable, Equatable, Sendable {
     public func recovered(in stack: GGStack) -> StackShipPlan? {
         let through = Self.highestPublishedPosition(in: stack)
         guard through > 0 else { return nil }
-        return StackShipPlan(shipThroughPosition: through, of: stack, opensDrafts: opensDrafts)
+        return StackShipPlan(exactly: through, of: stack, opensDrafts: opensDrafts)
     }
 
     /// The entries the plan leaves unpublished, bottom-up. A boundary gg no

@@ -122,8 +122,10 @@ public enum StackShepherdPolicy {
         // and no verdict on unpublished work either.
         guard let stack else { return (false, nil) }
         let hasUnpublished = stack.entries.contains { $0.prNumber == nil } || hasEdits
-        let through = (try? StackShipPlan(shipThroughEntryID: shipThroughEntryID).shipThroughPosition(in: stack)) ?? 0
-        let shipped = stack.entries.filter { $0.position <= through }
+        // Shipped is what Held back leaves: with a boundary gg no longer
+        // lists, every entry that has a request.
+        let heldBackIDs = Set(StackShipPlan(shipThroughEntryID: shipThroughEntryID).heldBackEntries(of: stack).map(\.id))
+        let shipped = stack.entries.filter { !heldBackIDs.contains($0.id) }
         // gg counts the entries whose branch matches the remote; held-back
         // entries have no branch, so the shipped ones are synced when the
         // count covers them.

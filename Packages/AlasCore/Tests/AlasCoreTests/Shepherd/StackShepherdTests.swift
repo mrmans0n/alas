@@ -331,6 +331,15 @@ struct StackShepherdTests {
             of: Self.stack(published: [false, true], synced: 1), local: Self.local, shipThroughEntryID: "g1"
         )
         #expect(!gap.isPublished)
+
+        // Clean removed the boundary: every entry with a request counts as
+        // shipped, so an unpushed amend among them still blocks.
+        for (synced, isPublished) in [(1, false), (2, true)] {
+            let cleaned = StackShepherdPolicy.publication(
+                of: Self.stack(published: [true, true, false], synced: synced), local: Self.local, shipThroughEntryID: "cleaned"
+            )
+            #expect(cleaned.isPublished == isPublished)
+        }
     }
 
     /// The line at the top ships the whole stack, so commits the agent adds
@@ -1032,11 +1041,13 @@ struct StackShepherdTests {
     }
 
     /// gg sync cannot take a request back, so a boundary below a published
-    /// entry rises to it: that entry's fixes keep being pushed.
-    @Test func stackShipNeverHoldsBackAnEntryThatHasARequest() async {
+    /// entry rises to it: that entry's fixes keep being pushed. A SHA-only
+    /// one is kept as is, not moved up onto the held-back entry above it.
+    @Test(arguments: [([], "g1"), ([2], "sha1")] as [(Set<Int>, String)])
+    func stackShipNeverHoldsBackAnEntryThatHasARequest(shaOnly: Set<Int>, boundary: String) async {
         let core = makeCore()
         var synced: [StackShipPlan] = []
-        let stack = Self.stack(published: [true, true, false])
+        let stack = Self.stack(published: [true, true, false], shaOnly: shaOnly)
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
             loadStack: { _ in stack },
@@ -1054,17 +1065,20 @@ struct StackShepherdTests {
 
         _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
 
-        #expect(synced == [StackShipPlan(shipThroughEntryID: "g1")])
+        #expect(synced == [StackShipPlan(shipThroughEntryID: boundary)])
     }
 
     /// After Clean removes the boundary the record shipped through, a fix
     /// push ships what already has a request: the whole stack once the rest
-    /// was published with Sync, else everything but the held-back entries.
-    @Test(arguments: [([true, true], nil), ([true, false], "g0")] as [([Bool], String?)])
-    func stackShipRecoversARecordBoundaryCleanRemoved(published: [Bool], boundary: String?) async {
+    /// was published with Sync, else everything but the held-back entries,
+    /// with a SHA-only entry kept as the boundary.
+    @Test(arguments: [
+        ([true, true], [], nil), ([true, false], [], "g0"), ([true, true, false], [2], "sha1"),
+    ] as [([Bool], Set<Int>, String?)])
+    func stackShipRecoversARecordBoundaryCleanRemoved(published: [Bool], shaOnly: Set<Int>, boundary: String?) async {
         let core = makeCore()
         var synced: [StackShipPlan] = []
-        let stack = Self.stack(published: published)
+        let stack = Self.stack(published: published, shaOnly: shaOnly)
         core.stackShepherd.effects = StackShepherd.Effects(
             worktreeContext: { .init(worktreeID: $0, path: URL(fileURLWithPath: "/tmp/\($0)"), stackName: "auth", isEligible: true) },
             loadStack: { _ in stack },
