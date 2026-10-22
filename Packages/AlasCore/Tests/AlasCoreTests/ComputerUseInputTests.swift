@@ -25,6 +25,15 @@ struct ComputerUseInputTests {
         #expect(Chord.parse(text) == nil)
     }
 
+    /// Chords that can put text into the focused field get the secure-field check that typing gets.
+    @Test(arguments: [
+        ("a", true), ("shift+a", true), ("space", true), ("cmd+v", true), ("5", true),
+        ("cmd+a", false), ("cmd+shift+v", false), ("ctrl+v", false), ("return", false), ("opt+e", false),
+    ])
+    private func chordsThatMayInsertText(text: String, inserts: Bool) throws {
+        #expect(try #require(Chord.parse(text)).mayInsertText == inserts)
+    }
+
     @Test func pointsMapThroughTheScreenshotFrameAndAreBoundedByTheCurrentFrame() {
         let frame = CGRect(x: 100, y: 50, width: 800, height: 600)
         let pixel = CGPoint(x: 200, y: 100)
@@ -54,6 +63,7 @@ struct ComputerUseInputTests {
         (true, 0.5, false, 10.0, .refuse),
         (false, 0.5, false, 0.0, .proceed),
         (true, 2.0, false, 0.0, .proceed),
+        (false, 0.5, true, 0.0, .refuse),
     ])
     private func takeoverDecisions(
         frontmost: Bool, idle: TimeInterval, direct: Bool, waited: TimeInterval,

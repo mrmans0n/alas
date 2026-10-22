@@ -17,6 +17,16 @@ public struct ComputerUseKeyChord: Equatable, Sendable {
         self.key = key
     }
 
+    /// A printable key with no modifier but shift, or ⌘V: what can put text into the focused field.
+    public var mayInsertText: Bool {
+        switch key {
+        case .character(let character):
+            modifiers.isSubset(of: [.shift]) || (modifiers == [.command] && character == "v")
+        case .named(let named):
+            named == .space && modifiers.isSubset(of: [.shift])
+        }
+    }
+
     private static let modifierAliases: [String: Modifier] = [
         "cmd": .command, "command": .command, "⌘": .command,
         "shift": .shift, "⇧": .shift,
