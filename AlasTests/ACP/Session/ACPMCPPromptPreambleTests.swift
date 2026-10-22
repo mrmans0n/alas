@@ -170,6 +170,7 @@ struct ACPMCPPromptPreambleTests {
             "preview_list", "preview_open", "preview_navigate", "preview_reload", "preview_back", "preview_forward",
             "preview_inspect", "preview_capture", "preview_console", "preview_click", "preview_type", "preview_scroll",
             "preview_wait", "preview_cancel",
+            "computer_apps", "computer_screenshot", "computer_inspect",
         ])
     }
 
