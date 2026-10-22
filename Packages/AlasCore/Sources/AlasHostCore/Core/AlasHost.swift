@@ -29,6 +29,13 @@ public final class AlasHost {
     }
 
     public var projects: ProjectsAPI { ProjectsAPI(core: core) }
+
+    /// Lists the projects' worktrees, from the cache and then from git. A
+    /// serving host starts with this; see `AlasCoreContext.loadProjectWorktrees()`.
+    public func loadProjectWorktrees() async {
+        await core.loadProjectWorktrees()
+    }
+
     public var worktrees: WorktreesAPI { WorktreesAPI(core: core) }
     public var workspaces: WorkspacesAPI { WorkspacesAPI(core: core) }
     public var runs: RunsAPI { RunsAPI(core: core) }
