@@ -441,7 +441,8 @@ private struct NativePeerComposer: View {
 
     private var composerPill: some View {
         VStack(spacing: 6) {
-            if let error = client.deliveryError ?? notice ?? config?.agentIssue?.message {
+            if let error = NativePeerSessions.composerMessage(
+                deliveryError: client.deliveryError, notice: notice, agentIssue: config?.agentIssue) {
                 Text(error)
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(theme.color("del"))

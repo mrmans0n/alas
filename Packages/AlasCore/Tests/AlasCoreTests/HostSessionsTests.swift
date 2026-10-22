@@ -364,6 +364,28 @@ struct HostSessionsTests {
         try await eventually { await received.states(of: id).last?.config.agentIssue == nil }
     }
 
+    /// A Remote client whose prompt fails hears why with the rejection, as
+    /// the sessionConfig saying so may come later or not at all.
+    @Test func aRejectedRemotePromptCarriesItsReason() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        try await eventually { await manager.liveSession(for: id)?.agentState == .ready }
+        fixture.agent.script(method: "session/prompt") { _ in throw JSONRPCError(code: -32603, message: "boom", data: nil) }
+        let sent = Mutex<[RemoteServerMessage]>([])
+        let gateway = RemoteSessionGateway(host: fixture.host) { message in sent.withLock { $0.append(message) } }
+        defer { gateway.close() }
+
+        await gateway.handle(.sendPrompt(sessionId: id, text: "hi", attachments: [], intent: "auto"))
+        try await eventually {
+            sent.withLock {
+                $0.contains { if case .promptRejected(id, let reason) = $0 { reason?.hasPrefix("prompt failed:") == true } else { false } }
+            }
+        }
+    }
+
     @Test(arguments: [
         (ACPSession.AgentState.ready, ACPSession.SetupState.ready, nil, nil),
         (.spawning, .checking, nil, nil),

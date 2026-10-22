@@ -282,7 +282,7 @@ struct RemoteFederationAggregationTests {
         try await home.loseLease(bSession)
         try await phone.send(.sendPrompt(sessionId: "srv-b:\(bSession)", text: "again", attachments: [], intent: "auto"))
         let rejected = try await phone.receive { message -> Bool? in
-            if case .promptRejected("srv-b:\(bSession)") = message { return true }
+            if case .promptRejected("srv-b:\(bSession)", _) = message { return true }
             return nil
         }
         #expect(rejected)

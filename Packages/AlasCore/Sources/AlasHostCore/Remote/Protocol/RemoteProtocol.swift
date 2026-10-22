@@ -844,8 +844,9 @@ public enum RemoteServerMessage: Equatable, Sendable {
     case sessionClosed(sessionId: String)
     /// The server dropped a `sendPrompt` (caller is no longer the writer, or
     /// the prompt was empty), so the client should restore the user's text
-    /// instead of silently losing it.
-    case promptRejected(sessionId: String)
+    /// instead of silently losing it. `reason` is why the session's agent
+    /// cannot take it, when the host knows; nil on older hosts.
+    case promptRejected(sessionId: String, reason: String? = nil)
     /// The server refused a `visualAidResponse` (reason: notWriter, notFound,
     /// alreadyAnswered, invalid or failed), so the phone re-enables the card.
     /// `requestId` echoes the response's token when it carried one.
@@ -1029,7 +1030,10 @@ extension RemoteServerMessage: Codable {
                 visualId: try c.decode(String.self, forKey: .visualId),
                 reason: try c.decode(String.self, forKey: .reason),
                 requestId: try c.decodeIfPresent(String.self, forKey: .requestId))
-        case "promptRejected": self = .promptRejected(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "promptRejected":
+            self = .promptRejected(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                reason: try? c.decodeIfPresent(String.self, forKey: .reason) ?? nil)
         case "sessionTabActionSucceeded":
             self = .sessionTabActionSucceeded(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "sessionTabActionFailed":
@@ -1280,8 +1284,9 @@ extension RemoteServerMessage: Codable {
             try c.encode(requestId, forKey: .requestId)
         case .sessionClosed(let id): try c.encode("sessionClosed", forKey: .type)
         try c.encode(id, forKey: .sessionId)
-        case .promptRejected(let id): try c.encode("promptRejected", forKey: .type)
+        case .promptRejected(let id, let reason): try c.encode("promptRejected", forKey: .type)
         try c.encode(id, forKey: .sessionId)
+        try c.encodeIfPresent(reason, forKey: .reason)
         case .visualAidRejected(let s, let v, let r, let requestId):
             try c.encode("visualAidRejected", forKey: .type)
             try c.encode(s, forKey: .sessionId)

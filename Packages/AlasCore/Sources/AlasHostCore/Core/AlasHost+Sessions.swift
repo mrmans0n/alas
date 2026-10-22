@@ -276,6 +276,11 @@ extension SessionsAPI {
         (try? writerManager(for: sessionID)) != nil
     }
 
+    /// Why the live session's agent cannot run, or the error it last hit.
+    public func agentIssue(_ sessionID: String) -> RemoteAgentIssue? {
+        (try? liveManager(for: sessionID))?.liveSession(for: sessionID).flatMap(RemoteSessionConfigProjection.agentIssue(session:))
+    }
+
     /// Takes the session over from the instance that drives it.
     public func takeOver(_ sessionID: String, caller: HostCaller) async throws {
         caller.log("sessions.takeOver", sessionID)

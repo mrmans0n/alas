@@ -1053,10 +1053,22 @@ final class NativePeerSessions {
         draft.isEmpty ? text : draft + "\n" + text
     }
 
+    nonisolated static let genericPromptRejectedMessage = "Prompt was not delivered. Your draft was kept."
+
     /// The host refuses prompts while its agent cannot run; say why.
-    private static func promptRejectedMessage(_ issue: RemoteAgentIssue?) -> String {
-        guard let issue else { return "Prompt was not delivered. Your draft was kept." }
-        return "Prompt was not delivered: \(issue.message.trimmingCharacters(in: CharacterSet(charactersIn: ". "))). Your draft was kept."
+    nonisolated static func promptRejectedMessage(_ reason: String?) -> String {
+        guard let reason else { return genericPromptRejectedMessage }
+        return "Prompt was not delivered: \(reason.trimmingCharacters(in: CharacterSet(charactersIn: ". "))). Your draft was kept."
+    }
+
+    /// What the composer's error line shows. A generic rejection gives way
+    /// to one that says why once the session reports its agent issue, which
+    /// can arrive after the rejection.
+    nonisolated static func composerMessage(deliveryError: String?, notice: String?, agentIssue: RemoteAgentIssue?) -> String? {
+        if deliveryError == genericPromptRejectedMessage, let agentIssue {
+            return promptRejectedMessage(agentIssue.message)
+        }
+        return deliveryError ?? notice ?? agentIssue?.message
     }
 
     private static let unconfirmedDeliveryMessage = "Peer session changed before delivery could be confirmed. Your draft was kept."
@@ -1077,6 +1089,7 @@ final class NativePeerSessions {
         default: break
         }
         let rejected: Bool = if case .promptRejected = message { true } else { false }
+        let rejectionReason: String? = if case .promptRejected(_, let reason) = message { reason } else { nil }
         let confirmed = suspended.isConfirmed(by: message)
         let superseded: Bool
         if case .queueState = message, let epoch = suspended.replayEpoch, let sentEpoch = suspended.prompt.epoch {
@@ -1095,7 +1108,7 @@ final class NativePeerSessions {
                composer.draft == suspended.prompt.composerDraft { composer.replaceDraft(.empty) }
         } else {
             composerErrors[sessionId] = superseded
-                ? Self.unconfirmedDeliveryMessage : Self.promptRejectedMessage(suspended.agentIssue)
+                ? Self.unconfirmedDeliveryMessage : Self.promptRejectedMessage(rejectionReason ?? suspended.agentIssue?.message)
         }
         if let downstream { _ = federation.route(.unsubscribe(sessionId: sessionId), from: downstream) }
         if confirmed {
@@ -1188,8 +1201,8 @@ final class NativePeerSessions {
             }
             return
         }
-        if case .promptRejected = message {
-            rejectPendingPrompt(message: Self.promptRejectedMessage(transcript?.config?.agentIssue))
+        if case .promptRejected(_, let reason) = message {
+            rejectPendingPrompt(message: Self.promptRejectedMessage(reason ?? transcript?.config?.agentIssue?.message))
             return
         }
         let isChangesReply: Bool = switch message {

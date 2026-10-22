@@ -32,11 +32,15 @@ public enum RemoteSessionConfigProjection: Sendable {
                              lastTurn: session.lastTurnQuota, cumulative: session.sessionQuotaTotal)
         config.supportsQueueReorder = true
         config.supportsMentions = true
-        config.agentIssue = agentIssue(
+        config.agentIssue = agentIssue(session: session)
+        return config
+    }
+
+    public static func agentIssue(session: ACPSession) -> RemoteAgentIssue? {
+        agentIssue(
             agentName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
             managedAdapter: ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil,
             agentState: session.agentState, setupState: session.setupState, lastError: session.lastError)
-        return config
     }
 
     /// Why the agent cannot run, in the words of the banner `ACPTabView`

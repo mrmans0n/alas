@@ -692,8 +692,9 @@ struct RemoteProtocolTests {
         #expect(try roundTrip(rejected) == rejected)
     }
 
-    @Test func promptRejectedRoundTrips() throws {
-        let rejected = RemoteServerMessage.promptRejected(sessionId: "s1")
+    @Test(arguments: [nil, "Codex needs sign-in before it can continue."] as [String?])
+    func promptRejectedRoundTrips(reason: String?) throws {
+        let rejected = RemoteServerMessage.promptRejected(sessionId: "s1", reason: reason)
         #expect(try roundTrip(rejected) == rejected)
     }
 

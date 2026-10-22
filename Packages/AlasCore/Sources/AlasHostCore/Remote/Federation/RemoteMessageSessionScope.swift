@@ -106,7 +106,7 @@ extension RemoteServerMessage {
              .transcriptPage(let id, _, _, _), .stopPending(let id), .permissionRequest(let id, _),
              .permissionResolved(let id, _), .questionRequest(let id, _), .questionResolved(let id, _),
              .planRequest(let id, _), .planResolved(let id, _), .elicitationRequest(let id, _),
-             .elicitationResolved(let id, _), .sessionClosed(let id), .promptRejected(let id), .visualAidRejected(let id, _, _, _),
+             .elicitationResolved(let id, _), .sessionClosed(let id), .promptRejected(let id, _), .visualAidRejected(let id, _, _, _),
              .sessionTabActionSucceeded(let id), .sessionTabActionFailed(let id, _),
              .sessionRenamed(let id, _), .queueState(let id, _), .queueEditRestored(let id, _, _),
              .changeList(let id, _, _, _, _, _, _, _, _), .changeListFailed(let id, _, _),
@@ -152,7 +152,7 @@ extension RemoteServerMessage {
         case .elicitationRequest(_, let p): return .elicitationRequest(sessionId: new, payload: p)
         case .elicitationResolved(_, let r): return .elicitationResolved(sessionId: new, requestId: r)
         case .sessionClosed: return .sessionClosed(sessionId: new)
-        case .promptRejected: return .promptRejected(sessionId: new)
+        case .promptRejected(_, let reason): return .promptRejected(sessionId: new, reason: reason)
         case .sessionTabActionSucceeded: return .sessionTabActionSucceeded(sessionId: new)
         case .sessionTabActionFailed(_, let message): return .sessionTabActionFailed(sessionId: new, message: message)
         case .visualAidRejected(_, let visualId, let reason, let requestId):

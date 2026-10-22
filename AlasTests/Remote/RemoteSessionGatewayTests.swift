@@ -608,7 +608,10 @@ struct RemoteSessionGatewayTests {
         await gw.handle(.sendPrompt(sessionId: id, text: "look", attachments: [
             RemoteAttachment(name: "a.png", mimeType: "image/png", dataBase64: png),
         ], intent: "auto"))
-        try await fixture.until { sent.contains(.promptRejected(sessionId: id)) }
+        // A failed delivery says why.
+        try await fixture.until {
+            sent.contains { if case .promptRejected(id, let reason) = $0 { refusedAtOnce || reason != nil } else { false } }
+        }
         let files = (try? FileManager.default.contentsOfDirectory(atPath: Paths.acpAttachmentsDir(forWorktreeId: fixture.worktree.id).path)) ?? []
         #expect(files.isEmpty == refusedAtOnce)
     }

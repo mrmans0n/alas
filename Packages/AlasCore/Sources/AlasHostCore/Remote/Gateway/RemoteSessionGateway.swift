@@ -219,13 +219,13 @@ public final class RemoteSessionGateway {
             // still works: the client sends `takeOver` (synchronous lease seize)
             // before `sendPrompt`, so isWriter is already true here.
             guard let sessions, sessions.isWriter(id) else {
-                send(.promptRejected(sessionId: id))
+                rejectPrompt(id)
                 return
             }
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             let hasContent = !trimmed.isEmpty || !attachments.isEmpty || !mentions.isEmpty
             guard hasContent else {
-                send(.promptRejected(sessionId: id))
+                rejectPrompt(id)
                 return
             }
             // Resolved before `materialize` writes anything, so a refused
@@ -233,11 +233,11 @@ public final class RemoteSessionGateway {
             guard mentions.count <= Self.maxMentionCount,
                   let mentioned = await hostCalls.mentionAttachments(mentions, id)
             else {
-                send(.promptRejected(sessionId: id))
+                rejectPrompt(id)
                 return
             }
             guard let images = materialize(attachments, for: id) else {
-                send(.promptRejected(sessionId: id))   // oversize / non-image
+                rejectPrompt(id)   // oversize / non-image
                 return
             }
             let materialized = images + mentioned
@@ -257,13 +257,13 @@ public final class RemoteSessionGateway {
                 // Refused before the session recorded the message, so the
                 // image files we wrote are orphans. Mentioned files are the
                 // user's own.
-                send(.promptRejected(sessionId: id))
+                rejectPrompt(id)
                 discardAttachmentFiles(images)
                 return
             }
             // A later failure keeps the files: the recorded message refers to them.
             Task { @MainActor [weak self] in
-                if await !delivery.value { self?.send(.promptRejected(sessionId: id)) }
+                if await !delivery.value { self?.rejectPrompt(id) }
             }
         case .stop(let id):
             // Emergency brake: any authenticated subscriber may cancel the
@@ -844,6 +844,14 @@ public final class RemoteSessionGateway {
         let s = RemoteTranscriptSync()
         syncStates[id] = s
         return s
+    }
+
+    /// Tells the client its prompt was not taken, with why the session's
+    /// agent cannot run when there is a reason: the coalesced sessionConfig
+    /// carrying it may arrive later, or not at all once the client stops
+    /// following.
+    private func rejectPrompt(_ id: String) {
+        send(.promptRejected(sessionId: id, reason: sessions?.agentIssue(id)?.message))
     }
 
     /// Viewers update their config optimistically. When the host refuses or
