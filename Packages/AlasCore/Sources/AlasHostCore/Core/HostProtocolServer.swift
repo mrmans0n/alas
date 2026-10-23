@@ -242,10 +242,22 @@ public final class HostProtocolConnection {
             return .workspaceCheckout(checkout: try await host.workspaces.checkout(id: id))
         case .startRun(let scriptKey, let ref):
             guard let script = try await runnableScript(scriptKey, in: ref) else { return Self.archivedRunStart }
-            return .runStart(start: host.runs.start(script, in: try worktree(ref), caller: caller))
+            // Whoever asks over the protocol is not at this Mac's screen: the
+            // console follows the script and never takes the active tab.
+            return .runStart(start: host.runs.start(
+                script, in: try worktree(ref), isHidden: script.console == .hidden, activatesConsole: false, caller: caller
+            ))
         case .restartRun(let scriptKey, let ref):
             guard let script = try await runnableScript(scriptKey, in: ref) else { return Self.archivedRunStart }
-            return .runStart(start: host.runs.restart(script, in: try worktree(ref), caller: caller))
+            let worktree = try worktree(ref)
+            // The open console's visibility wins over the script's, as for a
+            // local restart.
+            let isHidden = host.core.startingRunIsHidden(scriptKey: script.key, worktreeID: worktree.id)
+                ?? host.core.environment.runConsoleIsHidden(scriptKey: script.key, worktreeID: worktree.id)
+                ?? (script.console == .hidden)
+            return .runStart(start: host.runs.restart(
+                script, in: worktree, isHidden: isHidden, activatesConsole: false, caller: caller
+            ))
         case .listRunScripts(let ref):
             // Only a listed worktree, as for `readWorktree`: an archived one
             // is refused as an unknown one is.

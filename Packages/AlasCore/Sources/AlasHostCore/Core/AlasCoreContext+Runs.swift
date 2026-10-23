@@ -31,6 +31,9 @@ public struct RunLaunchRequest: Sendable {
     public let command: String
     /// The run's console stays out of sight unless asked for.
     public let isHidden: Bool
+    /// A shown console becomes its worktree's active tab; false for runs
+    /// asked for from elsewhere, which leave the host's screen alone.
+    public let activatesConsole: Bool
 }
 
 /// How a `RunLauncher` started a run, and so how its completion arrives.
@@ -137,6 +140,7 @@ extension AlasCoreContext {
         _ script: RunScript,
         in worktree: Worktree,
         isHidden: Bool = false,
+        activatesConsole: Bool = true,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
         guard !isStopping else { return Self.stoppingRefusal }
@@ -218,7 +222,8 @@ extension AlasCoreContext {
                         capturePaths: location.paths,
                         executionIdentity: RunScriptExecutionIdentity(runID: runID, worktreeID: worktree.id, projectID: project.id)
                     ),
-                    isHidden: isHidden
+                    isHidden: isHidden,
+                    activatesConsole: activatesConsole
                 )
                 let launch: RunLaunch
                 do {
@@ -263,6 +268,7 @@ extension AlasCoreContext {
         _ script: RunScript,
         in worktree: Worktree,
         isHidden: Bool = false,
+        activatesConsole: Bool = true,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
         guard !isStopping else { return Self.stoppingRefusal }
@@ -273,7 +279,7 @@ extension AlasCoreContext {
             || environment.runLauncher.hostsRun(scriptKey: script.key, worktreeID: worktree.id) {
             stopRun(scriptKey: script.key, in: worktree)
         }
-        return startRun(script, in: worktree, isHidden: isHidden, onSettled: onSettled)
+        return startRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole, onSettled: onSettled)
     }
 
     /// Whether the script's launch in `worktree`, still starting, hides its

@@ -307,6 +307,33 @@ struct HostProtocolServerTests {
         ])
     }
 
+    /// A run asked for over the host protocol is shown as the script says, or
+    /// for a restart as its open console is, and never becomes the active tab.
+    @Test(arguments: [
+        (restart: false, console: RunScriptConsole.hidden, openConsoleIsHidden: Bool?.some(false), hidden: true),
+        (restart: false, console: .shown, openConsoleIsHidden: nil, hidden: false),
+        (restart: true, console: .shown, openConsoleIsHidden: true, hidden: true),
+        (restart: true, console: .hidden, openConsoleIsHidden: nil, hidden: true),
+    ])
+    func hostProtocolRunsFollowTheConsoleSettingAndNeverActivate(
+        restart: Bool, console: RunScriptConsole, openConsoleIsHidden: Bool?, hidden: Bool
+    ) async throws {
+        let environment = RecordingRunEnvironment()
+        environment.openConsoleIsHidden = openConsoleIsHidden
+        let fixture = try Fixture(environment: environment)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString).sh")
+        try "#!/bin/sh\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let server = HostProtocolServer(host: fixture.host) { _, _ in [Self.devScript(console: console, fileURL: file)] }
+        let connection = server.connect(caller: .remotePeer(deviceID: "d"), send: Client().receive)
+        let ref = WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
+        await connection.receive(HostClientMessage(id: 1, request: restart
+                ? .restartRun(scriptKey: "repo:dev.sh", worktree: ref) : .startRun(scriptKey: "repo:dev.sh", worktree: ref)))
+        await fixture.host.core.waitForStartingRunsForTesting()
+        #expect(environment.launcher.requests.map(\.isHidden) == [hidden])
+        #expect(environment.launcher.requests.map(\.activatesConsole) == [false])
+    }
+
     nonisolated static func devScript(
         cwd: String? = nil, console: RunScriptConsole = .shown, fileURL: URL = URL(fileURLWithPath: "/srv/feature/dev.sh")
     ) -> RunScript {
@@ -520,7 +547,7 @@ struct HostProtocolServerTests {
         let server: HostProtocolServer
         let worktree: Worktree
 
-        init() throws {
+        init(environment: (any AlasHostEnvironment)? = nil) throws {
             let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
             projects = ProjectsManager(persistedProjects: [project])
             let path = URL(fileURLWithPath: "/srv/feature")
@@ -534,7 +561,8 @@ struct HostProtocolServerTests {
                 projects: projects,
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json")),
-                attentionStore: .scratch()
+                attentionStore: .scratch(),
+                environment: environment ?? HeadlessHostEnvironment()
             ))
             server = HostProtocolServer(host: host)
         }
@@ -575,4 +603,19 @@ struct HostProtocolServerTests {
             try await eventually { await condition(self.messages) }
         }
     }
+}
+
+@MainActor private final class RecordingRunEnvironment: AlasHostEnvironment {
+    final class Launcher: RunLauncher {
+        var requests: [RunLaunchRequest] = []
+        func launch(_ request: RunLaunchRequest, in core: AlasCoreContext) async throws -> RunLaunch {
+            requests.append(request)
+            return .unobservable
+        }
+    }
+
+    let launcher = Launcher()
+    var openConsoleIsHidden: Bool?
+    var runLauncher: any RunLauncher { launcher }
+    func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { openConsoleIsHidden }
 }

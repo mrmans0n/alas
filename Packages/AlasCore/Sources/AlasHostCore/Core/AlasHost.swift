@@ -381,15 +381,19 @@ public struct RunsAPI {
     }
 
     @discardableResult
-    public func start(_ script: RunScript, in worktree: Worktree, isHidden: Bool = false, caller: HostCaller) -> RunStart {
+    public func start(
+        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true, caller: HostCaller
+    ) -> RunStart {
         caller.log("runs.start", script.key)
-        return core.startRun(script, in: worktree, isHidden: isHidden)
+        return core.startRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole)
     }
 
     @discardableResult
-    public func restart(_ script: RunScript, in worktree: Worktree, isHidden: Bool = false, caller: HostCaller) -> RunStart {
+    public func restart(
+        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true, caller: HostCaller
+    ) -> RunStart {
         caller.log("runs.restart", script.key)
-        return core.restartRun(script, in: worktree, isHidden: isHidden)
+        return core.restartRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole)
     }
 
     public func stop(scriptKey: String, in worktree: Worktree, caller: HostCaller) {

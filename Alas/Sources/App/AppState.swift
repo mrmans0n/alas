@@ -7420,7 +7420,8 @@ final class AppState {
         environmentRemovals: Set<String> = [],
         titleOverride: String? = nil,
         runScriptKey: String? = nil,
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        activates: Bool = true
     ) async throws -> Tab {
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
@@ -7453,7 +7454,8 @@ final class AppState {
             environmentRemovals: environmentRemovals,
             titleOverride: titleOverride,
             runScriptKey: runScriptKey,
-            isHidden: isHidden
+            isHidden: isHidden,
+            activates: activates
         )
     }
 
@@ -7511,7 +7513,8 @@ final class AppState {
         environmentRemovals: Set<String> = [],
         titleOverride: String? = nil,
         runScriptKey: String? = nil,
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        activates: Bool = true
     ) throws -> Tab {
         guard !checkpointTerminalAdmissionDisabled(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
@@ -7572,7 +7575,7 @@ final class AppState {
         // honor it for backward-compat with existing tests.
         let tab = tabs.appendTerminal(
             worktreeId: worktree.id, title: title, sessionId: opened.id,
-            runScriptKey: runScriptKey, isHidden: isHidden
+            runScriptKey: runScriptKey, isHidden: isHidden, activates: activates
         )
         return tab
     }

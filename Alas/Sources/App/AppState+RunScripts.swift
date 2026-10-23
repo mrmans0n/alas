@@ -629,7 +629,8 @@ final class AppRunLauncher: RunLauncher {
             includeUserStartupScript: true,
             titleOverride: request.script.displayName,
             runScriptKey: request.script.key,
-            isHidden: request.isHidden
+            isHidden: request.isHidden,
+            activates: request.activatesConsole
         )
         // A terminal with no run leaf gives nothing to observe.
         guard case .terminal(let terminalState) = tab, let sessionID = terminalState.runScriptLeafId else {

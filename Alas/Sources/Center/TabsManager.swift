@@ -369,12 +369,13 @@ final class TabsManager {
         title: String,
         sessionId: String,
         runScriptKey: String? = nil,
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        activates: Bool = true
     ) -> Tab {
         var state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
         state.isHidden = isHidden
         let tab = Tab.terminal(state)
-        append(tab, to: worktreeId, activate: !isHidden)
+        append(tab, to: worktreeId, activate: activates && !isHidden)
         return tab
     }
 
