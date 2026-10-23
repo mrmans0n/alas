@@ -215,6 +215,8 @@ private enum LiveComputerUseSystem {
         var ownerName: String?
         var title: String?
         var frame: CGRect
+        var layer: Int
+        var alpha: Double
     }
 
     static func runningApps() async -> [(app: ComputerUseAppIdentity, windows: [ComputerUseWindow])] {
@@ -323,12 +325,25 @@ private enum LiveComputerUseSystem {
         return screens.first(where: { $0.frame.contains(center) })?.backingScaleFactor ?? fallback
     }
 
+    /// The normal-layer windows: the ones apps are driven in.
     private static func onScreenWindows() -> [CGWindowEntry] {
+        allOnScreenWindows().filter { $0.layer == 0 }
+    }
+
+    /// Every on-screen window at every layer, front to back, as a system-wide press or drop is
+    /// hit-tested: floating panels, notification banners and the Dock sit above layer 0.
+    private static func screenWindows() -> [ComputerUseInputGeometry.ScreenWindow] {
+        allOnScreenWindows().map {
+            ComputerUseInputGeometry.ScreenWindow(id: $0.id, pid: $0.pid, layer: $0.layer, alpha: $0.alpha, frame: $0.frame)
+        }
+    }
+
+    private static func allOnScreenWindows() -> [CGWindowEntry] {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
             as? [[String: Any]]
         else { return [] }
         return list.compactMap { info in
-            guard (info[kCGWindowLayer as String] as? Int) == 0,
+            guard let layer = info[kCGWindowLayer as String] as? Int,
                   let number = info[kCGWindowNumber as String] as? NSNumber,
                   let pid = info[kCGWindowOwnerPID as String] as? NSNumber,
                   let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
@@ -340,7 +355,9 @@ private enum LiveComputerUseSystem {
                 pid: pid.int32Value,
                 ownerName: info[kCGWindowOwnerName as String] as? String,
                 title: title,
-                frame: frame
+                frame: frame,
+                layer: layer,
+                alpha: (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1
             )
         }
     }
@@ -763,7 +780,7 @@ extension LiveComputerUseSystem {
             func checkCovered() throws {
                 switch ComputerUseInputGeometry.coveredDragPoint(
                     start: start, in: window.windowID, end: end, in: dropWindow.windowID,
-                    windows: onScreenWindows().map { ($0.id, $0.frame) }) {
+                    windows: screenWindows(), appPID: app.pid) {
                 case .start: throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
                 case .end: throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
                 case nil: break
@@ -783,8 +800,7 @@ extension LiveComputerUseSystem {
             let pid = app.pid
             let dragBegan = ComputerUseUserInput.now()
             try await ComputerUseInputPoster.systemDrag(from: start, to: end, dropIsVisible: {
-                ComputerUseInputGeometry.topmostWindow(at: end, in: onScreenWindows().map { ($0.id, $0.frame) })
-                    == dropWindowID
+                ComputerUseInputGeometry.topmostWindow(at: end, in: screenWindows(), appPID: pid) == dropWindowID
             }, interrupt: {
                 if isCancelled() || Task.isCancelled { return .cancelled }
                 // The cursor is shared: any input of the user's since the drag began, in any app,

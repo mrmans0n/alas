@@ -5,6 +5,7 @@ import Testing
 
 struct ComputerUseInputTests {
     private typealias Chord = ComputerUseKeyChord
+    private typealias Window = ComputerUseInputGeometry.ScreenWindow
 
     @Test(arguments: [
         ("cmd+shift+s", Chord(modifiers: [.command, .shift], key: .character("s"))),
@@ -57,8 +58,9 @@ struct ComputerUseInputTests {
     ] as [(CGPoint, UInt32?)])
     func dropPointsHitTheFrontmostWindow(point: CGPoint, expected: UInt32?) {
         // Front to back: window 1 overlaps window 2's top-left corner.
-        let windows: [(id: UInt32, frame: CGRect)] = [
-            (1, CGRect(x: 0, y: 0, width: 100, height: 100)), (2, CGRect(x: 50, y: 50, width: 200, height: 200)),
+        let windows = [
+            Window(id: 1, frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+            Window(id: 2, frame: CGRect(x: 50, y: 50, width: 200, height: 200)),
         ]
         #expect(ComputerUseInputGeometry.topmostWindow(at: point, in: windows) == expected)
     }
@@ -87,18 +89,31 @@ struct ComputerUseInputTests {
     }
 
     /// Both of a drag's points must be on the window it uses there; the start is reported first.
+    /// A window above the normal layer that shows (a floating panel, a banner, the Dock) takes the
+    /// press or drop too, unless it is the dragging app's own (its drag image).
     @Test(arguments: [
         (CGPoint(x: 20, y: 20), CGPoint(x: 220, y: 220), nil),
         (CGPoint(x: 20, y: 20), CGPoint(x: 120, y: 120), ComputerUseInputGeometry.DragPoint.end),
         (CGPoint(x: 160, y: 160), CGPoint(x: 120, y: 120), .start),
+        // Another app's floating panel over the drop.
+        (CGPoint(x: 20, y: 20), CGPoint(x: 260, y: 260), .end),
+        // A transparent overlay, and the dragging app's own drag image, take nothing.
+        (CGPoint(x: 20, y: 20), CGPoint(x: 290, y: 110), nil),
+        (CGPoint(x: 20, y: 20), CGPoint(x: 110, y: 290), nil),
     ] as [(CGPoint, CGPoint, ComputerUseInputGeometry.DragPoint?)])
     func coveredDragPoints(start: CGPoint, end: CGPoint, expected: ComputerUseInputGeometry.DragPoint?) {
-        // Front to back: another app's window 9 over the middle, start window 1, drop window 2.
-        let windows: [(id: UInt32, frame: CGRect)] = [
-            (9, CGRect(x: 100, y: 100, width: 80, height: 80)),
-            (1, CGRect(x: 0, y: 0, width: 200, height: 200)), (2, CGRect(x: 100, y: 100, width: 200, height: 200)),
+        // Front to back: the dragging app's (pid 42) drag image 6, another app's transparent
+        // overlay 7 and floating panel 8, its window 9 over the middle, start window 1, drop window 2.
+        let windows = [
+            Window(id: 6, pid: 42, layer: 500, frame: CGRect(x: 100, y: 280, width: 20, height: 20)),
+            Window(id: 7, pid: 7, layer: 25, alpha: 0, frame: CGRect(x: 280, y: 100, width: 20, height: 20)),
+            Window(id: 8, pid: 7, layer: 3, frame: CGRect(x: 250, y: 250, width: 30, height: 30)),
+            Window(id: 9, pid: 7, frame: CGRect(x: 100, y: 100, width: 80, height: 80)),
+            Window(id: 1, pid: 42, frame: CGRect(x: 0, y: 0, width: 200, height: 200)),
+            Window(id: 2, pid: 42, frame: CGRect(x: 100, y: 100, width: 200, height: 200)),
         ]
-        #expect(ComputerUseInputGeometry.coveredDragPoint(start: start, in: 1, end: end, in: 2, windows: windows) == expected)
+        #expect(ComputerUseInputGeometry.coveredDragPoint(
+            start: start, in: 1, end: end, in: 2, windows: windows, appPID: 42) == expected)
     }
 
     @Test(arguments: [

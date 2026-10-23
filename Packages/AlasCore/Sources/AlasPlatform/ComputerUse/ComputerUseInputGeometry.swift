@@ -17,9 +17,32 @@ public enum ComputerUseInputGeometry {
         return currentFrame.contains(point) ? point : nil
     }
 
-    /// The id of the frontmost window containing `point`; `windows` run front to back.
-    public static func topmostWindow(at point: CGPoint, in windows: [(id: UInt32, frame: CGRect)]) -> UInt32? {
-        windows.first { $0.frame.contains(point) }?.id
+    /// An on-screen window as WindowServer hit-tests it, at any layer.
+    public struct ScreenWindow: Sendable, Equatable {
+        public var id: UInt32
+        public var pid: Int32
+        /// 0 for normal windows; floating panels, banners, the Dock and drag images sit above.
+        public var layer: Int
+        public var alpha: Double
+        public var frame: CGRect
+
+        public init(id: UInt32, pid: Int32 = 0, layer: Int = 0, alpha: Double = 1, frame: CGRect) {
+            self.id = id
+            self.pid = pid
+            self.layer = layer
+            self.alpha = alpha
+            self.frame = frame
+        }
+    }
+
+    /// The id of the window a system-wide press or drop at `point` lands in: the frontmost one
+    /// over it that shows, at any layer. Above the normal layer, `appPID`'s own windows don't
+    /// count (the drag image of its drag follows the cursor). `windows` run front to back.
+    public static func topmostWindow(at point: CGPoint, in windows: [ScreenWindow], appPID: Int32? = nil) -> UInt32? {
+        windows.first { window in
+            guard window.frame.contains(point), window.alpha > 0 else { return false }
+            return window.layer == 0 || window.pid != appPID
+        }?.id
     }
 
     public static func center(of frame: CGRect) -> CGPoint {
@@ -29,13 +52,14 @@ public enum ComputerUseInputGeometry {
     public enum DragPoint: Sendable, Equatable { case start, end }
 
     /// Which of a drag's points another window covers, start first; nil when the start window is
-    /// topmost at the start and the drop window at the end. `windows` run front to back.
+    /// topmost at the start and the drop window at the end, as `topmostWindow` hit-tests for the
+    /// dragging app `appPID`. `windows` run front to back.
     public static func coveredDragPoint(
         start: CGPoint, in startWindow: UInt32, end: CGPoint, in endWindow: UInt32,
-        windows: [(id: UInt32, frame: CGRect)]
+        windows: [ScreenWindow], appPID: Int32
     ) -> DragPoint? {
-        if topmostWindow(at: start, in: windows) != startWindow { return .start }
-        if topmostWindow(at: end, in: windows) != endWindow { return .end }
+        if topmostWindow(at: start, in: windows, appPID: appPID) != startWindow { return .start }
+        if topmostWindow(at: end, in: windows, appPID: appPID) != endWindow { return .end }
         return nil
     }
 
