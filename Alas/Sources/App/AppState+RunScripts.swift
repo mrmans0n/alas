@@ -644,6 +644,11 @@ final class AppRunLauncher: RunLauncher {
         app?.scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) != nil
     }
 
+    func runHostIsActive(scriptKey: String, worktreeID: String) -> Bool {
+        guard let app, let tab = app.scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) else { return false }
+        return app.tabs.activeTabId(forWorktree: worktreeID) == tab.id
+    }
+
     func endRunHost(scriptKey: String, worktreeID: String) {
         guard let app, let tab = app.scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) else { return }
         app.closeTab(worktreeId: worktreeID, tabId: tab.id)

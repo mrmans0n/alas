@@ -308,18 +308,21 @@ struct HostProtocolServerTests {
     }
 
     /// A run asked for over the host protocol is shown as the script says, or
-    /// for a restart as its open console is, and never becomes the active tab.
+    /// for a restart as its open console is. It becomes the active tab only to
+    /// replace the active console, so the host's screen stays where it was.
     @Test(arguments: [
-        (restart: false, console: RunScriptConsole.hidden, openConsoleIsHidden: Bool?.some(false), hidden: true),
-        (restart: false, console: .shown, openConsoleIsHidden: nil, hidden: false),
-        (restart: true, console: .shown, openConsoleIsHidden: true, hidden: true),
-        (restart: true, console: .hidden, openConsoleIsHidden: nil, hidden: true),
+        (restart: false, console: RunScriptConsole.hidden, openConsoleIsHidden: Bool?.some(false), active: false, hidden: true, activates: false),
+        (restart: false, console: .shown, openConsoleIsHidden: nil, active: false, hidden: false, activates: false),
+        (restart: true, console: .shown, openConsoleIsHidden: true, active: false, hidden: true, activates: false),
+        (restart: true, console: .hidden, openConsoleIsHidden: nil, active: false, hidden: true, activates: false),
+        (restart: true, console: .shown, openConsoleIsHidden: false, active: true, hidden: false, activates: true),
     ])
-    func hostProtocolRunsFollowTheConsoleSettingAndNeverActivate(
-        restart: Bool, console: RunScriptConsole, openConsoleIsHidden: Bool?, hidden: Bool
+    func hostProtocolRunsFollowTheConsoleSettingAndActivateOnlyInPlaceOfTheActiveConsole(
+        restart: Bool, console: RunScriptConsole, openConsoleIsHidden: Bool?, active: Bool, hidden: Bool, activates: Bool
     ) async throws {
         let environment = RecordingRunEnvironment()
         environment.openConsoleIsHidden = openConsoleIsHidden
+        environment.launcher.hostsActiveConsole = active
         let fixture = try Fixture(environment: environment)
         let file = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString).sh")
         try "#!/bin/sh\n".write(to: file, atomically: true, encoding: .utf8)
@@ -331,7 +334,7 @@ struct HostProtocolServerTests {
             ? .restartRun(scriptKey: "repo:dev.sh", worktree: ref) : .startRun(scriptKey: "repo:dev.sh", worktree: ref)))
         await fixture.host.core.waitForStartingRunsForTesting()
         #expect(environment.launcher.requests.map(\.isHidden) == [hidden])
-        #expect(environment.launcher.requests.map(\.activatesConsole) == [false])
+        #expect(environment.launcher.requests.map(\.activatesConsole) == [activates])
     }
 
     nonisolated static func devScript(
@@ -608,6 +611,10 @@ struct HostProtocolServerTests {
 @MainActor private final class RecordingRunEnvironment: AlasHostEnvironment {
     final class Launcher: RunLauncher {
         var requests: [RunLaunchRequest] = []
+        var hostsActiveConsole = false
+        func hostsRun(scriptKey: String, worktreeID: String) -> Bool { hostsActiveConsole }
+        func runHostIsActive(scriptKey: String, worktreeID: String) -> Bool { hostsActiveConsole }
+        func endRunHost(scriptKey: String, worktreeID: String) { hostsActiveConsole = false }
         func launch(_ request: RunLaunchRequest, in core: AlasCoreContext) async throws -> RunLaunch {
             requests.append(request)
             return .unobservable
