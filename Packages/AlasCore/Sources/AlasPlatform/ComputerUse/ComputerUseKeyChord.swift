@@ -17,14 +17,16 @@ public struct ComputerUseKeyChord: Equatable, Sendable {
         self.key = key
     }
 
-    /// What can change the focused field's text: ⌘V, or a printable key, space, delete or forward
-    /// delete without command or control. Option and shift+option type characters such as å.
+    /// What can change the focused field's text: ⌘V; a delete or forward delete with any modifiers
+    /// (⌘⌫ deletes to the line start); a control key, as Cocoa's ⌃Y yanks and ⌃K, ⌃H, ⌃D delete;
+    /// a printable key or space without command. Option and shift+option type characters such as å.
     public var mayEditText: Bool {
         if modifiers == [.command], key == .character("v") { return true }
-        guard modifiers.isDisjoint(with: [.command, .control]) else { return false }
         switch key {
-        case .character: return true
-        case .named(let named): return [.space, .delete, .forwardDelete].contains(named)
+        case .named(.delete), .named(.forwardDelete): return true
+        case .character: return modifiers.contains(.control) || !modifiers.contains(.command)
+        case .named(.space): return !modifiers.contains(.command)
+        case .named: return false
         }
     }
 
