@@ -802,6 +802,37 @@ struct NativePeerSessionsTests {
         #expect(listChangesCount(links, "s") == initial + 1)
     }
 
+    /// A session whose row carries no worktree summary keeps comparing its
+    /// own (absent) summary, not the one its worktree's console lends the row.
+    @Test func aSessionWithoutASummaryIsNotReloadedOnEverySessionList() {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let consoles = NativePeerConsoles(
+            send: { _, _ in }, supportsConsoles: { _ in true },
+            makeSurface: { _, _, _ in throw CancellationError() }
+        )
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] },
+            consoles: consoles
+        )
+        client.start()
+        let session = RemoteSessionSummary(id: "s", title: "s", agentId: "claude", status: "idle", canDrive: true, worktreeId: "w")
+        links.receive(.sessionList(sessions: [session]), from: "B")
+        consoles.receive(serverId: "B", .list(consoles: [PeerConsoleSummary(
+            consoleId: "c", title: "zsh", worktreeId: "w", projectId: "p", projectName: "alas", worktreeName: "w",
+            rows: 24, columns: 80, worktree: row("x", changedFiles: 1).worktree)]))
+        client.select("B:s")
+        links.receive(.changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true,
+                                  files: [], staged: [], unstaged: [], commits: [], truncated: false), from: "B")
+        let initial = listChangesCount(links, "s")
+
+        links.receive(.sessionList(sessions: [session]), from: "B")
+        links.receive(.sessionList(sessions: [session]), from: "B")
+
+        #expect(listChangesCount(links, "s") == initial)
+    }
+
     @Test func secondChangesRefreshWhileFirstRefreshInFlightQueuesARetry() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

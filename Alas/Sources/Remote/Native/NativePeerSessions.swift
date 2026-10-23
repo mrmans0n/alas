@@ -894,7 +894,9 @@ final class NativePeerSessions {
     @discardableResult
     func requestChanges() -> Bool {
         guard canReadWorkspace else { return false }
-        workspaceSummary = selectedRow?.worktree ?? selectedWorktreeGroup?.worktree
+        // A session's own summary, as `refresh()` compares it; the group's
+        // only for an idle worktree.
+        workspaceSummary = selectedSessionId != nil ? selectedRow?.worktree : selectedWorktreeGroup?.worktree
         workspaceHostSnapshot = selectedWorktreeGroup?.host?.snapshot
         // A folder project has no git, so there are no changes to ask for.
         guard workspaceSummary?.isFolder != true, !changesRequestInFlight else { return false }
@@ -1111,17 +1113,25 @@ final class NativePeerSessions {
             let reply = await hosts.read(read, in: target.worktree, serverId: target.serverId)
             guard let self, workspaceEpoch == epoch, hostReadTarget?.worktree.snapshot.worktree.id == worktreeId
             else { return }
-            if let reply, reply.sessionId == worktreeId {
-                _ = applyWorkspaceReply(reply)
-            } else {
-                // Unanswered: nothing is in flight any more.
-                changesRequestInFlight = false
-                fileTreeRequestInFlight = false
-                documentRequestsInFlight = []
-                workspace.markUnavailable()
-            }
+            // Unanswered or refused: fail just this read, as a failure reply would.
+            let answer = reply.flatMap { $0.sessionId == worktreeId ? $0 : nil } ?? Self.unserved(read, worktreeId: worktreeId)
+            _ = applyWorkspaceReply(answer)
         }
         return true
+    }
+
+    /// The failure reply standing in for a host-channel read with no answer.
+    private static func unserved(_ read: HostWorktreeRead, worktreeId id: String) -> RemoteServerMessage {
+        switch read {
+        case .changes: .changeListFailed(sessionId: id, reason: .unknown, message: nil)
+        case .fileDiff(let path, let stage, _):
+            .fileDiffFailed(sessionId: id, path: path, stage: stage, reason: .unknown, message: nil)
+        case .files(let path, _): .fileTreeFailed(sessionId: id, path: path, reason: .unknown, message: nil)
+        case .commitFiles(let sha): .commitFilesFailed(sessionId: id, sha: sha, reason: .unknown, message: nil)
+        case .commitDiff(let sha, let path):
+            .commitDiffFailed(sessionId: id, sha: sha, path: path, reason: .unknown, message: nil)
+        case .file(let path): .fileUnavailable(sessionId: id, path: path, reason: .unknown, byteSize: nil, message: nil)
+        }
     }
 
     private static func appending(_ text: String, to draft: String) -> String {
