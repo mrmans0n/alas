@@ -328,7 +328,7 @@ struct HostProtocolServerTests {
         let connection = server.connect(caller: .remotePeer(deviceID: "d"), send: Client().receive)
         let ref = WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
         await connection.receive(HostClientMessage(id: 1, request: restart
-                ? .restartRun(scriptKey: "repo:dev.sh", worktree: ref) : .startRun(scriptKey: "repo:dev.sh", worktree: ref)))
+            ? .restartRun(scriptKey: "repo:dev.sh", worktree: ref) : .startRun(scriptKey: "repo:dev.sh", worktree: ref)))
         await fixture.host.core.waitForStartingRunsForTesting()
         #expect(environment.launcher.requests.map(\.isHidden) == [hidden])
         #expect(environment.launcher.requests.map(\.activatesConsole) == [false])

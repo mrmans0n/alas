@@ -32,7 +32,8 @@ public struct RunLaunchRequest: Sendable {
     /// The run's console stays out of sight unless asked for.
     public let isHidden: Bool
     /// A shown console becomes its worktree's active tab; false for runs
-    /// asked for from elsewhere, which leave the host's screen alone.
+    /// asked for from elsewhere, which leave the host's screen alone unless
+    /// the worktree has none active.
     public let activatesConsole: Bool
 }
 
