@@ -647,6 +647,9 @@ extension LiveComputerUseSystem {
             try checkCancelled()
             try ComputerUseInputPoster.scroll(at: location, dx: dx, dy: dy, target: target)
         case .drag(let from, let to):
+            // With the app activated, the drag starts in its window brought to the front: the
+            // down, every dragged step and the up go there, as a user's drag would.
+            if !background { try await requireActiveWindow() }
             let start = try await point(from)
             let end = try await point(to)
             try checkCancelled()

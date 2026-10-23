@@ -184,10 +184,10 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
         }
         "key" => "usage: alas computer key <window-id> <keys> [--direct]",
         "scroll" => {
-            "usage: alas computer scroll <window-id> (--ref <eN> | --x <px> --y <px>) [--dx <-100...100>] [--dy <-100...100>]"
+            "usage: alas computer scroll <window-id> (--ref <eN> | --x <px> --y <px>) [--dx <-100...100>] [--dy <-100...100>] [--direct]"
         }
         "drag" => {
-            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) (--to-ref <eN> | --to-x <px> --to-y <px>)"
+            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) (--to-ref <eN> | --to-x <px> --to-y <px>) [--direct]"
         }
         _ => {
             "usage: alas computer wait <window-id> <query> [--disappear] [--timeout-ms <100...20000>]"
@@ -205,8 +205,10 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
         "click" => &["--ref", "--x", "--y", "--button", "--count", "--direct"],
         "type" => &["--ref", "--replace", "--direct"],
         "key" => &["--direct"],
-        "scroll" => &["--ref", "--x", "--y", "--dx", "--dy"],
-        "drag" => &["--ref", "--x", "--y", "--to-ref", "--to-x", "--to-y"],
+        "scroll" => &["--ref", "--x", "--y", "--dx", "--dy", "--direct"],
+        "drag" => &[
+            "--ref", "--x", "--y", "--to-ref", "--to-x", "--to-y", "--direct",
+        ],
         _ => &["--disappear", "--timeout-ms"],
     };
     const BOOLEAN_FLAGS: [&str; 3] = ["--direct", "--replace", "--disappear"];
@@ -324,6 +326,7 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
                 target: target("--ref", "--x", "--y")?,
                 dx,
                 dy,
+                direct,
                 post,
                 call_id: None,
             }
@@ -332,6 +335,7 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
             window_id,
             from: target("--ref", "--x", "--y")?,
             to: target("--to-ref", "--to-x", "--to-y")?,
+            direct,
             post,
             call_id: None,
         },
@@ -2337,19 +2341,21 @@ mod tests {
                 target: alas_client::ComputerTarget::Ref("e1".into()),
                 dx: 0,
                 dy: -5,
+                direct: false,
                 post: post(),
                 call_id: None
             })
         );
         assert_eq!(
             p(&[
-                "computer", "drag", "7", "--ref", "e1", "--to-x", "3", "--to-y", "4"
+                "computer", "drag", "7", "--ref", "e1", "--to-x", "3", "--to-y", "4", "--direct"
             ])
             .unwrap(),
             Command::Computer(ComputerCommand::Drag {
                 window_id: 7,
                 from: alas_client::ComputerTarget::Ref("e1".into()),
                 to: alas_client::ComputerTarget::Point { x: 3.0, y: 4.0 },
+                direct: true,
                 post: post(),
                 call_id: None
             })

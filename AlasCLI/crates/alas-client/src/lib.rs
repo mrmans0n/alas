@@ -330,6 +330,7 @@ pub enum ComputerCommand {
         target: ComputerTarget,
         dx: i64,
         dy: i64,
+        direct: bool,
         post: ComputerPost,
         call_id: Option<String>,
     },
@@ -337,6 +338,7 @@ pub enum ComputerCommand {
         window_id: u32,
         from: ComputerTarget,
         to: ComputerTarget,
+        direct: bool,
         post: ComputerPost,
         call_id: Option<String>,
     },
@@ -996,6 +998,7 @@ fn computer_request(command: &ComputerCommand) -> Request {
             target,
             dx,
             dy,
+            direct,
             post,
             ..
         } => {
@@ -1007,6 +1010,7 @@ fn computer_request(command: &ComputerCommand) -> Request {
             if *dy != 0 {
                 params.insert("dy".into(), serde_json::Value::from(*dy));
             }
+            insert_direct(&mut params, *direct);
             insert_post(&mut params, post);
             "computer_scroll"
         }
@@ -1014,12 +1018,14 @@ fn computer_request(command: &ComputerCommand) -> Request {
             window_id,
             from,
             to,
+            direct,
             post,
             ..
         } => {
             params.insert("window_id".into(), serde_json::Value::from(*window_id));
             insert_target(&mut params, from, "ref", "x", "y");
             insert_target(&mut params, to, "to_ref", "to_x", "to_y");
+            insert_direct(&mut params, *direct);
             insert_post(&mut params, post);
             "computer_drag"
         }
@@ -2254,6 +2260,7 @@ mod tests {
                 window_id: 7,
                 from: ComputerTarget::Point { x: 10.5, y: 20.0 },
                 to: ComputerTarget::Ref("e3".into()),
+                direct: true,
                 post: ComputerPost::default(),
                 call_id: None,
             }),
@@ -2263,7 +2270,9 @@ mod tests {
         assert_eq!(drag.command, "computer_drag");
         assert_eq!(
             drag.params,
-            Some(serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_ref": "e3" }))
+            Some(
+                serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_ref": "e3", "delivery": "direct" })
+            )
         );
 
         let wait = build_request(

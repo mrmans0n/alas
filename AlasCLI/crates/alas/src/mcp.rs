@@ -726,7 +726,8 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "x": computer_pixel_property("Pixels from the left edge of the latest screenshot. Use with y, instead of ref."),
                     "y": computer_pixel_property("Pixels from the top edge of the latest screenshot. Use with x, instead of ref."),
                     "dx": { "type": "integer", "minimum": -100, "maximum": 100, "description": "Horizontal lines. Default: 0." },
-                    "dy": { "type": "integer", "minimum": -100, "maximum": 100, "description": "Vertical lines. Default: 0. dx and dy are not both 0." }
+                    "dy": { "type": "integer", "minimum": -100, "maximum": 100, "description": "Vertical lines. Default: 0. dx and dy are not both 0." },
+                    "delivery": computer_delivery_property()
                 }),
                 &[]
             )
@@ -742,7 +743,8 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "y": computer_pixel_property("Start pixels from the top edge of the latest screenshot. Use with x, instead of ref."),
                     "to_ref": computer_ref_property("The element to drop on."),
                     "to_x": computer_pixel_property("End pixels from the left edge of the latest screenshot. Use with to_y, instead of to_ref."),
-                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref.")
+                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref."),
+                    "delivery": computer_delivery_property()
                 }),
                 &[]
             )
@@ -1403,6 +1405,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "y",
                     "dx",
                     "dy",
+                    "delivery",
                     "query",
                     "limit",
                     "include_screenshot",
@@ -1418,6 +1421,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 target: computer_target(args, "ref", "x", "y")?,
                 dx,
                 dy,
+                direct: computer_direct(args)?,
                 post: computer_post(args)?,
                 call_id: None,
             }))
@@ -1434,6 +1438,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "to_ref",
                     "to_x",
                     "to_y",
+                    "delivery",
                     "query",
                     "limit",
                     "include_screenshot",
@@ -1443,6 +1448,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 window_id: required_window_id(args)?,
                 from: computer_target(args, "ref", "x", "y")?,
                 to: computer_target(args, "to_ref", "to_x", "to_y")?,
+                direct: computer_direct(args)?,
                 post: computer_post(args)?,
                 call_id: None,
             }))
@@ -4137,17 +4143,19 @@ mod tests {
                     target: at(10.5, 0.0),
                     dx: 0,
                     dy: -3,
+                    direct: false,
                     post: post.clone(),
                     call_id: None,
                 },
             ),
             (
                 "computer_drag",
-                json!({ "window_id": 7, "ref": "e1", "to_x": 5, "to_y": 6 }),
+                json!({ "window_id": 7, "ref": "e1", "to_x": 5, "to_y": 6, "delivery": "direct" }),
                 ComputerCommand::Drag {
                     window_id: 7,
                     from: element("e1"),
                     to: at(5.0, 6.0),
+                    direct: true,
                     post,
                     call_id: None,
                 },

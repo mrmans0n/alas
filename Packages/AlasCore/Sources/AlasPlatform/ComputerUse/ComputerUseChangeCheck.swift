@@ -38,17 +38,35 @@ public struct ComputerUseWindowFingerprint: Equatable, Sendable {
 
 /// Apps may accept an input and ignore it; an action that changed nothing says so.
 public enum ComputerUseChangeCheck {
+    /// The input the check ran for.
+    public enum Kind: Sendable { case click, type, key, scroll, drag }
+
     public static let noChangeWarning =
         "No change was observed in the window after this action; the app may have ignored it."
     public static let retryDirectHint = #" Retry with delivery: "direct"."#
+    public static let dragWarning = "Couldn't confirm the drag had an effect; inspect to verify."
+    public static let dragRetryHint = #" Retry with delivery: "direct" to drag with the app in front."#
 
-    /// The warning for an action whose window looks the same after it, else nil.
-    /// Without both complete element lists the check can't tell, so it doesn't warn.
+    /// The warning for an action whose window looks the same after it, else nil. Without both
+    /// complete element lists the check can't tell, so it doesn't warn, except after a drag: a
+    /// cut-short read is how a drag that did nothing looked like one that worked. The retry hint
+    /// is only for clicks, scrolls and drags that went as events: a key or typed text can
+    /// legitimately change nothing a read shows, and an activation already was the direct way.
     public static func warning(
-        before: ComputerUseWindowFingerprint?, after: ComputerUseWindowFingerprint?, deliveredAsEvents: Bool
+        before: ComputerUseWindowFingerprint?, after: ComputerUseWindowFingerprint?, kind: Kind, deliveredAsEvents: Bool
     ) -> String? {
-        guard let before, let after, before.elementsHash != nil, after.elementsHash != nil, before == after else { return nil }
-        return deliveredAsEvents ? noChangeWarning + retryDirectHint : noChangeWarning
+        guard var before, var after else { return nil }
+        if kind == .drag {
+            if before.elementsHash == nil || after.elementsHash == nil {
+                before.elementsHash = nil
+                after.elementsHash = nil
+            }
+            guard before == after else { return nil }
+            return deliveredAsEvents ? dragWarning + dragRetryHint : dragWarning
+        }
+        guard before.elementsHash != nil, after.elementsHash != nil, before == after else { return nil }
+        let hint = deliveredAsEvents && (kind == .click || kind == .scroll)
+        return hint ? noChangeWarning + retryDirectHint : noChangeWarning
     }
 
     /// A hash of everything an element list shows; equal lists hash equal within a process.

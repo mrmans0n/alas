@@ -170,8 +170,8 @@ public struct ComputerUseCommand: Equatable, Sendable {
         case .click: postAction.union(pointTarget).union(["button", "count", "delivery"])
         case .type: postAction.union(["text", "ref", "mode", "delivery"])
         case .key: postAction.union(["keys", "delivery"])
-        case .scroll: postAction.union(pointTarget).union(["dx", "dy"])
-        case .drag: postAction.union(pointTarget).union(["to_ref", "to_x", "to_y"])
+        case .scroll: postAction.union(pointTarget).union(["dx", "dy", "delivery"])
+        case .drag: postAction.union(pointTarget).union(["to_ref", "to_x", "to_y", "delivery"])
         case .openApp: ["name", "bundle_id", "call_id"]
         case .wait: ["window_id", "query", "condition", "timeout_ms", "limit", "call_id"]
         }

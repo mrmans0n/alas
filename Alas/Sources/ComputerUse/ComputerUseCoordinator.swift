@@ -715,7 +715,8 @@ final class ComputerUseCoordinator {
             payload["elements"] = read.elements.map(Self.element)
             let after = await fingerprint(of: window, read: read, target: target)
             payload["warning"] = ComputerUseChangeCheck.warning(
-                before: before, after: after, deliveredAsEvents: [.event, .background].contains(delivered.delivery))
+                before: before, after: after, kind: Self.changeKind(command.action),
+                deliveredAsEvents: [.event, .background].contains(delivered.delivery))
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -724,6 +725,16 @@ final class ComputerUseCoordinator {
             payload["truncated"] = true
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription
+        }
+    }
+
+    private static func changeKind(_ action: ComputerUseCommand.Action) -> ComputerUseChangeCheck.Kind {
+        switch action {
+        case .type: .type
+        case .key: .key
+        case .scroll: .scroll
+        case .drag: .drag
+        default: .click
         }
     }
 

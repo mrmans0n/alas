@@ -317,21 +317,30 @@ struct ComputerUseCoordinatorTests {
     }
 
     enum WindowChange: CaseIterable { case none, elements, focus, target, truncatedBefore, truncatedAfter }
+    enum ActionKind { case click, key, type, drag }
 
     @Test(arguments: [
-        (ComputerUseDelivered.ax, WindowChange.none,
-         "No change was observed in the window after this action; the app may have ignored it."),
-        (.background, .none,
-         #"No change was observed in the window after this action; the app may have ignored it. Retry with delivery: "direct"."#),
-        (.event, .elements, nil),
-        (.event, .focus, nil),
+        (ActionKind.click, ComputerUseDelivered.ax, WindowChange.none, Warnings.noChange),
+        (.click, .background, .none, Warnings.noChange + #" Retry with delivery: "direct"."#),
+        (.click, .event, .elements, nil),
+        (.click, .event, .focus, nil),
         // The clicked element changed although the listing and focus look the same.
-        (.background, .target, nil),
+        (.click, .background, .target, nil),
         // A cut-short read may have missed what changed.
-        (.background, .truncatedBefore, nil),
-        (.background, .truncatedAfter, nil),
-    ] as [(ComputerUseDelivered, WindowChange, String?)])
-    func actionThatChangedNothingSaysSo(_ delivered: ComputerUseDelivered, change: WindowChange, warning: String?) async throws {
+        (.click, .background, .truncatedBefore, nil),
+        (.click, .background, .truncatedAfter, nil),
+        // Navigation keys and typing can legitimately change nothing a read shows: no retry hint.
+        (.key, .background, .none, Warnings.noChange),
+        (.type, .background, .none, Warnings.noChange),
+        // A drag that changed nothing always says so, even when a read was cut short.
+        (.drag, .background, .none, Warnings.drag + Warnings.dragRetry),
+        (.drag, .background, .truncatedAfter, Warnings.drag + Warnings.dragRetry),
+        (.drag, .activation, .none, Warnings.drag),
+        (.drag, .background, .elements, nil),
+    ] as [(ActionKind, ComputerUseDelivered, WindowChange, String?)])
+    func actionThatChangedNothingSaysSo(
+        _ kind: ActionKind, _ delivered: ComputerUseDelivered, change: WindowChange, warning: String?
+    ) async throws {
         let reads = Counter()
         let focusReads = Counter()
         let stateReads = Counter()
@@ -353,7 +362,13 @@ struct ComputerUseCoordinatorTests {
         system.elementState = { _, _ in change == .target && stateReads.next() == 2 ? 2 : 1 }
         let f = Self.fixture(system: system, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let command: ComputerUseCommand = switch kind {
+        case .click: .init(action: .click, windowID: 1, ref: "e2")
+        case .key: .init(action: .key, windowID: 1, keys: "down")
+        case .type: .init(action: .type, windowID: 1, ref: "e2", text: "x")
+        case .drag: .init(action: .drag, windowID: 1, ref: "e2", toRef: "e1")
+        }
+        let json = try #require(Self.text(await f.coordinator.perform(command, sessionID: "s")))
         let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         #expect(payload["warning"] as? String == warning)
         #expect(payload["delivery"] as? String == delivered.delivery.rawValue)
@@ -689,6 +704,13 @@ struct ComputerUseCoordinatorTests {
             #expect(recorder.inputs.isEmpty)
         }
     }
+}
+
+/// The change check's warnings, spelled out so a reworded one fails the test.
+private enum Warnings {
+    static let noChange = "No change was observed in the window after this action; the app may have ignored it."
+    static let drag = "Couldn't confirm the drag had an effect; inspect to verify."
+    static let dragRetry = #" Retry with delivery: "direct" to drag with the app in front."#
 }
 
 /// Inputs, launches, sleeps, cancellation checks and ordered events seen by the fakes.
