@@ -541,7 +541,9 @@ struct RunRowView: View {
                     actionButton(action, prominent: true)
                         .fixedSize()
                 }
-                actionMenu
+                if hasMenuActions {
+                    actionMenu
+                }
             }
 
             Text("\(status)\(detail)")
@@ -618,6 +620,10 @@ struct RunRowView: View {
             default: false
             }
         }
+    }
+
+    private var hasMenuActions: Bool {
+        presentation.actions.contains(.restart) || presentation.actions.contains(.edit) || !pluginCommands.isEmpty
     }
 
     private var actionMenu: some View {

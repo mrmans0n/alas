@@ -16,6 +16,8 @@ struct NativePeerRunTabView: View {
     /// the skeleton until its first answer but a refresh does not.
     @State private var answeredWorktree: String?
     @State private var output: PeerRunOutput?
+    /// Scripts with a request still unanswered, so a double click sends one.
+    @State private var inFlight: Set<String> = []
     /// Drives the relative timestamps ("3m ago"), as `RunTabView` does.
     @State private var now = Date()
     @State private var ticker = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
@@ -101,9 +103,13 @@ struct NativePeerRunTabView: View {
         case .showReport(let runID): command = .output(runID: runID)
         case .openTerminal, .openEndpoint, .edit: return
         }
+        let key = "\(worktreeKey)|\(row.script.key)"
+        guard inFlight.insert(key).inserted else { return }
         let hosts = hosts, worktree = worktree, serverId = serverId
         Task {
-            switch await hosts.perform(command, on: row, in: worktree, serverId: serverId) {
+            let reply = await hosts.perform(command, on: row, in: worktree, serverId: serverId)
+            inFlight.remove(key)
+            switch reply {
             case .done: break
             case .refused(let title, let message): hosts.showError(title, message)
             case .output(let presentation):
