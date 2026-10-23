@@ -50,6 +50,8 @@ struct PeerHostChannelTests {
     @Test func connectTakesASnapshotThenSubscribesAfterItsCursor() async throws {
         let sent = Sent()
         let channel = PeerHostChannel(send: sent.append)
+        var changes = 0
+        channel.onChange = { changes += 1 }
         let connecting = Task { await channel.connect() }
         try await eventually { @MainActor in sent.messages.count == 1 }
         #expect(sent.messages[0].request == .snapshot)
@@ -59,9 +61,13 @@ struct PeerHostChannelTests {
         #expect(channel.state?.worktrees == [feature])
         #expect(sent.messages[1].request == .subscribe(after: cursor))
         #expect(!channel.isSubscribed)
+        #expect(changes == 1)
 
         // The host forwards events right after `.subscribed`, before `connect()` resumes.
         channel.receive(.response(id: 2, result: .subscribed))
+        // Readiness is a change: reads gated on it can start now.
+        #expect(channel.isSubscribed)
+        #expect(changes == 2)
         channel.receive(.events(events: [.worktreeRemoved(projectID: "p", worktreeID: feature.worktree.id)], cursor: cursor))
         await connecting.value
         #expect(channel.isSubscribed)

@@ -220,7 +220,14 @@ final class NativePeerSessions {
         let openSessionIds = Set(snapshot.groups.flatMap(\.sessions).filter(\.isActive).map(\.id))
         closingSessionIds.formIntersection(openSessionIds)
         reconcileSelectedTab()
-        if selectedTab == nil, canReadWorkspace, selectedWorktreeGroup?.host?.snapshot != workspaceHostSnapshot {
+        guard selectedTab == nil else { return }
+        if !canReadWorkspace {
+            // The host channel is not ready (yet, or any more): read the
+            // worktree again once it is.
+            workspaceHostSnapshot = nil
+        } else if selectedWorktreeGroup?.host?.snapshot != workspaceHostSnapshot {
+            // Ready again, or the host changed the worktree. `requestChanges`
+            // records the snapshot, so this reloads once per change.
             reloadWorkspace()
         }
     }
@@ -878,6 +885,8 @@ final class NativePeerSessions {
     /// Re-asks the peer for the selected session's changes and file tree.
     /// Replies land through `receive`.
     func reloadWorkspace() {
+        // Nothing to read yet: no retry to queue either.
+        guard canReadWorkspace else { return }
         // A request already in flight (e.g. the user hit refresh while the
         // initial load was still out) skips its send; queue a retry so the
         // eventual reply doesn't stand in as current.
@@ -1111,9 +1120,12 @@ final class NativePeerSessions {
         let worktreeId = target.worktree.snapshot.worktree.id
         Task { [weak self] in
             let reply = await hosts.read(read, in: target.worktree, serverId: target.serverId)
-            guard let self, workspaceEpoch == epoch, hostReadTarget?.worktree.snapshot.worktree.id == worktreeId
-            else { return }
-            // Unanswered or refused: fail just this read, as a failure reply would.
+            // The selection moved since: the answer is no longer wanted. A
+            // lost host channel is not a selection change, so its failure
+            // still clears this read's in-flight marker below.
+            guard let self, workspaceEpoch == epoch else { return }
+            // Unanswered, refused, or cut off by a disconnect: fail just this
+            // read, as a failure reply would.
             let answer = reply.flatMap { $0.sessionId == worktreeId ? $0 : nil } ?? Self.unserved(read, worktreeId: worktreeId)
             _ = applyWorkspaceReply(answer)
         }

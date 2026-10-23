@@ -72,7 +72,7 @@ public final class PeerHostChannel {
     /// until a resync or a disconnect replaces it.
     public private(set) var isSubscribed = false
     public private(set) var isConnecting = false
-    /// Called when `state` changes.
+    /// Called when `state` or `isSubscribed` changes.
     public var onChange: (@MainActor () -> Void)?
 
     private let timeout: Duration
@@ -133,6 +133,7 @@ public final class PeerHostChannel {
             guard isSubscribed, var next = state else { return }
             if events.contains(.resync) {
                 isSubscribed = false
+                onChange?()
                 let epoch = self.epoch
                 Task {
                     guard epoch == self.epoch else { return } // disconnected since
@@ -168,7 +169,10 @@ public final class PeerHostChannel {
         guard let entry = pending.removeValue(forKey: id) else { return }
         if id == subscribeID {
             subscribeID = nil
-            if case .subscribed = response { isSubscribed = true }
+            if case .subscribed = response {
+                isSubscribed = true
+                onChange?() // reads gated on the subscription can start
+            }
         }
         entry.timeout.cancel()
         entry.continuation.resume(returning: response)
