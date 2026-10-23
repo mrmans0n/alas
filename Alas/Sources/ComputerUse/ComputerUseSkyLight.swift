@@ -60,7 +60,8 @@ enum ComputerUseSkyLight {
     static var canIdentifyWindows: Bool { symbols.axGetWindow != nil }
 
     /// Lets the app handle one record before the next; some apps drop a record that arrives
-    /// while they are still handling the previous one (yabai waits the same).
+    /// while they are still handling the previous one (yabai waits the same). Waited out in full
+    /// also in a cancelled task, so the records never go out back to back.
     private static let recordSettle: Duration = .milliseconds(40)
 
     /// Posts the records that make `windowID` the key window of `pid`, moving key status off
@@ -74,10 +75,10 @@ enum ComputerUseSkyLight {
         var accepted = true
         if let current, current != windowID {
             accepted = send(focusRecord(current, focus: false)) && accepted
-            try? await Task.sleep(for: recordSettle)
+            await ComputerUseInputPoster.steadyPause(recordSettle)
         }
         accepted = send(focusRecord(windowID, focus: true)) && accepted
-        try? await Task.sleep(for: recordSettle)
+        await ComputerUseInputPoster.steadyPause(recordSettle)
         for kind: UInt8 in [0x01, 0x02] {
             accepted = send(makeKeyRecord(windowID, kind: kind)) && accepted
         }

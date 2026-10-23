@@ -130,7 +130,7 @@ enum ComputerUseInputPoster {
     }
 
     /// A pause that a cancelled task still waits out in full.
-    private static func steadyPause(_ duration: Duration) async {
+    static func steadyPause(_ duration: Duration) async {
         let parts = duration.components
         let seconds = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
