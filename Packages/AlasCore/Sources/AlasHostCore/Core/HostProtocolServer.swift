@@ -241,16 +241,22 @@ public final class HostProtocolConnection {
         case .workspaceCheckout(let id):
             return .workspaceCheckout(checkout: try await host.workspaces.checkout(id: id))
         case .startRun(let scriptKey, let ref):
-            let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
-            if let refusal = try archivedRunRefusal(ref) { return refusal }
-            let scripts = await discoverScripts(try worktree(ref).path, projectHost)
-            guard let script = scripts.first(where: { $0.key == scriptKey }) else {
-                throw HostError.notFound(what: "script \(scriptKey)")
-            }
-            // Discovery can take a while on a remote host: the worktree may
-            // have been archived or removed meanwhile.
-            if let refusal = try archivedRunRefusal(ref) { return refusal }
+            guard let script = try await runnableScript(scriptKey, in: ref) else { return Self.archivedRunStart }
             return .runStart(start: host.runs.start(script, in: try worktree(ref), caller: caller))
+        case .restartRun(let scriptKey, let ref):
+            guard let script = try await runnableScript(scriptKey, in: ref) else { return Self.archivedRunStart }
+            return .runStart(start: host.runs.restart(script, in: try worktree(ref), caller: caller))
+        case .listRunScripts(let ref):
+            // Only a listed worktree, as for `readWorktree`: an archived one
+            // is refused as an unknown one is.
+            let listed = try worktree(ref)
+            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
+                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
+            }
+            let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
+            return .runScripts(scripts: await discoverScripts(listed.path, projectHost).map {
+                HostRunScript($0, target: host.core.runExecutionTarget(for: $0, in: listed))
+            })
         case .stopRun(let scriptKey, let ref):
             host.runs.stop(scriptKey: scriptKey, in: try worktree(ref), caller: caller)
             return .done
@@ -362,10 +368,26 @@ public final class HostProtocolConnection {
 
     /// Archiving stopped everything in a worktree; nothing starts there
     /// again until it is unarchived.
-    private func archivedRunRefusal(_ ref: WorktreeRef) throws -> HostResponse? {
-        let listed = try worktree(ref)
-        guard host.core.projects.isWorktreeHidden(projectId: ref.projectID, path: listed.path) else { return nil }
-        return .runStart(start: .refused(title: "Worktree archived", message: "Unarchive the worktree to run scripts in it."))
+    private func isArchived(_ ref: WorktreeRef) throws -> Bool {
+        host.core.projects.isWorktreeHidden(projectId: ref.projectID, path: try worktree(ref).path)
+    }
+
+    private static let archivedRunStart = HostResponse.runStart(
+        start: .refused(title: "Worktree archived", message: "Unarchive the worktree to run scripts in it.")
+    )
+
+    /// The discovered script `scriptKey` names, or nil when the worktree is archived.
+    private func runnableScript(_ scriptKey: String, in ref: WorktreeRef) async throws -> RunScript? {
+        let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
+        if try isArchived(ref) { return nil }
+        let scripts = await discoverScripts(try worktree(ref).path, projectHost)
+        guard let script = scripts.first(where: { $0.key == scriptKey }) else {
+            throw HostError.notFound(what: "script \(scriptKey)")
+        }
+        // Discovery can take a while on a remote host: the worktree may
+        // have been archived or removed meanwhile.
+        if try isArchived(ref) { return nil }
+        return script
     }
 
     /// The listed, unarchived or archived, worktree a reference names.
