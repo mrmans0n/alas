@@ -220,7 +220,7 @@ private enum LiveComputerUseSystem {
             }
     }
 
-    /// From the user input monitor; the HID idle time, which counts Alas's own events, only until it runs.
+    /// From the input tap; the HID idle time, which counts Alas's own events, only until it runs.
     static func secondsSinceUserInput() -> TimeInterval {
         ComputerUseTakeover.userIdleSeconds(
             now: ComputerUseUserInput.now(), lastUserInput: ComputerUseUserInput.lastInput(),
@@ -980,63 +980,97 @@ private actor ComputerUseSerialLock {
     }
 }
 
-/// The user's own input to any app, Alas included, from AppKit event monitors. Events Alas posts
-/// to a pid don't pass through them, and carry `postedEventMarker` should one ever do. The global
-/// monitor sees other apps' input only with the Accessibility grant, so it is installed once the
-/// process is trusted; until then the takeover check falls back to the HID idle time.
+/// The user's physical input to any app, Alas included, from a listen-only event tap at the HID
+/// level. Events Alas posts to a pid never pass through it, and carry `postedEventMarker` should
+/// one ever do. The tap runs on its own thread and run loop, never the main thread, and only
+/// stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
+/// in a trusted process; until it runs the takeover check falls back to the HID idle time.
 enum ComputerUseUserInput {
     /// "ALAS", in every event Alas posts (`kCGEventSourceUserData`).
     static let postedEventMarker: Int64 = 0x414C_4153
     /// Uptime nanoseconds of the last input; 0 before any.
     private static let lastInputNanoseconds = Atomic<UInt64>(0)
-    /// The global monitor is installed in a trusted process: the timestamp covers every app.
-    private static let globalLive = Atomic<Bool>(false)
-    /// An install hop to the main actor is already queued.
-    private static let installQueued = Atomic<Bool>(false)
-    @MainActor private static var localMonitor: Any?
-    @MainActor private static var globalMonitor: Any?
+    /// The tap is enabled and its run loop runs: the timestamp covers every app.
+    private static let live = Atomic<Bool>(false)
+    /// A tap thread exists, starting or running.
+    private static let started = Atomic<Bool>(false)
+    /// Uptime nanoseconds before which no tap is attempted; throttles the trust check and a
+    /// failing `tapCreate`, since the idle check runs every few milliseconds during a drag.
+    private static let nextAttempt = Atomic<UInt64>(0)
+    private static let attemptInterval: UInt64 = 5_000_000_000
+    /// Written and read on the tap thread only: before the tap is enabled, and by its callback.
+    private nonisolated(unsafe) static var tap: CFMachPort?
 
-    private static let monitored: NSEvent.EventTypeMask = [
+    private static let monitored: [CGEventType] = [
         .keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown,
         .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .mouseMoved, .scrollWheel,
     ]
 
-    /// The local monitor at once (Alas's own windows need no grant); the global one once trusted.
-    @MainActor
-    static func install() {
-        if localMonitor == nil {
-            localMonitor = NSEvent.addLocalMonitorForEvents(matching: monitored) { event in
-                record(event)
-                return event
-            }
+    /// Uptime seconds of the user's last input; nil until the tap runs.
+    static func lastInput() -> TimeInterval? {
+        guard live.load(ordering: .acquiring) else {
+            startIfTrusted()
+            return nil
         }
-        installGlobalIfTrusted()
+        return TimeInterval(lastInputNanoseconds.load(ordering: .relaxed)) / 1e9
     }
 
-    /// Installs the global monitor when the process just became trusted. The HID idle time seeds
-    /// the last input, so input from just before counts.
-    @MainActor
-    static func installGlobalIfTrusted() {
-        installQueued.store(false, ordering: .relaxed)
-        guard globalMonitor == nil, AXIsProcessTrusted() else { return }
-        guard let monitor = NSEvent.addGlobalMonitorForEvents(matching: monitored, handler: { record($0) }) else { return }
-        globalMonitor = monitor
+    /// Starts the tap thread once the process is trusted, at most once per `attemptInterval`.
+    private static func startIfTrusted() {
+        let now = DispatchTime.now().uptimeNanoseconds
+        let next = nextAttempt.load(ordering: .relaxed)
+        guard now >= next, !started.load(ordering: .acquiring),
+              nextAttempt.compareExchange(expected: next, desired: now + attemptInterval, ordering: .relaxed).exchanged,
+              AXIsProcessTrusted(),
+              started.compareExchange(expected: false, desired: true, ordering: .acquiringAndReleasing).exchanged
+        else { return }
+        let thread = Thread { runTap() }
+        thread.name = "Computer use input tap"
+        thread.qualityOfService = .userInteractive
+        thread.start()
+    }
+
+    /// The tap thread's body: returns, and lets the next idle check try again, when the tap
+    /// can't be created or its port is invalidated.
+    private static func runTap() {
+        defer {
+            live.store(false, ordering: .releasing)
+            nextAttempt.store(DispatchTime.now().uptimeNanoseconds + attemptInterval, ordering: .relaxed)
+            started.store(false, ordering: .releasing)
+        }
+        let mask = monitored.reduce(CGEventMask(0)) { $0 | (CGEventMask(1) << $1.rawValue) }
+        guard let port = CGEvent.tapCreate(
+            tap: .cghidEventTap, place: .headInsertEventTap, options: .listenOnly, eventsOfInterest: mask,
+            callback: { _, type, event, _ in
+                ComputerUseUserInput.handle(type, event)
+                return Unmanaged.passUnretained(event)
+            },
+            userInfo: nil)
+        else { return }
+        tap = port
+        defer { tap = nil }
+        guard let source = CFMachPortCreateRunLoopSource(nil, port, 0) else { return }
+        let runLoop = CFRunLoopGetCurrent()
+        CFRunLoopAddSource(runLoop, source, .defaultMode)
+        CGEvent.tapEnable(tap: port, enable: true)
+        // Input from just before the tap started counts too.
         let seed = UInt64(max(0, now() - hidIdleSeconds()) * 1e9)
         let current = lastInputNanoseconds.load(ordering: .relaxed)
         lastInputNanoseconds.store(max(current, seed, 1), ordering: .relaxed)
-        globalLive.store(true, ordering: .releasing)
+        live.store(true, ordering: .releasing)
+        // Runs until the port is invalidated and its source goes away.
+        CFRunLoopRun()
+        CFRunLoopRemoveSource(runLoop, source, .defaultMode)
     }
 
-    /// From any thread: queues the global install once the grant shows up.
-    static func installGlobalIfNowTrusted() {
-        guard !globalLive.load(ordering: .acquiring), AXIsProcessTrusted() else { return }
-        guard installQueued.compareExchange(expected: false, desired: true, ordering: .relaxed).exchanged else { return }
-        Task { @MainActor in installGlobalIfTrusted() }
-    }
-
-    private static func record(_ event: NSEvent) {
-        guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != postedEventMarker else { return }
-        lastInputNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .relaxed)
+    private static func handle(_ type: CGEventType, _ event: CGEvent) {
+        switch type {
+        case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+        default:
+            guard event.getIntegerValueField(.eventSourceUserData) != postedEventMarker else { return }
+            lastInputNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .relaxed)
+        }
     }
 
     static func hidIdleSeconds() -> TimeInterval {
@@ -1047,15 +1081,5 @@ enum ComputerUseUserInput {
     /// Seconds of uptime.
     static func now() -> TimeInterval {
         TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1e9
-    }
-
-    /// Uptime seconds of the user's last input; nil until the global monitor is live, since the
-    /// local one alone sees only Alas's own windows.
-    static func lastInput() -> TimeInterval? {
-        guard globalLive.load(ordering: .acquiring) else {
-            installGlobalIfNowTrusted()
-            return nil
-        }
-        return TimeInterval(lastInputNanoseconds.load(ordering: .relaxed)) / 1e9
     }
 }

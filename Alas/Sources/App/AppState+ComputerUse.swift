@@ -9,8 +9,6 @@ final class AppStateLink {
 
 extension AppState {
     static func makeComputerUse(link: AppStateLink) -> ComputerUseCoordinator {
-        // The takeover rule's source of the user's own input.
-        ComputerUseUserInput.install()
         let access = ComputerUseAccess(hostPID: getpid(), alwaysAllowed: {
             Set(link.state?.config.computerUse.alwaysAllowedApps ?? [])
         })
