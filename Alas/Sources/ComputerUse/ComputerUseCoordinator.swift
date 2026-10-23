@@ -853,7 +853,7 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         // The input landed; a failed re-read must not report it as failed.
         do {
-            let read: ElementRead
+            var read: ElementRead
             do {
                 // The action may have moved or resized the window; the read matches it by its frame.
                 window = try await currentWindow(window)
@@ -867,24 +867,39 @@ final class ComputerUseCoordinator {
                 read = try await readElements(
                     window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
             }
-            payload["truncated"] = read.truncated
-            payload["elements"] = read.elements.map(Self.element)
-            let after = await fingerprint(of: window, read: read, target: target)
-            let kind = Self.changeKind(command.action)
-            let asEvents = [.event, .background].contains(delivered.delivery)
-            var warning = ComputerUseChangeCheck.warning(before: before, after: after, kind: kind, deliveredAsEvents: asEvents)
-            if let end {
-                // The drop window read back too: the drop may have changed only that one.
-                // An unreadable drop window says nothing either way, so the start window's verdict stands.
-                if let endRead = try await readDropWindow(end.window, of: command, context: context, payload: &payload) {
-                    let endAfter = await fingerprint(of: endRead.window, read: endRead.read, target: nil)
-                    let endWarning = ComputerUseChangeCheck.warning(
-                        before: end.before, after: endAfter, kind: kind, deliveredAsEvents: asEvents)
-                    if endWarning == nil { warning = nil }
+            var verdict = try await check(
+                read, of: window, after: delivered, of: command, target: target, before: before, end: end,
+                context: context, payload: &payload)
+            if command.action == .drag {
+                // Finder and others show a drop a moment later: a drag that seems to have changed
+                // nothing is read again until it shows, or the deadline passes. Slow reads count too.
+                let clock = ContinuousClock()
+                let start = clock.now
+                var slept = Duration.zero
+                while verdict.warning != nil, slept < Self.dragConfirmDeadline, clock.now - start < Self.dragConfirmDeadline {
+                    await sleep(Self.dragConfirmPoll)
+                    slept += Self.dragConfirmPoll
+                    try checkStillActive(context)
+                    let polled: ElementRead
+                    do {
+                        window = try await currentWindow(window)
+                        polled = try await readElements(
+                            window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth,
+                            context: context)
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        // A re-read that failed says nothing new: the last read's result stands.
+                        break
+                    }
+                    read = polled
+                    verdict = try await check(
+                        read, of: window, after: delivered, of: command, target: target, before: before, end: end,
+                        context: context, payload: &payload)
                 }
             }
-            Self.report(depthLimited: read.depthLimited, warning: warning, into: &payload)
-            return Settled(warning: warning, after: after)
+            Self.report(depthLimited: read.depthLimited, warning: verdict.warning, into: &payload)
+            return verdict
         } catch is CancellationError {
             throw CancellationError()
         } catch let refusal as Refusal {
@@ -900,6 +915,33 @@ final class ComputerUseCoordinator {
             payload["post_state_error"] = error.localizedDescription
             return Settled()
         }
+    }
+
+    /// The change check over a post-action read of the start window, with the drop window, if
+    /// any, read back too, into the payload: the elements of this read and the verdict over both.
+    private func check(
+        _ read: ElementRead, of window: ComputerUseWindow, after delivered: ComputerUseDelivered,
+        of command: ComputerUseCommand, target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint,
+        end: (window: ComputerUseWindow, before: ComputerUseWindowFingerprint?)?, context: CallContext,
+        payload: inout [String: Any]
+    ) async throws -> Settled {
+        payload["truncated"] = read.truncated
+        payload["elements"] = read.elements.map(Self.element)
+        let after = await fingerprint(of: window, read: read, target: target)
+        let kind = Self.changeKind(command.action)
+        let asEvents = [.event, .background].contains(delivered.delivery)
+        var warning = ComputerUseChangeCheck.warning(before: before, after: after, kind: kind, deliveredAsEvents: asEvents)
+        if let end {
+            // The drop window read back too: the drop may have changed only that one.
+            // An unreadable drop window says nothing either way, so the start window's verdict stands.
+            if let endRead = try await readDropWindow(end.window, of: command, context: context, payload: &payload) {
+                let endAfter = await fingerprint(of: endRead.window, read: endRead.read, target: nil)
+                let endWarning = ComputerUseChangeCheck.warning(
+                    before: end.before, after: endAfter, kind: kind, deliveredAsEvents: asEvents)
+                if endWarning == nil { warning = nil }
+            }
+        }
+        return Settled(warning: warning, after: after)
     }
 
     /// Reads the window a drag dropped into, as the start window is read, into `to_window`.
@@ -941,6 +983,10 @@ final class ComputerUseCoordinator {
     static let settleDelay: Duration = .milliseconds(300)
     /// Before the one retry of a post-action read the app didn't answer.
     static let postReadRetryDelay: Duration = .milliseconds(300)
+    /// Between re-reads of a drag that seems to have changed nothing, up to `dragConfirmDeadline`
+    /// of them after the first read.
+    static let dragConfirmPoll: Duration = .milliseconds(250)
+    static let dragConfirmDeadline: Duration = .milliseconds(1500)
     static let postStateDepth = 12
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)

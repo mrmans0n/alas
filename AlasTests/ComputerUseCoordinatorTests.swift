@@ -509,11 +509,12 @@ struct ComputerUseCoordinatorTests {
         #expect(point == CGPoint(x: 200, y: 100))
     }
 
-    enum CrossWindowDrop: CaseIterable { case mapped, outOfBounds, staleRef, otherApp }
+    /// `mappedLate`: the end window shows the drop only on a re-read, as Finder does.
+    enum CrossWindowDrop: CaseIterable { case mapped, mappedLate, outOfBounds, staleRef, otherApp }
 
     /// The drop end resolves in the end window: its screenshot, its frame and its refs. The end
-    /// window is read back too, so a drop that changed only it isn't reported as no change.
-    /// Another app's window is refused before any card or input.
+    /// window is read back too, so a drop that changed only it isn't reported as no change, nor
+    /// one that shows a moment later. Another app's window is refused before any card or input.
     @Test(arguments: CrossWindowDrop.allCases)
     func dragIntoAnotherWindowUsesThatWindow(_ drop: CrossWindowDrop) async throws {
         let recorder = Recorder()
@@ -522,10 +523,14 @@ struct ComputerUseCoordinatorTests {
         windows[5] = ComputerUseWindow(windowID: 5, title: "Other", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: Self.notes)
         var system = Self.system(windows: windows, recorder: recorder)
         let saveTree = Self.saveTree
-        // The end window's second read (the one after the drop) shows a new element.
+        // The end window's second read (the one after the drop) shows a new element; a late
+        // drop shows it from the third (the first re-read) on.
         system.axTree = { window, _, _, _ in
             var tree = saveTree
-            if window.windowID == 5, endReads.next() == 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
+            if window.windowID == 5 {
+                let read = endReads.next()
+                if drop == .mappedLate ? read >= 3 : read == 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
+            }
             return (tree, true, ComputerUseAXHandles())
         }
         system.perform = { input, _, _, _ in
@@ -536,7 +541,7 @@ struct ComputerUseCoordinatorTests {
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
         let drag: ComputerUseCommand = switch drop {
-        case .mapped: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
+        case .mapped, .mappedLate: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
         case .outOfBounds: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 2000, toY: 2000)
         // Window 5 was never inspected, so e1 there is unknown even though window 1 has none either.
         case .staleRef: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toRef: "e1")
@@ -544,7 +549,7 @@ struct ComputerUseCoordinatorTests {
         }
         let response = await f.coordinator.perform(drag, sessionID: "s")
         switch drop {
-        case .mapped:
+        case .mapped, .mappedLate:
             let json = try #require(Self.text(response))
             let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
             guard case .drag(.point(let start), .point(let point), let toWindow) = try #require(recorder.inputs.first) else {
@@ -557,6 +562,7 @@ struct ComputerUseCoordinatorTests {
             #expect(end["window_id"] as? Int == 5 && (end["elements"] as? [Any])?.count == 3)
             // The start window looks the same, but the drop changed the end window.
             #expect(payload["warning"] == nil)
+            #expect(recorder.sleeps.contains(ComputerUseCoordinator.dragConfirmPoll) == (drop == .mappedLate))
         case .outOfBounds:
             #expect(response == .error("computer_out_of_bounds: The point is outside window 5."))
             #expect(recorder.inputs.isEmpty)
