@@ -47,6 +47,8 @@ enum ComputerUseInputPoster {
     private static let systemDragStepDelay: Duration = .milliseconds(16)
     private static let systemDragDownHold: Duration = .milliseconds(100)
     private static let systemDragHover: Duration = .milliseconds(300)
+    /// Back at the start before a cancelled drag's release, for the trailing drag session to follow.
+    private static let systemDragCancelSettle: Duration = .milliseconds(100)
     private static let cursorRestoreDelay: Duration = .milliseconds(100)
 
     /// A drag the system's drag and drop can follow: posted at the HID level, so the cursor moves
@@ -75,39 +77,41 @@ enum ComputerUseInputPoster {
         let up = try systemMouseEvent(.leftMouseUp, at: end, clickState: 1)
         var pressed = false
         /// Cancels in place on a stop or the user's input, before the next event goes out.
-        func checkInterrupt() throws {
+        func checkInterrupt() async throws {
             switch interrupt() {
             case .cancelled:
-                if pressed { cancelInPlace() }
+                if pressed { await cancelInPlace() }
                 throw CancellationError()
             case .userActive:
                 guard pressed else { throw ComputerUseSystemError.userActive }
-                cancelInPlace()
+                await cancelInPlace()
                 throw ComputerUseSystemError.userTookOverDrag
             case nil:
                 break
             }
         }
-        func cancelInPlace() {
+        /// Settles back at the start before the release, so the button comes up where the drag began.
+        func cancelInPlace() async {
             postSystemWide(back)
+            await steadyPause(systemDragCancelSettle)
             postSystemWide(upAtStart)
         }
         do {
             postSystemWide(primer)
             await steadyPause(stepDelay)
-            try checkInterrupt()
+            try await checkInterrupt()
             postSystemWide(down)
             pressed = true
             await steadyPause(systemDragDownHold)
             for move in moves {
-                try checkInterrupt()
+                try await checkInterrupt()
                 postSystemWide(move)
                 await steadyPause(systemDragStepDelay)
             }
             await steadyPause(systemDragHover)
-            try checkInterrupt()
+            try await checkInterrupt()
             guard dropIsVisible() else {
-                cancelInPlace()
+                await cancelInPlace()
                 throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
             }
             postSystemWide(up)
