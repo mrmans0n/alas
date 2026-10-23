@@ -638,6 +638,10 @@ extension LiveComputerUseSystem {
         try await directLock.run {
             // A Stop while waiting for another direct action performs nothing.
             if isCancelled() { throw CancellationError() }
+            // The takeover rule once more, right before the app comes to the front: the wait for an
+            // idle user ended before the ref re-check and the lock waits. As the fallback route
+            // does, a user who is back now isn't waited out again.
+            if secondsSinceUserInput() < ComputerUseTakeover.idleThreshold { throw ComputerUseSystemError.userActive }
             try await withActivation(of: window.app, isCancelled: isCancelled) {
                 try await postEvents(input, in: window, paste: true, background: false, interrupt: interrupt)
             }
