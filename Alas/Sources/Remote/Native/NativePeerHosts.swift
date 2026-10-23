@@ -42,6 +42,9 @@ final class NativePeerHosts {
         for serverId in online where servesHostChannel(serverId) {
             let channel = channels[serverId] ?? makeChannel(serverId)
             guard !channel.isSubscribed, !channel.isConnecting else { continue }
+            // ponytail: unthrottled retry, once per refresh (each session-list or
+            // availability change); add a failure counter with backoff if a peer
+            // that keeps refusing the snapshot or subscribe shows up.
             Task { await channel.connect() }
         }
     }

@@ -592,7 +592,8 @@ struct NativePeerSessionsTests {
         #expect(hosts.worktrees["B"]?.map(\.snapshot.worktree.branch) == ["idle"])
         #expect(hosts.worktrees["C"] == nil)
 
-        links.offline("B") // drives refresh, then peersChanged
+        links.offline("B")
+        client.refresh() // the app refreshes on availability changes; peersChanged drops B
         #expect(hosts.worktrees["B"] == nil)
     }
 
