@@ -157,6 +157,13 @@ struct ComputerUseInputTests {
         #expect(ComputerUseTakeover.decide(targetIsFrontmost: true, idleSeconds: seconds, direct: false, waited: 0) == decision)
     }
 
+    /// A drag ends on any input of the user's since it began; without the input monitor there is
+    /// no telling theirs from the drag's own, so that ends it too.
+    @Test(arguments: [(nil, true), (99.0, false), (101.0, true)] as [(TimeInterval?, Bool)])
+    private func dragTakeover(lastUserInput: TimeInterval?, tookOver: Bool) {
+        #expect(ComputerUseTakeover.tookOverDrag(lastUserInput: lastUserInput, dragBegan: 100) == tookOver)
+    }
+
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.
     @Test(arguments: [
         (true, true, 0.5, ComputerUseEventRoute.background),

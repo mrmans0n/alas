@@ -25,6 +25,14 @@ public enum ComputerUseTakeover {
         guard let lastUserInput else { return hidIdle }
         return max(0, now - lastUserInput)
     }
+
+    /// Whether the user took over a drag under way since `dragBegan`: any input of theirs since
+    /// then, or the input monitor no longer running (`lastUserInput` nil), since the HID idle
+    /// time counts the drag's own events and can't tell the user's from them.
+    public static func tookOverDrag(lastUserInput: TimeInterval?, dragBegan: TimeInterval) -> Bool {
+        guard let lastUserInput else { return true }
+        return lastUserInput > dragBegan
+    }
 }
 
 /// How a background input that AX couldn't deliver reaches the app.

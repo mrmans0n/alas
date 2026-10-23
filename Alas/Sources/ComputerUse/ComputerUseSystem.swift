@@ -788,8 +788,10 @@ extension LiveComputerUseSystem {
             }, interrupt: {
                 if isCancelled() || Task.isCancelled { return .cancelled }
                 // The cursor is shared: any input of the user's since the drag began, in any app,
-                // or the target leaving the front ends it.
-                if let last = ComputerUseUserInput.lastInput(), last > dragBegan { return .userActive }
+                // input watching stopping, or the target leaving the front ends it.
+                if ComputerUseTakeover.tookOverDrag(lastUserInput: ComputerUseUserInput.lastInput(), dragBegan: dragBegan) {
+                    return .userActive
+                }
                 let front = ComputerUseSkyLight.isFrontProcess(pid: pid)
                     ?? NSRunningApplication(processIdentifier: pid)?.isActive ?? false
                 return front ? interrupt() : .userActive
