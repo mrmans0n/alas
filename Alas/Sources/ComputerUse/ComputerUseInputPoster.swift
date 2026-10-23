@@ -96,6 +96,8 @@ enum ComputerUseInputPoster {
             await steadyPause(systemDragCancelSettle)
             postSystemWide(upAtStart)
         }
+        // Nothing has moved yet: an active user keeps their cursor where it is.
+        try await checkInterrupt()
         do {
             postSystemWide(primer)
             await steadyPause(stepDelay)
