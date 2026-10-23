@@ -981,33 +981,57 @@ private actor ComputerUseSerialLock {
 }
 
 /// The user's own input to any app, Alas included, from AppKit event monitors. Events Alas posts
-/// to a pid don't pass through them, and carry `postedEventMarker` should one ever do.
+/// to a pid don't pass through them, and carry `postedEventMarker` should one ever do. The global
+/// monitor sees other apps' input only with the Accessibility grant, so it is installed once the
+/// process is trusted; until then the takeover check falls back to the HID idle time.
 enum ComputerUseUserInput {
     /// "ALAS", in every event Alas posts (`kCGEventSourceUserData`).
     static let postedEventMarker: Int64 = 0x414C_4153
-    /// Uptime nanoseconds of the last input; 0 until the monitors are installed.
+    /// Uptime nanoseconds of the last input; 0 before any.
     private static let lastInputNanoseconds = Atomic<UInt64>(0)
-    @MainActor private static var monitors: [Any] = []
+    /// The global monitor is installed in a trusted process: the timestamp covers every app.
+    private static let globalLive = Atomic<Bool>(false)
+    /// An install hop to the main actor is already queued.
+    private static let installQueued = Atomic<Bool>(false)
+    @MainActor private static var localMonitor: Any?
+    @MainActor private static var globalMonitor: Any?
 
     private static let monitored: NSEvent.EventTypeMask = [
-        .keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .mouseMoved, .scrollWheel,
+        .keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown,
+        .leftMouseDragged, .rightMouseDragged, .otherMouseDragged, .mouseMoved, .scrollWheel,
     ]
 
-    /// Once; the HID idle time seeds the last input, so input from just before counts.
+    /// The local monitor at once (Alas's own windows need no grant); the global one once trusted.
     @MainActor
     static func install() {
-        guard monitors.isEmpty else { return }
-        let seed = max(0, now() - hidIdleSeconds())
-        lastInputNanoseconds.store(max(1, UInt64(seed * 1e9)), ordering: .relaxed)
-        if let global = NSEvent.addGlobalMonitorForEvents(matching: monitored, handler: { record($0) }) {
-            monitors.append(global)
+        if localMonitor == nil {
+            localMonitor = NSEvent.addLocalMonitorForEvents(matching: monitored) { event in
+                record(event)
+                return event
+            }
         }
-        if let local = NSEvent.addLocalMonitorForEvents(matching: monitored, handler: { event in
-            record(event)
-            return event
-        }) {
-            monitors.append(local)
-        }
+        installGlobalIfTrusted()
+    }
+
+    /// Installs the global monitor when the process just became trusted. The HID idle time seeds
+    /// the last input, so input from just before counts.
+    @MainActor
+    static func installGlobalIfTrusted() {
+        installQueued.store(false, ordering: .relaxed)
+        guard globalMonitor == nil, AXIsProcessTrusted() else { return }
+        guard let monitor = NSEvent.addGlobalMonitorForEvents(matching: monitored, handler: { record($0) }) else { return }
+        globalMonitor = monitor
+        let seed = UInt64(max(0, now() - hidIdleSeconds()) * 1e9)
+        let current = lastInputNanoseconds.load(ordering: .relaxed)
+        lastInputNanoseconds.store(max(current, seed, 1), ordering: .relaxed)
+        globalLive.store(true, ordering: .releasing)
+    }
+
+    /// From any thread: queues the global install once the grant shows up.
+    static func installGlobalIfNowTrusted() {
+        guard !globalLive.load(ordering: .acquiring), AXIsProcessTrusted() else { return }
+        guard installQueued.compareExchange(expected: false, desired: true, ordering: .relaxed).exchanged else { return }
+        Task { @MainActor in installGlobalIfTrusted() }
     }
 
     private static func record(_ event: NSEvent) {
@@ -1025,9 +1049,13 @@ enum ComputerUseUserInput {
         TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1e9
     }
 
-    /// Uptime seconds of the user's last input; nil while the monitors aren't installed.
+    /// Uptime seconds of the user's last input; nil until the global monitor is live, since the
+    /// local one alone sees only Alas's own windows.
     static func lastInput() -> TimeInterval? {
-        let last = lastInputNanoseconds.load(ordering: .relaxed)
-        return last == 0 ? nil : TimeInterval(last) / 1e9
+        guard globalLive.load(ordering: .acquiring) else {
+            installGlobalIfNowTrusted()
+            return nil
+        }
+        return TimeInterval(lastInputNanoseconds.load(ordering: .relaxed)) / 1e9
     }
 }

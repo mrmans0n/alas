@@ -126,5 +126,7 @@ struct ComputerUsePane: View {
 
     private func refresh() {
         granted = ComputerUsePlatform.shared.grantedPermissions()
+        // The takeover check sees other apps' input once Accessibility is granted.
+        if granted.contains(.accessibility) { ComputerUseUserInput.installGlobalIfTrusted() }
     }
 }
