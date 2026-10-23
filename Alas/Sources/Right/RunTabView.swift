@@ -489,7 +489,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     }
 }
 
-private struct RunScopeHeader: View {
+struct RunScopeHeader: View {
     let title: String
     let count: Int
     @Environment(\.theme) private var theme
@@ -512,7 +512,7 @@ private struct RunScopeHeader: View {
     }
 }
 
-private struct RunRowView: View {
+struct RunRowView: View {
     let presentation: RunRowPresentation
     let onAction: (RunRowAction) -> Void
     var pluginCommands: [PluginCommandItem] = []

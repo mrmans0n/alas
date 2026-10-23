@@ -3,6 +3,7 @@ import Testing
 import AlasCore
 import AlasHostCore
 
+@MainActor // `PeerRuns.perform` is main-actor API.
 struct PeerRunsTests {
     func record(_ key: String, worktreeID: String = "w", status: RunStatus, id: String = UUID().uuidString) -> RunRecord {
         let fileName = String(key.split(separator: ":", maxSplits: 1)[1])

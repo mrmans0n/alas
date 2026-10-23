@@ -50,6 +50,7 @@ public enum PeerRuns {
         return listed.map { Row(script: $0, record: recordsByKey[$0.key]) } + unlisted
     }
 
+    @MainActor
     public static func perform(
         _ command: Command, on row: Row, in worktree: WorktreeRef,
         request: (HostRequest) async -> HostResponse
