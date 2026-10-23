@@ -26,13 +26,15 @@ struct ComputerUseInputTests {
         #expect(Chord.parse(text) == nil)
     }
 
-    /// Chords that can put text into the focused field get the secure-field check that typing gets.
+    /// Chords that can change the focused field's text get the secure-field check that typing gets.
     @Test(arguments: [
         ("a", true), ("shift+a", true), ("space", true), ("cmd+v", true), ("5", true),
-        ("cmd+a", false), ("cmd+shift+v", false), ("ctrl+v", false), ("return", false), ("opt+e", false),
+        ("opt+e", true), ("shift+opt+a", true), ("delete", true), ("opt+delete", true), ("forwardDelete", true),
+        ("cmd+a", false), ("cmd+shift+v", false), ("ctrl+v", false), ("return", false), ("tab", false),
+        ("cmd+delete", false),
     ])
-    private func chordsThatMayInsertText(text: String, inserts: Bool) throws {
-        #expect(try #require(Chord.parse(text)).mayInsertText == inserts)
+    private func chordsThatMayEditText(text: String, edits: Bool) throws {
+        #expect(try #require(Chord.parse(text)).mayEditText == edits)
     }
 
     @Test func pointsMapThroughTheScreenshotFrameAndAreBoundedByTheCurrentFrame() {

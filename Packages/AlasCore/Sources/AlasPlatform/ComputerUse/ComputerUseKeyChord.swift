@@ -17,13 +17,14 @@ public struct ComputerUseKeyChord: Equatable, Sendable {
         self.key = key
     }
 
-    /// A printable key with no modifier but shift, or ⌘V: what can put text into the focused field.
-    public var mayInsertText: Bool {
+    /// What can change the focused field's text: ⌘V, or a printable key, space, delete or forward
+    /// delete without command or control. Option and shift+option type characters such as å.
+    public var mayEditText: Bool {
+        if modifiers == [.command], key == .character("v") { return true }
+        guard modifiers.isDisjoint(with: [.command, .control]) else { return false }
         switch key {
-        case .character(let character):
-            modifiers.isSubset(of: [.shift]) || (modifiers == [.command] && character == "v")
-        case .named(let named):
-            named == .space && modifiers.isSubset(of: [.shift])
+        case .character: return true
+        case .named(let named): return [.space, .delete, .forwardDelete].contains(named)
         }
     }
 
