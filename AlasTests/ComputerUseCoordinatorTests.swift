@@ -576,6 +576,30 @@ struct ComputerUseCoordinatorTests {
         }
     }
 
+    /// A drag that grabbed the window itself moved it: that is a failure, not a drop.
+    @Test(arguments: [(CGFloat(40), true), (CGFloat(1), false)])
+    func dragThatMovedTheWindowFails(offset: CGFloat, fails: Bool) async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        let windows = Self.windows
+        system.window = { id in
+            guard var window = windows[id] else { return nil }
+            if !recorder.inputs.isEmpty { window.frame = window.frame.offsetBy(dx: offset, dy: 0) }
+            return window
+        }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            return .activation
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let response = await f.coordinator.perform(.init(action: .drag, windowID: 1, ref: "e2", toRef: "e1"), sessionID: "s")
+        #expect(recorder.inputs.count == 1)
+        let failure = AlasCLIResponse.error(
+            "computer_action_failed: The drag moved the window instead of an item; nothing was dropped.")
+        #expect((response == failure) == fails)
+    }
+
     /// An AX press in an Electron app may only focus the element: a click that changed nothing
     /// there is clicked once more with the pointer. Elsewhere, after a change, and on a toggle a
     /// second press could undo, it stands.

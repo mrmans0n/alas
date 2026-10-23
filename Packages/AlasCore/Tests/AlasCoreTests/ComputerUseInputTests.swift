@@ -79,6 +79,31 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.visibleCenter(of: frame, clippedTo: [window, scrollArea]) == expected)
     }
 
+    /// Both of a drag's points must be on the window it uses there; the start is reported first.
+    @Test(arguments: [
+        (CGPoint(x: 20, y: 20), CGPoint(x: 220, y: 220), nil),
+        (CGPoint(x: 20, y: 20), CGPoint(x: 120, y: 120), ComputerUseInputGeometry.DragPoint.end),
+        (CGPoint(x: 160, y: 160), CGPoint(x: 120, y: 120), .start),
+    ] as [(CGPoint, CGPoint, ComputerUseInputGeometry.DragPoint?)])
+    func coveredDragPoints(start: CGPoint, end: CGPoint, expected: ComputerUseInputGeometry.DragPoint?) {
+        // Front to back: another app's window 9 over the middle, start window 1, drop window 2.
+        let windows: [(id: UInt32, frame: CGRect)] = [
+            (9, CGRect(x: 100, y: 100, width: 80, height: 80)),
+            (1, CGRect(x: 0, y: 0, width: 200, height: 200)), (2, CGRect(x: 100, y: 100, width: 200, height: 200)),
+        ]
+        #expect(ComputerUseInputGeometry.coveredDragPoint(start: start, in: 1, end: end, in: 2, windows: windows) == expected)
+    }
+
+    @Test(arguments: [
+        (CGRect(x: 10, y: 10, width: 100, height: 100), false),
+        (CGRect(x: 12, y: 8, width: 101, height: 100), false),
+        (CGRect(x: 13, y: 10, width: 100, height: 100), true),
+        (CGRect(x: 10, y: 10, width: 100, height: 97), true),
+    ])
+    func dragsThatMoveTheWindow(after: CGRect, moved: Bool) {
+        #expect(ComputerUseInputGeometry.windowMoved(from: CGRect(x: 10, y: 10, width: 100, height: 100), to: after) == moved)
+    }
+
     @Test func interpolationEndsAtTheTarget() {
         let points = ComputerUseInputGeometry.interpolate(from: .zero, to: CGPoint(x: 10, y: 20), steps: 4)
         #expect(points == [CGPoint(x: 2.5, y: 5), CGPoint(x: 5, y: 10), CGPoint(x: 7.5, y: 15), CGPoint(x: 10, y: 20)])

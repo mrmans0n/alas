@@ -347,6 +347,8 @@ extension LiveComputerUseSystem {
     static let pasteRestoreFloor: Duration = .milliseconds(200)
     /// Lets a click move focus before the focused element is checked.
     static let focusSettle: Duration = .milliseconds(50)
+    /// After raising a drag's windows, before checking nothing covers its points.
+    static let dragRaiseSettle: Duration = .milliseconds(150)
     /// How long typing into an element waits for the focus it set to land.
     static let focusWait: Duration = .milliseconds(300)
     static let focusPoll: Duration = .milliseconds(25)
@@ -698,6 +700,11 @@ extension LiveComputerUseSystem {
             // Only with the app activated: the drag starts in its window brought to the front, and
             // the down, every dragged step and the up go there, as a user's drag would.
             try await requireActiveWindow()
+            // Activation fronts only the app's key window; another app's window can still cover the drop window.
+            if let toWindow, toWindow.windowID != window.windowID {
+                try await ComputerUseAXActions.raise(toWindow, isCancelled: isCancelled)
+            }
+            try? await Task.sleep(for: dragRaiseSettle)
             let start = try await point(from)
             // Mouse events stay with the window the button went down in, as AppKit routes a drag.
             let end: CGPoint
@@ -707,6 +714,13 @@ extension LiveComputerUseSystem {
                 throw ComputerUseSystemError.staleDropElement
             } catch ComputerUseSystemError.outOfBounds {
                 throw ComputerUseSystemError.dropOutOfBounds
+            }
+            switch ComputerUseInputGeometry.coveredDragPoint(
+                start: start, in: window.windowID, end: end, in: (toWindow ?? window).windowID,
+                windows: onScreenWindows().map { ($0.id, $0.frame) }) {
+            case .start: throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
+            case .end: throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
+            case nil: break
             }
             try checkCancelled()
             // Another window over the drop point would take the drop: checked right before the release.

@@ -26,6 +26,26 @@ public enum ComputerUseInputGeometry {
         CGPoint(x: frame.midX, y: frame.midY)
     }
 
+    public enum DragPoint: Sendable, Equatable { case start, end }
+
+    /// Which of a drag's points another window covers, start first; nil when the start window is
+    /// topmost at the start and the drop window at the end. `windows` run front to back.
+    public static func coveredDragPoint(
+        start: CGPoint, in startWindow: UInt32, end: CGPoint, in endWindow: UInt32,
+        windows: [(id: UInt32, frame: CGRect)]
+    ) -> DragPoint? {
+        if topmostWindow(at: start, in: windows) != startWindow { return .start }
+        if topmostWindow(at: end, in: windows) != endWindow { return .end }
+        return nil
+    }
+
+    /// Whether a window's frame moved or resized by more than `tolerance` points: a drag that
+    /// grabbed the window itself rather than an item in it.
+    public static func windowMoved(from before: CGRect, to after: CGRect, tolerance: CGFloat = 2) -> Bool {
+        abs(before.minX - after.minX) > tolerance || abs(before.minY - after.minY) > tolerance
+            || abs(before.width - after.width) > tolerance || abs(before.height - after.height) > tolerance
+    }
+
     /// The centre of the part of `frame` inside every clip (a scroll area, the window); nil when
     /// `frame`'s own centre is outside one, so the element is scrolled or moved out of view.
     public static func visibleCenter(of frame: CGRect, clippedTo clips: [CGRect]) -> CGPoint? {

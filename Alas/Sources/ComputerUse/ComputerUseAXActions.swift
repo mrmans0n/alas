@@ -173,6 +173,22 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// Raises `window` above its app's other windows, without checking focus. For an activated app
+    /// only: an AXRaise on a background app can bring it to the front.
+    static func raise(_ window: ComputerUseWindow, isCancelled: @escaping IsCancelled) async throws {
+        try await onQueue(isCancelled) {
+            let app = window.app
+            var windowsRef: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(
+                ComputerUseAXReader.application(app.pid), kAXWindowsAttribute as CFString, &windowsRef)
+            if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
+            guard result == .success, let axWindows = windowsRef as? [AXUIElement],
+                  let target = axWindow(axWindows, for: window)
+            else { throw ComputerUseSystemError.windowNotFound(window.windowID) }
+            AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+        }
+    }
+
     /// Whether `window` is its app's key window: the app reports itself frontmost, which follows
     /// AppKit's activation state rather than the user's front app, and `window` as its focused
     /// window. The focused window alone proves nothing: an inactive app reports its main window

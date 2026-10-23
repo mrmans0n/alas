@@ -677,6 +677,7 @@ final class ComputerUseCoordinator {
         try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
         try checkStillActive(context)
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
+        if command.action == .drag { try await refuseIfDragMovedWindow(window) }
         let changeWarning = try await settle(
             after: delivered, of: command, in: &window, target: target, before: before,
             end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload).warning
@@ -735,6 +736,14 @@ final class ComputerUseCoordinator {
         // A read that failed reports its error instead; one that can't tell is no success either.
         guard let after = settled.after, !ComputerUseChangeCheck.retryChanged(before: before, after: after) else { return }
         Self.report(depthLimited: payload["depth_limited"] != nil, warning: settled.warning ?? firstWarning, into: &payload)
+    }
+
+    /// A drag that grabbed the window instead of an item moves it; the button is already up then.
+    private func refuseIfDragMovedWindow(_ window: ComputerUseWindow) async throws {
+        guard let current = await system.window(window.windowID),
+              ComputerUseInputGeometry.windowMoved(from: window.frame, to: current.frame)
+        else { return }
+        throw Refusal(Message.actionFailed("The drag moved the window instead of an item; nothing was dropped."))
     }
 
     /// Delivers the input, mapping its failures to the tool errors that name the ref and window.
