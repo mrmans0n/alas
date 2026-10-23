@@ -407,7 +407,7 @@ extension ComputerUseAXActions {
     /// element takes the key itself: a text area (Return is a new line) or an editable control with
     /// a popup, menu or completion list open (the key picks or dismisses it). When the dialog's
     /// button attribute has no value, Escape presses a button titled as a cancel button, and Return
-    /// goes as a key from a single-line field in the panel, else throws `defaultButtonUnreadable`.
+    /// throws `defaultButtonUnreadable`: posted keys don't reach such a panel either.
     static func pressDialogButton(
         _ chord: ComputerUseKeyChord, in window: ComputerUseWindow,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -459,13 +459,9 @@ extension ComputerUseAXActions {
                 return string(of: button, kAXTitleAttribute) ?? (key == .escape ? "Cancel" : "Default")
             }
             guard !unreadable.isEmpty else { return nil }
-            if key == .return {
-                // A field in the panel submits it on Return itself, as typing a name and pressing Return does.
-                if let focused = focusedElement(of: app), isSingleLineField(focused),
-                   isInside(focused, any: unreadable + [target]) { return nil }
-                // A Return that types nothing would look like it did; which button is the default can't be guessed.
-                throw ComputerUseSystemError.actionFailed(defaultButtonUnreadable)
-            }
+            // Such a panel is hosted out of process: a posted Return doesn't reach it, from a field in
+            // it either, and which button is the default can't be guessed.
+            guard key == .escape else { throw ComputerUseSystemError.actionFailed(defaultButtonUnreadable) }
             for candidate in unreadable {
                 guard let (button, title) = cancelButton(in: candidate) else { continue }
                 try pressChecked(button)
@@ -473,25 +469,6 @@ extension ComputerUseAXActions {
             }
             return nil
         }
-    }
-
-    /// Levels a focused field may sit below the sheet or dialog it is in.
-    static let focusedFieldAncestorLevels = 16
-
-    private static func isSingleLineField(_ element: AXUIElement) -> Bool {
-        let fields: Set<String> = [kAXTextFieldRole, kAXComboBoxRole, kAXSearchFieldSubrole]
-        return fields.contains(string(of: element, kAXRoleAttribute) ?? "")
-            || string(of: element, kAXSubroleAttribute) == kAXSearchFieldSubrole
-    }
-
-    /// Whether `element` is in one of `containers`: its window is one, or one is among its ancestors.
-    private static func isInside(_ element: AXUIElement, any containers: [AXUIElement]) -> Bool {
-        if let window = elementAttribute(element, kAXWindowAttribute), containers.contains(where: { CFEqual($0, window) }) {
-            return true
-        }
-        return ancestor(of: element, levels: focusedFieldAncestorLevels) { current in
-            containers.contains { CFEqual($0, current) }
-        } != nil
     }
 
     static let defaultButtonUnreadable =

@@ -274,6 +274,12 @@ enum ComputerUseAXReader {
                     // Conservative: the unread element may have had no children.
                     cutOff = true
                 }
+            } else if !isHalted {
+                // At the depth limit: only whether there is more below, so the agent can ask for it.
+                var childCount: CFIndex = 0
+                let counted = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &childCount)
+                if counted == .cannotComplete { appStalled = true }
+                result.childrenUnread = counted == .success && childCount > 0
             }
             return result
         }

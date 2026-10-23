@@ -5,16 +5,28 @@ public enum ComputerUseTakeover {
     public static let idleThreshold: TimeInterval = 2
     public static let maxWait: TimeInterval = 10
 
+    /// Posted events can land in the HID idle time a little after they were posted.
+    public static let ownInputSlack: TimeInterval = 0.05
+
     public enum Decision: Equatable, Sendable { case proceed, wait, refuse }
 
-    /// `direct` means the activation fallback was requested (the target must be brought to the front).
+    /// `direct` means the activation fallback was requested (the target must be brought to the
+    /// front): it waits for an active user wherever they are, as a background input waits for one
+    /// in the target app, and refuses after `maxWait`.
     public static func decide(
         targetIsFrontmost: Bool, idleSeconds: TimeInterval, direct: Bool, waited: TimeInterval
     ) -> Decision {
         guard idleSeconds < idleThreshold else { return .proceed }
-        if direct { return .refuse }
-        guard targetIsFrontmost else { return .proceed }
+        guard direct || targetIsFrontmost else { return .proceed }
         return waited < maxWait ? .wait : .refuse
+    }
+
+    /// The seconds since the user's own input. The HID idle time counts the events Alas posts too:
+    /// activity no later than Alas's last post (`sinceOwnPost`, nil when it never posted), within
+    /// `ownInputSlack`, is taken as that post, and the user counts as idle.
+    public static func userIdleSeconds(hidIdle: TimeInterval, sinceOwnPost: TimeInterval?) -> TimeInterval {
+        guard let sinceOwnPost, hidIdle + ownInputSlack >= sinceOwnPost else { return hidIdle }
+        return .infinity
     }
 }
 
@@ -30,8 +42,7 @@ public enum ComputerUseEventRoute: Equatable, Sendable {
     /// `keyConfirmed`: the app reported the target window as its key window after the attempt.
     public static func choose(skyLightAvailable: Bool, keyConfirmed: Bool, idleSeconds: TimeInterval) -> Self {
         if skyLightAvailable, keyConfirmed { return .background }
-        let fallback = ComputerUseTakeover.decide(
-            targetIsFrontmost: false, idleSeconds: idleSeconds, direct: true, waited: 0)
-        return fallback == .refuse ? .refuse : .activation
+        // The coordinator already waited for an idle user; one who is back now isn't waited out again.
+        return idleSeconds < ComputerUseTakeover.idleThreshold ? .refuse : .activation
     }
 }

@@ -381,7 +381,8 @@ struct ComputerUseCoordinatorTests {
         (ComputerUseSystemError.staleElement, false,
          "computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."),
         (.outOfBounds, false, "computer_out_of_bounds: The point is outside window 1."),
-        (.userActive, false, "computer_user_active: The user is using Notes right now. Try again in a moment."),
+        // The user isn't in Notes (nothing is frontmost in the fake): the message names the Mac.
+        (.userActive, false, "computer_user_active: You're using the Mac right now. Try again in a moment."),
         (.staleDropElement, true,
          "computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."),
         (.staleElement, true,
@@ -550,8 +551,8 @@ struct ComputerUseCoordinatorTests {
         }
     }
 
-    /// A drag always goes with the app in front, so like direct delivery it is refused, not
-    /// waited out, while the user is active, whatever app they are in.
+    /// A drag always goes with the app in front, so like direct delivery it waits for a user who
+    /// is active in any app, then gives up.
     @Test(arguments: [(60.0, true), (0.5, false)])
     func dragsAlwaysGoDirect(idleSeconds: TimeInterval, delivers: Bool) async throws {
         let recorder = Recorder()
@@ -570,8 +571,8 @@ struct ComputerUseCoordinatorTests {
             #expect(try #require(Self.text(response)).contains(#""delivery":"activation""#))
             #expect(directs.checks == [true])
         } else {
-            #expect(response == .error("computer_user_active: The user is using Notes right now. Try again in a moment."))
-            #expect(recorder.inputs.isEmpty && !recorder.sleeps.contains(ComputerUseCoordinator.takeoverPoll))
+            #expect(response == .error("computer_user_active: You're using the Mac right now. Try again in a moment."))
+            #expect(recorder.inputs.isEmpty && recorder.sleeps.reduce(.zero, +) == .seconds(10))
         }
     }
 
@@ -659,14 +660,23 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.isEmpty)
     }
 
-    @Test func directDeliveryIsRefusedWhileTheUserIsActive() async throws {
+    /// Direct delivery would take the screen: it waits for a user active in another app too, and
+    /// goes once they stop.
+    @Test(arguments: [false, true])
+    func directDeliveryWaitsForTheUserWhereverTheyAre(userStops: Bool) async throws {
         let recorder = Recorder()
+        let polls = Counter()
         var system = Self.system(recorder: recorder)
-        system.secondsSinceUserInput = { 0.5 }
+        system.secondsSinceUserInput = { userStops && polls.next() > 3 ? 60 : 0.5 }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         let response = await f.coordinator.perform(.init(action: .key, windowID: 1, keys: "cmd+s", delivery: .direct), sessionID: "s")
-        #expect(response == .error("computer_user_active: The user is using Notes right now. Try again in a moment."))
-        #expect(recorder.sleeps.isEmpty && recorder.inputs.isEmpty)
+        if userStops {
+            #expect(Self.text(response) != nil && recorder.inputs.count == 1)
+            #expect(recorder.sleeps.prefix(3) == [.milliseconds(100), .milliseconds(100), .milliseconds(100)])
+        } else {
+            #expect(response == .error("computer_user_active: You're using the Mac right now. Try again in a moment."))
+            #expect(recorder.sleeps.reduce(.zero, +) == .seconds(10) && recorder.inputs.isEmpty)
+        }
     }
 
     @Test func turnEndDuringTheTakeoverWaitSendsNothing() async throws {

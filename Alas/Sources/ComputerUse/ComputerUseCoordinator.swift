@@ -168,6 +168,7 @@ final class ComputerUseCoordinator {
         static func userActive(_ app: ComputerUseAppIdentity) -> String {
             "computer_user_active: The user is using \(app.name) right now. Try again in a moment."
         }
+        static let userActiveElsewhere = "computer_user_active: You're using the Mac right now. Try again in a moment."
         static func userTookOver(_ app: ComputerUseAppIdentity, typed: Int, of total: Int) -> String {
             "computer_user_active: The user started using \(app.name); stopped after typing \(typed) of \(total) characters."
         }
@@ -633,10 +634,12 @@ final class ComputerUseCoordinator {
                 window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             payload["truncated"] = read.truncated
             payload["elements"] = read.elements.map(Self.element)
+            Self.report(depthLimited: read.depthLimited, warning: nil, into: &payload)
         case .wait:
             let read = try await waitFor(command, in: window, context: context)
             payload["truncated"] = read.truncated
             payload["elements"] = read.elements.map(Self.element)
+            Self.report(depthLimited: read.depthLimited, warning: nil, into: &payload)
         case .click, .type, .key, .scroll, .drag:
             try await act(command, in: window, toWindow: toWindow, context: context, payload: &payload)
         }
@@ -674,9 +677,10 @@ final class ComputerUseCoordinator {
         try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
         try checkStillActive(context)
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
-        try await settle(after: delivered, of: command, in: &window, target: target, before: before,
-                         end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload)
-        let unchanged = payload["warning"] is String
+        let changeWarning = try await settle(
+            after: delivered, of: command, in: &window, target: target, before: before,
+            end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload)
+        let unchanged = changeWarning != nil
         if let target, let targetRef, Self.retriesWithPointer(
             command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
             manualAccessibility: system.usesManualAccessibility(window.app.pid)) {
@@ -745,7 +749,7 @@ final class ComputerUseCoordinator {
         } catch ComputerUseSystemError.dropOutOfBounds {
             throw Refusal(Message.outOfBounds((toWindow ?? window).windowID))
         } catch ComputerUseSystemError.userActive {
-            throw Refusal(Message.userActive(window.app))
+            throw Refusal(userActiveMessage(window))
         } catch ComputerUseSystemError.userTookOver(let typed, let total) {
             throw Refusal(Message.userTookOver(window.app, typed: typed, of: total))
         }
@@ -753,22 +757,35 @@ final class ComputerUseCoordinator {
 
     /// `settleAndRead`, with a window the input made key in a background app kept through the
     /// settle and the read, which see the window as the input left it, and handed back after them.
+    @discardableResult
     private func settle(
         after delivered: ComputerUseDelivered, of command: ComputerUseCommand, in window: inout ComputerUseWindow,
         target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint,
         end: (window: ComputerUseWindow, before: ComputerUseWindowFingerprint?)?, context: CallContext,
         payload: inout [String: Any]
-    ) async throws {
+    ) async throws -> String? {
         let keyedWindow = delivered.keyedInBackground ? window : nil
         if let keyedWindow { backgroundKeyed[context.sessionID, default: [:]][keyedWindow.windowID] = keyedWindow }
+        let changeWarning: String?
         do {
-            try await settleAndRead(after: delivered, of: command, in: &window, target: target, before: before,
-                                    end: end, context: context, payload: &payload)
+            changeWarning = try await settleAndRead(after: delivered, of: command, in: &window, target: target, before: before,
+                                                    end: end, context: context, payload: &payload)
         } catch {
             if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
             throw error
         }
         if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
+        return changeWarning
+    }
+
+    /// `depth_limited` when the read left elements out for depth, with the hint appended to the warning.
+    private static func report(depthLimited: Bool, warning: String?, into payload: inout [String: Any]) {
+        payload["depth_limited"] = depthLimited ? true : nil
+        guard depthLimited else {
+            payload["warning"] = warning
+            return
+        }
+        payload["warning"] = [warning, ComputerUseInspectTree.depthHint].compactMap { $0 }.joined(separator: " ")
     }
 
     /// Drags always go with the app brought to the front, so the direct takeover rule applies to
@@ -794,12 +811,13 @@ final class ComputerUseCoordinator {
     ]
 
     /// Reports the delivered input, waits for the app to handle it and reads the window back.
+    /// Returns the change check's warning: nil when the input changed something or a read can't tell.
     private func settleAndRead(
         after delivered: ComputerUseDelivered, of command: ComputerUseCommand, in window: inout ComputerUseWindow,
         target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint,
         end: (window: ComputerUseWindow, before: ComputerUseWindowFingerprint?)? = nil, context: CallContext,
         payload: inout [String: Any]
-    ) async throws {
+    ) async throws -> String? {
         // Stopped mid-sequence: the input finished its events, but nothing more happens.
         try checkStillActive(context)
         payload["action"] = command.action.rawValue
@@ -831,17 +849,19 @@ final class ComputerUseCoordinator {
                     if endWarning == nil { warning = nil }
                 }
             }
-            payload["warning"] = warning
+            Self.report(depthLimited: read.depthLimited, warning: warning, into: &payload)
+            return warning
         } catch is CancellationError {
             throw CancellationError()
         } catch {
             // The action changed the window, so the refs from before it are gone either way.
             updateSnapshot(of: window, context: context) { $0.refs = [:] }
             // An earlier attempt's verdict doesn't describe this read.
-            payload["warning"] = nil
+            Self.report(depthLimited: false, warning: nil, into: &payload)
             payload["truncated"] = true
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription
+            return nil
         }
     }
 
@@ -858,6 +878,7 @@ final class ComputerUseCoordinator {
                 current, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
             entry["truncated"] = read.truncated
             entry["elements"] = read.elements.map(Self.element)
+            if read.depthLimited { entry["depth_limited"] = true }
             return (current, read)
         } catch is CancellationError {
             throw CancellationError()
@@ -985,21 +1006,27 @@ final class ComputerUseCoordinator {
     private func waitForUserIdle(in window: ComputerUseWindow, direct: Bool, context: CallContext) async throws -> Bool {
         var waited = Duration.zero
         while true {
+            let targetIsFrontmost = system.frontmostPID() == window.app.pid
             let decision = ComputerUseTakeover.decide(
-                targetIsFrontmost: system.frontmostPID() == window.app.pid,
+                targetIsFrontmost: targetIsFrontmost,
                 idleSeconds: system.secondsSinceUserInput(),
                 direct: direct,
                 waited: Self.seconds(waited)
             )
             switch decision {
             case .proceed: return waited > .zero
-            case .refuse: throw Refusal(Message.userActive(window.app))
+            case .refuse: throw Refusal(targetIsFrontmost ? Message.userActive(window.app) : Message.userActiveElsewhere)
             case .wait:
                 await sleep(Self.takeoverPoll)
                 waited += Self.takeoverPoll
                 try checkStillActive(context)
             }
         }
+    }
+
+    /// Names the target app when the user is in it, else the Mac.
+    private func userActiveMessage(_ window: ComputerUseWindow) -> String {
+        system.frontmostPID() == window.app.pid ? Message.userActive(window.app) : Message.userActiveElsewhere
     }
 
     /// The input sees a stop, session end or cancellation through `isCancelled`, between its events.
@@ -1030,7 +1057,7 @@ final class ComputerUseCoordinator {
 
     private func waitFor(
         _ command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext
-    ) async throws -> (truncated: Bool, elements: [ComputerUseInspectElement]) {
+    ) async throws -> (truncated: Bool, elements: [ComputerUseInspectElement], depthLimited: Bool) {
         let query = command.query ?? ""
         let timeout = Duration.milliseconds(command.timeoutMS)
         let clock = ContinuousClock()
@@ -1043,7 +1070,7 @@ final class ComputerUseCoordinator {
                 window, query: query, limit: command.limit, maxDepth: command.maxDepth, context: context, recordRefs: false)
             if read.elements.isEmpty == (command.condition == .disappear) {
                 record(refs: read, of: window, context: context)
-                return (read.truncated, read.elements)
+                return (read.truncated, read.elements, read.depthLimited)
             }
             // Slow reads count too, so a stalled app can't stretch the wait.
             if slept >= timeout || clock.now - start >= timeout {
@@ -1061,6 +1088,8 @@ final class ComputerUseCoordinator {
 
     private struct ElementRead {
         var truncated: Bool
+        /// Elements were left out for being deeper than the read's max depth.
+        var depthLimited = false
         var elements: [ComputerUseInspectElement]
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
@@ -1089,8 +1118,8 @@ final class ComputerUseCoordinator {
         }
         collect(tree.root)
         let read = ElementRead(
-            truncated: flat.truncated || !tree.complete, elements: flat.elements, handles: tree.handles, refs: flat.refs,
-            identities: identities)
+            truncated: flat.truncated || !tree.complete, depthLimited: flat.depthLimited, elements: flat.elements,
+            handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
     }

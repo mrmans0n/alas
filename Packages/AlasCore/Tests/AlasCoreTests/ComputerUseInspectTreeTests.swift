@@ -44,7 +44,13 @@ struct ComputerUseInspectTreeTests {
     @Test func flattenSkipsBeyondMaxDepth() {
         let result = ComputerUseInspectTree.flatten(sample, query: nil, limit: 100, maxDepth: 1)
         #expect(result.elements.map(\.role) == ["AXWindow", "AXGroup", "AXTextField"])
-        #expect(!result.truncated)
+        #expect(!result.truncated && result.depthLimited)
+        // Deep enough for every element: nothing was left out for depth.
+        #expect(!ComputerUseInspectTree.flatten(sample, query: nil, limit: 100, maxDepth: 2).depthLimited)
+        // The read itself stopped above children it didn't read.
+        var cut = sample
+        cut.children[1].childrenUnread = true
+        #expect(ComputerUseInspectTree.flatten(cut, query: nil, limit: 100, maxDepth: 10).depthLimited)
     }
 
     @Test func queryMatchesCaseInsensitivelyAndKeepsDescendantsReachable() {

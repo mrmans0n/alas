@@ -71,13 +71,15 @@ struct ComputerUseInputTests {
     }
 
     @Test(arguments: [
-        (true, 0.5, true, 0.0, ComputerUseTakeover.Decision.refuse),
+        (true, 0.5, true, 0.0, ComputerUseTakeover.Decision.wait),
         (true, 5.0, true, 0.0, .proceed),
         (true, 0.5, false, 3.0, .wait),
         (true, 0.5, false, 10.0, .refuse),
         (false, 0.5, false, 0.0, .proceed),
         (true, 2.0, false, 0.0, .proceed),
-        (false, 0.5, true, 0.0, .refuse),
+        // Direct waits for the user wherever they are, then gives up.
+        (false, 0.5, true, 3.0, .wait),
+        (false, 0.5, true, 10.0, .refuse),
     ])
     private func takeoverDecisions(
         frontmost: Bool, idle: TimeInterval, direct: Bool, waited: TimeInterval,
@@ -86,6 +88,20 @@ struct ComputerUseInputTests {
         #expect(ComputerUseTakeover.decide(
             targetIsFrontmost: frontmost, idleSeconds: idle, direct: direct, waited: waited
         ) == expected)
+    }
+
+    @Test(arguments: [
+        // Never posted: the HID idle time is the user's.
+        (0.5, nil, 0.5),
+        // The only activity is Alas's own post 0.5 s ago: the user is idle.
+        (0.5, 0.5, Double.infinity),
+        (0.48, 0.5, .infinity),
+        // Input after Alas's last post is the user's.
+        (0.2, 1.0, 0.2),
+        (3.0, 5.0, 3.0),
+    ] as [(TimeInterval, TimeInterval?, TimeInterval)])
+    private func ownPostsDontCountAsTheUsers(hidIdle: TimeInterval, sinceOwnPost: TimeInterval?, expected: TimeInterval) {
+        #expect(ComputerUseTakeover.userIdleSeconds(hidIdle: hidIdle, sinceOwnPost: sinceOwnPost) == expected)
     }
 
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.

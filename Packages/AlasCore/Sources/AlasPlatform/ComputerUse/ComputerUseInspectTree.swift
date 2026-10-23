@@ -13,6 +13,8 @@ public struct ComputerUseAXNode: Sendable {
     public var children: [ComputerUseAXNode]
     /// Opaque index into the app-side handle table; never serialized.
     public var handle: Int?
+    /// The read stopped at its depth limit here, and the element has children it didn't read.
+    public var childrenUnread: Bool
 
     public init(
         role: String,
@@ -24,7 +26,8 @@ public struct ComputerUseAXNode: Sendable {
         isEnabled: Bool = true,
         isFocused: Bool = false,
         children: [ComputerUseAXNode] = [],
-        handle: Int? = nil
+        handle: Int? = nil,
+        childrenUnread: Bool = false
     ) {
         self.role = role
         self.subrole = subrole
@@ -36,6 +39,7 @@ public struct ComputerUseAXNode: Sendable {
         self.isFocused = isFocused
         self.children = children
         self.handle = handle
+        self.childrenUnread = childrenUnread
     }
 }
 
@@ -86,21 +90,25 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
 
 public enum ComputerUseInspectTree {
     static let maxStringLength = 200
+    public static let depthHint =
+        "Some elements are deeper than max_depth; pass a higher max_depth (up to 32) or a query."
 
     /// Refs are the pre-order index of each node among all nodes visited (root is `e1`),
     /// so a query or limit never renumbers them: the same element has the same ref in a
     /// filtered and an unfiltered listing of the same tree. `refs` maps the ref of every
     /// visited node with a handle, listed or not, so a filtered read keeps the others usable.
+    /// `depthLimited`: elements were left out for being deeper than `maxDepth`, here or in the read.
     public static func flatten(
         _ root: ComputerUseAXNode,
         query: String?,
         limit: Int,
         maxDepth: Int
-    ) -> (elements: [ComputerUseInspectElement], truncated: Bool, refs: [String: Int]) {
+    ) -> (elements: [ComputerUseInspectElement], truncated: Bool, refs: [String: Int], depthLimited: Bool) {
         let needle = query.flatMap { $0.isEmpty ? nil : $0.lowercased() }
         var elements: [ComputerUseInspectElement] = []
         var refs: [String: Int] = [:]
         var truncated = false
+        var depthLimited = false
         var visited = 0
 
         func isSecure(_ node: ComputerUseAXNode) -> Bool {
@@ -146,12 +154,13 @@ public enum ComputerUseInspectTree {
                     ))
                 }
             }
+            if node.childrenUnread || (depth == maxDepth && !node.children.isEmpty) { depthLimited = true }
             for child in node.children {
                 visit(child, depth: depth + 1)
             }
         }
 
         visit(root, depth: 0)
-        return (elements, truncated, refs)
+        return (elements, truncated, refs, depthLimited)
     }
 }

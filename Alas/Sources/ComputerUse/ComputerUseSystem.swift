@@ -219,9 +219,11 @@ private enum LiveComputerUseSystem {
             }
     }
 
+    /// The HID idle time, less the activity Alas's own posted events explain.
     static func secondsSinceUserInput() -> TimeInterval {
         // ~0 is kCGAnyInputEventType, which does not import into Swift.
-        CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
+        let hidIdle = CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
+        return ComputerUseTakeover.userIdleSeconds(hidIdle: hidIdle, sinceOwnPost: ComputerUseOwnInput.secondsSinceLastPost())
     }
 
     static func window(_ id: UInt32) async -> ComputerUseWindow? {
