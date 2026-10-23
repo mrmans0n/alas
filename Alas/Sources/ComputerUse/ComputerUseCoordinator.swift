@@ -245,8 +245,12 @@ final class ComputerUseCoordinator {
                 }
                 if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
                 if let refused = accessAfterAnswer(for: current.app, sessionID: sessionID, input: true) { return refused }
-                // The start window's access may have changed while this card was up.
-                if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID, input: true) { return refused }
+                // The start window may have moved, closed or changed access while this card was up.
+                guard let start = await system.window(windowID), start.app.pid == window.app.pid else {
+                    return .error(Message.windowNotFound(windowID))
+                }
+                if let refused = accessAfterAnswer(for: start.app, sessionID: sessionID, input: true) { return refused }
+                window = start
                 toWindow = current
             }
         }
