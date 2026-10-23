@@ -18,7 +18,11 @@ public struct RemotePeerPairer {
         /// key at all (an older build), which pairs but leaves the record
         /// unverified — never "offered one we could not check", which is
         /// `identityUnproven` instead.
-        case paired(token: String, serverId: String?, name: String?, publicKey: String?, origin: String)
+        ///
+        /// `inboundOnly` means the far side will not pair back; it is only
+        /// ever true alongside a proven `publicKey`.
+        case paired(token: String, serverId: String?, name: String?, publicKey: String?, origin: String,
+                    inboundOnly: Bool = false)
         case expiredCode
         case originRejected
         case approvalExpired
@@ -79,6 +83,7 @@ public struct RemotePeerPairer {
             let name: String?
             let publicKey: String?
             let signature: String?
+            let inboundOnly: Bool?
         }
         // One challenge for the whole attempt, not one per origin: whichever
         // origin answers has to sign THIS value, and it is never reused
@@ -138,8 +143,15 @@ public struct RemotePeerPairer {
                     }
                     verifiedKey = claimedKey
                 }
+                // Without a pair-back nothing else ever vouches for the far
+                // side, so an inbound-only reply has to prove its key.
+                let inboundOnly = reply.inboundOnly == true
+                if inboundOnly, verifiedKey == nil {
+                    sawUnprovenIdentity = true
+                    continue
+                }
                 return .paired(token: reply.token, serverId: reply.serverId, name: reply.name,
-                               publicKey: verifiedKey, origin: normalized)
+                               publicKey: verifiedKey, origin: normalized, inboundOnly: inboundOnly)
             case 401:
                 sawExpiredCode = true
                 continue
@@ -166,9 +178,9 @@ extension RemotePeerPairer.Outcome: CustomStringConvertible {
     /// string. Redact it at the type, so no caller has to remember.
     public var description: String {
         switch self {
-        case .paired(_, let serverId, let name, let publicKey, let origin):
+        case .paired(_, let serverId, let name, let publicKey, let origin, let inboundOnly):
             return "paired(token: <redacted>, serverId: \(serverId ?? "nil"), name: \(name ?? "nil"), "
-                + "publicKey: \(publicKey ?? "nil"), origin: \(origin))"
+                + "publicKey: \(publicKey ?? "nil"), origin: \(origin), inboundOnly: \(inboundOnly))"
         case .expiredCode:
             return "expiredCode"
         case .originRejected:

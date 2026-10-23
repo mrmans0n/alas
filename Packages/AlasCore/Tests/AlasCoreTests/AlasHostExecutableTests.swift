@@ -264,7 +264,7 @@ struct AlasHostExecutableTests {
             // Stopped before the next start, which needs the data directory.
             host.process.terminate()
             #expect(try await host.exitStatus() == 0)
-            guard case .paired(_, _, _, let publicKey, _) = outcome else {
+            guard case .paired(_, _, _, let publicKey, _, _) = outcome else {
                 Issue.record("expected the host to pair, got \(outcome)")
                 return nil
             }
