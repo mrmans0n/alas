@@ -295,6 +295,22 @@ struct RunTabPresentationTests {
         #expect(row.locationDetail == "devbox · /srv/wt/apps/web")
     }
 
+    // MARK: - Peer rows
+
+    /// A peer's row reads as the local one, without Edit or Terminal, and
+    /// names the host instead of this Mac.
+    @Test func peerRowsOfferRunStopRerunAndOutputOnly() {
+        let script = HostRunScript(scope: .repo, fileName: "dev.sh", name: "Dev Server", cwd: nil, target: RunExecutionTarget(host: nil, workingDirectory: "/wt"))
+        let finished = RunTabPresentation.peerRow(
+            PeerRuns.Row(script: script, record: record(status: .finished(.failed(exitCode: 42)), finishedAt: epoch.addingTimeInterval(75))),
+            hostName: "Studio", now: epoch.addingTimeInterval(75 + 3_600))
+        #expect(finished.detail == "exit 42 · 1m 15s · 1h ago")
+        #expect(finished.actions == [.start(label: "Rerun"), .showReport(runID: "run-1")])
+        #expect(finished.locationDetail == "Studio · /wt")
+        let running = RunTabPresentation.peerRow(PeerRuns.Row(script: script, record: record(status: .running)), hostName: "Studio", now: epoch)
+        #expect(running.actions == [.stop, .restart])
+    }
+
     // MARK: - Port conflicts
 
     @Test func portConflictNamesTheOtherOwnerWithoutOfferingToKillIt() {

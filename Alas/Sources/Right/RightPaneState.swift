@@ -12,9 +12,11 @@ enum RightPaneTab: String {
     }
 
     /// A peer worktree exposes read-only changes and files, and its sessions;
-    /// run scripts and schedules belong to this Mac.
-    static func peerAvailable(isFolder: Bool = false) -> [Self] {
-        isFolder ? [.files, .agent] : [.changes, .files, .agent]
+    /// schedules belong to this Mac; Run needs a host that serves
+    /// `host.runs.scripts.v1`.
+    static func peerAvailable(isFolder: Bool = false, servesRuns: Bool = false) -> [Self] {
+        let tabs: [Self] = isFolder ? [.files, .agent] : [.changes, .files, .agent]
+        return servesRuns ? tabs + [.run] : tabs
     }
 }
 
