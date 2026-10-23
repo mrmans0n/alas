@@ -46,69 +46,38 @@ enum ComputerUseAXReader {
 
     /// An app that just accepted `AXManualAccessibility` builds its tree asynchronously: until it
     /// has, the window reads as nested groups. Before the first read of such an app, checks every
-    /// `treeBuildPoll` for up to `treeBuildWait` until the window has an element other than a group
-    /// within `treeBuildProbeDepth` levels. Apps that refused the ask are never waited on.
-    /// The waits happen off the AX queue, so actions and other reads go on meanwhile.
+    /// `treeBuildPoll` until the window has an element other than a group within
+    /// `treeBuildProbeDepth` levels, for at most `treeBuildWait` overall and as much AX-queue time.
+    /// A pid already asked and not building costs nothing: no hop to the AX queue. The waits
+    /// happen off the queue, so actions and other reads go on meanwhile.
     private static func awaitTreeBuild(_ window: ComputerUseWindow, cancel: CancelFlag) async {
         let pid = window.app.pid
+        let asked = manualAccessibilityPIDs.withLock { $0.contains(pid) }
+        if asked, !buildingTreePIDs.withLock({ $0.contains(pid) }) { return }
         let deadline = ContinuousClock.now + treeBuildWait
+        var queueTime = Duration.zero
         while true {
-            let built = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let budget = treeBuildWait - queueTime
+            let (built, spent) = await withCheckedContinuation { (continuation: CheckedContinuation<(Bool, Duration), Never>) in
                 queue.async {
+                    let start = ContinuousClock.now
+                    // The first sight of a pid asks it here.
                     let application = application(pid)
                     guard buildingTreePIDs.withLock({ $0.contains(pid) }), !cancel.isSet else {
-                        return continuation.resume(returning: true)
+                        return continuation.resume(returning: (true, ContinuousClock.now - start))
                     }
-                    continuation.resume(returning: hasMoreThanGroups(window, application: application))
+                    let probe = Walk(
+                        budget: treeBuildProbeNodes, maxDepth: treeBuildProbeDepth,
+                        deadline: min(deadline, start + budget), isCancelled: { cancel.isSet })
+                    let built = probe.hasMoreThanGroups(window, application: application)
+                    continuation.resume(returning: (built, ContinuousClock.now - start))
                 }
             }
-            if built || cancel.isSet || ContinuousClock.now >= deadline { break }
+            queueTime += spent
+            if built || cancel.isSet || ContinuousClock.now >= deadline || queueTime >= treeBuildWait { break }
             try? await Task.sleep(for: treeBuildPoll)
         }
         buildingTreePIDs.withLock { _ = $0.remove(pid) }
-    }
-
-    /// Whether the window has a descendant other than an `AXGroup` within the probe's bounds.
-    /// Call on `queue`.
-    private static func hasMoreThanGroups(_ window: ComputerUseWindow, application: AXUIElement) -> Bool {
-        func copy(_ element: AXUIElement, _ attribute: String) -> CFTypeRef? {
-            var value: CFTypeRef?
-            return AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success ? value : nil
-        }
-        func frame(_ element: AXUIElement) -> CGRect? {
-            guard let position = copy(element, kAXPositionAttribute), let size = copy(element, kAXSizeAttribute),
-                  CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID()
-            else { return nil }
-            var point = CGPoint.zero
-            var extent = CGSize.zero
-            guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &extent)
-            else { return nil }
-            return CGRect(origin: point, size: extent)
-        }
-        func children(_ element: AXUIElement) -> [AXUIElement] {
-            let children = (copy(element, kAXChildrenAttribute) as? [AXUIElement]) ?? []
-            for child in children {
-                AXUIElementSetMessagingTimeout(child, messagingTimeout)
-            }
-            return children
-        }
-        guard let axWindows = copy(application, kAXWindowsAttribute) as? [AXUIElement],
-              let root = matchingWindow(axWindows, for: window, frame: frame, title: { copy($0, kAXTitleAttribute) as? String })
-        else { return false }
-        var level = children(root)
-        var visited = 0
-        for _ in 1 ... treeBuildProbeDepth {
-            var next: [AXUIElement] = []
-            for element in level {
-                visited += 1
-                guard visited <= treeBuildProbeNodes else { return false }
-                if (copy(element, kAXRoleAttribute) as? String) != kAXGroupRole { return true }
-                next += children(element)
-            }
-            if next.isEmpty { return false }
-            level = next
-        }
-        return false
     }
 
     final class CancelFlag: Sendable {
@@ -220,6 +189,41 @@ enum ComputerUseAXReader {
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
             return (root, !cutOff && !isHalted, ComputerUseAXHandles(elements))
+        }
+
+        /// Whether the window has a descendant other than an `AXGroup` within `maxDepth` levels and
+        /// `budget` nodes. Every element is checked against the deadline and cancellation, and no
+        /// AX message may wait past the deadline.
+        func hasMoreThanGroups(_ window: ComputerUseWindow, application: AXUIElement) -> Bool {
+            func limitWait(_ element: AXUIElement) {
+                let remaining = deadline - ContinuousClock.now
+                let seconds = Float(remaining.components.seconds) + Float(remaining.components.attoseconds) / 1e18
+                AXUIElementSetMessagingTimeout(element, max(0.01, min(ComputerUseAXReader.messagingTimeout, seconds)))
+            }
+            limitWait(application)
+            guard let windowsRef = attribute(application, kAXWindowsAttribute), let axWindows = windowsRef as? [AXUIElement],
+                  let root = ComputerUseAXReader.matchingWindow(
+                      axWindows, for: window, frame: { frame(of: $0) }, title: { string(of: $0, kAXTitleAttribute) },
+                      shouldStop: { isHalted })
+            else { return false }
+            limitWait(root)
+            var level = childElements(of: root)
+            for _ in 0 ..< maxDepth {
+                var next: [AXUIElement] = []
+                for element in level {
+                    count += 1
+                    guard count <= budget, !isHalted else { return false }
+                    limitWait(element)
+                    // A halted walk reads nothing; an unreadable role proves nothing.
+                    let role = string(of: element, kAXRoleAttribute)
+                    if isHalted { return false }
+                    if let role, role != kAXGroupRole { return true }
+                    next += childElements(of: element)
+                }
+                guard !next.isEmpty else { return false }
+                level = next
+            }
+            return false
         }
 
         private func notResponding(_ window: ComputerUseWindow) -> ComputerUseSystemError {
