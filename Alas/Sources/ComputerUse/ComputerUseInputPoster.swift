@@ -52,11 +52,14 @@ enum ComputerUseInputPoster {
     /// A drag the system's drag and drop can follow: posted at the HID level, so the cursor moves
     /// with it. A file drag hands off to a drag session that tracks the cursor, not the events
     /// posted to a pid. Every event carries Alas's marker, so the input tap never takes it for the
-    /// user's. Between steps, `userActive` true cancels it: dragged back to the start and released
-    /// there, as for a covered drop (`dropIsVisible` false before the release), so nothing moves.
-    /// The button is always released, and then the cursor goes back where it was.
+    /// user's. `interrupt`, checked before every step and the release, cancels it in place: dragged
+    /// back to the start and released there, so nothing moves; so does a covered drop
+    /// (`dropIsVisible` false before the release). The button is always released. The cursor then
+    /// goes back where it was, except when the user took over, since their hand is on it.
+    /// Pauses don't shorten under cancellation, so a Stop can't turn into an early drop.
     static func systemDrag(
-        from start: CGPoint, to end: CGPoint, dropIsVisible: @Sendable () -> Bool, userActive: @Sendable () -> Bool
+        from start: CGPoint, to end: CGPoint, dropIsVisible: @Sendable () -> Bool,
+        interrupt: @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         // Build everything first so a failure can't leave the button down or the cursor moved.
         let cursor = CGEvent(source: nil)?.location ?? start
@@ -70,40 +73,63 @@ enum ComputerUseInputPoster {
         let back = try systemMouseEvent(.leftMouseDragged, at: start, clickState: 1)
         let upAtStart = try systemMouseEvent(.leftMouseUp, at: start, clickState: 1)
         let up = try systemMouseEvent(.leftMouseUp, at: end, clickState: 1)
-        func cancel() {
+        var pressed = false
+        /// Cancels in place on a stop or the user's input, before the next event goes out.
+        func checkInterrupt() throws {
+            switch interrupt() {
+            case .cancelled:
+                if pressed { cancelInPlace() }
+                throw CancellationError()
+            case .userActive:
+                guard pressed else { throw ComputerUseSystemError.userActive }
+                cancelInPlace()
+                throw ComputerUseSystemError.userTookOverDrag
+            case nil:
+                break
+            }
+        }
+        func cancelInPlace() {
             postSystemWide(back)
             postSystemWide(upAtStart)
         }
         do {
             postSystemWide(primer)
-            await pause()
+            await steadyPause(stepDelay)
+            try checkInterrupt()
             postSystemWide(down)
-            try? await Task.sleep(for: systemDragDownHold)
+            pressed = true
+            await steadyPause(systemDragDownHold)
             for move in moves {
-                try? await Task.sleep(for: systemDragStepDelay)
-                if userActive() {
-                    cancel()
-                    throw ComputerUseSystemError.userActive
-                }
+                try checkInterrupt()
                 postSystemWide(move)
+                await steadyPause(systemDragStepDelay)
             }
-            try? await Task.sleep(for: systemDragHover)
-            if userActive() {
-                cancel()
-                throw ComputerUseSystemError.userActive
-            }
+            await steadyPause(systemDragHover)
+            try checkInterrupt()
             guard dropIsVisible() else {
-                cancel()
+                cancelInPlace()
                 throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
             }
             postSystemWide(up)
+        } catch let error as ComputerUseSystemError where error.isUserTakeover {
+            // The user's hand is on the cursor: it stays where they put it.
+            throw error
         } catch {
-            try? await Task.sleep(for: cursorRestoreDelay)
+            await steadyPause(cursorRestoreDelay)
             postSystemWide(restore)
             throw error
         }
-        try? await Task.sleep(for: cursorRestoreDelay)
+        await steadyPause(cursorRestoreDelay)
         postSystemWide(restore)
+    }
+
+    /// A pause that a cancelled task still waits out in full.
+    private static func steadyPause(_ duration: Duration) async {
+        let parts = duration.components
+        let seconds = Double(parts.seconds) + Double(parts.attoseconds) / 1e18
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global(qos: .userInteractive).asyncAfter(deadline: .now() + seconds) { continuation.resume() }
+        }
     }
 
     private static func systemMouseEvent(_ type: CGEventType, at point: CGPoint, clickState: Int) throws -> CGEvent {

@@ -172,6 +172,8 @@ final class ComputerUseCoordinator {
         static func userTookOver(_ app: ComputerUseAppIdentity, typed: Int, of total: Int) -> String {
             "computer_user_active: The user started using \(app.name); stopped after typing \(typed) of \(total) characters."
         }
+        static let userTookOverDrag =
+            "computer_user_active: You started using the Mac, so the drag was cancelled mid-way; nothing was dropped."
         static func actionFailed(_ reason: String) -> String { "computer_action_failed: \(reason)" }
         static let noQuitting = "Agents can't quit apps."
         static let noCrossAppDrag = "Dragging between different apps isn't supported yet."
@@ -766,6 +768,8 @@ final class ComputerUseCoordinator {
             throw Refusal(userActiveMessage(window))
         } catch ComputerUseSystemError.userTookOver(let typed, let total) {
             throw Refusal(Message.userTookOver(window.app, typed: typed, of: total))
+        } catch ComputerUseSystemError.userTookOverDrag {
+            throw Refusal(Message.userTookOverDrag)
         }
     }
 

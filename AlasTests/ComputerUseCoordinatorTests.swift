@@ -403,6 +403,8 @@ struct ComputerUseCoordinatorTests {
          "computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."),
         (.staleElement, true,
          "computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."),
+        (.userTookOverDrag, true,
+         "computer_user_active: You started using the Mac, so the drag was cancelled mid-way; nothing was dropped."),
     ])
     func deliveryFailuresMapToTheirToolErrors(_ error: ComputerUseSystemError, drag: Bool, expected: String) async throws {
         var system = Self.system()

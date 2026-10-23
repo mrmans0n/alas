@@ -113,6 +113,16 @@ enum ComputerUseSystemError: Error, LocalizedError {
     case userActive
     /// The user took over while text was being typed.
     case userTookOver(typed: Int, of: Int)
+    /// The user took over after a drag's button went down; it was cancelled in place.
+    case userTookOverDrag
+
+    /// The user's input stopped the input.
+    var isUserTakeover: Bool {
+        switch self {
+        case .userActive, .userTookOver, .userTookOverDrag: true
+        default: false
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -123,6 +133,7 @@ enum ComputerUseSystemError: Error, LocalizedError {
         case .outOfBounds, .dropOutOfBounds: "The point is outside the window"
         case .userActive: "The user is using the app"
         case .userTookOver(let typed, let total): "The user took over after \(typed) of \(total) characters"
+        case .userTookOverDrag: "The user took over during the drag"
         case .actionFailed(let reason): reason
         case .notActiveWindow(let reason): reason
         case .openFailed(let reason): reason
@@ -703,6 +714,7 @@ extension LiveComputerUseSystem {
         case .drag(let from, let to, let toWindow):
             // Only with the app activated, and posted system-wide: a file drag's session follows
             // the cursor. Telling the user's input from these events needs the input tap.
+            precondition(!background, "Drags only go with the app activated")
             guard ComputerUseUserInput.isWatching else {
                 throw ComputerUseSystemError.actionFailed(
                     "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own.")
@@ -716,18 +728,19 @@ extension LiveComputerUseSystem {
             let dropWindow = toWindow ?? window
             // A ref's point is on the part of it its scroll area shows: an element scrolled under
             // another part of the window (a sidebar) would press that part instead.
-            let start: CGPoint
-            switch from {
-            case .element(let handles, let handle):
-                guard let visible = try await ComputerUseAXActions.visibleCenter(
-                    handles, handle, within: window.frame, app: app, requireOwnCenter: false, isCancelled: isCancelled)
-                else { throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.") }
-                start = visible
-                try await ComputerUseAXActions.selectRow(handles, handle, isCancelled: isCancelled)
-            case .point(let point):
-                guard window.frame.contains(point) else { throw ComputerUseSystemError.outOfBounds }
-                start = point
+            func startPoint() async throws -> CGPoint {
+                switch from {
+                case .element(let handles, let handle):
+                    guard let visible = try await ComputerUseAXActions.visibleCenter(
+                        handles, handle, within: window.frame, app: app, requireOwnCenter: false, isCancelled: isCancelled)
+                    else { throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.") }
+                    return visible
+                case .point(let point):
+                    guard window.frame.contains(point) else { throw ComputerUseSystemError.outOfBounds }
+                    return point
+                }
             }
+            var start = try await startPoint()
             let end: CGPoint
             switch to {
             case .element(let handles, let handle):
@@ -747,21 +760,39 @@ extension LiveComputerUseSystem {
                 guard dropWindow.frame.contains(point) else { throw ComputerUseSystemError.dropOutOfBounds }
                 end = point
             }
-            switch ComputerUseInputGeometry.coveredDragPoint(
-                start: start, in: window.windowID, end: end, in: (toWindow ?? window).windowID,
-                windows: onScreenWindows().map { ($0.id, $0.frame) }) {
-            case .start: throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
-            case .end: throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
-            case nil: break
+            func checkCovered() throws {
+                switch ComputerUseInputGeometry.coveredDragPoint(
+                    start: start, in: window.windowID, end: end, in: dropWindow.windowID,
+                    windows: onScreenWindows().map { ($0.id, $0.frame) }) {
+                case .start: throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
+                case .end: throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
+                case nil: break
+                }
             }
+            try checkCovered()
             try checkCancelled()
+            if case .element(let handles, let handle) = from {
+                try await ComputerUseAXActions.selectRow(handles, handle, isCancelled: isCancelled)
+                // Selecting may scroll the row.
+                start = try await startPoint()
+                try checkCovered()
+                try checkCancelled()
+            }
             // Another window over the drop point would take the drop: checked right before the release.
             let dropWindowID = dropWindow.windowID
+            let pid = app.pid
+            let dragBegan = ComputerUseUserInput.now()
             try await ComputerUseInputPoster.systemDrag(from: start, to: end, dropIsVisible: {
                 ComputerUseInputGeometry.topmostWindow(at: end, in: onScreenWindows().map { ($0.id, $0.frame) })
                     == dropWindowID
-            }, userActive: {
-                interrupt() == .userActive
+            }, interrupt: {
+                if isCancelled() || Task.isCancelled { return .cancelled }
+                // The cursor is shared: any input of the user's since the drag began, in any app,
+                // or the target leaving the front ends it.
+                if let last = ComputerUseUserInput.lastInput(), last > dragBegan { return .userActive }
+                let front = ComputerUseSkyLight.isFrontProcess(pid: pid)
+                    ?? NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+                return front ? interrupt() : .userActive
             })
         }
     }
@@ -1045,9 +1076,9 @@ private actor ComputerUseSerialLock {
 }
 
 /// The user's physical input to any app, Alas included, from a listen-only event tap at the HID
-/// level. Events Alas posts to a pid never pass through it, and carry `postedEventMarker` should
-/// one ever do. The tap runs on its own thread and run loop, never the main thread, and only
-/// stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
+/// level. Events Alas posts to a pid never pass through it. The drags Alas posts system-wide do,
+/// and carry `postedEventMarker`, which the tap skips; so does every other event Alas posts. The
+/// tap runs on its own thread and run loop, never the main thread, and only stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
 /// in a trusted process; until it runs the takeover check falls back to the HID idle time.
 enum ComputerUseUserInput {
     /// "ALAS", in every event Alas posts (`kCGEventSourceUserData`).

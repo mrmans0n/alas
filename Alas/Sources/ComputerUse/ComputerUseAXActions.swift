@@ -147,17 +147,21 @@ enum ComputerUseAXActions {
         }
     }
 
-    /// Selects the table or outline row holding the element (itself or up to `rowLevels` above),
-    /// when it isn't selected and can be: Finder starts a drag only from a row already selected
-    /// when the button goes down, as a user's press-and-hold would leave it.
+    /// Makes the table or outline row holding the element (itself or up to `rowLevels` above) the
+    /// only selected row, as a press on it would: Finder starts a drag only from a row already
+    /// selected when the button goes down, and other selected rows would be dragged along.
+    /// Sets the table's selected rows, else the row's own selected flag; nothing without a row.
     static func selectRow(_ handles: ComputerUseAXHandles, _ handle: Int, isCancelled: @escaping IsCancelled) async throws {
         try await onQueue(isCancelled) {
             guard let row = ancestor(of: try resolve(handles, handle), levels: rowLevels, where: {
                 string(of: $0, kAXRoleAttribute) == kAXRowRole
             }) else { return }
-            var selected: CFTypeRef?
-            if AXUIElementCopyAttributeValue(row, kAXSelectedAttribute as CFString, &selected) == .success,
-               (selected as? Bool) == true { return }
+            if let table = elementAttribute(row, kAXParentAttribute),
+               [kAXTableRole, kAXOutlineRole].contains(string(of: table, kAXRoleAttribute)),
+               isSettable(table, kAXSelectedRowsAttribute),
+               AXUIElementSetAttributeValue(table, kAXSelectedRowsAttribute as CFString, [row] as CFArray) == .success {
+                return
+            }
             guard isSettable(row, kAXSelectedAttribute) else { return }
             AXUIElementSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
         }
