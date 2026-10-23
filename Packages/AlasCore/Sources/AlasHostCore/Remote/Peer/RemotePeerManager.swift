@@ -868,8 +868,10 @@ public final class RemotePeerManager {
     /// for it, and the record is never dialled. It exists so the peer can be
     /// listed and forgotten, which revokes the device it was just granted.
     /// Nothing here proved the peer's key, so none is pinned; a key an
-    /// earlier pair-back proved stays, as `upsert` never clears one. A token
-    /// and address the app sharing this profile holds stay too.
+    /// earlier pair-back proved stays, as `upsert` never clears one. An
+    /// existing record keeps its token and addresses as they are: nothing
+    /// here proved the caller answers at the origins it advertised, and the
+    /// app sharing this profile would send that token to them.
     private func recordInboundOnlyPeer(_ request: RemotePeerPairingRequest, approvalID: String?) -> Bool {
         let startGeneration = startGenerationAtRedeem.removeValue(forKey: request.localDeviceId)
             ?? forgetGeneration(for: request.peerServerId)
@@ -882,7 +884,7 @@ public final class RemotePeerManager {
         }
         let existing = peers.first { $0.serverId == request.peerServerId }
         lastUpsertOwnerByServerId[request.peerServerId] = request.redeemedCode
-        upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
+        upsert(serverId: request.peerServerId, name: request.peerName, origins: existing?.origins ?? request.origins,
                lastOrigin: existing?.lastOrigin, token: existing?.token ?? "", publicKey: nil,
                localDeviceId: request.localDeviceId)
         durableStateByServerId[request.peerServerId] = peers.first { $0.serverId == request.peerServerId }
