@@ -728,6 +728,7 @@ final class ComputerUseCoordinator {
         payload["action"] = command.action.rawValue
         payload["delivery"] = delivered.delivery.rawValue
         payload["menu_item"] = delivered.menuItem
+        payload["button"] = delivered.button
 
         await sleep(Self.settleDelay)
         try checkStillActive(context)

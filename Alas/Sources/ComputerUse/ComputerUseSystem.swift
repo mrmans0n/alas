@@ -69,6 +69,8 @@ struct ComputerUseDelivered: Sendable, Equatable {
     var delivery: ComputerUseDelivery
     /// "Menu > Item" in the app's own menu titles.
     var menuItem: String?
+    /// The title of the sheet or dialog button an Escape or Return pressed.
+    var button: String?
     /// The input made the window key in an app that isn't the user's front app; the app keeps
     /// treating it as its active key window until `releaseBackgroundFocus` hands it back.
     var keyedInBackground = false
@@ -383,6 +385,12 @@ extension LiveComputerUseSystem {
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // The text isn't settable; focus it and type instead.
+            }
+        case .key(let chord):
+            // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing
+            // the button needs no key window, so nothing is keyed or activated for it.
+            if let button = try await ComputerUseAXActions.pressDialogButton(chord, in: window, interrupt: interrupt) {
+                return ComputerUseDelivered(delivery: .ax, button: button)
             }
         case .scroll(let at, let dx, let dy):
             do {

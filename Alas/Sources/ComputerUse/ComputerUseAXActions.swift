@@ -148,14 +148,15 @@ enum ComputerUseAXActions {
     /// Whether `window` is its app's key window: the app reports itself frontmost, which follows
     /// AppKit's activation state rather than the user's front app, and `window` as its focused
     /// window. The focused window alone proves nothing: an inactive app reports its main window
-    /// there while it has no key window. Also returns the focused window's id, nil when unknown.
+    /// there while it has no key window. A sheet open on `window` counts as `window`: it takes the
+    /// keys while it is up. Also returns the focused window's id, nil when unknown.
     static func keyWindowState(
         _ window: ComputerUseWindow, isCancelled: @escaping IsCancelled
     ) async throws -> (isKey: Bool, focusedWindowID: UInt32?) {
         try await onQueue(isCancelled) {
             let app = window.app
             let application = ComputerUseAXReader.application(app.pid)
-            let focused = elementAttribute(application, kAXFocusedWindowAttribute)
+            let focused = elementAttribute(application, kAXFocusedWindowAttribute).map(owningWindow(of:))
             let focusedID = focused.flatMap(ComputerUseSkyLight.windowID(of:))
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
@@ -186,9 +187,18 @@ enum ComputerUseAXActions {
     /// Whether the app's focused window is `target`, the AX window of `window`: by window id where
     /// AX can name it, else by element equality.
     private static func isFocusedWindow(_ target: AXUIElement, _ window: ComputerUseWindow, of application: AXUIElement) -> Bool {
-        guard let focused = elementAttribute(application, kAXFocusedWindowAttribute) else { return false }
+        guard let focused = elementAttribute(application, kAXFocusedWindowAttribute).map(owningWindow(of:)) else { return false }
         if ComputerUseSkyLight.canIdentifyWindows { return ComputerUseSkyLight.windowID(of: focused) == window.windowID }
         return CFEqual(focused, target)
+    }
+
+    /// The window a focused sheet is attached to, else the focused window itself.
+    private static func owningWindow(of focused: AXUIElement) -> AXUIElement {
+        guard string(of: focused, kAXRoleAttribute) == kAXSheetRole,
+              let parent = elementAttribute(focused, kAXParentAttribute),
+              string(of: parent, kAXRoleAttribute) == kAXWindowRole
+        else { return focused }
+        return parent
     }
 
     private static func frame(of element: AXUIElement) -> CGRect? {
@@ -387,6 +397,70 @@ extension ComputerUseAXActions {
             try press(target.item, app: app)
             return target.path.joined(separator: " > ")
         }
+    }
+
+    /// Escape and Return on a window with a sheet or dialog up: presses its cancel or default
+    /// button and returns the button's title; nil when the chord isn't a bare Escape or Return or
+    /// there is no such enabled button. Looks at the window's sheets, the app's focused window when
+    /// it is one of them, and the window itself when it is a dialog.
+    static func pressDialogButton(
+        _ chord: ComputerUseKeyChord, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> String? {
+        guard chord.modifiers.isEmpty, case .named(let key) = chord.key else { return nil }
+        let attribute: String
+        switch key {
+        case .escape: attribute = kAXCancelButtonAttribute
+        case .return: attribute = kAXDefaultButtonAttribute
+        default: return nil
+        }
+        let app = window.app
+        return try await onQueue({ interrupt() == .cancelled }) {
+            let application = ComputerUseAXReader.application(app.pid)
+            var windowsRef: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
+            if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
+            guard result == .success, let axWindows = windowsRef as? [AXUIElement],
+                  let target = axWindow(axWindows, for: window)
+            else { return nil }
+            var candidates = elements(of: target, sheetsAttribute)
+            candidates += children(of: target).filter { string(of: $0, kAXRoleAttribute) == kAXSheetRole }
+            if let focused = elementAttribute(application, kAXFocusedWindowAttribute),
+               string(of: focused, kAXRoleAttribute) == kAXSheetRole,
+               elementAttribute(focused, kAXParentAttribute).map({ CFEqual($0, target) }) == true {
+                candidates.append(focused)
+            }
+            if let subrole = string(of: target, kAXSubroleAttribute), [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole) {
+                candidates.append(target)
+            }
+            for candidate in candidates {
+                guard let button = elementAttribute(candidate, attribute), bool(of: button, kAXEnabledAttribute) != false
+                else { continue }
+                switch interrupt() {
+                case .cancelled: throw CancellationError()
+                case .userActive: throw ComputerUseSystemError.userActive
+                case nil: break
+                }
+                try press(button, app: app)
+                return string(of: button, kAXTitleAttribute) ?? (key == .escape ? "Cancel" : "Default")
+            }
+            return nil
+        }
+    }
+
+    /// No header constant exists for it.
+    private static let sheetsAttribute = "AXSheets"
+
+    /// An attribute holding a list of elements, with the messaging timeout set on each.
+    private static func elements(of element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+              let elements = value as? [AXUIElement]
+        else { return [] }
+        for element in elements {
+            AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+        }
+        return elements
     }
 
     /// Inserts `text` at the element's caret, replacing its selection. Refuses secure text fields.
