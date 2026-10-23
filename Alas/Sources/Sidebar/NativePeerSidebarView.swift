@@ -365,7 +365,7 @@ private struct NativePeerWorktreeRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 7) {
                 Icon(name: "branch", size: 12,
-                     color: theme.color(status?.pulses == true ? "add" : "fg-faint"))
+                     color: theme.color(status == NativePeerWorktreeGroup.running ? "add" : "fg-faint"))
                 Text(worktree.title)
                     .font(.system(size: 12, weight: .medium, design: .monospaced))
                     .foregroundColor(theme.color("fg"))
@@ -411,10 +411,13 @@ private struct NativePeerWorktreeRow: View {
             if let status {
                 HStack(spacing: 5) {
                     StatusDot(color: theme.color(status.colorToken), pulses: status.pulses)
+                    // A host's failure carries git's message, which can be long.
                     Text(status.note)
                         .foregroundColor(theme.color(status.colorToken))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                 }
-                .fixedSize()
+                .help(status.note)
             } else if worktree.sessions.count == 1, let session = worktree.sessions.first {
                 // Nothing to report, so the chat's own title fills the slot a
                 // status chip would take.

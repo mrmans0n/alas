@@ -215,6 +215,8 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
     /// The host's own record of the worktree, for a peer serving the host channel.
     var host: PeerHostWorktree?
 
+    /// An agent mid-turn; the only status that tints the branch icon.
+    static let running = WorktreeRowView.StatusPresentation(note: "running", colorToken: "add", pulses: true)
     static let waitingStatuses: Set<String> = ["awaitingPermission", "awaitingInput"]
 
     static func key(for session: RemoteSessionSummary) -> String {
@@ -333,9 +335,7 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         if sessions.contains(where: { $0.status == "awaitingInput" }) {
             return .init(note: "needs input", colorToken: "mod", pulses: false)
         }
-        if sessions.contains(where: { $0.status == "streaming" }) {
-            return .init(note: "running", colorToken: "add", pulses: true)
-        }
+        if sessions.contains(where: { $0.status == "streaming" }) { return Self.running }
         return nil
     }
 
