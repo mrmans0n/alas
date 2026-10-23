@@ -560,6 +560,9 @@ public final class RemotePeerManager {
         case .identityUnproven:
             endAttempt(counterCode: counterCode)
             return .identityUnproven
+        case .identityRebindRefused:
+            endAttempt(counterCode: counterCode)
+            return .identityRebindRefused
         case .unreachable:
             // Our own leg failing does not mean the peer's did: A's reply to
             // us can be lost on the wire after A already redeemed our
@@ -854,10 +857,19 @@ public final class RemotePeerManager {
         return true
     }
 
+    /// Whether a peer may pair with this server inbound only: not when a
+    /// record for its identity is pinned to a different key. Asked before the
+    /// reply, so the peer hears the refusal instead of keeping a dead token.
+    public func admitsInboundOnlyPeer(_ advertisement: RemotePeerAdvertisement) -> Bool {
+        !wouldRebindIdentity(serverId: advertisement.serverId, publicKey: advertisement.publicKey)
+    }
+
     /// A peer this server answered `inboundOnly`: no pair-back, so no token
     /// for it, and the record is never dialled. It exists so the peer can be
     /// listed and forgotten, which revokes the device it was just granted.
-    /// Its key is the one it claimed; nothing here proved it.
+    /// Nothing here proved the peer's key, so none is pinned; a key an
+    /// earlier pair-back proved stays, as `upsert` never clears one. A token
+    /// and address the app sharing this profile holds stay too.
     private func recordInboundOnlyPeer(_ request: RemotePeerPairingRequest, approvalID: String?) -> Bool {
         let startGeneration = startGenerationAtRedeem.removeValue(forKey: request.localDeviceId)
             ?? forgetGeneration(for: request.peerServerId)
@@ -868,9 +880,10 @@ public final class RemotePeerManager {
             onRevokeDevice?(request.localDeviceId)
             return false
         }
+        let existing = peers.first { $0.serverId == request.peerServerId }
         lastUpsertOwnerByServerId[request.peerServerId] = request.redeemedCode
         upsert(serverId: request.peerServerId, name: request.peerName, origins: request.origins,
-               lastOrigin: nil, token: "", publicKey: request.peerPublicKey,
+               lastOrigin: existing?.lastOrigin, token: existing?.token ?? "", publicKey: nil,
                localDeviceId: request.localDeviceId)
         durableStateByServerId[request.peerServerId] = peers.first { $0.serverId == request.peerServerId }
         return true

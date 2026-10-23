@@ -54,6 +54,12 @@ public struct RemoteHTTPResponder: Sendable {
     /// False on a headless host, which cannot rely on reaching a peer: it
     /// then answers a peer that accepts it `inboundOnly` and never pairs back.
     public var pairsBackWithPeers = true
+    /// Asked, before the code is redeemed, whether a peer may pair inbound
+    /// only. Refusing here, rather than after the reply, means the peer is
+    /// told and the code stays unconsumed. Nil admits every peer.
+    public var admitsInboundOnlyPeer: (@MainActor (RemotePeerAdvertisement) -> Bool)?
+    /// The 403 error a refused inbound-only peer gets.
+    public nonisolated static let rebindRefusedError = "identity rebind refused"
     /// The identity this Mac advertises. Shared with the `hello` frame so a
     /// pairing reply and the socket that follows it can never disagree.
     /// Nil means "no identity configured" and omits both keys from the reply.
@@ -236,12 +242,15 @@ public struct RemoteHTTPResponder: Sendable {
             if let ownServerId = identity?().serverId, !ownServerId.isEmpty, ownServerId == peer.serverId {
                 return forbidden("cannot pair with self")
             }
-            guard let result = try? pairing.redeemPeer(code: code, deviceName: pr.deviceName,
-                                                       peerServerId: peer.serverId) else { return unauthorized }
-            token = result.token
             // Only with a proof: the peer refuses an inbound-only reply
             // that does not prove this server's key.
             inboundOnly = !pairsBackWithPeers && peer.acceptsInboundOnly == true && proof != nil
+            if inboundOnly, admitsInboundOnlyPeer?(peer) == false {
+                return forbidden(Self.rebindRefusedError)
+            }
+            guard let result = try? pairing.redeemPeer(code: code, deviceName: pr.deviceName,
+                                                       peerServerId: peer.serverId) else { return unauthorized }
+            token = result.token
             onPeerPaired?(RemotePeerPairingRequest(
                 peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,
                 peerPublicKey: peer.publicKey, counterCode: peer.counterCode,

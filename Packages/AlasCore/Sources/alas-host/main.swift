@@ -294,6 +294,7 @@ if let listen = config.hostRemoteListen {
         )
     }
     server.pairsBackWithPeers = false
+    server.admitsInboundOnlyPeer = { peers.admitsInboundOnlyPeer($0) }
     server.onPeerPaired = { request in
         // Noted on the redeem's own call stack, before the pair-back's task,
         // so a Forget landing in between is not missed (as in the app).

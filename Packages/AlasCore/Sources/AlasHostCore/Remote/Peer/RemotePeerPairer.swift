@@ -33,6 +33,9 @@ public struct RemotePeerPairer {
         /// is not a network problem and retrying cannot fix it: something
         /// there is claiming a key it does not have.
         case identityUnproven
+        /// A host that does not pair back already holds this Mac's identity
+        /// pinned to a different key, and refused before redeeming the code.
+        case identityRebindRefused
     }
 
     // Not `@Sendable`: tests inject closures that record into plain classes,
@@ -108,6 +111,7 @@ public struct RemotePeerPairer {
         // that answers with a key it cannot back must not stop a later origin
         // where the real peer still lives. Reported only if nothing works.
         var sawUnprovenIdentity = false
+        var sawRebindRefused = false
         for origin in origins {
             // Origins reach this type from two directions: a link the user
             // pasted, and a peer's self-reported advertisement, which is
@@ -156,13 +160,18 @@ public struct RemotePeerPairer {
                 sawExpiredCode = true
                 continue
             case 403:
-                sawOriginRejected = true
+                if String(decoding: data, as: UTF8.self).contains(RemoteHTTPResponder.rebindRefusedError) {
+                    sawRebindRefused = true
+                } else {
+                    sawOriginRejected = true
+                }
                 continue
             default:
                 continue
             }
         }
         if sawExpiredCode { return .expiredCode }
+        if sawRebindRefused { return .identityRebindRefused }
         if sawOriginRejected { return .originRejected }
         // Below the two above: a dead code and a peers-off setting are both
         // more fundamental, and both are things the user can act on directly.
@@ -193,6 +202,8 @@ extension RemotePeerPairer.Outcome: CustomStringConvertible {
             return "unreachable"
         case .identityUnproven:
             return "identityUnproven"
+        case .identityRebindRefused:
+            return "identityRebindRefused"
         }
     }
 }

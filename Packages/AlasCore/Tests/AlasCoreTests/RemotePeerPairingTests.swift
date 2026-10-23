@@ -12,59 +12,107 @@ struct RemotePeerPairingTests {
     private typealias PeerStore = HostProtocolServerTests.MemoryPeerStore
     private typealias DeviceStore = HostProtocolServerTests.MemoryDeviceStore
 
-    /// The Mac advertises an origin nothing listens on, so a pair-back
-    /// would fail and the Mac's short reciprocal wait would report it.
-    @Test func aMacPairsWithAHeadlessHostThatCannotReachIt() async throws {
-        let hostPairing = RemotePairingService(store: DeviceStore(devices: []))
-        let hostKey = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
+    /// A headless host on loopback, wired as alas-host wires it.
+    private struct Host {
+        let pairing: RemotePairingService
+        let key: RemoteIdentityKeyProvider
+        let server: RemoteServer
+        let peers: RemotePeerManager
+        let origin: String
+    }
+
+    private func startHost(holding existing: [RemotePeer] = [], onPeerPaired: @escaping (RemotePeerPairingRequest) -> Void = { _ in })
+        async throws -> Host {
+        let pairing = RemotePairingService(store: DeviceStore(devices: []))
+        let key = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
         let server = RemoteServer(
-            pairing: hostPairing, assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
-            host: nil, identity: { RemoteServerIdentity(serverId: "host", name: "Host") }, signer: hostKey
+            pairing: pairing, assets: RemoteWebAssets(root: URL(fileURLWithPath: NSTemporaryDirectory())),
+            host: nil, identity: { RemoteServerIdentity(serverId: "host", name: "Host") }, signer: key
         )
-        server.pairsBackWithPeers = false
-        let hostPeers = RemotePeerManager(
-            store: PeerStore(peers: []), pairing: hostPairing,
+        let peers = RemotePeerManager(
+            store: PeerStore(peers: existing), pairing: pairing,
             localIdentity: { .init(serverId: "host", name: "Host", origins: ["http://127.0.0.1:1"]) }
         )
-        var counterCode: String?
+        server.pairsBackWithPeers = false
+        server.admitsInboundOnlyPeer = { peers.admitsInboundOnlyPeer($0) }
         server.onPeerPaired = { request in
-            counterCode = request.counterCode
-            hostPeers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
-            Task { @MainActor in await hostPeers.handleInboundPeer(request) }
+            onPeerPaired(request)
+            peers.notePeerPairingArrived(serverId: request.peerServerId, localDeviceId: request.localDeviceId)
+            Task { @MainActor in await peers.handleInboundPeer(request) }
         }
         try server.start(port: 0, loopbackOnly: true)
-        defer { server.stop() }
         try await eventually { await server.port != nil }
-        let port = try #require(server.port)
+        return try Host(pairing: pairing, key: key, server: server, peers: peers,
+                        origin: "http://127.0.0.1:\(#require(server.port))")
+    }
 
-        let macPairing = RemotePairingService(store: DeviceStore(devices: []))
-        let macKey = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
-        let mac = RemotePeerManager(
-            store: PeerStore(peers: []), pairing: macPairing, reciprocalConfirmationTimeout: 2,
+    /// A Mac on the new version, advertising an origin nothing listens on, so
+    /// a pair-back would fail and its short reciprocal wait would report it.
+    private func makeMac(pairing: RemotePairingService) -> RemotePeerManager {
+        let key = RemoteIdentityKeyProvider(store: RemoteInMemorySecretStore())
+        return RemotePeerManager(
+            store: PeerStore(peers: []), pairing: pairing, reciprocalConfirmationTimeout: 2,
             localIdentity: {
-                .init(serverId: "mac", name: "Mac", origins: ["http://127.0.0.1:1"], publicKey: macKey.publicKey)
+                .init(serverId: "mac", name: "Mac", origins: ["http://127.0.0.1:1"], publicKey: key.publicKey)
             }
         )
+    }
 
-        let error = await mac.addPeer(code: hostPairing.beginPairing(), origins: ["http://127.0.0.1:\(port)"])
+    /// Also a reinstalled Mac with a new key re-pairing: the host's earlier
+    /// inbound-only record pinned no key, and keeps the token the app sharing
+    /// its profile holds.
+    @Test(arguments: [nil, "app-token"] as [String?])
+    func aMacPairsWithAHeadlessHostThatCannotReachIt(existingToken: String?) async throws {
+        var counterCode: String?
+        let existing = existingToken.map {
+            RemotePeer(id: "old", serverId: "mac", name: "Mac", origins: ["http://127.0.0.1:1"], token: $0, addedAt: .distantPast)
+        }
+        let host = try await startHost(holding: existing.map { [$0] } ?? []) { counterCode = $0.counterCode }
+        defer { host.server.stop() }
+        let macPairing = RemotePairingService(store: DeviceStore(devices: []))
+        let mac = makeMac(pairing: macPairing)
+
+        let error = await mac.addPeer(code: host.pairing.beginPairing(), origins: [host.origin])
 
         #expect(error == nil)
         let record = try #require(mac.peers.first)
         #expect(record.serverId == "host")
-        #expect(record.publicKey == hostKey.publicKey)
+        #expect(record.publicKey == host.key.publicKey)
         #expect(record.localDeviceId == nil)
         // The counter-code the Mac offered can no longer authorize anyone.
         let offered = try #require(counterCode)
         #expect(throws: (any Error).self) {
             try macPairing.redeemPeer(code: offered, deviceName: "Host", peerServerId: "host")
         }
-        try await eventually { await hostPeers.peers.contains { $0.serverId == "mac" } }
-        let hostRecord = try #require(hostPeers.peers.first)
-        #expect(hostRecord.token.isEmpty)
-        #expect(hostRecord.localDeviceId != nil)
-        #expect(hostPairing.devices.map(\.id) == [hostRecord.localDeviceId])
-        hostPeers.forget(peerId: hostRecord.id)
-        #expect(hostPairing.devices.isEmpty)
+        try await eventually { await host.peers.peers.first?.localDeviceId != nil }
+        let hostRecord = try #require(host.peers.peers.first)
+        #expect(host.peers.peers.count == 1)
+        #expect(hostRecord.publicKey == nil)
+        #expect(hostRecord.token == existingToken ?? "")
+        #expect(host.pairing.devices.map(\.id) == [hostRecord.localDeviceId])
+        host.peers.forget(peerId: hostRecord.id)
+        #expect(host.pairing.devices.isEmpty)
+    }
+
+    /// Refused before the reply, so the Mac hears it instead of keeping a
+    /// token the host then revokes, and the code survives for a retry.
+    @Test func aHeadlessHostRefusesAMacItHoldsUnderAnotherKey() async throws {
+        let pinned = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
+        let host = try await startHost(holding: [RemotePeer(
+            id: "old", serverId: "mac", name: "Mac", origins: ["http://127.0.0.1:1"], token: "t",
+            publicKey: pinned, addedAt: .distantPast
+        )])
+        defer { host.server.stop() }
+        let mac = makeMac(pairing: RemotePairingService(store: DeviceStore(devices: [])))
+        let code = host.pairing.beginPairing()
+
+        let error = await mac.addPeer(code: code, origins: [host.origin])
+
+        #expect(error == .identityRebindRefused)
+        #expect(mac.peers.isEmpty)
+        #expect(host.pairing.devices.isEmpty)
+        #expect(host.peers.peers.map(\.publicKey) == [pinned])
+        #expect(throws: Never.self) { try host.pairing.redeemPeer(code: code, deviceName: "Mac", peerServerId: "mac") }
     }
 
     /// Only a host that does not pair back answers inbound-only, only to a
@@ -116,13 +164,8 @@ struct RemotePeerPairingTests {
 
     /// An inbound-only reply skips the pair-back, which is what would
     /// otherwise vouch for the far side, so its key proof is all there is.
-    @Test(arguments: [
-        #"{"token":"t","serverId":"host","inboundOnly":true}"#,
-        #"{"token":"t","serverId":"host","inboundOnly":true,"publicKey":"KEY","signature":"bm90IGEgc2lnbmF0dXJl"}"#,
-    ])
-    func aMacRefusesAnInboundOnlyReplyWithoutAProvenKey(_ reply: String) async {
-        let key = RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey)
-        let data = Data(reply.replacingOccurrences(of: "KEY", with: key).utf8)
+    @Test func aMacRefusesAnInboundOnlyReplyWithoutAProvenKey() async {
+        let data = Data(#"{"token":"t","serverId":"host","inboundOnly":true}"#.utf8)
         let pairer = RemotePeerPairer(fetch: { request in
             (data, HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         })
