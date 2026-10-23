@@ -90,18 +90,23 @@ struct ComputerUseInputTests {
         ) == expected)
     }
 
+    /// The monitor's last user event decides; Alas's own posts reset only the HID idle time.
     @Test(arguments: [
-        // Never posted: the HID idle time is the user's.
-        (0.5, nil, 0.5),
-        // The only activity is Alas's own post 0.5 s ago: the user is idle.
-        (0.5, 0.5, Double.infinity),
-        (0.48, 0.5, .infinity),
-        // Input after Alas's last post is the user's.
-        (0.2, 1.0, 0.2),
-        (3.0, 5.0, 3.0),
-    ] as [(TimeInterval, TimeInterval?, TimeInterval)])
-    private func ownPostsDontCountAsTheUsers(hidIdle: TimeInterval, sinceOwnPost: TimeInterval?, expected: TimeInterval) {
-        #expect(ComputerUseTakeover.userIdleSeconds(hidIdle: hidIdle, sinceOwnPost: sinceOwnPost) == expected)
+        // Alas just posted (HID idle 0), the user's last input was 5 s ago: idle.
+        (100.0, 95.0, 0.0, 5.0, ComputerUseTakeover.Decision.proceed),
+        // The user typed 0.5 s ago, in the target app.
+        (100.0, 99.5, 0.0, 0.5, .wait),
+        // No monitor: the HID idle time is all there is.
+        (100.0, nil, 0.3, 0.3, .wait),
+        (100.0, nil, 4.0, 4.0, .proceed),
+    ] as [(TimeInterval, TimeInterval?, TimeInterval, TimeInterval, ComputerUseTakeover.Decision)])
+    private func idleComesFromTheUsersOwnInput(
+        now: TimeInterval, lastUserInput: TimeInterval?, hidIdle: TimeInterval, idle: TimeInterval,
+        decision: ComputerUseTakeover.Decision
+    ) {
+        let seconds = ComputerUseTakeover.userIdleSeconds(now: now, lastUserInput: lastUserInput, hidIdle: hidIdle)
+        #expect(seconds == idle)
+        #expect(ComputerUseTakeover.decide(targetIsFrontmost: true, idleSeconds: seconds, direct: false, waited: 0) == decision)
     }
 
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.

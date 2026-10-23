@@ -4,6 +4,7 @@ import ApplicationServices
 import Carbon.HIToolbox
 import CoreGraphics
 import ScreenCaptureKit
+import Synchronization
 
 /// An on-screen, layer-0 window of a running app.
 struct ComputerUseWindow: Sendable, Equatable {
@@ -219,11 +220,11 @@ private enum LiveComputerUseSystem {
             }
     }
 
-    /// The HID idle time, less the activity Alas's own posted events explain.
+    /// From the user input monitor; the HID idle time, which counts Alas's own events, only until it runs.
     static func secondsSinceUserInput() -> TimeInterval {
-        // ~0 is kCGAnyInputEventType, which does not import into Swift.
-        let hidIdle = CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
-        return ComputerUseTakeover.userIdleSeconds(hidIdle: hidIdle, sinceOwnPost: ComputerUseOwnInput.secondsSinceLastPost())
+        ComputerUseTakeover.userIdleSeconds(
+            now: ComputerUseUserInput.now(), lastUserInput: ComputerUseUserInput.lastInput(),
+            hidIdle: ComputerUseUserInput.hidIdleSeconds())
     }
 
     static func window(_ id: UInt32) async -> ComputerUseWindow? {
@@ -976,5 +977,57 @@ private actor ComputerUseSerialLock {
             if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
         }
         return try await body()
+    }
+}
+
+/// The user's own input to any app, Alas included, from AppKit event monitors. Events Alas posts
+/// to a pid don't pass through them, and carry `postedEventMarker` should one ever do.
+enum ComputerUseUserInput {
+    /// "ALAS", in every event Alas posts (`kCGEventSourceUserData`).
+    static let postedEventMarker: Int64 = 0x414C_4153
+    /// Uptime nanoseconds of the last input; 0 until the monitors are installed.
+    private static let lastInputNanoseconds = Atomic<UInt64>(0)
+    @MainActor private static var monitors: [Any] = []
+
+    private static let monitored: NSEvent.EventTypeMask = [
+        .keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .mouseMoved, .scrollWheel,
+    ]
+
+    /// Once; the HID idle time seeds the last input, so input from just before counts.
+    @MainActor
+    static func install() {
+        guard monitors.isEmpty else { return }
+        let seed = max(0, now() - hidIdleSeconds())
+        lastInputNanoseconds.store(max(1, UInt64(seed * 1e9)), ordering: .relaxed)
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: monitored, handler: { record($0) }) {
+            monitors.append(global)
+        }
+        if let local = NSEvent.addLocalMonitorForEvents(matching: monitored, handler: { event in
+            record(event)
+            return event
+        }) {
+            monitors.append(local)
+        }
+    }
+
+    private static func record(_ event: NSEvent) {
+        guard event.cgEvent?.getIntegerValueField(.eventSourceUserData) != postedEventMarker else { return }
+        lastInputNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .relaxed)
+    }
+
+    static func hidIdleSeconds() -> TimeInterval {
+        // ~0 is kCGAnyInputEventType, which does not import into Swift.
+        CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
+    }
+
+    /// Seconds of uptime.
+    static func now() -> TimeInterval {
+        TimeInterval(DispatchTime.now().uptimeNanoseconds) / 1e9
+    }
+
+    /// Uptime seconds of the user's last input; nil while the monitors aren't installed.
+    static func lastInput() -> TimeInterval? {
+        let last = lastInputNanoseconds.load(ordering: .relaxed)
+        return last == 0 ? nil : TimeInterval(last) / 1e9
     }
 }

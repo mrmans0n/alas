@@ -5,9 +5,6 @@ public enum ComputerUseTakeover {
     public static let idleThreshold: TimeInterval = 2
     public static let maxWait: TimeInterval = 10
 
-    /// Posted events can land in the HID idle time a little after they were posted.
-    public static let ownInputSlack: TimeInterval = 0.05
-
     public enum Decision: Equatable, Sendable { case proceed, wait, refuse }
 
     /// `direct` means the activation fallback was requested (the target must be brought to the
@@ -21,12 +18,12 @@ public enum ComputerUseTakeover {
         return waited < maxWait ? .wait : .refuse
     }
 
-    /// The seconds since the user's own input. The HID idle time counts the events Alas posts too:
-    /// activity no later than Alas's last post (`sinceOwnPost`, nil when it never posted), within
-    /// `ownInputSlack`, is taken as that post, and the user counts as idle.
-    public static func userIdleSeconds(hidIdle: TimeInterval, sinceOwnPost: TimeInterval?) -> TimeInterval {
-        guard let sinceOwnPost, hidIdle + ownInputSlack >= sinceOwnPost else { return hidIdle }
-        return .infinity
+    /// Seconds since the user's own input: from the input monitor's last event (`lastUserInput`,
+    /// on the same clock as `now`), which events Alas posts never reach; the HID idle time, which
+    /// counts those too, only while the monitor isn't running (nil).
+    public static func userIdleSeconds(now: TimeInterval, lastUserInput: TimeInterval?, hidIdle: TimeInterval) -> TimeInterval {
+        guard let lastUserInput else { return hidIdle }
+        return max(0, now - lastUserInput)
     }
 }
 

@@ -1,7 +1,6 @@
 import ApplicationServices
 import CoreGraphics
 import Foundation
-import Synchronization
 
 /// Private WindowServer (SkyLight) calls that let input reach a background window: making a
 /// window its app's key window without activating the app or raising the window, and posting
@@ -108,7 +107,6 @@ enum ComputerUseSkyLight {
 
     private static func send(_ record: [UInt8], to psn: [UInt8]) -> Bool {
         guard let post = symbols.postEventRecordTo else { return false }
-        defer { ComputerUseOwnInput.recordPost() }
         return psn.withUnsafeBytes { psn in record.withUnsafeBytes { post(psn.baseAddress!, $0.baseAddress!) } } == 0
     }
 
@@ -128,12 +126,13 @@ enum ComputerUseSkyLight {
     /// Posts through WindowServer's per-process path, else the public one. Never both: an AppKit
     /// view would get the event twice.
     static func post(_ event: CGEvent, pid: pid_t) {
+        // Marks it as Alas's, should an input monitor ever see it.
+        event.setIntegerValueField(.eventSourceUserData, value: ComputerUseUserInput.postedEventMarker)
         if let post = symbols.eventPostToPid {
             post(pid, event)
         } else {
             event.postToPid(pid)
         }
-        ComputerUseOwnInput.recordPost()
     }
 
     /// 0xf8 bytes: the window id at 0x3c (little-endian), 0x8a = 1 to focus, 2 to defocus.
@@ -163,24 +162,5 @@ enum ComputerUseSkyLight {
             }
         }
         return record
-    }
-}
-
-/// When Alas last posted an event or record, process-wide: the HID idle time counts those too,
-/// so they must not pass for the user's input.
-enum ComputerUseOwnInput {
-    /// Uptime nanoseconds of the latest post; 0 before the first.
-    private static let lastPost = Atomic<UInt64>(0)
-
-    static func recordPost() {
-        lastPost.store(DispatchTime.now().uptimeNanoseconds, ordering: .relaxed)
-    }
-
-    /// Nil when nothing was posted yet.
-    static func secondsSinceLastPost() -> TimeInterval? {
-        let last = lastPost.load(ordering: .relaxed)
-        guard last > 0 else { return nil }
-        let now = DispatchTime.now().uptimeNanoseconds
-        return TimeInterval(now > last ? now - last : 0) / 1e9
     }
 }
