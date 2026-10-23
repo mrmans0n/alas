@@ -93,7 +93,7 @@ public enum PeerWorktreeRemoval {
         while true {
             switch await request(makeRequest(action, worktree.worktree, force: force, discard: discard)) {
             case .done: return .done
-            case .failure(.worktreeDeletion(.needsForce)) where !force:
+            case .failure(.worktreeDeletion(.needsForce)) where !force && action != .archive:
                 guard await confirm(.force(branch: branch)) else { return .cancelled }
                 force = true
             case .failure(.worktreeDeletion(.unsavedEdits)) where !discard,

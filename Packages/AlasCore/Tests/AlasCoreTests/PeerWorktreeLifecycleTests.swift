@@ -173,6 +173,16 @@ struct PeerWorktreeLifecycleTests {
         }
     }
 
+    @Test(arguments: [false, true])
+    func forceIsAskedAtMostOnceAndNeverForAnArchive(archiving: Bool) async {
+        let needsForce = HostError.worktreeDeletion(refusal: .needsForce("dirty"))
+        let script = Script([.failure(error: needsForce), .failure(error: needsForce)])
+        let outcome = await script.run(archiving ? .archive : .delete(keepBranch: false, deleteBranchIfMerged: false))
+        #expect(outcome == .refused(message: PeerWorktreeRemoval.message(for: needsForce)))
+        #expect(script.confirmations == (archiving ? [] : [.delete(branch: "feature", keepBranch: false), .force(branch: "feature")]))
+        #expect(script.requests.count == (archiving ? 1 : 2))
+    }
+
     @Test(arguments: [0, 1])
     func aDeclinedConfirmationSendsNothingMore(declinedAt: Int) async {
         let answers = (0...declinedAt).map { $0 != declinedAt }
