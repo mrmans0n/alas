@@ -789,7 +789,7 @@ extension LiveComputerUseSystem {
             func checkCovered() throws {
                 switch ComputerUseInputGeometry.coveredDragPoint(
                     start: start, in: window.windowID, end: end, in: dropWindow.windowID,
-                    windows: screenWindows(), appPID: app.pid) {
+                    windows: screenWindows()) {
                 case .start: throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
                 case .end: throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
                 case nil: break
@@ -809,7 +809,7 @@ extension LiveComputerUseSystem {
             let pid = app.pid
             let dragBegan = ComputerUseUserInput.now()
             try await ComputerUseInputPoster.systemDrag(from: start, to: end, dropIsVisible: {
-                ComputerUseInputGeometry.topmostWindow(at: end, in: screenWindows(), appPID: pid) == dropWindowID
+                ComputerUseInputGeometry.topmostWindow(at: end, in: screenWindows()) == dropWindowID
             }, interrupt: {
                 if isCancelled() || Task.isCancelled { return .cancelled }
                 // The cursor is shared: any input of the user's since the drag began, in any app,

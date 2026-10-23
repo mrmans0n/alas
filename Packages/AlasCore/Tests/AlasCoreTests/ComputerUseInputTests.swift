@@ -91,22 +91,29 @@ struct ComputerUseInputTests {
     }
 
     /// Both of a drag's points must be on the window it uses there; the start is reported first.
-    /// A window above the normal layer that shows (a floating panel, a banner, the Dock) takes the
-    /// press or drop too, unless it is the dragging app's own (its drag image).
+    /// A window above the normal layer that shows (a floating panel, a banner, the Dock, the
+    /// dragging app's own panel) takes the press or drop too; from the dragging layer up
+    /// (drag images, the software cursor, display shields) nothing does.
     @Test(arguments: [
         (CGPoint(x: 20, y: 20), CGPoint(x: 220, y: 220), nil),
         (CGPoint(x: 20, y: 20), CGPoint(x: 120, y: 120), ComputerUseInputGeometry.DragPoint.end),
         (CGPoint(x: 160, y: 160), CGPoint(x: 120, y: 120), .start),
         // Another app's floating panel over the drop.
         (CGPoint(x: 20, y: 20), CGPoint(x: 260, y: 260), .end),
-        // A transparent overlay, and the dragging app's own drag image, take nothing.
+        // The dragging app's own floating panel over the start.
+        (CGPoint(x: 10, y: 10), CGPoint(x: 220, y: 220), .start),
+        // A transparent overlay, a drag image and the software cursor take nothing.
         (CGPoint(x: 20, y: 20), CGPoint(x: 290, y: 110), nil),
         (CGPoint(x: 20, y: 20), CGPoint(x: 110, y: 290), nil),
+        (CGPoint(x: 20, y: 20), CGPoint(x: 290, y: 150), nil),
     ] as [(CGPoint, CGPoint, ComputerUseInputGeometry.DragPoint?)])
     func coveredDragPoints(start: CGPoint, end: CGPoint, expected: ComputerUseInputGeometry.DragPoint?) {
-        // Front to back: the dragging app's (pid 42) drag image 6, another app's transparent
-        // overlay 7 and floating panel 8, its window 9 over the middle, start window 1, drop window 2.
+        // Front to back: the software cursor 4, the dragging app's (pid 42) floating panel 5 and
+        // drag image 6, another app's transparent overlay 7 and floating panel 8, its window 9 over
+        // the middle, start window 1, drop window 2.
         let windows = [
+            Window(id: 4, pid: 0, layer: 2_147_483_630, frame: CGRect(x: 280, y: 140, width: 20, height: 20)),
+            Window(id: 5, pid: 42, layer: 3, frame: CGRect(x: 0, y: 0, width: 15, height: 15)),
             Window(id: 6, pid: 42, layer: 500, frame: CGRect(x: 100, y: 280, width: 20, height: 20)),
             Window(id: 7, pid: 7, layer: 25, alpha: 0, frame: CGRect(x: 280, y: 100, width: 20, height: 20)),
             Window(id: 8, pid: 7, layer: 3, frame: CGRect(x: 250, y: 250, width: 30, height: 30)),
@@ -115,7 +122,7 @@ struct ComputerUseInputTests {
             Window(id: 2, pid: 42, frame: CGRect(x: 100, y: 100, width: 200, height: 200)),
         ]
         #expect(ComputerUseInputGeometry.coveredDragPoint(
-            start: start, in: 1, end: end, in: 2, windows: windows, appPID: 42) == expected)
+            start: start, in: 1, end: end, in: 2, windows: windows) == expected)
     }
 
     @Test(arguments: [
