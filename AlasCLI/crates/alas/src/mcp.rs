@@ -734,14 +734,14 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_drag",
-            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). Both windows' apps need approval. A drop into another app's window always briefly activates the start app (delivery `activation`); the drop window must already be visible, since it is not raised. Returns the start window's new elements (refs are replaced). The first use of each app asks the user for approval.",
+            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. The drop point must be visible: when another window covers it, the drag is cancelled in place with an error. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
                     "ref": computer_ref_property("The element to start the drag on."),
                     "x": computer_pixel_property("Start pixels from the left edge of the latest screenshot. Use with y, instead of ref."),
                     "y": computer_pixel_property("Start pixels from the top edge of the latest screenshot. Use with x, instead of ref."),
-                    "to_window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "The window to drop into, a window_id from computer_apps. Default: window_id." },
+                    "to_window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "Another window of the same app to drop into, a window_id from computer_apps. Default: window_id." },
                     "to_ref": computer_ref_property("The element to drop on."),
                     "to_x": computer_pixel_property("End pixels from the left edge of the latest screenshot. Use with to_y, instead of to_ref."),
                     "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref."),

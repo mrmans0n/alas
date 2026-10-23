@@ -49,6 +49,20 @@ struct ComputerUseInputTests {
         ) == nil)
     }
 
+    /// A drop lands in the frontmost window over the point, which may not be the one aimed at.
+    @Test(arguments: [
+        (CGPoint(x: 50, y: 50), 1),
+        (CGPoint(x: 150, y: 150), 2),
+        (CGPoint(x: 500, y: 500), nil),
+    ] as [(CGPoint, UInt32?)])
+    func dropPointsHitTheFrontmostWindow(point: CGPoint, expected: UInt32?) {
+        // Front to back: window 1 overlaps window 2's top-left corner.
+        let windows: [(id: UInt32, frame: CGRect)] = [
+            (1, CGRect(x: 0, y: 0, width: 100, height: 100)), (2, CGRect(x: 50, y: 50, width: 200, height: 200)),
+        ]
+        #expect(ComputerUseInputGeometry.topmostWindow(at: point, in: windows) == expected)
+    }
+
     @Test func interpolationEndsAtTheTarget() {
         let points = ComputerUseInputGeometry.interpolate(from: .zero, to: CGPoint(x: 10, y: 20), steps: 4)
         #expect(points == [CGPoint(x: 2.5, y: 5), CGPoint(x: 5, y: 10), CGPoint(x: 7.5, y: 15), CGPoint(x: 10, y: 20)])

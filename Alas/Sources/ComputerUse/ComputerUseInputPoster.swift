@@ -42,9 +42,11 @@ enum ComputerUseInputPoster {
     }
 
     /// Throws `userActive` between steps once `userActive` turns true, after
-    /// releasing the button where the drag got to.
+    /// releasing the button where the drag got to. `dropIsVisible`, checked before the release,
+    /// false: the button is released back at the start, which cancels the drag in place.
     static func drag(
-        from start: CGPoint, to end: CGPoint, target: Target, userActive: @Sendable () -> Bool
+        from start: CGPoint, to end: CGPoint, target: Target, dropIsVisible: (@Sendable () -> Bool)? = nil,
+        userActive: @Sendable () -> Bool
     ) async throws {
         let points = ComputerUseInputGeometry.interpolate(from: start, to: end, steps: dragSteps)
         // Build everything first so a failure can't leave the button down.
@@ -66,6 +68,12 @@ enum ComputerUseInputPoster {
             ComputerUseSkyLight.post(move, pid: target.pid)
         }
         await pause()
+        if let dropIsVisible, !dropIsVisible() {
+            let back = try mouseEvent(.leftMouseDragged, at: start, button: .left, clickState: 1, target: target)
+            ComputerUseSkyLight.post(back, pid: target.pid)
+            ComputerUseSkyLight.post(ups[0], pid: target.pid)
+            throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
+        }
         ComputerUseSkyLight.post(ups[moves.count], pid: target.pid)
     }
 

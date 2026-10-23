@@ -92,6 +92,10 @@ enum ComputerUseSystemError: Error, LocalizedError {
     case openFailed(String)
     /// The point the input would land on is outside the target window.
     case outOfBounds
+    /// A drag's drop element is gone.
+    case staleDropElement
+    /// A drag's drop point is outside the window it drops into.
+    case dropOutOfBounds
     /// The user took over between the input's events.
     case userActive
     /// The user took over while text was being typed.
@@ -101,8 +105,8 @@ enum ComputerUseSystemError: Error, LocalizedError {
         switch self {
         case .windowNotFound(let id): "Window \(id) is no longer on screen"
         case .captureFailed(let reason): "Capture failed: \(reason)"
-        case .staleElement: "The element is no longer valid"
-        case .outOfBounds: "The point is outside the window"
+        case .staleElement, .staleDropElement: "The element is no longer valid"
+        case .outOfBounds, .dropOutOfBounds: "The point is outside the window"
         case .userActive: "The user is using the app"
         case .userTookOver(let typed, let total): "The user took over after \(typed) of \(total) characters"
         case .actionFailed(let reason): reason
@@ -662,9 +666,25 @@ extension LiveComputerUseSystem {
             if !background { try await requireActiveWindow() }
             let start = try await point(from)
             // Mouse events stay with the window the button went down in, as AppKit routes a drag.
-            let end = try await point(to, in: toWindow ?? window)
+            let end: CGPoint
+            do {
+                end = try await point(to, in: toWindow ?? window)
+            } catch ComputerUseSystemError.staleElement {
+                throw ComputerUseSystemError.staleDropElement
+            } catch ComputerUseSystemError.outOfBounds {
+                throw ComputerUseSystemError.dropOutOfBounds
+            }
             try checkCancelled()
-            try await ComputerUseInputPoster.drag(from: start, to: end, target: target) { interrupt() == .userActive }
+            // Another window over the drop point would take the drop: checked right before the release.
+            let dropTarget = toWindow.map { drop in
+                { @Sendable in
+                    ComputerUseInputGeometry.topmostWindow(at: end, in: onScreenWindows().map { ($0.id, $0.frame) })
+                        == drop.windowID
+                }
+            }
+            try await ComputerUseInputPoster.drag(from: start, to: end, target: target, dropIsVisible: dropTarget) {
+                interrupt() == .userActive
+            }
         }
     }
 

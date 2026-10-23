@@ -17,6 +17,11 @@ public enum ComputerUseInputGeometry {
         return currentFrame.contains(point) ? point : nil
     }
 
+    /// The id of the frontmost window containing `point`; `windows` run front to back.
+    public static func topmostWindow(at point: CGPoint, in windows: [(id: UInt32, frame: CGRect)]) -> UInt32? {
+        windows.first { $0.frame.contains(point) }?.id
+    }
+
     public static func center(of frame: CGRect) -> CGPoint {
         CGPoint(x: frame.midX, y: frame.midY)
     }

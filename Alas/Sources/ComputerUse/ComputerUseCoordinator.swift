@@ -173,6 +173,7 @@ final class ComputerUseCoordinator {
         }
         static func actionFailed(_ reason: String) -> String { "computer_action_failed: \(reason)" }
         static let noQuitting = "Agents can't quit apps."
+        static let noCrossAppDrag = "Dragging between different apps isn't supported yet."
         static func openFailed(_ reason: String) -> String { "computer_open_failed: \(reason)" }
         static func waitTimeout(_ query: String, _ condition: ComputerUseCommand.WaitCondition, windowID: UInt32, ms: Int) -> String {
             let verb = condition == .appear ? "appeared" : "disappeared"
@@ -213,6 +214,13 @@ final class ComputerUseCoordinator {
         let epoch = context.epoch
         guard var window = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
+        // A drop into another window of the same app; another app's window is refused before any card.
+        var toWindow: ComputerUseWindow?
+        if command.action == .drag, let toID = command.toWindowID, toID != windowID {
+            guard let end = await system.window(toID) else { return .error(Message.windowNotFound(toID)) }
+            guard end.app.pid == window.app.pid else { return .error(Message.actionFailed(Message.noCrossAppDrag)) }
+            toWindow = end
+        }
 
         let input = Self.isInput(command.action)
         switch await approval(for: window.app, sessionID: sessionID, epoch: epoch, input: input) {
@@ -228,29 +236,10 @@ final class ComputerUseCoordinator {
             window = current
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
             if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID, input: input) { return refused }
-        }
-
-        var toWindow: ComputerUseWindow?
-        if command.action == .drag, let toID = command.toWindowID, toID != windowID {
-            // The drop window's app is operated too: it needs access like the start's, from the same rules.
-            guard let end = await system.window(toID) else { return .error(Message.windowNotFound(toID)) }
-            switch await approval(for: end.app, sessionID: sessionID, epoch: epoch, input: true) {
-            case .refused(let response):
-                return response
-            case .allowed:
-                toWindow = end
-            case .answered:
-                guard let current = await system.window(toID), current.app.pid == end.app.pid else {
-                    return .error(Message.windowNotFound(toID))
+            if let end = toWindow {
+                guard let current = await system.window(end.windowID), current.app.pid == end.app.pid else {
+                    return .error(Message.windowNotFound(end.windowID))
                 }
-                if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
-                if let refused = accessAfterAnswer(for: current.app, sessionID: sessionID, input: true) { return refused }
-                // The start window may have moved, closed or changed access while this card was up.
-                guard let start = await system.window(windowID), start.app.pid == window.app.pid else {
-                    return .error(Message.windowNotFound(windowID))
-                }
-                if let refused = accessAfterAnswer(for: start.app, sessionID: sessionID, input: true) { return refused }
-                window = start
                 toWindow = current
             }
         }
@@ -661,9 +650,7 @@ final class ComputerUseCoordinator {
         var window = window
         var toWindow = toWindow
         var input = try input(for: command, in: window, toWindow: toWindow, context: context)
-        // Events posted to one app never reach another: a drop into another app's window goes
-        // with the start app activated, onto a drop window the user can see.
-        let direct = command.delivery == .direct || toWindow.map { $0.app.pid != window.app.pid } == true
+        let direct = command.delivery == .direct
         // What the window looked like, so an input the app ignored doesn't pass for one that worked.
         // Read first, so the takeover wait and the ref re-check are the last steps before the input.
         var target: (ComputerUseAXHandles, Int)?
@@ -671,6 +658,9 @@ final class ComputerUseCoordinator {
             target = (snapshot.handles, element.handle)
         }
         let before = await fingerprint(of: window, for: command, target: target, context: context)
+        // A drop into another window may change only that one.
+        var beforeEnd: ComputerUseWindowFingerprint?
+        if let toWindow { beforeEnd = await fingerprint(of: toWindow, for: command, target: nil, context: context) }
         try checkStillActive(context)
         if try await waitForUserIdle(in: window, direct: direct, context: context) {
             // The window may have moved or closed while the user had it: map points against where it is now.
@@ -685,11 +675,14 @@ final class ComputerUseCoordinator {
         do {
             delivered = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
         } catch ComputerUseSystemError.staleElement {
-            if let ref = command.ref { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
-            guard let ref = command.toRef else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
-            throw Refusal(Message.stale(ref, windowID: (toWindow ?? window).windowID))
+            guard let ref = command.ref else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
+            throw Refusal(Message.stale(ref, windowID: window.windowID))
+        } catch ComputerUseSystemError.staleDropElement {
+            throw Refusal(Message.stale(command.toRef ?? "", windowID: (toWindow ?? window).windowID))
         } catch ComputerUseSystemError.outOfBounds {
             throw Refusal(Message.outOfBounds(window.windowID))
+        } catch ComputerUseSystemError.dropOutOfBounds {
+            throw Refusal(Message.outOfBounds((toWindow ?? window).windowID))
         } catch ComputerUseSystemError.userActive {
             throw Refusal(Message.userActive(window.app))
         } catch ComputerUseSystemError.userTookOver(let typed, let total) {
@@ -701,7 +694,7 @@ final class ComputerUseCoordinator {
         if let keyedWindow { backgroundKeyed[context.sessionID, default: [:]][keyedWindow.windowID] = keyedWindow }
         do {
             try await settleAndRead(after: delivered, of: command, in: &window, target: target, before: before,
-                                    context: context, payload: &payload)
+                                    end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload)
         } catch {
             if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
             throw error
@@ -724,7 +717,8 @@ final class ComputerUseCoordinator {
     /// Reports the delivered input, waits for the app to handle it and reads the window back.
     private func settleAndRead(
         after delivered: ComputerUseDelivered, of command: ComputerUseCommand, in window: inout ComputerUseWindow,
-        target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint, context: CallContext,
+        target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint,
+        end: (window: ComputerUseWindow, before: ComputerUseWindowFingerprint?)? = nil, context: CallContext,
         payload: inout [String: Any]
     ) async throws {
         // Stopped mid-sequence: the input finished its events, but nothing more happens.
@@ -745,9 +739,20 @@ final class ComputerUseCoordinator {
             payload["truncated"] = read.truncated
             payload["elements"] = read.elements.map(Self.element)
             let after = await fingerprint(of: window, read: read, target: target)
-            payload["warning"] = ComputerUseChangeCheck.warning(
-                before: before, after: after, kind: Self.changeKind(command.action),
-                deliveredAsEvents: [.event, .background].contains(delivered.delivery))
+            let kind = Self.changeKind(command.action)
+            let asEvents = [.event, .background].contains(delivered.delivery)
+            var warning = ComputerUseChangeCheck.warning(before: before, after: after, kind: kind, deliveredAsEvents: asEvents)
+            if let end {
+                // The drop window read back too: the drop may have changed only that one.
+                // An unreadable drop window says nothing either way, so the start window's verdict stands.
+                if let endRead = try await readDropWindow(end.window, of: command, context: context, payload: &payload) {
+                    let endAfter = await fingerprint(of: endRead.window, read: endRead.read, target: nil)
+                    let endWarning = ComputerUseChangeCheck.warning(
+                        before: end.before, after: endAfter, kind: kind, deliveredAsEvents: asEvents)
+                    if endWarning == nil { warning = nil }
+                }
+            }
+            payload["warning"] = warning
         } catch is CancellationError {
             throw CancellationError()
         } catch {
@@ -756,6 +761,31 @@ final class ComputerUseCoordinator {
             payload["truncated"] = true
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription
+        }
+    }
+
+    /// Reads the window a drag dropped into, as the start window is read, into `to_window`.
+    /// A failed read reports its error there and leaves the drop window's refs empty.
+    private func readDropWindow(
+        _ window: ComputerUseWindow, of command: ComputerUseCommand, context: CallContext, payload: inout [String: Any]
+    ) async throws -> (window: ComputerUseWindow, read: ElementRead)? {
+        var entry: [String: Any] = ["window_id": Int(window.windowID)]
+        defer { payload["to_window"] = entry }
+        do {
+            let current = try await currentWindow(window)
+            let read = try await readElements(
+                current, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+            entry["truncated"] = read.truncated
+            entry["elements"] = read.elements.map(Self.element)
+            return (current, read)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            updateSnapshot(of: window, context: context) { $0.refs = [:] }
+            entry["truncated"] = true
+            entry["elements"] = [[String: Any]]()
+            entry["post_state_error"] = error.localizedDescription
+            return nil
         }
     }
 

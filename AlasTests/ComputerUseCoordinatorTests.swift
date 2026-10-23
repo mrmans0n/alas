@@ -317,7 +317,7 @@ struct ComputerUseCoordinatorTests {
     }
 
     enum WindowChange: CaseIterable { case none, elements, focus, target, truncatedBefore, truncatedAfter }
-    enum ActionKind { case click, key, type, drag }
+    enum ActionKind { case click, key, type, scroll, drag }
 
     @Test(arguments: [
         (ActionKind.click, ComputerUseDelivered.ax, WindowChange.none, Warnings.noChange),
@@ -329,6 +329,7 @@ struct ComputerUseCoordinatorTests {
         // A cut-short read may have missed what changed.
         (.click, .background, .truncatedBefore, nil),
         (.click, .background, .truncatedAfter, nil),
+        (.scroll, .background, .none, Warnings.noChange + #" Retry with delivery: "direct"."#),
         // Navigation keys and typing can legitimately change nothing a read shows: no retry hint.
         (.key, .background, .none, Warnings.noChange),
         (.type, .background, .none, Warnings.noChange),
@@ -366,6 +367,7 @@ struct ComputerUseCoordinatorTests {
         case .click: .init(action: .click, windowID: 1, ref: "e2")
         case .key: .init(action: .key, windowID: 1, keys: "down")
         case .type: .init(action: .type, windowID: 1, ref: "e2", text: "x")
+        case .scroll: .init(action: .scroll, windowID: 1, ref: "e2", dy: 3)
         case .drag: .init(action: .drag, windowID: 1, ref: "e2", toRef: "e1")
         }
         let json = try #require(Self.text(await f.coordinator.perform(command, sessionID: "s")))
@@ -374,19 +376,26 @@ struct ComputerUseCoordinatorTests {
         #expect(payload["delivery"] as? String == delivered.delivery.rawValue)
     }
 
+    /// `drag`: from e2 onto e1, so a failure names the end it is about.
     @Test(arguments: [
-        (ComputerUseSystemError.staleElement,
+        (ComputerUseSystemError.staleElement, false,
          "computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."),
-        (.outOfBounds, "computer_out_of_bounds: The point is outside window 1."),
-        (.userActive, "computer_user_active: The user is using Notes right now. Try again in a moment."),
+        (.outOfBounds, false, "computer_out_of_bounds: The point is outside window 1."),
+        (.userActive, false, "computer_user_active: The user is using Notes right now. Try again in a moment."),
+        (.staleDropElement, true,
+         "computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 1 again."),
+        (.staleElement, true,
+         "computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."),
     ])
-    func deliveryFailuresMapToTheirToolErrors(_ error: ComputerUseSystemError, expected: String) async throws {
+    func deliveryFailuresMapToTheirToolErrors(_ error: ComputerUseSystemError, drag: Bool, expected: String) async throws {
         var system = Self.system()
         system.perform = { _, _, _, _ in throw error }
         let f = Self.fixture(system: system, allowed: [Self.notes])
-        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
-        let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
-        #expect(response == .error(expected))
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let command: ComputerUseCommand = drag
+            ? .init(action: .drag, windowID: 1, ref: "e2", toRef: "e1")
+            : .init(action: .click, windowID: 1, ref: "e2")
+        #expect(await f.coordinator.perform(command, sessionID: "s") == .error(expected))
     }
 
     @Test func userTakingOverMidTypingStopsTheInput() async throws {
@@ -481,43 +490,63 @@ struct ComputerUseCoordinatorTests {
         #expect(point == CGPoint(x: 200, y: 100))
     }
 
-    enum CrossWindowDrop: CaseIterable { case mapped, outOfBounds, blockedApp }
+    enum CrossWindowDrop: CaseIterable { case mapped, outOfBounds, staleRef, otherApp }
 
-    /// The drop end maps through the end window's own screenshot and frame, its app needs access
-    /// like the start's, and a drop into another app goes with the app activated.
+    /// The drop end resolves in the end window: its screenshot, its frame and its refs. The end
+    /// window is read back too, so a drop that changed only it isn't reported as no change.
+    /// Another app's window is refused before any card or input.
     @Test(arguments: CrossWindowDrop.allCases)
     func dragIntoAnotherWindowUsesThatWindow(_ drop: CrossWindowDrop) async throws {
         let recorder = Recorder()
-        let directs = Recorder()
-        var system = Self.system(recorder: recorder)
-        system.perform = { input, _, direct, _ in
-            recorder.record(input)
-            directs.recordCheck(direct)
-            return .activation
+        let endReads = Counter()
+        var windows = Self.windows
+        windows[5] = ComputerUseWindow(windowID: 5, title: "Other", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: Self.notes)
+        var system = Self.system(windows: windows, recorder: recorder)
+        let saveTree = Self.saveTree
+        // The end window's second read (the one after the drop) shows a new element.
+        system.axTree = { window, _, _, _ in
+            var tree = saveTree
+            if window.windowID == 5, endReads.next() == 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
+            return (tree, true, ComputerUseAXHandles())
         }
-        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes, Self.mail, Self.alasDev])
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            return .background
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
-        let end: UInt32 = drop == .blockedApp ? 4 : 2
-        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: end), sessionID: "s")
-        let to = drop == .outOfBounds ? 2000.0 : 100
-        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: end, toX: to, toY: to)
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
+        let drag: ComputerUseCommand = switch drop {
+        case .mapped: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
+        case .outOfBounds: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 2000, toY: 2000)
+        // Window 5 was never inspected, so e1 there is unknown even though window 1 has none either.
+        case .staleRef: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toRef: "e1")
+        case .otherApp: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 2, toX: 100, toY: 100)
+        }
         let response = await f.coordinator.perform(drag, sessionID: "s")
         switch drop {
         case .mapped:
-            #expect(Self.text(response) != nil)
+            let json = try #require(Self.text(response))
+            let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
             guard case .drag(.point(let start), .point(let point), let toWindow) = try #require(recorder.inputs.first) else {
                 Issue.record("expected a point drag")
                 return
             }
-            // Mail's window sits at (10, 10); its screenshot has 2 pixels per point.
-            #expect(start == CGPoint(x: 5, y: 5) && point == CGPoint(x: 60, y: 60) && toWindow?.windowID == 2)
-            #expect(directs.checks == [true])
+            // The end window sits at (10, 10); its screenshot has 2 pixels per point.
+            #expect(start == CGPoint(x: 5, y: 5) && point == CGPoint(x: 60, y: 60) && toWindow?.windowID == 5)
+            let end = try #require(payload["to_window"] as? [String: Any])
+            #expect(end["window_id"] as? Int == 5 && (end["elements"] as? [Any])?.count == 3)
+            // The start window looks the same, but the drop changed the end window.
+            #expect(payload["warning"] == nil)
         case .outOfBounds:
-            #expect(response == .error("computer_out_of_bounds: The point is outside window 2."))
+            #expect(response == .error("computer_out_of_bounds: The point is outside window 5."))
             #expect(recorder.inputs.isEmpty)
-        case .blockedApp:
-            #expect(response == .error("computer_blocked: Alas Dev can't be used by agents."))
+        case .staleRef:
+            #expect(response == .error("computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 5 again."))
             #expect(recorder.inputs.isEmpty)
+        case .otherApp:
+            #expect(response == .error("computer_action_failed: Dragging between different apps isn't supported yet."))
+            #expect(f.coordinator.pendingApprovals.isEmpty && recorder.inputs.isEmpty)
         }
     }
 
