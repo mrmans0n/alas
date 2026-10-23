@@ -198,8 +198,10 @@ var isStopping = false
 // it, or a tunnel; or every interface when the LAN is chosen. Accepting
 // incoming TCP needs no local network permission, only Bonjour does (TN3179).
 // Other Macs pair as peers, as with the app: the host proves its identity key
-// on `/pair` and on every later socket, and pairs back to the Mac. It never
-// connects out to peers' sessions, and has no federation or Bonjour.
+// on `/pair` and on every later socket. It pairs back only to a Mac too old to
+// pair without it: macOS silently denies a launch agent's connections to LAN
+// addresses. It never connects out to peers' sessions, and has no federation
+// or Bonjour.
 var remote: RemoteServer?
 /// Starts Remote once the open sessions are restored; nil when Remote is off.
 var startRemote: (@MainActor () async -> Void)?
@@ -291,6 +293,8 @@ if let listen = config.hostRemoteListen {
             publicKey: identityKey.publicKey
         )
     }
+    server.pairsBackWithPeers = false
+    server.admitsInboundOnlyPeer = { peers.admitsInboundOnlyPeer($0) }
     server.onPeerPaired = { request in
         // Noted on the redeem's own call stack, before the pair-back's task,
         // so a Forget landing in between is not missed (as in the app).

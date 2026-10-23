@@ -80,6 +80,10 @@ public final class RemoteServer {
     public var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
     /// Fired on the main actor after another Alas instance paired here.
     public var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
+    /// See `RemoteHTTPResponder.pairsBackWithPeers`. Off only on alas-host.
+    public var pairsBackWithPeers = true
+    /// See `RemoteHTTPResponder.admitsInboundOnlyPeer`.
+    public var admitsInboundOnlyPeer: (@MainActor (RemotePeerAdvertisement) -> Bool)?
     public var onApprovedPeerPaired: (@MainActor (RemotePeerPairingRequest, String, ApprovalPeer) -> Void)?
     /// Bonjour advertisement applied to the live listener, and to any listener
     /// `start()` creates later (a port-fallback restart must keep advertising).
@@ -265,6 +269,8 @@ public final class RemoteServer {
             originPolicy: originPolicy
         )
         configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
+        configured.pairsBackWithPeers = pairsBackWithPeers
+        configured.admitsInboundOnlyPeer = admitsInboundOnlyPeer
         configured.onApprovedPeerPaired = { [weak self] request, requestID, localPeer in
             self?.onApprovedPeerPaired?(request, requestID, localPeer)
         }

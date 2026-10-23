@@ -154,8 +154,10 @@ A Mac running the app pairs with the host as a peer and sees its projects and
 sessions. On the host Mac, run `alas-host pair`. On the other Mac, paste the
 link into Settings > Remote > Peers > Add peer.
 
-That Mac's Remote must be on and reachable from the host (same LAN or tailnet),
-because the host pairs back to it.
+That Mac's Remote must be on. A Mac on this version pairs with the host over
+the LAN or tailnet with no connection back to it. An older app version still
+needs the host to reach it, for example over Tailscale, because the host pairs
+back to it.
 
 ```bash
 alas-host peers list                  # id, name, serverId

@@ -51,6 +51,15 @@ public struct RemoteHTTPResponder: Sendable {
     public var originPolicy: RemoteOriginPolicy = .loopback
     /// Fired after a peer redeemed a code here, so the app can pair back.
     public var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)? = nil
+    /// False on a headless host, which cannot rely on reaching a peer: it
+    /// then answers a peer that accepts it `inboundOnly` and never pairs back.
+    public var pairsBackWithPeers = true
+    /// Asked, before the code is redeemed, whether a peer may pair inbound
+    /// only. Refusing here, rather than after the reply, means the peer is
+    /// told and the code stays unconsumed. Nil admits every peer.
+    public var admitsInboundOnlyPeer: (@MainActor (RemotePeerAdvertisement) -> Bool)?
+    /// The 403 error a refused inbound-only peer gets.
+    public nonisolated static let rebindRefusedError = "identity rebind refused"
     /// The identity this Mac advertises. Shared with the `hello` frame so a
     /// pairing reply and the socket that follows it can never disagree.
     /// Nil means "no identity configured" and omits both keys from the reply.
@@ -149,6 +158,9 @@ public struct RemoteHTTPResponder: Sendable {
             /// resulting record unverified rather than falsely verified.
             let publicKey: String?
             let signature: String?
+            /// True when this server will not pair back. Absent otherwise,
+            /// which is all an older peer has ever read.
+            var inboundOnly: Bool?
         }
         let unauthorized = Self.http(status: "401 Unauthorized", contentType: "application/json",
                                      body: Data(#"{"error":"pairing failed"}"#.utf8), extraHeaders: hasApproval ? [] : extraHeaders)
@@ -193,7 +205,15 @@ public struct RemoteHTTPResponder: Sendable {
             catch { return RemotePairingApprovalHTTP.failure(.invalid) }
         }
         guard let code = pr.code else { return unauthorized }
+        let id = identity?()
+        // Signed only when the caller asked: the challenge is the peer's
+        // own, so a reply carrying a signature over anything else would
+        // prove nothing and only invite a caller to accept it as if it did.
+        let proof = pr.challenge.flatMap { challenge in
+            challenge.isEmpty ? nil : identityProof?(challenge)
+        }
         let token: String
+        var inboundOnly = false
         if let peer = pr.peer {
             // Everything in `peer` is attacker-controlled and only the 1 MB
             // body cap bounds it. Reject an implausible advertisement BEFORE
@@ -222,30 +242,30 @@ public struct RemoteHTTPResponder: Sendable {
             if let ownServerId = identity?().serverId, !ownServerId.isEmpty, ownServerId == peer.serverId {
                 return forbidden("cannot pair with self")
             }
+            // Only with a proof: the peer refuses an inbound-only reply
+            // that does not prove this server's key.
+            inboundOnly = !pairsBackWithPeers && peer.acceptsInboundOnly == true && proof != nil
+            if inboundOnly, admitsInboundOnlyPeer?(peer) == false {
+                return forbidden(Self.rebindRefusedError)
+            }
             guard let result = try? pairing.redeemPeer(code: code, deviceName: pr.deviceName,
                                                        peerServerId: peer.serverId) else { return unauthorized }
             token = result.token
             onPeerPaired?(RemotePeerPairingRequest(
                 peerServerId: peer.serverId, peerName: peer.name, origins: peer.origins,
                 peerPublicKey: peer.publicKey, counterCode: peer.counterCode,
-                localDeviceId: result.deviceId, redeemedCode: code))
+                localDeviceId: result.deviceId, redeemedCode: code, inboundOnly: inboundOnly))
         } else {
             guard let issued = try? pairing.redeem(code: code, deviceName: pr.deviceName) else { return unauthorized }
             token = issued
-        }
-        let id = identity?()
-        // Signed only when the caller asked: the challenge is the peer's
-        // own, so a reply carrying a signature over anything else would
-        // prove nothing and only invite a caller to accept it as if it did.
-        let proof = pr.challenge.flatMap { challenge in
-            challenge.isEmpty ? nil : identityProof?(challenge)
         }
         let reply = PairReply(
             token: token,
             serverId: id?.serverId.isEmpty == false ? id?.serverId : nil,
             name: id.map(\.name),
             publicKey: proof?.publicKey,
-            signature: proof?.signature)
+            signature: proof?.signature,
+            inboundOnly: inboundOnly ? true : nil)
         let payload = (try? JSONEncoder().encode(reply)) ?? Data(#"{"token":"\#(token)"}"#.utf8)
         return Self.http(status: "200 OK", contentType: "application/json", body: payload, extraHeaders: extraHeaders)
     }

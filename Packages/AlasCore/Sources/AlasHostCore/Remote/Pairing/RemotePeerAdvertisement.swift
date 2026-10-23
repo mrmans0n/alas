@@ -22,14 +22,19 @@ public struct RemotePeerAdvertisement: Codable, Equatable, Sendable {
     /// endpoint then proves another is refused rather than reconciled.
     /// Absent from an older peer's advertisement.
     public let publicKey: String?
+    /// True when the sender can pair without a connection back to it: a
+    /// host that never pairs back may then answer `inboundOnly`. Absent
+    /// from an older peer's advertisement, which still needs the pair-back.
+    public let acceptsInboundOnly: Bool?
 
     public init(serverId: String, name: String, origins: [String], counterCode: String?,
-         publicKey: String? = nil) {
+         publicKey: String? = nil, acceptsInboundOnly: Bool? = nil) {
         self.serverId = serverId
         self.name = name
         self.origins = origins
         self.counterCode = counterCode
         self.publicKey = publicKey
+        self.acceptsInboundOnly = acceptsInboundOnly
     }
 
     /// Whether an advertised key could be a real Ed25519 public key at all.
@@ -60,10 +65,13 @@ public struct RemotePeerPairingRequest: Equatable, Sendable {
     /// distinguish a stray, unrelated attempt's callback (one whose own
     /// `/pair` reply never made it back) from the current attempt's own.
     public let redeemedCode: String
+    /// The reply told the peer this server will not pair back, so the
+    /// request is only recorded. Its `counterCode` is ignored.
+    public let inboundOnly: Bool
 
     public init(peerServerId: String, peerName: String, origins: [String],
          peerPublicKey: String? = nil, counterCode: String?,
-         localDeviceId: String, redeemedCode: String) {
+         localDeviceId: String, redeemedCode: String, inboundOnly: Bool = false) {
         self.peerServerId = peerServerId
         self.peerName = peerName
         self.origins = origins
@@ -71,5 +79,6 @@ public struct RemotePeerPairingRequest: Equatable, Sendable {
         self.counterCode = counterCode
         self.localDeviceId = localDeviceId
         self.redeemedCode = redeemedCode
+        self.inboundOnly = inboundOnly
     }
 }

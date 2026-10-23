@@ -359,6 +359,26 @@ struct RemotePeerPairerTests {
                                    origin: "http://10.0.0.9:8765"))
     }
 
+    // An inbound-only reply skips the pair-back, which is what would
+    // otherwise vouch for the far side, so its key proof is all there is.
+    @Test func anInboundOnlyReplyWithNoKeyIsRefused() async {
+        let reply = #"{"token":"tok","serverId":"srv-a","name":"Mac A","inboundOnly":true}"#
+        let p = pairer(["10.0.0.9:8765": (200, reply)], recorder: Recorder())
+        let outcome = await p.pair(origins: ["http://10.0.0.9:8765"], code: "ABC", deviceName: "Mac B", advertisement: ad)
+        #expect(outcome == .identityUnproven)
+    }
+
+    // Absent stays absent on the wire, so an older host reads exactly what
+    // it always did.
+    @Test(arguments: [nil, true] as [Bool?])
+    func anAdvertisementCarriesItsInboundOnlyFlagOnlyWhenSet(_ accepts: Bool?) throws {
+        let advertisement = RemotePeerAdvertisement(
+            serverId: "srv-b", name: "Mac B", origins: [], counterCode: nil, acceptsInboundOnly: accepts)
+        let data = try JSONEncoder().encode(advertisement)
+        #expect(String(decoding: data, as: UTF8.self).contains("acceptsInboundOnly") == (accepts != nil))
+        #expect(try JSONDecoder().decode(RemotePeerAdvertisement.self, from: data) == advertisement)
+    }
+
     // The synthesized enum description would print the token verbatim, so any
     // future interpolation of an outcome would leak a live bearer token.
     @Test func pairedDescriptionRedactsTheToken() {
