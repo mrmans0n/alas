@@ -623,10 +623,13 @@ extension LiveComputerUseSystem {
     }
 
     /// The defocus record, only while the app is still not WindowServer's front process: once the
-    /// user brought it to the front, the window may be the one they are working in.
+    /// user brought it to the front, the window may be the one they are working in. Without
+    /// SkyLight's front-process call, the app's active state tells.
     private static func defocusIfInBackground(_ window: ComputerUseWindow) {
-        guard ComputerUseSkyLight.isFrontProcess(pid: window.app.pid) == false else { return }
-        _ = ComputerUseSkyLight.defocus(pid: window.app.pid, windowID: window.windowID)
+        let pid = window.app.pid
+        let front = ComputerUseSkyLight.isFrontProcess(pid: pid) ?? NSRunningApplication(processIdentifier: pid)?.isActive
+        guard front == false else { return }
+        _ = ComputerUseSkyLight.defocus(pid: pid, windowID: window.windowID)
     }
 
     /// Activates the app around the events; one direct action at a time.
