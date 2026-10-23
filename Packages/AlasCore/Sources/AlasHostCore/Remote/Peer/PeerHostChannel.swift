@@ -107,12 +107,13 @@ public final class PeerHostChannel {
     }
 
     /// Sends `request` and waits for its answer, or fails with
-    /// `unansweredMessage` once the timeout passes.
-    public func request(_ request: HostRequest) async -> HostResponse {
+    /// `unansweredMessage` once `timeout` (the channel's by default) passes.
+    public func request(_ request: HostRequest, timeout: Duration? = nil) async -> HostResponse {
         let id = nextID
         nextID += 1
+        let timeout = timeout ?? self.timeout
         return await withCheckedContinuation { continuation in
-            let timeout = Task { [weak self, timeout] in
+            let timeout = Task { [weak self] in
                 try? await Task.sleep(for: timeout)
                 guard !Task.isCancelled else { return }
                 self?.finish(id, with: .failure(error: .failed(message: Self.unansweredMessage)))

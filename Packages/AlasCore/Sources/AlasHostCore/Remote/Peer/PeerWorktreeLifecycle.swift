@@ -80,10 +80,16 @@ public enum PeerWorktreeRemoval {
         case refused(message: String)
     }
 
+    /// A host quiesces the worktree's sessions and terminals before removing
+    /// it, which can take far longer than an ordinary request.
+    public static let requestTimeout: Duration = .seconds(600)
+    public static let unansweredMessage = "The Mac didn't answer in time. The operation may still finish; the list updates when it does."
+
+    /// Each request is sent with `requestTimeout`.
     @MainActor
     public static func run(
         _ action: Action, on worktree: WorktreeSnapshot,
-        request: @MainActor (HostRequest) async -> HostResponse,
+        request: @MainActor (HostRequest, _ timeout: Duration) async -> HostResponse,
         confirm: @MainActor (Confirmation) async -> Bool
     ) async -> Outcome {
         let branch = worktree.worktree.branch
@@ -91,7 +97,7 @@ public enum PeerWorktreeRemoval {
            !(await confirm(.delete(branch: branch, keepBranch: keepBranch))) { return .cancelled }
         var force = false, discard = false
         while true {
-            switch await request(makeRequest(action, worktree.worktree, force: force, discard: discard)) {
+            switch await request(makeRequest(action, worktree.worktree, force: force, discard: discard), requestTimeout) {
             case .done: return .done
             case .failure(.worktreeDeletion(.needsForce)) where !force && action != .archive:
                 guard await confirm(.force(branch: branch)) else { return .cancelled }
@@ -123,10 +129,10 @@ public enum PeerWorktreeRemoval {
         switch error {
         case .worktreeDeletion(let refusal): refusal.localizedDescription
         case .worktreeArchive(let refusal): refusal.localizedDescription
-        case .failed(let message): message
+        case .failed(let message): message == PeerHostChannel.unansweredMessage ? unansweredMessage : message
         case .operationInProgress: "Wait for the current worktree operation to finish."
         case .notFound: "The host no longer lists this worktree."
-        default: String(describing: error)
+        default: "The host could not complete the request." // HostError has no user-facing description
         }
     }
 }

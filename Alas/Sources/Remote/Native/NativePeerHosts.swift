@@ -103,7 +103,7 @@ final class NativePeerHosts {
         Task {
             let outcome = await PeerWorktreeRemoval.run(
                 action, on: worktree.snapshot,
-                request: { await channel.request($0) },
+                request: { await channel.request($0, timeout: $1) },
                 confirm: { await confirm($0, peerName) }
             )
             if case .refused(let message) = outcome { showError(failureTitle, message) }

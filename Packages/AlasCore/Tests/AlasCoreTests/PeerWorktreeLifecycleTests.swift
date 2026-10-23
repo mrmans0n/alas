@@ -107,6 +107,7 @@ struct PeerWorktreeLifecycleTests {
         var responses: [HostResponse]
         var answers: [Bool]
         var requests: [HostRequest] = []
+        var timeouts: [Duration] = []
         var confirmations: [PeerWorktreeRemoval.Confirmation] = []
 
         init(_ responses: [HostResponse], answers: [Bool] = []) {
@@ -117,8 +118,9 @@ struct PeerWorktreeLifecycleTests {
         func run(_ action: PeerWorktreeRemoval.Action) async -> PeerWorktreeRemoval.Outcome {
             await PeerWorktreeRemoval.run(
                 action, on: PeerWorktreeLifecycleTests.worktree("feature"),
-                request: { request in
+                request: { request, timeout in
                     self.requests.append(request)
+                    self.timeouts.append(timeout)
                     return self.responses.removeFirst()
                 },
                 confirm: { confirmation in
@@ -183,6 +185,15 @@ struct PeerWorktreeLifecycleTests {
         #expect(script.requests.count == (archiving ? 1 : 2))
     }
 
+    /// The host quiesces the worktree first, which can outlast an ordinary request.
+    @Test(arguments: [false, true])
+    func removalRequestsWaitLongerThanOrdinaryOnes(archiving: Bool) async {
+        let script = Script([.done])
+        _ = await script.run(archiving ? .archive : .delete(keepBranch: false, deleteBranchIfMerged: false))
+        #expect(script.timeouts == [PeerWorktreeRemoval.requestTimeout])
+        #expect(PeerWorktreeRemoval.requestTimeout > PeerHostChannel.defaultTimeout)
+    }
+
     @Test(arguments: [0, 1])
     func aDeclinedConfirmationSendsNothingMore(declinedAt: Int) async {
         let answers = (0...declinedAt).map { $0 != declinedAt }
@@ -197,7 +208,8 @@ struct PeerWorktreeLifecycleTests {
          "The worktree changed since it was listed."),
         (.failure(error: .worktreeDeletion(refusal: .ownedByWorkspaceCheckout("Owned by \u{201C}W\u{201D}."))),
          "Owned by \u{201C}W\u{201D}."),
-        (.failure(error: .failed(message: PeerHostChannel.unansweredMessage)), PeerHostChannel.unansweredMessage),
+        // A timed-out removal may still finish on the host.
+        (.failure(error: .failed(message: PeerHostChannel.unansweredMessage)), PeerWorktreeRemoval.unansweredMessage),
     ])
     func otherRefusalsEndTheFlowWithTheirMessage(_ response: HostResponse, _ message: String) async {
         let script = Script([response])
