@@ -692,7 +692,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_type",
-            "description": "Type text into a window. With `ref` (from the latest computer_inspect or computer_wait of this window) the element is focused first; `mode: \"replace\"` (needs ref) sets the element's whole value. Without ref the text goes to the focused element. Returns the window's new elements (refs are replaced). Works in the background; `delivery: \"direct\"` briefly activates the app and pastes. The first use of each app asks the user for approval.",
+            "description": "Type text into a window. With `ref` (from the latest computer_inspect or computer_wait of this window) the element is focused first; `mode: \"replace\"` (needs ref) sets the element's whole value. Without ref the text goes to the focused element. Returns the window's new elements (refs are replaced). Works in the background; `delivery: \"direct\"` briefly activates the app and pastes the text in one step, so the check that the user isn't using the app runs once before it, not between keystrokes. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
