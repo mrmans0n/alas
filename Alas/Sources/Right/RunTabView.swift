@@ -489,7 +489,7 @@ RightPaneLoadingSkeletonView(activeTab: .run)
     }
 }
 
-private struct RunScopeHeader: View {
+struct RunScopeHeader: View {
     let title: String
     let count: Int
     @Environment(\.theme) private var theme
@@ -512,7 +512,7 @@ private struct RunScopeHeader: View {
     }
 }
 
-private struct RunRowView: View {
+struct RunRowView: View {
     let presentation: RunRowPresentation
     let onAction: (RunRowAction) -> Void
     var pluginCommands: [PluginCommandItem] = []
@@ -541,7 +541,9 @@ private struct RunRowView: View {
                     actionButton(action, prominent: true)
                         .fixedSize()
                 }
-                actionMenu
+                if hasMenuActions {
+                    actionMenu
+                }
             }
 
             Text("\(status)\(detail)")
@@ -618,6 +620,10 @@ private struct RunRowView: View {
             default: false
             }
         }
+    }
+
+    private var hasMenuActions: Bool {
+        presentation.actions.contains(.restart) || presentation.actions.contains(.edit) || !pluginCommands.isEmpty
     }
 
     private var actionMenu: some View {

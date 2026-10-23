@@ -1,21 +1,25 @@
 import Foundation
+import Observation
 
 /// Paired Macs' worktrees, followed over the host channel of each online
 /// peer that serves it (`host.v1` and `host.events.v1`). Peers without it
 /// keep the session-derived grouping.
 @MainActor
+@Observable
 final class NativePeerHosts {
     /// Visible worktrees by peer `serverId`. A key exists only for a peer
     /// whose channel holds a snapshot.
     private(set) var worktrees: [String: [PeerHostWorktree]] = [:]
-    var onChange: (@MainActor () -> Void)?
+    /// Each peer's latest run per (worktree, script), keyed like `worktrees`.
+    private(set) var runs: [String: [RunRecord]] = [:]
+    @ObservationIgnored var onChange: (@MainActor () -> Void)?
 
     private let send: @MainActor (_ serverId: String, HostClientMessage) -> Void
     private let supports: @MainActor (_ serverId: String, _ capability: String) -> Bool
     let confirm: @MainActor (PeerWorktreeRemoval.Confirmation, _ peerName: String) async -> Bool
     let showError: @MainActor (_ title: String, _ message: String) -> Void
     private let timeout: Duration
-    private var channels: [String: PeerHostChannel] = [:]
+    @ObservationIgnored private var channels: [String: PeerHostChannel] = [:]
 
     init(
         send: @escaping @MainActor (_ serverId: String, HostClientMessage) -> Void,
@@ -57,6 +61,7 @@ final class NativePeerHosts {
         let stopped = channels.values
         channels = [:]
         worktrees = [:]
+        runs = [:]
         for channel in stopped {
             channel.onChange = nil
             channel.disconnect()
@@ -72,9 +77,36 @@ final class NativePeerHosts {
     /// host cannot be read, refused, or did not answer in time.
     func read(_ read: HostWorktreeRead, in worktree: PeerHostWorktree, serverId: String) async -> RemoteServerMessage? {
         guard canRead(serverId: serverId), let channel = channels[serverId] else { return nil }
-        let ref = WorktreeRef(projectID: worktree.snapshot.worktree.projectId, path: worktree.snapshot.worktree.path.path)
-        guard case .worktreeRead(let reply) = await channel.request(.readWorktree(worktree: ref, read: read)) else { return nil }
+        guard case .worktreeRead(let reply) = await channel.request(.readWorktree(worktree: Self.ref(worktree), read: read)) else {
+            return nil
+        }
         return reply
+    }
+
+    /// Whether `serverId` serves its worktrees' Run tab.
+    func servesRuns(serverId: String) -> Bool {
+        runs[serverId] != nil && supports(serverId, HostProtocolCapability.runsScriptsV1)
+    }
+
+    /// The scripts `worktree`'s Run tab lists on the host. Nil when the host
+    /// does not serve runs, refused, or did not answer.
+    func runScripts(in worktree: PeerHostWorktree, serverId: String) async -> [HostRunScript]? {
+        guard servesRuns(serverId: serverId), let channel = channels[serverId] else { return nil }
+        guard case .runScripts(let scripts) = await channel.request(.listRunScripts(worktree: Self.ref(worktree))) else { return nil }
+        return scripts
+    }
+
+    func perform(
+        _ command: PeerRuns.Command, on row: PeerRuns.Row, in worktree: PeerHostWorktree, serverId: String
+    ) async -> PeerRuns.Reply {
+        guard servesRuns(serverId: serverId), let channel = channels[serverId] else {
+            return .refused(title: "Run Script Failed", message: FederatedSessionsProvider.peerUnavailableMessage)
+        }
+        return await PeerRuns.perform(command, on: row, in: Self.ref(worktree)) { await channel.request($0) }
+    }
+
+    private static func ref(_ worktree: PeerHostWorktree) -> WorktreeRef {
+        WorktreeRef(projectID: worktree.snapshot.worktree.projectId, path: worktree.snapshot.worktree.path.path)
     }
 
     /// Archive and Delete for `worktree`, only on a host that serves them.
@@ -119,6 +151,7 @@ final class NativePeerHosts {
         channel.onChange = { [weak self, weak channel] in
             guard let self, let channel else { return }
             worktrees[serverId] = channel.state?.visibleWorktrees()
+            runs[serverId] = channel.state?.runs
             onChange?()
         }
         channels[serverId] = channel

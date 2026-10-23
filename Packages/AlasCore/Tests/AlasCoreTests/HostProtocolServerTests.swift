@@ -235,10 +235,7 @@ struct HostProtocolServerTests {
         let server = HostProtocolServer(host: fixture.host) { _, _ in
             entered.continuation.yield()
             for await _ in release.stream { break }
-            return [RunScript(
-                scope: .repo, fileName: "dev.sh", fileURL: URL(fileURLWithPath: "/srv/feature/dev.sh"),
-                displayName: "Dev", onExit: .close, cwd: nil, isExecutable: true
-            )]
+            return [Self.devScript()]
         }
         let client = Client()
         let connection = server.connect(caller: .localUser(uid: 501), send: client.receive)
@@ -265,32 +262,88 @@ struct HostProtocolServerTests {
         )))])
     }
 
-    /// Archiving stopped everything in a worktree; a run does not start
-    /// there again, including one archived while its scripts were found.
-    @Test(arguments: [false, true])
-    func runsDoNotStartInArchivedWorktrees(archivedDuringDiscovery: Bool) async throws {
+    /// Archiving stopped everything in a worktree; a run does not start or
+    /// restart there again, including one archived while its scripts were found.
+    @Test(arguments: [false, true], [false, true])
+    func runsDoNotStartInArchivedWorktrees(archivedDuringDiscovery: Bool, restart: Bool) async throws {
         let fixture = try Fixture()
         let projects = fixture.projects
         let worktree = fixture.worktree
         if !archivedDuringDiscovery {
             projects.setWorktreeHidden(projectId: "p", path: worktree.path, hidden: true)
         }
-        let script = RunScript(
-            scope: .repo, fileName: "dev.sh", fileURL: URL(fileURLWithPath: "/srv/feature/dev.sh"),
-            displayName: "Dev", onExit: .close, cwd: nil, isExecutable: false
-        )
         let server = HostProtocolServer(host: fixture.host) { _, _ in
             await MainActor.run { projects.setWorktreeHidden(projectId: "p", path: worktree.path, hidden: true) }
-            return [script]
+            return [Self.devScript()]
         }
         let client = Client()
         let connection = server.connect(caller: .localUser(uid: 501), send: client.receive)
-        await connection.receive(HostClientMessage(id: 1, request: .startRun(
-            scriptKey: "repo:dev.sh", worktree: WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
-        )))
+        let ref = WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
+        await connection.receive(HostClientMessage(
+            id: 1, request: restart ? .restartRun(scriptKey: "repo:dev.sh", worktree: ref) : .startRun(scriptKey: "repo:dev.sh", worktree: ref)
+        ))
         #expect(client.messages == [.response(id: 1, result: .runStart(start: .refused(
             title: "Worktree archived", message: "Unarchive the worktree to run scripts in it."
         )))])
+    }
+
+    /// The listing is the server's discovery with each script's run location;
+    /// an archived worktree is refused as an unknown one is.
+    @Test func runScriptsAreListedForListedWorktreesOnly() async throws {
+        let fixture = try Fixture()
+        let server = HostProtocolServer(host: fixture.host) { _, _ in [Self.devScript(cwd: "web")] }
+        let client = Client()
+        let connection = server.connect(caller: .remotePeer(deviceID: "d"), send: client.receive)
+        let ref = WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
+        await connection.receive(HostClientMessage(id: 1, request: .listRunScripts(worktree: ref)))
+        fixture.projects.setWorktreeHidden(projectId: "p", path: fixture.worktree.path, hidden: true)
+        await connection.receive(HostClientMessage(id: 2, request: .listRunScripts(worktree: ref)))
+        #expect(client.messages == [
+            .response(id: 1, result: .runScripts(scripts: [HostRunScript(
+                scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web",
+                target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
+            )])),
+            .response(id: 2, result: .failure(error: .notFound(what: "worktree /srv/feature in project p"))),
+        ])
+    }
+
+    /// A run asked for over the host protocol is shown as the script says, or
+    /// for a restart as its open console is. It becomes the active tab only to
+    /// replace the active console, so the host's screen stays where it was.
+    @Test(arguments: [
+        (restart: false, console: RunScriptConsole.hidden, openConsoleIsHidden: Bool?.some(false), active: false, hidden: true, activates: false),
+        (restart: false, console: .shown, openConsoleIsHidden: nil, active: false, hidden: false, activates: false),
+        (restart: true, console: .shown, openConsoleIsHidden: true, active: false, hidden: true, activates: false),
+        (restart: true, console: .hidden, openConsoleIsHidden: nil, active: false, hidden: true, activates: false),
+        (restart: true, console: .shown, openConsoleIsHidden: false, active: true, hidden: false, activates: true),
+    ])
+    func hostProtocolRunsFollowTheConsoleSettingAndActivateOnlyInPlaceOfTheActiveConsole(
+        restart: Bool, console: RunScriptConsole, openConsoleIsHidden: Bool?, active: Bool, hidden: Bool, activates: Bool
+    ) async throws {
+        let environment = RecordingRunEnvironment()
+        environment.openConsoleIsHidden = openConsoleIsHidden
+        environment.launcher.hostsActiveConsole = active
+        let fixture = try Fixture(environment: environment)
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("alas-run-\(UUID().uuidString).sh")
+        try "#!/bin/sh\n".write(to: file, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let server = HostProtocolServer(host: fixture.host) { _, _ in [Self.devScript(console: console, fileURL: file)] }
+        let connection = server.connect(caller: .remotePeer(deviceID: "d"), send: Client().receive)
+        let ref = WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
+        await connection.receive(HostClientMessage(id: 1, request: restart
+            ? .restartRun(scriptKey: "repo:dev.sh", worktree: ref) : .startRun(scriptKey: "repo:dev.sh", worktree: ref)))
+        await fixture.host.core.waitForStartingRunsForTesting()
+        #expect(environment.launcher.requests.map(\.isHidden) == [hidden])
+        #expect(environment.launcher.requests.map(\.activatesConsole) == [activates])
+    }
+
+    nonisolated static func devScript(
+        cwd: String? = nil, console: RunScriptConsole = .shown, fileURL: URL = URL(fileURLWithPath: "/srv/feature/dev.sh")
+    ) -> RunScript {
+        RunScript(
+            scope: .repo, fileName: "dev.sh", fileURL: fileURL,
+            displayName: "Dev", onExit: .close, cwd: cwd, isExecutable: true, console: console
+        )
     }
 
     /// A removed project leaves the host and the persisted list.
@@ -497,7 +550,7 @@ struct HostProtocolServerTests {
         let server: HostProtocolServer
         let worktree: Worktree
 
-        init() throws {
+        init(environment: (any AlasHostEnvironment)? = nil) throws {
             let project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
             projects = ProjectsManager(persistedProjects: [project])
             let path = URL(fileURLWithPath: "/srv/feature")
@@ -511,7 +564,8 @@ struct HostProtocolServerTests {
                 projects: projects,
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json")),
-                attentionStore: .scratch()
+                attentionStore: .scratch(),
+                environment: environment ?? HeadlessHostEnvironment()
             ))
             server = HostProtocolServer(host: host)
         }
@@ -552,4 +606,23 @@ struct HostProtocolServerTests {
             try await eventually { await condition(self.messages) }
         }
     }
+}
+
+@MainActor private final class RecordingRunEnvironment: AlasHostEnvironment {
+    final class Launcher: RunLauncher {
+        var requests: [RunLaunchRequest] = []
+        var hostsActiveConsole = false
+        func hostsRun(scriptKey: String, worktreeID: String) -> Bool { hostsActiveConsole }
+        func runHostIsActive(scriptKey: String, worktreeID: String) -> Bool { hostsActiveConsole }
+        func endRunHost(scriptKey: String, worktreeID: String) { hostsActiveConsole = false }
+        func launch(_ request: RunLaunchRequest, in core: AlasCoreContext) async throws -> RunLaunch {
+            requests.append(request)
+            return .unobservable
+        }
+    }
+
+    let launcher = Launcher()
+    var openConsoleIsHidden: Bool?
+    var runLauncher: any RunLauncher { launcher }
+    func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { openConsoleIsHidden }
 }

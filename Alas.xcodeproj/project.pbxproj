@@ -292,6 +292,7 @@
 		27F8B3029CA5F11982515486 /* DiffReviewRenderContextCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BC9FF2675A6904A01CAEE52 /* DiffReviewRenderContextCacheTests.swift */; };
 		281C65FD7F2B509B963B74ED /* AlasHookCommandTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A77AA40A1700F0AF21335876 /* AlasHookCommandTests.swift */; };
 		2843F603A4D71AEEA4C09317 /* CloseTabConfirmationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C78D0715973BD840FDE95AA2 /* CloseTabConfirmationPolicy.swift */; };
+		2857FBBA484A3F6565B7FAC1 /* NativePeerRunTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7881A2BE28B8F9BA6AD7719C /* NativePeerRunTabView.swift */; };
 		285BEFDF742866D620398EB3 /* StartupRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9BB18B529D24C1BAE68B443B /* StartupRecoveryTests.swift */; };
 		28710B18EF9FAE100B99E0A7 /* ACPThumbnailImageCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B3E9B2665E18F4C4BF3FB683 /* ACPThumbnailImageCacheTests.swift */; };
 		28BFB7C825FE3CFD8999A988 /* CodePane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 93CDC9895F48619E97461875 /* CodePane.swift */; };
@@ -2724,6 +2725,7 @@
 		783BF39E4E31679C16C6746B /* WorktreesPaneTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreesPaneTests.swift; sourceTree = "<group>"; };
 		784A5C206CA363AB14B709E6 /* RepoSelectorRecentsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorRecentsTests.swift; sourceTree = "<group>"; };
 		7861A044BEFFC09DBF61E06B /* AppKitDiffReviewScroller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffReviewScroller.swift; sourceTree = "<group>"; };
+		7881A2BE28B8F9BA6AD7719C /* NativePeerRunTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePeerRunTabView.swift; sourceTree = "<group>"; };
 		78A775AB4D9567A7AAF0519E /* ACPUpstreamReferenceDetectorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUpstreamReferenceDetectorTests.swift; sourceTree = "<group>"; };
 		78C3D3BFCB08264735C94B7F /* RepositoryAgentSelectionPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryAgentSelectionPolicyTests.swift; sourceTree = "<group>"; };
 		791A44F599AD12B254F9E2A6 /* ACPUpstreamReferenceHover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUpstreamReferenceHover.swift; sourceTree = "<group>"; };
@@ -4752,6 +4754,7 @@
 				542B9A0D90AC20BBCA6073F8 /* MergeOperationState.swift */,
 				BFF14A872437EAF5999E6E97 /* NativePeerChangesView.swift */,
 				FF62C1AE2F26ACA30F3E8CF1 /* NativePeerRightPaneView.swift */,
+				7881A2BE28B8F9BA6AD7719C /* NativePeerRunTabView.swift */,
 				4941BFBEEEAF9DE9E1752548 /* OperationCard.swift */,
 				1440CBF73B5E39F6CD4C1001 /* PaneBandStyle.swift */,
 				9B15F58AFF7BC19419935C05 /* PendingDiscard.swift */,
@@ -7500,6 +7503,7 @@
 				E05DCD5C1151953912226A8C /* NativePeerNewSessionSheet.swift in Sources */,
 				7CACAEC0AA8ECDBD4B489C5A /* NativePeerRequestBridge.swift in Sources */,
 				46ADDF922E44FCC085170F56 /* NativePeerRightPaneView.swift in Sources */,
+				2857FBBA484A3F6565B7FAC1 /* NativePeerRunTabView.swift in Sources */,
 				C5B8A1CF2C3F457B29DB0ED5 /* NativePeerSessionView.swift in Sources */,
 				90D08EC25B1B3E67EC635174 /* NativePeerSessions.swift in Sources */,
 				D50A2890F958DBE99F383D7A /* NativePeerSidebarSnapshot.swift in Sources */,

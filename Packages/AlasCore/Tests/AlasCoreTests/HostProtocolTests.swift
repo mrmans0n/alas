@@ -42,6 +42,8 @@ struct HostProtocolTests {
         )),
         HostClientMessage(id: 19, request: .archiveWorktree(worktree: ref, lineageID: "l", branch: "feature", discardUnsavedEdits: false)),
         HostClientMessage(id: 20, request: .readWorktree(worktree: ref, read: .fileDiff(path: "a.swift", stage: "unstaged", comparisonMode: nil))),
+        HostClientMessage(id: 21, request: .listRunScripts(worktree: ref)),
+        HostClientMessage(id: 22, request: .restartRun(scriptKey: "repo:dev.sh", worktree: ref)),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -68,6 +70,9 @@ struct HostProtocolTests {
         .response(id: 11, result: .failure(error: .worktreeArchive(refusal: .unsavedEdits))),
         .response(id: 12, result: .failure(error: .worktreeDeletion(refusal: .ownedByWorkspaceCheckout("Owned.")))),
         .response(id: 13, result: .worktreeRead(reply: .fileContents(sessionId: "/srv/feature", path: "a.txt", text: "hi", truncated: false))),
+        .response(id: 14, result: .runScripts(scripts: [HostRunScript(
+            scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
+        )])),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),
@@ -117,6 +122,9 @@ struct HostProtocolTests {
         ))) == #"{"id":1,"request":{"deleteWorktree":{"branch":"feature","deleteBranchIfMerged":false,"discardUnsavedEdits":true,"force":false,"lineageID":"l","worktree":{"path":"\/srv\/feature","projectID":"p"}}},"version":1}"#)
         #expect(try json(HostServerMessage.response(id: 3, result: .failure(error: .worktreeDeletion(refusal: .unsavedEdits)))) ==
             #"{"response":{"id":3,"result":{"failure":{"error":{"worktreeDeletion":{"refusal":{"unsavedEdits":{}}}}}}}}"#)
+        #expect(try json(HostServerMessage.response(id: 4, result: .runScripts(scripts: [HostRunScript(
+            scope: .repo, fileName: "dev.sh", name: "Dev", cwd: nil, target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature")
+        )]))) == #"{"response":{"id":4,"result":{"runScripts":{"scripts":[{"fileName":"dev.sh","name":"Dev","scope":"repo","target":{"workingDirectory":"\/srv\/feature"}}]}}}}"#)
     }
 
     /// A client before `host.worktrees.lifecycle.v1` sends no acknowledgement.

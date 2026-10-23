@@ -369,6 +369,17 @@ struct TabsManagerTests {
         #expect(reloaded.activeTabId(forWorktree: worktreeID) == existing.id)
     }
 
+    /// A console that does not take focus leaves an active tab alone, but
+    /// becomes active in a worktree with none, so the center is not empty.
+    @Test(arguments: [false, true])
+    func nonActivatingTerminalBecomesActiveOnlyWithoutAnActiveTab(hasActiveTab: Bool) {
+        let worktreeID = "tabs-manager-non-activating"
+        let manager = TabsManager(store: TestPersistenceStore())
+        let existing = hasActiveTab ? manager.appendTerminal(worktreeId: worktreeID, title: "a", sessionId: "a") : nil
+        let console = manager.appendTerminal(worktreeId: worktreeID, title: "run", sessionId: "run", activates: false)
+        #expect(manager.activeTabId(forWorktree: worktreeID) == (existing ?? console).id)
+    }
+
     @Test func newTerminalAppendsAndActivates() {
         let worktreeId = "tabs-manager-new-terminal"
         defer { try? FileManager.default.removeItem(at: Paths.tabsFile(forWorktreeId: worktreeId)) }

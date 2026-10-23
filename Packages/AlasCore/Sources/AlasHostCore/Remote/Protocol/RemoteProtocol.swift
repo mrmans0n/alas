@@ -1461,8 +1461,12 @@ public enum HostProtocolCapability: Sendable {
     public static let worktreesLifecycleV1 = "host.worktrees.lifecycle.v1"
     /// Hosts that serve `readWorktree`.
     public static let worktreesReadV1 = "host.worktrees.read.v1"
+    /// Hosts that serve `listRunScripts` and `restartRun`.
+    public static let runsScriptsV1 = "host.runs.scripts.v1"
     /// Everything this host serves of the host protocol.
-    public static let served = [v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1]
+    public static let served = [
+        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
+    ]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

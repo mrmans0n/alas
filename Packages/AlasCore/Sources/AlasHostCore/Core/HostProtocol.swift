@@ -71,6 +71,11 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case workspaceCheckout(id: UUID)
     case startRun(scriptKey: String, worktree: WorktreeRef)
     case stopRun(scriptKey: String, worktree: WorktreeRef)
+    /// The scripts a listed worktree's Run tab lists (`host.runs.scripts.v1`).
+    case listRunScripts(worktree: WorktreeRef)
+    /// Stops whatever the script's slot holds, then starts it again
+    /// (`host.runs.scripts.v1`).
+    case restartRun(scriptKey: String, worktree: WorktreeRef)
     case createSession(target: SessionTarget, agentID: String, modelID: String?, autoRun: Bool)
     case sendPrompt(sessionID: String, prompt: String)
     case stopSession(sessionID: String)
@@ -127,6 +132,31 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
     case file(path: String)
 }
 
+/// A run script as a worktree's Run tab lists it.
+public struct HostRunScript: Codable, Equatable, Sendable {
+    public var scope: RunScriptScope
+    public var fileName: String
+    public var name: String
+    /// Working directory relative to the worktree root. Nil = worktree root.
+    public var cwd: String?
+    /// Where a run executes: the host and working directory.
+    public var target: RunExecutionTarget
+
+    public var key: String { "\(scope.rawValue):\(fileName)" }
+
+    public init(scope: RunScriptScope, fileName: String, name: String, cwd: String?, target: RunExecutionTarget) {
+        self.scope = scope
+        self.fileName = fileName
+        self.name = name
+        self.cwd = cwd
+        self.target = target
+    }
+
+    public init(_ script: RunScript, target: RunExecutionTarget) {
+        self.init(scope: script.scope, fileName: script.fileName, name: script.displayName, cwd: script.cwd, target: target)
+    }
+}
+
 /// A paired Mac as `alas-host peers list` shows it; never its token.
 public struct HostPeerSummary: Codable, Equatable, Sendable {
     public var id: String
@@ -181,6 +211,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     /// the worktree's id as its `sessionId`. Indirect: a Remote message
     /// carries host messages.
     indirect case worktreeRead(reply: RemoteServerMessage)
+    /// The answer to `listRunScripts`.
+    case runScripts(scripts: [HostRunScript])
     case failure(error: HostError)
 }
 
