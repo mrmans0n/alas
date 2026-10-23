@@ -372,6 +372,10 @@ struct HostProtocolServerTests {
         }
         #expect(try await fixture.request(.readWorktree(worktree: WorktreeRef(projectID: fixture.projectID, path: "/srv/missing"), read: .file(path: "a")))
             == .failure(error: .notFound(what: "worktree /srv/missing in project \(fixture.projectID)")))
+        // An archived worktree is not listed, so it is not read either.
+        fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: worktree.path, hidden: true)
+        #expect(try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "notes.txt")))
+            == .failure(error: .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")))
     }
 
     /// A host over a real repository, persisting to a scratch directory,

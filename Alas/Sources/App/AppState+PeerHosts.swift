@@ -20,14 +20,18 @@ extension AppState {
         return hosts
     }
 
-    /// The local delete and force alerts, plus the host-only unsaved-edits one.
+    /// The local delete and force alerts, naming the host Mac so they can't
+    /// pass for a local delete, plus the host-only unsaved-edits one.
     func confirmPeerWorktreeRemoval(_ confirmation: PeerWorktreeRemoval.Confirmation, peerName: String) -> Bool {
         let title: String, text: String, button: String
         switch confirmation {
         case .delete(let branch, let keepBranch):
-            return confirmDeleteWorktree(Self.deleteConfirmation(branch: branch, keepBranch: keepBranch))
+            let local = Self.deleteConfirmation(branch: branch, keepBranch: keepBranch)
+            return confirmDeleteWorktree(WorktreeDeleteConfirmation(
+                title: "Delete worktree '\(branch)' on \(peerName)?", message: local.message
+            ))
         case .force(let branch):
-            title = "'\(branch)' \(Self.forceDeleteAlertTitleSuffix)"
+            title = "'\(branch)' on \(peerName) \(Self.forceDeleteAlertTitleSuffix)"
             text = Self.forceDeleteAlertMessage
             button = "Force Delete"
         case .discardUnsavedEdits(let branch, let archiving):

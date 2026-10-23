@@ -314,8 +314,12 @@ public final class HostProtocolConnection {
             return .done
         case .readWorktree(let ref, let read):
             // Needs no lease, as for a session: seeing a worktree is enough
-            // to read its code. Only a listed worktree is read.
+            // to read its code. Only a listed worktree is read: an archived
+            // one is refused as an unknown one is.
             let listed = try worktree(ref)
+            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
+                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
+            }
             return .worktreeRead(reply: await host.core.remoteRead(read, in: listed, replyingAs: listed.id))
         }
         return .done
