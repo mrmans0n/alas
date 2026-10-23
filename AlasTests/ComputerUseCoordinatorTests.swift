@@ -648,6 +648,26 @@ struct ComputerUseCoordinatorTests {
             && payload["retry_error"] as? String == "computer_user_active: The user is using Notes right now. Try again in a moment.")
     }
 
+    /// An app still opening what the input showed (a sheet) may not answer the first read back.
+    @Test func postActionReadTheAppDidNotAnswerIsRetriedOnce() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        var system = Self.system(recorder: recorder)
+        // Read 1 is the inspect, 2 the window before the press, 3 the first read after it.
+        let saveTree = Self.saveTree
+        system.axTree = { _, _, _, _ in
+            if reads.next() == 3 { throw ComputerUseSystemError.appNotResponding("Notes") }
+            return (saveTree, true, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["post_state_error"] == nil)
+        #expect((payload["elements"] as? [[String: Any]])?.isEmpty == false)
+        #expect(recorder.sleeps.contains(ComputerUseCoordinator.postReadRetryDelay))
+    }
+
     @Test func actionWaitsForUserIdleThenGivesUp() async throws {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)

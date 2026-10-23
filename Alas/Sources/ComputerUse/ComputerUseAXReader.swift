@@ -235,7 +235,7 @@ enum ComputerUseAXReader {
         }
 
         private func notResponding(_ window: ComputerUseWindow) -> ComputerUseSystemError {
-            .captureFailed("\(window.app.name) is not responding")
+            .appNotResponding(window.app.name)
         }
 
         /// The root is depth 0 and counts toward the budget. Once the walk

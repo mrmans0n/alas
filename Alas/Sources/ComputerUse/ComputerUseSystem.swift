@@ -94,6 +94,8 @@ struct ComputerUseDelivered: Sendable, Equatable {
 enum ComputerUseSystemError: Error, LocalizedError {
     case windowNotFound(UInt32)
     case captureFailed(String)
+    /// The app didn't answer an Accessibility read in time (kAXErrorCannotComplete, a stalled read).
+    case appNotResponding(String)
     /// The element a handle points at no longer exists.
     case staleElement
     case actionFailed(String)
@@ -115,6 +117,7 @@ enum ComputerUseSystemError: Error, LocalizedError {
         switch self {
         case .windowNotFound(let id): "Window \(id) is no longer on screen"
         case .captureFailed(let reason): "Capture failed: \(reason)"
+        case .appNotResponding(let app): "Capture failed: \(app) is not responding"
         case .staleElement, .staleDropElement: "The element is no longer valid"
         case .outOfBounds, .dropOutOfBounds: "The point is outside the window"
         case .userActive: "The user is using the app"

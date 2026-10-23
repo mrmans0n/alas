@@ -829,10 +829,20 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         // The input landed; a failed re-read must not report it as failed.
         do {
-            // The action may have moved or resized the window; the read matches it by its frame.
-            window = try await currentWindow(window)
-            let read = try await readElements(
-                window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+            let read: ElementRead
+            do {
+                // The action may have moved or resized the window; the read matches it by its frame.
+                window = try await currentWindow(window)
+                read = try await readElements(
+                    window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+            } catch ComputerUseSystemError.appNotResponding {
+                // An app still busy with what the input opened (a sheet sliding in) answers a moment later.
+                await sleep(Self.postReadRetryDelay)
+                try checkStillActive(context)
+                window = try await currentWindow(window)
+                read = try await readElements(
+                    window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+            }
             payload["truncated"] = read.truncated
             payload["elements"] = read.elements.map(Self.element)
             let after = await fingerprint(of: window, read: read, target: target)
@@ -853,6 +863,9 @@ final class ComputerUseCoordinator {
             return warning
         } catch is CancellationError {
             throw CancellationError()
+        } catch let refusal as Refusal {
+            // The turn ended during the retry's wait.
+            throw refusal
         } catch {
             // The action changed the window, so the refs from before it are gone either way.
             updateSnapshot(of: window, context: context) { $0.refs = [:] }
@@ -902,6 +915,8 @@ final class ComputerUseCoordinator {
     }
 
     static let settleDelay: Duration = .milliseconds(300)
+    /// Before the one retry of a post-action read the app didn't answer.
+    static let postReadRetryDelay: Duration = .milliseconds(300)
     static let postStateDepth = 12
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)
@@ -1201,6 +1216,7 @@ final class ComputerUseCoordinator {
         switch error {
         case ComputerUseSystemError.windowNotFound(let id): Message.windowNotFound(id)
         case ComputerUseSystemError.captureFailed(let reason): Message.captureFailed(reason)
+        case ComputerUseSystemError.appNotResponding(let app): Message.captureFailed("\(app) is not responding")
         case ComputerUseSystemError.actionFailed(let reason), ComputerUseSystemError.notActiveWindow(let reason):
             Message.actionFailed(reason)
         case ComputerUseSystemError.openFailed(let reason): Message.openFailed(reason)
