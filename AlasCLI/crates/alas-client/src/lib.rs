@@ -337,6 +337,8 @@ pub enum ComputerCommand {
     Drag {
         window_id: u32,
         from: ComputerTarget,
+        /// The window `to` is in, when it isn't `window_id`.
+        to_window_id: Option<u32>,
         to: ComputerTarget,
         direct: bool,
         post: ComputerPost,
@@ -1017,6 +1019,7 @@ fn computer_request(command: &ComputerCommand) -> Request {
         ComputerCommand::Drag {
             window_id,
             from,
+            to_window_id,
             to,
             direct,
             post,
@@ -1024,6 +1027,12 @@ fn computer_request(command: &ComputerCommand) -> Request {
         } => {
             params.insert("window_id".into(), serde_json::Value::from(*window_id));
             insert_target(&mut params, from, "ref", "x", "y");
+            if let Some(to_window_id) = to_window_id {
+                params.insert(
+                    "to_window_id".into(),
+                    serde_json::Value::from(*to_window_id),
+                );
+            }
             insert_target(&mut params, to, "to_ref", "to_x", "to_y");
             insert_direct(&mut params, *direct);
             insert_post(&mut params, post);
@@ -2259,6 +2268,7 @@ mod tests {
             &Command::Computer(ComputerCommand::Drag {
                 window_id: 7,
                 from: ComputerTarget::Point { x: 10.5, y: 20.0 },
+                to_window_id: Some(9),
                 to: ComputerTarget::Ref("e3".into()),
                 direct: true,
                 post: ComputerPost::default(),
@@ -2271,7 +2281,7 @@ mod tests {
         assert_eq!(
             drag.params,
             Some(
-                serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_ref": "e3", "delivery": "direct" })
+                serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_window_id": 9, "to_ref": "e3", "delivery": "direct" })
             )
         );
 

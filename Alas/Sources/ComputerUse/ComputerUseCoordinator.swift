@@ -230,8 +230,29 @@ final class ComputerUseCoordinator {
             if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID, input: input) { return refused }
         }
 
-        return await withDriverLock(sessionID: sessionID, app: window.app, epoch: epoch) {
-            (try await run(command, window: window, context: context), window.app)
+        var toWindow: ComputerUseWindow?
+        if command.action == .drag, let toID = command.toWindowID, toID != windowID {
+            // The drop window's app is operated too: it needs access like the start's, from the same rules.
+            guard let end = await system.window(toID) else { return .error(Message.windowNotFound(toID)) }
+            switch await approval(for: end.app, sessionID: sessionID, epoch: epoch, input: true) {
+            case .refused(let response):
+                return response
+            case .allowed:
+                toWindow = end
+            case .answered:
+                guard let current = await system.window(toID), current.app.pid == end.app.pid else {
+                    return .error(Message.windowNotFound(toID))
+                }
+                if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
+                if let refused = accessAfterAnswer(for: current.app, sessionID: sessionID, input: true) { return refused }
+                // The start window's access may have changed while this card was up.
+                if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID, input: true) { return refused }
+                toWindow = current
+            }
+        }
+
+        return await withDriverLock(sessionID: sessionID, app: window.app, epoch: epoch) { [toWindow] in
+            (try await run(command, window: window, toWindow: toWindow, context: context), window.app)
         }
     }
 
@@ -593,7 +614,9 @@ final class ComputerUseCoordinator {
         return Self.serialize(["version": 1, "apps": entries])
     }
 
-    private func run(_ command: ComputerUseCommand, window: ComputerUseWindow, context: CallContext) async throws -> [String: Any] {
+    private func run(
+        _ command: ComputerUseCommand, window: ComputerUseWindow, toWindow: ComputerUseWindow? = nil, context: CallContext
+    ) async throws -> [String: Any] {
         var payload: [String: Any] = [
             "version": 1,
             "window_id": Int(window.windowID),
@@ -622,17 +645,21 @@ final class ComputerUseCoordinator {
             payload["truncated"] = read.truncated
             payload["elements"] = read.elements.map(Self.element)
         case .click, .type, .key, .scroll, .drag:
-            try await act(command, in: window, context: context, payload: &payload)
+            try await act(command, in: window, toWindow: toWindow, context: context, payload: &payload)
         }
         return payload
     }
 
     private func act(
-        _ command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext, payload: inout [String: Any]
+        _ command: ComputerUseCommand, in window: ComputerUseWindow, toWindow: ComputerUseWindow?, context: CallContext,
+        payload: inout [String: Any]
     ) async throws {
         var window = window
-        var input = try input(for: command, in: window, context: context)
-        let direct = command.delivery == .direct
+        var toWindow = toWindow
+        var input = try input(for: command, in: window, toWindow: toWindow, context: context)
+        // Events posted to one app never reach another: a drop into another app's window goes
+        // with the start app activated, onto a drop window the user can see.
+        let direct = command.delivery == .direct || toWindow.map { $0.app.pid != window.app.pid } == true
         // What the window looked like, so an input the app ignored doesn't pass for one that worked.
         // Read first, so the takeover wait and the ref re-check are the last steps before the input.
         var target: (ComputerUseAXHandles, Int)?
@@ -643,21 +670,20 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         if try await waitForUserIdle(in: window, direct: direct, context: context) {
             // The window may have moved or closed while the user had it: map points against where it is now.
-            guard let current = await system.window(window.windowID), current.app.pid == window.app.pid else {
-                throw ComputerUseSystemError.windowNotFound(window.windowID)
-            }
-            window = current
-            input = try self.input(for: command, in: window, context: context)
+            window = try await currentWindow(window)
+            if let end = toWindow { toWindow = try await currentWindow(end) }
+            input = try self.input(for: command, in: window, toWindow: toWindow, context: context)
         }
         try checkStillActive(context)
-        try await recheckRefs(of: command, in: window, context: context)
+        try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
         try checkStillActive(context)
         let delivered: ComputerUseDelivered
         do {
             delivered = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
         } catch ComputerUseSystemError.staleElement {
-            guard let ref = command.ref ?? command.toRef else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
-            throw Refusal(Message.stale(ref, windowID: window.windowID))
+            if let ref = command.ref { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
+            guard let ref = command.toRef else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
+            throw Refusal(Message.stale(ref, windowID: (toWindow ?? window).windowID))
         } catch ComputerUseSystemError.outOfBounds {
             throw Refusal(Message.outOfBounds(window.windowID))
         } catch ComputerUseSystemError.userActive {
@@ -782,15 +808,21 @@ final class ComputerUseCoordinator {
     }
 
     /// An element behind a ref must still read as what the agent was shown.
-    private func recheckRefs(of command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext) async throws {
-        for ref in [command.ref, command.toRef].compactMap(\.self) {
+    /// `toRef` is in `toWindow`'s snapshot when the drag drops into another window.
+    private func recheckRefs(
+        of command: ComputerUseCommand, in window: ComputerUseWindow, toWindow: ComputerUseWindow?, context: CallContext
+    ) async throws {
+        for (ref, window) in [(command.ref, window), (command.toRef, toWindow ?? window)] {
+            guard let ref else { continue }
             guard let snapshot = snapshot(of: window, context: context), let element = snapshot.refs[ref],
                   await system.elementMatches(snapshot.handles, element.handle, element.role, element.title)
             else { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
         }
     }
 
-    private func input(for command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext) throws -> ComputerUseInput {
+    private func input(
+        for command: ComputerUseCommand, in window: ComputerUseWindow, toWindow: ComputerUseWindow?, context: CallContext
+    ) throws -> ComputerUseInput {
         func target(_ ref: String?, _ x: Double?, _ y: Double?) throws -> ComputerUseInputTarget {
             try self.target(ref: ref, x: x, y: y, in: window, context: context)
         }
@@ -809,7 +841,9 @@ final class ComputerUseCoordinator {
         case .scroll:
             return try .scroll(target(command.ref, command.x, command.y), dx: command.dx, dy: command.dy)
         case .drag:
-            return try .drag(from: target(command.ref, command.x, command.y), to: target(command.toRef, command.toX, command.toY))
+            // The drop end resolves in the window it is in: its refs, its screenshot, its frame.
+            let end = try self.target(ref: command.toRef, x: command.toX, y: command.toY, in: toWindow ?? window, context: context)
+            return try .drag(from: target(command.ref, command.x, command.y), to: end, toWindow: toWindow)
         case .apps, .screenshot, .inspect, .cancel, .openApp, .wait:
             preconditionFailure("\(command.action.rawValue) is not an input action")
         }

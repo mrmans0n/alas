@@ -481,6 +481,46 @@ struct ComputerUseCoordinatorTests {
         #expect(point == CGPoint(x: 200, y: 100))
     }
 
+    enum CrossWindowDrop: CaseIterable { case mapped, outOfBounds, blockedApp }
+
+    /// The drop end maps through the end window's own screenshot and frame, its app needs access
+    /// like the start's, and a drop into another app goes with the app activated.
+    @Test(arguments: CrossWindowDrop.allCases)
+    func dragIntoAnotherWindowUsesThatWindow(_ drop: CrossWindowDrop) async throws {
+        let recorder = Recorder()
+        let directs = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.perform = { input, _, direct, _ in
+            recorder.record(input)
+            directs.recordCheck(direct)
+            return .activation
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes, Self.mail, Self.alasDev])
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let end: UInt32 = drop == .blockedApp ? 4 : 2
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: end), sessionID: "s")
+        let to = drop == .outOfBounds ? 2000.0 : 100
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: end, toX: to, toY: to)
+        let response = await f.coordinator.perform(drag, sessionID: "s")
+        switch drop {
+        case .mapped:
+            #expect(Self.text(response) != nil)
+            guard case .drag(.point(let start), .point(let point), let toWindow) = try #require(recorder.inputs.first) else {
+                Issue.record("expected a point drag")
+                return
+            }
+            // Mail's window sits at (10, 10); its screenshot has 2 pixels per point.
+            #expect(start == CGPoint(x: 5, y: 5) && point == CGPoint(x: 60, y: 60) && toWindow?.windowID == 2)
+            #expect(directs.checks == [true])
+        case .outOfBounds:
+            #expect(response == .error("computer_out_of_bounds: The point is outside window 2."))
+            #expect(recorder.inputs.isEmpty)
+        case .blockedApp:
+            #expect(response == .error("computer_blocked: Alas Dev can't be used by agents."))
+            #expect(recorder.inputs.isEmpty)
+        }
+    }
+
     @Test func actionWaitsForUserIdleThenGivesUp() async throws {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)

@@ -46,7 +46,8 @@ enum ComputerUseInput: Sendable {
     case type(String, target: ComputerUseInputTarget?, replace: Bool)
     case key(ComputerUseKeyChord)
     case scroll(ComputerUseInputTarget, dx: Int, dy: Int)
-    case drag(from: ComputerUseInputTarget, to: ComputerUseInputTarget)
+    /// `toWindow`: the window the drop end is in, when it isn't the start's; its frame bounds that end.
+    case drag(from: ComputerUseInputTarget, to: ComputerUseInputTarget, toWindow: ComputerUseWindow?)
 }
 
 /// Why an input in flight must stop before its next event.
@@ -588,10 +589,11 @@ extension LiveComputerUseSystem {
         func requireActiveWindow() async throws {
             try await ComputerUseAXActions.makeActiveWindow(window, raise: !background, isCancelled: isCancelled)
         }
-        func point(_ input: ComputerUseInputTarget) async throws -> CGPoint {
+        func point(_ input: ComputerUseInputTarget, in bounds: ComputerUseWindow = window) async throws -> CGPoint {
             switch input {
             case .element(let handles, let handle):
-                try await ComputerUseAXActions.center(handles, handle, within: window.frame, app: app, isCancelled: isCancelled)
+                try await ComputerUseAXActions.center(
+                    handles, handle, within: bounds.frame, app: bounds.app, isCancelled: isCancelled)
             case .point(let point):
                 point
             }
@@ -646,12 +648,13 @@ extension LiveComputerUseSystem {
             let location = try await point(at)
             try checkCancelled()
             try ComputerUseInputPoster.scroll(at: location, dx: dx, dy: dy, target: target)
-        case .drag(let from, let to):
+        case .drag(let from, let to, let toWindow):
             // With the app activated, the drag starts in its window brought to the front: the
             // down, every dragged step and the up go there, as a user's drag would.
             if !background { try await requireActiveWindow() }
             let start = try await point(from)
-            let end = try await point(to)
+            // Mouse events stay with the window the button went down in, as AppKit routes a drag.
+            let end = try await point(to, in: toWindow ?? window)
             try checkCancelled()
             try await ComputerUseInputPoster.drag(from: start, to: end, target: target) { interrupt() == .userActive }
         }

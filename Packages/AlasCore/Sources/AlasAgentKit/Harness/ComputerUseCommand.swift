@@ -47,6 +47,8 @@ public struct ComputerUseCommand: Equatable, Sendable {
     public var ref: String?
     public var x: Double?
     public var y: Double?
+    /// The window a drag drops into, when not its own: `toRef` and `toX`/`toY` then refer to it.
+    public var toWindowID: UInt32?
     /// Drag destination, same two forms.
     public var toRef: String?
     public var toX: Double?
@@ -68,7 +70,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
     public init(
         action: Action, windowID: UInt32? = nil, query: String? = nil, limit: Int? = nil, maxDepth: Int = 12,
         callID: String? = nil, ref: String? = nil, x: Double? = nil, y: Double? = nil,
-        toRef: String? = nil, toX: Double? = nil, toY: Double? = nil,
+        toWindowID: UInt32? = nil, toRef: String? = nil, toX: Double? = nil, toY: Double? = nil,
         button: Button = .left, count: Int = 1, text: String? = nil, mode: TypeMode = .insert,
         keys: String? = nil, dx: Int = 0, dy: Int = 0, delivery: Delivery = .background,
         name: String? = nil, bundleID: String? = nil, condition: WaitCondition = .appear,
@@ -83,6 +85,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         self.ref = ref
         self.x = x
         self.y = y
+        self.toWindowID = toWindowID
         self.toRef = toRef
         self.toX = toX
         self.toY = toY
@@ -110,6 +113,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         var ref: String?
         var x: Double?
         var y: Double?
+        var to_window_id: UInt32?
         var to_ref: String?
         var to_x: Double?
         var to_y: Double?
@@ -139,6 +143,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
             note("ref", ref)
             note("x", x)
             note("y", y)
+            note("to_window_id", to_window_id)
             note("to_ref", to_ref)
             note("to_x", to_x)
             note("to_y", to_y)
@@ -171,7 +176,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         case .type: postAction.union(["text", "ref", "mode", "delivery"])
         case .key: postAction.union(["keys", "delivery"])
         case .scroll: postAction.union(pointTarget).union(["dx", "dy", "delivery"])
-        case .drag: postAction.union(pointTarget).union(["to_ref", "to_x", "to_y", "delivery"])
+        case .drag: postAction.union(pointTarget).union(["to_window_id", "to_ref", "to_x", "to_y", "delivery"])
         case .openApp: ["name", "bundle_id", "call_id"]
         case .wait: ["window_id", "query", "condition", "timeout_ms", "limit", "call_id"]
         }
@@ -186,7 +191,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
             action: action, windowID: params?.window_id, query: params?.query,
             limit: params?.limit, maxDepth: params?.max_depth ?? 12, callID: params?.call_id,
             ref: params?.ref, x: params?.x, y: params?.y,
-            toRef: params?.to_ref, toX: params?.to_x, toY: params?.to_y,
+            toWindowID: params?.to_window_id, toRef: params?.to_ref, toX: params?.to_x, toY: params?.to_y,
             button: params?.button ?? .left, count: params?.count ?? 1,
             text: params?.text, mode: params?.mode ?? .insert, keys: params?.keys,
             dx: params?.dx ?? 0, dy: params?.dy ?? 0, delivery: params?.delivery ?? .background,
