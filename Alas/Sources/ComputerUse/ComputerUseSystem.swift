@@ -241,10 +241,12 @@ private enum LiveComputerUseSystem {
     }
 
     /// From the input tap; the HID idle time, which counts Alas's own events, only until it runs.
+    /// While Secure Event Input is on the tap gets no keys, so the HID idle time for keys counts too.
     static func secondsSinceUserInput() -> TimeInterval {
         ComputerUseTakeover.userIdleSeconds(
             now: ComputerUseUserInput.now(), lastUserInput: ComputerUseUserInput.lastInput(),
-            hidIdle: ComputerUseUserInput.hidIdleSeconds())
+            hidIdle: ComputerUseUserInput.hidIdleSeconds(),
+            secureInputKeyIdle: IsSecureEventInputEnabled() ? ComputerUseUserInput.hidKeyIdleSeconds() : nil)
     }
 
     static func window(_ id: UInt32) async -> ComputerUseWindow? {
@@ -1215,6 +1217,12 @@ enum ComputerUseUserInput {
     static func hidIdleSeconds() -> TimeInterval {
         // ~0 is kCGAnyInputEventType, which does not import into Swift.
         CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: CGEventType(rawValue: ~0)!)
+    }
+
+    /// Seconds since the last key press, from the HID system: unlike the tap, it sees keys typed
+    /// under Secure Event Input.
+    static func hidKeyIdleSeconds() -> TimeInterval {
+        CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: .keyDown)
     }
 
     /// Seconds of uptime.

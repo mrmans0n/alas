@@ -21,9 +21,14 @@ public enum ComputerUseTakeover {
     /// Seconds since the user's own input: from the input monitor's last event (`lastUserInput`,
     /// on the same clock as `now`), which events Alas posts never reach; the HID idle time, which
     /// counts those too, only while the monitor isn't running (nil).
-    public static func userIdleSeconds(now: TimeInterval, lastUserInput: TimeInterval?, hidIdle: TimeInterval) -> TimeInterval {
+    /// `secureInputKeyIdle`: the HID idle time for keys while Secure Event Input is on (nil when
+    /// off). The monitor gets no key events then, so a user typing a password would read as idle.
+    public static func userIdleSeconds(
+        now: TimeInterval, lastUserInput: TimeInterval?, hidIdle: TimeInterval, secureInputKeyIdle: TimeInterval? = nil
+    ) -> TimeInterval {
         guard let lastUserInput else { return hidIdle }
-        return max(0, now - lastUserInput)
+        let monitored = max(0, now - lastUserInput)
+        return secureInputKeyIdle.map { min(monitored, $0) } ?? monitored
     }
 
     /// Whether the user took over a drag under way since `dragBegan`: any input of theirs since

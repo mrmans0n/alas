@@ -156,18 +156,21 @@ struct ComputerUseInputTests {
     /// The monitor's last user event decides; Alas's own posts reset only the HID idle time.
     @Test(arguments: [
         // Alas just posted (HID idle 0), the user's last input was 5 s ago: idle.
-        (100.0, 95.0, 0.0, 5.0, ComputerUseTakeover.Decision.proceed),
+        (100.0, 95.0, 0.0, nil, 5.0, ComputerUseTakeover.Decision.proceed),
         // The user typed 0.5 s ago, in the target app.
-        (100.0, 99.5, 0.0, 0.5, .wait),
+        (100.0, 99.5, 0.0, nil, 0.5, .wait),
         // No monitor: the HID idle time is all there is.
-        (100.0, nil, 0.3, 0.3, .wait),
-        (100.0, nil, 4.0, 4.0, .proceed),
-    ] as [(TimeInterval, TimeInterval?, TimeInterval, TimeInterval, ComputerUseTakeover.Decision)])
+        (100.0, nil, 0.3, nil, 0.3, .wait),
+        (100.0, nil, 4.0, nil, 4.0, .proceed),
+        // Secure Event Input hides the keys from the monitor: the user typing a password is active.
+        (100.0, 95.0, 0.0, 0.4, 0.4, .wait),
+    ] as [(TimeInterval, TimeInterval?, TimeInterval, TimeInterval?, TimeInterval, ComputerUseTakeover.Decision)])
     private func idleComesFromTheUsersOwnInput(
-        now: TimeInterval, lastUserInput: TimeInterval?, hidIdle: TimeInterval, idle: TimeInterval,
-        decision: ComputerUseTakeover.Decision
+        now: TimeInterval, lastUserInput: TimeInterval?, hidIdle: TimeInterval, secureInputKeyIdle: TimeInterval?,
+        idle: TimeInterval, decision: ComputerUseTakeover.Decision
     ) {
-        let seconds = ComputerUseTakeover.userIdleSeconds(now: now, lastUserInput: lastUserInput, hidIdle: hidIdle)
+        let seconds = ComputerUseTakeover.userIdleSeconds(
+            now: now, lastUserInput: lastUserInput, hidIdle: hidIdle, secureInputKeyIdle: secureInputKeyIdle)
         #expect(seconds == idle)
         #expect(ComputerUseTakeover.decide(targetIsFrontmost: true, idleSeconds: seconds, direct: false, waited: 0) == decision)
     }
