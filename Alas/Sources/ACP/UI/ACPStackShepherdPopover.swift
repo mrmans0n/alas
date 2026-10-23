@@ -439,8 +439,10 @@ struct StackShepherdPopover: View {
 }
 
 /// The Ship stack entry list with one line: entries below it ship, entries
-/// above it stay local. Drag the line or click a row to ship through it; the
-/// focused line also moves with the arrow keys, and VoiceOver adjusts it.
+/// above it stay local. Dragged, the line follows the pointer and the rows
+/// part at the stop nearest it, where it settles when let go. Clicking a row
+/// ships through it; the focused line also moves with the arrow keys, and
+/// VoiceOver adjusts it.
 struct StackShipLinePicker: View {
     /// Contiguous positions, in any order; listed top of the stack first.
     let entries: [GGStackEntry]
@@ -450,57 +452,63 @@ struct StackShipLinePicker: View {
     @Binding var shipThrough: Int
     let opensDrafts: Bool
     @Environment(\.theme) private var theme
-    @State private var dragOrigin: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The line's top while dragged, in the list's coordinate space.
+    @State private var dragTop: CGFloat?
+    /// The line's resting top when the drag began.
+    @State private var dragStartTop: CGFloat?
     @State private var hovered: Int?
+    @State private var lineHovered = false
+    @FocusState private var lineFocused: Bool
 
-    /// A row's height plus the spacing: how far the line moves per entry.
-    private static let rowPitch: CGFloat = 25
+    private static let rowHeight: CGFloat = 20
+    private static let rowSpacing: CGFloat = 5
+    private static let lineHeight: CGFloat = 14
+    /// How far the line moves per row.
+    private static let rowPitch = rowHeight + rowSpacing
     private static let maxVisibleRows = 8
-    private static let lineID = "ship-line"
     private static let space = "ship-line-picker"
 
-    private enum Item: Identifiable {
-        case entry(GGStackEntry)
-        case line
-
-        var id: String {
-            switch self {
-            case .entry(let entry): entry.id
-            case .line: StackShipLinePicker.lineID
-            }
-        }
-    }
-
+    /// Top of the stack first.
+    private var rows: [GGStackEntry] { entries.sorted { $0.position > $1.position } }
     private var top: Int { entries.map(\.position).max() ?? 0 }
     /// Where the line can stop: never below an entry that already has a
-    /// request, and only above entries with a GG-ID (`StackShipPlan.linePositions`).
+    /// request, and only where the boundary survives an amend
+    /// (`StackShipPlan.linePositions`).
     private var stops: [Int] { StackShipPlan.linePositions(in: entries) }
     private var through: Int { StackShipPlan.snap(shipThrough, to: stops) }
+    private var animation: Animation? { reduceMotion ? nil : .snappy(duration: 0.22) }
 
-    /// Rows top-first with the line above the first row that ships. The line
-    /// keeps one identity wherever it sits, so a drag survives it moving.
-    private var items: [Item] {
-        var items: [Item] = []
-        for entry in entries.sorted(by: { $0.position > $1.position }) {
-            if entry.position == through { items.append(.line) }
-            items.append(.entry(entry))
+    /// The line's top resting above the row at `index` of `rows`: the rows
+    /// above keep their place, and the rest move down to make room for it.
+    private static func lineTop(atRow index: Int) -> CGFloat { CGFloat(index) * rowPitch }
+
+    /// Each stop with the line's top resting on it.
+    private func stopTops(in rows: [GGStackEntry]) -> [(position: Int, top: CGFloat)] {
+        stops.compactMap { stop in
+            rows.firstIndex { $0.position == stop }.map { (stop, Self.lineTop(atRow: $0)) }
         }
-        return items
     }
 
     var body: some View {
-        let list = VStack(alignment: .leading, spacing: 5) {
-            ForEach(items) { item in
-                switch item {
-                case .entry(let entry): row(entry)
-                case .line: line
-                }
+        let rows = self.rows
+        let through = self.through
+        let restingTop = Self.lineTop(atRow: rows.firstIndex { $0.position == through } ?? 0)
+        let list = VStack(alignment: .leading, spacing: Self.rowSpacing) {
+            ForEach(rows) { entry in
+                row(entry)
+                    .padding(.top, entry.position == through ? Self.lineHeight + Self.rowSpacing : 0)
             }
         }
+        .overlay(alignment: .topLeading) {
+            line(rows: rows, restingTop: restingTop)
+                .offset(y: dragTop ?? restingTop)
+        }
         .coordinateSpace(.named(Self.space))
+        .sensoryFeedback(.alignment, trigger: through) { _, _ in dragTop != nil }
         if entries.count > Self.maxVisibleRows {
             ScrollView { list }
-                .frame(height: CGFloat(Self.maxVisibleRows) * Self.rowPitch)
+                .frame(height: CGFloat(Self.maxVisibleRows) * Self.rowPitch + Self.lineHeight)
         } else {
             list
         }
@@ -510,7 +518,7 @@ struct StackShipLinePicker: View {
         let ships = entry.position <= through
         let state = Self.stateLabel(entry, prefix: (kind ?? .github).reviewRequestNumberPrefix, ships: ships, opensDrafts: opensDrafts)
         return Button {
-            shipThrough = entry.position
+            withAnimation(animation) { shipThrough = entry.position }
         } label: {
             HStack(spacing: 8) {
                 Text("\(entry.position)")
@@ -532,10 +540,10 @@ struct StackShipLinePicker: View {
                 }
             }
             .opacity(ships ? 1 : 0.5)
-            .frame(height: 20)
+            .frame(height: Self.rowHeight)
             .padding(.horizontal, 4)
             .background(
-                hovered == entry.position ? theme.color("bg-3") : .clear,
+                hovered == entry.position && dragTop == nil ? theme.color("bg-3") : .clear,
                 in: RoundedRectangle(cornerRadius: 4)
             )
             .padding(.horizontal, -4)
@@ -550,9 +558,13 @@ struct StackShipLinePicker: View {
         .accessibilityHint("Ships this entry and every entry below it")
     }
 
-    private var line: some View {
-        HStack(spacing: 6) {
-            Rectangle().frame(height: 1.5)
+    private func line(rows: [GGStackEntry], restingTop: CGFloat) -> some View {
+        // Focus shows on the line itself: the system ring would box the
+        // whole row-wide hit area.
+        let isActive = lineHovered || lineFocused || dragTop != nil
+        let accent = theme.color("accent")
+        return HStack(spacing: 6) {
+            Rectangle().frame(height: isActive ? 2 : 1.5)
             HStack(spacing: 3) {
                 Image(systemName: "arrow.up.and.down")
                     .font(.system(size: 8, weight: .semibold))
@@ -561,24 +573,30 @@ struct StackShipLinePicker: View {
             }
             .padding(.horizontal, 6)
             .padding(.vertical, 1)
-            .overlay(Capsule().strokeBorder(theme.color("accent"), lineWidth: 1))
-            Rectangle().frame(height: 1.5)
+            // Opaque, so the label stays legible as it passes over rows.
+            .background(Capsule().fill(theme.color("bg-1")))
+            .background(Capsule().fill(accent.opacity(isActive ? 0.18 : 0)))
+            .overlay(Capsule().strokeBorder(accent, lineWidth: 1))
+            .scaleEffect(dragTop != nil ? 1.06 : 1)
+            Rectangle().frame(height: isActive ? 2 : 1.5)
         }
-        .foregroundStyle(theme.color("accent"))
-        .frame(height: 14)
+        .foregroundStyle(accent)
+        .frame(height: Self.lineHeight)
         .contentShape(Rectangle())
+        .animation(animation, value: isActive)
+        .onHover { lineHovered = $0 }
         .pointerStyle(.rowResize)
         .gesture(
-            DragGesture(minimumDistance: 2, coordinateSpace: .named(Self.space))
-                .onChanged { value in
-                    let origin = dragOrigin ?? through
-                    dragOrigin = origin
-                    let rows = Int((-value.translation.height / Self.rowPitch).rounded())
-                    shipThrough = min(max(origin + rows, stops.first ?? 0), top)
+            DragGesture(minimumDistance: 1, coordinateSpace: .named(Self.space))
+                .onChanged { value in drag(by: value.translation.height, rows: rows, restingTop: restingTop) }
+                .onEnded { _ in
+                    dragStartTop = nil
+                    withAnimation(animation) { dragTop = nil }
                 }
-                .onEnded { _ in dragOrigin = nil }
         )
         .focusable()
+        .focused($lineFocused)
+        .focusEffectDisabled()
         .onKeyPress(.upArrow) { move(1) }
         .onKeyPress(.downArrow) { move(-1) }
         .help("Drag to choose what ships: entries below the line ship, entries above it stay local")
@@ -594,11 +612,27 @@ struct StackShipLinePicker: View {
         }
     }
 
+    /// Keeps the line under the pointer, within the highest and lowest stop,
+    /// and parts the rows at the stop nearest it.
+    private func drag(by translation: CGFloat, rows: [GGStackEntry], restingTop: CGFloat) {
+        let stopTops = stopTops(in: rows)
+        guard let highest = stopTops.map(\.top).min(), let lowest = stopTops.map(\.top).max() else { return }
+        let start = dragStartTop ?? restingTop
+        dragStartTop = start
+        let lineTop = min(max(start + translation, highest), lowest)
+        var tracking = Transaction()
+        tracking.disablesAnimations = true
+        withTransaction(tracking) { dragTop = lineTop }
+        guard let nearest = stopTops.min(by: { abs($0.top - lineTop) < abs($1.top - lineTop) })?.position,
+              nearest != through else { return }
+        withAnimation(animation) { shipThrough = nearest }
+    }
+
     /// Moves the line `stops` stops up (positive) or down.
     private func move(_ stops: Int) -> KeyPress.Result {
         let all = self.stops
         let index = all.firstIndex(of: through) ?? all.count - 1
-        shipThrough = all[min(max(index + stops, 0), all.count - 1)]
+        withAnimation(animation) { shipThrough = all[min(max(index + stops, 0), all.count - 1)] }
         return .handled
     }
 

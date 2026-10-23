@@ -276,7 +276,7 @@ public final class StackShepherd {
         return StackShepherdPolicy.isReady(
             current, requests: freshRequests,
             isStackPublished: StackShepherdPolicy.publication(
-                of: stack, local: probed.local, landed: landed, shipThroughEntryID: latest.shipPlan?.shipThroughEntryID
+                of: stack, local: probed.local, landed: landed, shipPlan: latest.shipPlan ?? .wholeStack
             ).isPublished,
             capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now()
         )
@@ -632,7 +632,7 @@ public final class StackShepherd {
         let publication = StackShepherdPolicy.publication(
             of: onStack, local: probed.local,
             landed: onStack.map { StackShepherdPolicy.landedEntryIDs(of: current, in: $0) } ?? [],
-            shipThroughEntryID: current.shipPlan?.shipThroughEntryID
+            shipPlan: current.shipPlan ?? .wholeStack
         )
         let observation = StackShepherdObservation(
             requests: fetched,

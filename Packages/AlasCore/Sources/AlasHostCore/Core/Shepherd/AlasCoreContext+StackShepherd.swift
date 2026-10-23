@@ -113,7 +113,7 @@ extension AlasCoreContext {
             throw PRShepherdCLIError(message: "gg sync did not finish: \(Self.prShepherdErrorMessage(error))")
         }
         let published = try await publishedStack(
-            effects, context: context, shipThroughEntryID: plan.shipThroughEntryID, unpublishedHint: "gg sync did not open one"
+            effects, context: context, shipPlan: plan, unpublishedHint: "gg sync did not open one"
         )
         let record = await bindStackShepherd(
             sessionID: sessionID, worktreeID: worktreeID, published: published, shipPlan: plan, contextRules: nil
@@ -177,7 +177,7 @@ extension AlasCoreContext {
             stackShepherd.liveRecord(forWorktree: worktreeID, stackName: $0)?.shipPlan
         } ?? .wholeStack
         let published = try await publishedStack(
-            effects, context: context, shipThroughEntryID: plan.shipThroughEntryID, unpublishedHint: "Ship the stack to open it"
+            effects, context: context, shipPlan: plan, unpublishedHint: "Ship the stack to open it"
         )
         return await bindStackShepherd(
             sessionID: sessionID, worktreeID: worktreeID, published: published, shipPlan: plan, contextRules: contextRules
@@ -278,18 +278,18 @@ extension AlasCoreContext {
     }
 
     /// The worktree's stack with every entry's request read. Throws when an
-    /// entry up to `shipThroughEntryID` has none yet; `unpublishedHint` says
+    /// entry up to `shipPlan`'s boundary has none yet; `unpublishedHint` says
     /// what to do about it.
     private func publishedStack(
         _ effects: StackShepherd.Effects,
         context: StackShepherd.WorktreeContext,
-        shipThroughEntryID: String?,
+        shipPlan: StackShipPlan,
         unpublishedHint: String
     ) async throws -> PublishedGGStack {
         guard let stack = try await loadStack(effects, path: context.path), !stack.entries.isEmpty else {
             throw PRShepherdCLIError(message: "gg does not list a stack with commits for this worktree.")
         }
-        let heldBack = StackShipPlan(shipThroughEntryID: shipThroughEntryID).heldBackEntries(of: stack)
+        let heldBack = shipPlan.heldBackEntries(of: stack)
         let heldBackIDs = Set(heldBack.map(\.id))
         let shipped = stack.entries.filter { !heldBackIDs.contains($0.id) }.sorted { $0.position < $1.position }
         if let missing = shipped.first(where: { $0.prNumber == nil }) {

@@ -2,18 +2,23 @@ import Foundation
 
 /// What Ship publishes of a gg stack: the entries up to
 /// `shipThroughEntryID`, as one `gg sync --until`. The entry is named by
-/// `GGStackEntry.id` (GG-ID, else SHA), so the plan survives the agent
-/// amending and rebasing the stack; commits it adds above the boundary stay
-/// local.
+/// `GGStackEntry.id` (GG-ID, else SHA) and, without a GG-ID, also by its
+/// title, so the plan survives the agent amending and rebasing the stack;
+/// commits it adds above the boundary stay local.
 public struct StackShipPlan: Codable, Equatable, Sendable {
     /// The topmost entry to publish; nil publishes the whole stack.
     public var shipThroughEntryID: String?
+    /// The boundary's commit title when `shipThroughEntryID` is a SHA.
+    /// Amending the entry, as `gg absorb` and `gg sc` do, changes the SHA
+    /// but keeps the title, so a title only one entry has still finds it.
+    public var shipThroughTitle: String?
     /// The requests this ship creates open as drafts (`gg sync --draft`).
     /// Entries that already have a request keep its state.
     public var opensDrafts: Bool
 
-    public init(shipThroughEntryID: String? = nil, opensDrafts: Bool = false) {
+    public init(shipThroughEntryID: String? = nil, shipThroughTitle: String? = nil, opensDrafts: Bool = false) {
         self.shipThroughEntryID = shipThroughEntryID
+        self.shipThroughTitle = shipThroughTitle
         self.opensDrafts = opensDrafts
     }
 
@@ -28,8 +33,10 @@ public struct StackShipPlan: Codable, Equatable, Sendable {
     /// a sync about to run, where no rewrite can come in between.
     private init(exactly position: Int, of stack: GGStack, opensDrafts: Bool) {
         let isTop = position >= (stack.entries.map(\.position).max() ?? 0)
+        let entry = isTop ? nil : stack.entries.first { $0.position == position }
         self.init(
-            shipThroughEntryID: isTop ? nil : stack.entries.first { $0.position == position }?.id,
+            shipThroughEntryID: entry?.id,
+            shipThroughTitle: entry?.ggId == nil ? entry?.title : nil,
             opensDrafts: opensDrafts
         )
     }
@@ -47,10 +54,19 @@ public struct StackShipPlan: Codable, Equatable, Sendable {
     /// pushed.
     public func shipThroughPosition(in stack: GGStack) throws(MissingEntry) -> Int {
         guard let shipThroughEntryID else { return stack.entries.map(\.position).max() ?? 0 }
-        guard let entry = stack.entries.first(where: { $0.id == shipThroughEntryID }) else {
+        guard let entry = boundary(in: stack) else {
             throw MissingEntry(entryID: shipThroughEntryID)
         }
         return max(entry.position, Self.highestPublishedPosition(in: stack))
+    }
+
+    /// The boundary entry: the one `shipThroughEntryID` names, else the only
+    /// one titled `shipThroughTitle`. Two with that title name neither.
+    private func boundary(in stack: GGStack) -> GGStackEntry? {
+        if let entry = stack.entries.first(where: { $0.id == shipThroughEntryID }) { return entry }
+        guard let shipThroughTitle else { return nil }
+        let titled = stack.entries.filter { $0.title == shipThroughTitle }
+        return titled.count == 1 ? titled.first : nil
     }
 
     /// The plan with its boundary on the entry it actually ships through, as
@@ -91,14 +107,17 @@ public struct StackShipPlan: Codable, Equatable, Sendable {
     }
 
     /// Where Ship's line can stop among `entries`, ascending: the top, and
-    /// every entry with a GG-ID at or above the highest one with a request.
-    /// A SHA changes when the agent amends the entry, so only a GG-ID can name
-    /// the boundary until `stack_ship` runs.
+    /// every entry at or above the highest one with a request that the
+    /// boundary can still name once the agent amends it: by GG-ID, else by
+    /// a title no other entry has.
     public static func linePositions(in entries: [GGStackEntry]) -> [Int] {
         let top = entries.map(\.position).max() ?? 0
         let floor = entries.filter { $0.prNumber != nil }.map(\.position).max() ?? 0
-        let stops = entries.filter { $0.ggId != nil && $0.position >= floor }.map(\.position)
-        return Set(stops + [top]).sorted()
+        let titleCounts = Dictionary(entries.map { ($0.title, 1) }, uniquingKeysWith: +)
+        let stops = entries.filter { entry in
+            entry.position >= floor && (entry.ggId != nil || titleCounts[entry.title] == 1)
+        }
+        return Set(stops.map(\.position) + [top]).sorted()
     }
 
     /// `target` moved to the nearest stop at or below it, so a line that
