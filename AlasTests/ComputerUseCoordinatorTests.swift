@@ -333,11 +333,11 @@ struct ComputerUseCoordinatorTests {
         // Navigation keys and typing can legitimately change nothing a read shows: no retry hint.
         (.key, .background, .none, Warnings.noChange),
         (.type, .background, .none, Warnings.noChange),
-        // A drag that changed nothing always says so, even when a read was cut short.
-        (.drag, .background, .none, Warnings.drag + Warnings.dragRetry),
-        (.drag, .background, .truncatedAfter, Warnings.drag + Warnings.dragRetry),
+        // A drag that changed nothing always says so, even when a read was cut short. Drags go
+        // with the app activated, so there is no direct way left to suggest.
         (.drag, .activation, .none, Warnings.drag),
-        (.drag, .background, .elements, nil),
+        (.drag, .activation, .truncatedAfter, Warnings.drag),
+        (.drag, .activation, .elements, nil),
     ] as [(ActionKind, ComputerUseDelivered, WindowChange, String?)])
     func actionThatChangedNothingSaysSo(
         _ kind: ActionKind, _ delivered: ComputerUseDelivered, change: WindowChange, warning: String?
@@ -511,7 +511,7 @@ struct ComputerUseCoordinatorTests {
         }
         system.perform = { input, _, _, _ in
             recorder.record(input)
-            return .background
+            return .activation
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
@@ -547,6 +547,73 @@ struct ComputerUseCoordinatorTests {
         case .otherApp:
             #expect(response == .error("computer_action_failed: Dragging between different apps isn't supported yet."))
             #expect(f.coordinator.pendingApprovals.isEmpty && recorder.inputs.isEmpty)
+        }
+    }
+
+    /// A drag always goes with the app in front, so like direct delivery it is refused, not
+    /// waited out, while the user is active, whatever app they are in.
+    @Test(arguments: [(60.0, true), (0.5, false)])
+    func dragsAlwaysGoDirect(idleSeconds: TimeInterval, delivers: Bool) async throws {
+        let recorder = Recorder()
+        let directs = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.secondsSinceUserInput = { idleSeconds }
+        system.perform = { input, _, direct, _ in
+            recorder.record(input)
+            directs.recordCheck(direct)
+            return .activation
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let response = await f.coordinator.perform(.init(action: .drag, windowID: 1, ref: "e2", toRef: "e1"), sessionID: "s")
+        if delivers {
+            #expect(try #require(Self.text(response)).contains(#""delivery":"activation""#))
+            #expect(directs.checks == [true])
+        } else {
+            #expect(response == .error("computer_user_active: The user is using Notes right now. Try again in a moment."))
+            #expect(recorder.inputs.isEmpty && !recorder.sleeps.contains(ComputerUseCoordinator.takeoverPoll))
+        }
+    }
+
+    /// An AX press in an Electron app may only focus the element: a click that changed nothing
+    /// there is clicked once more with the pointer. Elsewhere, and after a change, it stands.
+    @Test(arguments: [(true, false, true), (true, true, false), (false, false, false)])
+    func electronClickThatChangedNothingIsRetriedWithThePointer(
+        manualAccessibility: Bool, changed: Bool, retries: Bool
+    ) async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let saveTree = Self.saveTree
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { $0 == 101 && manualAccessibility }
+        // Read 1 is the inspect, 2 the window before the click, 3 the one after it.
+        system.axTree = { _, _, _, _ in
+            var tree = saveTree
+            if changed, reads.next() >= 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
+            return (tree, true, ComputerUseAXHandles())
+        }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            if case .pointerClick = input { return .background }
+            return .ax
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let inputs = recorder.inputs
+        guard case .click(.element(_, 1), .left, 1) = try #require(inputs.first) else {
+            Issue.record("expected the element click first")
+            return
+        }
+        if retries {
+            guard inputs.count == 2, case .pointerClick(.element(_, 1)) = inputs[1] else {
+                Issue.record("expected one pointer click at the element")
+                return
+            }
+            #expect(payload["delivery"] as? String == "background" && payload["retried"] as? String == "pointer")
+        } else {
+            #expect(inputs.count == 1 && payload["delivery"] as? String == "ax" && payload["retried"] == nil)
         }
     }
 
@@ -779,7 +846,6 @@ struct ComputerUseCoordinatorTests {
 private enum Warnings {
     static let noChange = "No change was observed in the window after this action; the app may have ignored it."
     static let drag = "Couldn't confirm the drag had an effect; inspect to verify."
-    static let dragRetry = #" Retry with delivery: "direct" to drag with the app in front."#
 }
 
 /// Inputs, launches, sleeps, cancellation checks and ordered events seen by the fakes.

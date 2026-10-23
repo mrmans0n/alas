@@ -734,7 +734,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_drag",
-            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. The drop point must be visible: when another window covers it, the drag is cancelled in place with an error. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
+            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. The drop point must be visible: when another window covers it, the drag is cancelled in place with an error. Drags bring the app to the front briefly; they're refused while you're typing or using the mouse. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
@@ -744,8 +744,7 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "to_window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "Another window of the same app to drop into, a window_id from computer_apps. Default: window_id." },
                     "to_ref": computer_ref_property("The element to drop on."),
                     "to_x": computer_pixel_property("End pixels from the left edge of the latest screenshot. Use with to_y, instead of to_ref."),
-                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref."),
-                    "delivery": computer_delivery_property()
+                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref.")
                 }),
                 &[]
             )
@@ -1440,7 +1439,6 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "to_ref",
                     "to_x",
                     "to_y",
-                    "delivery",
                     "query",
                     "limit",
                     "include_screenshot",
@@ -1452,7 +1450,8 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 to_window_id: optional_bounded_u64(args, "to_window_id", 0, u32::MAX.into())?
                     .map(|value| value as u32),
                 to: computer_target(args, "to_ref", "to_x", "to_y")?,
-                direct: computer_direct(args)?,
+                // Always delivered with the app in front; the flag would only repeat that.
+                direct: false,
                 post: computer_post(args)?,
                 call_id: None,
             }))
@@ -4154,19 +4153,6 @@ mod tests {
             ),
             (
                 "computer_drag",
-                json!({ "window_id": 7, "ref": "e1", "to_x": 5, "to_y": 6, "delivery": "direct" }),
-                ComputerCommand::Drag {
-                    window_id: 7,
-                    from: element("e1"),
-                    to_window_id: None,
-                    to: at(5.0, 6.0),
-                    direct: true,
-                    post: post.clone(),
-                    call_id: None,
-                },
-            ),
-            (
-                "computer_drag",
                 json!({ "window_id": 7, "ref": "e1", "to_window_id": 9, "to_ref": "e4" }),
                 ComputerCommand::Drag {
                     window_id: 7,
@@ -4320,6 +4306,10 @@ mod tests {
             (
                 "computer_drag",
                 json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "to_x": 1, "to_y": 1 }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "delivery": "direct" }),
             ),
             ("computer_open_app", json!({})),
             (

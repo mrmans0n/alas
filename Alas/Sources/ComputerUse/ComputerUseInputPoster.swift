@@ -56,6 +56,8 @@ enum ComputerUseInputPoster {
         let ups = try ([start] + points).map {
             try mouseEvent(.leftMouseUp, at: $0, button: .left, clickState: 1, target: target)
         }
+        // The cancel for a covered drop: dragged back to the start, then released there.
+        let back = try mouseEvent(.leftMouseDragged, at: start, button: .left, clickState: 1, target: target)
         let primer = try mouseEvent(.mouseMoved, at: start, button: .left, clickState: 0, target: target)
         ComputerUseSkyLight.post(primer, pid: target.pid)
         ComputerUseSkyLight.post(down, pid: target.pid)
@@ -69,7 +71,6 @@ enum ComputerUseInputPoster {
         }
         await pause()
         if let dropIsVisible, !dropIsVisible() {
-            let back = try mouseEvent(.leftMouseDragged, at: start, button: .left, clickState: 1, target: target)
             ComputerUseSkyLight.post(back, pid: target.pid)
             ComputerUseSkyLight.post(ups[0], pid: target.pid)
             throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")

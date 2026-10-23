@@ -650,7 +650,7 @@ final class ComputerUseCoordinator {
         var window = window
         var toWindow = toWindow
         var input = try input(for: command, in: window, toWindow: toWindow, context: context)
-        let direct = command.delivery == .direct
+        let direct = Self.deliversDirect(command)
         // What the window looked like, so an input the app ignored doesn't pass for one that worked.
         // Read first, so the takeover wait and the ref re-check are the last steps before the input.
         var target: (ComputerUseAXHandles, Int)?
@@ -671,9 +671,46 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
         try checkStillActive(context)
-        let delivered: ComputerUseDelivered
+        let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
+        try await settle(after: delivered, of: command, in: &window, target: target, before: before,
+                         end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload)
+        let unchanged = payload["warning"] is String
+        if Self.retriesWithPointer(
+            command, delivered: delivered.delivery, unchanged: unchanged,
+            manualAccessibility: system.usesManualAccessibility(window.app.pid)) {
+            // Once, with the same checks as the first input; the ref resolves in the read just made.
+            try checkStillActive(context)
+            if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
+            try checkStillActive(context)
+            try await recheckRefs(of: command, in: window, toWindow: nil, context: context)
+            let at = try self.target(ref: command.ref, x: nil, y: nil, in: window, context: context)
+            try checkStillActive(context)
+            let retried = try await deliver(.pointerClick(at), of: command, to: window, toWindow: nil, direct: false, context: context)
+            try await settle(after: retried, of: command, in: &window, target: target, before: before,
+                             end: nil, context: context, payload: &payload)
+            payload["retried"] = "pointer"
+        }
+        guard command.includeScreenshot else { return }
         do {
-            delivered = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
+            let current = await system.window(window.windowID).flatMap { $0.app.pid == window.app.pid ? $0 : nil } ?? window
+            let shot = try await system.screenshot(current)
+            try record(screenshot: shot, of: current, context: context)
+            payload["scale"] = Double(shot.scale)
+            payload["image"] = Self.image(shot)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            payload["screenshot_error"] = error.localizedDescription
+        }
+    }
+
+    /// Delivers the input, mapping its failures to the tool errors that name the ref and window.
+    private func deliver(
+        _ input: ComputerUseInput, of command: ComputerUseCommand, to window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?, direct: Bool, context: CallContext
+    ) async throws -> ComputerUseDelivered {
+        do {
+            return try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
         } catch ComputerUseSystemError.staleElement {
             guard let ref = command.ref else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
             throw Refusal(Message.stale(ref, windowID: window.windowID))
@@ -688,30 +725,42 @@ final class ComputerUseCoordinator {
         } catch ComputerUseSystemError.userTookOver(let typed, let total) {
             throw Refusal(Message.userTookOver(window.app, typed: typed, of: total))
         }
-        // A background app whose window the input made key keeps it through the settle and the
-        // read below, which see the window as the input left it; it is handed back after them.
+    }
+
+    /// `settleAndRead`, with a window the input made key in a background app kept through the
+    /// settle and the read, which see the window as the input left it, and handed back after them.
+    private func settle(
+        after delivered: ComputerUseDelivered, of command: ComputerUseCommand, in window: inout ComputerUseWindow,
+        target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint,
+        end: (window: ComputerUseWindow, before: ComputerUseWindowFingerprint?)?, context: CallContext,
+        payload: inout [String: Any]
+    ) async throws {
         let keyedWindow = delivered.keyedInBackground ? window : nil
         if let keyedWindow { backgroundKeyed[context.sessionID, default: [:]][keyedWindow.windowID] = keyedWindow }
         do {
             try await settleAndRead(after: delivered, of: command, in: &window, target: target, before: before,
-                                    end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload)
+                                    end: end, context: context, payload: &payload)
         } catch {
             if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
             throw error
         }
         if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
-        guard command.includeScreenshot else { return }
-        do {
-            let current = await system.window(window.windowID).flatMap { $0.app.pid == window.app.pid ? $0 : nil } ?? window
-            let shot = try await system.screenshot(current)
-            try record(screenshot: shot, of: current, context: context)
-            payload["scale"] = Double(shot.scale)
-            payload["image"] = Self.image(shot)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            payload["screenshot_error"] = error.localizedDescription
-        }
+    }
+
+    /// Drags always go with the app brought to the front, so the direct takeover rule applies to
+    /// them: refused while the user is active, rather than waited out.
+    static func deliversDirect(_ command: ComputerUseCommand) -> Bool {
+        command.delivery == .direct || command.action == .drag
+    }
+
+    /// An AX press may only focus an element in an app that builds its tree on request (Electron):
+    /// a left single click by ref that went as AX and changed nothing is retried once as a pointer
+    /// click. Never in other apps, where an AX press that changed nothing is the app's answer.
+    static func retriesWithPointer(
+        _ command: ComputerUseCommand, delivered: ComputerUseDelivery, unchanged: Bool, manualAccessibility: Bool
+    ) -> Bool {
+        command.action == .click && command.ref != nil && command.button == .left && command.count == 1
+            && delivered == .ax && unchanged && manualAccessibility
     }
 
     /// Reports the delivered input, waits for the app to handle it and reads the window back.

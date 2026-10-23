@@ -47,7 +47,16 @@ enum ComputerUseInput: Sendable {
     case key(ComputerUseKeyChord)
     case scroll(ComputerUseInputTarget, dx: Int, dy: Int)
     /// `toWindow`: the window the drop end is in, when it isn't the start's; its frame bounds that end.
+    /// Always delivered with the app activated.
     case drag(from: ComputerUseInputTarget, to: ComputerUseInputTarget, toWindow: ComputerUseWindow?)
+    /// A left click as pointer events at the target, skipping the AX ways: the retry of an AX press
+    /// that changed nothing in an app whose AX press only focuses (Electron).
+    case pointerClick(ComputerUseInputTarget)
+
+    var isDrag: Bool {
+        if case .drag = self { return true }
+        return false
+    }
 }
 
 /// Why an input in flight must stop before its next event.
@@ -149,6 +158,9 @@ struct ComputerUseSystem: Sendable {
     /// Undoes a `keyedInBackground` input once it settled: the app stops treating the window as
     /// its active key window, unless the user brought the app to the front meanwhile.
     var releaseBackgroundFocus: @Sendable (ComputerUseWindow) async -> Void = { _ in }
+    /// Whether the app builds its Accessibility tree on request (Chromium, Electron), where an AX
+    /// press may only focus the element.
+    var usesManualAccessibility: @Sendable (Int32) -> Bool = { _ in false }
 
     static let live = ComputerUseSystem(
         runningApps: { await LiveComputerUseSystem.runningApps() },
@@ -169,7 +181,8 @@ struct ComputerUseSystem: Sendable {
         frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
         resolveApp: { await LiveComputerUseSystem.resolveApp(name: $0, bundleID: $1) },
         openApp: { try await LiveComputerUseSystem.openApp($0) },
-        releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) }
+        releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
+        usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) }
     )
 }
 
@@ -354,7 +367,8 @@ extension LiveComputerUseSystem {
            let button = try await ComputerUseAXActions.pressDialogButton(chord, in: window, interrupt: interrupt) {
             return ComputerUseDelivered(delivery: .ax, button: button)
         }
-        if direct {
+        // Drags always go with the app in front; the coordinator applies the direct takeover rule to them.
+        if direct || input.isDrag {
             // Raising the window moves the app's key window too; not while another input holds it.
             return try await keyLocks.run(window.app.pid) { try await activated(input, in: window, interrupt: interrupt) }
         }
@@ -447,10 +461,11 @@ extension LiveComputerUseSystem {
             try await postEvents(input, in: window, paste: false, background: true, interrupt: interrupt)
             return .background
         }
-        // Not key: the AX ways still work where the target is the app's focused window.
+        // Not key: the AX ways still work where the target already is the app's focused window.
+        // Never raised here: an AXRaise can bring the app to the front, with the user still at work.
         if actsOnKeyWindow(input) {
             do {
-                try await ComputerUseAXActions.makeActiveWindow(window, isCancelled: isCancelled)
+                try await ComputerUseAXActions.makeActiveWindow(window, raise: false, isCancelled: isCancelled)
                 if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
             } catch ComputerUseSystemError.notActiveWindow {
                 // Activation makes it the active window.
@@ -618,6 +633,10 @@ extension LiveComputerUseSystem {
             let location = try await point(at)
             try checkCancelled()
             try await ComputerUseInputPoster.click(at: location, button: button, count: count, target: target)
+        case .pointerClick(let at):
+            let location = try await point(at)
+            try checkCancelled()
+            try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
         case .type(let text, let at, let replace):
             switch at {
             case .element(let handles, let handle):
@@ -661,9 +680,9 @@ extension LiveComputerUseSystem {
             try checkCancelled()
             try ComputerUseInputPoster.scroll(at: location, dx: dx, dy: dy, target: target)
         case .drag(let from, let to, let toWindow):
-            // With the app activated, the drag starts in its window brought to the front: the
-            // down, every dragged step and the up go there, as a user's drag would.
-            if !background { try await requireActiveWindow() }
+            // Only with the app activated: the drag starts in its window brought to the front, and
+            // the down, every dragged step and the up go there, as a user's drag would.
+            try await requireActiveWindow()
             let start = try await point(from)
             // Mouse events stay with the window the button went down in, as AppKit routes a drag.
             let end: CGPoint

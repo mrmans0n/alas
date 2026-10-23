@@ -139,6 +139,14 @@ struct ComputerUseInputTests {
         #expect(ComputerUseMenuShortcut.isQuit(try #require(Chord.parse(text))) == quits)
     }
 
+    @Test(arguments: [
+        ("Cancel", true), (" cancelar ", true), ("ANNULER", true), ("キャンセル", true), ("İptal", true),
+        ("Guardar", false), ("Cancel Download", false), ("", false),
+    ])
+    private func cancelTitles(title: String, isCancel: Bool) {
+        #expect(ComputerUseDialogButton.isCancelTitle(title) == isCancel)
+    }
+
     private typealias Link = (role: String, actions: [String])
 
     @Test(arguments: [

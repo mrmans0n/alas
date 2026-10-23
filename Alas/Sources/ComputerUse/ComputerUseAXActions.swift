@@ -122,9 +122,10 @@ enum ComputerUseAXActions {
 
     /// Keys and typed text go to the app's key window: makes `window` that window, raising it
     /// if needed, or refuses with `notActiveWindow`. Events posted to the pid can't pick a window
-    /// themselves. With `raise` false it only checks, for a window already made key another way.
+    /// themselves. `raise` only with the app activated: an AXRaise on a background app can bring
+    /// it to the front. With `raise` false it only checks.
     static func makeActiveWindow(
-        _ window: ComputerUseWindow, raise: Bool = true, isCancelled: @escaping IsCancelled
+        _ window: ComputerUseWindow, raise: Bool, isCancelled: @escaping IsCancelled
     ) async throws {
         try await onQueue(isCancelled) {
             let app = window.app
@@ -404,7 +405,9 @@ extension ComputerUseAXActions {
     /// there is no such enabled button. Looks at the window's sheets, the app's focused window when
     /// it is one of them, and the window itself when it is a dialog. Nil as well while the focused
     /// element takes the key itself: a text area (Return is a new line) or an editable control with
-    /// a popup, menu or completion list open (the key picks or dismisses it).
+    /// a popup, menu or completion list open (the key picks or dismisses it). When the dialog's
+    /// button attribute has no value, Escape presses a button titled as a cancel button, and Return
+    /// throws `defaultButtonUnreadable`: posted keys don't reach such a panel either.
     static func pressDialogButton(
         _ chord: ComputerUseKeyChord, in window: ComputerUseWindow,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -436,19 +439,66 @@ extension ComputerUseAXActions {
             if let subrole = string(of: target, kAXSubroleAttribute), [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole) {
                 candidates.append(target)
             }
-            for candidate in candidates {
-                guard let button = elementAttribute(candidate, attribute), bool(of: button, kAXEnabledAttribute) != false
-                else { continue }
+            func pressChecked(_ button: AXUIElement) throws {
                 switch interrupt() {
                 case .cancelled: throw CancellationError()
                 case .userActive: throw ComputerUseSystemError.userActive
                 case nil: break
                 }
                 try press(button, app: app)
+            }
+            // Panels hosted out of process (TextEdit's Save sheet) list the attribute with no value.
+            var unreadable: [AXUIElement] = []
+            for candidate in candidates {
+                guard let button = elementAttribute(candidate, attribute) else {
+                    unreadable.append(candidate)
+                    continue
+                }
+                guard bool(of: button, kAXEnabledAttribute) != false else { continue }
+                try pressChecked(button)
                 return string(of: button, kAXTitleAttribute) ?? (key == .escape ? "Cancel" : "Default")
+            }
+            guard !unreadable.isEmpty else { return nil }
+            // A Return that types nothing would look like it did; which button is the default can't be guessed.
+            guard key == .escape else { throw ComputerUseSystemError.actionFailed(defaultButtonUnreadable) }
+            for candidate in unreadable {
+                guard let (button, title) = cancelButton(in: candidate) else { continue }
+                try pressChecked(button)
+                return title
             }
             return nil
         }
+    }
+
+    static let defaultButtonUnreadable =
+        "This dialog's default button can't be pressed with a key here. Click the button by ref (computer_inspect lists the dialog's buttons)."
+
+    /// Levels below a sheet or dialog searched for its cancel button by title, and how many elements.
+    static let cancelButtonSearchDepth = 4
+    static let cancelButtonSearchNodes = 300
+
+    /// The first enabled button within `cancelButtonSearchDepth` levels of `dialog`, breadth first,
+    /// whose title is a cancel title (`ComputerUseDialogButton`), with that title.
+    private static func cancelButton(in dialog: AXUIElement) -> (AXUIElement, String)? {
+        var level = [dialog]
+        var visited = 0
+        for _ in 0 ..< cancelButtonSearchDepth {
+            var next: [AXUIElement] = []
+            for element in level {
+                for child in children(of: element) {
+                    visited += 1
+                    guard visited <= cancelButtonSearchNodes else { return nil }
+                    if string(of: child, kAXRoleAttribute) == kAXButtonRole,
+                       let title = string(of: child, kAXTitleAttribute), ComputerUseDialogButton.isCancelTitle(title),
+                       bool(of: child, kAXEnabledAttribute) != false {
+                        return (child, title)
+                    }
+                    next.append(child)
+                }
+            }
+            level = next
+        }
+        return nil
     }
 
     /// No header constant exists for it.

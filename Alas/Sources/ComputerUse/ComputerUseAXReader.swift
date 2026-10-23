@@ -22,6 +22,13 @@ enum ComputerUseAXReader {
     private static let manualAccessibilityPIDs = Mutex<Set<pid_t>>([])
     /// Pids that accepted the ask and haven't been read since: their tree may still be building.
     private static let buildingTreePIDs = Mutex<Set<pid_t>>([])
+    /// Pids that accepted the ask: Chromium and Electron apps, kept for the process's life.
+    private static let manualAccessibilityAccepted = Mutex<Set<pid_t>>([])
+
+    /// Whether the app accepted `AXManualAccessibility` when it was first asked.
+    static func acceptsManualAccessibility(_ pid: pid_t) -> Bool {
+        manualAccessibilityAccepted.withLock { $0.contains(pid) }
+    }
 
     /// How long the first read after the ask waits for the tree to show more than groups.
     static let treeBuildWait: Duration = .seconds(1)
@@ -40,6 +47,7 @@ enum ComputerUseAXReader {
         if manualAccessibilityPIDs.withLock({ $0.insert(pid).inserted }),
            AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success {
             buildingTreePIDs.withLock { _ = $0.insert(pid) }
+            manualAccessibilityAccepted.withLock { _ = $0.insert(pid) }
         }
         return application
     }
