@@ -132,4 +132,6 @@ fi
 mkdir -p "${fff_destination_dir}"
 rsync -a "${fff_source}" "${fff_destination}"
 install_name_tool -id @rpath/libfff_c.dylib "${fff_destination}"
-codesign --force --sign - "${fff_destination}" >/dev/null
+# Sign with the app's identity so a Developer ID-signed Debug build (see
+# Config/Local.xcconfig) can load it under library validation; ad-hoc otherwise.
+codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY:--}" "${fff_destination}" >/dev/null
