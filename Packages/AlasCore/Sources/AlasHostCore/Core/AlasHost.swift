@@ -122,6 +122,18 @@ public struct HostSnapshot: Codable, Equatable, Sendable {
     public var workspaceCheckouts: [WorkspaceCheckoutSnapshot]
     public var runs: [RunRecord]
     public var sessions: [HostSessionSummary]
+
+    public init(
+        cursor: HostCursor, projects: [ProjectSnapshot], worktrees: [WorktreeSnapshot],
+        workspaceCheckouts: [WorkspaceCheckoutSnapshot], runs: [RunRecord], sessions: [HostSessionSummary]
+    ) {
+        self.cursor = cursor
+        self.projects = projects
+        self.worktrees = worktrees
+        self.workspaceCheckouts = workspaceCheckouts
+        self.runs = runs
+        self.sessions = sessions
+    }
 }
 
 /// A project as clients see it. Its configuration stays with the host: it
@@ -155,6 +167,12 @@ public struct WorktreeSnapshot: Codable, Equatable, Sendable {
     /// The operation holding the worktree, if any.
     public var operation: WorktreeOperation?
     public var isArchived: Bool
+
+    public init(worktree: Worktree, operation: WorktreeOperation?, isArchived: Bool) {
+        self.worktree = worktree
+        self.operation = operation
+        self.isArchived = isArchived
+    }
 }
 
 /// What holds a worktree, as clients see it: the kind of operation, and the
