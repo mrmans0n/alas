@@ -257,11 +257,17 @@ public struct WorktreesAPI {
     /// Deletes a worktree nobody needs to confirm, refusing (with a
     /// `WorktreeDeletionRefusal`) one whose checkout no longer matches it:
     /// another lineage or branch at the path, a remote or unidentified
-    /// checkout, the main checkout, or one another operation holds.
-    public func delete(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false, caller: HostCaller) async throws {
+    /// checkout, the main checkout, or one another operation holds. Unsaved
+    /// editor changes refuse it, whatever `force`, unless `discardUnsavedEdits`.
+    public func delete(
+        _ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false,
+        discardUnsavedEdits: Bool = false, caller: HostCaller
+    ) async throws {
         caller.log("worktrees.delete", worktree.path.path)
-        try deletionCheck(worktree, force: force)
-        try await core.deleteWorktree(worktree, force: force, deleteBranchIfMerged: deleteBranchIfMerged)
+        try deletionCheck(worktree, discardUnsavedEdits: discardUnsavedEdits)
+        try await core.deleteWorktree(
+            worktree, force: force, deleteBranchIfMerged: deleteBranchIfMerged, discardUnsavedEdits: discardUnsavedEdits
+        )
     }
 
     /// Claims a worktree for a deletion its caller confirms first; pass the
@@ -299,9 +305,16 @@ public struct WorktreesAPI {
 
     /// With `verifiesCheckout`, refuses (`changed`) a checkout whose lineage
     /// or branch on disk no longer matches `worktree`, as late as possible.
-    public func archive(_ worktree: Worktree, verifiesCheckout: Bool = false, caller: HostCaller) async throws {
+    /// Unsaved editor changes, including any made while it runs, refuse it
+    /// unless `discardUnsavedEdits`.
+    public func archive(
+        _ worktree: Worktree, verifiesCheckout: Bool = false, discardUnsavedEdits: Bool = false, caller: HostCaller
+    ) async throws {
         caller.log("worktrees.archive", worktree.path.path)
-        try await core.archiveWorktree(worktree, verifiesCheckout: verifiesCheckout)
+        if !discardUnsavedEdits, core.environment.hasUnsavedEditorChanges(in: worktree) {
+            throw WorktreeArchiveRefusal.unsavedEdits
+        }
+        try await core.archiveWorktree(worktree, verifiesCheckout: verifiesCheckout, refusesUnsavedEdits: !discardUnsavedEdits)
     }
 
     /// Reads project `projectID`'s worktrees from disk again, saving the

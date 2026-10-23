@@ -169,6 +169,21 @@ struct HostProtocolServerTests {
         #expect(client.messages == [.response(id: message.id, result: .failure(error: error))])
     }
 
+    /// The refusals `host.worktrees.lifecycle.v1` added reach only a client that
+    /// sent `discardUnsavedEdits`; an older one gets the message it can decode.
+    @Test(arguments: [false, true])
+    func newLifecycleRefusalsAreTypedOnlyForClientsThatAcknowledgeDiscards(typed: Bool) {
+        let refusals: [any Error] = [
+            WorktreeDeletionRefusal.unsavedEdits, WorktreeDeletionRefusal.ownedByWorkspaceCheckout("Owned."), WorktreeArchiveRefusal.unsavedEdits,
+        ]
+        let mapped = refusals.map { HostProtocolConnection.hostError(HostProtocolConnection.lifecycleRefusal($0, typed: typed)) }
+        #expect(mapped == (typed
+            ? [.worktreeDeletion(refusal: .unsavedEdits), .worktreeDeletion(refusal: .ownedByWorkspaceCheckout("Owned.")), .worktreeArchive(refusal: .unsavedEdits)]
+            : refusals.map { .failed(message: $0.localizedDescription) }))
+        #expect(HostProtocolConnection.hostError(HostProtocolConnection.lifecycleRefusal(WorktreeDeletionRefusal.needsForce("dirty"), typed: typed))
+            == .worktreeDeletion(refusal: .needsForce("dirty")))
+    }
+
     /// Only a listed worktree can be followed: an unknown id would keep a
     /// review refresh waking with no removal to ever end it.
     @Test func onlyListedWorktreesCanBeFollowed() async throws {

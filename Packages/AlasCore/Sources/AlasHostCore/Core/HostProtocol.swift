@@ -56,9 +56,16 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case createWorktree(projectID: String, base: String, branch: String, destination: String)
     /// `lineageID` and `branch` are the worktree's as the client last saw
     /// it: a checkout replaced or switched since is refused as changed.
-    case deleteWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, force: Bool, deleteBranchIfMerged: Bool)
-    /// Like a delete, names the lineage and branch the client last saw.
-    case archiveWorktree(worktree: WorktreeRef, lineageID: String?, branch: String)
+    /// `discardUnsavedEdits`: whether the user agreed to discard unsaved
+    /// editor changes on the host (`host.worktrees.lifecycle.v1`). Nil from an
+    /// older client, refused like false with an untyped message.
+    case deleteWorktree(
+        worktree: WorktreeRef, lineageID: String?, branch: String, force: Bool, deleteBranchIfMerged: Bool,
+        discardUnsavedEdits: Bool? = nil
+    )
+    /// Like a delete, names the lineage and branch the client last saw, and
+    /// acknowledges discarding unsaved editor changes.
+    case archiveWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, discardUnsavedEdits: Bool? = nil)
     case unarchiveWorktree(worktree: WorktreeRef)
     case listWorkspaceCheckouts
     case workspaceCheckout(id: UUID)
