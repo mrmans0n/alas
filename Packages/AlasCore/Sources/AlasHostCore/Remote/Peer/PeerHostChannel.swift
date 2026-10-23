@@ -9,7 +9,7 @@ import AlasFeatures
 @MainActor
 public final class PeerHostChannel {
     public static let defaultTimeout: Duration = .seconds(60)
-    public static let unansweredMessage = "The peer did not answer."
+    public nonisolated static let unansweredMessage = "The peer did not answer."
 
     /// The peer's projects, worktrees, Workspace checkouts and runs.
     public struct State: Equatable, Sendable {
