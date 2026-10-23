@@ -192,7 +192,7 @@ public final class HostProtocolConnection {
                 projectID: projectID, base: base, branch: branch, destination: URL(fileURLWithPath: destination)
             )
             return .worktree(worktree: try await host.worktrees.create(request, caller: caller))
-        case .deleteWorktree(let ref, let lineageID, let branch, let force, let deleteBranchIfMerged):
+        case .deleteWorktree(let ref, let lineageID, let branch, let force, let deleteBranchIfMerged, let discardUnsavedEdits):
             let listed = try worktree(ref)
             // What the client saw must still be what is listed; the host then
             // checks what is listed against the checkout on disk.
@@ -205,11 +205,16 @@ public final class HostProtocolConnection {
                AlasCoreContext.checkoutChange(listed, lineageID: lineageID) != nil {
                 throw WorktreeDeletionRefusal.changed("The checkout at this path changed.")
             }
-            try await host.worktrees.delete(
-                listed, force: force, deleteBranchIfMerged: deleteBranchIfMerged, caller: caller
-            )
+            do {
+                try await host.worktrees.delete(
+                    listed, force: force, deleteBranchIfMerged: deleteBranchIfMerged,
+                    discardUnsavedEdits: discardUnsavedEdits ?? false, caller: caller
+                )
+            } catch {
+                throw Self.lifecycleRefusal(error, typed: discardUnsavedEdits != nil)
+            }
             return .done
-        case .archiveWorktree(let ref, let lineageID, let branch):
+        case .archiveWorktree(let ref, let lineageID, let branch, let discardUnsavedEdits):
             let listed = try worktree(ref)
             guard listed.lineageID == lineageID, listed.branch == branch else {
                 throw WorktreeArchiveRefusal.changed("The worktree changed since it was listed.")
@@ -220,7 +225,13 @@ public final class HostProtocolConnection {
             guard let lineageID, AlasCoreContext.checkoutChange(listed, lineageID: lineageID) == nil else {
                 throw WorktreeArchiveRefusal.changed("The checkout at this path changed.")
             }
-            try await host.worktrees.archive(listed, verifiesCheckout: true, caller: caller)
+            do {
+                try await host.worktrees.archive(
+                    listed, verifiesCheckout: true, discardUnsavedEdits: discardUnsavedEdits ?? false, caller: caller
+                )
+            } catch {
+                throw Self.lifecycleRefusal(error, typed: discardUnsavedEdits != nil)
+            }
             return .done
         case .unarchiveWorktree(let ref):
             try host.worktrees.unarchive(path: try worktree(ref).path, projectID: ref.projectID, caller: caller)
@@ -301,6 +312,15 @@ public final class HostProtocolConnection {
             guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
             peers.forget(peerId: peerID)
             return .done
+        case .readWorktree(let ref, let read):
+            // Needs no lease, as for a session: seeing a worktree is enough
+            // to read its code. Only a listed worktree is read: an archived
+            // one is refused as an unknown one is.
+            let listed = try worktree(ref)
+            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
+                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
+            }
+            return .worktreeRead(reply: await host.core.remoteRead(read, in: listed, replyingAs: listed.id))
         }
         return .done
     }
@@ -355,6 +375,19 @@ public final class HostProtocolConnection {
             .first(where: { $0.path.standardizedFileURL.path == path })
         else { throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)") }
         return worktree
+    }
+
+    /// The refusals `host.worktrees.lifecycle.v1` added, as a message for a
+    /// client that did not send `discardUnsavedEdits` and cannot decode them.
+    static func lifecycleRefusal(_ error: any Error, typed: Bool) -> any Error {
+        guard !typed else { return error }
+        switch error {
+        case WorktreeDeletionRefusal.unsavedEdits, WorktreeDeletionRefusal.ownedByWorkspaceCheckout,
+             WorktreeArchiveRefusal.unsavedEdits:
+            return HostError.failed(message: error.localizedDescription)
+        default:
+            return error
+        }
     }
 
     static func hostError(_ error: any Error) -> HostError {

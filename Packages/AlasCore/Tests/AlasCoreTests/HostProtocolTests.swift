@@ -37,6 +37,11 @@ struct HostProtocolTests {
         )),
         HostClientMessage(id: 16, request: .runOutput(runID: "r", projectID: "p")),
         HostClientMessage(id: 17, request: .remotePairingCode),
+        HostClientMessage(id: 18, request: .deleteWorktree(
+            worktree: ref, lineageID: "l", branch: "feature", force: false, deleteBranchIfMerged: true, discardUnsavedEdits: true
+        )),
+        HostClientMessage(id: 19, request: .archiveWorktree(worktree: ref, lineageID: "l", branch: "feature", discardUnsavedEdits: false)),
+        HostClientMessage(id: 20, request: .readWorktree(worktree: ref, read: .fileDiff(path: "a.swift", stage: "unstaged", comparisonMode: nil))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -60,6 +65,9 @@ struct HostProtocolTests {
         .response(id: 8, result: .runOutput(output: .text("hello\n", truncated: true))),
         .response(id: 9, result: .runOutput(output: .notFinished)),
         .response(id: 10, result: .remotePairingCode(code: "ABC123", expiresAt: Date(timeIntervalSince1970: 1_800_000_000), link: nil)),
+        .response(id: 11, result: .failure(error: .worktreeArchive(refusal: .unsavedEdits))),
+        .response(id: 12, result: .failure(error: .worktreeDeletion(refusal: .ownedByWorkspaceCheckout("Owned.")))),
+        .response(id: 13, result: .worktreeRead(reply: .fileContents(sessionId: "/srv/feature", path: "a.txt", text: "hi", truncated: false))),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),
@@ -104,6 +112,19 @@ struct HostProtocolTests {
             #"{"events":{"cursor":{"generation":"6F9619FF-8B86-D011-B42D-00CF4FC964FF","sequence":3},"events":[{"sessionRemoved":{"id":"s","owner":{"worktree":{"id":"w"}}}},{"runRemoved":{"id":"r"}},{"resync":{}}]}}"#)
         #expect(try json(HostServerMessage.response(id: 2, result: .failure(error: .worktreeDeletion(refusal: .needsForce("dirty"))))) ==
             #"{"response":{"id":2,"result":{"failure":{"error":{"worktreeDeletion":{"refusal":{"needsForce":{"message":"dirty"}}}}}}}}"#)
+        #expect(try json(HostClientMessage(id: 1, request: .deleteWorktree(
+            worktree: Self.ref, lineageID: "l", branch: "feature", force: false, deleteBranchIfMerged: false, discardUnsavedEdits: true
+        ))) == #"{"id":1,"request":{"deleteWorktree":{"branch":"feature","deleteBranchIfMerged":false,"discardUnsavedEdits":true,"force":false,"lineageID":"l","worktree":{"path":"\/srv\/feature","projectID":"p"}}},"version":1}"#)
+        #expect(try json(HostServerMessage.response(id: 3, result: .failure(error: .worktreeDeletion(refusal: .unsavedEdits)))) ==
+            #"{"response":{"id":3,"result":{"failure":{"error":{"worktreeDeletion":{"refusal":{"unsavedEdits":{}}}}}}}}"#)
+    }
+
+    /// A client before `host.worktrees.lifecycle.v1` sends no acknowledgement.
+    @Test func anOlderClientsDeleteDecodesWithoutADiscardAcknowledgement() throws {
+        let old = #"{"id":1,"request":{"deleteWorktree":{"branch":"feature","deleteBranchIfMerged":false,"force":true,"lineageID":"l","worktree":{"path":"\/srv\/feature","projectID":"p"}}},"version":1}"#
+        #expect(try JSONDecoder().decode(HostClientMessage.self, from: Data(old.utf8)).request == .deleteWorktree(
+            worktree: Self.ref, lineageID: "l", branch: "feature", force: true, deleteBranchIfMerged: false, discardUnsavedEdits: nil
+        ))
     }
 
     @Test func helloOmitsConsoleCapabilitiesForAServerWithoutConsoles() {

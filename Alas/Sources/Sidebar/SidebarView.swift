@@ -325,6 +325,7 @@ struct SidebarView: View {
                                             onSettings()
                                         },
                                         worktreeOrdering: state.config.worktrees.defaultOrdering,
+                                        showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
                                         topSpacing: SidebarFilterRowMetrics.slotSpacing
                                     )
                                 }

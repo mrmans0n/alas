@@ -283,8 +283,15 @@ extension AlasCoreContext {
         sessionId: String,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
     ) async -> RemoteChangeListResult {
+        await remoteChangeList(in: remoteWorktreeContext(sessionId: sessionId), comparisonMode: comparisonMode)
+    }
+
+    private func remoteChangeList(
+        in context: RemoteWorktreeContextResult,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteChangeListResult {
         let worktree: Worktree
-        switch remoteWorktreeContext(sessionId: sessionId) {
+        switch context {
         case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
         case .worktreeUnavailable:
@@ -335,8 +342,18 @@ extension AlasCoreContext {
         stage: String? = nil,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
     ) async -> RemoteFileDiffResult {
+        await remoteFileDiff(
+            in: remoteWorktreeContext(sessionId: sessionId), path: path, stage: stage, comparisonMode: comparisonMode)
+    }
+
+    private func remoteFileDiff(
+        in context: RemoteWorktreeContextResult,
+        path: String,
+        stage: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileDiffResult {
         let worktree: Worktree
-        switch remoteWorktreeContext(sessionId: sessionId) {
+        switch context {
         case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
         case .worktreeUnavailable:
@@ -434,8 +451,12 @@ extension AlasCoreContext {
     }
 
     @_spi(Testing) public func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult {
+        await remoteCommitFiles(in: remoteWorktreeContext(sessionId: sessionId), sha: sha)
+    }
+
+    private func remoteCommitFiles(in context: RemoteWorktreeContextResult, sha: String) async -> RemoteCommitFilesResult {
         let worktree: Worktree
-        switch remoteWorktreeContext(sessionId: sessionId) {
+        switch context {
         case .sessionUnknown: return .failure(reason: .sessionUnknown, message: nil)
         case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, message: nil)
         case .found(let found): worktree = found
@@ -458,8 +479,12 @@ extension AlasCoreContext {
     }
 
     @_spi(Testing) public func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult {
+        await remoteCommitDiff(in: remoteWorktreeContext(sessionId: sessionId), sha: sha, path: path)
+    }
+
+    private func remoteCommitDiff(in context: RemoteWorktreeContextResult, sha: String, path: String) async -> RemoteFileDiffResult {
         let worktree: Worktree
-        switch remoteWorktreeContext(sessionId: sessionId) {
+        switch context {
         case .sessionUnknown: return .failure(reason: .sessionUnknown, message: nil)
         case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, message: nil)
         case .found(let found): worktree = found
@@ -493,8 +518,16 @@ extension AlasCoreContext {
         path: String?,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode? = nil
     ) async -> RemoteFileTreeResult {
+        await remoteFileTree(in: remoteWorktreeContext(sessionId: sessionId), path: path, comparisonMode: comparisonMode)
+    }
+
+    private func remoteFileTree(
+        in context: RemoteWorktreeContextResult,
+        path: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) async -> RemoteFileTreeResult {
         let worktree: Worktree
-        switch remoteWorktreeContext(sessionId: sessionId) {
+        switch context {
         case .sessionUnknown:
             return .failure(reason: .sessionUnknown, message: nil)
         case .worktreeUnavailable:
@@ -587,8 +620,12 @@ extension AlasCoreContext {
     }
 
     @_spi(Testing) public func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult {
+        await remoteFileContents(in: remoteWorktreeContext(sessionId: sessionId), path: path)
+    }
+
+    private func remoteFileContents(in context: RemoteWorktreeContextResult, path: String) async -> RemoteFileContentsResult {
         let worktree: Worktree
-        switch remoteWorktreeContext(sessionId: sessionId) {
+        switch context {
         case .sessionUnknown:
             return .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
         case .worktreeUnavailable:
@@ -661,6 +698,44 @@ extension AlasCoreContext {
             return .failure(reason: .binary, byteSize: byteSize, message: nil)
         case .text(let text):
             return .success(text: text, truncated: false)
+        }
+    }
+
+    /// The message a session in `worktree` would get for `read`, answered as
+    /// `id`: the session path's own mapping, over the worktree's reads.
+    func remoteRead(_ read: HostWorktreeRead, in worktree: Worktree, replyingAs id: String) async -> RemoteServerMessage {
+        await WorktreeInspection(core: self, worktree: worktree).remoteRead(read, sessionId: id)
+    }
+
+    /// Reads one worktree whatever session it is asked about.
+    private final class WorktreeInspection: RemoteWorktreeInspecting {
+        let core: AlasCoreContext
+        let worktree: Worktree
+
+        init(core: AlasCoreContext, worktree: Worktree) {
+            self.core = core
+            self.worktree = worktree
+        }
+
+        func remoteChangeList(sessionId _: String, comparisonMode: AppConfig.Changes.ChangesComparisonMode?) async -> RemoteChangeListResult {
+            await core.remoteChangeList(in: .found(worktree), comparisonMode: comparisonMode)
+        }
+        func remoteFileDiff(
+            sessionId _: String, path: String, stage: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+        ) async -> RemoteFileDiffResult {
+            await core.remoteFileDiff(in: .found(worktree), path: path, stage: stage, comparisonMode: comparisonMode)
+        }
+        func remoteFileTree(sessionId _: String, path: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?) async -> RemoteFileTreeResult {
+            await core.remoteFileTree(in: .found(worktree), path: path, comparisonMode: comparisonMode)
+        }
+        func remoteCommitFiles(sessionId _: String, sha: String) async -> RemoteCommitFilesResult {
+            await core.remoteCommitFiles(in: .found(worktree), sha: sha)
+        }
+        func remoteCommitDiff(sessionId _: String, sha: String, path: String) async -> RemoteFileDiffResult {
+            await core.remoteCommitDiff(in: .found(worktree), sha: sha, path: path)
+        }
+        func remoteFileContents(sessionId _: String, path: String) async -> RemoteFileContentsResult {
+            await core.remoteFileContents(in: .found(worktree), path: path)
         }
     }
 

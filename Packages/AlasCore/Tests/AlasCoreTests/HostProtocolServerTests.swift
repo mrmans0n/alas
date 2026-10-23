@@ -169,6 +169,21 @@ struct HostProtocolServerTests {
         #expect(client.messages == [.response(id: message.id, result: .failure(error: error))])
     }
 
+    /// The refusals `host.worktrees.lifecycle.v1` added reach only a client that
+    /// sent `discardUnsavedEdits`; an older one gets the message it can decode.
+    @Test(arguments: [false, true])
+    func newLifecycleRefusalsAreTypedOnlyForClientsThatAcknowledgeDiscards(typed: Bool) {
+        let refusals: [any Error] = [
+            WorktreeDeletionRefusal.unsavedEdits, WorktreeDeletionRefusal.ownedByWorkspaceCheckout("Owned."), WorktreeArchiveRefusal.unsavedEdits,
+        ]
+        let mapped = refusals.map { HostProtocolConnection.hostError(HostProtocolConnection.lifecycleRefusal($0, typed: typed)) }
+        #expect(mapped == (typed
+            ? [.worktreeDeletion(refusal: .unsavedEdits), .worktreeDeletion(refusal: .ownedByWorkspaceCheckout("Owned.")), .worktreeArchive(refusal: .unsavedEdits)]
+            : refusals.map { .failed(message: $0.localizedDescription) }))
+        #expect(HostProtocolConnection.hostError(HostProtocolConnection.lifecycleRefusal(WorktreeDeletionRefusal.needsForce("dirty"), typed: typed))
+            == .worktreeDeletion(refusal: .needsForce("dirty")))
+    }
+
     /// Only a listed worktree can be followed: an unknown id would keep a
     /// review refresh waking with no removal to ever end it.
     @Test func onlyListedWorktreesCanBeFollowed() async throws {
@@ -330,6 +345,37 @@ struct HostProtocolServerTests {
         try await fixture.host.sessions.archive(session.id, caller: .app)
 
         #expect(try await fixture.request(.removeProject(projectID: fixture.projectID)) == .done)
+    }
+
+    /// A worktree is read as a session in it would be, keyed by the worktree.
+    @Test func worktreeReadsAnswerWithTheSessionReplyKeyedByTheWorktree() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "hi\n".write(to: worktree.path.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        let ref = WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)
+
+        #expect(try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "notes.txt")))
+            == .worktreeRead(reply: .fileContents(sessionId: worktree.id, path: "notes.txt", text: "hi\n", truncated: false)))
+        guard case .worktreeRead(.fileTree(worktree.id, nil, let nodes, _)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .files(path: nil, comparisonMode: nil)))
+        else {
+            Issue.record("expected a file tree")
+            return
+        }
+        #expect(nodes.contains { $0.path == "notes.txt" })
+        guard case .worktreeRead(.fileUnavailable(worktree.id, "../outside", .pathRejected, _, _)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "../outside")))
+        else {
+            Issue.record("expected the escape refused")
+            return
+        }
+        #expect(try await fixture.request(.readWorktree(worktree: WorktreeRef(projectID: fixture.projectID, path: "/srv/missing"), read: .file(path: "a")))
+            == .failure(error: .notFound(what: "worktree /srv/missing in project \(fixture.projectID)")))
+        // An archived worktree is not listed, so it is not read either.
+        fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: worktree.path, hidden: true)
+        #expect(try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "notes.txt")))
+            == .failure(error: .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")))
     }
 
     /// A host over a real repository, persisting to a scratch directory,

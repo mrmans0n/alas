@@ -1046,7 +1046,8 @@ final class AppState {
                     federation: remoteFederation,
                     peers: { [weak self] in self?.remotePeers.helloPeers ?? [] },
                     comparisonMode: { [weak self] in self?.config.changes.comparisonMode },
-                    consoles: makeNativePeerConsoles()
+                    consoles: makeNativePeerConsoles(),
+                    hosts: makeNativePeerHosts()
                 )
                 nativePeerSessions = client
                 client.start()
@@ -11676,7 +11677,7 @@ final class AppState {
         WorktreeService.requiresForceRetry(forRemovalRefusal: stderr)
     }
 
-    private func confirmDeleteWorktree(_ confirmation: WorktreeDeleteConfirmation) -> Bool {
+    func confirmDeleteWorktree(_ confirmation: WorktreeDeleteConfirmation) -> Bool {
         let alert = NSAlert()
         alert.messageText = confirmation.title
         alert.informativeText = confirmation.message

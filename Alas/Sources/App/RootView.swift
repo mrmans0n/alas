@@ -398,33 +398,33 @@ struct RootView: View {
     /// The selected peer tab's content. A peer document opens over it.
     @ViewBuilder
     private func peerCenterContent(_ client: NativePeerSessions) -> some View {
-        if client.selectedSessionId != nil {
-            if let document = client.workspace.document {
-                NativePeerDocumentView(
-                    document: document,
-                    content: client.workspace.documentContent,
-                    codeFontFamily: state.config.code.fontFamily,
-                    codeFontSize: CGFloat(state.config.code.fontSize),
-                    onClose: { client.closeDocument() }
-                )
-                .id(document)
-            } else {
-                NativePeerSessionView(
-                    client: client,
-                    typography: ACPChatTypography(
-                        fontFamily: state.config.agents.chatFontFamily,
-                        fontSize: state.config.agents.chatFontSize
-                    ),
-                    collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
-                    sendOnEnter: state.config.harness.acpSendOnEnter,
-                    dictationPreferences: state.config.harness.dictationPreferences,
-                    onChangeDictationPreferences: { [state] preferences in
-                        state.config.harness.dictationPreferences = preferences
-                        state.saveConfig()
-                    }
-                )
-                .id(client.selectedSessionId)
-            }
+        // A session's document, or one of a selected idle worktree read
+        // over its host's channel.
+        if client.canReadWorkspace, let document = client.workspace.document {
+            NativePeerDocumentView(
+                document: document,
+                content: client.workspace.documentContent,
+                codeFontFamily: state.config.code.fontFamily,
+                codeFontSize: CGFloat(state.config.code.fontSize),
+                onClose: { client.closeDocument() }
+            )
+            .id(document)
+        } else if client.selectedSessionId != nil {
+            NativePeerSessionView(
+                client: client,
+                typography: ACPChatTypography(
+                    fontFamily: state.config.agents.chatFontFamily,
+                    fontSize: state.config.agents.chatFontSize
+                ),
+                collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
+                sendOnEnter: state.config.harness.acpSendOnEnter,
+                dictationPreferences: state.config.harness.dictationPreferences,
+                onChangeDictationPreferences: { [state] preferences in
+                    state.config.harness.dictationPreferences = preferences
+                    state.saveConfig()
+                }
+            )
+            .id(client.selectedSessionId)
         } else if let consoles = client.consoles, let viewer = consoles.viewer {
             NativePeerConsoleView(
                 viewer: viewer,

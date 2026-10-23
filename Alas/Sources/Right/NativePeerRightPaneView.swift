@@ -89,20 +89,21 @@ struct NativePeerRightPaneView: View {
     private var tabContent: some View {
         if shownTab == .agent {
             agentTab
-        } else if client.selectedSessionId == nil {
-            // Changes and files are served per session.
+        } else if !client.canReadWorkspace {
+            // Changes and files are served per session, or per worktree by a
+            // host that reads worktrees.
             NativePeerRailMessage(text: "Select a session to see this worktree's changes and files.")
         } else if shownTab == .files {
             filesTab
         } else {
             NativePeerChangesView(
                 changes: client.workspace.changes,
-                worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
+                worktreePath: URL(fileURLWithPath: client.workspaceWorktreePath ?? "/"),
                 commitFiles: client.workspace.commitFiles,
                 onLoadCommitFiles: { client.loadCommitFiles(sha: $0) },
                 onOpen: { client.open($0) }
             )
-            .id(client.selectedSessionId)
+            .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
         }
     }
 
@@ -153,7 +154,7 @@ struct NativePeerRightPaneView: View {
                     fileTreeGeneration: 0,
                     fileTreeRefreshRevision: client.workspace.fileTreeRevision,
                     // Only used to build copied full paths; the path is the peer's.
-                    worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
+                    worktreePath: URL(fileURLWithPath: client.workspaceWorktreePath ?? "/"),
                     openPaths: $openPaths,
                     onSelectFile: { client.open(.file(path: $0.path)) },
                     onFileHistory: { _ in },

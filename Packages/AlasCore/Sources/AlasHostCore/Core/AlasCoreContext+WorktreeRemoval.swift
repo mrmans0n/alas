@@ -192,10 +192,11 @@ extension AlasCoreContext {
     /// cannot be quiesced or the save fails.
     func performArchive(
         _ worktree: Worktree,
+        refusesUnsavedEdits: Bool = false,
         revalidate: @MainActor () async -> (any Error)? = { nil }
     ) async throws {
         await stopProcessRuns(worktreeID: worktree.id)
-        try await environment.quiesceWorktree(worktree, in: self)
+        try await environment.quiesceWorktree(worktree, refusingUnsavedEdits: refusesUnsavedEdits, in: self)
         // Ownership can change while everything stops (a Workspace checkout
         // registering this worktree), so it is checked again right before hiding.
         if let refusal = await revalidate() {
@@ -216,9 +217,13 @@ extension AlasCoreContext {
     /// so nothing new starts in it meanwhile. The main checkout and members of
     /// an active Workspace checkout are refused. With `verifiesCheckout`, so
     /// is a local checkout whose lineage or branch on disk no longer matches
-    /// `worktree`, checked right before it is hidden.
-    public func archiveWorktree(_ worktree: Worktree, verifiesCheckout: Bool = false) async throws {
-        try await archiveWorktree(worktree, claim: beginArchive(worktree), verifiesCheckout: verifiesCheckout)
+    /// `worktree`, checked right before it is hidden. With
+    /// `refusesUnsavedEdits`, nobody confirmed discarding unsaved editor
+    /// changes: any refuses the archive as the editors close.
+    public func archiveWorktree(_ worktree: Worktree, verifiesCheckout: Bool = false, refusesUnsavedEdits: Bool = false) async throws {
+        try await archiveWorktree(
+            worktree, claim: beginArchive(worktree), verifiesCheckout: verifiesCheckout, refusesUnsavedEdits: refusesUnsavedEdits
+        )
     }
 
     /// Why the checkout at `worktree`'s path is no longer the one with
@@ -255,7 +260,9 @@ extension AlasCoreContext {
     }
 
     /// Archives a worktree claimed by `beginArchive`, and releases the claim.
-    public func archiveWorktree(_ worktree: Worktree, claim: UUID, verifiesCheckout: Bool = false) async throws {
+    public func archiveWorktree(
+        _ worktree: Worktree, claim: UUID, verifiesCheckout: Bool = false, refusesUnsavedEdits: Bool = false
+    ) async throws {
         defer { projects.releaseOperation(claim, for: worktree) }
         // Each check reads the claim after the ownership await: a refresh can
         // clear it meanwhile, and whatever is listed then is not this claim's.
@@ -263,7 +270,7 @@ extension AlasCoreContext {
             throw WorktreeArchiveRefusal.ownedByWorkspaceCheckout(refusal)
         }
         guard projects.holdsClaim(claim, for: worktree) else { throw WorktreeArchiveRefusal.operationInProgress }
-        try await performArchive(worktree, revalidate: { [weak self] in
+        try await performArchive(worktree, refusesUnsavedEdits: refusesUnsavedEdits, revalidate: { [weak self] in
             guard let self else { return nil }
             let refusal = await workspaceOwnershipRefusal(for: worktree)
             guard projects.holdsClaim(claim, for: worktree) else { return WorktreeArchiveRefusal.operationInProgress }
@@ -349,6 +356,9 @@ public enum WorktreeArchiveRefusal: Codable, LocalizedError, Equatable {
     /// A remote checkout's identity cannot be checked, so only the app,
     /// whose user sees it, archives one.
     case remoteUnsupported
+    /// An editor on the host has unsaved changes in the worktree, and the
+    /// caller did not agree to discard them.
+    case unsavedEdits
 
     private enum OwnedByWorkspaceCheckoutCodingKeys: String, CodingKey { case _0 = "reason" }
     private enum ChangedCodingKeys: String, CodingKey { case _0 = "reason" }
@@ -360,6 +370,7 @@ public enum WorktreeArchiveRefusal: Codable, LocalizedError, Equatable {
         case .ownedByWorkspaceCheckout(let reason): "\(reason)."
         case .changed(let reason): reason
         case .remoteUnsupported: "Remote worktrees can only be archived from the app."
+        case .unsavedEdits: "An editor on the host has unsaved changes in this worktree."
         }
     }
 }
@@ -383,10 +394,16 @@ public enum WorktreeDeletionRefusal: Codable, LocalizedError, Equatable {
     /// An interrupted checkpoint restore must be recovered first.
     case checkpointRecoveryPending
     case failed(String)
+    /// An editor on the host has unsaved changes in the worktree, and the
+    /// caller did not agree to discard them. `force` does not.
+    case unsavedEdits
+    /// An active Workspace checkout manages this worktree.
+    case ownedByWorkspaceCheckout(String)
 
     private enum NeedsForceCodingKeys: String, CodingKey { case _0 = "message" }
     private enum ChangedCodingKeys: String, CodingKey { case _0 = "message" }
     private enum FailedCodingKeys: String, CodingKey { case _0 = "message" }
+    private enum OwnedByWorkspaceCheckoutCodingKeys: String, CodingKey { case _0 = "reason" }
 
     public var errorDescription: String? {
         switch self {
@@ -399,6 +416,8 @@ public enum WorktreeDeletionRefusal: Codable, LocalizedError, Equatable {
         case .remoteUnsupported: "Remote worktrees can only be archived from the app."
         case .checkpointRecoveryPending: WorktreeRemovalResult.checkpointRecoveryMessage
         case .failed(let message): message
+        case .unsavedEdits: "An editor on the host has unsaved changes in this worktree."
+        case .ownedByWorkspaceCheckout(let reason): reason
         }
     }
 }
@@ -407,9 +426,13 @@ extension AlasCoreContext {
     /// Deletes `worktree`, and its branch when merged and
     /// `deleteBranchIfMerged`, through the same routine as the app. It claims
     /// the worktree so nothing new starts in it, and is refused for the main
-    /// checkout, remote checkouts and worktrees without a lineage. Throws if
-    /// the project list cannot be saved afterwards; the worktree is gone by then.
-    public func deleteWorktree(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false) async throws {
+    /// checkout, remote checkouts and worktrees without a lineage. Unless
+    /// `discardUnsavedEdits`, an unsaved editor change refuses it as the
+    /// editors close. Throws if the project list cannot be saved afterwards;
+    /// the worktree is gone by then.
+    public func deleteWorktree(
+        _ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false, discardUnsavedEdits: Bool = false
+    ) async throws {
         guard !worktree.path.isRemoteAlasPath else { throw WorktreeDeletionRefusal.remoteUnsupported }
         guard let lineageID = worktree.lineageID else { throw WorktreeDeletionRefusal.unknownIdentity }
         let claim = try beginDelete(worktree)
@@ -419,7 +442,7 @@ extension AlasCoreContext {
         options.recordsSkips = false
         options.refreshesProject = false
         options.revalidate = { Self.checkoutChange(worktree, lineageID: lineageID) }
-        options.refusesUnsavedEdits = !force
+        options.refusesUnsavedEdits = !discardUnsavedEdits
         switch await deleteWorktree(worktree, claim: claim, options: options) {
         case .deleted, .deletedButNotSaved:
             try await finishDeletions([(worktree, claim)])

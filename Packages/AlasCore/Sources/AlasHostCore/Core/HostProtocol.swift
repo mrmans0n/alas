@@ -56,9 +56,16 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case createWorktree(projectID: String, base: String, branch: String, destination: String)
     /// `lineageID` and `branch` are the worktree's as the client last saw
     /// it: a checkout replaced or switched since is refused as changed.
-    case deleteWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, force: Bool, deleteBranchIfMerged: Bool)
-    /// Like a delete, names the lineage and branch the client last saw.
-    case archiveWorktree(worktree: WorktreeRef, lineageID: String?, branch: String)
+    /// `discardUnsavedEdits`: whether the user agreed to discard unsaved
+    /// editor changes on the host (`host.worktrees.lifecycle.v1`). Nil from an
+    /// older client, refused like false with an untyped message.
+    case deleteWorktree(
+        worktree: WorktreeRef, lineageID: String?, branch: String, force: Bool, deleteBranchIfMerged: Bool,
+        discardUnsavedEdits: Bool? = nil
+    )
+    /// Like a delete, names the lineage and branch the client last saw, and
+    /// acknowledges discarding unsaved editor changes.
+    case archiveWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, discardUnsavedEdits: Bool? = nil)
     case unarchiveWorktree(worktree: WorktreeRef)
     case listWorkspaceCheckouts
     case workspaceCheckout(id: UUID)
@@ -105,6 +112,19 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case listPeers
     /// Forgets a paired Mac and revokes its token; local client only.
     case forgetPeer(peerID: String)
+    /// Reads a listed worktree's code as a session in it would
+    /// (`host.worktrees.read.v1`).
+    case readWorktree(worktree: WorktreeRef, read: HostWorktreeRead)
+}
+
+/// One read of a worktree's code, as the Remote session requests of the same name.
+public enum HostWorktreeRead: Codable, Equatable, Sendable {
+    case changes(comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case fileDiff(path: String, stage: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case files(path: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case commitFiles(sha: String)
+    case commitDiff(sha: String, path: String)
+    case file(path: String)
 }
 
 /// A paired Mac as `alas-host peers list` shows it; never its token.
@@ -157,6 +177,10 @@ public enum HostResponse: Codable, Equatable, Sendable {
     /// `link` is absent from an older host, and where the host has no address for one.
     case remotePairingCode(code: String, expiresAt: Date, link: String?)
     case peers(peers: [HostPeerSummary])
+    /// The message a session in the worktree gets for the same read, with
+    /// the worktree's id as its `sessionId`. Indirect: a Remote message
+    /// carries host messages.
+    indirect case worktreeRead(reply: RemoteServerMessage)
     case failure(error: HostError)
 }
 

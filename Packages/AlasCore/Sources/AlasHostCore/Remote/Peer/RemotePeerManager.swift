@@ -87,6 +87,9 @@ public final class RemotePeerManager {
     /// Peer console events, kept off the federation fan-out: they belong to
     /// one attachment on this Mac, never to ACP subscribers.
     @ObservationIgnored public var onConsoleEvent: (@MainActor (_ serverId: String, PeerConsoleEvent) -> Void)?
+    /// Peer host-protocol messages, kept off the federation fan-out like
+    /// console events: they answer this Mac's own host channel to that peer.
+    @ObservationIgnored public var onHostMessage: (@MainActor (_ serverId: String, HostServerMessage) -> Void)?
     /// Optional features each peer advertised in its latest `hello`, by
     /// `serverId`. In memory only: every connection re-announces them.
     public private(set) var capabilities: [String: Set<String>] = [:]
@@ -1155,6 +1158,10 @@ public final class RemotePeerManager {
                   let peer = peers.first(where: { $0.id == peerId }) else { return }
             if case .console(let event) = message {
                 onConsoleEvent?(peer.serverId, event)
+                return
+            }
+            if case .host(let message) = message {
+                onHostMessage?(peer.serverId, message)
                 return
             }
             onFederationEvent?(.message(serverId: peer.serverId, message))
