@@ -649,7 +649,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_screenshot",
-            "description": "Capture a PNG screenshot of one on-screen window by window_id (long edge at most 1280 px). Returns native MCP image content plus JSON metadata, including `scale` (image pixels per screen point). The first use of each app asks the user for approval.",
+            "description": "Capture a PNG screenshot of one on-screen window by window_id (long edge at most 1280 px). Returns native MCP image content plus JSON metadata, including `scale` (image pixels per screen point). Its pixel coordinates hold for the current turn only: after a stop, a resume or a new turn, take a fresh screenshot before using x/y. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -661,7 +661,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_inspect",
-            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter and `limit`/`max_depth` to bound the result. Prefer this over screenshots. The first use of each app asks the user for approval.",
+            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter and `limit`/`max_depth` to bound the result. Prefer this over screenshots. Refs hold for the current turn only: after a stop, a resume or a new turn, inspect again before using them. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
