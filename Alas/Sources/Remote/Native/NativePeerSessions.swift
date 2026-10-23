@@ -152,6 +152,12 @@ final class NativePeerSessions {
     /// Peers re-send it with every session list, so a change here is the
     /// cue that the agent touched the worktree.
     @ObservationIgnored private var workspaceSummary: RemoteWorktreeSummary?
+    /// The selected group's host record when changes were last requested: a
+    /// change to it is the cue to re-read an idle worktree.
+    @ObservationIgnored private var workspaceHostSnapshot: WorktreeSnapshot?
+    /// Bumped whenever the workspace is reset, so a host-channel answer to a
+    /// read sent before then is dropped.
+    @ObservationIgnored private var workspaceEpoch = 0
     /// Whether a root `listFiles` request is currently awaiting a reply.
     /// `workspace.beginRootLoad()` only distinguishes "never loaded" from
     /// "loaded"; once loaded it permits sending on every call, so this is
@@ -214,6 +220,9 @@ final class NativePeerSessions {
         let openSessionIds = Set(snapshot.groups.flatMap(\.sessions).filter(\.isActive).map(\.id))
         closingSessionIds.formIntersection(openSessionIds)
         reconcileSelectedTab()
+        if selectedTab == nil, canReadWorkspace, selectedWorktreeGroup?.host?.snapshot != workspaceHostSnapshot {
+            reloadWorkspace()
+        }
     }
 
     var selectedTab: NativePeerTab? {
@@ -243,6 +252,7 @@ final class NativePeerSessions {
         } else {
             clearSelection()
             selectedWorktree = selection
+            reloadWorkspace()
         }
     }
 
@@ -307,6 +317,23 @@ final class NativePeerSessions {
 
     var selectedWorktreeGroup: NativePeerWorktreeGroup? {
         selectedWorktree.flatMap(worktree)
+    }
+
+    /// Whether Changes and Files can load: a session is selected, or the
+    /// selected worktree has no tab open and its host serves worktree reads.
+    var canReadWorkspace: Bool { selectedSessionId != nil || hostReadTarget != nil }
+
+    /// The worktree Changes and Files show.
+    var workspaceWorktreePath: String? {
+        (selectedRow?.worktree ?? selectedWorktreeGroup?.worktree)?.path
+    }
+
+    /// The selected tab-less worktree, read over its host's channel.
+    private var hostReadTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard selectedTab == nil, let selectedWorktree, let host = selectedWorktreeGroup?.host,
+              hosts?.canRead(serverId: selectedWorktree.serverId) == true
+        else { return nil }
+        return (selectedWorktree.serverId, host)
     }
 
     var selectedWorktreePeer: NativePeerGroup? {
@@ -403,6 +430,8 @@ final class NativePeerSessions {
         tabCloseError = nil
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
+        workspaceHostSnapshot = nil
+        workspaceEpoch += 1
         fileTreeRequestOutdated = false
         changesRequestInFlight = false
         changesRequestOutdated = false
@@ -546,6 +575,8 @@ final class NativePeerSessions {
         sessionTabError = nil
         workspace = NativePeerWorkspace()
         workspaceSummary = nil
+        workspaceHostSnapshot = nil
+        workspaceEpoch += 1
         fileTreeRequestOutdated = false
         changesRequestInFlight = false
         changesRequestOutdated = false
@@ -862,14 +893,16 @@ final class NativePeerSessions {
 
     @discardableResult
     func requestChanges() -> Bool {
-        guard selectedSessionId != nil else { return false }
-        workspaceSummary = selectedRow?.worktree
+        guard canReadWorkspace else { return false }
+        workspaceSummary = selectedRow?.worktree ?? selectedWorktreeGroup?.worktree
+        workspaceHostSnapshot = selectedWorktreeGroup?.host?.snapshot
         // A folder project has no git, so there are no changes to ask for.
         guard workspaceSummary?.isFolder != true, !changesRequestInFlight else { return false }
         changesRequestInFlight = true
         workspace.beginChangesLoad()
-        if !routeWhileOnline({
-            .listChanges(sessionId: $0, comparisonMode: comparisonMode())
+        let mode = comparisonMode()
+        if !routeWorkspaceRead(.changes(comparisonMode: mode), session: {
+            .listChanges(sessionId: $0, comparisonMode: mode)
         }) {
             changesRequestInFlight = false
             workspace.markUnavailable()
@@ -880,11 +913,12 @@ final class NativePeerSessions {
 
     @discardableResult
     func loadFileTree() -> Bool {
-        guard selectedSessionId != nil, workspace.beginRootLoad() else { return false }
+        guard canReadWorkspace, workspace.beginRootLoad() else { return false }
         guard !fileTreeRequestInFlight else { return false }
         fileTreeRequestInFlight = true
-        if !routeWhileOnline({
-            .listFiles(sessionId: $0, path: nil, comparisonMode: comparisonMode())
+        let mode = comparisonMode()
+        if !routeWorkspaceRead(.files(path: nil, comparisonMode: mode), session: {
+            .listFiles(sessionId: $0, path: nil, comparisonMode: mode)
         }) {
             fileTreeRequestInFlight = false
             workspace.markUnavailable()
@@ -894,17 +928,18 @@ final class NativePeerSessions {
     }
 
     func loadFileTreeChildren(path: String) {
-        guard selectedSessionId != nil, workspace.beginChildrenLoad(path: path) else { return }
-        if !routeWhileOnline({
-            .listFiles(sessionId: $0, path: path, comparisonMode: comparisonMode())
+        guard canReadWorkspace, workspace.beginChildrenLoad(path: path) else { return }
+        let mode = comparisonMode()
+        if !routeWorkspaceRead(.files(path: path, comparisonMode: mode), session: {
+            .listFiles(sessionId: $0, path: path, comparisonMode: mode)
         }) {
             workspace.markUnavailable()
         }
     }
 
     func loadCommitFiles(sha: String) {
-        guard selectedSessionId != nil, workspace.beginCommitFilesLoad(sha: sha) else { return }
-        if !routeWhileOnline({ .listCommitFiles(sessionId: $0, sha: sha) }) {
+        guard canReadWorkspace, workspace.beginCommitFilesLoad(sha: sha) else { return }
+        if !routeWorkspaceRead(.commitFiles(sha: sha), session: { .listCommitFiles(sessionId: $0, sha: sha) }) {
             workspace.markUnavailable()
         }
     }
@@ -917,7 +952,7 @@ final class NativePeerSessions {
     /// no longer matters.
     @discardableResult
     func open(_ document: NativePeerWorkspace.Document) -> Bool {
-        guard selectedSessionId != nil else { return false }
+        guard canReadWorkspace else { return false }
         if document != workspace.document { documentRequestOutdated = false }
         workspace.beginDocument(document)
         guard !documentRequestsInFlight.contains(document) else {
@@ -932,7 +967,7 @@ final class NativePeerSessions {
         documentRequestsInFlight.insert(document)
         let sent = switch document {
         case .diff(let path, let stage):
-            routeWhileOnline {
+            routeWorkspaceRead(.fileDiff(path: path, stage: stage?.rawValue, comparisonMode: comparisonMode())) {
                 .fileDiff(
                     sessionId: $0,
                     path: path,
@@ -941,9 +976,9 @@ final class NativePeerSessions {
                 )
             }
         case .commitDiff(let path, let sha):
-            routeWhileOnline { .commitFileDiff(sessionId: $0, sha: sha, path: path) }
+            routeWorkspaceRead(.commitDiff(sha: sha, path: path)) { .commitFileDiff(sessionId: $0, sha: sha, path: path) }
         case .file(let path):
-            routeWhileOnline { .readFile(sessionId: $0, path: path) }
+            routeWorkspaceRead(.file(path: path)) { .readFile(sessionId: $0, path: path) }
         }
         if !sent {
             documentRequestsInFlight.remove(document)
@@ -1062,6 +1097,31 @@ final class NativePeerSessions {
         guard let selectedSessionId, let downstream,
               selectedPeer?.state.carriesSessions == true else { return false }
         return federation.route(makeMessage(selectedSessionId), from: downstream)
+    }
+
+    /// Sends a Changes or Files read: the session's own request while a
+    /// session is selected, else `read` of the selected worktree over its
+    /// host's channel. An answer after the selection moved is dropped.
+    private func routeWorkspaceRead(_ read: HostWorktreeRead, session: (String) -> RemoteClientMessage) -> Bool {
+        if selectedSessionId != nil { return routeWhileOnline(session) }
+        guard let hosts, let target = hostReadTarget else { return false }
+        let epoch = workspaceEpoch
+        let worktreeId = target.worktree.snapshot.worktree.id
+        Task { [weak self] in
+            let reply = await hosts.read(read, in: target.worktree, serverId: target.serverId)
+            guard let self, workspaceEpoch == epoch, hostReadTarget?.worktree.snapshot.worktree.id == worktreeId
+            else { return }
+            if let reply, reply.sessionId == worktreeId {
+                _ = applyWorkspaceReply(reply)
+            } else {
+                // Unanswered: nothing is in flight any more.
+                changesRequestInFlight = false
+                fileTreeRequestInFlight = false
+                documentRequestsInFlight = []
+                workspace.markUnavailable()
+            }
+        }
+        return true
     }
 
     private static func appending(_ text: String, to draft: String) -> String {
@@ -1220,6 +1280,45 @@ final class NativePeerSessions {
             rejectPendingPrompt(message: Self.promptRejectedMessage(reason ?? transcript?.config?.agentIssue?.message))
             return
         }
+        if applyWorkspaceReply(message) { return }
+        let needsResubscribe = transcript?.apply(message) == true
+        if needsResubscribe, let downstream,
+           !federation.route(.subscribe(sessionId: selectedSessionId), from: downstream) {
+            transcript?.resetResubscribeRequest()
+        }
+        let promptConfirmationRows: [RemoteWireMessage]
+        switch message {
+        case .transcriptSnapshot(_, _, _, let rows, _, _, let epoch, let revision, _)
+            where transcript?.epoch == epoch && transcript?.revision == revision:
+            promptConfirmationRows = rows
+        case .transcriptDelta(_, _, _, let upserts, let epoch, let revision, _)
+            where transcript?.epoch == epoch && transcript?.revision == revision:
+            promptConfirmationRows = upserts
+        default:
+            promptConfirmationRows = []
+        }
+        if case .queueState(_, let items) = message, let pendingPrompt,
+           items.contains(where: { pendingPrompt.matches($0) && !pendingPromptPriorQueueIds.contains($0.id) }) {
+            confirm(pendingPrompt)
+            return
+        }
+        if let pendingPrompt, let expectedIndex = pendingPromptExpectedIndex,
+           promptConfirmationRows.contains(where: { pendingPrompt.matches($0) && $0.index >= expectedIndex }) {
+            confirm(pendingPrompt)
+            return
+        }
+        if case .queueState = message, let pendingPrompt,
+           let epoch = transcript?.epoch, epoch != pendingPrompt.epoch {
+            // Wait for both the transcript and queue replay before deciding
+            // that an older epoch can no longer acknowledge its prompt.
+            rejectPendingPrompt(message: Self.unconfirmedDeliveryMessage)
+        }
+    }
+
+    /// Folds a Changes or Files reply into the workspace, clearing its
+    /// in-flight marker and sending a retry queued while it was out. False
+    /// for every other message.
+    private func applyWorkspaceReply(_ message: RemoteServerMessage) -> Bool {
         let isChangesReply: Bool = switch message {
         case .changeList, .changeListFailed: true
         default: false
@@ -1258,39 +1357,7 @@ final class NativePeerSessions {
             documentRequestOutdated = false
             open(document)
         }
-        if handled { return }
-        let needsResubscribe = transcript?.apply(message) == true
-        if needsResubscribe, let downstream,
-           !federation.route(.subscribe(sessionId: selectedSessionId), from: downstream) {
-            transcript?.resetResubscribeRequest()
-        }
-        let promptConfirmationRows: [RemoteWireMessage]
-        switch message {
-        case .transcriptSnapshot(_, _, _, let rows, _, _, let epoch, let revision, _)
-            where transcript?.epoch == epoch && transcript?.revision == revision:
-            promptConfirmationRows = rows
-        case .transcriptDelta(_, _, _, let upserts, let epoch, let revision, _)
-            where transcript?.epoch == epoch && transcript?.revision == revision:
-            promptConfirmationRows = upserts
-        default:
-            promptConfirmationRows = []
-        }
-        if case .queueState(_, let items) = message, let pendingPrompt,
-           items.contains(where: { pendingPrompt.matches($0) && !pendingPromptPriorQueueIds.contains($0.id) }) {
-            confirm(pendingPrompt)
-            return
-        }
-        if let pendingPrompt, let expectedIndex = pendingPromptExpectedIndex,
-           promptConfirmationRows.contains(where: { pendingPrompt.matches($0) && $0.index >= expectedIndex }) {
-            confirm(pendingPrompt)
-            return
-        }
-        if case .queueState = message, let pendingPrompt,
-           let epoch = transcript?.epoch, epoch != pendingPrompt.epoch {
-            // Wait for both the transcript and queue replay before deciding
-            // that an older epoch can no longer acknowledge its prompt.
-            rejectPendingPrompt(message: Self.unconfirmedDeliveryMessage)
-        }
+        return handled
     }
 
     /// Clears what was sent from the composer, leaving anything the user

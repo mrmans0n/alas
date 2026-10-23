@@ -63,6 +63,20 @@ final class NativePeerHosts {
         }
     }
 
+    /// Whether `serverId`'s worktrees can be read over its host channel.
+    func canRead(serverId: String) -> Bool {
+        channels[serverId]?.isSubscribed == true && supports(serverId, HostProtocolCapability.worktreesReadV1)
+    }
+
+    /// The reply a session in `worktree` would get for `read`. Nil when the
+    /// host cannot be read, refused, or did not answer in time.
+    func read(_ read: HostWorktreeRead, in worktree: PeerHostWorktree, serverId: String) async -> RemoteServerMessage? {
+        guard canRead(serverId: serverId), let channel = channels[serverId] else { return nil }
+        let ref = WorktreeRef(projectID: worktree.snapshot.worktree.projectId, path: worktree.snapshot.worktree.path.path)
+        guard case .worktreeRead(let reply) = await channel.request(.readWorktree(worktree: ref, read: read)) else { return nil }
+        return reply
+    }
+
     private func servesHostChannel(_ serverId: String) -> Bool {
         supports(serverId, HostProtocolCapability.v1) && supports(serverId, HostProtocolCapability.eventsV1)
     }

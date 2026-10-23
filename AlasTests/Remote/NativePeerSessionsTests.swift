@@ -637,6 +637,86 @@ struct NativePeerSessionsTests {
         #expect(client.selectedWorktree == nil)
     }
 
+    /// A selected idle worktree reads its Changes and Files over the host
+    /// channel, only from a host that serves worktree reads, and drops an
+    /// answer that lands after the selection moved.
+    @Test(arguments: [false, true])
+    func aSelectedIdleWorktreeReadsItsFilesOverTheHostChannel(servesReads: Bool) async throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        var sent: [HostClientMessage] = []
+        let hosts = NativePeerHosts(
+            send: { sent.append($1) },
+            supports: { _, capability in capability != HostProtocolCapability.worktreesReadV1 || servesReads }
+        )
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] },
+            hosts: hosts
+        )
+        client.start()
+        defer { client.stop() }
+        try await eventually("snapshot request") { sent.count == 1 }
+        func worktree(_ name: String) -> Worktree {
+            let path = URL(fileURLWithPath: "/srv/\(name)")
+            return Worktree(id: Worktree.makeId(path: path), projectId: "p", name: name, branch: name,
+                            path: path, status: .clean, lastActivity: .distantPast)
+        }
+        let idle = worktree("idle")
+        let other = worktree("other")
+        let cursor = HostCursor(generation: UUID(), sequence: 0)
+        hosts.receive(serverId: "B", .response(id: sent[0].id, result: .snapshot(snapshot: HostSnapshot(
+            cursor: cursor,
+            projects: [ProjectSnapshot(ProjectConfig(id: "p", name: "repo", path: "/srv/repo", color: "blue", addedAt: .distantPast))],
+            worktrees: [idle, other].map { WorktreeSnapshot(worktree: $0, operation: nil, isArchived: false) },
+            workspaceCheckouts: [], runs: [], sessions: []
+        ))))
+        try await eventually("subscribe request") { sent.count == 2 }
+        hosts.receive(serverId: "B", .response(id: sent[1].id, result: .subscribed))
+        let rows = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees)
+        func selection(_ worktree: Worktree) throws -> NativePeerWorktreeSelection {
+            let row = try #require(rows.first { $0.host?.snapshot.worktree.id == worktree.id })
+            return NativePeerWorktreeSelection(serverId: "B", worktreeId: row.id)
+        }
+        func reads() -> [(id: Int, ref: WorktreeRef, read: HostWorktreeRead)] {
+            sent.compactMap { message in
+                guard case .readWorktree(let ref, let read) = message.request else { return nil }
+                return (message.id, ref, read)
+            }
+        }
+
+        let idleSelection = try selection(idle)
+        let otherSelection = try selection(other)
+        client.selectWorktree(idleSelection)
+
+        #expect(client.canReadWorkspace == servesReads)
+        guard servesReads else {
+            #expect(reads().isEmpty)
+            return
+        }
+        try await eventually("reads of the idle worktree") { reads().count == 2 }
+        #expect(reads().allSatisfy { $0.ref == WorktreeRef(projectID: "p", path: idle.path.path) })
+        let changesRequestID = try #require(reads().first { $0.read == .changes(comparisonMode: nil) }?.id)
+        let filesRequestID = try #require(reads().first { $0.read == .files(path: nil, comparisonMode: nil) }?.id)
+        let nodes = [RemoteFileNode(name: "notes.txt", path: "notes.txt", kind: "file", badge: nil, childrenState: "loaded", isSubmodule: false)]
+        hosts.receive(serverId: "B", .response(id: filesRequestID, result: .worktreeRead(
+            reply: .fileTree(sessionId: idle.id, path: nil, nodes: nodes, truncated: false))))
+        try await eventually("file tree") {
+            if case .loaded(let loaded) = client.workspace.fileTree { loaded.map(\.path) == ["notes.txt"] } else { false }
+        }
+
+        client.selectWorktree(otherSelection)
+        try await eventually("reads of the other worktree") { reads().count == 4 }
+        let otherFilesRequestID = try #require(reads().last { $0.read == .files(path: nil, comparisonMode: nil) }?.id)
+        hosts.receive(serverId: "B", .response(id: changesRequestID, result: .worktreeRead(
+            reply: .changeListFailed(sessionId: idle.id, reason: .gitFailed, message: "late"))))
+        hosts.receive(serverId: "B", .response(id: otherFilesRequestID, result: .worktreeRead(
+            reply: .fileTree(sessionId: other.id, path: nil, nodes: [], truncated: false))))
+        try await eventually("other's file tree") { client.workspace.fileTree == .loaded([]) }
+        // The late answer resumed first, and was dropped.
+        #expect(client.workspace.changes == .loading)
+    }
+
     @Test func selectingAPeerSessionLoadsItsWorktreeAndRoutesReplies() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
