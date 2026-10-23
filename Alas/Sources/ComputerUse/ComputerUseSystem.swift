@@ -3,6 +3,7 @@ import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
 import CoreGraphics
+import os
 import ScreenCaptureKit
 import Synchronization
 
@@ -1034,6 +1035,20 @@ enum ComputerUseUserInput {
     private static let attemptInterval: UInt64 = 5_000_000_000
     /// Written and read on the tap thread only: before the tap is enabled, and by its callback.
     private nonisolated(unsafe) static var tap: CFMachPort?
+    /// macOS's Input Monitoring prompt was asked for once in this process.
+    private static let listenAccessRequested = Atomic<Bool>(false)
+    private static let log = Logger(subsystem: "io.nlopez.alas", category: "computer-use")
+
+    /// Whether the tap runs, so the takeover check sees the user's input to every app. Asking
+    /// also starts it when it can run and isn't yet (throttled).
+    static var isWatching: Bool {
+        lastInput() != nil
+    }
+
+    /// Asks macOS for Input Monitoring, which the tap needs when Accessibility alone doesn't do.
+    static func requestListenAccess() {
+        _ = CGRequestListenEventAccess()
+    }
 
     private static let monitored: [CGEventType] = [
         .keyDown, .flagsChanged, .leftMouseDown, .rightMouseDown, .otherMouseDown,
@@ -1080,7 +1095,16 @@ enum ComputerUseUserInput {
                 return Unmanaged.passUnretained(event)
             },
             userInfo: nil)
-        else { return }
+        else {
+            log.error("Computer use input tap could not be created")
+            // Input Monitoring covers the tap where Accessibility doesn't; the next idle checks retry.
+            if !CGPreflightListenEventAccess(),
+               listenAccessRequested.compareExchange(expected: false, desired: true, ordering: .relaxed).exchanged {
+                _ = CGRequestListenEventAccess()
+            }
+            return
+        }
+        log.info("Computer use input tap created")
         tap = port
         defer { tap = nil }
         guard let source = CFMachPortCreateRunLoopSource(nil, port, 0) else { return }
@@ -1100,7 +1124,10 @@ enum ComputerUseUserInput {
     private static func handle(_ type: CGEventType, _ event: CGEvent) {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
+            if let tap {
+                CGEvent.tapEnable(tap: tap, enable: true)
+                log.info("Computer use input tap re-enabled after macOS disabled it")
+            }
         default:
             guard event.getIntegerValueField(.eventSourceUserData) != postedEventMarker else { return }
             lastInputNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .relaxed)
