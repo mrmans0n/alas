@@ -81,6 +81,10 @@ public final class PeerHostChannel {
     private var pending: [Int: (continuation: CheckedContinuation<HostResponse, Never>, timeout: Task<Void, Never>)] = [:]
     /// Bumped by `disconnect()`, so a connect it interrupted publishes nothing.
     private var epoch = 0
+    /// The current connect's subscribe request: its `.subscribed` starts
+    /// applying events at once, since the host's first batch can follow it
+    /// before `connect()` resumes.
+    private var subscribeID: Int?
 
     public init(timeout: Duration = defaultTimeout, send: @escaping @MainActor (HostClientMessage) -> Void) {
         self.timeout = timeout
@@ -98,8 +102,8 @@ public final class PeerHostChannel {
         guard case .snapshot(let snapshot) = await request(.snapshot), epoch == self.epoch else { return }
         state = State(snapshot)
         onChange?()
-        guard case .subscribed = await request(.subscribe(after: snapshot.cursor)), epoch == self.epoch else { return }
-        isSubscribed = true // the host sends .subscribed before any of its events
+        subscribeID = nextID
+        _ = await request(.subscribe(after: snapshot.cursor)) // `finish` sets isSubscribed on .subscribed
     }
 
     /// Sends `request` and waits for its answer, or fails with
@@ -128,7 +132,11 @@ public final class PeerHostChannel {
             guard isSubscribed, var next = state else { return }
             if events.contains(.resync) {
                 isSubscribed = false
-                Task { await connect() }
+                let epoch = self.epoch
+                Task {
+                    guard epoch == self.epoch else { return } // disconnected since
+                    await connect()
+                }
                 return
             }
             for event in events { next.apply(event) }
@@ -151,11 +159,16 @@ public final class PeerHostChannel {
         state = nil
         isSubscribed = false
         isConnecting = false
+        subscribeID = nil
         onChange?()
     }
 
     private func finish(_ id: Int, with response: HostResponse) {
         guard let entry = pending.removeValue(forKey: id) else { return }
+        if id == subscribeID {
+            subscribeID = nil
+            if case .subscribed = response { isSubscribed = true }
+        }
         entry.timeout.cancel()
         entry.continuation.resume(returning: response)
     }

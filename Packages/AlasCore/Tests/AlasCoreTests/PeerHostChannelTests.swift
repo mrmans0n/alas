@@ -60,9 +60,12 @@ struct PeerHostChannelTests {
         #expect(sent.messages[1].request == .subscribe(after: cursor))
         #expect(!channel.isSubscribed)
 
+        // The host forwards events right after `.subscribed`, before `connect()` resumes.
         channel.receive(.response(id: 2, result: .subscribed))
+        channel.receive(.events(events: [.worktreeRemoved(projectID: "p", worktreeID: feature.worktree.id)], cursor: cursor))
         await connecting.value
         #expect(channel.isSubscribed)
+        #expect(channel.state?.worktrees == [])
     }
 
     @Test func eventsApplyOnlyWhileSubscribedAndResyncTakesANewSnapshot() async throws {
@@ -131,5 +134,28 @@ struct PeerHostChannelTests {
         #expect(!channel.isSubscribed)
         channel.receive(.events(events: [.worktreeChanged(feature)], cursor: cursor))
         #expect(channel.state == nil)
+    }
+
+    @Test func aResyncDoesNotReconnectAfterADisconnect() async {
+        let (channel, sent) = await connected([feature])
+        channel.receive(.events(events: [.resync], cursor: cursor))
+        channel.disconnect()
+        // Main-actor jobs run in order: this one runs after the resync's.
+        await Task {}.value
+        #expect(sent.messages.count == 2)
+    }
+
+    @Test func connectAfterADisconnectMidConnectStartsOver() async throws {
+        let sent = Sent()
+        let channel = PeerHostChannel(send: sent.append)
+        let first = Task { await channel.connect() }
+        try await eventually { @MainActor in sent.messages.count == 1 }
+        channel.disconnect()
+        let second = Task { await channel.connect() }
+        try await eventually { @MainActor in sent.messages.count == 2 }
+        #expect(sent.messages[1].request == .snapshot)
+        await first.value
+        channel.disconnect()
+        await second.value
     }
 }
