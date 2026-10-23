@@ -36,7 +36,7 @@ struct ComputerUseCoordinatorTests {
             elementState: { _, _ in nil },
             elementMatches: { _, _, _, _ in true },
             secondsSinceUserInput: { 60 },
-            frontmostPID: { nil },
+            isFrontmost: { _ in false },
             resolveApp: { _, _ in notes },
             openApp: {
                 recorder?.recordOpen()
@@ -402,7 +402,7 @@ struct ComputerUseCoordinatorTests {
     @Test func userTakingOverMidTypingStopsTheInput() async throws {
         let polls = Counter()
         var system = Self.system()
-        system.frontmostPID = { 101 }
+        system.isFrontmost = { $0 == 101 }
         // Idle for the takeover check before the input, busy by the next chunk.
         system.secondsSinceUserInput = { polls.next() == 1 ? 60 : 0.5 }
         system.perform = { _, _, _, interrupt in
@@ -629,7 +629,7 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { _ in true }
-        system.frontmostPID = { 101 }
+        system.isFrontmost = { $0 == 101 }
         // Idle until the first press, active from then on.
         let presses = Recorder()
         system.secondsSinceUserInput = { presses.inputs.isEmpty ? 60 : 0.5 }
@@ -651,7 +651,7 @@ struct ComputerUseCoordinatorTests {
     @Test func actionWaitsForUserIdleThenGivesUp() async throws {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
-        system.frontmostPID = { 101 }
+        system.isFrontmost = { $0 == 101 }
         system.secondsSinceUserInput = { 0.5 }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         let response = await f.coordinator.perform(.init(action: .key, windowID: 1, keys: "cmd+s"), sessionID: "s")
@@ -684,7 +684,7 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         let polls = Counter()
         var system = Self.system(recorder: recorder)
-        system.frontmostPID = { 101 }
+        system.isFrontmost = { $0 == 101 }
         // Busy for the first poll, idle after it.
         system.secondsSinceUserInput = { polls.next() == 1 ? 0.5 : 60 }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes]) { _ in await gate.enter(1) }
@@ -706,7 +706,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         // The screenshot and the click resolve the original frame; the window moves while the user is busy.
         system.window = { [moved] _ in lookups.next() <= 2 ? original : moved }
-        system.frontmostPID = { 101 }
+        system.isFrontmost = { $0 == 101 }
         system.secondsSinceUserInput = { polls.next() == 1 ? 0.5 : 60 }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")

@@ -151,7 +151,8 @@ struct ComputerUseSystem: Sendable {
     var elementMatches: @Sendable (ComputerUseAXHandles, Int, _ role: String, _ title: String?) async -> Bool
     /// Seconds since the last hardware input; events Alas posts don't count.
     var secondsSinceUserInput: @Sendable () -> TimeInterval
-    var frontmostPID: @Sendable () -> Int32?
+    /// Whether the app is the user's front app, as WindowServer has it.
+    var isFrontmost: @Sendable (Int32) -> Bool
     /// Identity without launching: running app (real pid) or installed app (pid 0); nil when not found.
     var resolveApp: @Sendable (_ name: String?, _ bundleID: String?) async -> ComputerUseAppIdentity?
     /// Launches, or unhides and reopens, without activating; returns the running identity.
@@ -179,7 +180,9 @@ struct ComputerUseSystem: Sendable {
             await ComputerUseAXActions.elementMatches(handles, handle, role: role, title: title)
         },
         secondsSinceUserInput: { LiveComputerUseSystem.secondsSinceUserInput() },
-        frontmostPID: { NSWorkspace.shared.frontmostApplication?.processIdentifier },
+        // Synchronous and called off the main actor between an input's events, so without
+        // SkyLight it reads `isActive` directly rather than hopping to the main actor.
+        isFrontmost: { ComputerUseSkyLight.isFrontProcess(pid: $0) ?? NSRunningApplication(processIdentifier: $0)?.isActive ?? false },
         resolveApp: { await LiveComputerUseSystem.resolveApp(name: $0, bundleID: $1) },
         openApp: { try await LiveComputerUseSystem.openApp($0) },
         releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
@@ -552,7 +555,7 @@ extension LiveComputerUseSystem {
             return
         }
         let pid = window.app.pid
-        let userFront = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier } == pid
+        let userFront = await isFrontmost(pid)
         if userFront {
             // The takeover rule once more, right before the user's key window moves: the wait for
             // an idle user ended before the change check and the ref re-check.
@@ -729,11 +732,12 @@ extension LiveComputerUseSystem {
     private static func withActivation(
         of app: ComputerUseAppIdentity, isCancelled: @Sendable () -> Bool, _ body: () async throws -> Void
     ) async throws {
-        let previousPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
-        guard previousPID != app.pid else {
+        guard await !isFrontmost(app.pid) else {
             try await body()
             return
         }
+        // Only to hand the front back afterwards.
+        let previousPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
         await MainActor.run { _ = NSRunningApplication(processIdentifier: app.pid)?.activate() }
         let deadline = ContinuousClock.now + activationWait
         var frontmost = false
@@ -743,7 +747,7 @@ extension LiveComputerUseSystem {
                 await restoreActivation(previousPID, from: app.pid)
                 throw CancellationError()
             }
-            frontmost = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier } == app.pid
+            frontmost = await isFrontmost(app.pid)
             guard !frontmost, ContinuousClock.now < deadline else { break }
             try? await Task.sleep(for: .milliseconds(25))
         }
@@ -759,6 +763,13 @@ extension LiveComputerUseSystem {
         }
         try? await Task.sleep(for: activationSettle)
         await restoreActivation(previousPID, from: app.pid)
+    }
+
+    /// Whether `pid` is WindowServer's front process. `frontmostApplication` follows it only
+    /// once its notification reached the main run loop, so it can still name the previous app.
+    private static func isFrontmost(_ pid: Int32) async -> Bool {
+        if let front = ComputerUseSkyLight.isFrontProcess(pid: pid) { return front }
+        return await MainActor.run { NSRunningApplication(processIdentifier: pid)?.isActive ?? false }
     }
 
     private static func restoreActivation(_ previousPID: Int32?, from pid: Int32) async {

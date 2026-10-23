@@ -1006,7 +1006,7 @@ final class ComputerUseCoordinator {
     private func waitForUserIdle(in window: ComputerUseWindow, direct: Bool, context: CallContext) async throws -> Bool {
         var waited = Duration.zero
         while true {
-            let targetIsFrontmost = system.frontmostPID() == window.app.pid
+            let targetIsFrontmost = system.isFrontmost(window.app.pid)
             let decision = ComputerUseTakeover.decide(
                 targetIsFrontmost: targetIsFrontmost,
                 idleSeconds: system.secondsSinceUserInput(),
@@ -1026,7 +1026,7 @@ final class ComputerUseCoordinator {
 
     /// Names the target app when the user is in it, else the Mac.
     private func userActiveMessage(_ window: ComputerUseWindow) -> String {
-        system.frontmostPID() == window.app.pid ? Message.userActive(window.app) : Message.userActiveElsewhere
+        system.isFrontmost(window.app.pid) ? Message.userActive(window.app) : Message.userActiveElsewhere
     }
 
     /// The input sees a stop, session end or cancellation through `isCancelled`, between its events.
@@ -1044,7 +1044,7 @@ final class ComputerUseCoordinator {
         // The takeover rule between a long input's events: the user is working in the target app.
         let interrupt: @Sendable () -> ComputerUseInputInterrupt? = {
             if flag.isSet { return .cancelled }
-            let userActive = system.frontmostPID() == pid
+            let userActive = system.isFrontmost(pid)
                 && system.secondsSinceUserInput() < ComputerUseTakeover.idleThreshold
             return userActive ? .userActive : nil
         }
