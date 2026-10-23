@@ -112,6 +112,19 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case listPeers
     /// Forgets a paired Mac and revokes its token; local client only.
     case forgetPeer(peerID: String)
+    /// Reads a listed worktree's code as a session in it would
+    /// (`host.worktrees.read.v1`).
+    case readWorktree(worktree: WorktreeRef, read: HostWorktreeRead)
+}
+
+/// One read of a worktree's code, as the Remote session requests of the same name.
+public enum HostWorktreeRead: Codable, Equatable, Sendable {
+    case changes(comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case fileDiff(path: String, stage: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case files(path: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case commitFiles(sha: String)
+    case commitDiff(sha: String, path: String)
+    case file(path: String)
 }
 
 /// A paired Mac as `alas-host peers list` shows it; never its token.
@@ -164,6 +177,10 @@ public enum HostResponse: Codable, Equatable, Sendable {
     /// `link` is absent from an older host, and where the host has no address for one.
     case remotePairingCode(code: String, expiresAt: Date, link: String?)
     case peers(peers: [HostPeerSummary])
+    /// The message a session in the worktree gets for the same read, with
+    /// the worktree's id as its `sessionId`. Indirect: a Remote message
+    /// carries host messages.
+    indirect case worktreeRead(reply: RemoteServerMessage)
     case failure(error: HostError)
 }
 

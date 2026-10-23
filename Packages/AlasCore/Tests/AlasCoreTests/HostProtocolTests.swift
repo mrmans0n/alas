@@ -41,6 +41,7 @@ struct HostProtocolTests {
             worktree: ref, lineageID: "l", branch: "feature", force: false, deleteBranchIfMerged: true, discardUnsavedEdits: true
         )),
         HostClientMessage(id: 19, request: .archiveWorktree(worktree: ref, lineageID: "l", branch: "feature", discardUnsavedEdits: false)),
+        HostClientMessage(id: 20, request: .readWorktree(worktree: ref, read: .fileDiff(path: "a.swift", stage: "unstaged", comparisonMode: nil))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -66,6 +67,7 @@ struct HostProtocolTests {
         .response(id: 10, result: .remotePairingCode(code: "ABC123", expiresAt: Date(timeIntervalSince1970: 1_800_000_000), link: nil)),
         .response(id: 11, result: .failure(error: .worktreeArchive(refusal: .unsavedEdits))),
         .response(id: 12, result: .failure(error: .worktreeDeletion(refusal: .ownedByWorkspaceCheckout("Owned.")))),
+        .response(id: 13, result: .worktreeRead(reply: .fileContents(sessionId: "/srv/feature", path: "a.txt", text: "hi", truncated: false))),
         .events(events: [
             .worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .deleting, isArchived: false)),
             .worktreeRemoved(projectID: "p", worktreeID: worktree.id),

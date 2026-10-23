@@ -312,6 +312,11 @@ public final class HostProtocolConnection {
             guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
             peers.forget(peerId: peerID)
             return .done
+        case .readWorktree(let ref, let read):
+            // Needs no lease, as for a session: seeing a worktree is enough
+            // to read its code. Only a listed worktree is read.
+            let listed = try worktree(ref)
+            return .worktreeRead(reply: await host.core.remoteRead(read, in: listed, replyingAs: listed.id))
         }
         return .done
     }

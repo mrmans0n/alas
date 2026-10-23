@@ -347,6 +347,33 @@ struct HostProtocolServerTests {
         #expect(try await fixture.request(.removeProject(projectID: fixture.projectID)) == .done)
     }
 
+    /// A worktree is read as a session in it would be, keyed by the worktree.
+    @Test func worktreeReadsAnswerWithTheSessionReplyKeyedByTheWorktree() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "hi\n".write(to: worktree.path.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        let ref = WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)
+
+        #expect(try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "notes.txt")))
+            == .worktreeRead(reply: .fileContents(sessionId: worktree.id, path: "notes.txt", text: "hi\n", truncated: false)))
+        guard case .worktreeRead(.fileTree(worktree.id, nil, let nodes, _)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .files(path: nil, comparisonMode: nil)))
+        else {
+            Issue.record("expected a file tree")
+            return
+        }
+        #expect(nodes.contains { $0.path == "notes.txt" })
+        guard case .worktreeRead(.fileUnavailable(worktree.id, "../outside", .pathRejected, _, _)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "../outside")))
+        else {
+            Issue.record("expected the escape refused")
+            return
+        }
+        #expect(try await fixture.request(.readWorktree(worktree: WorktreeRef(projectID: fixture.projectID, path: "/srv/missing"), read: .file(path: "a")))
+            == .failure(error: .notFound(what: "worktree /srv/missing in project \(fixture.projectID)")))
+    }
+
     /// A host over a real repository, persisting to a scratch directory,
     /// whose sessions talk to a scripted agent.
     @MainActor
