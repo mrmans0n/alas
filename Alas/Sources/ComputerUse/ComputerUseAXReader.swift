@@ -127,6 +127,7 @@ enum ComputerUseAXReader {
 
     /// The AX window behind `window`: by its CG window id where AX can name it, so two windows
     /// with the same frame and title can't be confused, else by frame with the title breaking ties.
+    /// An app none of whose AX windows has an id is matched by frame too.
     /// The readers are the caller's, so a walk can stop on a stalled app.
     static func axWindow(
         _ candidates: [AXUIElement], for window: ComputerUseWindow,
@@ -135,12 +136,16 @@ enum ComputerUseAXReader {
         guard ComputerUseSkyLight.canIdentifyWindows else {
             return matchingWindow(candidates, for: window, frame: frame, title: title, shouldStop: shouldStop)
         }
+        var anyIdentified = false
         for candidate in candidates {
-            guard !shouldStop() else { break }
+            guard !shouldStop() else { return nil }
             AXUIElementSetMessagingTimeout(candidate, messagingTimeout)
-            if ComputerUseSkyLight.windowID(of: candidate) == window.windowID { return candidate }
+            guard let id = ComputerUseSkyLight.windowID(of: candidate) else { continue }
+            if id == window.windowID { return candidate }
+            anyIdentified = true
         }
-        return nil
+        guard !anyIdentified else { return nil }
+        return matchingWindow(candidates, for: window, frame: frame, title: title, shouldStop: shouldStop)
     }
 
     /// The AX window whose frame matches the CG bounds; the title breaks ties.
