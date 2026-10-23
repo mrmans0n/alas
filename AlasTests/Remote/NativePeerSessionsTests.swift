@@ -597,6 +597,46 @@ struct NativePeerSessionsTests {
         #expect(hosts.worktrees["B"] == nil)
     }
 
+    @Test func anIdleHostWorktreeSelectsIntoItsEmptyStateAndClearsWhenTheHostDropsIt() async throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        var sent: [HostClientMessage] = []
+        let hosts = NativePeerHosts(send: { sent.append($1) }, supports: { _, _ in true })
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] },
+            hosts: hosts
+        )
+        client.start()
+        defer { client.stop() }
+        try await eventually("snapshot request") { sent.count == 1 }
+        let path = URL(fileURLWithPath: "/srv/idle")
+        let idle = Worktree(id: Worktree.makeId(path: path), projectId: "p", name: "idle", branch: "idle",
+                            path: path, status: .clean, lastActivity: .distantPast)
+        let project = ProjectSnapshot(ProjectConfig(
+            id: "p", name: "repo", path: "/srv/repo", color: "blue", addedAt: .distantPast
+        ))
+        let cursor = HostCursor(generation: UUID(), sequence: 0)
+        hosts.receive(serverId: "B", .response(id: sent[0].id, result: .snapshot(snapshot: HostSnapshot(
+            cursor: cursor, projects: [project],
+            worktrees: [WorktreeSnapshot(worktree: idle, operation: nil, isArchived: false)],
+            workspaceCheckouts: [], runs: [], sessions: []
+        ))))
+        try await eventually("subscribe request") { sent.count == 2 }
+        hosts.receive(serverId: "B", .response(id: sent[1].id, result: .subscribed))
+
+        let idleRow = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees.first)
+        let selection = NativePeerWorktreeSelection(serverId: "B", worktreeId: idleRow.id)
+        client.selectWorktree(selection)
+        #expect(client.selectedWorktree == selection)
+        #expect(client.selectedTab == nil)
+        #expect(client.selectedWorktreeGroup?.worktree != nil)
+        #expect(client.newSessionTarget(in: selection) != nil)
+
+        hosts.receive(serverId: "B", .events(events: [.worktreeRemoved(projectID: "p", worktreeID: idle.id)], cursor: cursor))
+        #expect(client.selectedWorktree == nil)
+    }
+
     @Test func selectingAPeerSessionLoadsItsWorktreeAndRoutesReplies() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

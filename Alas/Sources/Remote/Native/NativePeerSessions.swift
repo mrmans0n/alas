@@ -208,7 +208,8 @@ final class NativePeerSessions {
         guard downstream != nil else { return }
         snapshot = .build(
             peers: peers(), rows: federation.peerSessionSummaries,
-            consoles: consoles?.consoles ?? [:], projects: federation.peerProjects
+            consoles: consoles?.consoles ?? [:], projects: federation.peerProjects,
+            hostWorktrees: hosts?.worktrees ?? [:]
         )
         let openSessionIds = Set(snapshot.groups.flatMap(\.sessions).filter(\.isActive).map(\.id))
         closingSessionIds.formIntersection(openSessionIds)
@@ -281,6 +282,12 @@ final class NativePeerSessions {
         } else if case .console = selected {
             // The console list is known (checked above), so its last console closed.
             current = []
+        } else if selected == nil, hosts?.worktrees[selection.serverId] != nil {
+            // The host lists every worktree: an idle one it no longer lists
+            // was removed or archived.
+            selectedWorktree = nil
+            selectedWorktreeTabs = []
+            return
         } else {
             // Missing session rows mean the peer's list dropped, not that its
             // tabs closed; `refresh()` marks the selection unavailable.
