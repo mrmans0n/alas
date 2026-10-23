@@ -717,6 +717,49 @@ struct NativePeerSessionsTests {
         #expect(client.workspace.changes == .loading)
     }
 
+    /// A host serving the host channel without `host.worktrees.lifecycle.v1`
+    /// lists its worktrees with no controls and is never sent a lifecycle request.
+    @Test(arguments: [false, true])
+    func peerWorktreeControlsNeedTheLifecycleCapability(lifecycle: Bool) async throws {
+        var sent: [(String, HostClientMessage)] = []
+        let hosts = NativePeerHosts(
+            send: { sent.append(($0, $1)) },
+            supports: { _, capability in capability != HostProtocolCapability.worktreesLifecycleV1 || lifecycle }
+        )
+        defer { hosts.stop() }
+        hosts.peersChanged(online: ["B"])
+        try await eventually("snapshot request") { sent.count == 1 }
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+                                path: path, status: .clean, lastActivity: .distantPast)
+        let cursor = HostCursor(generation: UUID(), sequence: 0)
+        hosts.receive(serverId: "B", .response(id: sent[0].1.id, result: .snapshot(snapshot: HostSnapshot(
+            cursor: cursor,
+            projects: [ProjectSnapshot(ProjectConfig(id: "p", name: "repo", path: "/srv/repo", color: "blue", addedAt: .distantPast))],
+            worktrees: [WorktreeSnapshot(worktree: worktree, operation: nil, isArchived: false)],
+            workspaceCheckouts: [], runs: [], sessions: []
+        ))))
+        try await eventually("subscribe request") { sent.count == 2 }
+        hosts.receive(serverId: "B", .response(id: sent[1].1.id, result: .subscribed))
+        try await eventually("host worktrees") { hosts.worktrees["B"] != nil }
+        let feature = try #require(hosts.worktrees["B"]?.first)
+        #expect(hosts.controls(for: feature, serverId: "B") == (lifecycle ? .available : .hidden))
+
+        let before = sent.count
+        hosts.archive(feature, serverId: "B", peerName: "Mac B")
+        guard lifecycle else {
+            #expect(sent.count == before) // an older host is never sent a lifecycle request
+            return
+        }
+        try await eventually("archive request") { sent.count == before + 1 }
+        let request = try #require(sent.last?.1)
+        #expect(request.request == .archiveWorktree(
+            worktree: WorktreeRef(projectID: "p", path: path.path),
+            lineageID: worktree.lineageID, branch: "feature", discardUnsavedEdits: false
+        ))
+        hosts.receive(serverId: "B", .response(id: request.id, result: .done))
+    }
+
     @Test func selectingAPeerSessionLoadsItsWorktreeAndRoutesReplies() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

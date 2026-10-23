@@ -11677,7 +11677,7 @@ final class AppState {
         WorktreeService.requiresForceRetry(forRemovalRefusal: stderr)
     }
 
-    private func confirmDeleteWorktree(_ confirmation: WorktreeDeleteConfirmation) -> Bool {
+    func confirmDeleteWorktree(_ confirmation: WorktreeDeleteConfirmation) -> Bool {
         let alert = NSAlert()
         alert.messageText = confirmation.title
         alert.informativeText = confirmation.message

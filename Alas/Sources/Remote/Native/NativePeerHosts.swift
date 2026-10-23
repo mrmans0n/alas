@@ -77,6 +77,39 @@ final class NativePeerHosts {
         return reply
     }
 
+    /// Archive and Delete for `worktree`, only on a host that serves them.
+    func controls(for worktree: PeerHostWorktree, serverId: String) -> PeerWorktreeControls {
+        worktree.controls(lifecycleSupported: supports(serverId, HostProtocolCapability.worktreesLifecycleV1))
+    }
+
+    func archive(_ worktree: PeerHostWorktree, serverId: String, peerName: String) {
+        remove(worktree, .archive, failureTitle: "Archive Failed", serverId: serverId, peerName: peerName)
+    }
+
+    func delete(_ worktree: PeerHostWorktree, keepBranch: Bool, deleteBranchIfMerged: Bool, serverId: String, peerName: String) {
+        remove(
+            worktree, .delete(keepBranch: keepBranch, deleteBranchIfMerged: deleteBranchIfMerged),
+            failureTitle: "Delete Failed", serverId: serverId, peerName: peerName
+        )
+    }
+
+    /// The host's events then update or drop the row; only a refusal is shown here.
+    private func remove(
+        _ worktree: PeerHostWorktree, _ action: PeerWorktreeRemoval.Action, failureTitle: String,
+        serverId: String, peerName: String
+    ) {
+        guard controls(for: worktree, serverId: serverId) == .available, let channel = channels[serverId] else { return }
+        let confirm = confirm, showError = showError
+        Task {
+            let outcome = await PeerWorktreeRemoval.run(
+                action, on: worktree.snapshot,
+                request: { await channel.request($0) },
+                confirm: { await confirm($0, peerName) }
+            )
+            if case .refused(let message) = outcome { showError(failureTitle, message) }
+        }
+    }
+
     private func servesHostChannel(_ serverId: String) -> Bool {
         supports(serverId, HostProtocolCapability.v1) && supports(serverId, HostProtocolCapability.eventsV1)
     }

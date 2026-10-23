@@ -43,6 +43,9 @@ struct NativePeerSidebarView: View {
     var onAddPeer: (() -> Void)?
     /// The local sidebar's worktree ordering, applied to every peer's worktrees.
     var worktreeOrdering: AppConfig.WorktreeSortMode = .lastUpdateDesc
+    /// Offers "Delete Worktree, Keep Branch…" under the local rule
+    /// (`config.worktrees.deleteBranchOnRemove` on this Mac).
+    var showKeepBranchOption: Bool = false
     /// Gap above the section, from whatever precedes it in the sidebar.
     var topSpacing: CGFloat = 0
     @Environment(\.theme) private var theme
@@ -157,9 +160,41 @@ struct NativePeerSidebarView: View {
                     onSelect: { client.selectWorktree(selection) },
                     onSelectTab: { client.selectTab($0, in: selection) }
                 )
+                .contextMenu { removalMenu(worktree, peer: peer) }
                 .padding(.top, index == 0 ? 0 : 1)
                 .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
                 .padding(.trailing, 6)
+            }
+        }
+    }
+
+    /// The local row's Archive and Delete items, for a host that serves them.
+    @ViewBuilder
+    private func removalMenu(_ worktree: NativePeerWorktreeGroup, peer: NativePeerGroup) -> some View {
+        if let host = worktree.host, let hosts = client.hosts {
+            let controls = hosts.controls(for: host, serverId: peer.serverId)
+            if controls != .hidden {
+                let disabled = controls != .available
+                let delete = { (keepBranch: Bool) in
+                    hosts.delete(
+                        host, keepBranch: keepBranch,
+                        deleteBranchIfMerged: AppState.resolveDeleteBranchIfMerged(
+                            globalDeleteOnRemove: showKeepBranchOption, keepBranch: keepBranch
+                        ),
+                        serverId: peer.serverId, peerName: peer.name
+                    )
+                }
+                Button("Archive") { hosts.archive(host, serverId: peer.serverId, peerName: peer.name) }
+                    .disabled(disabled)
+                Button("Delete Worktree…", role: .destructive) { delete(false) }
+                    .disabled(disabled)
+                if showKeepBranchOption {
+                    Button("Delete Worktree, Keep Branch…", role: .destructive) { delete(true) }
+                        .disabled(disabled)
+                }
+                if case .disabled(let reason) = controls {
+                    Text(reason)
+                }
             }
         }
     }
