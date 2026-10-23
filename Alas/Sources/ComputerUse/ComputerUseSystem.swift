@@ -344,6 +344,12 @@ extension LiveComputerUseSystem {
         if case .key(let chord) = input, ComputerUseMenuShortcut.isQuit(chord) {
             throw ComputerUseSystemError.actionFailed(ComputerUseCoordinator.Message.noQuitting)
         }
+        // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing the
+        // button needs no key window, so nothing is keyed or activated for it, also when direct.
+        if case .key(let chord) = input,
+           let button = try await ComputerUseAXActions.pressDialogButton(chord, in: window, interrupt: interrupt) {
+            return ComputerUseDelivered(delivery: .ax, button: button)
+        }
         if direct {
             // Raising the window moves the app's key window too; not while another input holds it.
             return try await keyLocks.run(window.app.pid) { try await activated(input, in: window, interrupt: interrupt) }
@@ -385,12 +391,6 @@ extension LiveComputerUseSystem {
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // The text isn't settable; focus it and type instead.
-            }
-        case .key(let chord):
-            // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing
-            // the button needs no key window, so nothing is keyed or activated for it.
-            if let button = try await ComputerUseAXActions.pressDialogButton(chord, in: window, interrupt: interrupt) {
-                return ComputerUseDelivered(delivery: .ax, button: button)
             }
         case .scroll(let at, let dx, let dy):
             do {

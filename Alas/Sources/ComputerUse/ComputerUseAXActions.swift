@@ -402,7 +402,9 @@ extension ComputerUseAXActions {
     /// Escape and Return on a window with a sheet or dialog up: presses its cancel or default
     /// button and returns the button's title; nil when the chord isn't a bare Escape or Return or
     /// there is no such enabled button. Looks at the window's sheets, the app's focused window when
-    /// it is one of them, and the window itself when it is a dialog.
+    /// it is one of them, and the window itself when it is a dialog. Nil as well while the focused
+    /// element takes the key itself: a text area (Return is a new line) or an editable control with
+    /// a popup, menu or completion list open (the key picks or dismisses it).
     static func pressDialogButton(
         _ chord: ComputerUseKeyChord, in window: ComputerUseWindow,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -423,6 +425,7 @@ extension ComputerUseAXActions {
             guard result == .success, let axWindows = windowsRef as? [AXUIElement],
                   let target = axWindow(axWindows, for: window)
             else { return nil }
+            if let focused = focusedElement(of: app), takesKeyItself(focused) { return nil }
             var candidates = elements(of: target, sheetsAttribute)
             candidates += children(of: target).filter { string(of: $0, kAXRoleAttribute) == kAXSheetRole }
             if let focused = elementAttribute(application, kAXFocusedWindowAttribute),
@@ -450,6 +453,21 @@ extension ComputerUseAXActions {
 
     /// No header constant exists for it.
     private static let sheetsAttribute = "AXSheets"
+    private static let expandedAttribute = "AXExpanded"
+
+    /// Whether Escape or Return belongs to the focused element rather than to a dialog button.
+    private static func takesKeyItself(_ focused: AXUIElement) -> Bool {
+        let role = string(of: focused, kAXRoleAttribute) ?? ""
+        if role == kAXTextAreaRole { return true }
+        guard [kAXTextFieldRole, kAXComboBoxRole].contains(role) || isSettable(focused, kAXValueAttribute) else { return false }
+        if bool(of: focused, expandedAttribute) == true { return true }
+        return children(of: focused).contains { child in
+            guard [kAXListRole, kAXMenuRole].contains(string(of: child, kAXRoleAttribute) ?? ""),
+                  let frame = frame(of: child)
+            else { return false }
+            return frame.width > 0 && frame.height > 0
+        }
+    }
 
     /// An attribute holding a list of elements, with the messaging timeout set on each.
     private static func elements(of element: AXUIElement, _ attribute: String) -> [AXUIElement] {
