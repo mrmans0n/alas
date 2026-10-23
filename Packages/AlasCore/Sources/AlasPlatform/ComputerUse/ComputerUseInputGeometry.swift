@@ -47,11 +47,15 @@ public enum ComputerUseInputGeometry {
     }
 
     /// The centre of the part of `frame` inside every clip (a scroll area, the window); nil when
-    /// `frame`'s own centre is outside one, so the element is scrolled or moved out of view.
-    public static func visibleCenter(of frame: CGRect, clippedTo clips: [CGRect]) -> CGPoint? {
+    /// none of it shows, or with `requireOwnCenter` when `frame`'s own centre is outside a clip.
+    public static func visibleCenter(
+        of frame: CGRect, clippedTo clips: [CGRect], requireOwnCenter: Bool = true
+    ) -> CGPoint? {
         let own = center(of: frame)
-        guard clips.allSatisfy({ $0.contains(own) }) else { return nil }
-        return center(of: clips.reduce(frame) { $0.intersection($1) })
+        if requireOwnCenter, !clips.allSatisfy({ $0.contains(own) }) { return nil }
+        let visible = clips.reduce(frame) { $0.intersection($1) }
+        guard !visible.isNull, visible.width > 0, visible.height > 0 else { return nil }
+        return center(of: visible)
     }
 
     /// `steps` evenly spaced points from `from` (excluded) to `to` (included).

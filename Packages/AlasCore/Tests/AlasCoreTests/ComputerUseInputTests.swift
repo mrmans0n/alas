@@ -63,20 +63,27 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.topmostWindow(at: point, in: windows) == expected)
     }
 
-    /// A pointer click lands on the part of the element its scroll area shows; one scrolled out of
-    /// view isn't clicked.
+    /// Pointer input lands on the part of the element its scroll area shows. A retry click needs
+    /// the element's own centre in view; a drag takes any visible part, and nothing when none shows
+    /// (a name cell scrolled under the sidebar).
     @Test(arguments: [
         // Fully shown.
-        (CGRect(x: 10, y: 10, width: 100, height: 20), CGPoint(x: 60, y: 20)),
+        (CGRect(x: 10, y: 10, width: 100, height: 20), true, CGPoint(x: 60, y: 20)),
         // A wide row cut off on the right: the centre of what shows.
-        (CGRect(x: 0, y: 10, width: 400, height: 20), CGPoint(x: 150, y: 20)),
+        (CGRect(x: 0, y: 10, width: 400, height: 20), true, CGPoint(x: 150, y: 20)),
         // Scrolled below the area.
-        (CGRect(x: 10, y: 250, width: 100, height: 20), nil),
-    ] as [(CGRect, CGPoint?)])
-    func pointerClicksLandOnTheVisiblePart(frame: CGRect, expected: CGPoint?) {
-        let window = CGRect(x: 0, y: 0, width: 500, height: 400)
+        (CGRect(x: 10, y: 250, width: 100, height: 20), true, nil),
+        // Mostly scrolled off the left: the retry skips it, a drag uses what shows.
+        (CGRect(x: -150, y: 10, width: 200, height: 20), true, nil),
+        (CGRect(x: -150, y: 10, width: 200, height: 20), false, CGPoint(x: 25, y: 20)),
+        // Entirely under the area's left edge.
+        (CGRect(x: -100, y: 10, width: 80, height: 20), false, nil),
+    ] as [(CGRect, Bool, CGPoint?)])
+    func pointerInputLandsOnTheVisiblePart(frame: CGRect, requireOwnCenter: Bool, expected: CGPoint?) {
+        let window = CGRect(x: -200, y: 0, width: 700, height: 400)
         let scrollArea = CGRect(x: 0, y: 0, width: 300, height: 200)
-        #expect(ComputerUseInputGeometry.visibleCenter(of: frame, clippedTo: [window, scrollArea]) == expected)
+        #expect(ComputerUseInputGeometry.visibleCenter(
+            of: frame, clippedTo: [window, scrollArea], requireOwnCenter: requireOwnCenter) == expected)
     }
 
     /// Both of a drag's points must be on the window it uses there; the start is reported first.

@@ -646,12 +646,15 @@ extension LiveComputerUseSystem {
             try checkCancelled()
             try await ComputerUseInputPoster.click(at: location, button: button, count: count, target: target)
         case .pointerClick(let at):
-            let location = switch at {
+            let location: CGPoint
+            switch at {
             case .element(let handles, let handle):
-                try await ComputerUseAXActions.visibleCenter(
-                    handles, handle, within: window.frame, app: app, isCancelled: isCancelled)
+                guard let visible = try await ComputerUseAXActions.visibleCenter(
+                    handles, handle, within: window.frame, app: app, requireOwnCenter: true, isCancelled: isCancelled)
+                else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view; it wasn't clicked again.") }
+                location = visible
             case .point(let point):
-                point
+                location = point
             }
             try checkCancelled()
             try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
@@ -698,23 +701,51 @@ extension LiveComputerUseSystem {
             try checkCancelled()
             try ComputerUseInputPoster.scroll(at: location, dx: dx, dy: dy, target: target)
         case .drag(let from, let to, let toWindow):
-            // Only with the app activated: the drag starts in its window brought to the front, and
-            // the down, every dragged step and the up go there, as a user's drag would.
+            // Only with the app activated, and posted system-wide: a file drag's session follows
+            // the cursor. Telling the user's input from these events needs the input tap.
+            guard ComputerUseUserInput.isWatching else {
+                throw ComputerUseSystemError.actionFailed(
+                    "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own.")
+            }
             try await requireActiveWindow()
             // Activation fronts only the app's key window; another app's window can still cover the drop window.
             if let toWindow, toWindow.windowID != window.windowID {
                 try await ComputerUseAXActions.raise(toWindow, isCancelled: isCancelled)
             }
             try? await Task.sleep(for: dragRaiseSettle)
-            let start = try await point(from)
-            // Mouse events stay with the window the button went down in, as AppKit routes a drag.
+            let dropWindow = toWindow ?? window
+            // A ref's point is on the part of it its scroll area shows: an element scrolled under
+            // another part of the window (a sidebar) would press that part instead.
+            let start: CGPoint
+            switch from {
+            case .element(let handles, let handle):
+                guard let visible = try await ComputerUseAXActions.visibleCenter(
+                    handles, handle, within: window.frame, app: app, requireOwnCenter: false, isCancelled: isCancelled)
+                else { throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.") }
+                start = visible
+                try await ComputerUseAXActions.selectRow(handles, handle, isCancelled: isCancelled)
+            case .point(let point):
+                guard window.frame.contains(point) else { throw ComputerUseSystemError.outOfBounds }
+                start = point
+            }
             let end: CGPoint
-            do {
-                end = try await point(to, in: toWindow ?? window)
-            } catch ComputerUseSystemError.staleElement {
-                throw ComputerUseSystemError.staleDropElement
-            } catch ComputerUseSystemError.outOfBounds {
-                throw ComputerUseSystemError.dropOutOfBounds
+            switch to {
+            case .element(let handles, let handle):
+                let visible: CGPoint?
+                do {
+                    visible = try await ComputerUseAXActions.visibleCenter(
+                        handles, handle, within: dropWindow.frame, app: dropWindow.app, requireOwnCenter: false,
+                        isCancelled: isCancelled)
+                } catch ComputerUseSystemError.staleElement {
+                    throw ComputerUseSystemError.staleDropElement
+                }
+                guard let visible else {
+                    throw ComputerUseSystemError.actionFailed("The drop element is scrolled out of view or hidden.")
+                }
+                end = visible
+            case .point(let point):
+                guard dropWindow.frame.contains(point) else { throw ComputerUseSystemError.dropOutOfBounds }
+                end = point
             }
             switch ComputerUseInputGeometry.coveredDragPoint(
                 start: start, in: window.windowID, end: end, in: (toWindow ?? window).windowID,
@@ -725,15 +756,13 @@ extension LiveComputerUseSystem {
             }
             try checkCancelled()
             // Another window over the drop point would take the drop: checked right before the release.
-            let dropTarget = toWindow.map { drop in
-                { @Sendable in
-                    ComputerUseInputGeometry.topmostWindow(at: end, in: onScreenWindows().map { ($0.id, $0.frame) })
-                        == drop.windowID
-                }
-            }
-            try await ComputerUseInputPoster.drag(from: start, to: end, target: target, dropIsVisible: dropTarget) {
+            let dropWindowID = dropWindow.windowID
+            try await ComputerUseInputPoster.systemDrag(from: start, to: end, dropIsVisible: {
+                ComputerUseInputGeometry.topmostWindow(at: end, in: onScreenWindows().map { ($0.id, $0.frame) })
+                    == dropWindowID
+            }, userActive: {
                 interrupt() == .userActive
-            }
+            })
         }
     }
 

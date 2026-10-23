@@ -5,12 +5,12 @@ import Foundation
 
 /// Synthesized input posted straight to an app's pid, so the system cursor and
 /// the frontmost app are untouched. Mouse events carry their window and the point inside it,
-/// so they reach a window that isn't frontmost; see `ComputerUseSkyLight`. Every sequence that presses something
-/// releases it before returning or checking for cancellation.
+/// so they reach a window that isn't frontmost; see `ComputerUseSkyLight`. Drags are the exception:
+/// they go system-wide with the app activated and put the cursor back after. Every sequence that
+/// presses something releases it before returning or checking for cancellation.
 enum ComputerUseInputPoster {
     /// Unicode text per keyboard event; larger strings are dropped by some apps.
     static let textChunkUnits = 20
-    static let dragSteps = 10
     private static let stepDelay: Duration = .milliseconds(8)
 
     struct Target {
@@ -41,41 +41,84 @@ enum ComputerUseInputPoster {
         }
     }
 
-    /// Throws `userActive` between steps once `userActive` turns true, after
-    /// releasing the button where the drag got to. `dropIsVisible`, checked before the release,
-    /// false: the button is released back at the start, which cancels the drag in place.
-    static func drag(
-        from start: CGPoint, to end: CGPoint, target: Target, dropIsVisible: (@Sendable () -> Bool)? = nil,
-        userActive: @Sendable () -> Bool
+    /// Steps and pauses for a system-wide drag: Finder's drag session trails the cursor, so it
+    /// needs time over the drop target before the release.
+    static let systemDragSteps = 20
+    private static let systemDragStepDelay: Duration = .milliseconds(16)
+    private static let systemDragDownHold: Duration = .milliseconds(100)
+    private static let systemDragHover: Duration = .milliseconds(300)
+    private static let cursorRestoreDelay: Duration = .milliseconds(100)
+
+    /// A drag the system's drag and drop can follow: posted at the HID level, so the cursor moves
+    /// with it. A file drag hands off to a drag session that tracks the cursor, not the events
+    /// posted to a pid. Every event carries Alas's marker, so the input tap never takes it for the
+    /// user's. Between steps, `userActive` true cancels it: dragged back to the start and released
+    /// there, as for a covered drop (`dropIsVisible` false before the release), so nothing moves.
+    /// The button is always released, and then the cursor goes back where it was.
+    static func systemDrag(
+        from start: CGPoint, to end: CGPoint, dropIsVisible: @Sendable () -> Bool, userActive: @Sendable () -> Bool
     ) async throws {
-        let points = ComputerUseInputGeometry.interpolate(from: start, to: end, steps: dragSteps)
-        // Build everything first so a failure can't leave the button down.
-        let down = try mouseEvent(.leftMouseDown, at: start, button: .left, clickState: 1, target: target)
-        let moves = try points.map { try mouseEvent(.leftMouseDragged, at: $0, button: .left, clickState: 1, target: target) }
-        // One release per position, so the drag can stop at any step.
-        let ups = try ([start] + points).map {
-            try mouseEvent(.leftMouseUp, at: $0, button: .left, clickState: 1, target: target)
+        // Build everything first so a failure can't leave the button down or the cursor moved.
+        let cursor = CGEvent(source: nil)?.location ?? start
+        let restore = try systemMouseEvent(.mouseMoved, at: cursor, clickState: 0)
+        let primer = try systemMouseEvent(.mouseMoved, at: start, clickState: 0)
+        let down = try systemMouseEvent(.leftMouseDown, at: start, clickState: 1)
+        // Two short moves first cross the drag threshold while still over the item.
+        let points = [CGPoint(x: start.x + 3, y: start.y + 3), CGPoint(x: start.x + 8, y: start.y + 8)]
+            + ComputerUseInputGeometry.interpolate(from: start, to: end, steps: systemDragSteps)
+        let moves = try points.map { try systemMouseEvent(.leftMouseDragged, at: $0, clickState: 1) }
+        let back = try systemMouseEvent(.leftMouseDragged, at: start, clickState: 1)
+        let upAtStart = try systemMouseEvent(.leftMouseUp, at: start, clickState: 1)
+        let up = try systemMouseEvent(.leftMouseUp, at: end, clickState: 1)
+        func cancel() {
+            postSystemWide(back)
+            postSystemWide(upAtStart)
         }
-        // The cancel for a covered drop: dragged back to the start, then released there.
-        let back = try mouseEvent(.leftMouseDragged, at: start, button: .left, clickState: 1, target: target)
-        let primer = try mouseEvent(.mouseMoved, at: start, button: .left, clickState: 0, target: target)
-        ComputerUseSkyLight.post(primer, pid: target.pid)
-        ComputerUseSkyLight.post(down, pid: target.pid)
-        for (index, move) in moves.enumerated() {
+        do {
+            postSystemWide(primer)
             await pause()
+            postSystemWide(down)
+            try? await Task.sleep(for: systemDragDownHold)
+            for move in moves {
+                try? await Task.sleep(for: systemDragStepDelay)
+                if userActive() {
+                    cancel()
+                    throw ComputerUseSystemError.userActive
+                }
+                postSystemWide(move)
+            }
+            try? await Task.sleep(for: systemDragHover)
             if userActive() {
-                ComputerUseSkyLight.post(ups[index], pid: target.pid)
+                cancel()
                 throw ComputerUseSystemError.userActive
             }
-            ComputerUseSkyLight.post(move, pid: target.pid)
+            guard dropIsVisible() else {
+                cancel()
+                throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
+            }
+            postSystemWide(up)
+        } catch {
+            try? await Task.sleep(for: cursorRestoreDelay)
+            postSystemWide(restore)
+            throw error
         }
-        await pause()
-        if let dropIsVisible, !dropIsVisible() {
-            ComputerUseSkyLight.post(back, pid: target.pid)
-            ComputerUseSkyLight.post(ups[0], pid: target.pid)
-            throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
-        }
-        ComputerUseSkyLight.post(ups[moves.count], pid: target.pid)
+        try? await Task.sleep(for: cursorRestoreDelay)
+        postSystemWide(restore)
+    }
+
+    private static func systemMouseEvent(_ type: CGEventType, at point: CGPoint, clickState: Int) throws -> CGEvent {
+        guard let event = CGEvent(
+            mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type, mouseCursorPosition: point,
+            mouseButton: .left)
+        else { throw ComputerUseSystemError.actionFailed("Could not create a mouse event.") }
+        event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+        return event
+    }
+
+    /// Into the HID stream, where WindowServer routes it like the user's own input; marked as Alas's.
+    private static func postSystemWide(_ event: CGEvent) {
+        event.setIntegerValueField(.eventSourceUserData, value: ComputerUseUserInput.postedEventMarker)
+        event.post(tap: .cghidEventTap)
     }
 
     /// Positive `dy` scrolls down and positive `dx` right, like CSS. CG wheel

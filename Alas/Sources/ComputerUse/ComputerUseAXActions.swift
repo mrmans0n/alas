@@ -120,12 +120,13 @@ enum ComputerUseAXActions {
         }
     }
 
-    /// Where a pointer click lands on the element: the centre of the part its nearest scroll area
-    /// and `window` show, global points. Throws when its own centre is scrolled or moved out of view.
+    /// Where pointer input lands on the element: the centre of the part its nearest scroll area
+    /// and `window` show, global points. Nil when none of it shows, or with `requireOwnCenter` when
+    /// its own centre is scrolled or moved out of view.
     static func visibleCenter(
         _ handles: ComputerUseAXHandles, _ handle: Int, within window: CGRect, app: ComputerUseAppIdentity,
-        isCancelled: @escaping IsCancelled
-    ) async throws -> CGPoint {
+        requireOwnCenter: Bool, isCancelled: @escaping IsCancelled
+    ) async throws -> CGPoint? {
         try await onQueue(isCancelled) {
             let element = try resolve(handles, handle)
             var position = CGPoint.zero
@@ -141,11 +142,28 @@ enum ComputerUseAXActions {
                let areaFrame = frame(of: area) {
                 clips.append(areaFrame)
             }
-            guard let point = ComputerUseInputGeometry.visibleCenter(of: CGRect(origin: position, size: size), clippedTo: clips)
-            else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view; it wasn't clicked again.") }
-            return point
+            return ComputerUseInputGeometry.visibleCenter(
+                of: CGRect(origin: position, size: size), clippedTo: clips, requireOwnCenter: requireOwnCenter)
         }
     }
+
+    /// Selects the table or outline row holding the element (itself or up to `rowLevels` above),
+    /// when it isn't selected and can be: Finder starts a drag only from a row already selected
+    /// when the button goes down, as a user's press-and-hold would leave it.
+    static func selectRow(_ handles: ComputerUseAXHandles, _ handle: Int, isCancelled: @escaping IsCancelled) async throws {
+        try await onQueue(isCancelled) {
+            guard let row = ancestor(of: try resolve(handles, handle), levels: rowLevels, where: {
+                string(of: $0, kAXRoleAttribute) == kAXRowRole
+            }) else { return }
+            var selected: CFTypeRef?
+            if AXUIElementCopyAttributeValue(row, kAXSelectedAttribute as CFString, &selected) == .success,
+               (selected as? Bool) == true { return }
+            guard isSettable(row, kAXSelectedAttribute) else { return }
+            AXUIElementSetAttributeValue(row, kAXSelectedAttribute as CFString, kCFBooleanTrue)
+        }
+    }
+
+    static let rowLevels = 4
 
     /// Keys and typed text go to the app's key window: makes `window` that window, raising it
     /// if needed, or refuses with `notActiveWindow`. Events posted to the pid can't pick a window
