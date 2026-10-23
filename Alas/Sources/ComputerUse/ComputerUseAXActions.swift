@@ -240,14 +240,7 @@ enum ComputerUseAXActions {
     /// The AX window behind `window`: by its CG window id where AX can name it, else by frame,
     /// with the title breaking ties.
     private static func axWindow(_ candidates: [AXUIElement], for window: ComputerUseWindow) -> AXUIElement? {
-        guard ComputerUseSkyLight.canIdentifyWindows else {
-            return ComputerUseAXReader.matchingWindow(
-                candidates, for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) })
-        }
-        return candidates.first { candidate in
-            AXUIElementSetMessagingTimeout(candidate, ComputerUseAXReader.messagingTimeout)
-            return ComputerUseSkyLight.windowID(of: candidate) == window.windowID
-        }
+        ComputerUseAXReader.axWindow(candidates, for: window, frame: frame(of:), title: { string(of: $0, kAXTitleAttribute) })
     }
 
     /// Whether the app's focused window is `target`, the AX window of `window`: by window id where
