@@ -120,6 +120,33 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// Where a pointer click lands on the element: the centre of the part its nearest scroll area
+    /// and `window` show, global points. Throws when its own centre is scrolled or moved out of view.
+    static func visibleCenter(
+        _ handles: ComputerUseAXHandles, _ handle: Int, within window: CGRect, app: ComputerUseAppIdentity,
+        isCancelled: @escaping IsCancelled
+    ) async throws -> CGPoint {
+        try await onQueue(isCancelled) {
+            let element = try resolve(handles, handle)
+            var position = CGPoint.zero
+            var size = CGSize.zero
+            guard AXValueGetValue(try value(element, kAXPositionAttribute, app: app), .cgPoint, &position),
+                  AXValueGetValue(try value(element, kAXSizeAttribute, app: app), .cgSize, &size)
+            else { throw noFrame }
+            var clips = [window]
+            if let parent = elementAttribute(element, kAXParentAttribute),
+               let area = ancestor(of: parent, levels: scrollAncestorLevels, where: {
+                   string(of: $0, kAXRoleAttribute) == kAXScrollAreaRole
+               }),
+               let areaFrame = frame(of: area) {
+                clips.append(areaFrame)
+            }
+            guard let point = ComputerUseInputGeometry.visibleCenter(of: CGRect(origin: position, size: size), clippedTo: clips)
+            else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view; it wasn't clicked again.") }
+            return point
+        }
+    }
+
     /// Keys and typed text go to the app's key window: makes `window` that window, raising it
     /// if needed, or refuses with `notActiveWindow`. Events posted to the pid can't pick a window
     /// themselves. `raise` only with the app activated: an AXRaise on a background app can bring

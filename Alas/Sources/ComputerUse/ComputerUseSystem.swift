@@ -643,7 +643,13 @@ extension LiveComputerUseSystem {
             try checkCancelled()
             try await ComputerUseInputPoster.click(at: location, button: button, count: count, target: target)
         case .pointerClick(let at):
-            let location = try await point(at)
+            let location = switch at {
+            case .element(let handles, let handle):
+                try await ComputerUseAXActions.visibleCenter(
+                    handles, handle, within: window.frame, app: app, isCancelled: isCancelled)
+            case .point(let point):
+                point
+            }
             try checkCancelled()
             try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
         case .type(let text, let at, let replace):

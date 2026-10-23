@@ -648,6 +648,34 @@ struct ComputerUseCoordinatorTests {
             && payload["retry_error"] as? String == "computer_user_active: The user is using Notes right now. Try again in a moment.")
     }
 
+    /// A pointer retry that left the window looking the same, or whose read can't tell, is no
+    /// success: the no-change warning stays next to `retried`.
+    @Test(arguments: [true, false])
+    func pointerRetryThatShowsNoChangeKeepsTheWarning(retryReadTruncated: Bool) async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { _ in true }
+        // Read 1 is the inspect, 2 the window before the press, 3 after it, 4 after the retry.
+        let saveTree = Self.saveTree
+        system.axTree = { _, _, _, _ in (saveTree, !(retryReadTruncated && reads.next() >= 4), ComputerUseAXHandles()) }
+        // Otherwise only the focus moves with the pointer click.
+        system.focusState = { _ in
+            !retryReadTruncated && recorder.inputs.count > 1 ? .init(role: "AXButton", title: "Save") : nil
+        }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            if case .pointerClick = input { return .background }
+            return .ax
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(recorder.inputs.count == 2)
+        #expect(payload["retried"] as? String == "pointer" && payload["warning"] as? String == Warnings.noChange)
+    }
+
     /// An app still opening what the input showed (a sheet) may not answer the first read back.
     @Test func postActionReadTheAppDidNotAnswerIsRetriedOnce() async throws {
         let recorder = Recorder()

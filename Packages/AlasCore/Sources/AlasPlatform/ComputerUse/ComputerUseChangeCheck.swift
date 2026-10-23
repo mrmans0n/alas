@@ -68,6 +68,15 @@ public enum ComputerUseChangeCheck {
         return hint ? noChangeWarning + retryDirectHint : noChangeWarning
     }
 
+    /// Whether a pointer retry visibly changed the window: a complete read whose elements, title or
+    /// clicked element differ from before the first press. Focus alone doesn't count, since a
+    /// press that only focused is what the retry is for; a read that can't tell doesn't either.
+    public static func retryChanged(before: ComputerUseWindowFingerprint, after: ComputerUseWindowFingerprint?) -> Bool {
+        guard let after, before.elementsHash != nil, after.elementsHash != nil else { return false }
+        return before.elementsHash != after.elementsHash || before.windowTitle != after.windowTitle
+            || before.targetHash != after.targetHash
+    }
+
     /// A hash of everything an element list shows; equal lists hash equal within a process.
     public static func elementsHash(_ elements: [ComputerUseInspectElement]) -> Int {
         var hasher = Hasher()

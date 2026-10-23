@@ -63,6 +63,22 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.topmostWindow(at: point, in: windows) == expected)
     }
 
+    /// A pointer click lands on the part of the element its scroll area shows; one scrolled out of
+    /// view isn't clicked.
+    @Test(arguments: [
+        // Fully shown.
+        (CGRect(x: 10, y: 10, width: 100, height: 20), CGPoint(x: 60, y: 20)),
+        // A wide row cut off on the right: the centre of what shows.
+        (CGRect(x: 0, y: 10, width: 400, height: 20), CGPoint(x: 150, y: 20)),
+        // Scrolled below the area.
+        (CGRect(x: 10, y: 250, width: 100, height: 20), nil),
+    ] as [(CGRect, CGPoint?)])
+    func pointerClicksLandOnTheVisiblePart(frame: CGRect, expected: CGPoint?) {
+        let window = CGRect(x: 0, y: 0, width: 500, height: 400)
+        let scrollArea = CGRect(x: 0, y: 0, width: 300, height: 200)
+        #expect(ComputerUseInputGeometry.visibleCenter(of: frame, clippedTo: [window, scrollArea]) == expected)
+    }
+
     @Test func interpolationEndsAtTheTarget() {
         let points = ComputerUseInputGeometry.interpolate(from: .zero, to: CGPoint(x: 10, y: 20), steps: 4)
         #expect(points == [CGPoint(x: 2.5, y: 5), CGPoint(x: 5, y: 10), CGPoint(x: 7.5, y: 15), CGPoint(x: 10, y: 20)])

@@ -26,6 +26,14 @@ public enum ComputerUseInputGeometry {
         CGPoint(x: frame.midX, y: frame.midY)
     }
 
+    /// The centre of the part of `frame` inside every clip (a scroll area, the window); nil when
+    /// `frame`'s own centre is outside one, so the element is scrolled or moved out of view.
+    public static func visibleCenter(of frame: CGRect, clippedTo clips: [CGRect]) -> CGPoint? {
+        let own = center(of: frame)
+        guard clips.allSatisfy({ $0.contains(own) }) else { return nil }
+        return center(of: clips.reduce(frame) { $0.intersection($1) })
+    }
+
     /// `steps` evenly spaced points from `from` (excluded) to `to` (included).
     public static func interpolate(from: CGPoint, to: CGPoint, steps: Int) -> [CGPoint] {
         guard steps >= 1 else { return [to] }

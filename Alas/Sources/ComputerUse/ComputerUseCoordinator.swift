@@ -679,7 +679,7 @@ final class ComputerUseCoordinator {
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
         let changeWarning = try await settle(
             after: delivered, of: command, in: &window, target: target, before: before,
-            end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload)
+            end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload).warning
         let unchanged = changeWarning != nil
         if let target, let targetRef, Self.retriesWithPointer(
             command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
@@ -688,7 +688,8 @@ final class ComputerUseCoordinator {
             let first = (payload: payload, window: window)
             do {
                 try await retryWithPointer(
-                    command, at: target, ref: targetRef, in: &window, before: before, context: context, payload: &payload)
+                    command, at: target, ref: targetRef, in: &window, before: before, firstWarning: changeWarning,
+                    context: context, payload: &payload)
                 payload["retried"] = "pointer"
             } catch is CancellationError {
                 throw CancellationError()
@@ -714,10 +715,11 @@ final class ComputerUseCoordinator {
 
     /// The pointer click after an AX press that changed nothing, with the same checks as the first
     /// input, at the element that was pressed: it must still read as the one the agent was shown.
+    /// Unless the window then visibly changed, the result keeps a no-change warning.
     private func retryWithPointer(
         _ command: ComputerUseCommand, at target: (ComputerUseAXHandles, Int), ref: ElementRef,
-        in window: inout ComputerUseWindow, before: ComputerUseWindowFingerprint, context: CallContext,
-        payload: inout [String: Any]
+        in window: inout ComputerUseWindow, before: ComputerUseWindowFingerprint, firstWarning: String?,
+        context: CallContext, payload: inout [String: Any]
     ) async throws {
         try checkStillActive(context)
         if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
@@ -728,8 +730,11 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         let retried = try await deliver(
             .pointerClick(.element(target.0, target.1)), of: command, to: window, toWindow: nil, direct: false, context: context)
-        try await settle(after: retried, of: command, in: &window, target: target, before: before,
-                         end: nil, context: context, payload: &payload)
+        let settled = try await settle(after: retried, of: command, in: &window, target: target, before: before,
+                                       end: nil, context: context, payload: &payload)
+        // A read that failed reports its error instead; one that can't tell is no success either.
+        guard let after = settled.after, !ComputerUseChangeCheck.retryChanged(before: before, after: after) else { return }
+        Self.report(depthLimited: payload["depth_limited"] != nil, warning: settled.warning ?? firstWarning, into: &payload)
     }
 
     /// Delivers the input, mapping its failures to the tool errors that name the ref and window.
@@ -763,19 +768,26 @@ final class ComputerUseCoordinator {
         target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint,
         end: (window: ComputerUseWindow, before: ComputerUseWindowFingerprint?)?, context: CallContext,
         payload: inout [String: Any]
-    ) async throws -> String? {
+    ) async throws -> Settled {
         let keyedWindow = delivered.keyedInBackground ? window : nil
         if let keyedWindow { backgroundKeyed[context.sessionID, default: [:]][keyedWindow.windowID] = keyedWindow }
-        let changeWarning: String?
+        let settled: Settled
         do {
-            changeWarning = try await settleAndRead(after: delivered, of: command, in: &window, target: target, before: before,
+            settled = try await settleAndRead(after: delivered, of: command, in: &window, target: target, before: before,
                                                     end: end, context: context, payload: &payload)
         } catch {
             if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
             throw error
         }
         if let keyedWindow { await releaseBackgroundFocus(of: keyedWindow, sessionID: context.sessionID) }
-        return changeWarning
+        return settled
+    }
+
+    /// The change check's warning, nil when the input changed something or a read can't tell, and
+    /// the window read back after the input, nil when that read failed.
+    private struct Settled {
+        var warning: String?
+        var after: ComputerUseWindowFingerprint?
     }
 
     /// `depth_limited` when the read left elements out for depth, with the hint appended to the warning.
@@ -811,13 +823,12 @@ final class ComputerUseCoordinator {
     ]
 
     /// Reports the delivered input, waits for the app to handle it and reads the window back.
-    /// Returns the change check's warning: nil when the input changed something or a read can't tell.
     private func settleAndRead(
         after delivered: ComputerUseDelivered, of command: ComputerUseCommand, in window: inout ComputerUseWindow,
         target: (ComputerUseAXHandles, Int)?, before: ComputerUseWindowFingerprint,
         end: (window: ComputerUseWindow, before: ComputerUseWindowFingerprint?)? = nil, context: CallContext,
         payload: inout [String: Any]
-    ) async throws -> String? {
+    ) async throws -> Settled {
         // Stopped mid-sequence: the input finished its events, but nothing more happens.
         try checkStillActive(context)
         payload["action"] = command.action.rawValue
@@ -860,7 +871,7 @@ final class ComputerUseCoordinator {
                 }
             }
             Self.report(depthLimited: read.depthLimited, warning: warning, into: &payload)
-            return warning
+            return Settled(warning: warning, after: after)
         } catch is CancellationError {
             throw CancellationError()
         } catch let refusal as Refusal {
@@ -874,7 +885,7 @@ final class ComputerUseCoordinator {
             payload["truncated"] = true
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription
-            return nil
+            return Settled()
         }
     }
 
