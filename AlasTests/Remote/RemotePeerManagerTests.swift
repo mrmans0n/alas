@@ -2000,7 +2000,7 @@ struct RemotePeerManagerTests {
         #expect(availability.contains("srv-old"))
     }
 
-    @Test func consoleEventsBypassFederationAndNeedACarryingLink() throws {
+    @Test func consoleAndHostMessagesBypassFederationAndNeedACarryingLink() throws {
         let store = InMemoryPeerStore()
         store.save([verifiedPeer(), unverifiedPeer()])
         let links = Links()
@@ -2009,19 +2009,27 @@ struct RemotePeerManagerTests {
         var consoles: [(String, PeerConsoleEvent)] = []
         manager.onFederationEvent = { federated.append($0) }
         manager.onConsoleEvent = { consoles.append(($0, $1)) }
+        var hosts: [(String, HostServerMessage)] = []
+        manager.onHostMessage = { hosts.append(($0, $1)) }
         manager.connectAll()
         let verified = try #require(links.byPeerId["p1"])
         let unverified = try #require(links.byPeerId["p2"])
         let event = PeerConsoleEvent.output(attachmentId: "a", sequence: 1, data: Data("x".utf8))
+        let host = HostServerMessage.response(id: 1, result: .done)
         verified.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true,
                              capabilities: [PeerConsoleCapability.v1]))
         verified.emit(.message(.console(event)))                        // offline: dropped
+        verified.emit(.message(.host(host)))
         verified.emit(.stateChanged(.online))
         verified.emit(.message(.console(event)))                        // delivered to the console sink
+        verified.emit(.message(.host(host)))                            // delivered to the host sink
         unverified.emit(.stateChanged(.online))
         unverified.emit(.message(.console(event)))                      // unverified: dropped
+        unverified.emit(.message(.host(host)))
         #expect(consoles.map(\.0) == ["srv-a"])
         #expect(consoles.map(\.1) == [event])
+        #expect(hosts.map(\.0) == ["srv-a"])
+        #expect(hosts.map(\.1) == [.response(id: 1, result: .done)])
         #expect(!federated.contains { if case .message = $0 { true } else { false } })
         #expect(manager.capabilities["srv-a"] == [PeerConsoleCapability.v1])
     }

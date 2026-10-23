@@ -558,6 +558,44 @@ struct NativePeerSessionsTests {
         #expect(client.snapshot.groups.first?.consoles == [summary])
     }
 
+    @Test func onlyPeersServingTheHostChannelAreAskedForASnapshot() async throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B") // serves host.v1 + host.events.v1
+        links.online("C", name: "Mac C") // serves neither
+        var sent: [(String, HostClientMessage)] = []
+        let hosts = NativePeerHosts(send: { sent.append(($0, $1)) }, supports: { serverId, _ in serverId == "B" })
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { links.sessionCarryingPeers.map { .init(serverId: $0.serverId, name: $0.name, state: "online") } },
+            hosts: hosts
+        )
+        client.start()
+        defer { client.stop() }
+        try await eventually("snapshot request") { sent.count == 1 }
+        #expect(sent.map(\.0) == ["B"])
+        #expect(sent[0].1.request == .snapshot)
+
+        let path = URL(fileURLWithPath: "/srv/idle")
+        let idle = WorktreeSnapshot(
+            worktree: Worktree(id: Worktree.makeId(path: path), projectId: "p", name: "idle", branch: "idle",
+                               path: path, status: .clean, lastActivity: .distantPast),
+            operation: nil, isArchived: false
+        )
+        let project = ProjectSnapshot(ProjectConfig(
+            id: "p", name: "repo", path: "/srv/repo", color: "blue", addedAt: .distantPast
+        ))
+        hosts.receive(serverId: "B", .response(id: sent[0].1.id, result: .snapshot(snapshot: HostSnapshot(
+            cursor: HostCursor(generation: UUID(), sequence: 0), projects: [project], worktrees: [idle],
+            workspaceCheckouts: [], runs: [], sessions: []
+        ))))
+        try await eventually("host worktrees") { hosts.worktrees["B"] != nil } // connect() resumes on a later turn
+        #expect(hosts.worktrees["B"]?.map(\.snapshot.worktree.branch) == ["idle"])
+        #expect(hosts.worktrees["C"] == nil)
+
+        links.offline("B") // drives refresh, then peersChanged
+        #expect(hosts.worktrees["B"] == nil)
+    }
+
     @Test func selectingAPeerSessionLoadsItsWorktreeAndRoutesReplies() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

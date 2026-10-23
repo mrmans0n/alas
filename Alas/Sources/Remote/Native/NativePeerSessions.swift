@@ -10,6 +10,8 @@ final class NativePeerSessions {
     /// Peer consoles. Selecting one clears the selected session and vice
     /// versa, so the center pane shows exactly one peer surface.
     let consoles: NativePeerConsoles?
+    /// Peers' worktrees over the host channel, for peers that serve it.
+    let hosts: NativePeerHosts?
     @ObservationIgnored private var downstream: FederatedDownstream?
     @ObservationIgnored private var promptCompletion: (@MainActor (Bool) -> Void)?
     @ObservationIgnored private var pendingPromptExpectedIndex: Int?
@@ -188,13 +190,16 @@ final class NativePeerSessions {
         federation: FederatedSessionsProvider,
         peers: @escaping @MainActor () -> [RemoteHelloPeer],
         comparisonMode: @escaping @MainActor () -> AppConfig.Changes.ChangesComparisonMode? = { nil },
-        consoles: NativePeerConsoles? = nil
+        consoles: NativePeerConsoles? = nil,
+        hosts: NativePeerHosts? = nil
     ) {
         self.federation = federation
         self.peers = peers
         self.comparisonMode = comparisonMode
         self.consoles = consoles
+        self.hosts = hosts
         consoles?.onListChanged = { [weak self] in self?.rebuildSnapshot() }
+        hosts?.onChange = { [weak self] in self?.rebuildSnapshot() }
     }
 
     /// Only the sidebar model: console lists change nothing a selected
@@ -365,6 +370,7 @@ final class NativePeerSessions {
         }
         downstream = nil
         consoles?.stop()
+        hosts?.stop()
         selectedWorktree = nil
         selectedWorktreeTabs = []
         selectedSessionId = nil
@@ -416,7 +422,9 @@ final class NativePeerSessions {
         guard downstream != nil else { return }
         rebuildSnapshot()
         resubscribeSuspendedPrompts()
-        consoles?.peersChanged(online: Set(snapshot.groups.filter(\.state.carriesSessions).map(\.serverId)))
+        let online = Set(snapshot.groups.filter(\.state.carriesSessions).map(\.serverId))
+        consoles?.peersChanged(online: online)
+        hosts?.peersChanged(online: online)
         reconcileNewSession()
         if let pending = pendingSessionId,
            snapshot.groups.contains(where: { $0.sessions.contains { $0.id == pending && $0.isActive } }) {

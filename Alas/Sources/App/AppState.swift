@@ -1046,7 +1046,8 @@ final class AppState {
                     federation: remoteFederation,
                     peers: { [weak self] in self?.remotePeers.helloPeers ?? [] },
                     comparisonMode: { [weak self] in self?.config.changes.comparisonMode },
-                    consoles: makeNativePeerConsoles()
+                    consoles: makeNativePeerConsoles(),
+                    hosts: makeNativePeerHosts()
                 )
                 nativePeerSessions = client
                 client.start()
