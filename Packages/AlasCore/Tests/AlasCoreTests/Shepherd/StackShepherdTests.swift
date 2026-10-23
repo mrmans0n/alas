@@ -306,14 +306,18 @@ struct StackShepherdTests {
     }
 
     /// Entry IDs are `g<index>`; positions in `shaOnly` have no GG-ID, so their
-    /// ID is their SHA: `shas[index]` when given, else `sha<index>`.
-    private static func stack(published: [Bool], synced: Int? = nil, shaOnly: Set<Int> = [], shas: [String] = []) -> GGStack {
+    /// ID is their SHA: `shas[index]` when given, else `sha<index>`. Titles
+    /// are `titles[index]` when given, else all `t`.
+    private static func stack(
+        published: [Bool], synced: Int? = nil, shaOnly: Set<Int> = [], shas: [String] = [], titles: [String] = []
+    ) -> GGStack {
         GGStack(
             name: "auth", base: "main", totalCommits: published.count, syncedCommits: synced ?? published.count,
             currentPosition: published.count, behindBase: 0,
             entries: published.enumerated().map { index, isPublished in
                 GGStackEntry(
-                    position: index + 1, sha: index < shas.count ? shas[index] : "sha\(index)", title: "t",
+                    position: index + 1, sha: index < shas.count ? shas[index] : "sha\(index)",
+                    title: index < titles.count ? titles[index] : "t",
                     ggId: shaOnly.contains(index + 1) ? nil : "g\(index)", prNumber: isPublished ? 40 + index : nil
                 )
             }
@@ -366,12 +370,12 @@ struct StackShepherdTests {
     /// alive. An unpublished entry below the boundary still blocks.
     @Test func publicationIgnoresEntriesHeldBackAboveTheShipBoundary() {
         let partial = StackShepherdPolicy.publication(
-            of: Self.stack(published: [true, false], synced: 1), local: Self.local, shipThroughEntryID: "g0"
+            of: Self.stack(published: [true, false], synced: 1), local: Self.local, shipPlan: StackShipPlan(shipThroughEntryID: "g0")
         )
         #expect(partial.isPublished && partial.hasUnpublishedEntries == true)
 
         let gap = StackShepherdPolicy.publication(
-            of: Self.stack(published: [false, true], synced: 1), local: Self.local, shipThroughEntryID: "g1"
+            of: Self.stack(published: [false, true], synced: 1), local: Self.local, shipPlan: StackShipPlan(shipThroughEntryID: "g1")
         )
         #expect(!gap.isPublished)
 
@@ -379,7 +383,7 @@ struct StackShepherdTests {
         // shipped, so an unpushed amend among them still blocks.
         for (synced, isPublished) in [(1, false), (2, true)] {
             let cleaned = StackShepherdPolicy.publication(
-                of: Self.stack(published: [true, true, false], synced: synced), local: Self.local, shipThroughEntryID: "cleaned"
+                of: Self.stack(published: [true, true, false], synced: synced), local: Self.local, shipPlan: StackShipPlan(shipThroughEntryID: "cleaned")
             )
             #expect(cleaned.isPublished == isPublished)
         }
@@ -389,7 +393,8 @@ struct StackShepherdTests {
     /// on top ship too; below it, the boundary names the entry by GG-ID, so
     /// it survives the agent amending it. It never sits below an entry that
     /// already has a request, which gg sync cannot take back, nor on an entry
-    /// without a GG-ID: it moves down to the next one, else up.
+    /// without a GG-ID whose title another entry shares: it moves down to the
+    /// next one, else up.
     @Test(arguments: [
         ([true, false, false], [], 3, nil), ([true, false, false], [], 5, nil), ([true, false, false], [], 2, "g1"),
         ([true, true, false], [], 1, "g1"), ([true, true, true], [], 1, nil),
@@ -399,6 +404,23 @@ struct StackShepherdTests {
         let stack = Self.stack(published: published, shaOnly: shaOnly)
         let plan = StackShipPlan(shipThroughPosition: position, of: stack, opensDrafts: true)
         #expect(plan == StackShipPlan(shipThroughEntryID: entryID, opensDrafts: true))
+    }
+
+    /// Without a GG-ID the boundary also keeps the entry's title, so it finds
+    /// the entry after the agent amends it to a new SHA. A title two entries
+    /// share names neither, so the line never stops on one.
+    @Test func aShaOnlyBoundaryFollowsItsTitleThroughAnAmend() throws {
+        let published = [false, false, false]
+        let before = Self.stack(published: published, shaOnly: [1, 2, 3], titles: ["a", "b", "c"])
+        let plan = StackShipPlan(shipThroughPosition: 2, of: before, opensDrafts: false)
+        #expect(plan == StackShipPlan(shipThroughEntryID: "sha1", shipThroughTitle: "b"))
+
+        let amended = Self.stack(published: published, shaOnly: [1, 2, 3], shas: ["x0", "x1", "x2"], titles: ["a", "b", "c"])
+        #expect(try plan.shipThroughPosition(in: amended) == 2)
+
+        let shared = Self.stack(published: published, shaOnly: [1, 2, 3], shas: ["x0", "x1", "x2"], titles: ["b", "b", "c"])
+        #expect(throws: StackShipPlan.MissingEntry.self) { try plan.shipThroughPosition(in: shared) }
+        #expect(StackShipPlan.linePositions(in: shared.entries) == [3])
     }
 
     /// After Clean removes the merged entries a ship published, its boundary
@@ -1052,10 +1074,13 @@ struct StackShepherdTests {
         return (core, log, stack, shas)
     }
 
-    /// `name` with `sha<index>` read as the fixture's `shas[index]`.
-    private static func entryID(_ name: String?, shas: [String]) -> String? {
-        guard let name, name.hasPrefix("sha"), let index = Int(name.dropFirst(3)) else { return name }
-        return shas[index]
+    /// The plan shipping through `name`, with `sha<index>` read as the
+    /// fixture's `shas[index]` and that SHA-only entry's title kept.
+    private static func shipPlan(through name: String?, shas: [String]) -> StackShipPlan {
+        guard let name, name.hasPrefix("sha"), let index = Int(name.dropFirst(3)) else {
+            return StackShipPlan(shipThroughEntryID: name)
+        }
+        return StackShipPlan(shipThroughEntryID: shas[index], shipThroughTitle: "t")
     }
 
     /// The agent's `stack_ship` takes no arguments: it publishes what the
@@ -1125,7 +1150,7 @@ struct StackShepherdTests {
 
         _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
 
-        #expect(log.plans == [StackShipPlan(shipThroughEntryID: Self.entryID(boundary, shas: shas))])
+        #expect(log.plans == [Self.shipPlan(through: boundary, shas: shas)])
     }
 
     /// After Clean removes the boundary the record shipped through, a fix
@@ -1144,6 +1169,6 @@ struct StackShepherdTests {
 
         _ = await core.shipStack(sessionID: "session-1", worktreeID: "wt-1")
 
-        #expect(log.plans == [StackShipPlan(shipThroughEntryID: Self.entryID(boundary, shas: shas))])
+        #expect(log.plans == [Self.shipPlan(through: boundary, shas: shas)])
     }
 }

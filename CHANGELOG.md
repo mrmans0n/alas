@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Let Ship's "ship below" line move on gg stacks that were never synced. Entries without a GG-ID can now hold the line, matched by their title after the agent amends them, and the line follows the pointer and settles where the rows part.
+
 ## [0.21.12] - 2026-10-23
 
 ### ✨ Features

@@ -122,7 +122,7 @@ public enum StackShepherdPolicy {
     /// `landed` are entries gg still lists after their request merged (see
     /// `landedEntryIDs`): they are not unpublished work, but the stack is not
     /// published either until a rebase drops them and the rest is synced.
-    /// Entries above `shipThroughEntryID` are held back on purpose: they keep
+    /// Entries above `shipPlan`'s boundary are held back on purpose: they keep
     /// the record alive but don't stop the shipped entries from being
     /// published. A boundary gg no longer lists holds back every entry
     /// without a request.
@@ -130,7 +130,7 @@ public enum StackShepherdPolicy {
         of stack: GGStack?,
         local: ReviewLoopLocalState,
         landed: Set<String> = [],
-        shipThroughEntryID: String? = nil
+        shipPlan: StackShipPlan = .wholeStack
     ) -> (isPublished: Bool, hasUnpublishedEntries: Bool?) {
         let hasEdits = local.hasWorkingTreeChanges || local.hasStagedChanges
         // Off the stack nothing is known about its publication: not ready,
@@ -142,7 +142,7 @@ public enum StackShepherdPolicy {
         // Shipped is what Held back leaves: with a boundary gg no longer
         // lists, every entry that has a request. A landed entry is never held
         // back, even with its request forgotten.
-        let heldBackIDs = Set(StackShipPlan(shipThroughEntryID: shipThroughEntryID).heldBackEntries(of: stack).map(\.id))
+        let heldBackIDs = Set(shipPlan.heldBackEntries(of: stack).map(\.id))
             .subtracting(landed)
         let shipped = stack.entries.filter { !heldBackIDs.contains($0.id) }
         // gg counts the entries whose branch matches the remote; held-back
