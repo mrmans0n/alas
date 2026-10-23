@@ -32,6 +32,9 @@ public struct ComputerUseCommand: Equatable, Sendable {
     public enum Delivery: String, Sendable, Decodable { case background, direct }
     public enum WaitCondition: String, Sendable, Decodable { case appear, disappear }
 
+    /// The deepest tree a read may walk; the default depth stays 12.
+    public static let maxDepthLimit = 32
+
     public var action: Action
     public var windowID: UInt32?
     public var query: String?
@@ -238,7 +241,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         case .inspect:
             try require(windowID != nil)
             try validQuery()
-            try require((1...3000).contains(limit) && (1...12).contains(maxDepth))
+            try require((1...3000).contains(limit) && (1...Self.maxDepthLimit).contains(maxDepth))
         case .click:
             try require(validTarget(ref: ref, x: x, y: y))
             try require((1...2).contains(count))

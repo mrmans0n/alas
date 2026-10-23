@@ -64,7 +64,7 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
 }
 
 fn parse_computer(args: &[&str]) -> Result<Command, String> {
-    const USAGE: &str = "usage: alas computer apps | screenshot <window-id> | inspect <window-id> [--query <text>] [--limit <1...3000>] [--max-depth <1...12>]";
+    const USAGE: &str = "usage: alas computer apps | screenshot <window-id> | inspect <window-id> [--query <text>] [--limit <1...3000>] [--max-depth <1...32>]";
     let window_id = |value: &str| {
         value
             .parse::<u32>()
@@ -111,7 +111,7 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
                     "--max-depth" if !seen_depth => {
                         seen_depth = true;
                         i += 1;
-                        max_depth = bounded_u64(flag_value(rest, i).ok_or(USAGE)?, 1, 12, USAGE)?;
+                        max_depth = bounded_u64(flag_value(rest, i).ok_or(USAGE)?, 1, 32, USAGE)?;
                     }
                     _ => return Err(USAGE.into()),
                 }
@@ -2280,14 +2280,14 @@ mod tests {
                 "--limit",
                 "3000",
                 "--max-depth",
-                "1"
+                "32"
             ])
             .unwrap(),
             Command::Computer(ComputerCommand::Inspect {
                 window_id: 7,
                 query: Some("Save".into()),
                 limit: 3000,
-                max_depth: 1,
+                max_depth: 32,
                 call_id: None
             })
         );
@@ -2391,7 +2391,7 @@ mod tests {
             &["computer", "inspect", "-1"],
             &["computer", "inspect", "7", "--limit", "0"],
             &["computer", "inspect", "7", "--limit", "3001"],
-            &["computer", "inspect", "7", "--max-depth", "13"],
+            &["computer", "inspect", "7", "--max-depth", "33"],
             &["computer", "inspect", "7", "--query", "  "],
             &["computer", "inspect", "7", "--query"],
             &["computer", "click", "7"],

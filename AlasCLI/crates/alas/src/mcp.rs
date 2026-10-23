@@ -669,7 +669,7 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "A window_id from computer_apps." },
                     "query": { "type": "string", "maxLength": 256, "description": "Optional text filter on element role, title and value." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 300." },
-                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Maximum tree depth. Default: 12." }
+                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Maximum tree depth, at most 32. Default: 12." }
                 },
                 "required": ["window_id"]
             }
@@ -1303,7 +1303,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 window_id: required_window_id(args)?,
                 query: optional_limited_string(args, "query", 256)?,
                 limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(300),
-                max_depth: optional_bounded_u64(args, "max_depth", 1, 12)?.unwrap_or(12),
+                max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?.unwrap_or(12),
                 call_id: None,
             }))
         }
@@ -4069,6 +4069,21 @@ mod tests {
                 call_id: None
             })
         );
+        assert_eq!(
+            command_for_tool(
+                "computer_inspect",
+                &json!({ "window_id": 7, "max_depth": 32 }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::Computer(ComputerCommand::Inspect {
+                window_id: 7,
+                query: None,
+                limit: 300,
+                max_depth: 32,
+                call_id: None
+            })
+        );
         let post = alas_client::ComputerPost::default();
         let at = |x, y| alas_client::ComputerTarget::Point { x, y };
         let element = |value: &str| alas_client::ComputerTarget::Ref(value.into());
@@ -4321,7 +4336,7 @@ mod tests {
             ),
             (
                 "computer_inspect",
-                json!({ "window_id": 7, "max_depth": 13 }),
+                json!({ "window_id": 7, "max_depth": 33 }),
             ),
         ] {
             assert!(

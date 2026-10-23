@@ -13,6 +13,8 @@ struct ComputerUseCommandTests {
     @Test func decodesEachActionWithDefaults() throws {
         let inspect = try decode("computer_inspect", #"{"window_id":42}"#)
         #expect(inspect.command == .computer(.init(action: .inspect, windowID: 42, query: nil, limit: 300, maxDepth: 12)))
+        let deep = try decode("computer_inspect", #"{"window_id":42,"max_depth":32}"#)
+        #expect(deep.command == .computer(.init(action: .inspect, windowID: 42, query: nil, limit: 300, maxDepth: 32)))
         let apps = try decode("computer_apps", nil)
         #expect(apps.command == .computer(.init(action: .apps, windowID: nil, query: nil, limit: 300, maxDepth: 12)))
         let shot = try decode("computer_screenshot", #"{"window_id":7}"#)
@@ -51,7 +53,7 @@ struct ComputerUseCommandTests {
         ("computer_screenshot", "{}"),
         ("computer_inspect", #"{"window_id":1,"limit":0}"#),
         ("computer_inspect", #"{"window_id":1,"limit":3001}"#),
-        ("computer_inspect", #"{"window_id":1,"max_depth":13}"#),
+        ("computer_inspect", #"{"window_id":1,"max_depth":33}"#),
         ("computer_inspect", #"{"window_id":1,"query":"   "}"#),
         ("computer_inspect", "{\"window_id\":1,\"query\":\"\(String(repeating: "x", count: 257))\"}"),
         ("computer_apps", #"{"window_id":1}"#),
