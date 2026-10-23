@@ -576,18 +576,23 @@ struct ComputerUseCoordinatorTests {
     }
 
     /// An AX press in an Electron app may only focus the element: a click that changed nothing
-    /// there is clicked once more with the pointer. Elsewhere, and after a change, it stands.
-    @Test(arguments: [(true, false, true), (true, true, false), (false, false, false)])
+    /// there is clicked once more with the pointer. Elsewhere, after a change, and on a toggle a
+    /// second press could undo, it stands.
+    @Test(arguments: [
+        (true, false, "AXButton", true), (true, true, "AXButton", false), (false, false, "AXButton", false),
+        (true, false, "AXCheckBox", false),
+    ])
     func electronClickThatChangedNothingIsRetriedWithThePointer(
-        manualAccessibility: Bool, changed: Bool, retries: Bool
+        manualAccessibility: Bool, changed: Bool, role: String, retries: Bool
     ) async throws {
         let recorder = Recorder()
         let reads = Counter()
-        let saveTree = Self.saveTree
+        var saveTree = Self.saveTree
+        saveTree.children[0].role = role
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { $0 == 101 && manualAccessibility }
         // Read 1 is the inspect, 2 the window before the click, 3 the one after it.
-        system.axTree = { _, _, _, _ in
+        system.axTree = { [saveTree] _, _, _, _ in
             var tree = saveTree
             if changed, reads.next() >= 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
             return (tree, true, ComputerUseAXHandles())
@@ -615,6 +620,31 @@ struct ComputerUseCoordinatorTests {
         } else {
             #expect(inputs.count == 1 && payload["delivery"] as? String == "ax" && payload["retried"] == nil)
         }
+    }
+
+    /// The first press was delivered either way: a retry the user's return refuses leaves its
+    /// result as it was, with the reason.
+    @Test func failedPointerRetryKeepsTheFirstResult() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { _ in true }
+        system.frontmostPID = { 101 }
+        // Idle until the first press, active from then on.
+        let presses = Recorder()
+        system.secondsSinceUserInput = { presses.inputs.isEmpty ? 60 : 0.5 }
+        system.perform = { input, _, _, _ in
+            presses.record(input)
+            recorder.record(input)
+            return .ax
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(recorder.inputs.count == 1)
+        #expect(payload["delivery"] as? String == "ax" && payload["warning"] as? String == Warnings.noChange)
+        #expect(payload["retried"] == nil
+            && payload["retry_error"] as? String == "computer_user_active: The user is using Notes right now. Try again in a moment.")
     }
 
     @Test func actionWaitsForUserIdleThenGivesUp() async throws {

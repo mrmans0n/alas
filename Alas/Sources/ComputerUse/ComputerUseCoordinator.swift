@@ -654,8 +654,10 @@ final class ComputerUseCoordinator {
         // What the window looked like, so an input the app ignored doesn't pass for one that worked.
         // Read first, so the takeover wait and the ref re-check are the last steps before the input.
         var target: (ComputerUseAXHandles, Int)?
+        var targetRef: ElementRef?
         if let ref = command.ref, let snapshot = snapshot(of: window, context: context), let element = snapshot.refs[ref] {
             target = (snapshot.handles, element.handle)
+            targetRef = element
         }
         let before = await fingerprint(of: window, for: command, target: target, context: context)
         // A drop into another window may change only that one.
@@ -675,20 +677,22 @@ final class ComputerUseCoordinator {
         try await settle(after: delivered, of: command, in: &window, target: target, before: before,
                          end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload)
         let unchanged = payload["warning"] is String
-        if Self.retriesWithPointer(
-            command, delivered: delivered.delivery, unchanged: unchanged,
+        if let target, let targetRef, Self.retriesWithPointer(
+            command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
             manualAccessibility: system.usesManualAccessibility(window.app.pid)) {
-            // Once, with the same checks as the first input; the ref resolves in the read just made.
-            try checkStillActive(context)
-            if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
-            try checkStillActive(context)
-            try await recheckRefs(of: command, in: window, toWindow: nil, context: context)
-            let at = try self.target(ref: command.ref, x: nil, y: nil, in: window, context: context)
-            try checkStillActive(context)
-            let retried = try await deliver(.pointerClick(at), of: command, to: window, toWindow: nil, direct: false, context: context)
-            try await settle(after: retried, of: command, in: &window, target: target, before: before,
-                             end: nil, context: context, payload: &payload)
-            payload["retried"] = "pointer"
+            // The first press was delivered: a retry that fails reports why next to its result.
+            let first = (payload: payload, window: window)
+            do {
+                try await retryWithPointer(
+                    command, at: target, ref: targetRef, in: &window, before: before, context: context, payload: &payload)
+                payload["retried"] = "pointer"
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                payload = first.payload
+                window = first.window
+                payload["retry_error"] = Self.message(for: error)
+            }
         }
         guard command.includeScreenshot else { return }
         do {
@@ -702,6 +706,26 @@ final class ComputerUseCoordinator {
         } catch {
             payload["screenshot_error"] = error.localizedDescription
         }
+    }
+
+    /// The pointer click after an AX press that changed nothing, with the same checks as the first
+    /// input, at the element that was pressed: it must still read as the one the agent was shown.
+    private func retryWithPointer(
+        _ command: ComputerUseCommand, at target: (ComputerUseAXHandles, Int), ref: ElementRef,
+        in window: inout ComputerUseWindow, before: ComputerUseWindowFingerprint, context: CallContext,
+        payload: inout [String: Any]
+    ) async throws {
+        try checkStillActive(context)
+        if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
+        try checkStillActive(context)
+        guard await system.elementMatches(target.0, target.1, ref.role, ref.title) else {
+            throw Refusal(Message.stale(command.ref ?? "", windowID: window.windowID))
+        }
+        try checkStillActive(context)
+        let retried = try await deliver(
+            .pointerClick(.element(target.0, target.1)), of: command, to: window, toWindow: nil, direct: false, context: context)
+        try await settle(after: retried, of: command, in: &window, target: target, before: before,
+                         end: nil, context: context, payload: &payload)
     }
 
     /// Delivers the input, mapping its failures to the tool errors that name the ref and window.
@@ -755,13 +779,19 @@ final class ComputerUseCoordinator {
 
     /// An AX press may only focus an element in an app that builds its tree on request (Electron):
     /// a left single click by ref that went as AX and changed nothing is retried once as a pointer
-    /// click. Never in other apps, where an AX press that changed nothing is the app's answer.
+    /// click. Never in other apps, where an AX press that changed nothing is the app's answer, nor
+    /// on a toggle or menu item (`role`, as read), where a second press could undo the first.
     static func retriesWithPointer(
-        _ command: ComputerUseCommand, delivered: ComputerUseDelivery, unchanged: Bool, manualAccessibility: Bool
+        _ command: ComputerUseCommand, role: String, delivered: ComputerUseDelivery, unchanged: Bool,
+        manualAccessibility: Bool
     ) -> Bool {
         command.action == .click && command.ref != nil && command.button == .left && command.count == 1
-            && delivered == .ax && unchanged && manualAccessibility
+            && !noPointerRetryRoles.contains(role) && delivered == .ax && unchanged && manualAccessibility
     }
+
+    static let noPointerRetryRoles: Set<String> = [
+        "AXCheckBox", "AXSwitch", "AXRadioButton", "AXMenuItem", "AXMenuBarItem", "AXToggle",
+    ]
 
     /// Reports the delivered input, waits for the app to handle it and reads the window back.
     private func settleAndRead(
@@ -807,6 +837,8 @@ final class ComputerUseCoordinator {
         } catch {
             // The action changed the window, so the refs from before it are gone either way.
             updateSnapshot(of: window, context: context) { $0.refs = [:] }
+            // An earlier attempt's verdict doesn't describe this read.
+            payload["warning"] = nil
             payload["truncated"] = true
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription
