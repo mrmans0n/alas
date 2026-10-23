@@ -1676,7 +1676,7 @@ struct RemotePeerManagerTests {
     /// A pairer whose replies prove possession of `key` under `serverId` —
     /// what a real peer running this build produces.
     private func provingPairer(serverId: String, key: Curve25519.Signing.PrivateKey,
-                               token: String = "tokA", name: String = "Mac A",
+                               token: String = "tokA", name: String = "Mac A", inboundOnly: Bool = false,
                                requests: Requests) -> RemotePeerPairer {
         RemotePeerPairer(fetch: { req in
             requests.seen.append(req)
@@ -1686,10 +1686,55 @@ struct RemotePeerManagerTests {
             let proof = try #require(RemoteIdentityCrypto.sign(serverId: serverId, challenge: challenge, with: key))
             let reply = """
                 {"token":"\(token)","serverId":"\(serverId)","name":"\(name)",\
-                "publicKey":"\(proof.publicKey)","signature":"\(proof.signature)"}
+                "publicKey":"\(proof.publicKey)","signature":"\(proof.signature)"\(inboundOnly ? #","inboundOnly":true"# : "")}
                 """
             return (Data(reply.utf8), HTTPURLResponse(url: req.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!)
         }, timeout: 1)
+    }
+
+    /// A headless host that cannot dial back answers inbound-only: nothing
+    /// reciprocal is coming, so the add finishes on the proven key alone,
+    /// and the counter-code it offered can never authorize anyone later.
+    @Test func anInboundOnlyAddFinishesWithoutAReciprocalAndRetiresItsCounterCode() async throws {
+        let key = Curve25519.Signing.PrivateKey()
+        let requests = Requests()
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let manager = makeManager(pairing: pairing,
+                                  pairer: provingPairer(serverId: "srv-a", key: key, inboundOnly: true, requests: requests),
+                                  links: Links(), reciprocalConfirmationTimeout: 2)
+        #expect(await manager.addPeer(link: linkFromA) == nil)
+        let peer = try #require(manager.peers.first)
+        #expect(peer.publicKey == RemoteIdentityCrypto.publicKeyString(key.publicKey))
+        #expect(peer.localDeviceId == nil)
+        let counterCode = try #require(capturedCounterCode(from: requests))
+        #expect(throws: (any Error).self) {
+            try pairing.redeemPeer(code: counterCode, deviceName: "Mac A", peerServerId: "srv-a")
+        }
+    }
+
+    /// The host side of that exchange proves nothing about the origins the
+    /// peer advertised, so an existing record keeps its own and its token:
+    /// otherwise a code holder claiming that peer's identity could point the
+    /// app sharing the profile, token and all, at an endpoint of its choice.
+    @Test(arguments: [false, true])
+    func anInboundOnlyRecordKeepsAnExistingPeersAddressesAndToken(hasExisting: Bool) async {
+        let store = InMemoryPeerStore()
+        if hasExisting {
+            store.save([RemotePeer(id: "old", serverId: "srv-a", name: "Mac A", origins: ["http://10.0.0.1:8765"],
+                                   lastOrigin: "http://10.0.0.1:8765", token: "app-token", addedAt: .distantPast)])
+        }
+        let manager = makeManager(store: store, pairer: pairer([:], requests: Requests()), links: Links())
+        await manager.handleInboundPeer(RemotePeerPairingRequest(
+            peerServerId: "srv-a", peerName: "Mac A", origins: ["http://10.6.6.6:8765"],
+            peerPublicKey: RemoteIdentityCrypto.publicKeyString(Curve25519.Signing.PrivateKey().publicKey),
+            counterCode: "COUNTER", localDeviceId: "dev-a", redeemedCode: "CODE", inboundOnly: true))
+        let peer = manager.peers.first
+        #expect(manager.peers.count == 1)
+        #expect(peer?.origins == [hasExisting ? "http://10.0.0.1:8765" : "http://10.6.6.6:8765"])
+        #expect(peer?.lastOrigin == (hasExisting ? "http://10.0.0.1:8765" : nil))
+        #expect(peer?.token == (hasExisting ? "app-token" : ""))
+        #expect(peer?.publicKey == nil)
+        #expect(peer?.localDeviceId == "dev-a")
     }
 
     @Test func addPeerPinsTheProvedKeyOnTheRecord() async throws {
