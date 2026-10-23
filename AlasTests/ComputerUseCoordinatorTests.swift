@@ -113,6 +113,22 @@ struct ComputerUseCoordinatorTests {
         #expect(json.contains(#""truncated":true"#))
     }
 
+    /// Only an element nothing of which shows carries `visible`.
+    @Test func inspectMarksHiddenElements() async throws {
+        var system = Self.system()
+        let tree = ComputerUseAXNode(role: "AXWindow", frame: CGRect(x: 0, y: 0, width: 400, height: 300), children: [
+            ComputerUseAXNode(role: "AXButton", title: "Shown", frame: CGRect(x: 10, y: 10, width: 50, height: 20)),
+            ComputerUseAXNode(role: "AXButton", title: "Off", frame: CGRect(x: 10, y: 320, width: 50, height: 20)),
+        ])
+        system.axTree = { _, _, _, _ in (tree, true, ComputerUseAXHandles()) }
+        let f = Self.fixture(system: system)
+        f.access.record(.allowForSession, for: Self.notes, session: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        let elements = try #require(payload["elements"] as? [[String: Any]])
+        #expect(elements.map { $0["visible"] as? Bool } == [nil, nil, false])
+    }
+
     @Test func unansweredApprovalReturnsPendingAndKeepsTheCard() async {
         let f = Self.fixture(approvalWait: .milliseconds(200))
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")

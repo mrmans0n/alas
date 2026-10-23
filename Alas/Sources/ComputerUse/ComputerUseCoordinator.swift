@@ -1292,6 +1292,7 @@ final class ComputerUseCoordinator {
             object["value_length"] = length
         }
         object["description"] = element.description
+        if !element.isVisible { object["visible"] = false }
         return object
     }
 }

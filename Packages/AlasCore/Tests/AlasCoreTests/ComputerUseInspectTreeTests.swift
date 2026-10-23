@@ -41,6 +41,25 @@ struct ComputerUseInspectTreeTests {
         #expect(!exact.truncated)
     }
 
+    /// An element is marked hidden when none of its frame shows in the window and its scroll
+    /// areas, such as a name cell scrolled under the sidebar; one without a frame isn't.
+    @Test func flattenMarksElementsNothingOfWhichShows() {
+        let tree = ComputerUseAXNode(role: "AXWindow", frame: CGRect(x: 0, y: 0, width: 500, height: 400), children: [
+            ComputerUseAXNode(role: "AXScrollArea", frame: CGRect(x: 200, y: 0, width: 300, height: 400), children: [
+                ComputerUseAXNode(role: "AXTextField", title: "under the sidebar", frame: CGRect(x: 50, y: 10, width: 100, height: 20)),
+                ComputerUseAXNode(role: "AXTextField", title: "half shown", frame: CGRect(x: 150, y: 40, width: 100, height: 20)),
+                ComputerUseAXNode(role: "AXButton", title: "no frame"),
+            ]),
+            ComputerUseAXNode(role: "AXButton", title: "below the window", frame: CGRect(x: 10, y: 420, width: 50, height: 20)),
+        ])
+        let visible = ComputerUseInspectTree.flatten(tree, query: nil, limit: 100, maxDepth: 10).elements
+            .map { "\($0.title ?? $0.role)=\($0.isVisible)" }
+        #expect(visible == [
+            "AXWindow=true", "AXScrollArea=true", "under the sidebar=false", "half shown=true", "no frame=true",
+            "below the window=false",
+        ])
+    }
+
     @Test func flattenSkipsBeyondMaxDepth() {
         let result = ComputerUseInspectTree.flatten(sample, query: nil, limit: 100, maxDepth: 1)
         #expect(result.elements.map(\.role) == ["AXWindow", "AXGroup", "AXTextField"])

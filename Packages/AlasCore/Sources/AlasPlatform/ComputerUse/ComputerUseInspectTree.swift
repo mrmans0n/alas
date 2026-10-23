@@ -56,6 +56,9 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
     public var frame: CGRect
     public var isEnabled: Bool
     public var isFocused: Bool
+    /// False when no part of its frame shows: outside the window, or scrolled out of (or under
+    /// another part of the window next to) an enclosing scroll area. True when it can't tell.
+    public var isVisible: Bool
     /// Opaque handle copied from the node; never serialized.
     public var handle: Int?
 
@@ -71,6 +74,7 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
         frame: CGRect = .zero,
         isEnabled: Bool = true,
         isFocused: Bool = false,
+        isVisible: Bool = true,
         handle: Int? = nil
     ) {
         self.ref = ref
@@ -84,6 +88,7 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
         self.frame = frame
         self.isEnabled = isEnabled
         self.isFocused = isFocused
+        self.isVisible = isVisible
         self.handle = handle
     }
 }
@@ -126,8 +131,15 @@ public enum ComputerUseInspectTree {
             string.map { String($0.prefix(maxStringLength)) }
         }
 
+        /// Whether any of the node's frame shows inside `clips` (the window and enclosing scroll
+        /// areas); a node without a frame counts as shown.
+        func isVisible(_ node: ComputerUseAXNode, clips: [CGRect]) -> Bool {
+            guard node.frame.width > 0, node.frame.height > 0 else { return true }
+            return ComputerUseInputGeometry.visibleCenter(of: node.frame, clippedTo: clips, requireOwnCenter: false) != nil
+        }
+
         // Past the limit the walk goes on only to name the remaining nodes' refs.
-        func visit(_ node: ComputerUseAXNode, depth: Int) {
+        func visit(_ node: ComputerUseAXNode, depth: Int, clips: [CGRect]) {
             guard depth <= maxDepth else { return }
             visited += 1
             let ref = "e\(visited)"
@@ -150,17 +162,21 @@ public enum ComputerUseInspectTree {
                         frame: node.frame,
                         isEnabled: node.isEnabled,
                         isFocused: node.isFocused,
+                        isVisible: isVisible(node, clips: clips),
                         handle: node.handle
                     ))
                 }
             }
             if node.childrenUnread || (depth == maxDepth && !node.children.isEmpty) { depthLimited = true }
+            // The window and every scroll area clip what they hold.
+            let clipsChildren = (depth == 0 || node.role == "AXScrollArea") && node.frame.width > 0 && node.frame.height > 0
+            let childClips = clipsChildren ? clips + [node.frame] : clips
             for child in node.children {
-                visit(child, depth: depth + 1)
+                visit(child, depth: depth + 1, clips: childClips)
             }
         }
 
-        visit(root, depth: 0)
+        visit(root, depth: 0, clips: [])
         return (elements, truncated, refs, depthLimited)
     }
 }
