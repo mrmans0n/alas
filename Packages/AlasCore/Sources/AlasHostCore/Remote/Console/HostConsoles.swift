@@ -51,6 +51,8 @@ public final class HostConsoles {
     private let baseEnvironment: @Sendable () -> [String: String]
     private let shell: String
     private var entries: [HostConsoleEntry] = []
+    private var pendingSizes: [String: (rows: Int, columns: Int)] = [:]
+    private var resizing: Set<String> = []
 
     public init(
         core: AlasCoreContext,
@@ -178,16 +180,29 @@ public final class HostConsoles {
         return id
     }
 
-    /// True when zmx took the size; only then is it remembered.
-    public func resize(_ consoleId: String, rows: Int, columns: Int) async -> Bool {
-        guard let socketPath = target(consoleId)?.socketPath else { return false }
-        let applySize = applySize
-        guard await BlockingWork.run({ applySize(socketPath, rows, columns) }),
-              let index = entries.firstIndex(where: { $0.id == consoleId }) else { return false }
-        entries[index].rows = rows
-        entries[index].columns = columns
+    /// Applies the newest requested size, one apply at a time per console:
+    /// during a window drag a later size replaces a pending one, so zmx and
+    /// the registry end on the same size. Returns the size zmx took last
+    /// (only that is remembered), or nil when none applied or another call
+    /// is applying this console's sizes.
+    public func resize(_ consoleId: String, rows: Int, columns: Int) async -> (rows: Int, columns: Int)? {
+        pendingSizes[consoleId] = (rows, columns)
+        guard resizing.insert(consoleId).inserted else { return nil }
+        defer {
+            resizing.remove(consoleId)
+            pendingSizes[consoleId] = nil
+        }
+        var applied: (rows: Int, columns: Int)?
+        while let size = pendingSizes.removeValue(forKey: consoleId),
+              let socketPath = target(consoleId)?.socketPath {
+            let applySize = applySize
+            if await BlockingWork.run({ applySize(socketPath, size.rows, size.columns) }) { applied = size }
+        }
+        guard let applied, let index = entries.firstIndex(where: { $0.id == consoleId }) else { return nil }
+        entries[index].rows = applied.rows
+        entries[index].columns = applied.columns
         save()
-        return true
+        return applied
     }
 
     public func terminate(_ consoleId: String) {

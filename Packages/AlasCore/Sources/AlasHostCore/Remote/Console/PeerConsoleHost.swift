@@ -61,9 +61,10 @@ public final class PeerConsoleHost {
         /// Opens a console in a host worktree and returns its id. Throws
         /// `PeerConsoleOpenError`. Nil when this host can't open consoles.
         public var open: (@MainActor (_ worktreeId: String) async throws -> String)?
-        /// Resizes a console; true when it applied. Nil means the host sizes
-        /// its consoles itself and ignores peer resizes.
-        public var resize: (@MainActor (_ consoleId: String, _ rows: Int, _ columns: Int) async -> Bool)?
+        /// Resizes a console and returns the size it ended on (a newer request
+        /// may win), or nil when none applied. A nil closure means the host
+        /// sizes its consoles itself and ignores peer resizes.
+        public var resize: (@MainActor (_ consoleId: String, _ rows: Int, _ columns: Int) async -> (rows: Int, columns: Int)?)?
         /// How long a newly opened console has to become reachable before it
         /// is closed and the open fails.
         public var openReadyTimeout: Duration
@@ -79,7 +80,7 @@ public final class PeerConsoleHost {
             setLocalInputSuppressed: @escaping @MainActor (_ consoleId: String, _ suppressed: Bool) -> Void,
             terminate: @escaping @MainActor (String) -> Void,
             open: (@MainActor (_ worktreeId: String) async throws -> String)? = nil,
-            resize: (@MainActor (_ consoleId: String, _ rows: Int, _ columns: Int) async -> Bool)? = nil,
+            resize: (@MainActor (_ consoleId: String, _ rows: Int, _ columns: Int) async -> (rows: Int, columns: Int)?)? = nil,
             openReadyTimeout: Duration = .seconds(5),
             connect: @escaping @Sendable (String) throws -> ZmxIPCSocket = { try ZmxIPCSocket.connect(path: $0) },
             probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
@@ -306,8 +307,8 @@ public final class PeerConsoleHost {
               Self.gridLimits.contains(rows), Self.gridLimits.contains(columns) else { return }
         let consoleId = attachment.consoleId
         Task {
-            if await resize(consoleId, rows, columns) {
-                geometryChanged(consoleId: consoleId, rows: rows, columns: columns)
+            if let size = await resize(consoleId, rows, columns) {
+                geometryChanged(consoleId: consoleId, rows: size.rows, columns: size.columns)
             }
         }
     }

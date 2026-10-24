@@ -96,8 +96,7 @@ import Testing
         var openResult: Result<String, PeerConsoleOpenError> = .success("c")
         /// Applied resizes, formatted `"c 40x100"`.
         var resized: [String] = []
-        /// Read when `host` is first built, so set these before touching it.
-        var servesResize = true
+        /// Read when `host` is first built, so set it before touching it.
         var readyTimeout: Duration = .seconds(5)
         private let daemon: ZmxDaemonStatus
         lazy var host = PeerConsoleHost(environment: .init(
@@ -111,10 +110,10 @@ import Testing
                 known.removeAll { $0 == id }
             },
             open: { [unowned self] _ in try openResult.get() },
-            resize: servesResize ? { @MainActor [unowned self] id, rows, columns in
+            resize: { @MainActor [unowned self] id, rows, columns in
                 resized.append("\(id) \(rows)x\(columns)")
-                return true
-            } : nil,
+                return (rows: rows, columns: columns)
+            },
             openReadyTimeout: readyTimeout,
             // The host connects on the main actor.
             connect: { [unowned self] _ in try MainActor.assumeIsolated { try self.makeSocket() } },
@@ -316,16 +315,5 @@ import Testing
         try await eventually("geometry") { viewer.events.all.contains(.geometry(attachmentId: "b", rows: 40, columns: 100)) }
         #expect(fixture.resized == ["c 40x100"])
         #expect(holder.events.all.contains(.geometry(attachmentId: "a", rows: 40, columns: 100)))
-    }
-
-    @Test func anAppHostIgnoresResize() {
-        let fixture = Fixture()
-        fixture.servesResize = false
-        let peer = FakePeer()
-        fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0), from: peer.link)
-        fixture.host.handle(.takeControl(attachmentId: "a"), from: peer.link)
-        let before = peer.events.all
-        fixture.host.handle(.resize(attachmentId: "a", rows: 40, columns: 100), from: peer.link)
-        #expect(peer.events.all == before)
     }
 }

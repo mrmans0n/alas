@@ -147,11 +147,11 @@ struct HostConsolesTests {
         let id = try await consoles.open(worktreeId: fixture.worktree.id)
 
         fixture.fakes.withLock { $0.sizeApplies = false }
-        #expect(await consoles.resize(id, rows: 40, columns: 100) == false)
+        #expect(await consoles.resize(id, rows: 40, columns: 100) == nil)
         #expect(consoles.target(id).map { [$0.rows, $0.columns] } == [24, 120])
 
         fixture.fakes.withLock { $0.sizeApplies = true }
-        #expect(await consoles.resize(id, rows: 40, columns: 100))
+        #expect(await consoles.resize(id, rows: 40, columns: 100).map { [$0.rows, $0.columns] } == [40, 100])
         #expect(consoles.target(id).map { [$0.rows, $0.columns] } == [40, 100])
         let names = fixture.launches.map { $0.arguments[1] }
         fixture.fakes.withLock { $0.live = names }
@@ -159,6 +159,27 @@ struct HostConsolesTests {
         await restored.restore()
         #expect(restored.target(id).map { [$0.rows, $0.columns] } == [40, 100])
         #expect(fixture.fakes.withLock { $0.sizes } == ["40x100", "40x100"])
+    }
+
+    @Test func resizesDuringADragApplyOneAtATimeAndTheLatestWins() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let id = try await consoles.open(worktreeId: fixture.worktree.id)
+        let fakes = fixture.fakes
+
+        fakes.withLock { $0.holdNextSize = true }
+        let first = Task { await consoles.resize(id, rows: 30, columns: 80) }
+        try await eventually { fakes.withLock { $0.sizes } == ["30x80"] }
+        _ = await consoles.resize(id, rows: 35, columns: 90)
+        _ = await consoles.resize(id, rows: 40, columns: 100)
+        fakes.release.signal()
+        // The geometry broadcast follows what was applied last.
+        #expect(await first.value.map { [$0.rows, $0.columns] } == [40, 100])
+
+        #expect(fakes.withLock { $0.maxConcurrentSizes } == 1)
+        #expect(fakes.withLock { $0.sizes.last } == "40x100")
+        #expect(consoles.target(id).map { [$0.rows, $0.columns] } == [40, 100])
     }
 
     @Test func terminateKillsTheSessionAndForgetsIt() async throws {
@@ -182,11 +203,16 @@ struct HostConsolesTests {
         var lsFails = false
         var sizeApplies = true
         var sizes: [String] = []
+        /// The next size apply blocks until `release` is signaled.
+        var holdNextSize = false
+        var concurrentSizes = 0
+        var maxConcurrentSizes = 0
     }
 
     final class SharedFakes: @unchecked Sendable {
         private let lock = NSLock()
         private var value = Fakes()
+        let release = DispatchSemaphore(value: 0)
 
         func withLock<R>(_ body: (inout Fakes) throws -> R) rethrows -> R {
             try lock.withLock { try body(&value) }
@@ -266,8 +292,17 @@ struct HostConsolesTests {
                     FileManager.default.createFile(atPath: socket, contents: nil)
                 },
                 applySize: { _, rows, columns in
-                    fakes.withLock {
+                    let hold = fakes.withLock {
                         $0.sizes.append("\(rows)x\(columns)")
+                        $0.concurrentSizes += 1
+                        $0.maxConcurrentSizes = max($0.maxConcurrentSizes, $0.concurrentSizes)
+                        let hold = $0.holdNextSize
+                        $0.holdNextSize = false
+                        return hold
+                    }
+                    if hold { fakes.release.wait() }
+                    return fakes.withLock {
+                        $0.concurrentSizes -= 1
                         return $0.sizeApplies
                     }
                 },
