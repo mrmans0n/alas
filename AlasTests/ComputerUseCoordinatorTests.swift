@@ -928,7 +928,7 @@ struct ComputerUseCoordinatorTests {
         #expect(response == .error("computer_blocked: Keychain Access can't be used by agents."))
     }
 
-    enum WaitCase: CaseIterable { case appears, neverAppears, disappears, neverDisappears, windowCloses }
+    enum WaitCase: CaseIterable { case appears, neverAppears, disappears, neverDisappears, disappearsFromPartialRead, windowCloses }
 
     @Test(arguments: WaitCase.allCases)
     func waitReturnsWhenTheQueryAppearsOrTimesOut(_ waitCase: WaitCase) async throws {
@@ -944,15 +944,18 @@ struct ComputerUseCoordinatorTests {
             let read = reads.next()
             let done = switch waitCase {
             case .appears: read >= 4
-            case .neverAppears, .disappears, .windowCloses: false
+            case .neverAppears, .disappears, .disappearsFromPartialRead, .windowCloses: false
             case .neverDisappears: read > 1
             }
             let children = done ? [ComputerUseAXNode(role: "AXStaticText", title: "Done", handle: 1)] : []
-            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), true, ComputerUseAXHandles())
+            // A walk that ran out of budget may have missed "Done".
+            let complete = waitCase != .disappearsFromPartialRead
+            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), complete, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let condition: ComputerUseCommand.WaitCondition = waitCase == .neverDisappears || waitCase == .disappears ? .disappear : .appear
+        let condition: ComputerUseCommand.WaitCondition =
+            [.neverDisappears, .disappears, .disappearsFromPartialRead].contains(waitCase) ? .disappear : .appear
         let wait = ComputerUseCommand(action: .wait, windowID: 1, query: "done", condition: condition, timeoutMS: 1000)
         let response = await f.coordinator.perform(wait, sessionID: "s")
         switch waitCase {
@@ -966,9 +969,12 @@ struct ComputerUseCoordinatorTests {
         case .windowCloses:
             #expect(response == .error("computer_window_not_found: No on-screen window 1. Call computer_apps again."))
             #expect(recorder.sleeps == [.milliseconds(250)])
-        case .neverAppears, .neverDisappears:
+        case .neverAppears, .neverDisappears, .disappearsFromPartialRead:
             let verb = condition == .appear ? "appeared" : "disappeared"
-            #expect(response == .error(#"computer_wait_timeout: Nothing matching "done" \#(verb) in window 1 within 1000 ms."#))
+            #expect(response == .error(waitCase == .disappearsFromPartialRead
+                ? #"computer_wait_timeout: Couldn't confirm that "done" disappeared from window 1 within 1000 ms: "#
+                    + "the window's accessibility tree couldn't be read completely, so it may still be there."
+                : #"computer_wait_timeout: Nothing matching "done" \#(verb) in window 1 within 1000 ms."#))
             #expect(recorder.sleeps.reduce(.zero, +) == .seconds(1))
             // The polls the agent never saw don't leave refs behind, nor do the inspect's survive.
             #expect(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")

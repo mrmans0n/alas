@@ -838,7 +838,8 @@ extension LiveComputerUseSystem {
     }
 
     /// Brings `app` to the front for `body`, then returns the previously
-    /// frontmost app to the front, also when `body` throws. Throws without
+    /// frontmost app to the front, also when `body` throws, unless `app`
+    /// no longer is (the user switched apps meanwhile). Throws without
     /// running `body` when the app does not come to the front in time.
     private static func withActivation(
         of app: ComputerUseAppIdentity, isCancelled: @Sendable () -> Bool, _ body: () async throws -> Void
@@ -885,6 +886,8 @@ extension LiveComputerUseSystem {
 
     private static func restoreActivation(_ previousPID: Int32?, from pid: Int32) async {
         guard let previousPID else { return }
+        // Once the user picked another app, the front is theirs to keep.
+        guard await isFrontmost(pid) else { return }
         await MainActor.run {
             guard let previous = NSRunningApplication(processIdentifier: previousPID) else { return }
             // The target is active now; asking on its behalf passes cooperative activation.

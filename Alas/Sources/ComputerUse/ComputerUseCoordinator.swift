@@ -182,6 +182,10 @@ final class ComputerUseCoordinator {
             let verb = condition == .appear ? "appeared" : "disappeared"
             return "computer_wait_timeout: Nothing matching \"\(query)\" \(verb) in window \(windowID) within \(ms) ms."
         }
+        static func waitInconclusive(_ query: String, windowID: UInt32, ms: Int) -> String {
+            "computer_wait_timeout: Couldn't confirm that \"\(query)\" disappeared from window \(windowID) within \(ms) ms: "
+                + "the window's accessibility tree couldn't be read completely, so it may still be there."
+        }
     }
 
     // MARK: - Calls
@@ -1153,7 +1157,10 @@ final class ComputerUseCoordinator {
             // Only the read returned to the agent replaces its refs.
             let read = try await readElements(
                 window, query: query, limit: command.limit, maxDepth: command.maxDepth, context: context, recordRefs: false)
-            if read.elements.isEmpty == (command.condition == .disappear) {
+            // A partial read can miss the element, so only a complete one confirms it is gone.
+            let incomplete = read.truncated || read.depthLimited
+            let met = command.condition == .appear ? !read.elements.isEmpty : read.elements.isEmpty && !incomplete
+            if met {
                 record(refs: read, of: window, context: context)
                 return (read.truncated, read.elements, read.depthLimited)
             }
@@ -1161,6 +1168,9 @@ final class ComputerUseCoordinator {
             if slept >= timeout || clock.now - start >= timeout {
                 // The window changed while the agent waited; the refs it holds may point elsewhere now.
                 updateSnapshot(of: window, context: context) { $0.refs = [:] }
+                if command.condition == .disappear, read.elements.isEmpty {
+                    throw Refusal(Message.waitInconclusive(query, windowID: window.windowID, ms: command.timeoutMS))
+                }
                 throw Refusal(Message.waitTimeout(query, command.condition, windowID: window.windowID, ms: command.timeoutMS))
             }
             await sleep(Self.waitPoll)
