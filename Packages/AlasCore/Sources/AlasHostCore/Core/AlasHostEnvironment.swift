@@ -168,7 +168,24 @@ extension AlasHostEnvironment {
         projectID: String, branch: String, base: String?,
         recordDestination: @MainActor (URL) async throws -> Void, in core: AlasCoreContext
     ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
-        .failure(.init(message: "This host does not create worktrees for delegated sessions."))
+        // A peer's creation path: startup scripts run without prompting.
+        let worktrees = WorktreesAPI(core: core)
+        let prepared: PreparedWorktreeCreation
+        do {
+            prepared = try await worktrees.prepareCreate(projectID: projectID, branch: branch, base: base, caller: .cli)
+        } catch {
+            return .failure(.init(message: error.localizedDescription))
+        }
+        do {
+            try await recordDestination(prepared.request.destination)
+        } catch {
+            return .failure(.init(message: "Could not record the worktree destination."))
+        }
+        do {
+            return .success(try await worktrees.create(prepared.request, caller: .cli))
+        } catch {
+            return .failure(.init(message: error.localizedDescription))
+        }
     }
 
     public func delegatedSessionParentsChanged() {}

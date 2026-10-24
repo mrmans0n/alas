@@ -264,6 +264,41 @@ struct AlasHostTests {
         #expect(!environment.admitsAgent(disabled.agentDefinition.id, remoteHost: nil))
     }
 
+    /// An agent on a headless host can start a child session in a new
+    /// worktree: it is created where its destination was recorded, and listed.
+    @Test func aHeadlessHostCreatesADelegatedSessionsWorktree() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-delegated-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = root.appendingPathComponent("repo")
+        try GitTemplate.repository(at: repo)
+        var config = AppConfig.defaults
+        config.worktrees.rootPath = root.appendingPathComponent("worktrees").path
+        let core = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: []),
+            projectsFile: root.appendingPathComponent("projects.json"),
+            runHistoryStore: nil,
+            workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+            attentionStore: .scratch(),
+            environment: HeadlessHostEnvironment(configuration: config)
+        )
+        let project = try await core.addProject(path: repo, displayName: "repo", icon: .default())
+        let host = AlasHost(core: core)
+        var recorded: URL?
+
+        let result = await core.environment.createDelegatedWorktree(
+            projectID: project.id, branch: "child", base: nil, recordDestination: { recorded = $0 }, in: core
+        )
+
+        guard case .success(let wt) = result else {
+            Issue.record("expected a worktree, got \(result)")
+            return
+        }
+        #expect(wt.branch == "child")
+        #expect(recorded?.standardizedFileURL == wt.path.standardizedFileURL)
+        #expect(host.worktrees.list().contains { $0.worktree.id == wt.id })
+    }
+
     /// A host serves only its own process's data directory, so no store
     /// writes another profile's.
     @Test func bootRefusesAnotherProcesssDirectory() {

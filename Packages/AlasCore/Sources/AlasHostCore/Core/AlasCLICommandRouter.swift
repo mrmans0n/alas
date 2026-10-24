@@ -37,6 +37,8 @@ public struct AlasCLICommandRouter {
         .error("Computer use is not available.")
     }
     var activateApp: () -> Void
+    /// On a headless host, screen-bound commands are refused.
+    var isHeadless = false
 
     public init(
         host: AlasHost,
@@ -64,7 +66,8 @@ public struct AlasCLICommandRouter {
         computerCommand: @escaping (ComputerUseCommand, String) async -> AlasCLIResponse = { _, _ in
             .error("Computer use is not available.")
         },
-        activateApp: @escaping () -> Void
+        activateApp: @escaping () -> Void,
+        isHeadless: Bool = false
     ) {
         self.host = host
         self.openRelativeFile = openRelativeFile
@@ -80,6 +83,7 @@ public struct AlasCLICommandRouter {
         self.previewCommand = previewCommand
         self.computerCommand = computerCommand
         self.activateApp = activateApp
+        self.isHeadless = isHeadless
     }
 
     /// Also used by plugins (`review/comment`), so they take the CLI's paths rather than a copy of them.
@@ -103,6 +107,7 @@ public struct AlasCLICommandRouter {
     }
 
     public func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
+        if isHeadless, Self.isScreenBound(request.command) { return Self.headlessRefusal }
         let service = self.service
         let callers = host.callers
         // Attributed to the session only once the host knows it.

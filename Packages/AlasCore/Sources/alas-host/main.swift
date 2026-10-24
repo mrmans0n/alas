@@ -184,6 +184,7 @@ do {
 } catch {
     fail("cannot load \(Paths.appSupportRoot.path): \(error.localizedDescription)")
 }
+host.serveCLI()
 
 let protocolServer = HostProtocolServer(host: host)
 guard let socket = HostSocketServer(server: protocolServer) else {
