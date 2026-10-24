@@ -68,7 +68,8 @@ extension AppState {
                 return self.agent(id: session.agentId)?.displayName ?? session.agentId
             },
             showSession: { [weak self] in self?.showComputerUseSession($0) },
-            stopShortcutWarning: { [weak self] in self?.computerUseStopHotKey?.unavailableReason }
+            stopShortcutWarning: { [weak self] in self?.computerUseStopHotKey?.unavailableReason },
+            stopShortcut: { [weak self] in self?.binding(for: .stopComputerUse) }
         )
         computerUseStatusItem = item
         item.start()

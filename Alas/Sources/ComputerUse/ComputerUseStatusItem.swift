@@ -1,3 +1,4 @@
+import AlasCore
 import AppKit
 import Observation
 
@@ -8,7 +9,9 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
     private let label: (String, String) -> String
     private let showSession: (String) -> Void
     private let stopShortcutWarning: () -> String?
+    private let stopShortcut: () -> ShortcutBinding?
     private var warningItem: NSMenuItem?
+    private var stopItem: NSMenuItem?
     private var item: NSStatusItem?
     private var sessionID: String?
 
@@ -16,12 +19,14 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
         coordinator: ComputerUseCoordinator,
         agentName: @escaping (String) -> String,
         showSession: @escaping (String) -> Void,
-        stopShortcutWarning: @escaping () -> String?
+        stopShortcutWarning: @escaping () -> String?,
+        stopShortcut: @escaping () -> ShortcutBinding?
     ) {
         self.coordinator = coordinator
         self.label = { agentName($0) + " is using " + $1 }
         self.showSession = showSession
         self.stopShortcutWarning = stopShortcutWarning
+        self.stopShortcut = stopShortcut
         super.init()
     }
 
@@ -56,7 +61,9 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         let stop = NSMenuItem(title: "Stop", action: #selector(stopAction), keyEquivalent: "")
         stop.target = self
+        Self.showShortcut(stopShortcut(), on: stop)
         menu.addItem(stop)
+        stopItem = stop
         let warning = NSMenuItem(title: "", action: nil, keyEquivalent: "")
         warning.isEnabled = false
         warning.isHidden = true
@@ -72,6 +79,42 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
         let warning = stopShortcutWarning()
         warningItem?.title = warning ?? ""
         warningItem?.isHidden = warning == nil
+        if let stopItem { Self.showShortcut(stopShortcut(), on: stopItem) }
+    }
+
+    /// Shows the stop shortcut next to Stop; the system-wide hot key is what acts on it.
+    private static func showShortcut(_ binding: ShortcutBinding?, on item: NSMenuItem) {
+        let equivalent = binding.flatMap(menuKeyEquivalent)
+        item.keyEquivalent = equivalent?.key ?? ""
+        item.keyEquivalentModifierMask = equivalent?.modifiers ?? []
+    }
+
+    /// The binding as AppKit spells a menu item's key equivalent; nil for a key it can't show.
+    static func menuKeyEquivalent(_ binding: ShortcutBinding) -> (key: String, modifiers: NSEvent.ModifierFlags)? {
+        let named: [String: Int] = [
+            "return": 0x0D, "tab": 0x09, "space": 0x20, "delete": 0x08, "escape": 0x1B,
+            "leftArrow": NSLeftArrowFunctionKey, "rightArrow": NSRightArrowFunctionKey,
+            "upArrow": NSUpArrowFunctionKey, "downArrow": NSDownArrowFunctionKey,
+        ]
+        let key: String
+        if let code = named[binding.key], let scalar = UnicodeScalar(code) {
+            key = String(Character(scalar))
+        } else if binding.key.count == 1 {
+            // An uppercase letter would read as Shift too.
+            key = binding.key.lowercased()
+        } else {
+            return nil
+        }
+        var modifiers: NSEvent.ModifierFlags = []
+        for modifier in binding.modifiers {
+            switch modifier {
+            case .command: modifiers.insert(.command)
+            case .shift: modifiers.insert(.shift)
+            case .option: modifiers.insert(.option)
+            case .control: modifiers.insert(.control)
+            }
+        }
+        return (key, modifiers)
     }
 
     @objc private func showSessionAction() {
