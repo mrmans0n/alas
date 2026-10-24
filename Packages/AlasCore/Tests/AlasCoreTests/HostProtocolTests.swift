@@ -135,15 +135,14 @@ struct HostProtocolTests {
         ))
     }
 
-    @Test func helloOmitsConsoleCapabilitiesForAServerWithoutConsoles() {
+    @Test(arguments: [[], PeerConsoleCapability.appHost, PeerConsoleCapability.headlessHost])
+    func helloAdvertisesExactlyTheConsoleCapabilitiesItServes(_ console: [String]) {
         guard case .hello(_, _, _, _, _, let caps) = RemoteServerMessage.hello(
-            RemoteServerIdentity(serverId: "s", name: "n", servesPeerConsoles: false)) else {
+            RemoteServerIdentity(serverId: "s", name: "n", consoleCapabilities: console)) else {
             Issue.record("expected hello")
             return
         }
-        #expect(!caps.contains(PeerConsoleCapability.v1))
-        #expect(!caps.contains(PeerConsoleCapability.terminateV1))
-        #expect(caps.contains(PeerSessionTabsCapability.v1))
+        #expect(caps == console + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
     }
 
     /// `peers remove` takes an id or server id as is, and a name only when

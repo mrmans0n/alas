@@ -277,7 +277,7 @@ if let listen = config.hostRemoteListen {
             )
         },
         // No terminals here, so a Mac does not offer them.
-        identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName, servesPeerConsoles: false) },
+        identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName, consoleCapabilities: []) },
         signer: identityKey
     )
     localPeerIdentity = {
