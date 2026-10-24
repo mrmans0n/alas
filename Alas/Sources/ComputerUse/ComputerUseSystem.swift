@@ -888,10 +888,18 @@ extension LiveComputerUseSystem {
                 guard let visible = try await ComputerUseAXActions.visibleCenter(
                     handles, handle, within: bounds.frame, app: bounds.app, requireOwnCenter: false, isCancelled: isCancelled)
                 else { throw ComputerUseAXActions.hiddenRefusal }
-                return visible
+                return try onScreen(visible)
             case .point(let point):
-                return point
+                return try onScreen(point)
             }
+        }
+        /// Events at a point off every display reach nothing: the AX ways were tried before them.
+        func onScreen(_ point: CGPoint) throws -> CGPoint {
+            let displays = displayFrames()
+            guard displays.isEmpty || ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) else {
+                throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
+            }
+            return point
         }
         func checkCancelled() throws {
             if isCancelled() { throw CancellationError() }
@@ -908,9 +916,9 @@ extension LiveComputerUseSystem {
                 guard let visible = try await ComputerUseAXActions.visibleCenter(
                     handles, handle, within: window.frame, app: app, requireOwnCenter: true, isCancelled: isCancelled)
                 else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view; it wasn't clicked again.") }
-                location = visible
+                location = try onScreen(visible)
             case .point(let point):
-                location = point
+                location = try onScreen(point)
             }
             try checkCancelled()
             try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
@@ -926,7 +934,7 @@ extension LiveComputerUseSystem {
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case .point(let location):
                 try checkCancelled()
-                try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
+                try await ComputerUseInputPoster.click(at: try onScreen(location), button: .left, count: 1, target: target)
                 // Let the click move focus before checking what has it.
                 try? await Task.sleep(for: focusSettle)
                 try await requireActiveWindow()
