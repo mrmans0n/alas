@@ -27,7 +27,7 @@ struct ComputerUseCoordinatorTests {
             runningApps: { windows.values.map { (app: $0.app, windows: [$0]) } },
             window: { windows[$0] },
             screenshot: { _ in ComputerUseScreenshot(png: Data([0x89]), pixelSize: CGSize(width: 800, height: 600), scale: 2) },
-            axTree: { _, _, _, _ in (saveTree, treeComplete, ComputerUseAXHandles()) },
+            axTree: { _, _, _, _ in (saveTree, treeComplete ? nil : .timeLimit, ComputerUseAXHandles()) },
             perform: { input, _, _, _ in
                 recorder?.record(input)
                 recorder?.recordEvent("perform:\(Self.name(of: input))")
@@ -156,6 +156,7 @@ struct ComputerUseCoordinatorTests {
         f.access.record(.allowForSession, for: Self.notes, session: "s")
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
         #expect(json.contains(#""truncated":true"#))
+        #expect(json.contains(#""truncated_by":"time_limit""#))
     }
 
     /// Only an element nothing of which shows carries `visible`.
@@ -165,7 +166,7 @@ struct ComputerUseCoordinatorTests {
             ComputerUseAXNode(role: "AXButton", title: "Shown", frame: CGRect(x: 10, y: 10, width: 50, height: 20)),
             ComputerUseAXNode(role: "AXButton", title: "Off", frame: CGRect(x: 10, y: 320, width: 50, height: 20)),
         ])
-        system.axTree = { _, _, _, _ in (tree, true, ComputerUseAXHandles()) }
+        system.axTree = { _, _, _, _ in (tree, nil, ComputerUseAXHandles()) }
         let f = Self.fixture(system: system)
         f.access.record(.allowForSession, for: Self.notes, session: "s")
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
@@ -218,7 +219,7 @@ struct ComputerUseCoordinatorTests {
 
     @Test func failedCallKeepsTheLockWhileASiblingIsCapturing() async throws {
         let gate = TreeGate()
-        let tree = (root: ComputerUseAXNode(role: "AXWindow", title: "Inbox"), complete: true, handles: ComputerUseAXHandles())
+        let tree = (root: ComputerUseAXNode(role: "AXWindow", title: "Inbox"), cut: ComputerUseReadCut?.none, handles: ComputerUseAXHandles())
         var system = Self.system()
         system.runningApps = { [] }
         system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
@@ -253,7 +254,7 @@ struct ComputerUseCoordinatorTests {
         system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
         system.axTree = { window, _, _, _ in
             await gate.enter(window.windowID)
-            return (root: ComputerUseAXNode(role: "AXWindow", title: "Note"), complete: true, handles: ComputerUseAXHandles())
+            return (root: ComputerUseAXNode(role: "AXWindow", title: "Note"), cut: nil, handles: ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system)
         f.access.record(.allowForSession, for: Self.notes, session: "s")
@@ -465,7 +466,7 @@ struct ComputerUseCoordinatorTests {
             var tree = saveTree
             if change == .elements, read == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
             let cut = (change == .truncatedBefore && read == 2) || (change == .truncatedAfter && read == 3)
-            return (tree, !cut, ComputerUseAXHandles())
+            return (tree, cut ? .timeLimit : nil, ComputerUseAXHandles())
         }
         system.focusState = { _ in
             let caret = change == .focus && focusReads.next() == 2 ? 5 : 0
@@ -643,13 +644,13 @@ struct ComputerUseCoordinatorTests {
         ], handle: 0)
         // Only the first read still has the Save button.
         system.axTree = { _, _, _, _ in
-            guard reads.next() > 1 else { return (saveTree, true, ComputerUseAXHandles()) }
+            guard reads.next() > 1 else { return (saveTree, nil, ComputerUseAXHandles()) }
             let later = switch expiry {
             case .filteredReadRetitledTheNode: retitled
             case .filteredReadShiftedALookalikeIn: shifted
             case .turnEnd, .reinspectWithoutTheNode, .elementChanged: ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0)
             }
-            return (later, true, ComputerUseAXHandles())
+            return (later, nil, ComputerUseAXHandles())
         }
         // The element behind the handle still exists, but now reads as another button.
         system.elementMatches = { _, handle, role, title in
@@ -717,7 +718,7 @@ struct ComputerUseCoordinatorTests {
                 let read = endReads.next()
                 if drop == .mappedLate ? read >= 3 : read == 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
             }
-            return (tree, true, ComputerUseAXHandles())
+            return (tree, nil, ComputerUseAXHandles())
         }
         system.perform = { input, _, _, _ in
             recorder.record(input)
@@ -837,7 +838,7 @@ struct ComputerUseCoordinatorTests {
         system.axTree = { [saveTree] _, _, _, _ in
             var tree = saveTree
             if changed, reads.next() >= 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
-            return (tree, true, ComputerUseAXHandles())
+            return (tree, nil, ComputerUseAXHandles())
         }
         system.perform = { input, _, _, _ in
             recorder.record(input)
@@ -919,7 +920,7 @@ struct ComputerUseCoordinatorTests {
         system.usesManualAccessibility = { _ in true }
         // Read 1 is the inspect, 2 the window before the press, 3 after it, 4 after the retry.
         let saveTree = Self.saveTree
-        system.axTree = { _, _, _, _ in (saveTree, !(retryReadTruncated && reads.next() >= 4), ComputerUseAXHandles()) }
+        system.axTree = { _, _, _, _ in (saveTree, retryReadTruncated && reads.next() >= 4 ? .timeLimit : nil, ComputerUseAXHandles()) }
         // Otherwise only the focus moves with the pointer click.
         system.focusState = { _ in
             !retryReadTruncated && recorder.inputs.count > 1 ? .init(role: "AXButton", title: "Save") : nil
@@ -946,7 +947,7 @@ struct ComputerUseCoordinatorTests {
         let saveTree = Self.saveTree
         system.axTree = { _, _, _, _ in
             if reads.next() == 3 { throw ComputerUseSystemError.appNotResponding("Notes") }
-            return (saveTree, true, ComputerUseAXHandles())
+            return (saveTree, nil, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
@@ -1036,7 +1037,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         system.axTree = { _, _, _, _ in
             guard reads.next() == 1 || failure == .windowCloses else { throw ComputerUseSystemError.captureFailed("gone") }
-            return (saveTree, true, ComputerUseAXHandles())
+            return (saveTree, nil, ComputerUseAXHandles())
         }
         // Lookup 3 is the re-fetch before the post-action read.
         system.window = { _ in failure == .windowCloses && lookups.next() == 3 ? nil : window }
@@ -1061,7 +1062,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         system.axTree = { _, _, _, _ in
             recorder.recordEvent("read")
-            return (saveTree, true, ComputerUseAXHandles())
+            return (saveTree, nil, ComputerUseAXHandles())
         }
         system.perform = { _, _, _, _ in ComputerUseDelivered(delivery: .background, keyedInBackground: true) }
         system.releaseBackgroundFocus = { recorder.recordEvent("release \($0.windowID)") }
@@ -1155,7 +1156,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         // The inspect resolves the original frame; the window has moved by the click.
         system.window = { [moved] _ in lookups.next() <= 1 ? original : moved }
-        system.axTree = { _, _, _, _ in (tree, true, ComputerUseAXHandles()) }
+        system.axTree = { _, _, _, _ in (tree, nil, ComputerUseAXHandles()) }
         let cursor = ComputerUseCursor(present: { _ in }, perform: { recorder.recordEvent("\($0)") }, dismiss: {})
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes], cursor: cursor)
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
@@ -1282,8 +1283,8 @@ struct ComputerUseCoordinatorTests {
             }
             let children = done ? [ComputerUseAXNode(role: "AXStaticText", title: "Done", handle: 1)] : []
             // A walk that ran out of budget may have missed "Done".
-            let complete = waitCase != .disappearsFromPartialRead
-            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), complete, ComputerUseAXHandles())
+            let cut: ComputerUseReadCut? = waitCase == .disappearsFromPartialRead ? .nodeBudget : nil
+            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), cut, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")

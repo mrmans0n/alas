@@ -156,10 +156,10 @@ struct ComputerUseSystem: Sendable {
     var runningApps: @Sendable () async -> [(app: ComputerUseAppIdentity, windows: [ComputerUseWindow])]
     var window: @Sendable (UInt32) async -> ComputerUseWindow?
     var screenshot: @Sendable (ComputerUseWindow) async throws -> ComputerUseScreenshot
-    /// `complete` is false when the read stopped early (node budget, time limit, stalled app).
-    /// `handles` retains the elements behind each node's `handle`.
+    /// `cut` says why the read stopped early (node budget, time limit, stalled app); nil when
+    /// it read everything. `handles` retains the elements behind each node's `handle`.
     var axTree: @Sendable (ComputerUseWindow, _ maxDepth: Int, _ nodeBudget: Int, _ timeLimit: Duration) async throws
-        -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles)
+        -> (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles)
     /// Delivers one input. Throws `CancellationError` when `interrupt` reports
     /// `.cancelled` before the first event, or after the event sequence in flight;
     /// `.userActive` stops long sequences (typed text, drags) between their events.

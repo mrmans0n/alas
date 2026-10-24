@@ -766,11 +766,13 @@ final class ComputerUseCoordinator {
             let read = try await readElements(
                 window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             payload["truncated"] = read.truncated
+            payload["truncated_by"] = read.truncatedBy
             payload["elements"] = read.elements.map(Self.element)
             Self.report(depthLimited: read.depthLimited, warning: nil, into: &payload)
         case .wait:
             let read = try await waitFor(command, in: window, context: context)
             payload["truncated"] = read.truncated
+            payload["truncated_by"] = read.truncatedBy
             payload["elements"] = read.elements.map(Self.element)
             Self.report(depthLimited: read.depthLimited, warning: nil, into: &payload)
         case .click, .type, .key, .scroll, .drag:
@@ -1109,6 +1111,7 @@ final class ComputerUseCoordinator {
         payload: inout [String: Any]
     ) async throws -> Settled {
         payload["truncated"] = read.truncated
+        payload["truncated_by"] = read.truncatedBy
         payload["elements"] = read.elements.map(Self.element)
         let after = await fingerprint(of: window, read: read, target: target)
         let kind = Self.changeKind(command.action)
@@ -1139,6 +1142,7 @@ final class ComputerUseCoordinator {
             let read = try await readElements(
                 current, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             entry["truncated"] = read.truncated
+            entry["truncated_by"] = read.truncatedBy
             entry["elements"] = read.elements.map(Self.element)
             if read.depthLimited { entry["depth_limited"] = true }
             return (current, read)
@@ -1327,7 +1331,7 @@ final class ComputerUseCoordinator {
 
     private func waitFor(
         _ command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext
-    ) async throws -> (truncated: Bool, elements: [ComputerUseInspectElement], depthLimited: Bool) {
+    ) async throws -> ElementRead {
         let query = command.query ?? ""
         let timeout = Duration.milliseconds(command.timeoutMS)
         let clock = ContinuousClock()
@@ -1345,7 +1349,7 @@ final class ComputerUseCoordinator {
             if met, await system.credentialPrompt(window.app.pid) { throw Refusal(Message.credentialPrompt(window.app)) }
             if met {
                 record(refs: read, of: window, context: context)
-                return (read.truncated, read.elements, read.depthLimited)
+                return read
             }
             // Slow reads count too, so a stalled app can't stretch the wait.
             if slept >= timeout || clock.now - start >= timeout {
@@ -1366,6 +1370,8 @@ final class ComputerUseCoordinator {
 
     private struct ElementRead {
         var truncated: Bool
+        /// What cut a truncated read short (`ComputerUseInspectTree.truncation`).
+        var truncatedBy: String?
         /// Elements were left out for being deeper than the read's max depth.
         var depthLimited = false
         var elements: [ComputerUseInspectElement]
@@ -1412,7 +1418,9 @@ final class ComputerUseCoordinator {
         }
         collect(tree.root, above: [])
         let read = ElementRead(
-            truncated: flat.truncated || !tree.complete, depthLimited: flat.depthLimited, elements: flat.elements,
+            truncated: flat.truncated || tree.cut != nil,
+            truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: tree.cut),
+            depthLimited: flat.depthLimited, elements: flat.elements,
             handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read

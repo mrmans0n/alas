@@ -15,6 +15,22 @@ struct ComputerUseInspectTreeTests {
         ])
     }
 
+    /// A truncated result names what cut it: the element limit first, then an app that stopped
+    /// answering, then the time limit, which may have kept the read from its node budget.
+    @Test(arguments: [
+        (true, true, true, true, String?("limit")),
+        (false, true, true, true, "app_not_responding"),
+        (false, false, true, true, "time_limit"),
+        (false, false, false, true, "node_budget"),
+        (false, false, false, false, nil),
+    ])
+    func aTruncatedResultNamesWhatCutIt(
+        limitReached: Bool, appNotResponding: Bool, timedOut: Bool, budgetSpent: Bool, truncatedBy: String?
+    ) {
+        let cut = ComputerUseReadCut.reason(appNotResponding: appNotResponding, timedOut: timedOut, budgetSpent: budgetSpent)
+        #expect(ComputerUseInspectTree.truncation(limitReached: limitReached, cut: cut) == truncatedBy)
+    }
+
     @Test func flattenAssignsPreOrderRefsAndDepths() {
         let result = ComputerUseInspectTree.flatten(sample, query: nil, limit: 100, maxDepth: 10)
         #expect(result.elements.map(\.ref) == ["e1", "e2", "e3", "e4", "e5"])

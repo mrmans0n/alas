@@ -93,7 +93,35 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
     }
 }
 
+/// Why an Accessibility read stopped before it read every element within its depth.
+public enum ComputerUseReadCut: String, Sendable, Equatable {
+    /// It read as many elements as it may (a limit's worth, or a query's node budget).
+    case nodeBudget = "node_budget"
+    /// Its time limit passed.
+    case timeLimit = "time_limit"
+    /// The app stopped answering, or left elements unanswered.
+    case appNotResponding = "app_not_responding"
+
+    /// Elements in a row the app may leave unanswered (an AX message that timed out) before the
+    /// read stops: one slow element, a source editor's whole text, doesn't end the walk.
+    public static let unansweredLimit = 3
+
+    /// The reason a read reports; nil when it read everything. An app that didn't answer explains
+    /// the rest, and a time limit explains a node budget it kept the read from reaching.
+    public static func reason(appNotResponding: Bool, timedOut: Bool, budgetSpent: Bool) -> Self? {
+        if appNotResponding { return .appNotResponding }
+        if timedOut { return .timeLimit }
+        return budgetSpent ? .nodeBudget : nil
+    }
+}
+
 public enum ComputerUseInspectTree {
+    /// What `truncated_by` says about a truncated result: "limit" when it had more elements than
+    /// `limit`, else why the read stopped; nil for a result that isn't truncated.
+    public static func truncation(limitReached: Bool, cut: ComputerUseReadCut?) -> String? {
+        limitReached ? "limit" : cut?.rawValue
+    }
+
     static let maxStringLength = 200
     public static let depthHint =
         "Some elements are deeper than max_depth; pass a higher max_depth (up to 32). An input action given a query "

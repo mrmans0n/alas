@@ -94,13 +94,13 @@ enum ComputerUseAXReader {
         var isSet: Bool { flag.load(ordering: .relaxed) }
     }
 
-    /// Throws `CancellationError` when the calling task is cancelled. `complete`
-    /// is false when the walk stopped early (node budget, deadline, stalled app).
+    /// Throws `CancellationError` when the calling task is cancelled. `cut` says why the walk
+    /// stopped early (node budget, deadline, an app that didn't answer); nil when it read it all.
     /// `handles` retains every element in the tree, indexed by `ComputerUseAXNode.handle`.
     static func read(
         _ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int, timeLimit: Duration = deadline
     ) async throws
-        -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
+        -> (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles) {
         let cancel = CancelFlag()
         return try await withTaskCancellationHandler {
             await awaitTreeBuild(window, cancel: cancel)
@@ -180,8 +180,12 @@ enum ComputerUseAXReader {
         var count = 0
         /// Every element turned into a node; a node's handle is its index here.
         var elements: [AXUIElement] = []
-        /// Set on the first timeout-class AX error: the app is not answering.
+        /// Set once `ComputerUseReadCut.unansweredLimit` AX messages in a row went unanswered
+        /// (kAXErrorCannotComplete): the app is not answering.
         var appStalled = false
+        var unansweredInARow = 0
+        /// An element the app didn't answer was left without its attributes and children.
+        var skippedUnanswered = false
         /// Set when children were left unread because the budget ran out or the walk halted.
         var cutOff = false
 
@@ -197,7 +201,7 @@ enum ComputerUseAXReader {
         }
 
         func tree(for window: ComputerUseWindow) throws
-            -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
+            -> (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles) {
             let app = ComputerUseAXReader.application(window.app.pid)
 
             var windowsRef: CFTypeRef?
@@ -218,7 +222,10 @@ enum ComputerUseAXReader {
 
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
-            return (root, !cutOff && !isHalted, ComputerUseAXHandles(elements))
+            let cut = ComputerUseReadCut.reason(
+                appNotResponding: appStalled || skippedUnanswered, timedOut: ContinuousClock.now >= deadline,
+                budgetSpent: cutOff)
+            return (root, cut, ComputerUseAXHandles(elements))
         }
 
         /// Whether the window has a descendant other than an `AXGroup` within `maxDepth` levels and
@@ -262,56 +269,128 @@ enum ComputerUseAXReader {
 
         /// The root is depth 0 and counts toward the budget. Once the walk
         /// halts (stalled app, cancellation, deadline) or the budget runs out,
-        /// the nodes already built are kept and no more are read.
+        /// the nodes already built are kept and no more are read. An element the app doesn't
+        /// answer reads as `AXUnknown` without children, and the walk goes on past it.
         private func node(_ element: AXUIElement, depth: Int) -> ComputerUseAXNode {
             count += 1
             AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
-            let role = string(of: element, kAXRoleAttribute) ?? "AXUnknown"
-            let subrole = string(of: element, kAXSubroleAttribute)
+            let values = attributes(of: element)
+            let role = Self.string(values?[kAXRoleAttribute]) ?? "AXUnknown"
+            let subrole = Self.string(values?[kAXSubroleAttribute])
             // Never read the contents of a password field. Some apps expose it
             // as the role rather than the subrole; both use the same string.
             let isSecure = role == kAXSecureTextFieldSubrole || subrole == kAXSecureTextFieldSubrole
+            let children = (values?[kAXChildrenAttribute] as? [AXUIElement]) ?? []
             var result = ComputerUseAXNode(
                 role: role,
                 subrole: subrole,
-                title: string(of: element, kAXTitleAttribute),
-                value: isSecure ? nil : valueString(of: element),
-                description: string(of: element, kAXDescriptionAttribute),
-                frame: frame(of: element) ?? .zero,
-                isEnabled: bool(of: element, kAXEnabledAttribute) ?? true,
-                isFocused: bool(of: element, kAXFocusedAttribute) ?? false,
+                title: Self.string(values?[kAXTitleAttribute]),
+                value: isSecure || values == nil ? nil : valueString(of: element),
+                description: Self.string(values?[kAXDescriptionAttribute]),
+                frame: Self.frame(position: values?[kAXPositionAttribute], size: values?[kAXSizeAttribute]) ?? .zero,
+                isEnabled: Self.bool(values?[kAXEnabledAttribute]) ?? true,
+                isFocused: Self.bool(values?[kAXFocusedAttribute]) ?? false,
                 handle: elements.count
             )
             elements.append(element)
             if depth < maxDepth {
                 if count < budget, !isHalted {
-                    for child in childElements(of: element) {
+                    for child in children {
                         guard count < budget, !isHalted else {
                             cutOff = true
                             break
                         }
                         result.children.append(node(child, depth: depth + 1))
                     }
-                } else {
-                    // Conservative: the unread element may have had no children.
+                } else if values == nil || !children.isEmpty {
+                    // An element left unread may have had children.
                     cutOff = true
                 }
-            } else if !isHalted {
+            } else {
                 // At the depth limit: only whether there is more below, so the agent can ask for it.
-                var childCount: CFIndex = 0
-                let counted = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &childCount)
-                if counted == .cannotComplete { appStalled = true }
-                result.childrenUnread = counted == .success && childCount > 0
+                result.childrenUnread = !children.isEmpty
             }
             return result
         }
 
-        /// Skips the IPC once the walk has halted, and flags a stalled app.
+        /// What `node` reads of every element, in one message.
+        private static let nodeAttributes = [
+            kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXPositionAttribute,
+            kAXSizeAttribute, kAXEnabledAttribute, kAXFocusedAttribute, kAXChildrenAttribute,
+        ]
+
+        /// `nodeAttributes` by name, read in one message: a walk sends one per element rather than
+        /// one per attribute, several times faster. Attributes the element lacks are absent. Read
+        /// one at a time where the app doesn't take the batch. Nil when the walk has halted, the
+        /// element is gone, or the app didn't answer, which counts toward a stalled app.
+        private func attributes(of element: AXUIElement) -> [String: AnyObject]? {
+            guard !isHalted else { return nil }
+            var list: CFArray?
+            let result = AXUIElementCopyMultipleAttributeValues(
+                element, Self.nodeAttributes as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &list)
+            noteAnswer(result)
+            switch result {
+            case .success:
+                guard let values = list as? [AnyObject], values.count == Self.nodeAttributes.count else { return nil }
+                var byName: [String: AnyObject] = [:]
+                for (name, value) in zip(Self.nodeAttributes, values) where !Self.isError(value) { byName[name] = value }
+                return byName
+            case .cannotComplete:
+                skippedUnanswered = true
+                return nil
+            case .invalidUIElement:
+                return nil
+            default:
+                var byName: [String: AnyObject] = [:]
+                for name in Self.nodeAttributes {
+                    if let value = attribute(element, name) { byName[name] = value }
+                }
+                return isHalted ? nil : byName
+            }
+        }
+
+        /// Counts the messages in a row the app didn't answer; the limit's worth halts the walk.
+        private func noteAnswer(_ result: AXError) {
+            guard result == .cannotComplete else {
+                unansweredInARow = 0
+                return
+            }
+            unansweredInARow += 1
+            if unansweredInARow >= ComputerUseReadCut.unansweredLimit { appStalled = true }
+        }
+
+        /// A batch read's entry for an attribute that failed.
+        private static func isError(_ value: AnyObject) -> Bool {
+            CFGetTypeID(value) == AXValueGetTypeID() && AXValueGetType(value as! AXValue) == .axError
+        }
+
+        private static func string(_ value: AnyObject?) -> String? {
+            guard let value, CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
+            let string = value as! String
+            return string.isEmpty ? nil : string
+        }
+
+        private static func bool(_ value: AnyObject?) -> Bool? {
+            guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+            return CFBooleanGetValue((value as! CFBoolean))
+        }
+
+        private static func frame(position: AnyObject?, size: AnyObject?) -> CGRect? {
+            guard let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID()
+            else { return nil }
+            var point = CGPoint.zero
+            var extent = CGSize.zero
+            guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &extent)
+            else { return nil }
+            return CGRect(origin: point, size: extent)
+        }
+
+        /// Skips the IPC once the walk has halted, and counts an unanswered message.
         private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
             guard !isHalted else { return nil }
             var value: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
-            if result == .cannotComplete { appStalled = true }
+            noteAnswer(result)
             return result == .success ? value : nil
         }
 
@@ -319,11 +398,6 @@ enum ComputerUseAXReader {
             guard let value = attribute(element, name), CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
             let string = value as! String
             return string.isEmpty ? nil : string
-        }
-
-        private func bool(of element: AXUIElement, _ name: String) -> Bool? {
-            guard let value = attribute(element, name), CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
-            return CFBooleanGetValue((value as! CFBoolean))
         }
 
         /// Only text and numbers: other value types (elements, ranges) carry no
