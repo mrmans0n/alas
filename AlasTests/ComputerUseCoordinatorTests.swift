@@ -998,6 +998,31 @@ struct ComputerUseCoordinatorTests {
         #expect(hide < delivered && delivered < jump)
     }
 
+    @Test(arguments: Interruption.allCases)
+    func aDragStoppedMidDeliveryDoesNotParkTheCursor(_ interruption: Interruption) async throws {
+        let recorder = Recorder()
+        let gate = TreeGate()
+        var system = Self.system(recorder: recorder)
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            recorder.recordEvent("perform:drag")
+            await gate.enter(1)
+            return .activation
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes], cursor: Self.cursor(recorder))
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        let call = Task { await f.coordinator.perform(drag, sessionID: "s") }
+        try await eventually("dragging") { gate.entered == [1] }
+        switch interruption {
+        case .stop: await f.coordinator.stop(sessionID: "s")
+        case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
+        }
+        gate.open(1)
+        _ = await call.value
+        #expect(recorder.events.suffix(2) == ["perform:drag", "dismiss"])
+    }
+
     @Test(arguments: [
         ComputerUseAppIdentity(name: "Keychain Access", bundleID: "com.apple.keychainaccess", pid: 0),
         ComputerUseAppIdentity(name: "Alas Dev", bundleID: "io.nlopez.alas.dev", pid: 0),

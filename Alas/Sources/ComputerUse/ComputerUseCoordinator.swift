@@ -726,9 +726,10 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         try await moveCursor(Self.cursorCue(for: input, elementFrame: targetRef?.frame), over: window, context: context)
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
-        if case .drag(_, .point(let drop), _) = input {
-            // Parked where the drop landed, over the window it landed in.
-            try await moveCursor(.jump(to: drop, outline: nil, click: false), over: toWindow ?? window, context: context)
+        // Parked where the drop landed, over the window it landed in. Cosmetic once the drop is
+        // delivered: skipped when the call was stopped meanwhile, and the settle's check decides.
+        if case .drag(_, .point(let drop), _) = input, (try? checkStillActive(context)) != nil {
+            try? await moveCursor(.jump(to: drop, outline: nil, click: false), over: toWindow ?? window, context: context)
         }
         if command.action == .drag { try await refuseIfDragMovedWindow(window) }
         let changeWarning = try await settle(
