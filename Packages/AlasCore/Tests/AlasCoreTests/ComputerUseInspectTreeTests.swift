@@ -151,6 +151,8 @@ struct ComputerUseWebContentTests {
             ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXTextField")]),
         ]),
     ])
+    /// A read that stopped at its depth limit above the web content.
+    private static let deep = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", childrenUnread: true)])
     /// A web area the app hasn't filled yet.
     private static let hollow = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXWebArea")])
 
@@ -177,7 +179,7 @@ struct ComputerUseWebContentTests {
         ("com.tinyspeck.slackmacgap", empty, false),
     ])
     func onlyAChromeWindowStillEmptyGetsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode, sets: Bool) {
-        #expect(ComputerUseWebContent.needsEnhancedUserInterface(bundleID: bundleID, root: root) == sets)
+        #expect(ComputerUseWebContent.needsEnhancedUserInterface(bundleID: bundleID, root: root, cut: nil) == sets)
     }
 
     /// Only a setting Alas turned on is turned off again.
@@ -188,13 +190,24 @@ struct ComputerUseWebContentTests {
 
     /// After the wake, the window is read again until its web area has something in it, for at
     /// most `contentDeadline`.
+    /// A read cut short, or one that left children unread past its depth, may hold the content:
+    /// it ends the wait, and never asks for AXEnhancedUserInterface.
     @Test(arguments: [
-        (empty, Duration.zero, true),
-        (hollow, .milliseconds(1250), true),
-        (hollow, .milliseconds(1500), false),
-        (built, .zero, false),
+        (empty, ComputerUseReadCut?.none, Duration.zero, true),
+        (hollow, nil, .milliseconds(1250), true),
+        (hollow, nil, .milliseconds(1500), false),
+        (built, nil, .zero, false),
+        (empty, .nodeBudget, .zero, false),
+        (empty, .timeLimit, .zero, false),
+        (empty, .appNotResponding, .zero, false),
+        (deep, nil, .zero, false),
     ])
-    func firstContactWaitsForWebContentUntilTheDeadline(root: ComputerUseAXNode, waited: Duration, waits: Bool) {
-        #expect(ComputerUseWebContent.keepsWaiting(root: root, waited: waited) == waits)
+    func firstContactWaitsForWebContentUntilTheDeadline(
+        root: ComputerUseAXNode, cut: ComputerUseReadCut?, waited: Duration, waits: Bool
+    ) {
+        #expect(ComputerUseWebContent.keepsWaiting(root: root, cut: cut, waited: waited) == waits)
+        // Past the deadline the wait ends either way; the window still has no content.
+        guard waited < ComputerUseWebContent.contentDeadline else { return }
+        #expect(ComputerUseWebContent.needsEnhancedUserInterface(bundleID: "com.google.Chrome", root: root, cut: cut) == waits)
     }
 }

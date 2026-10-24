@@ -24,17 +24,28 @@ public enum ComputerUseWebContent {
     /// Whether a Chromium browser whose window still shows no web content after the first wait is
     /// asked once more, with `enhancedUserInterface`. That one is app-wide and slows window moves
     /// under window managers, so it is the second resort, and is undone after.
-    public static func needsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode) -> Bool {
-        chromeBundleIDs.contains(bundleID ?? "") && !hasWebContent(root)
+    public static func needsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode, cut: ComputerUseReadCut?) -> Bool {
+        chromeBundleIDs.contains(bundleID ?? "") && !showsContent(root: root, cut: cut)
     }
 
     /// The longest a first contact waits for the web content, from the wake.
     public static let contentDeadline: Duration = .milliseconds(1500)
 
-    /// Whether to read the window again after `waited` since the wake: its web content isn't there
-    /// yet and the deadline hasn't passed.
-    public static func keepsWaiting(root: ComputerUseAXNode, waited: Duration) -> Bool {
-        !hasWebContent(root) && waited < contentDeadline
+    /// Whether to read the window again after `waited` since the wake, read time included: its
+    /// web content isn't there yet (`showsContent`) and the deadline hasn't passed.
+    public static func keepsWaiting(root: ComputerUseAXNode, cut: ComputerUseReadCut?, waited: Duration) -> Bool {
+        !showsContent(root: root, cut: cut) && waited < contentDeadline
+    }
+
+    /// Whether a read can count as showing the window's content: a web area with something in it,
+    /// or a read that left elements unread (`cut`, or `childrenUnread` past its depth), which may
+    /// hold the content. Only a complete read without content asks for more.
+    public static func showsContent(root: ComputerUseAXNode, cut: ComputerUseReadCut?) -> Bool {
+        cut != nil || hasWebContent(root) || hasUnreadChildren(root)
+    }
+
+    static func hasUnreadChildren(_ node: ComputerUseAXNode) -> Bool {
+        node.childrenUnread || node.children.contains(where: hasUnreadChildren)
     }
 
     /// Whether Alas turned an attribute on, and so turns it off again at stop, turn end and
@@ -48,10 +59,11 @@ public enum ComputerUseWebContent {
     /// this is the first such try for it, and the window showed no web content: no web area, or
     /// one without anything in it yet.
     public static func needsWake(
-        acceptsManualAccessibility: Bool, bundleID: String?, alreadyWoken: Bool, root: ComputerUseAXNode
+        acceptsManualAccessibility: Bool, bundleID: String?, alreadyWoken: Bool, root: ComputerUseAXNode,
+        cut: ComputerUseReadCut? = nil
     ) -> Bool {
         guard !alreadyWoken, acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "") else { return false }
-        return !hasWebContent(root)
+        return !showsContent(root: root, cut: cut)
     }
 
     /// A web area with something in it.

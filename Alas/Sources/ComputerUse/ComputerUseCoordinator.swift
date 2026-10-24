@@ -1448,25 +1448,33 @@ final class ComputerUseCoordinator {
         // A Chromium or Electron window may show only empty groups, or an empty web area, at first
         // contact: an Electron app is asked for its tree, and the window is read again until its
         // web content shows, up to a deadline.
+        // The deadline counts the reads' time too, and each read gets a short limit; a read cut
+        // short ends the wait, since what it left unread may be the content.
         func awaitWebContent() async throws {
-            var waited = Duration.zero
-            while ComputerUseWebContent.keepsWaiting(root: tree.root, waited: waited) {
+            let clock = ContinuousClock()
+            let start = clock.now
+            var slept = Duration.zero
+            while ComputerUseWebContent.keepsWaiting(root: tree.root, cut: tree.cut, waited: max(slept, clock.now - start)) {
                 await sleep(Self.webContentPoll)
-                waited += Self.webContentPoll
+                slept += Self.webContentPoll
                 try checkStillActive(context)
+                tree = try await system.axTree(window, maxDepth, budget, min(readLimit, Self.webContentReadLimit))
+            }
+            // A short read that stopped the wait is read again with the call's own limit.
+            if slept > .zero, tree.cut != nil {
                 tree = try await system.axTree(window, maxDepth, budget, readLimit)
             }
         }
         if ComputerUseWebContent.needsWake(
             acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid), bundleID: window.app.bundleID,
-            alreadyWoken: wokenWebContent.contains(window.app.pid), root: tree.root) {
+            alreadyWoken: wokenWebContent.contains(window.app.pid), root: tree.root, cut: tree.cut) {
             wokenWebContent.insert(window.app.pid)
             if let attribute = ComputerUseWebContent.wakeAttribute(bundleID: window.app.bundleID) {
                 _ = await system.wakeWebContent(window.app, attribute)
             }
             try await awaitWebContent()
             // A Chromium browser that still shows none gets what VoiceOver sets, for the turn.
-            if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: tree.root) {
+            if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: tree.root, cut: tree.cut) {
                 if await system.wakeWebContent(window.app, ComputerUseWebContent.enhancedUserInterface) {
                     // A stop, turn end or session end during the set already restored what it found:
                     // this one is turned off at once instead of waiting for a lifecycle hook that ran.
@@ -1581,6 +1589,8 @@ final class ComputerUseCoordinator {
 
     /// Between reads of a web window waiting for its content (`ComputerUseWebContent.keepsWaiting`).
     static let webContentPoll: Duration = .milliseconds(250)
+    /// The time limit of each read during that wait.
+    static let webContentReadLimit: Duration = .milliseconds(500)
 
     /// Nodes an inspect with a query may read before filtering.
     static let queryNodeBudget = 10_000
