@@ -15,14 +15,18 @@ extension AlasCoreContext {
 
     /// Serialized with the project's creates and deletes. A worktree being
     /// created or deleted keeps its branch: a delete has already captured it.
-    /// Failure states are settled and do not block a rename.
+    /// Failure states are settled and do not block a rename. `revalidate`
+    /// runs under the same gate, right before the idle check; throwing
+    /// refuses the rename.
     public func renameBranchWhileIdle(
         _ worktree: Worktree,
         from: String,
         to: String,
-        requireUnpublished: Bool
+        requireUnpublished: Bool,
+        revalidate: (@MainActor @Sendable () async throws -> Void)? = nil
     ) async throws -> String {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { [self] in
+            try await revalidate?()
             let isIdle = await MainActor.run {
                 switch projects.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) {
                 case .creating, .preparingDelete, .deleting, .archiving: false
@@ -39,20 +43,28 @@ extension AlasCoreContext {
         }
     }
 
-    /// A user's rename of a listed worktree's branch, under the local menu's
-    /// rules: never the main checkout, a detached or branchless one, or one
-    /// an active Workspace checkout manages (it records the branch by name).
-    /// Returns the branch name actually used.
-    func renameListedWorktreeBranch(_ worktree: Worktree, to branch: String) async throws -> String {
+    /// A user's rename of a listed worktree's branch `from`, the one the
+    /// caller saw, under the local menu's rules: never the main checkout, a
+    /// detached or branchless one, or one an active Workspace checkout
+    /// manages (it records the branch by name). Checked under the project's
+    /// mutation gate, which a Workspace unarchive also takes. Returns the
+    /// branch name actually used.
+    func renameListedWorktreeBranch(_ worktree: Worktree, from: String, to branch: String) async throws -> String {
         try refuseIfStopping()
-        guard let project = projects.projects.first(where: { $0.id == worktree.projectId }),
-              !WorktreeCleanupScanner.isMainWorktree(worktree, of: project),
-              !worktree.branch.isEmpty, !worktree.isDetached
-        else { throw HostError.failed(message: "This worktree's branch cannot be renamed.") }
-        if let refusal = await workspaceOwnershipRefusal(for: worktree) {
-            throw HostError.failed(message: "\(refusal).")
+        let renamed = try await renameBranchWhileIdle(
+            worktree, from: from, to: branch, requireUnpublished: false
+        ) { [self] in
+            try refuseIfStopping()
+            guard let listed = projects.worktrees(projectId: worktree.projectId).first(where: { $0.id == worktree.id }),
+                  let project = projects.projects.first(where: { $0.id == worktree.projectId }),
+                  !WorktreeCleanupScanner.isMainWorktree(listed, of: project),
+                  !listed.branch.isEmpty, !listed.isDetached
+            else { throw HostError.failed(message: "This worktree's branch cannot be renamed.") }
+            guard listed.branch == from else { throw HostError.failed(message: "The worktree changed since it was listed.") }
+            if let refusal = await workspaceOwnershipRefusal(for: listed) {
+                throw HostError.failed(message: "\(refusal).")
+            }
         }
-        let renamed = try await renameBranchWhileIdle(worktree, from: worktree.branch, to: branch, requireUnpublished: false)
         if projects.pendingAutoBranchName(projectId: worktree.projectId, worktreeId: worktree.id) != nil {
             projects.removePendingAutoBranchName(projectId: worktree.projectId, worktreeId: worktree.id)
         }

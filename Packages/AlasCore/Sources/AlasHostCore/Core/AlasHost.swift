@@ -355,13 +355,13 @@ public struct WorktreesAPI {
         try core.unarchiveWorktree(path: path, projectID: projectID)
     }
 
-    /// Renames `worktree`'s branch, refusing the main checkout, a detached
-    /// or branchless one, and one a Workspace checkout manages. Returns the
-    /// branch name actually used.
+    /// Renames `worktree`'s branch `from`, refusing one no longer on it, the
+    /// main checkout, a detached or branchless one, and one a Workspace
+    /// checkout manages. Returns the branch name actually used.
     @discardableResult
-    public func renameBranch(_ worktree: Worktree, to branch: String, caller: HostCaller) async throws -> String {
+    public func renameBranch(_ worktree: Worktree, from: String, to branch: String, caller: HostCaller) async throws -> String {
         caller.log("worktrees.renameBranch", worktree.path.path)
-        return try await core.renameListedWorktreeBranch(worktree, to: branch)
+        return try await core.renameListedWorktreeBranch(worktree, from: from, to: branch)
     }
 }
 

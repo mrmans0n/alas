@@ -242,11 +242,8 @@ public final class HostProtocolConnection {
             guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
                 throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
             }
-            // What the client saw must still be what is listed.
-            guard listed.branch == from else {
-                throw HostError.failed(message: "The worktree changed since it was listed.")
-            }
-            try await host.worktrees.renameBranch(listed, to: branch, caller: caller)
+            // The branch the client saw is checked under the project's gate.
+            try await host.worktrees.renameBranch(listed, from: from, to: branch, caller: caller)
             return .done
         case .listWorkspaceCheckouts:
             return .workspaceCheckouts(checkouts: try await host.workspaces.list())
