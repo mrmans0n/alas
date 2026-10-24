@@ -13,6 +13,9 @@ final class NativePeerHosts {
     /// Each peer's latest run per (worktree, script), keyed like `worktrees`.
     private(set) var runs: [String: [RunRecord]] = [:]
     @ObservationIgnored var onChange: (@MainActor () -> Void)?
+    /// Fired with the peer's `serverId` when its runs changed, so a run's
+    /// console can be listed without waiting for the next poll.
+    @ObservationIgnored var onRunsChanged: (@MainActor (_ serverId: String) -> Void)?
 
     private let send: @MainActor (_ serverId: String, HostClientMessage) -> Void
     private let supports: @MainActor (_ serverId: String, _ capability: String) -> Bool
@@ -151,8 +154,11 @@ final class NativePeerHosts {
         channel.onChange = { [weak self, weak channel] in
             guard let self, let channel else { return }
             worktrees[serverId] = channel.state?.visibleWorktrees()
-            runs[serverId] = channel.state?.runs
+            let newRuns = channel.state?.runs
+            let runsChanged = runs[serverId] != newRuns
+            runs[serverId] = newRuns
             onChange?()
+            if runsChanged { onRunsChanged?(serverId) }
         }
         channels[serverId] = channel
         return channel

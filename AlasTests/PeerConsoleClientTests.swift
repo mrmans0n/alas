@@ -508,6 +508,32 @@ import Testing
         #expect(sent.count == 2)
     }
 
+    @Test func onDemandListRequestsCoalesceWhileOneIsInFlight() {
+        var sent: [(String, RemoteClientMessage)] = []
+        let consoles = NativePeerConsoles(
+            send: { sent.append(($0, $1)) }, supportsConsoles: { _ in true },
+            makeSurface: { _, _, _ in throw CancellationError() })
+        consoles.peersChanged(online: ["srv"])
+        consoles.receive(serverId: "srv", .list(consoles: []))
+        sent.removeAll()
+
+        consoles.refresh(serverId: "srv")
+        consoles.refresh(serverId: "srv")
+        consoles.refresh(serverId: "srv")
+        #expect(sent.count == 1)
+
+        // The burst collapses into one follow-up once the reply lands.
+        consoles.receive(serverId: "srv", .list(consoles: []))
+        #expect(sent.count == 2)
+        consoles.receive(serverId: "srv", .list(consoles: []))
+        #expect(sent.count == 2)
+
+        consoles.refresh(serverId: "srv")
+        #expect(sent.count == 3)
+        consoles.refresh(serverId: "other")
+        #expect(sent.count == 3)
+    }
+
     @Test func openingATerminalNeedsTheCapabilityAndAnswersOnlyItsOwnRequest() {
         var sent: [(String, RemoteClientMessage)] = []
         var opened: [String] = []

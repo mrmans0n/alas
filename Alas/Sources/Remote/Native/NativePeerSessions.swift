@@ -207,6 +207,7 @@ final class NativePeerSessions {
         consoles?.onListChanged = { [weak self] in self?.rebuildSnapshot() }
         consoles?.onOpened = { [weak self] in self?.selectConsole(serverId: $0, consoleId: $1) }
         hosts?.onChange = { [weak self] in self?.rebuildSnapshot() }
+        hosts?.onRunsChanged = { [weak consoles] in consoles?.refresh(serverId: $0) }
     }
 
     /// Only the sidebar model: console lists change nothing a selected
