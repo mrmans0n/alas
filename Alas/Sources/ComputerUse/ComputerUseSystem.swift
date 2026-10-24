@@ -618,7 +618,7 @@ extension LiveComputerUseSystem {
         let found = try await ComputerUseAXActions.elements(at: point, app: window.app, isCancelled: isCancelled)
         let onTop = ComputerUseInputGeometry.topmostWindow(at: point, in: screenWindows(), ignoring: ignoring()) == window.windowID
         let route = ComputerUseInputGeometry.pointRoute(
-            targetPID: window.app.pid, hostPID: getpid(), window: window.frame, appHit: found.app?.hit,
+            point: point, targetPID: window.app.pid, hostPID: getpid(), window: window.frame, appHit: found.app?.hit,
             systemHit: found.system?.hit, targetOnTop: onTop)
         let element: ComputerUseAXActions.PointElement?
         switch route {

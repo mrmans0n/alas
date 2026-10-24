@@ -40,23 +40,29 @@ public enum ComputerUseInputGeometry {
         case covered
     }
 
-    /// How an x/y click or scroll reaches the point. `appHit` is the target app's own hit test,
+    /// How an x/y click or scroll at `point` reaches it. `appHit` is the target app's own hit test,
     /// which sees its windows even under other apps'; `systemHit` is the system-wide one, which
     /// names whatever is on top, so it counts only when the target window is topmost there
     /// (`targetOnTop`), and never when it is Alas's own (`hostPID`: the drawn cursor).
-    /// An app hit whose frame can't be read counts as inside the window it was asked about.
+    /// Another process's element counts as in the window when the point is in the window and the
+    /// element's frame holds the point (a row half scrolled out still does); an app hit whose
+    /// frame can't be read counts as in it.
     public static func pointRoute(
-        targetPID: Int32, hostPID: Int32, window: CGRect, appHit: PointHit?, systemHit: PointHit?, targetOnTop: Bool
+        point: CGPoint, targetPID: Int32, hostPID: Int32, window: CGRect, appHit: PointHit?, systemHit: PointHit?,
+        targetOnTop: Bool
     ) -> PointRoute {
-        let bounds = window.insetBy(dx: -frameTolerance, dy: -frameTolerance)
+        func inWindow(_ frame: CGRect?, unknown: Bool) -> Bool {
+            guard window.contains(point) else { return false }
+            return frame.map { $0.insetBy(dx: -frameTolerance, dy: -frameTolerance).contains(point) } ?? unknown
+        }
         if let appHit, appHit.pid != targetPID {
-            return appHit.frame.map(bounds.contains) ?? true ? .appHit : .covered
+            return inWindow(appHit.frame, unknown: true) ? .appHit : .covered
         }
         guard targetOnTop, let systemHit, systemHit.pid != targetPID, systemHit.pid != hostPID else { return .events }
-        return systemHit.frame.map(bounds.contains) ?? false ? .systemHit : .covered
+        return inWindow(systemHit.frame, unknown: false) ? .systemHit : .covered
     }
 
-    /// Points a frame may stick out of its window and still count as inside it.
+    /// Points a frame may miss the point by and still count as holding it.
     static let frameTolerance: CGFloat = 2
 
     /// Whether the window's frame no longer is the one its screenshot was taken with.
