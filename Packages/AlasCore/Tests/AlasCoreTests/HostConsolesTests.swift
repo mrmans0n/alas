@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AlasCore
 @_spi(Testing) import AlasIntegrations
-@_spi(AppHost) @testable import AlasHostCore
+@_spi(AppHost) @_spi(Testing) @testable import AlasHostCore
 
 @MainActor
 struct HostConsolesTests {
@@ -298,6 +298,86 @@ struct HostConsolesTests {
         #expect(consoles.summaries().map(\.consoleId) == [id])
     }
 
+    // MARK: - Runs
+
+    @Test func aConsolesFileFromBeforeRunsReadsAsShells() throws {
+        let json = #"{"consoles":[{"id":"c","worktreeId":"w","title":"Terminal 1","zmxName":"alashost-a-b","rows":24,"columns":120}]}"#
+        let file = try JSONDecoder().decode(HostConsolesFile.self, from: Data(json.utf8))
+        #expect(file.consoles.map(\.scriptKey) == [nil])
+    }
+
+    @Test func aRunLaunchesInAShellThatSourcesTheCapturedCommand() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started(let runID) = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+
+        let launch = try #require(fixture.launches.first)
+        #expect(Array(launch.arguments.dropFirst(2)) == ["/bin/zsh", "-l", "-i"])
+        let rc = try String(contentsOfFile: #require(launch.environment["ZDOTDIR"]) + "/.zshrc", encoding: .utf8)
+        #expect(rc.contains("__alas_run_script_capture") && rc.contains(script.fileURL.path))
+        let record = try #require(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key))
+        let summary = try #require(consoles.summaries().first)
+        #expect((record.sessionID, summary.title) == (summary.consoleId, "Dev"))
+        #expect(try fixture.savedFile()?.consoles.map(\.scriptKey) == [script.key])
+
+        try fixture.complete(runID: runID, exitCode: 0)
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.succeeded) }
+        #expect(consoles.summaries().map(\.consoleId) == [summary.consoleId]) // keep: the console stays
+    }
+
+    /// zmx's `attach` fails when the command exits before it connects, though
+    /// the command ran: the run settles by its completion, not as never started.
+    @Test func aRunWhoseAttachFailsSettlesByItsCompletion() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.fakes.withLock { $0.launchFails = true }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .close)
+        guard case .started(let runID) = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        try fixture.complete(runID: runID, exitCode: 3)
+        await fixture.core.waitForStartingRunsForTesting()
+
+        #expect(fixture.killed == fixture.launches.map { $0.arguments[1] })
+        #expect(consoles.summaries().isEmpty)
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        try await eventually {
+            await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.failed(exitCode: 3))
+        }
+    }
+
+    enum NoConsole: CaseIterable { case noZmx, fish }
+
+    @Test(arguments: NoConsole.allCases)
+    func withoutZmxOrAnInjectableShellARunIsAPlainProcess(_ kind: NoConsole) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles(
+            zmx: kind == .noZmx ? ZmxClient(env: ZmxEnv(binaryURL: nil, zmxDir: fixture.zmxDir)) : nil,
+            shell: kind == .fish ? "/opt/homebrew/bin/fish" : "/bin/zsh"
+        )
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .close)
+
+        #expect(try await fixture.core.runScript(script, in: fixture.worktree) == .succeeded)
+        #expect(fixture.launches.isEmpty)
+        #expect(consoles.summaries().isEmpty)
+        #expect(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key)?.sessionID == nil)
+    }
+
     private static func git(_ arguments: [String], in directory: URL) throws {
         let git = Process()
         git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -368,6 +448,9 @@ struct HostConsolesTests {
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
                 attentionStore: .scratch(),
+                // Short enough for `eventually`, not zero: an already-written
+                // `.done` wins over the idle check.
+                runHostGrace: RunHostGrace(local: .milliseconds(200), any: .milliseconds(200)),
                 orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
             )
             let fakes = SharedFakes()
@@ -393,7 +476,7 @@ struct HostConsolesTests {
             )
         }
 
-        func consoles(zmx override: ZmxClient? = nil) -> HostConsoles {
+        func consoles(zmx override: ZmxClient? = nil, shell: String = "/bin/zsh") -> HostConsoles {
             let fakes = fakes
             let zmx = override ?? zmx
             let projects = projects
@@ -435,8 +518,25 @@ struct HostConsolesTests {
                     }
                 },
                 baseEnvironment: { [:] },
-                shell: "/bin/zsh"
+                shell: shell
             )
+        }
+
+        func runScript(onExit: RunScriptOnExit) throws -> RunScript {
+            let url = worktree.path.appendingPathComponent(".alas/scripts/dev.sh")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "exit 0\n".write(to: url, atomically: true, encoding: .utf8)
+            return RunScript(
+                scope: .repo, fileName: "dev.sh", fileURL: url, displayName: "Dev",
+                onExit: onExit, cwd: nil, isExecutable: false
+            )
+        }
+
+        func complete(runID: String, exitCode: Int32) throws {
+            let path = try RunScriptCompletionMonitor.paths(runID: runID, host: nil).paths.completion
+            let url = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "\(exitCode)\t1.0\n".write(to: url, atomically: true, encoding: .utf8)
         }
 
         func socketPath(of consoleId: String) -> String? {

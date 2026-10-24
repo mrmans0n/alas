@@ -26,6 +26,7 @@ public struct HostShellLaunch: Equatable, Sendable {
         directory: URL,
         shell: String,
         shellArguments: [String] = ["-l"],
+        environmentOverrides: [String: String] = [:],
         baseEnvironment: [String: String]
     ) -> HostShellLaunch? {
         guard zmx.isAvailable, let zmxDir = zmx.env.zmxDir else { return nil }
@@ -45,6 +46,7 @@ public struct HostShellLaunch: Equatable, Sendable {
         if ["LANG", "LC_ALL", "LC_CTYPE"].allSatisfy({ environment[$0] == nil }) {
             environment["LANG"] = "en_US.UTF-8"
         }
+        environment.merge(environmentOverrides) { _, override in override }
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["ZMX_DIR"] = zmxDir.path

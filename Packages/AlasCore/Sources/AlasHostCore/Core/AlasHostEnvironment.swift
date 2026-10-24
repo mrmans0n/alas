@@ -237,6 +237,12 @@ public final class HeadlessHostEnvironment: AlasHostEnvironment {
         modelCatalog = ACPAgentModelCatalog()
     }
 
+    /// The launcher a host installs to run scripts in its consoles. Weak:
+    /// the consoles hold the core, which holds this environment.
+    @_spi(AppHost) public weak var runLauncherOverride: (any RunLauncher)?
+
+    public var runLauncher: any RunLauncher { runLauncherOverride ?? HeadlessRunLauncher.shared }
+
     public func configuration() -> AppConfig { config }
 
     public func globalTerminalConfig() -> AppConfig.Terminal { config.terminal }

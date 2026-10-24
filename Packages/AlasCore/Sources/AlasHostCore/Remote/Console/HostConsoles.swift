@@ -4,6 +4,7 @@ import AlasFoundation
 import AlasModel
 import AlasPlatform
 import AlasACP
+import AlasFeatures
 
 private let consolesLogger = Logger(subsystem: "io.nlopez.alas", category: "HostConsoles")
 
@@ -14,14 +15,18 @@ public struct HostConsoleEntry: Codable, Equatable, Sendable {
     public let zmxName: String
     public var rows: Int
     public var columns: Int
+    /// The run script this console hosts; nil for a shell. Absent in files
+    /// written before runs had consoles.
+    public let scriptKey: String?
 
-    public init(id: String, worktreeId: String, title: String, zmxName: String, rows: Int, columns: Int) {
+    public init(id: String, worktreeId: String, title: String, zmxName: String, rows: Int, columns: Int, scriptKey: String? = nil) {
         self.id = id
         self.worktreeId = worktreeId
         self.title = title
         self.zmxName = zmxName
         self.rows = rows
         self.columns = columns
+        self.scriptKey = scriptKey
     }
 }
 
@@ -94,6 +99,7 @@ public final class HostConsoles {
         // forgetting their project would hide them the same way.
         core.willRemoveWorktree = { try await consoles.terminateConsoles(inWorktree: $0) }
         core.hasHostConsoles = { consoles.hasConsoles(inWorktrees: $0) }
+        (core.environment as? HeadlessHostEnvironment)?.runLauncherOverride = consoles
         return consoles
     }
 
@@ -304,5 +310,68 @@ public final class HostConsoles {
         } catch {
             consolesLogger.error("Could not save host consoles: \(String(describing: error), privacy: .public)")
         }
+    }
+}
+
+/// Headless runs launch in consoles, as the app's run in tabs: the login
+/// shell sources the captured command, so peers can attach and watch.
+/// Without zmx, or with a shell the command can't be injected into, a run
+/// is a plain process as before.
+extension HostConsoles: RunLauncher {
+    public func refusal(for script: RunScript, in worktree: Worktree, project: ProjectConfig) -> String? {
+        HeadlessRunLauncher.shared.refusal(for: script, in: worktree, project: project)
+    }
+
+    public func launch(_ request: RunLaunchRequest, in core: AlasCoreContext) async throws -> RunLaunch {
+        guard isAvailable, StartupScriptInstaller.supportsStartupScriptInjection(shell: shell) else {
+            return try await HeadlessRunLauncher.shared.launch(request, in: core)
+        }
+        let worktreeId = request.worktree.id
+        let worktree = try admittedWorktree(worktreeId)
+        await ShellEnvResolver.shared.waitUntilResolved()
+        // One console per script and worktree, as in the app.
+        _ = await stop(entries.filter { $0.worktreeId == worktreeId && $0.scriptKey == request.script.key })
+        let id = UUID().uuidString
+        let name = ZmxSessionName.hostShell(worktreeId: worktreeId, consoleId: id)
+        let plan = try StartupScriptInstaller.plan(shell: shell, startupScript: request.command, sessionId: id)
+        guard let shellLaunch = HostShellLaunch.make(
+            zmx: zmx, sessionName: name, directory: worktree.path, shell: shell,
+            shellArguments: plan.args, environmentOverrides: plan.envOverrides, baseEnvironment: baseEnvironment()
+        ) else { throw PeerConsoleOpenError.zmxMissing }
+        do {
+            try await launch(shellLaunch)
+        } catch {
+            // `attach` also fails when the command exits before it connects,
+            // though it ran. With the daemon killed and no entry, the run
+            // settles by its completion file, or as unknown after the grace.
+            let zmx = zmx
+            await BlockingWork.run { zmx.killSession(name: name) }
+            return .hosted(sessionID: id)
+        }
+        // The launch suspended: a removal may have claimed or deleted the
+        // worktree meanwhile, and its cleanup ran without this shell.
+        do {
+            _ = try admittedWorktree(worktreeId)
+        } catch {
+            let zmx = zmx
+            await BlockingWork.run { zmx.killSession(name: name) }
+            throw error
+        }
+        entries.append(HostConsoleEntry(
+            id: id, worktreeId: worktreeId, title: request.script.displayName, zmxName: name,
+            rows: Self.launchRows, columns: Self.launchColumns, scriptKey: request.script.key
+        ))
+        save()
+        return .hosted(sessionID: id)
+    }
+
+    public func hostSessionExists(_ sessionID: String) -> Bool {
+        pruneExited()
+        return entries.contains { $0.id == sessionID }
+    }
+
+    /// A gone socket means the shell exited.
+    public func hostSessionIsIdle(_ sessionID: String) -> Bool {
+        !hostSessionExists(sessionID)
     }
 }
