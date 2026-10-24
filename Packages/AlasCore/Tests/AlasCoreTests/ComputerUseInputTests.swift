@@ -438,3 +438,38 @@ struct ComputerUseInputTests {
         #expect(Motion.startPoint(in: window, size: CGSize(width: 200, height: 100), last: last) == expected)
     }
 }
+
+@Suite struct ComputerUseTextCheckTests {
+    typealias Verdict = ComputerUseTextCheck.Verdict
+
+    @Test(arguments: [
+        // A Chromium field that reported success and kept its value, after ⌘A and at the caret.
+        ("kotlin", "compose", (0, 7), "compose", Verdict.unchanged),
+        ("kotlin", "compose", (7, 0), "compose", .unchanged),
+        ("kotlin", "compose", (7, 0), "composekotlin", .landed),
+        ("kotlin", "compose", (0, 7), "kotlin", .landed),
+        // A field that formats what it takes still changed: typing again would double it.
+        ("5551234", "", (0, 0), "(555) 1234", .landed),
+        // Text put over the same selected text leaves the value as it was.
+        ("pose", "compose", (3, 4), "compose", .landed),
+        ("kotlin", nil, (0, 0), "kotlin", .unknown),
+        ("kotlin", "compose", nil, nil, .unknown),
+    ] as [(String, String?, (Int, Int)?, String?, Verdict)])
+    func anInsertLandedWhenTheValueChanged(
+        inserted: String, before: String?, selection: (Int, Int)?, after: String?, verdict: Verdict
+    ) {
+        #expect(ComputerUseTextCheck.insert(inserted, before: before, selection: selection, after: after) == verdict)
+    }
+
+    @Test(arguments: [
+        ("kotlin", "compose", "kotlin", Verdict.landed),
+        ("kotlin", "compose", "compose", .unchanged),
+        ("kotlin", "kotlin", "kotlin", .landed),
+        ("5551234", "", "(555) 1234", .landed),
+        ("kotlin", nil, "compose", .unknown),
+        ("kotlin", "compose", nil, .unknown),
+    ] as [(String, String?, String?, Verdict)])
+    func aReplaceLandedWhenTheValueIsTheTextOrChanged(text: String, before: String?, after: String?, verdict: Verdict) {
+        #expect(ComputerUseTextCheck.replace(with: text, before: before, after: after) == verdict)
+    }
+}

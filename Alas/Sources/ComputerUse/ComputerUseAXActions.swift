@@ -31,8 +31,8 @@ enum ComputerUseAXActions {
     }
 
     /// Replaces the element's value. Refuses secure text fields. Throws
-    /// `Unsupported` when the element doesn't take a value this way, so typing
-    /// can be tried instead.
+    /// `Unsupported` when the element doesn't take a value this way, or reads
+    /// back as it was, so typing can be tried instead.
     static func setValue(
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
         interrupt: @escaping Interrupt
@@ -40,8 +40,7 @@ enum ComputerUseAXActions {
         try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
-            let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
-            guard result == .success else { throw failure(result, app: app) }
+            try setValueChecked(text, element, app: app)
         }
     }
 
@@ -459,6 +458,12 @@ extension ComputerUseAXActions {
     static let scrollValuePerLine = 0.05
     /// Characters set per AX insert, so a stop or takeover can land between them.
     static let insertChunkCharacters = 200
+    /// Values longer than this aren't read back to check an insert; the length check stands in.
+    static let valueCheckCharacters = 200_000
+    /// After an AX insert or replace left the value as it was, how often and how long it is read
+    /// again before the text counts as not taken: an app may update its value a moment later.
+    static let landedPolls = 8
+    static let landedPoll: TimeInterval = 0.025
 
     /// Presses the enabled menu item whose shortcut is `chord` and returns its path in the app's
     /// menu titles ("Format > Font > Bold"); nil when no enabled menu item has it.
@@ -681,8 +686,7 @@ extension ComputerUseAXActions {
             guard let element = focusedElement(of: app) else { throw Unsupported(error: .noValue) }
             try refuseSecure(element, app: app)
             guard replace else { return Retained(element) }
-            let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
-            guard result == .success else { throw failure(result, app: app) }
+            try setValueChecked(text, element, app: app)
             return nil
         }
         if let element { try await insert(text, into: textTarget(element.element), app: app, interrupt: interrupt) }
@@ -984,8 +988,10 @@ extension ComputerUseAXActions {
 
     /// Sets the selected text `insertChunkCharacters` characters at a time, checking `interrupt`
     /// between chunks: a stop throws `CancellationError` and a takeover `userTookOver` with the
-    /// characters inserted so far. Checks the first chunk went in, since some apps report success
-    /// and insert nothing; that first failure is `Unsupported`, so events may type the text instead.
+    /// characters inserted so far. Checks the first chunk went in by reading the value back
+    /// (`ComputerUseTextCheck`), or its length where the value can't be read, since some apps
+    /// (Chromium) report success and insert nothing; that first failure is `Unsupported`, so events
+    /// may type the text instead.
     /// Any later failure is a tool error, so nothing already inserted gets typed twice.
     /// Each chunk goes at the caret the text so far left (from the selection read before the first
     /// one): the user or the app moving the caret in between stops the input rather than splitting
@@ -1013,13 +1019,14 @@ extension ComputerUseAXActions {
                     "\(app.name) moved the text cursor; stopped after typing \(typedSoFar) of \(total) characters.")
                 var startLocation = startLocation
                 var countBefore: Int?
-                var selectionWasEmpty: Bool?
+                var selection: CFRange?
+                var valueBefore: String?
                 if typedSoFar == 0 {
                     guard target.canSetSelectedText() else { throw Unsupported(error: .attributeUnsupported) }
                     countBefore = target.characterCount()
-                    let range = target.selectedRange()
-                    selectionWasEmpty = range.map { $0.length == 0 }
-                    startLocation = range?.location
+                    selection = target.selectedRange()
+                    startLocation = selection?.location
+                    if (countBefore ?? 0) <= valueCheckCharacters { valueBefore = target.value() }
                 } else {
                     switch interrupt() {
                     case .cancelled: throw CancellationError()
@@ -1041,16 +1048,40 @@ extension ComputerUseAXActions {
                     throw ComputerUseSystemError.actionFailed(
                         "\(app.name) stopped taking the text after \(typedSoFar) of \(total) characters (AXError \(result.rawValue)).")
                 }
-                // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
-                if typedSoFar == 0, !chunk.isEmpty, selectionWasEmpty == true, let countBefore,
-                   target.characterCount() == countBefore {
-                    throw Unsupported(error: .attributeUnsupported)
+                if typedSoFar == 0, !chunk.isEmpty {
+                    let landed = awaitLanded {
+                        ComputerUseTextCheck.insert(
+                            chunk, before: valueBefore, selection: selection.map { ($0.location, $0.length) },
+                            after: valueBefore == nil ? nil : target.value())
+                    }
+                    switch landed {
+                    case .landed: break
+                    case .unchanged: throw Unsupported(error: .attributeUnsupported)
+                    case .unknown:
+                        // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
+                        if selection?.length == 0, let countBefore, target.characterCount() == countBefore {
+                            throw Unsupported(error: .attributeUnsupported)
+                        }
+                    }
                 }
                 return startLocation
             }
             typed += chunk.count
             typedUTF16 += chunk.utf16.count
         }
+    }
+
+    /// A text check's verdict, read again while it says unchanged, up to `landedPolls` times.
+    /// Blocks the AX queue it runs on, only while nothing seems to have gone in.
+    private static func awaitLanded(_ check: () -> ComputerUseTextCheck.Verdict) -> ComputerUseTextCheck.Verdict {
+        var verdict = check()
+        var polls = 0
+        while verdict == .unchanged, polls < landedPolls {
+            Thread.sleep(forTimeInterval: landedPoll)
+            polls += 1
+            verdict = check()
+        }
+        return verdict
     }
 
     /// The text operations chunked insertion uses on one element. Only called on the AX queue.
@@ -1060,6 +1091,8 @@ extension ComputerUseAXActions {
         var selectedRange: () -> CFRange?
         var setSelectedRange: (CFRange) -> Bool
         var setSelectedText: (String) -> AXError
+        /// The whole value, empty included; nil when it can't be read.
+        var value: () -> String? = { nil }
     }
 
     private static func textTarget(_ element: AXUIElement) -> TextTarget {
@@ -1072,7 +1105,32 @@ extension ComputerUseAXActions {
                 guard let value = AXValueCreate(.cfRange, &range) else { return false }
                 return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
             },
-            setSelectedText: { AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, $0 as CFString) })
+            setSelectedText: { AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, $0 as CFString) },
+            value: { textValue(of: element) })
+    }
+
+    /// The element's value as text, empty included; nil when it isn't a string or can't be read.
+    private static func textValue(of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == CFStringGetTypeID()
+        else { return nil }
+        return (value as! String)
+    }
+
+    /// Sets the element's whole value and reads it back; `Unsupported` when it stayed as it was,
+    /// so events can type the text instead. Call on the AX queue.
+    private static func setValueChecked(_ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity) throws {
+        let before = isLong(element) ? nil : textValue(of: element)
+        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+        guard result == .success else { throw failure(result, app: app) }
+        guard let before else { return }
+        let landed = awaitLanded { ComputerUseTextCheck.replace(with: text, before: before, after: textValue(of: element)) }
+        if landed == .unchanged { throw Unsupported(error: .attributeUnsupported) }
+    }
+
+    private static func isLong(_ element: AXUIElement) -> Bool {
+        (number(of: element, kAXNumberOfCharactersAttribute) ?? 0) > valueCheckCharacters
     }
 
     private static func focusedElement(of app: ComputerUseAppIdentity) -> AXUIElement? {
