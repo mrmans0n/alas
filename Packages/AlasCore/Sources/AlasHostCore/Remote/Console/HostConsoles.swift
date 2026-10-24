@@ -357,10 +357,14 @@ extension HostConsoles: RunLauncher {
         let worktreeId = request.worktree.id
         let worktree = try admittedWorktree(worktreeId)
         await ShellEnvResolver.shared.waitUntilResolved()
-        // One console per script and worktree, as in the app.
-        if !(await stop(entries.filter { $0.worktreeId == worktreeId && $0.scriptKey == request.script.key })) {
-            consolesLogger.error("Could not stop an earlier console of \(request.script.key, privacy: .public)")
+        // A run stopped while preparing never starts.
+        try Task.checkCancellation()
+        // One console per script and worktree, as in the app: one zmx can't
+        // stop stays the script's only console.
+        guard await stop(entries.filter { $0.worktreeId == worktreeId && $0.scriptKey == request.script.key }) else {
+            throw RunLaunchFailure(message: "The previous run of \(request.script.displayName) couldn't be stopped; terminate its console and try again.")
         }
+        try Task.checkCancellation()
         let id = UUID().uuidString
         let name = ZmxSessionName.hostShell(worktreeId: worktreeId, consoleId: id)
         var registered = false

@@ -446,6 +446,48 @@ struct HostConsolesTests {
         #expect(FileManager.default.fileExists(atPath: sibling.path))
     }
 
+    /// A rerun replaces the script's kept console; one zmx can't stop stays
+    /// the script's only console, and the rerun is refused.
+    @Test func aRunWhosePreviousConsoleCantBeStoppedIsRefused() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let core = fixture.core
+        (core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        let first = try await fixture.finishedKeptRun(script, consoles: consoles)
+        fixture.fakes.withLock { $0.killFails = true }
+
+        var settlement: RunScriptSettlement?
+        _ = core.startRun(script, in: fixture.worktree, onSettled: { settlement = $0 })
+        await core.waitForStartingRunsForTesting()
+        try await eventually { await MainActor.run { settlement != nil } }
+        #expect(settlement == .launchFailed("The previous run of Dev couldn't be stopped; terminate its console and try again."))
+        #expect(fixture.launches.count == 1)
+        #expect(consoles.summaries().map(\.consoleId) == [first])
+    }
+
+    /// Stopped while it was still preparing, a run never starts its shell.
+    @Test func aRunStoppedWhilePreparingNeverLaunches() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let core = fixture.core
+        (core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        _ = try await fixture.finishedKeptRun(script, consoles: consoles)
+        let fakes = fixture.fakes
+        fakes.withLock { $0.holdKill = true }
+
+        _ = core.startRun(script, in: fixture.worktree)
+        // Preparing: stopping the earlier console.
+        try await eventually { fakes.withLock { $0.killed.count } == 1 }
+        core.stopRun(scriptKey: script.key, in: fixture.worktree)
+        fakes.release.signal()
+        try await eventually { await MainActor.run { core.stoppingRuns.isEmpty } }
+        #expect(fixture.launches.count == 1)
+    }
+
     /// With no peer listing consoles, a run whose console died without
     /// reporting completion still settles.
     @Test func aRunConsoleThatDiesUnwatchedSettlesItsRun() async throws {
@@ -525,6 +567,8 @@ struct HostConsolesTests {
         var launchFails = false
         var lsFails = false
         var killFails = false
+        /// The next kill blocks until `release` is signaled.
+        var holdKill = false
         var duringLaunch: DuringLaunch?
         var sizeApplies = true
         var sizes: [String] = []
@@ -591,10 +635,13 @@ struct HostConsolesTests {
                     if fakes.withLock({ $0.lsFails }) { return .init(exitCode: 1, stdout: "", stderr: "") }
                     return .init(exitCode: 0, stdout: fakes.withLock { $0.live }.joined(separator: "\n"), stderr: "")
                 case "kill":
-                    let fails = fakes.withLock {
-                        $0.killed.append(args[1])
-                        return $0.killFails
+                    let (fails, hold) = fakes.withLock { fakes in
+                        fakes.killed.append(args[1])
+                        let hold = fakes.holdKill
+                        fakes.holdKill = false
+                        return (fakes.killFails, hold)
                     }
+                    if hold { fakes.release.wait() }
                     return .init(exitCode: fails ? 1 : 0, stdout: "", stderr: "")
                 default:
                     return .init(exitCode: 1, stdout: "", stderr: "")
@@ -668,6 +715,17 @@ struct HostConsolesTests {
             let url = URL(fileURLWithPath: path)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try "\(exitCode)\t1.0\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+
+        /// Runs a keep script to completion; its console stays. Returns it.
+        func finishedKeptRun(_ script: RunScript, consoles: HostConsoles) async throws -> String {
+            guard case .started(let runID) = core.startRun(script, in: worktree) else { throw CancellationError() }
+            await core.waitForStartingRunsForTesting()
+            try complete(runID: runID, exitCode: 0)
+            let core = core
+            let worktreeID = worktree.id
+            try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.succeeded) }
+            return try #require(consoles.summaries().first?.consoleId)
         }
 
         func rcFilesExist(of launch: HostShellLaunch) -> Bool {
