@@ -40,10 +40,12 @@ public enum ComputerUseInputGeometry {
     public static let draggingLayer = 500
 
     /// The id of the window a system-wide press or drop at `point` lands in: the frontmost one
-    /// over it that shows, below `draggingLayer`. `windows` run front to back.
-    public static func topmostWindow(at point: CGPoint, in windows: [ScreenWindow]) -> UInt32? {
+    /// over it that shows, below `draggingLayer`. `windows` run front to back; ids in `ignoring` (Alas's own overlay) are skipped.
+    public static func topmostWindow(
+        at point: CGPoint, in windows: [ScreenWindow], ignoring: Set<UInt32> = []
+    ) -> UInt32? {
         windows.first { window in
-            window.frame.contains(point) && window.alpha > 0 && window.layer < draggingLayer
+            !ignoring.contains(window.id) && window.frame.contains(point) && window.alpha > 0 && window.layer < draggingLayer
         }?.id
     }
 
@@ -58,10 +60,10 @@ public enum ComputerUseInputGeometry {
     /// `windows` run front to back.
     public static func coveredDragPoint(
         start: CGPoint, in startWindow: UInt32, end: CGPoint, in endWindow: UInt32,
-        windows: [ScreenWindow]
+        windows: [ScreenWindow], ignoring: Set<UInt32> = []
     ) -> DragPoint? {
-        if topmostWindow(at: start, in: windows) != startWindow { return .start }
-        if topmostWindow(at: end, in: windows) != endWindow { return .end }
+        if topmostWindow(at: start, in: windows, ignoring: ignoring) != startWindow { return .start }
+        if topmostWindow(at: end, in: windows, ignoring: ignoring) != endWindow { return .end }
         return nil
     }
 

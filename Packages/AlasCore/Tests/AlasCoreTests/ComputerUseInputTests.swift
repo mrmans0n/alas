@@ -125,6 +125,20 @@ struct ComputerUseInputTests {
             start: start, in: 1, end: end, in: 2, windows: windows) == expected)
     }
 
+    @Test func dragsLookThroughIgnoredWindows() {
+        // Alas's own overlay 3 is frontmost over both windows.
+        let windows = [
+            Window(id: 3, frame: CGRect(x: 0, y: 0, width: 400, height: 400)),
+            Window(id: 1, frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+            Window(id: 2, frame: CGRect(x: 200, y: 200, width: 100, height: 100)),
+        ]
+        let start = CGPoint(x: 20, y: 20), end = CGPoint(x: 220, y: 220)
+        #expect(ComputerUseInputGeometry.coveredDragPoint(
+            start: start, in: 1, end: end, in: 2, windows: windows, ignoring: [3]) == nil)
+        #expect(ComputerUseInputGeometry.coveredDragPoint(
+            start: start, in: 1, end: end, in: 2, windows: windows) == .start)
+    }
+
     @Test(arguments: [
         (CGRect(x: 10, y: 10, width: 100, height: 100), false),
         (CGRect(x: 12, y: 8, width: 101, height: 100), false),
@@ -269,5 +283,52 @@ struct ComputerUseInputTests {
     ] as [([Link], ComputerUseClickTarget.Choice)])
     private func clickTargets(chain: [Link], expected: ComputerUseClickTarget.Choice) {
         #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
+    }
+}
+
+@Suite struct ComputerUseCursorMotionTests {
+    typealias Motion = ComputerUseCursorMotion
+
+    @Test(arguments: [
+        (CGPoint.zero, CGPoint.zero, Duration.milliseconds(300)),
+        (CGPoint.zero, CGPoint(x: 750, y: 0), .milliseconds(350)),
+        (CGPoint.zero, CGPoint(x: 3000, y: 4000), .milliseconds(400)),
+    ] as [(CGPoint, CGPoint, Duration)])
+    func glidesTakeThreeToFourHundredMilliseconds(from: CGPoint, to: CGPoint, expected: Duration) {
+        #expect(Motion.glideDuration(from: from, to: to) == expected)
+    }
+
+    @Test func easingStartsAndEndsAtRestAndIsSymmetric() {
+        #expect(Motion.eased(0) == 0)
+        #expect(Motion.eased(1) == 1)
+        #expect(Motion.eased(0.5) == 0.5)
+        #expect(Motion.eased(-1) == 0 && Motion.eased(2) == 1)
+        #expect(Motion.eased(0.1) < 0.1)
+    }
+
+    /// CG frames have a top-left origin on the primary display; AppKit's have a bottom-left one.
+    @Test(arguments: [
+        (CGRect(x: 100, y: 50, width: 400, height: 300), CGRect(x: 100, y: 650, width: 400, height: 300)),
+        // A display above the primary one: negative CG y.
+        (CGRect(x: 0, y: -500, width: 200, height: 100), CGRect(x: 0, y: 1400, width: 200, height: 100)),
+        // A display left of the primary one.
+        (CGRect(x: -800, y: 0, width: 200, height: 100), CGRect(x: -800, y: 900, width: 200, height: 100)),
+    ] as [(CGRect, CGRect)])
+    func cgFramesFlipAgainstThePrimaryDisplay(cg: CGRect, appKit: CGRect) {
+        #expect(Motion.appKitFrame(fromCG: cg, primaryScreenHeight: 1000) == appKit)
+    }
+
+    @Test(arguments: [
+        (ComputerUseCursorInputKind.click, CGPoint(x: 5, y: 5), nil, ComputerUseCursorCue.glide(to: CGPoint(x: 5, y: 5), click: true)),
+        (.scroll, CGPoint(x: 5, y: 5), nil, .glide(to: CGPoint(x: 5, y: 5), click: false)),
+        (.click, nil, CGRect(x: 0, y: 0, width: 20, height: 10), .jump(to: CGPoint(x: 10, y: 5), outline: CGRect(x: 0, y: 0, width: 20, height: 10), click: true)),
+        (.type, nil, CGRect(x: 0, y: 0, width: 20, height: 10), .outline(CGRect(x: 0, y: 0, width: 20, height: 10))),
+        (.type, nil, nil, ComputerUseCursorCue.none),
+        (.key, CGPoint(x: 5, y: 5), nil, ComputerUseCursorCue.none),
+        (.drag, CGPoint(x: 5, y: 5), nil, .hide),
+        (.click, nil, nil, ComputerUseCursorCue.none),
+    ] as [(ComputerUseCursorInputKind, CGPoint?, CGRect?, ComputerUseCursorCue)])
+    func eachInputGetsItsCue(kind: ComputerUseCursorInputKind, point: CGPoint?, frame: CGRect?, expected: ComputerUseCursorCue) {
+        #expect(ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: frame) == expected)
     }
 }
