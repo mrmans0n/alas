@@ -310,16 +310,19 @@ struct HostProtocolServerTests {
     /// A run asked for over the host protocol is shown as the script says, or
     /// for a restart as its open console is. It becomes the active tab only to
     /// replace the active console, so the host's screen stays where it was.
+    /// Only a local caller is asked about an unapproved repository hook.
     @Test(arguments: [
         (restart: false, console: RunScriptConsole.hidden, openConsoleIsHidden: Bool?.some(false), active: false, hidden: true, activates: false),
         (restart: false, console: .shown, openConsoleIsHidden: nil, active: false, hidden: false, activates: false),
         (restart: true, console: .shown, openConsoleIsHidden: true, active: false, hidden: true, activates: false),
         (restart: true, console: .hidden, openConsoleIsHidden: nil, active: false, hidden: true, activates: false),
         (restart: true, console: .shown, openConsoleIsHidden: false, active: true, hidden: false, activates: true),
-    ])
+    ], [HostCaller.remotePeer(deviceID: "d"), .localUser(uid: 501)])
     func hostProtocolRunsFollowTheConsoleSettingAndActivateOnlyInPlaceOfTheActiveConsole(
-        restart: Bool, console: RunScriptConsole, openConsoleIsHidden: Bool?, active: Bool, hidden: Bool, activates: Bool
+        _ run: (restart: Bool, console: RunScriptConsole, openConsoleIsHidden: Bool?, active: Bool, hidden: Bool, activates: Bool),
+        caller: HostCaller
     ) async throws {
+        let (restart, console, openConsoleIsHidden, active, hidden, activates) = run
         let environment = RecordingRunEnvironment()
         environment.openConsoleIsHidden = openConsoleIsHidden
         environment.launcher.hostsActiveConsole = active
@@ -328,13 +331,14 @@ struct HostProtocolServerTests {
         try "#!/bin/sh\n".write(to: file, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: file) }
         let server = HostProtocolServer(host: fixture.host) { _, _ in [Self.devScript(console: console, fileURL: file)] }
-        let connection = server.connect(caller: .remotePeer(deviceID: "d"), send: Client().receive)
+        let connection = server.connect(caller: caller, send: Client().receive)
         let ref = WorktreeRef(projectID: "p", path: fixture.worktree.path.path)
         await connection.receive(HostClientMessage(id: 1, request: restart
             ? .restartRun(scriptKey: "repo:dev.sh", worktree: ref) : .startRun(scriptKey: "repo:dev.sh", worktree: ref)))
         await fixture.host.core.waitForStartingRunsForTesting()
         #expect(environment.launcher.requests.map(\.isHidden) == [hidden])
         #expect(environment.launcher.requests.map(\.activatesConsole) == [activates])
+        #expect(environment.launcher.requests.map(\.promptsForRepoHooks) == [caller == .localUser(uid: 501)])
     }
 
     nonisolated static func devScript(

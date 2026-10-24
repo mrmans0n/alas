@@ -17,6 +17,7 @@ struct HostConsolesTests {
         let base = [
             "PATH": "/login/bin:/usr/bin", "TERM": "dumb", "TERM_PROGRAM": "Apple_Terminal",
             "ZMX_SESSION": "outer", "HOME": "/Users/u", "CLAUDECODE": "1", "CLAUDE_SESSION_ID": "s",
+            "ALAS_APP_SUPPORT_DIR": "/profile", "ALAS_ZMX_BINARY": "/opt/zmx", "ALAS_REMOTE_WEB_DIR": "/web",
         ]
         let launch = try #require(HostShellLaunch.make(
             zmx: zmx, sessionName: "alashost-a-b", directory: URL(fileURLWithPath: "/srv/feature"),
@@ -27,8 +28,14 @@ struct HostConsolesTests {
         #expect(launch.directory.path == "/srv/feature")
         #expect(launch.environment == [
             "PATH": "/login/bin:/usr/bin", "HOME": "/Users/u", "TERM": "xterm-256color",
-            "COLORTERM": "truecolor", "ZMX_DIR": "/tmp/z",
+            "COLORTERM": "truecolor", "ZMX_DIR": "/tmp/z", "LANG": "en_US.UTF-8",
         ])
+        // A locale the login environment set is kept as it is.
+        let localized = HostShellLaunch.make(
+            zmx: zmx, sessionName: "alashost-a-b", directory: URL(fileURLWithPath: "/srv/feature"),
+            shell: "/bin/zsh", baseEnvironment: ["LC_CTYPE": "UTF-8"]
+        )
+        #expect(localized?.environment["LANG"] == nil)
     }
 
     @Test func zmxIsFoundBesideTheLinkedExecutableElseInTheApp() throws {

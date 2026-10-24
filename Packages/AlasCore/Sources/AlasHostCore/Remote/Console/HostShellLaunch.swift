@@ -34,9 +34,16 @@ public struct HostShellLaunch: Equatable, Sendable {
             plan: StartupScriptInstaller.Plan(executable: shell, args: shellArguments, envOverrides: [:])
         )
         // Agent session markers too: a host started from inside an agent
-        // session must not hand them to the user's shells.
+        // session must not hand them to the user's shells. `ALAS_*` is the
+        // host's own configuration (profile, zmx, web dir), not the user's.
         var environment = baseEnvironment.filter {
             !terminalKeys.contains($0.key) && !ACPProcessEnvironment.agentSessionMarkerKeys.contains($0.key)
+                && !$0.key.hasPrefix("ALAS_")
+        }
+        // launchd sets no locale, which leaves the shell in "C" and garbles
+        // UTF-8 input and output.
+        if ["LANG", "LC_ALL", "LC_CTYPE"].allSatisfy({ environment[$0] == nil }) {
+            environment["LANG"] = "en_US.UTF-8"
         }
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
