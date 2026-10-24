@@ -457,7 +457,7 @@ extension LiveComputerUseSystem {
     static let focusSettle: Duration = .milliseconds(50)
     /// After raising a drag's windows, before checking nothing covers its points.
     static let dragRaiseSettle: Duration = .milliseconds(150)
-    /// Between coverage checks while a drag's windows come up (`ComputerUseTakeover.dragRaiseWait`).
+    /// Between looks while a drag's windows come up (`ComputerUseTakeover.dragSettleWait`).
     static let dragRaisePoll: Duration = .milliseconds(50)
     /// How long typing into an element waits for the focus it set to land.
     static let focusWait: Duration = .milliseconds(300)
@@ -649,6 +649,7 @@ extension LiveComputerUseSystem {
         }
     }
 
+    static let dragOverlapRefusal = "The two windows overlap at the drag's points; move one so both show."
     static let coveredPointRefusal =
         "Another app's content is at that point; nothing was sent. Use a ref from computer_inspect."
 
@@ -989,103 +990,111 @@ extension LiveComputerUseSystem {
                 throw ComputerUseSystemError.actionFailed(
                     "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own.")
             }
-            try await requireActiveWindow()
-            // Activation fronts only the app's key window; another app's window can still cover the drop window.
-            if let toWindow, toWindow.windowID != window.windowID {
-                try await ComputerUseAXActions.raise(toWindow, isCancelled: isCancelled)
-            }
-            try? await Task.sleep(for: dragRaiseSettle)
-            // Activation may have brought the windows back on screen (AeroSpace switches to their
-            // workspace): their points map against where they are now.
+            // The app is in front (`activated`). From here on the points are read again on every
+            // look: a parked window comes back (AeroSpace switches to its workspace) and windows come
+            // up a moment after the activation (`ComputerUseTakeover.dragStep`).
             func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
                 await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
             }
             func moved(_ point: CGPoint, from shown: ComputerUseWindow, to now: ComputerUseWindow) -> CGPoint {
                 CGPoint(x: point.x - shown.frame.minX + now.frame.minX, y: point.y - shown.frame.minY + now.frame.minY)
             }
-            let startWindow = await current(window)
-            let dropWindow = await current(toWindow ?? window)
-            // A ref's point is on the part of it its scroll area shows: an element scrolled under
-            // another part of the window (a sidebar) would press that part instead.
-            func startPoint() async throws -> CGPoint {
-                switch from {
+            let sourceShown = window
+            let dropShown = toWindow ?? window
+            var startWindow = window
+            var dropWindow = dropShown
+            /// Where an end of the drag is now; nil while its element doesn't show.
+            func resolve(
+                _ target: ComputerUseInputTarget, shown: ComputerUseWindow, now: ComputerUseWindow, isDrop: Bool
+            ) async throws -> CGPoint? {
+                switch target {
                 case .element(let handles, let handle):
-                    guard let visible = try await ComputerUseAXActions.visibleCenter(
-                        handles, handle, within: startWindow.frame, app: app, requireOwnCenter: false, isCancelled: isCancelled)
-                    else { throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.") }
-                    return visible
+                    do {
+                        // A ref's point is on the part of it its scroll area shows: an element scrolled
+                        // under another part of the window (a sidebar) would get the press instead.
+                        return try await ComputerUseAXActions.visibleCenter(
+                            handles, handle, within: now.frame, app: now.app, requireOwnCenter: false, isCancelled: isCancelled)
+                    } catch ComputerUseSystemError.staleElement where isDrop {
+                        throw ComputerUseSystemError.staleDropElement
+                    }
                 case .point(let point):
-                    let point = moved(point, from: window, to: startWindow)
-                    guard startWindow.frame.contains(point) else { throw ComputerUseSystemError.outOfBounds }
+                    let point = moved(point, from: shown, to: now)
+                    guard now.frame.contains(point) else {
+                        throw isDrop ? ComputerUseSystemError.dropOutOfBounds : ComputerUseSystemError.outOfBounds
+                    }
                     return point
                 }
             }
-            var start = try await startPoint()
-            let end: CGPoint
-            switch to {
-            case .element(let handles, let handle):
-                let visible: CGPoint?
-                do {
-                    visible = try await ComputerUseAXActions.visibleCenter(
-                        handles, handle, within: dropWindow.frame, app: dropWindow.app, requireOwnCenter: false,
-                        isCancelled: isCancelled)
-                } catch ComputerUseSystemError.staleElement {
-                    throw ComputerUseSystemError.staleDropElement
-                }
-                guard let visible else {
-                    throw ComputerUseSystemError.actionFailed("The drop element is scrolled out of view or hidden.")
-                }
-                end = visible
-            case .point(let point):
-                let point = moved(point, from: toWindow ?? window, to: dropWindow)
-                guard dropWindow.frame.contains(point) else { throw ComputerUseSystemError.dropOutOfBounds }
-                end = point
+            func state(_ point: CGPoint?, own: UInt32, other: UInt32, displays: [CGRect]) -> ComputerUseTakeover.DragPointState {
+                guard let point else { return .hidden }
+                if !displays.isEmpty, !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) { return .offScreen }
+                let top = ComputerUseInputGeometry.topmostWindow(at: point, in: screenWindows(), ignoring: ignoring())
+                if top == own { return .clear }
+                return top == other && own != other ? .byOtherDragWindow : .byOther
             }
-            // The app is in front by now (`activated`), but its windows may still be coming up over
-            // the others: coverage only refuses once they had `dragRaiseWait`, and a user back at
-            // the Mac meanwhile is told so instead (`ComputerUseTakeover.dragStep`).
-            func checkCovered() async throws {
-                // Still off screen once in front: nothing would get the drag's events.
-                let displays = displayFrames()
-                if !displays.isEmpty, !ComputerUseInputGeometry.pointIsOnScreen(start, displays: displays)
-                    || !ComputerUseInputGeometry.pointIsOnScreen(end, displays: displays) {
-                    throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
-                }
+            func raiseSource() async {
+                try? await ComputerUseAXActions.makeActiveWindow(window, raise: true, isCancelled: isCancelled)
+            }
+            var start = CGPoint.zero
+            var end = CGPoint.zero
+            /// Looks until the drag may go, raising windows as `dragStep` says.
+            func settle() async throws {
                 var waited: TimeInterval = 0
+                var raisedDrop = false
                 while true {
-                    let covered = ComputerUseInputGeometry.coveredDragPoint(
-                        start: start, in: startWindow.windowID, end: end, in: dropWindow.windowID,
-                        windows: screenWindows(), ignoring: ignoring())
-                    switch ComputerUseTakeover.dragStep(
-                        idleSeconds: secondsSinceUserInput(), activated: true, covered: covered, waitedForRaise: waited) {
-                    case .drag, .activate: return
+                    try checkCancelled()
+                    startWindow = await current(sourceShown)
+                    dropWindow = await current(dropShown)
+                    let startPoint = try await resolve(from, shown: sourceShown, now: startWindow, isDrop: false)
+                    let endPoint = try await resolve(to, shown: dropShown, now: dropWindow, isDrop: true)
+                    let displays = displayFrames()
+                    let step = ComputerUseTakeover.dragStep(
+                        idleSeconds: secondsSinceUserInput(), activated: true,
+                        start: state(startPoint, own: startWindow.windowID, other: dropWindow.windowID, displays: displays),
+                        drop: state(endPoint, own: dropWindow.windowID, other: startWindow.windowID, displays: displays),
+                        raisedDrop: raisedDrop, waited: waited)
+                    switch step {
+                    case .drag, .activate:
+                        if let startPoint, let endPoint { (start, end) = (startPoint, endPoint) }
+                        return
                     case .userActive: throw ComputerUseSystemError.userActive
-                    case .waitForRaise:
-                        try? await Task.sleep(for: dragRaisePoll)
-                        waited += 0.05
-                        try checkCancelled()
+                    case .raiseSource:
+                        await raiseSource()
+                    case .raiseDrop:
+                        try await ComputerUseAXActions.raise(dropWindow, isCancelled: isCancelled)
+                        raisedDrop = true
+                    case .hidden(.start):
+                        throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.")
+                    case .hidden(.end):
+                        throw ComputerUseSystemError.actionFailed("The drop element is scrolled out of view or hidden.")
+                    case .offScreen: throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
+                    case .overlap: throw ComputerUseSystemError.actionFailed(dragOverlapRefusal)
                     case .covered(.start):
                         throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
                     case .covered(.end):
                         throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
                     }
+                    try? await Task.sleep(for: dragRaisePoll)
+                    waited += 0.05
                 }
             }
-            try await checkCovered()
+            await raiseSource()
+            try? await Task.sleep(for: dragRaiseSettle)
+            try await settle()
             try checkCancelled()
             if case .element(let handles, let handle) = from {
                 try await ComputerUseAXActions.selectRow(handles, handle, isCancelled: isCancelled)
                 // Selecting may scroll the row.
-                start = try await startPoint()
-                try await checkCovered()
+                try await settle()
                 try checkCancelled()
             }
             // Another window over the drop point would take the drop: checked right before the release.
             let dropWindowID = dropWindow.windowID
             let pid = app.pid
+            let (dragStart, dragEnd) = (start, end)
             let dragBegan = ComputerUseUserInput.now()
-            try await ComputerUseInputPoster.systemDrag(from: start, to: end, dropIsVisible: {
-                ComputerUseInputGeometry.topmostWindow(at: end, in: screenWindows(), ignoring: ignoring()) == dropWindowID
+            try await ComputerUseInputPoster.systemDrag(from: dragStart, to: dragEnd, dropIsVisible: {
+                ComputerUseInputGeometry.topmostWindow(at: dragEnd, in: screenWindows(), ignoring: ignoring()) == dropWindowID
             }, interrupt: {
                 if isCancelled() || Task.isCancelled { return .cancelled }
                 // The cursor is shared: any input of the user's since the drag began, in any app,

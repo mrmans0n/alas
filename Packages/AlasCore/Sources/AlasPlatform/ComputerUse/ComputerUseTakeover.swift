@@ -18,32 +18,69 @@ public enum ComputerUseTakeover {
         return waited < maxWait ? .wait : .refuse
     }
 
+    /// Where one of a drag's points stands, read after activation.
+    public enum DragPointState: Equatable, Sendable {
+        /// Its element doesn't show (scrolled out of view, hidden), or isn't on screen yet.
+        case hidden
+        /// Off every display: its window is parked (another Space, an AeroSpace workspace).
+        case offScreen
+        /// Its own window is topmost there.
+        case clear
+        /// The drag's other window is over it: the drop window over the start, or the source over the drop.
+        case byOtherDragWindow
+        /// Another app's window, or another of the app's, is over it.
+        case byOther
+    }
+
     /// The next step of a drag, which always goes with the target app in front.
     public enum DragStep: Equatable, Sendable {
         /// The user is typing or using the mouse: refused before anything else happens.
         case userActive
-        /// Bring the target to the front: another app's window over a point is expected until then.
+        /// Bring the target to the front: a parked or covered window is expected until then.
         case activate
-        /// In front, but a point is still covered: window ordering may lag the activation.
-        case waitForRaise
-        /// Still covered once the raise had its time: refused.
+        /// Raise the source window (AXRaise, main), read the points again and look once more:
+        /// a parked window comes back and windows come up a moment after the activation.
+        case raiseSource
+        /// The source window covers the drop point: raise the drop window once.
+        case raiseDrop
+        case hidden(ComputerUseInputGeometry.DragPoint)
+        case offScreen
+        /// The two windows overlap at the points: one can't show without covering the other.
+        case overlap
         case covered(ComputerUseInputGeometry.DragPoint)
         case drag
     }
 
-    /// How long a drag waits after activation for its windows to come above the others.
-    public static let dragRaiseWait: TimeInterval = 0.5
+    /// How long a drag's windows get after activation to come back on screen and up.
+    public static let dragSettleWait: TimeInterval = 1
 
-    /// User activity first, then activation, then coverage of the start and drop points, which
-    /// only refuses once the target is in front and `dragRaiseWait` passed.
+    /// User activity first, then activation; then, with the points read again after it, their
+    /// visibility, the start point's coverage (raising the source window) and the drop point's
+    /// (raising the drop window only when the source covers it). Each refusal only comes once
+    /// `dragSettleWait` passed, except an overlap: raising either window then covers the other's point.
     public static func dragStep(
-        idleSeconds: TimeInterval, activated: Bool, covered: ComputerUseInputGeometry.DragPoint?,
-        waitedForRaise: TimeInterval
+        idleSeconds: TimeInterval, activated: Bool, start: DragPointState, drop: DragPointState, raisedDrop: Bool,
+        waited: TimeInterval
     ) -> DragStep {
         if idleSeconds < idleThreshold { return .userActive }
         guard activated else { return .activate }
-        guard let covered else { return .drag }
-        return waitedForRaise < dragRaiseWait ? .waitForRaise : .covered(covered)
+        let settling = waited < dragSettleWait
+        let unresolved: [DragPointState] = [.hidden, .offScreen]
+        if unresolved.contains(start) || unresolved.contains(drop) {
+            if settling { return .raiseSource }
+            if start == .offScreen || drop == .offScreen { return .offScreen }
+            return .hidden(start == .hidden ? .start : .end)
+        }
+        switch start {
+        case .byOtherDragWindow where raisedDrop: return .overlap
+        case .byOtherDragWindow, .byOther: return settling ? .raiseSource : .covered(.start)
+        default: break
+        }
+        switch drop {
+        case .byOtherDragWindow: return raisedDrop ? .overlap : .raiseDrop
+        case .byOther: return settling ? .raiseSource : .covered(.end)
+        default: return .drag
+        }
     }
 
     /// Why an activation didn't bring the target to the front in time.

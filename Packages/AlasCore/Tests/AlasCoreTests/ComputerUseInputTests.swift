@@ -280,22 +280,38 @@ struct ComputerUseInputTests {
     private static let halfOut = CGRect(x: 700, y: 50, width: 400, height: 300)
     private static let elsewhere = CGRect(x: 900, y: 400, width: 100, height: 100)
 
-    /// A drag checks the user first, then activates, and only refuses a covered point once the
-    /// target is in front and its windows had time to come up.
+    /// A drag checks the user first, then activates; then, with its points read again, waits for
+    /// parked or covered windows to come up, raises the drop window when the source covers it, and
+    /// refuses an overlap, a hidden or off-screen point, or a cover that stays.
     @Test(arguments: [
-        (0.5, false, Optional(ComputerUseInputGeometry.DragPoint.start), 0.0, ComputerUseTakeover.DragStep.userActive),
-        (0.5, true, nil, 0.0, .userActive),
-        (60, false, .start, 0, .activate),
-        (60, true, .start, 0.2, .waitForRaise),
-        (60, true, .end, 0.5, .covered(.end)),
-        (60, true, nil, 0, .drag),
-    ] as [(TimeInterval, Bool, ComputerUseInputGeometry.DragPoint?, TimeInterval, ComputerUseTakeover.DragStep)])
-    func dragsCheckTheUserThenActivateThenCoverage(
-        idle: TimeInterval, activated: Bool, covered: ComputerUseInputGeometry.DragPoint?, waited: TimeInterval,
-        step: ComputerUseTakeover.DragStep
+        (0.5, false, State.offScreen, State.clear, false, 0.0, Step.userActive),
+        (0.5, true, .clear, .clear, false, 0, .userActive),
+        (60, false, .offScreen, .offScreen, false, 0, .activate),
+        // A parked window comes back after activation.
+        (60, true, .offScreen, .hidden, false, 0.2, .raiseSource),
+        (60, true, .offScreen, .clear, false, 1, .offScreen),
+        (60, true, .hidden, .clear, false, 1, .hidden(.start)),
+        (60, true, .clear, .hidden, false, 1, .hidden(.end)),
+        // Another app's window over the start until the source comes up.
+        (60, true, .byOther, .clear, false, 0.3, .raiseSource),
+        (60, true, .byOther, .clear, false, 1, .covered(.start)),
+        // The same app's drop window over the start: the source is raised.
+        (60, true, .byOtherDragWindow, .clear, false, 0.3, .raiseSource),
+        (60, true, .clear, .byOtherDragWindow, false, 0.3, .raiseDrop),
+        (60, true, .byOtherDragWindow, .clear, true, 0.3, .overlap),
+        (60, true, .clear, .byOtherDragWindow, true, 0.3, .overlap),
+        (60, true, .clear, .byOther, false, 1, .covered(.end)),
+        (60, true, .clear, .clear, true, 0.3, .drag),
+    ] as [(TimeInterval, Bool, State, State, Bool, TimeInterval, Step)])
+    func dragsCheckTheUserThenActivateThenTheirPoints(
+        idle: TimeInterval, activated: Bool, start: State, drop: State, raisedDrop: Bool, waited: TimeInterval, step: Step
     ) {
-        #expect(ComputerUseTakeover.dragStep(idleSeconds: idle, activated: activated, covered: covered, waitedForRaise: waited) == step)
+        #expect(ComputerUseTakeover.dragStep(
+            idleSeconds: idle, activated: activated, start: start, drop: drop, raisedDrop: raisedDrop, waited: waited) == step)
     }
+
+    typealias State = ComputerUseTakeover.DragPointState
+    typealias Step = ComputerUseTakeover.DragStep
 
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
