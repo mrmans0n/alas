@@ -13,19 +13,19 @@ struct ComputerUseAccessTests {
         ComputerUseAccess(hostPID: hostPID, alwaysAllowed: { always })
     }
 
+    /// Another Alas build stays visible but can't be driven: its approval cards are not the agent's to click.
     @Test(arguments: [
-        (ComputerUseAppIdentity(name: "Host", bundleID: "io.nlopez.alas", pid: 100), true),
-        (ComputerUseAppIdentity(name: "Keychain", bundleID: "com.apple.keychainaccess", pid: 5), true),
-        (ComputerUseAppIdentity(name: "Alas", bundleID: "io.nlopez.alas", pid: 200), false),
+        (ComputerUseAppIdentity(name: "Host", bundleID: "io.nlopez.alas", pid: 100), true, true),
+        (ComputerUseAppIdentity(name: "Keychain", bundleID: "com.apple.keychainaccess", pid: 5), true, true),
+        (ComputerUseAppIdentity(name: "Alas", bundleID: "io.nlopez.alas", pid: 200), false, true),
+        (ComputerUseAppIdentity(name: "Alas Dev", bundleID: "io.nlopez.alas.dev", pid: 201), false, true),
+        (ComputerUseAppIdentity(name: "Alaska", bundleID: "io.nlopez.alaska", pid: 202), false, false),
     ])
-    func onlyBlocklistedAppsAreBlocked(app: ComputerUseAppIdentity, blocked: Bool) {
+    func onlyBlocklistedAppsAreBlocked(app: ComputerUseAppIdentity, blocked: Bool, inputBlocked: Bool) {
         let access = makeAccess(always: ["com.apple.keychainaccess"])
-        if blocked {
-            access.record(.allowForSession, for: app, session: "s")
-            #expect(access.access(for: app, session: "s") == .blocked)
-        } else {
-            #expect(access.access(for: app, session: "s") == .needsApproval)
-        }
+        access.record(.allowForSession, for: app, session: "s")
+        #expect(access.access(for: app, session: "s") == (blocked ? .blocked : .allowed(.session)))
+        #expect(access.access(for: app, session: "s", input: true) == (inputBlocked ? .blocked : .allowed(.session)))
     }
 
     @Test func grantScopesExpireAtTheirBoundary() {

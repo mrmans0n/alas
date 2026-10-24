@@ -298,9 +298,95 @@ pub enum ComputerCommand {
         max_depth: u64,
         call_id: Option<String>,
     },
+    Click {
+        window_id: u32,
+        target: ComputerTarget,
+        /// `left` or `right`.
+        button: String,
+        /// 1 or 2.
+        count: u64,
+        direct: bool,
+        post: ComputerPost,
+        call_id: Option<String>,
+    },
+    Type {
+        window_id: u32,
+        text: String,
+        element: Option<String>,
+        replace: bool,
+        direct: bool,
+        post: ComputerPost,
+        call_id: Option<String>,
+    },
+    Key {
+        window_id: u32,
+        keys: String,
+        direct: bool,
+        post: ComputerPost,
+        call_id: Option<String>,
+    },
+    Scroll {
+        window_id: u32,
+        target: ComputerTarget,
+        dx: i64,
+        dy: i64,
+        direct: bool,
+        post: ComputerPost,
+        call_id: Option<String>,
+    },
+    Drag {
+        window_id: u32,
+        from: ComputerTarget,
+        /// The window `to` is in, when it isn't `window_id`.
+        to_window_id: Option<u32>,
+        to: ComputerTarget,
+        direct: bool,
+        post: ComputerPost,
+        call_id: Option<String>,
+    },
+    /// Exactly one of `name` and `bundle_id` is set.
+    OpenApp {
+        name: Option<String>,
+        bundle_id: Option<String>,
+        call_id: Option<String>,
+    },
+    Wait {
+        window_id: u32,
+        query: String,
+        disappear: bool,
+        timeout_ms: u64,
+        limit: u64,
+        call_id: Option<String>,
+    },
     Cancel {
         call_id: String,
     },
+}
+
+/// Where an action lands: an element ref from `computer_inspect`, or pixels
+/// in the latest screenshot of the window.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComputerTarget {
+    Ref(String),
+    Point { x: f64, y: f64 },
+}
+
+/// What an input action returns afterwards: a fresh read of the window.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ComputerPost {
+    pub limit: u64,
+    pub query: Option<String>,
+    pub include_screenshot: bool,
+}
+
+impl Default for ComputerPost {
+    fn default() -> Self {
+        Self {
+            limit: 100,
+            query: None,
+            include_screenshot: false,
+        }
+    }
 }
 
 impl ComputerCommand {
@@ -308,7 +394,14 @@ impl ComputerCommand {
         match self {
             ComputerCommand::Apps { call_id }
             | ComputerCommand::Screenshot { call_id, .. }
-            | ComputerCommand::Inspect { call_id, .. } => call_id.as_deref(),
+            | ComputerCommand::Inspect { call_id, .. }
+            | ComputerCommand::Click { call_id, .. }
+            | ComputerCommand::Type { call_id, .. }
+            | ComputerCommand::Key { call_id, .. }
+            | ComputerCommand::Scroll { call_id, .. }
+            | ComputerCommand::Drag { call_id, .. }
+            | ComputerCommand::OpenApp { call_id, .. }
+            | ComputerCommand::Wait { call_id, .. } => call_id.as_deref(),
             ComputerCommand::Cancel { .. } => None,
         }
     }
@@ -317,8 +410,28 @@ impl ComputerCommand {
         match self {
             ComputerCommand::Apps { call_id }
             | ComputerCommand::Screenshot { call_id, .. }
-            | ComputerCommand::Inspect { call_id, .. } => *call_id = Some(id),
+            | ComputerCommand::Inspect { call_id, .. }
+            | ComputerCommand::Click { call_id, .. }
+            | ComputerCommand::Type { call_id, .. }
+            | ComputerCommand::Key { call_id, .. }
+            | ComputerCommand::Scroll { call_id, .. }
+            | ComputerCommand::Drag { call_id, .. }
+            | ComputerCommand::OpenApp { call_id, .. }
+            | ComputerCommand::Wait { call_id, .. } => *call_id = Some(id),
             ComputerCommand::Cancel { .. } => {}
+        }
+    }
+
+    /// Whether the call returns a screenshot image next to its elements.
+    pub fn includes_screenshot(&self) -> bool {
+        match self {
+            ComputerCommand::Screenshot { .. } => true,
+            ComputerCommand::Click { post, .. }
+            | ComputerCommand::Type { post, .. }
+            | ComputerCommand::Key { post, .. }
+            | ComputerCommand::Scroll { post, .. }
+            | ComputerCommand::Drag { post, .. } => post.include_screenshot,
+            _ => false,
         }
     }
 }
@@ -827,6 +940,142 @@ fn computer_request(command: &ComputerCommand) -> Request {
             params.insert("max_depth".into(), serde_json::Value::from(*max_depth));
             "computer_inspect"
         }
+        ComputerCommand::Click {
+            window_id,
+            target,
+            button,
+            count,
+            direct,
+            post,
+            ..
+        } => {
+            params.insert("window_id".into(), serde_json::Value::from(*window_id));
+            insert_target(&mut params, target, "ref", "x", "y");
+            if button != "left" {
+                params.insert("button".into(), serde_json::Value::String(button.clone()));
+            }
+            if *count != 1 {
+                params.insert("count".into(), serde_json::Value::from(*count));
+            }
+            insert_direct(&mut params, *direct);
+            insert_post(&mut params, post);
+            "computer_click"
+        }
+        ComputerCommand::Type {
+            window_id,
+            text,
+            element,
+            replace,
+            direct,
+            post,
+            ..
+        } => {
+            params.insert("window_id".into(), serde_json::Value::from(*window_id));
+            params.insert("text".into(), serde_json::Value::String(text.clone()));
+            if let Some(element) = element {
+                params.insert("ref".into(), serde_json::Value::String(element.clone()));
+            }
+            if *replace {
+                params.insert("mode".into(), serde_json::Value::String("replace".into()));
+            }
+            insert_direct(&mut params, *direct);
+            insert_post(&mut params, post);
+            "computer_type"
+        }
+        ComputerCommand::Key {
+            window_id,
+            keys,
+            direct,
+            post,
+            ..
+        } => {
+            params.insert("window_id".into(), serde_json::Value::from(*window_id));
+            params.insert("keys".into(), serde_json::Value::String(keys.clone()));
+            insert_direct(&mut params, *direct);
+            insert_post(&mut params, post);
+            "computer_key"
+        }
+        ComputerCommand::Scroll {
+            window_id,
+            target,
+            dx,
+            dy,
+            direct,
+            post,
+            ..
+        } => {
+            params.insert("window_id".into(), serde_json::Value::from(*window_id));
+            insert_target(&mut params, target, "ref", "x", "y");
+            if *dx != 0 {
+                params.insert("dx".into(), serde_json::Value::from(*dx));
+            }
+            if *dy != 0 {
+                params.insert("dy".into(), serde_json::Value::from(*dy));
+            }
+            insert_direct(&mut params, *direct);
+            insert_post(&mut params, post);
+            "computer_scroll"
+        }
+        ComputerCommand::Drag {
+            window_id,
+            from,
+            to_window_id,
+            to,
+            direct,
+            post,
+            ..
+        } => {
+            params.insert("window_id".into(), serde_json::Value::from(*window_id));
+            insert_target(&mut params, from, "ref", "x", "y");
+            if let Some(to_window_id) = to_window_id {
+                params.insert(
+                    "to_window_id".into(),
+                    serde_json::Value::from(*to_window_id),
+                );
+            }
+            insert_target(&mut params, to, "to_ref", "to_x", "to_y");
+            insert_direct(&mut params, *direct);
+            insert_post(&mut params, post);
+            "computer_drag"
+        }
+        ComputerCommand::OpenApp {
+            name, bundle_id, ..
+        } => {
+            if let Some(name) = name {
+                params.insert("name".into(), serde_json::Value::String(name.clone()));
+            }
+            if let Some(bundle_id) = bundle_id {
+                params.insert(
+                    "bundle_id".into(),
+                    serde_json::Value::String(bundle_id.clone()),
+                );
+            }
+            "computer_open_app"
+        }
+        ComputerCommand::Wait {
+            window_id,
+            query,
+            disappear,
+            timeout_ms,
+            limit,
+            ..
+        } => {
+            params.insert("window_id".into(), serde_json::Value::from(*window_id));
+            params.insert("query".into(), serde_json::Value::String(query.clone()));
+            if *disappear {
+                params.insert(
+                    "condition".into(),
+                    serde_json::Value::String("disappear".into()),
+                );
+            }
+            if *timeout_ms != 5000 {
+                params.insert("timeout_ms".into(), serde_json::Value::from(*timeout_ms));
+            }
+            if *limit != 100 {
+                params.insert("limit".into(), serde_json::Value::from(*limit));
+            }
+            "computer_wait"
+        }
         ComputerCommand::Cancel { call_id } => {
             params.insert("call_id".into(), serde_json::Value::String(call_id.clone()));
             "computer_cancel"
@@ -838,6 +1087,47 @@ fn computer_request(command: &ComputerCommand) -> Request {
     let mut request = Request::new(name);
     request.params = Some(serde_json::Value::Object(params));
     request
+}
+
+fn insert_target(
+    params: &mut serde_json::Map<String, serde_json::Value>,
+    target: &ComputerTarget,
+    ref_key: &str,
+    x_key: &str,
+    y_key: &str,
+) {
+    match target {
+        ComputerTarget::Ref(element) => {
+            params.insert(ref_key.into(), serde_json::Value::String(element.clone()));
+        }
+        ComputerTarget::Point { x, y } => {
+            params.insert(x_key.into(), serde_json::Value::from(*x));
+            params.insert(y_key.into(), serde_json::Value::from(*y));
+        }
+    }
+}
+
+/// Background delivery is the default on the app side, so only `direct` is sent.
+fn insert_direct(params: &mut serde_json::Map<String, serde_json::Value>, direct: bool) {
+    if direct {
+        params.insert(
+            "delivery".into(),
+            serde_json::Value::String("direct".into()),
+        );
+    }
+}
+
+/// The app applies the same defaults, so only non-default values are sent.
+fn insert_post(params: &mut serde_json::Map<String, serde_json::Value>, post: &ComputerPost) {
+    if post.limit != 100 {
+        params.insert("limit".into(), serde_json::Value::from(post.limit));
+    }
+    if let Some(query) = &post.query {
+        params.insert("query".into(), serde_json::Value::String(query.clone()));
+    }
+    if post.include_screenshot {
+        params.insert("include_screenshot".into(), serde_json::Value::Bool(true));
+    }
 }
 
 fn preview_request(command: &PreviewCommand) -> Request {
@@ -1945,6 +2235,87 @@ mod tests {
             Some(serde_json::json!({
                 "window_id": 7, "query": "Save", "limit": 300, "max_depth": 12, "call_id": "42-1"
             }))
+        );
+
+        let click = build_request(
+            &Command::Computer(ComputerCommand::Click {
+                window_id: 7,
+                target: ComputerTarget::Ref("e12".into()),
+                button: "right".into(),
+                count: 2,
+                direct: true,
+                post: ComputerPost {
+                    limit: 50,
+                    query: Some("Save".into()),
+                    include_screenshot: true,
+                },
+                call_id: Some("42-2".into()),
+            }),
+            None,
+            None,
+        );
+        assert_eq!(click.command, "computer_click");
+        assert_eq!(
+            click.params,
+            Some(serde_json::json!({
+                "window_id": 7, "ref": "e12", "button": "right", "count": 2,
+                "delivery": "direct", "limit": 50, "query": "Save",
+                "include_screenshot": true, "call_id": "42-2"
+            }))
+        );
+
+        let drag = build_request(
+            &Command::Computer(ComputerCommand::Drag {
+                window_id: 7,
+                from: ComputerTarget::Point { x: 10.5, y: 20.0 },
+                to_window_id: Some(9),
+                to: ComputerTarget::Ref("e3".into()),
+                direct: true,
+                post: ComputerPost::default(),
+                call_id: None,
+            }),
+            None,
+            None,
+        );
+        assert_eq!(drag.command, "computer_drag");
+        assert_eq!(
+            drag.params,
+            Some(
+                serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_window_id": 9, "to_ref": "e3", "delivery": "direct" })
+            )
+        );
+
+        let wait = build_request(
+            &Command::Computer(ComputerCommand::Wait {
+                window_id: 7,
+                query: "Done".into(),
+                disappear: true,
+                timeout_ms: 5000,
+                limit: 100,
+                call_id: None,
+            }),
+            None,
+            None,
+        );
+        assert_eq!(wait.command, "computer_wait");
+        assert_eq!(
+            wait.params,
+            Some(serde_json::json!({ "window_id": 7, "query": "Done", "condition": "disappear" }))
+        );
+
+        let open_app = build_request(
+            &Command::Computer(ComputerCommand::OpenApp {
+                name: None,
+                bundle_id: Some("com.apple.TextEdit".into()),
+                call_id: None,
+            }),
+            None,
+            None,
+        );
+        assert_eq!(open_app.command, "computer_open_app");
+        assert_eq!(
+            open_app.params,
+            Some(serde_json::json!({ "bundle_id": "com.apple.TextEdit" }))
         );
 
         let cancel = build_request(

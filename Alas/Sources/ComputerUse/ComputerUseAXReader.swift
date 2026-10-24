@@ -12,12 +12,83 @@ enum ComputerUseAXReader {
     static let frameTolerance: CGFloat = 2
     /// Per-message timeout, set on every element we query (the global default is about 6 s).
     static let messagingTimeout: Float = 1.0
-    /// Wall-clock budget for one read; the tree gathered so far is returned after it.
+    /// Default wall-clock budget for one read; the tree gathered so far is returned after it.
     static let deadline: Duration = .seconds(5)
 
-    private static let queue = DispatchQueue(label: "io.nlopez.alas.computer-use.ax", qos: .userInitiated)
+    /// Walks and AX actions share it so an action never runs during a walk.
+    static let queue = DispatchQueue(label: "io.nlopez.alas.computer-use.ax", qos: .userInitiated)
 
-    private final class CancelFlag: Sendable {
+    /// Pids already asked to expose their tree; one ask per process is enough.
+    private static let manualAccessibilityPIDs = Mutex<Set<pid_t>>([])
+    /// Pids that accepted the ask and haven't been read since: their tree may still be building.
+    private static let buildingTreePIDs = Mutex<Set<pid_t>>([])
+    /// Pids that accepted the ask: Chromium and Electron apps, kept for the process's life.
+    private static let manualAccessibilityAccepted = Mutex<Set<pid_t>>([])
+
+    /// Whether the app accepted `AXManualAccessibility` when it was first asked.
+    static func acceptsManualAccessibility(_ pid: pid_t) -> Bool {
+        manualAccessibilityAccepted.withLock { $0.contains(pid) }
+    }
+
+    /// How long the first read after the ask waits for the tree to show more than groups.
+    static let treeBuildWait: Duration = .seconds(1)
+    static let treeBuildPoll: Duration = .milliseconds(100)
+    /// How deep and how wide one check of a building tree looks.
+    static let treeBuildProbeDepth = 6
+    static let treeBuildProbeNodes = 300
+
+    /// The app element, with the messaging timeout set. The first time a pid is seen, asks it to
+    /// build its Accessibility tree (`AXManualAccessibility`): Chromium and Electron apps expose
+    /// little more than nested groups until asked. Other apps refuse the attribute; that's fine.
+    /// Call on `queue`.
+    static func application(_ pid: pid_t) -> AXUIElement {
+        let application = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(application, messagingTimeout)
+        if manualAccessibilityPIDs.withLock({ $0.insert(pid).inserted }),
+           AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success {
+            buildingTreePIDs.withLock { _ = $0.insert(pid) }
+            manualAccessibilityAccepted.withLock { _ = $0.insert(pid) }
+        }
+        return application
+    }
+
+    /// An app that just accepted `AXManualAccessibility` builds its tree asynchronously: until it
+    /// has, the window reads as nested groups. Before the first read of such an app, checks every
+    /// `treeBuildPoll` until the window has an element other than a group within
+    /// `treeBuildProbeDepth` levels, for at most `treeBuildWait` overall and as much AX-queue time.
+    /// A pid already asked and not building costs nothing: no hop to the AX queue. The waits
+    /// happen off the queue, so actions and other reads go on meanwhile.
+    private static func awaitTreeBuild(_ window: ComputerUseWindow, cancel: CancelFlag) async {
+        let pid = window.app.pid
+        let asked = manualAccessibilityPIDs.withLock { $0.contains(pid) }
+        if asked, !buildingTreePIDs.withLock({ $0.contains(pid) }) { return }
+        let deadline = ContinuousClock.now + treeBuildWait
+        var queueTime = Duration.zero
+        while true {
+            let budget = treeBuildWait - queueTime
+            let (built, spent) = await withCheckedContinuation { (continuation: CheckedContinuation<(Bool, Duration), Never>) in
+                queue.async {
+                    let start = ContinuousClock.now
+                    // The first sight of a pid asks it here.
+                    let application = application(pid)
+                    guard buildingTreePIDs.withLock({ $0.contains(pid) }), !cancel.isSet else {
+                        return continuation.resume(returning: (true, ContinuousClock.now - start))
+                    }
+                    let probe = Walk(
+                        budget: treeBuildProbeNodes, maxDepth: treeBuildProbeDepth,
+                        deadline: min(deadline, start + budget), isCancelled: { cancel.isSet })
+                    let built = probe.hasMoreThanGroups(window, application: application)
+                    continuation.resume(returning: (built, ContinuousClock.now - start))
+                }
+            }
+            queueTime += spent
+            if built || cancel.isSet || ContinuousClock.now >= deadline || queueTime >= treeBuildWait { break }
+            try? await Task.sleep(for: treeBuildPoll)
+        }
+        buildingTreePIDs.withLock { _ = $0.remove(pid) }
+    }
+
+    final class CancelFlag: Sendable {
         private let flag = Atomic<Bool>(false)
         func set() { flag.store(true, ordering: .relaxed) }
         var isSet: Bool { flag.load(ordering: .relaxed) }
@@ -25,11 +96,15 @@ enum ComputerUseAXReader {
 
     /// Throws `CancellationError` when the calling task is cancelled. `complete`
     /// is false when the walk stopped early (node budget, deadline, stalled app).
-    static func read(_ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int) async throws
-        -> (root: ComputerUseAXNode, complete: Bool) {
+    /// `handles` retains every element in the tree, indexed by `ComputerUseAXNode.handle`.
+    static func read(
+        _ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int, timeLimit: Duration = deadline
+    ) async throws
+        -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
         let cancel = CancelFlag()
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
+            await awaitTreeBuild(window, cancel: cancel)
+            return try await withCheckedThrowingContinuation { continuation in
                 queue.async {
                     // A call cancelled while queued behind another walk makes no AX request.
                     if cancel.isSet {
@@ -39,7 +114,7 @@ enum ComputerUseAXReader {
                     let walk = Walk(
                         budget: max(1, nodeBudget),
                         maxDepth: maxDepth,
-                        deadline: .now + deadline,
+                        deadline: .now + timeLimit,
                         isCancelled: { cancel.isSet }
                     )
                     continuation.resume(with: Result { try walk.tree(for: window) })
@@ -50,12 +125,61 @@ enum ComputerUseAXReader {
         }
     }
 
+    /// The AX window behind `window`: by its CG window id where AX can name it, so two windows
+    /// with the same frame and title can't be confused, else by frame with the title breaking ties.
+    /// An app none of whose AX windows has an id is matched by frame too.
+    /// The readers are the caller's, so a walk can stop on a stalled app.
+    static func axWindow(
+        _ candidates: [AXUIElement], for window: ComputerUseWindow,
+        frame: (AXUIElement) -> CGRect?, title: (AXUIElement) -> String?, shouldStop: () -> Bool = { false }
+    ) -> AXUIElement? {
+        guard ComputerUseSkyLight.canIdentifyWindows else {
+            return matchingWindow(candidates, for: window, frame: frame, title: title, shouldStop: shouldStop)
+        }
+        var anyIdentified = false
+        for candidate in candidates {
+            guard !shouldStop() else { return nil }
+            AXUIElementSetMessagingTimeout(candidate, messagingTimeout)
+            guard let id = ComputerUseSkyLight.windowID(of: candidate) else { continue }
+            if id == window.windowID { return candidate }
+            anyIdentified = true
+        }
+        guard !anyIdentified else { return nil }
+        return matchingWindow(candidates, for: window, frame: frame, title: title, shouldStop: shouldStop)
+    }
+
+    /// The AX window whose frame matches the CG bounds; the title breaks ties.
+    private static func matchingWindow(
+        _ candidates: [AXUIElement], for window: ComputerUseWindow,
+        frame: (AXUIElement) -> CGRect?, title: (AXUIElement) -> String?, shouldStop: () -> Bool = { false }
+    ) -> AXUIElement? {
+        var matches: [AXUIElement] = []
+        for candidate in candidates {
+            guard !shouldStop() else { break }
+            AXUIElementSetMessagingTimeout(candidate, messagingTimeout)
+            guard let frame = frame(candidate) else { continue }
+            if abs(frame.minX - window.frame.minX) <= frameTolerance,
+               abs(frame.minY - window.frame.minY) <= frameTolerance,
+               abs(frame.width - window.frame.width) <= frameTolerance,
+               abs(frame.height - window.frame.height) <= frameTolerance {
+                matches.append(candidate)
+            }
+        }
+        if matches.count > 1, let windowTitle = window.title,
+           let titled = matches.first(where: { title($0) == windowTitle }) {
+            return titled
+        }
+        return matches.first
+    }
+
     private final class Walk {
         let budget: Int
         let maxDepth: Int
         let deadline: ContinuousClock.Instant
         let isCancelled: () -> Bool
         var count = 0
+        /// Every element turned into a node; a node's handle is its index here.
+        var elements: [AXUIElement] = []
         /// Set on the first timeout-class AX error: the app is not answering.
         var appStalled = false
         /// Set when children were left unread because the budget ran out or the walk halted.
@@ -72,9 +196,9 @@ enum ComputerUseAXReader {
             appStalled || isCancelled() || ContinuousClock.now >= deadline
         }
 
-        func tree(for window: ComputerUseWindow) throws -> (root: ComputerUseAXNode, complete: Bool) {
-            let app = AXUIElementCreateApplication(window.app.pid)
-            AXUIElementSetMessagingTimeout(app, ComputerUseAXReader.messagingTimeout)
+        func tree(for window: ComputerUseWindow) throws
+            -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
+            let app = ComputerUseAXReader.application(window.app.pid)
 
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
@@ -85,40 +209,55 @@ enum ComputerUseAXReader {
                 }
                 throw ComputerUseSystemError.captureFailed("Could not read the app's windows (AXError \(result.rawValue))")
             }
-            let target = matchingWindow(axWindows, for: window)
+            let target = ComputerUseAXReader.axWindow(
+                axWindows, for: window,
+                frame: { frame(of: $0) }, title: { string(of: $0, kAXTitleAttribute) }, shouldStop: { isHalted })
             if isCancelled() { throw CancellationError() }
             if appStalled || (target == nil && ContinuousClock.now >= deadline) { throw notResponding(window) }
             guard let target else { throw ComputerUseSystemError.windowNotFound(window.windowID) }
 
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
-            return (root, !cutOff && !isHalted)
+            return (root, !cutOff && !isHalted, ComputerUseAXHandles(elements))
+        }
+
+        /// Whether the window has a descendant other than an `AXGroup` within `maxDepth` levels and
+        /// `budget` nodes. Every element is checked against the deadline and cancellation, and no
+        /// AX message may wait past the deadline.
+        func hasMoreThanGroups(_ window: ComputerUseWindow, application: AXUIElement) -> Bool {
+            func limitWait(_ element: AXUIElement) {
+                let remaining = deadline - ContinuousClock.now
+                let seconds = Float(remaining.components.seconds) + Float(remaining.components.attoseconds) / 1e18
+                AXUIElementSetMessagingTimeout(element, max(0.01, min(ComputerUseAXReader.messagingTimeout, seconds)))
+            }
+            limitWait(application)
+            guard let windowsRef = attribute(application, kAXWindowsAttribute), let axWindows = windowsRef as? [AXUIElement],
+                  let root = ComputerUseAXReader.axWindow(
+                      axWindows, for: window, frame: { frame(of: $0) }, title: { string(of: $0, kAXTitleAttribute) },
+                      shouldStop: { isHalted })
+            else { return false }
+            limitWait(root)
+            var level = childElements(of: root)
+            for _ in 0 ..< maxDepth {
+                var next: [AXUIElement] = []
+                for element in level {
+                    count += 1
+                    guard count <= budget, !isHalted else { return false }
+                    limitWait(element)
+                    // A halted walk reads nothing; an unreadable role proves nothing.
+                    let role = string(of: element, kAXRoleAttribute)
+                    if isHalted { return false }
+                    if let role, role != kAXGroupRole { return true }
+                    next += childElements(of: element)
+                }
+                guard !next.isEmpty else { return false }
+                level = next
+            }
+            return false
         }
 
         private func notResponding(_ window: ComputerUseWindow) -> ComputerUseSystemError {
-            .captureFailed("\(window.app.name) is not responding")
-        }
-
-        /// The AX window whose frame matches the CG bounds; the title breaks ties.
-        private func matchingWindow(_ candidates: [AXUIElement], for window: ComputerUseWindow) -> AXUIElement? {
-            var matches: [AXUIElement] = []
-            for candidate in candidates {
-                guard !isHalted else { break }
-                AXUIElementSetMessagingTimeout(candidate, ComputerUseAXReader.messagingTimeout)
-                guard let frame = frame(of: candidate) else { continue }
-                let tolerance = ComputerUseAXReader.frameTolerance
-                if abs(frame.minX - window.frame.minX) <= tolerance,
-                   abs(frame.minY - window.frame.minY) <= tolerance,
-                   abs(frame.width - window.frame.width) <= tolerance,
-                   abs(frame.height - window.frame.height) <= tolerance {
-                    matches.append(candidate)
-                }
-            }
-            if matches.count > 1, let title = window.title,
-               let titled = matches.first(where: { string(of: $0, kAXTitleAttribute) == title }) {
-                return titled
-            }
-            return matches.first
+            .appNotResponding(window.app.name)
         }
 
         /// The root is depth 0 and counts toward the budget. Once the walk
@@ -140,8 +279,10 @@ enum ComputerUseAXReader {
                 description: string(of: element, kAXDescriptionAttribute),
                 frame: frame(of: element) ?? .zero,
                 isEnabled: bool(of: element, kAXEnabledAttribute) ?? true,
-                isFocused: bool(of: element, kAXFocusedAttribute) ?? false
+                isFocused: bool(of: element, kAXFocusedAttribute) ?? false,
+                handle: elements.count
             )
+            elements.append(element)
             if depth < maxDepth {
                 if count < budget, !isHalted {
                     for child in childElements(of: element) {
@@ -155,6 +296,12 @@ enum ComputerUseAXReader {
                     // Conservative: the unread element may have had no children.
                     cutOff = true
                 }
+            } else if !isHalted {
+                // At the depth limit: only whether there is more below, so the agent can ask for it.
+                var childCount: CFIndex = 0
+                let counted = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &childCount)
+                if counted == .cannotComplete { appStalled = true }
+                result.childrenUnread = counted == .success && childCount > 0
             }
             return result
         }

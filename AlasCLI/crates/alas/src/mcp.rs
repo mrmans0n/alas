@@ -649,7 +649,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_screenshot",
-            "description": "Capture a PNG screenshot of one on-screen window by window_id (long edge at most 1280 px). Returns native MCP image content plus JSON metadata, including `scale` (image pixels per screen point). The first use of each app asks the user for approval.",
+            "description": "Capture a PNG screenshot of one on-screen window by window_id (long edge at most 1280 px). Returns native MCP image content plus JSON metadata, including `scale` (image pixels per screen point). Its pixel coordinates hold for the current turn only: after a stop, a resume or a new turn, take a fresh screenshot before using x/y. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -661,7 +661,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_inspect",
-            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter and `limit`/`max_depth` to bound the result. Prefer this over screenshots. The first use of each app asks the user for approval.",
+            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter and `limit`/`max_depth` to bound the result. Prefer this over screenshots. Refs hold for the current turn only: after a stop, a resume or a new turn, inspect again before using them. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -669,12 +669,155 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "A window_id from computer_apps." },
                     "query": { "type": "string", "maxLength": 256, "description": "Optional text filter on element role, title and value." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 300." },
-                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 12, "description": "Maximum tree depth. Default: 12." }
+                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Maximum tree depth, at most 32. Default: 12." }
                 },
                 "required": ["window_id"]
             }
         }),
+        json!({
+            "name": "computer_click",
+            "description": "Click an element or a point in a window. Target it with `ref` (an element ref from the latest computer_inspect or computer_wait of this window) or with `x` and `y` (pixels in the latest computer_screenshot of this window). Returns the window's new elements (refs are replaced). Works in the background without moving the user's cursor or changing the user's focus, though it may change which of the target app's windows is key; `delivery: \"direct\"` briefly activates the app instead. The first use of each app asks the user for approval.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": computer_action_schema(
+                json!({
+                    "ref": computer_ref_property("The element to click."),
+                    "x": computer_pixel_property("Pixels from the left edge of the latest screenshot. Use with y, instead of ref."),
+                    "y": computer_pixel_property("Pixels from the top edge of the latest screenshot. Use with x, instead of ref."),
+                    "button": { "type": "string", "enum": ["left", "right"], "description": "Default: left." },
+                    "count": { "type": "integer", "minimum": 1, "maximum": 2, "description": "2 double-clicks. Default: 1." },
+                    "delivery": computer_delivery_property()
+                }),
+                &[]
+            )
+        }),
+        json!({
+            "name": "computer_type",
+            "description": "Type text into a window. With `ref` (from the latest computer_inspect or computer_wait of this window) the element is focused first; `mode: \"replace\"` (needs ref) sets the element's whole value. Without ref the text goes to the focused element. Returns the window's new elements (refs are replaced). Works in the background; `delivery: \"direct\"` briefly activates the app and pastes the text in one step, so the check that the user isn't using the app runs once before it, not between keystrokes. The first use of each app asks the user for approval.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": computer_action_schema(
+                json!({
+                    "text": { "type": "string", "minLength": 1, "maxLength": 10000, "description": "The text to type (at most 40000 UTF-8 bytes)." },
+                    "ref": computer_ref_property("The element to focus and type into."),
+                    "mode": { "type": "string", "enum": ["insert", "replace"], "description": "replace sets the element's whole value and needs ref. Default: insert." },
+                    "delivery": computer_delivery_property()
+                }),
+                &["text"]
+            )
+        }),
+        json!({
+            "name": "computer_key",
+            "description": "Press a key or chord in a window, such as `return`, `cmd+s` or `shift+tab`. Keys go to the window's app, not to the user's focused app. A bare `escape` or `return` on a window with a sheet or dialog presses its cancel or default button (the result's `button` names it). Returns the window's new elements (refs are replaced). The first use of each app asks the user for approval.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": computer_action_schema(
+                json!({
+                    "keys": { "type": "string", "minLength": 1, "maxLength": 64, "description": "A key or chord, for example `cmd+shift+p`." },
+                    "delivery": computer_delivery_property()
+                }),
+                &["keys"]
+            )
+        }),
+        json!({
+            "name": "computer_scroll",
+            "description": "Scroll at an element or a point in a window. Target it with `ref` (from the latest computer_inspect or computer_wait of this window) or with `x` and `y` (pixels in the latest computer_screenshot of this window). `dx` and `dy` are scroll-wheel lines, at most 100 each: positive dy scrolls down, positive dx scrolls right. Returns the window's new elements (refs are replaced). The first use of each app asks the user for approval.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": computer_action_schema(
+                json!({
+                    "ref": computer_ref_property("The element to scroll over."),
+                    "x": computer_pixel_property("Pixels from the left edge of the latest screenshot. Use with y, instead of ref."),
+                    "y": computer_pixel_property("Pixels from the top edge of the latest screenshot. Use with x, instead of ref."),
+                    "dx": { "type": "integer", "minimum": -100, "maximum": 100, "description": "Horizontal lines. Default: 0." },
+                    "dy": { "type": "integer", "minimum": -100, "maximum": 100, "description": "Vertical lines. Default: 0. dx and dy are not both 0." },
+                    "delivery": computer_delivery_property()
+                }),
+                &[]
+            )
+        }),
+        json!({
+            "name": "computer_drag",
+            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. The drop point must be visible: when another window covers it, the drag is cancelled in place with an error. Drags bring the app to the front briefly; they're refused while the user is typing or using the mouse. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": computer_action_schema(
+                json!({
+                    "ref": computer_ref_property("The element to start the drag on."),
+                    "x": computer_pixel_property("Start pixels from the left edge of the latest screenshot. Use with y, instead of ref."),
+                    "y": computer_pixel_property("Start pixels from the top edge of the latest screenshot. Use with x, instead of ref."),
+                    "to_window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "Another window of the same app to drop into, a window_id from computer_apps. Default: window_id." },
+                    "to_ref": computer_ref_property("The element to drop on."),
+                    "to_x": computer_pixel_property("End pixels from the left edge of the latest screenshot. Use with to_y, instead of to_ref."),
+                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref.")
+                }),
+                &[]
+            )
+        }),
+        json!({
+            "name": "computer_open_app",
+            "description": "Launch or unhide an app without bringing it to the front, then wait for its window. Give exactly one of `name` or `bundle_id`. Returns the app and its windows like computer_apps, so you can pick a window_id for computer_screenshot and computer_inspect. Asks the user for approval for that app before launching.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "maxLength": 256, "description": "The app's name, such as `TextEdit`. Use instead of bundle_id." },
+                    "bundle_id": { "type": "string", "maxLength": 256, "description": "The app's bundle identifier, such as `com.apple.TextEdit`. Use instead of name." }
+                }
+            }
+        }),
+        json!({
+            "name": "computer_wait",
+            "description": "Wait until an element matching `query` (on role, title and value) appears in or disappears from a window, then return the window's elements as computer_inspect does (refs are replaced). Times out with an error. The first use of each app asks the user for approval.",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "A window_id from computer_apps." },
+                    "query": { "type": "string", "minLength": 1, "maxLength": 256, "description": "Text to look for in element role, title and value." },
+                    "condition": { "type": "string", "enum": ["appear", "disappear"], "description": "Default: appear." },
+                    "timeout_ms": { "type": "integer", "minimum": 100, "maximum": 20000, "description": "Default: 5000." },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 100." }
+                },
+                "required": ["window_id", "query"]
+            }
+        }),
     ]
+}
+
+/// The input schema shared by the actions that operate a window and return a
+/// fresh read of it.
+fn computer_action_schema(extra: Value, required: &[&str]) -> Value {
+    let mut properties = serde_json::Map::new();
+    properties.insert(
+        "window_id".into(),
+        json!({ "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "A window_id from computer_apps." }),
+    );
+    if let Value::Object(extra) = extra {
+        properties.extend(extra);
+    }
+    properties.insert(
+        "query".into(),
+        json!({ "type": "string", "maxLength": 256, "description": "Optional text filter on the returned elements' role, title and value." }),
+    );
+    properties.insert(
+        "limit".into(),
+        json!({ "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 100." }),
+    );
+    properties.insert(
+        "include_screenshot".into(),
+        json!({ "type": "boolean", "description": "Also return a screenshot of the window afterwards. Default: false." }),
+    );
+    let mut required = required.to_vec();
+    required.insert(0, "window_id");
+    json!({ "type": "object", "properties": properties, "required": required })
+}
+
+fn computer_ref_property(description: &str) -> Value {
+    json!({ "type": "string", "pattern": "^e[1-9][0-9]{0,4}$", "description": format!("{description} An element ref such as `e12`.") })
+}
+
+fn computer_pixel_property(description: &str) -> Value {
+    json!({ "type": "number", "minimum": 0, "maximum": 100000, "description": description })
+}
+
+fn computer_delivery_property() -> Value {
+    json!({ "type": "string", "enum": ["background", "direct"], "description": "background posts to the app without touching the user's focus; it may change the target app's key window, and activates the app briefly when that window can't be made key. direct briefly activates the app and is refused while the user is active. Default: background. The result's `delivery` reports how the input went: ax, background or activation." })
 }
 
 fn preview_tool_definitions() -> Vec<Value> {
@@ -1162,7 +1305,185 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 window_id: required_window_id(args)?,
                 query: optional_limited_string(args, "query", 256)?,
                 limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(300),
-                max_depth: optional_bounded_u64(args, "max_depth", 1, 12)?.unwrap_or(12),
+                max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?.unwrap_or(12),
+                call_id: None,
+            }))
+        }
+        "computer_click" => {
+            reject_arguments(
+                args,
+                name,
+                &[
+                    "window_id",
+                    "ref",
+                    "x",
+                    "y",
+                    "button",
+                    "count",
+                    "delivery",
+                    "query",
+                    "limit",
+                    "include_screenshot",
+                ],
+            )?;
+            let button = optional_enum(args, "button", &["left", "right"])?.unwrap_or("left");
+            Ok(Command::Computer(alas_client::ComputerCommand::Click {
+                window_id: required_window_id(args)?,
+                target: computer_target(args, "ref", "x", "y")?,
+                button: button.into(),
+                count: optional_bounded_u64(args, "count", 1, 2)?.unwrap_or(1),
+                direct: computer_direct(args)?,
+                post: computer_post(args)?,
+                call_id: None,
+            }))
+        }
+        "computer_type" => {
+            reject_arguments(
+                args,
+                name,
+                &[
+                    "window_id",
+                    "text",
+                    "ref",
+                    "mode",
+                    "delivery",
+                    "query",
+                    "limit",
+                    "include_screenshot",
+                ],
+            )?;
+            let element = optional_computer_ref(args, "ref")?;
+            let replace = optional_enum(args, "mode", &["insert", "replace"])? == Some("replace");
+            if replace && element.is_none() {
+                return Err("mode replace needs a ref".into());
+            }
+            Ok(Command::Computer(alas_client::ComputerCommand::Type {
+                window_id: required_window_id(args)?,
+                text: required_computer_text(args)?,
+                element,
+                replace,
+                direct: computer_direct(args)?,
+                post: computer_post(args)?,
+                call_id: None,
+            }))
+        }
+        "computer_key" => {
+            reject_arguments(
+                args,
+                name,
+                &[
+                    "window_id",
+                    "keys",
+                    "delivery",
+                    "query",
+                    "limit",
+                    "include_screenshot",
+                ],
+            )?;
+            let keys = match args.get("keys") {
+                Some(Value::String(keys)) if !keys.trim().is_empty() && keys.len() <= 64 => {
+                    keys.clone()
+                }
+                _ => return Err("keys must be a non-blank string of at most 64 bytes".into()),
+            };
+            Ok(Command::Computer(alas_client::ComputerCommand::Key {
+                window_id: required_window_id(args)?,
+                keys,
+                direct: computer_direct(args)?,
+                post: computer_post(args)?,
+                call_id: None,
+            }))
+        }
+        "computer_scroll" => {
+            reject_arguments(
+                args,
+                name,
+                &[
+                    "window_id",
+                    "ref",
+                    "x",
+                    "y",
+                    "dx",
+                    "dy",
+                    "delivery",
+                    "query",
+                    "limit",
+                    "include_screenshot",
+                ],
+            )?;
+            let dx = optional_bounded_i64(args, "dx", -100, 100)?.unwrap_or(0);
+            let dy = optional_bounded_i64(args, "dy", -100, 100)?.unwrap_or(0);
+            if dx == 0 && dy == 0 {
+                return Err("dx and dy must not both be 0".into());
+            }
+            Ok(Command::Computer(alas_client::ComputerCommand::Scroll {
+                window_id: required_window_id(args)?,
+                target: computer_target(args, "ref", "x", "y")?,
+                dx,
+                dy,
+                direct: computer_direct(args)?,
+                post: computer_post(args)?,
+                call_id: None,
+            }))
+        }
+        "computer_drag" => {
+            reject_arguments(
+                args,
+                name,
+                &[
+                    "window_id",
+                    "ref",
+                    "x",
+                    "y",
+                    "to_window_id",
+                    "to_ref",
+                    "to_x",
+                    "to_y",
+                    "query",
+                    "limit",
+                    "include_screenshot",
+                ],
+            )?;
+            Ok(Command::Computer(alas_client::ComputerCommand::Drag {
+                window_id: required_window_id(args)?,
+                from: computer_target(args, "ref", "x", "y")?,
+                to_window_id: optional_bounded_u64(args, "to_window_id", 0, u32::MAX.into())?
+                    .map(|value| value as u32),
+                to: computer_target(args, "to_ref", "to_x", "to_y")?,
+                // Always delivered with the app in front; the flag would only repeat that.
+                direct: false,
+                post: computer_post(args)?,
+                call_id: None,
+            }))
+        }
+        "computer_open_app" => {
+            reject_arguments(args, name, &["name", "bundle_id"])?;
+            let app_name = optional_limited_string_raw(args, "name", 256)?;
+            let bundle_id = optional_limited_string_raw(args, "bundle_id", 256)?;
+            if app_name.is_some() == bundle_id.is_some() {
+                return Err("computer_open_app needs exactly one of name or bundle_id".into());
+            }
+            Ok(Command::Computer(alas_client::ComputerCommand::OpenApp {
+                name: app_name,
+                bundle_id,
+                call_id: None,
+            }))
+        }
+        "computer_wait" => {
+            reject_arguments(
+                args,
+                name,
+                &["window_id", "query", "condition", "timeout_ms", "limit"],
+            )?;
+            let query = optional_limited_string_raw(args, "query", 256)?
+                .ok_or_else(|| "query is required".to_string())?;
+            Ok(Command::Computer(alas_client::ComputerCommand::Wait {
+                window_id: required_window_id(args)?,
+                query,
+                disappear: optional_enum(args, "condition", &["appear", "disappear"])?
+                    == Some("disappear"),
+                timeout_ms: optional_bounded_u64(args, "timeout_ms", 100, 20000)?.unwrap_or(5000),
+                limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(100),
                 call_id: None,
             }))
         }
@@ -1470,6 +1791,122 @@ fn optional_bounded_u64(
     }
 }
 
+fn optional_bounded_i64(
+    args: &Value,
+    key: &str,
+    min: i64,
+    max: i64,
+) -> Result<Option<i64>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(value) => value
+            .as_i64()
+            .filter(|value| *value >= min && *value <= max)
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be an integer from {min} to {max}")),
+    }
+}
+
+fn optional_enum<'a>(
+    args: &Value,
+    key: &str,
+    allowed: &[&'a str],
+) -> Result<Option<&'a str>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => allowed
+            .iter()
+            .copied()
+            .find(|candidate| candidate == value)
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be one of {}", allowed.join(", "))),
+        Some(_) => Err(format!("{key} must be one of {}", allowed.join(", "))),
+    }
+}
+
+/// A non-blank string of at most `max_bytes`, passed on untrimmed like the app reads it.
+fn optional_limited_string_raw(
+    args: &Value,
+    key: &str,
+    max_bytes: usize,
+) -> Result<Option<String>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) if !value.trim().is_empty() && value.len() <= max_bytes => {
+            Ok(Some(value.clone()))
+        }
+        Some(_) => Err(format!(
+            "{key} must be a non-blank string of at most {max_bytes} bytes"
+        )),
+    }
+}
+
+/// An `eN` ref: `^e[1-9][0-9]{0,4}$`.
+fn optional_computer_ref(args: &Value, key: &str) -> Result<Option<String>, String> {
+    match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(value)) => {
+            let digits = value.strip_prefix('e').unwrap_or("");
+            if (1..=5).contains(&digits.len())
+                && digits.bytes().all(|byte| byte.is_ascii_digit())
+                && !digits.starts_with('0')
+            {
+                Ok(Some(value.clone()))
+            } else {
+                Err(format!("{key} must be an element ref such as e12"))
+            }
+        }
+        Some(_) => Err(format!("{key} must be an element ref such as e12")),
+    }
+}
+
+/// Exactly one of a ref or an x+y pair, under the given keys.
+fn computer_target(
+    args: &Value,
+    ref_key: &str,
+    x_key: &str,
+    y_key: &str,
+) -> Result<alas_client::ComputerTarget, String> {
+    let coordinate = |key: &str| match args.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(_) => required_bounded_f64(args, key, 0.0, 100_000.0).map(Some),
+    };
+    match (
+        optional_computer_ref(args, ref_key)?,
+        coordinate(x_key)?,
+        coordinate(y_key)?,
+    ) {
+        (Some(element), None, None) => Ok(alas_client::ComputerTarget::Ref(element)),
+        (None, Some(x), Some(y)) => Ok(alas_client::ComputerTarget::Point { x, y }),
+        _ => Err(format!(
+            "give exactly one target: {ref_key}, or {x_key} and {y_key}"
+        )),
+    }
+}
+
+fn required_computer_text(args: &Value) -> Result<String, String> {
+    match args.get("text") {
+        Some(Value::String(text))
+            if (1..=10000).contains(&text.chars().count()) && text.len() <= 40000 =>
+        {
+            Ok(text.clone())
+        }
+        _ => Err("text must be 1 to 10000 characters and at most 40000 bytes".into()),
+    }
+}
+
+fn computer_direct(args: &Value) -> Result<bool, String> {
+    Ok(optional_enum(args, "delivery", &["background", "direct"])? == Some("direct"))
+}
+
+fn computer_post(args: &Value) -> Result<alas_client::ComputerPost, String> {
+    Ok(alas_client::ComputerPost {
+        limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(100),
+        query: optional_limited_string_raw(args, "query", 256)?,
+        include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
+    })
+}
+
 fn required_bounded_f64(args: &Value, key: &str, min: f64, max: f64) -> Result<f64, String> {
     args.get(key)
         .and_then(Value::as_f64)
@@ -1679,8 +2116,8 @@ fn tool_result(command: &Command, resp: Response) -> Value {
     if matches!(
         command,
         Command::Preview(alas_client::PreviewCommand::Capture { .. })
-            | Command::Computer(alas_client::ComputerCommand::Screenshot { .. })
-    ) {
+    ) || matches!(command, Command::Computer(computer) if computer.includes_screenshot())
+    {
         if let Some(result) = capture_tool_result(resp.lines.as_ref()) {
             return result;
         }
@@ -2901,6 +3338,13 @@ mod tests {
                 "computer_apps",
                 "computer_screenshot",
                 "computer_inspect",
+                "computer_click",
+                "computer_type",
+                "computer_key",
+                "computer_scroll",
+                "computer_drag",
+                "computer_open_app",
+                "computer_wait",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -3456,7 +3900,14 @@ mod tests {
             window_id: 7,
             call_id: None,
         });
-        let mut second = Command::Computer(ComputerCommand::Apps { call_id: None });
+        let mut second = Command::Computer(ComputerCommand::Wait {
+            window_id: 7,
+            query: "Done".into(),
+            disappear: false,
+            timeout_ms: 5000,
+            limit: 100,
+            call_id: None,
+        });
         assert!(register_pending_call(&pending, &json!(7), &mut first).is_some());
         assert!(register_pending_call(&pending, &json!(8), &mut second).is_some());
         let call_id = |command: &Command| match command {
@@ -3627,8 +4078,265 @@ mod tests {
                 call_id: None
             })
         );
+        assert_eq!(
+            command_for_tool(
+                "computer_inspect",
+                &json!({ "window_id": 7, "max_depth": 32 }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::Computer(ComputerCommand::Inspect {
+                window_id: 7,
+                query: None,
+                limit: 300,
+                max_depth: 32,
+                call_id: None
+            })
+        );
+        let post = alas_client::ComputerPost::default();
+        let at = |x, y| alas_client::ComputerTarget::Point { x, y };
+        let element = |value: &str| alas_client::ComputerTarget::Ref(value.into());
+        for (tool, args, expected) in [
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e12", "button": "right", "count": 2, "delivery": "direct" }),
+                ComputerCommand::Click {
+                    window_id: 7,
+                    target: element("e12"),
+                    button: "right".into(),
+                    count: 2,
+                    direct: true,
+                    post: post.clone(),
+                    call_id: None,
+                },
+            ),
+            (
+                "computer_type",
+                json!({ "window_id": 7, "text": " hi ", "ref": "e1", "mode": "replace", "include_screenshot": true, "limit": 5, "query": "ok" }),
+                ComputerCommand::Type {
+                    window_id: 7,
+                    text: " hi ".into(),
+                    element: Some("e1".into()),
+                    replace: true,
+                    direct: false,
+                    post: alas_client::ComputerPost {
+                        limit: 5,
+                        query: Some("ok".into()),
+                        include_screenshot: true,
+                    },
+                    call_id: None,
+                },
+            ),
+            (
+                "computer_key",
+                json!({ "window_id": 7, "keys": "cmd+s" }),
+                ComputerCommand::Key {
+                    window_id: 7,
+                    keys: "cmd+s".into(),
+                    direct: false,
+                    post: post.clone(),
+                    call_id: None,
+                },
+            ),
+            (
+                "computer_scroll",
+                json!({ "window_id": 7, "x": 10.5, "y": 0, "dy": -3 }),
+                ComputerCommand::Scroll {
+                    window_id: 7,
+                    target: at(10.5, 0.0),
+                    dx: 0,
+                    dy: -3,
+                    direct: false,
+                    post: post.clone(),
+                    call_id: None,
+                },
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_window_id": 9, "to_ref": "e4" }),
+                ComputerCommand::Drag {
+                    window_id: 7,
+                    from: element("e1"),
+                    to_window_id: Some(9),
+                    to: element("e4"),
+                    direct: false,
+                    post,
+                    call_id: None,
+                },
+            ),
+            (
+                "computer_open_app",
+                json!({ "bundle_id": "com.apple.TextEdit" }),
+                ComputerCommand::OpenApp {
+                    name: None,
+                    bundle_id: Some("com.apple.TextEdit".into()),
+                    call_id: None,
+                },
+            ),
+            (
+                "computer_wait",
+                json!({ "window_id": 7, "query": "Done", "condition": "disappear", "timeout_ms": 100 }),
+                ComputerCommand::Wait {
+                    window_id: 7,
+                    query: "Done".into(),
+                    disappear: true,
+                    timeout_ms: 100,
+                    limit: 100,
+                    call_id: None,
+                },
+            ),
+        ] {
+            assert_eq!(
+                command_for_tool(tool, &args, "/wt").unwrap(),
+                Command::Computer(expected),
+                "{tool} {args}"
+            );
+        }
         let long_query = "q".repeat(257);
+        let long_text = "a".repeat(10001);
+        // 10000 characters of 4 bytes each is the largest accepted text: 40000 bytes.
+        let wide_text = "\u{1F600}".repeat(10000);
+        assert!(
+            command_for_tool(
+                "computer_type",
+                &json!({ "window_id": 7, "text": wide_text }),
+                "/wt"
+            )
+            .is_ok()
+        );
         for (tool, args) in [
+            ("computer_click", json!({ "window_id": 7 })),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "x": 1, "y": 2 }),
+            ),
+            ("computer_click", json!({ "window_id": 7, "x": 1 })),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "x": 1, "y": 100001 }),
+            ),
+            ("computer_click", json!({ "window_id": 7, "x": -1, "y": 1 })),
+            ("computer_click", json!({ "window_id": 7, "ref": "e0" })),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e123456" }),
+            ),
+            ("computer_click", json!({ "window_id": 7, "ref": "12" })),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "count": 3 }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "button": "middle" }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "delivery": "teleport" }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "text": "x" }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "limit": 0 }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "include_screenshot": "yes" }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "call_id": "forged" }),
+            ),
+            ("computer_type", json!({ "window_id": 7, "text": "" })),
+            (
+                "computer_type",
+                json!({ "window_id": 7, "text": long_text }),
+            ),
+            (
+                "computer_type",
+                json!({ "window_id": 7, "text": "x", "mode": "replace" }),
+            ),
+            (
+                "computer_type",
+                json!({ "window_id": 7, "text": "x", "x": 1, "y": 1 }),
+            ),
+            ("computer_type", json!({ "window_id": 7 })),
+            ("computer_key", json!({ "window_id": 7, "keys": "  " })),
+            (
+                "computer_key",
+                json!({ "window_id": 7, "keys": "k".repeat(65) }),
+            ),
+            (
+                "computer_key",
+                json!({ "window_id": 7, "keys": "a", "ref": "e1" }),
+            ),
+            ("computer_scroll", json!({ "window_id": 7, "ref": "e1" })),
+            (
+                "computer_scroll",
+                json!({ "window_id": 7, "ref": "e1", "dx": 0, "dy": 0 }),
+            ),
+            (
+                "computer_scroll",
+                json!({ "window_id": 7, "ref": "e1", "dy": 101 }),
+            ),
+            (
+                "computer_scroll",
+                json!({ "window_id": 7, "ref": "e1", "dx": -101 }),
+            ),
+            ("computer_drag", json!({ "window_id": 7, "ref": "e1" })),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_window_id": -1, "to_ref": "e2" }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_window_id": 4294967296u64, "to_ref": "e2" }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "to_window_id": 2 }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_x": 1 }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "to_x": 1, "to_y": 1 }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "delivery": "direct" }),
+            ),
+            ("computer_open_app", json!({})),
+            (
+                "computer_open_app",
+                json!({ "name": "A", "bundle_id": "b" }),
+            ),
+            ("computer_open_app", json!({ "name": "  " })),
+            ("computer_open_app", json!({ "name": "n".repeat(257) })),
+            ("computer_open_app", json!({ "name": "A", "window_id": 7 })),
+            ("computer_wait", json!({ "window_id": 7 })),
+            ("computer_wait", json!({ "window_id": 7, "query": "  " })),
+            (
+                "computer_wait",
+                json!({ "window_id": 7, "query": "x", "timeout_ms": 99 }),
+            ),
+            (
+                "computer_wait",
+                json!({ "window_id": 7, "query": "x", "timeout_ms": 20001 }),
+            ),
+            (
+                "computer_wait",
+                json!({ "window_id": 7, "query": "x", "condition": "later" }),
+            ),
+            (
+                "computer_wait",
+                json!({ "window_id": 7, "query": "x", "include_screenshot": true }),
+            ),
             ("computer_apps", json!({ "window_id": 7 })),
             ("computer_apps", json!({ "query": "x" })),
             ("computer_screenshot", json!({})),
@@ -3656,7 +4364,7 @@ mod tests {
             ),
             (
                 "computer_inspect",
-                json!({ "window_id": 7, "max_depth": 13 }),
+                json!({ "window_id": 7, "max_depth": 33 }),
             ),
         ] {
             assert!(
@@ -3702,6 +4410,34 @@ mod tests {
     }
 
     #[test]
+    fn computer_action_with_include_screenshot_returns_mcp_image() {
+        let line = json!({
+            "version": 1,
+            "action": "click",
+            "elements": [],
+            "image": { "mime_type": "image/png", "data": "iVBORw0KGgo=" }
+        })
+        .to_string();
+        let reply = handle_line(
+            r#"{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"computer_key","arguments":{"window_id":7,"keys":"return","include_screenshot":true}}}"#,
+            "/wt",
+            |_| {
+                Ok(Response {
+                    ok: true,
+                    lines: Some(vec![line.clone()]),
+                    error: None,
+                    exit_code: None,
+                })
+            },
+        )
+        .unwrap();
+        let content = reply["result"]["content"].as_array().unwrap();
+        assert_eq!(content[0]["type"], json!("image"));
+        assert_eq!(content[1]["type"], json!("text"));
+        assert!(content[1]["text"].as_str().unwrap().contains("\"action\""));
+    }
+
+    #[test]
     fn computer_tools_are_read_only_and_absent_from_relays_and_workspace_mode() {
         let reply = handle_line(
             r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#,
@@ -3710,12 +4446,27 @@ mod tests {
         )
         .unwrap();
         let tools = reply["result"]["tools"].as_array().unwrap();
-        for name in ["computer_apps", "computer_screenshot", "computer_inspect"] {
+        let annotation = |name: &str, hint: &str| {
             let tool = tools
                 .iter()
                 .find(|tool| tool["name"] == json!(name))
                 .unwrap();
-            assert_eq!(tool["annotations"]["readOnlyHint"], json!(true), "{name}");
+            tool["annotations"][hint].clone()
+        };
+        for name in ["computer_apps", "computer_screenshot", "computer_inspect"] {
+            assert_eq!(annotation(name, "readOnlyHint"), json!(true), "{name}");
+        }
+        for name in [
+            "computer_click",
+            "computer_type",
+            "computer_key",
+            "computer_scroll",
+            "computer_drag",
+            "computer_open_app",
+            "computer_wait",
+        ] {
+            assert_eq!(annotation(name, "readOnlyHint"), json!(false), "{name}");
+            assert_eq!(annotation(name, "destructiveHint"), json!(true), "{name}");
         }
         for scope in [ToolScope::Visual, ToolScope::Remote, ToolScope::Workspace] {
             let names: Vec<String> = super::tool_definitions_for_mode(scope)

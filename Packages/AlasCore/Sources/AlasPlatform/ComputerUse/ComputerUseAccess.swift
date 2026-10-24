@@ -39,6 +39,14 @@ public enum ComputerUseBlocklist {
         if let bundleID = app.bundleID { return bundleIDs.contains(bundleID) }
         return false
     }
+
+    /// Other Alas builds can be seen but not driven: their approval and permission prompts
+    /// are the user's to answer.
+    public static func isInputBlocked(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {
+        if isBlocked(app, hostPID: hostPID) { return true }
+        guard let bundleID = app.bundleID else { return false }
+        return bundleID == "io.nlopez.alas" || bundleID.hasPrefix("io.nlopez.alas.")
+    }
 }
 
 /// Per-process approval state for all computer-use sessions. No I/O: the
@@ -68,8 +76,12 @@ public final class ComputerUseAccess {
         self.alwaysAllowed = alwaysAllowed
     }
 
-    public func access(for app: ComputerUseAppIdentity, session: String) -> ComputerUseAppAccess {
-        if ComputerUseBlocklist.isBlocked(app, hostPID: hostPID) { return .blocked }
+    /// `input`: the call clicks, types, presses keys, scrolls, drags or opens the app.
+    public func access(for app: ComputerUseAppIdentity, session: String, input: Bool = false) -> ComputerUseAppAccess {
+        let blocked = input
+            ? ComputerUseBlocklist.isInputBlocked(app, hostPID: hostPID)
+            : ComputerUseBlocklist.isBlocked(app, hostPID: hostPID)
+        if blocked { return .blocked }
         let key = app.approvalKey
         let state = sessions[session] ?? SessionState()
         if state.denied.contains(key) { return .denied }

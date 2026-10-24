@@ -8,6 +8,7 @@ struct ComputerUsePane: View {
     @State private var granted: Set<ComputerUsePermission>
     @State private var isAdHoc: Bool
     @State private var requestedScreenRecording = AppRelaunch.screenRecordingRequested
+    @State private var isWatchingInput = ComputerUseUserInput.isWatching
 
     init(state: AppState) {
         self.state = state
@@ -36,15 +37,16 @@ struct ComputerUsePane: View {
                     ForEach(ComputerUsePermission.allCases, id: \.self) { permission in
                         permissionRow(permission)
                     }
+                    inputWatchingRow
                 }
 
                 SettingsGroup(title: "Always allowed apps") {
-                    Text("If Codex also has OpenAI's Computer Use plugin turned on, agents there see both sets of tools.")
+                    Text("If Codex also has OpenAI's Computer Use plugin turned on, agents there see both sets of tools. Approving an app lets agents click and type in it, not just see it. For Electron and Chrome-based apps, Alas turns on their accessibility support, which can make them use a bit more memory.")
                         .font(.system(size: 12))
                         .foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, 8)
-                    let bundleIDs = state.config.computerUse.alwaysAllowedBundleIDs
+                    let bundleIDs = state.config.computerUse.alwaysAllowedApps
                     if bundleIDs.isEmpty {
                         Text("No apps yet. Choose \"Always allow\" when an agent asks.")
                             .font(.system(size: 12.5))
@@ -53,7 +55,7 @@ struct ComputerUsePane: View {
                         ForEach(bundleIDs, id: \.self) { bundleID in
                             SettingsRow(name: bundleID) {
                                 AlasButton(title: "Remove") {
-                                    state.config.computerUse.alwaysAllowedBundleIDs.removeAll { $0 == bundleID }
+                                    state.config.computerUse.alwaysAllowedApps.removeAll { $0 == bundleID }
                                     state.saveConfig()
                                 }
                             }
@@ -115,6 +117,32 @@ struct ComputerUsePane: View {
         }
     }
 
+    /// Whether Alas sees the user's own input, which holds agents back while the user works.
+    private var inputWatchingRow: some View {
+        SettingsRow(
+            name: "Input watching",
+            desc: "Lets Alas pause agents while you type or use the mouse in the app they work in."
+        ) {
+            if isWatchingInput {
+                Text("On")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(theme.color("fg-dim"))
+            } else {
+                HStack(spacing: 8) {
+                    Text("Off — Alas can't tell when you're using an app")
+                        .font(.system(size: 12.5))
+                        .foregroundColor(theme.color("fg-dim"))
+                    AlasButton(title: "Grant…") {
+                        ComputerUseUserInput.requestListenAccess()
+                        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+                            URLOpening.shared.open(url)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func description(for permission: ComputerUsePermission) -> String {
         switch permission {
         case .screenRecording:
@@ -126,5 +154,6 @@ struct ComputerUsePane: View {
 
     private func refresh() {
         granted = ComputerUsePlatform.shared.grantedPermissions()
+        isWatchingInput = ComputerUseUserInput.isWatching
     }
 }

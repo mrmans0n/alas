@@ -1,5 +1,6 @@
 import ApplicationServices
 import CoreGraphics
+import ScreenCaptureKit
 import Security
 
 /// The macOS implementation of `ComputerUsePlatform`.
@@ -17,6 +18,9 @@ enum ComputerUseSystemPermissions {
                 switch permission {
                 case .screenRecording:
                     _ = CGRequestScreenCaptureAccess()
+                    // Asking ScreenCaptureKit for content is what makes macOS list
+                    // the app under Screen Recording when the request alone doesn't.
+                    Task.detached { _ = try? await SCShareableContent.current }
                 case .accessibility:
                     let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary // value of kAXTrustedCheckOptionPrompt, a non-Sendable global var
                     _ = AXIsProcessTrustedWithOptions(options)
