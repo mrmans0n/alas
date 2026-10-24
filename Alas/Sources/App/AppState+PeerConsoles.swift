@@ -10,10 +10,37 @@ extension AppState {
             setLocalInputSuppressed: { [weak self] consoleId, suppressed in
                 self?.terminal.registry.session(for: consoleId)?.surface.setReadOnly(suppressed)
             },
-            terminate: { [weak self] in self?.closeTerminalPaneWithoutConfirmation(leafId: $0) }
+            terminate: { [weak self] in self?.closeTerminalPaneWithoutConfirmation(leafId: $0) },
+            open: { [weak self] in
+                guard let self else { throw PeerConsoleOpenError.unsupported }
+                return try await self.openPeerConsole(worktreeId: $0)
+            }
         ))
         _peerConsoleHost = host
         return host
+    }
+
+    /// Opens a terminal for a peer as a hidden, non-activating tab, so the
+    /// host user's selection and focus never move. The hidden flag isn't
+    /// persisted, so the tab shows once this Mac relaunches. No `resize`:
+    /// the app keeps sizing consoles from its own grid.
+    func openPeerConsole(worktreeId: String) async throws -> String {
+        guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId),
+              !projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path)
+        else { throw PeerConsoleOpenError.worktreeUnavailable }
+        guard project.host == nil else { throw PeerConsoleOpenError.sshProject }
+        guard config.terminal.keepSessionsAlive, terminal.zmxClient.isAvailable else {
+            throw PeerConsoleOpenError(
+                "This Mac doesn't keep terminal sessions alive (Settings › Terminal › Keep sessions alive across app quit), so it can't share a new terminal."
+            )
+        }
+        do {
+            let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, isHidden: true, activates: false)
+            if case .terminal(let state) = tab, let id = state.root.leaves().first?.id { return id }
+        } catch {
+            throw PeerConsoleOpenError((error as? LocalizedError)?.errorDescription ?? PeerConsoleOpenError.notStarted.message)
+        }
+        throw PeerConsoleOpenError.notStarted
     }
 
     /// Only live, host-local, zmx-backed consoles are eligible. SSH consoles
