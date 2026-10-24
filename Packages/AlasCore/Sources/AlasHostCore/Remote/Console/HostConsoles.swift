@@ -149,10 +149,7 @@ public final class HostConsoles {
     // ponytail: no per-peer open limit; pairing is the trust boundary (spec). Cap here if a peer misbehaves.
     public func open(worktreeId: String) async throws -> String {
         guard isAvailable else { throw PeerConsoleOpenError.zmxMissing }
-        guard let (project, worktree) = core.projectAndWorktree(withWorktreeId: worktreeId),
-              !core.projects.isWorktreeHidden(projectId: project.id, path: worktree.path)
-        else { throw PeerConsoleOpenError.worktreeUnavailable }
-        guard project.host == nil else { throw PeerConsoleOpenError.sshProject }
+        let worktree = try admittedWorktree(worktreeId)
         await ShellEnvResolver.shared.waitUntilResolved()
         let id = UUID().uuidString
         let name = ZmxSessionName.hostShell(worktreeId: worktreeId, consoleId: id)
@@ -168,6 +165,15 @@ public final class HostConsoles {
             await BlockingWork.run { zmx.killSession(name: name) }
             throw (error as? PeerConsoleOpenError) ?? .notStarted
         }
+        // The launch suspended: a removal that claimed or deleted the
+        // worktree meanwhile has already run its cleanup without this shell.
+        do {
+            _ = try admittedWorktree(worktreeId)
+        } catch {
+            let zmx = zmx
+            await BlockingWork.run { zmx.killSession(name: name) }
+            throw error
+        }
         // Numbered after the launch, with no suspension before the append,
         // so concurrent opens can't take the same title.
         let taken = Set(entries.filter { $0.worktreeId == worktreeId }.map(\.title))
@@ -178,6 +184,17 @@ public final class HostConsoles {
         ))
         save()
         return id
+    }
+
+    /// The worktree a shell may run in now: listed, visible, local, and not
+    /// claimed by a lifecycle operation.
+    private func admittedWorktree(_ worktreeId: String) throws -> Worktree {
+        guard let (project, worktree) = core.projectAndWorktree(withWorktreeId: worktreeId),
+              !core.projects.isWorktreeHidden(projectId: project.id, path: worktree.path)
+        else { throw PeerConsoleOpenError.worktreeUnavailable }
+        guard project.host == nil else { throw PeerConsoleOpenError.sshProject }
+        guard core.projects.admitsNewWork(in: worktree) else { throw PeerConsoleOpenError.worktreeBusy }
+        return worktree
     }
 
     /// Applies the newest requested size, one apply at a time per console:

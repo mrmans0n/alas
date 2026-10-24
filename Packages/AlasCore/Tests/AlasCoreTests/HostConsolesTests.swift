@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
+@_spi(Testing) import AlasIntegrations
 @_spi(AppHost) @testable import AlasHostCore
 
 @MainActor
@@ -81,16 +82,18 @@ struct HostConsolesTests {
         #expect(consoles.target(id)?.socketPath == fixture.socketPath(of: id))
     }
 
-    enum Unopenable: CaseIterable { case unknownWorktree, sshProject, noZmx, launchFails }
+    enum Unopenable: CaseIterable { case unknownWorktree, busyWorktree, sshProject, noZmx, launchFails }
 
     @Test(arguments: Unopenable.allCases)
     func openRefusesWithTheReasonAndRecordsNothing(_ kind: Unopenable) async throws {
         let fixture = try Fixture(host: kind == .sshProject ? "box" : nil, zmxAvailable: kind != .noZmx)
         defer { fixture.tearDown() }
         fixture.fakes.withLock { $0.launchFails = kind == .launchFails }
+        if kind == .busyWorktree { fixture.projects.setOperationState(for: fixture.worktree, state: .preparingDelete) }
         let consoles = fixture.consoles()
         let expected: PeerConsoleOpenError = switch kind {
         case .unknownWorktree: .worktreeUnavailable
+        case .busyWorktree: .worktreeBusy
         case .sshProject: .sshProject
         case .noZmx: .zmxMissing
         case .launchFails: .notStarted
@@ -102,6 +105,25 @@ struct HostConsolesTests {
         #expect(try fixture.savedFile()?.consoles.isEmpty ?? true)
         // A launcher that failed may have forked the daemon already.
         #expect(fixture.killed == fixture.launches.map { $0.arguments[1] })
+    }
+
+    enum DuringLaunch: CaseIterable { case removalClaimsIt, removalFinishes }
+
+    /// The launch suspends; a removal that begins or ends meanwhile must not
+    /// find the shell missing from its cleanup and then see it registered.
+    @Test(arguments: DuringLaunch.allCases)
+    func aShellLaunchedWhileItsWorktreeGoesIsKilled(_ during: DuringLaunch) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.fakes.withLock { $0.duringLaunch = during }
+        let consoles = fixture.consoles()
+        let expected: PeerConsoleOpenError = during == .removalClaimsIt ? .worktreeBusy : .worktreeUnavailable
+
+        await #expect(throws: expected) { try await consoles.open(worktreeId: fixture.worktree.id) }
+        #expect(consoles.summaries().isEmpty)
+        #expect(try fixture.savedFile()?.consoles.isEmpty ?? true)
+        #expect(fixture.killed == fixture.launches.map { $0.arguments[1] })
+        #expect(fixture.launches.count == 1)
     }
 
     @Test func titlesReuseTheLowestFreeNumber() async throws {
@@ -237,6 +259,7 @@ struct HostConsolesTests {
         var launches: [HostShellLaunch] = []
         var launchFails = false
         var lsFails = false
+        var duringLaunch: DuringLaunch?
         var sizeApplies = true
         var sizes: [String] = []
         /// The next size apply blocks until `release` is signaled.
@@ -314,6 +337,8 @@ struct HostConsolesTests {
         func consoles() -> HostConsoles {
             let fakes = fakes
             let zmx = zmx
+            let projects = projects
+            let worktree = worktree
             return HostConsoles(
                 core: core,
                 zmx: zmx,
@@ -324,6 +349,14 @@ struct HostConsolesTests {
                         return $0.launchFails
                     }
                     if fails { throw PeerConsoleOpenError.notStarted }
+                    switch fakes.withLock({ $0.duringLaunch }) {
+                    case .removalClaimsIt?:
+                        await MainActor.run { projects.setOperationState(for: worktree, state: .preparingDelete) }
+                    case .removalFinishes?:
+                        await MainActor.run { projects.removeOptimisticWorktree(id: worktree.id, projectId: worktree.projectId) }
+                    case nil:
+                        break
+                    }
                     guard let socket = zmx.socketPath(forSession: launch.arguments[1]) else { throw PeerConsoleOpenError.notStarted }
                     FileManager.default.createFile(atPath: socket, contents: nil)
                 },
