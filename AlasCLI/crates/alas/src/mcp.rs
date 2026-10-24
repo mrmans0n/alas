@@ -224,6 +224,9 @@ fn initialize_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value
         _ if scope == ToolScope::Visual => {
             "Shows visuals to the user in Alas with visual_show. Reach for it when an explanation has shape: how parts connect (architecture, data or control flow, state machines, sequences), options compared on several dimensions, before/after layouts or UI sketches, or numbers that read better as a chart. Keep it to one visual per reply, usually none: skip it for short answers, single facts, code edits, status updates, and anything a list or code block already shows clearly. A visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it."
         }
+        Some(_) if scope == ToolScope::Headless => {
+            "Tools that drive the user's Alas host. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
+        }
         Some(_) => {
             "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
         }
@@ -267,13 +270,22 @@ fn tool_definitions_for_mode(scope: ToolScope) -> Vec<Value> {
     if scope == ToolScope::Headless {
         // No UI to default to: the host must be told which review to act on.
         for tool in &mut tools {
-            let required = match tool["name"].as_str() {
-                Some("review") => json!(["target"]),
-                Some("review_finish") => json!(["session_id"]),
-                Some("review_comment_add") => json!(["path", "start_line", "body", "session_id"]),
+            let (required, session_desc) = match tool["name"].as_str() {
+                Some("review") => (json!(["target"]), None),
+                Some("review_finish") => (json!(["session_id"]), Some("Review session to finish, returned by the review tool.")),
+                Some("review_comment_add") => (
+                    json!(["path", "start_line", "body", "session_id"]),
+                    Some("Review session to file into, returned by the review tool."),
+                ),
                 _ => continue,
             };
             tool["inputSchema"]["required"] = required;
+            if let Some(desc) = session_desc {
+                tool["inputSchema"]["properties"]["session_id"]["description"] = json!(desc);
+            } else {
+                tool["description"] = json!("Start a review of the given target — a provider pull/merge request (number or URL), a commit SHA or revision, a commit range (base..head, or base...head for a merge-base diff), or a local branch (reviewed against the repository's base branch). Returns the review session id for use with review_comment_add.");
+                tool["inputSchema"]["properties"]["target"]["description"] = json!("PR/MR number or URL, commit SHA/revision, commit range (base..head or base...head), or branch name.");
+            }
         }
     }
     tools
@@ -3186,6 +3198,14 @@ mod tests {
         assert_eq!(schema("review"), json!(["target"]));
         assert!(schema("review_comment_add").as_array().unwrap().contains(&json!("session_id")));
         assert!(schema("review_finish").as_array().unwrap().contains(&json!("session_id")));
+        let review = listed.iter().find(|t| t["name"] == "review").unwrap().to_string();
+        assert!(!review.contains("omitted") && !review.contains("Omit") && !review.contains("review pane"));
+        for parent in [None, Some("p")] {
+            let text = initialize_result(parent, scope)["instructions"].as_str().unwrap().to_string();
+            for banned in ["open files", "preview", "workspace_", "workspace UI"] {
+                assert!(!text.contains(banned), "{parent:?}: {banned}");
+            }
+        }
         // A delegated child keeps both filters.
         let child: Vec<String> = tool_definitions_for_session(scope, true)
             .iter()
