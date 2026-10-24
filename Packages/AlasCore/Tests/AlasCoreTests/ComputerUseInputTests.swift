@@ -280,6 +280,26 @@ struct ComputerUseInputTests {
             windowOnScreen: onScreen, targetIsFocusedWindow: focused, deliveredThroughAX: delivered) == route)
     }
 
+    /// Escape and Return press a sheet's own cancel or default button first, then a button that
+    /// names the role by identifier, title or description, in any language macOS ships.
+    @Test(arguments: [
+        (Button.Role.cancel, Optional(Button.Candidate(title: "Cancel")), [Button.Candidate](), Button.Resolution.attribute(label: "Cancel")),
+        (.cancel, nil, [Button.Candidate(title: "Delete"), Button.Candidate(title: "Cancel")], .candidate(index: 1, label: "Cancel")),
+        // System Settings: the label only in the description.
+        (.cancel, nil, [Button.Candidate(description: "Aceptar"), Button.Candidate(description: "Cancelar")], .candidate(index: 1, label: "Cancelar")),
+        (.default, nil, [Button.Candidate(description: "Cancelar"), Button.Candidate(description: "Aceptar")], .candidate(index: 1, label: "Aceptar")),
+        (.cancel, nil, [Button.Candidate(description: "Cerrar", identifier: "AX_CANCEL")], .candidate(index: 0, label: "Cerrar")),
+        (.cancel, Button.Candidate(title: "Cancel", isEnabled: false), [Button.Candidate(title: "Cancel", isEnabled: false)], .none),
+        (.cancel, nil, [Button.Candidate(description: "Lenta"), Button.Candidate(description: "Aceptar")], .none),
+    ] as [(Button.Role, Button.Candidate?, [Button.Candidate], Button.Resolution)])
+    func sheetKeysPressTheButtonThatNamesTheirRole(
+        role: Button.Role, attribute: Button.Candidate?, candidates: [Button.Candidate], resolution: Button.Resolution
+    ) {
+        #expect(Button.resolve(role, attributeButton: attribute, candidates: candidates) == resolution)
+    }
+
+    typealias Button = ComputerUseDialogButton
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)

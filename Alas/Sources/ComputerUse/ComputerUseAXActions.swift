@@ -712,30 +712,35 @@ extension ComputerUseAXActions {
                     throw unconfirmed
                 }
             }
-            // Panels hosted out of process (TextEdit's Save sheet) list the attribute with no value.
-            var unreadable: [AXUIElement] = []
+            // Panels hosted out of process (TextEdit's Save sheet, System Settings' sheets) list the
+            // attribute with no value: their buttons are found by identifier or label instead.
+            let role: ComputerUseDialogButton.Role = key == .escape ? .cancel : .default
+            var unreadable = false
             for candidate in candidates {
-                guard let button = elementAttribute(candidate, attribute) else {
-                    unreadable.append(candidate)
+                let own = elementAttribute(candidate, attribute)
+                if own == nil { unreadable = true }
+                let ownInfo = own.map(buttonInfo)
+                let buttons = ownInfo?.isEnabled == true ? [] : dialogButtons(in: candidate)
+                switch ComputerUseDialogButton.resolve(role, attributeButton: ownInfo, candidates: buttons.map(buttonInfo)) {
+                case .attribute(let label):
+                    if let own { try pressChecked(own, title: label) }
+                    return label
+                case .candidate(let index, let label):
+                    try pressChecked(buttons[index], title: label)
+                    return label
+                case .none:
                     continue
                 }
-                guard bool(of: button, kAXEnabledAttribute) != false else { continue }
-                let title = string(of: button, kAXTitleAttribute) ?? (key == .escape ? "Cancel" : "Default")
-                try pressChecked(button, title: title)
-                return title
             }
-            guard !unreadable.isEmpty else { return nil }
-            // Such a panel is hosted out of process: a posted Return doesn't reach it, from a field in
-            // it either, and which button is the default can't be guessed.
-            guard key == .escape else { throw ComputerUseSystemError.actionFailed(defaultButtonUnreadable) }
-            for candidate in unreadable {
-                guard let (button, title) = cancelButton(in: candidate) else { continue }
-                try pressChecked(button, title: title)
-                return title
+            guard !candidates.isEmpty else { return nil }
+            // A posted key can't reach a sheet another process draws, or one in a window off screen:
+            // saying it was delivered would be wrong. One of the app's own may still take the key.
+            if !remote.isEmpty || searchesTree {
+                throw ComputerUseSystemError.actionFailed(key == .escape ? noCancelButton : defaultButtonUnreadable)
             }
-            // A posted Escape can't reach a sheet another process draws either: saying it was
-            // delivered would be wrong. One of the app's own may still take the key itself.
-            if !remote.isEmpty { throw ComputerUseSystemError.actionFailed(noCancelButton) }
+            // Which button is an unreadable panel's default can't be guessed, and a posted Return
+            // doesn't reach it, from a field in it either.
+            if unreadable, key == .return { throw ComputerUseSystemError.actionFailed(defaultButtonUnreadable) }
             return nil
         }
     }
@@ -777,32 +782,36 @@ extension ComputerUseAXActions {
     static let defaultButtonUnreadable =
         "This dialog's default button can't be pressed with a key here. Click the button by ref (computer_inspect lists the dialog's buttons)."
 
-    /// Levels below a sheet or dialog searched for its cancel button by title, and how many elements.
+    /// Levels below a sheet or dialog searched for its buttons, and how many elements.
     static let cancelButtonSearchDepth = 8
     static let cancelButtonSearchNodes = 300
 
-    /// The first enabled button within `cancelButtonSearchDepth` levels of `dialog`, breadth first,
-    /// whose title is a cancel title (`ComputerUseDialogButton`), with that title.
-    private static func cancelButton(in dialog: AXUIElement) -> (AXUIElement, String)? {
+    /// The buttons within `cancelButtonSearchDepth` levels of `dialog`, breadth first, at most
+    /// `cancelButtonSearchNodes` elements read, never one of Alas's own.
+    private static func dialogButtons(in dialog: AXUIElement) -> [AXUIElement] {
         var level = [dialog]
         var visited = 0
+        var buttons: [AXUIElement] = []
         for _ in 0 ..< cancelButtonSearchDepth {
             var next: [AXUIElement] = []
             for element in level {
                 for child in children(of: element) {
                     visited += 1
-                    guard visited <= cancelButtonSearchNodes else { return nil }
-                    if string(of: child, kAXRoleAttribute) == kAXButtonRole,
-                       let title = string(of: child, kAXTitleAttribute), ComputerUseDialogButton.isCancelTitle(title),
-                       bool(of: child, kAXEnabledAttribute) != false {
-                        return (child, title)
-                    }
-                    next.append(child)
+                    guard visited <= cancelButtonSearchNodes else { return buttons }
+                    guard isMessageable(child) else { continue }
+                    if string(of: child, kAXRoleAttribute) == kAXButtonRole { buttons.append(child) } else { next.append(child) }
                 }
             }
+            guard !next.isEmpty else { break }
             level = next
         }
-        return nil
+        return buttons
+    }
+
+    /// A button as `ComputerUseDialogButton.resolve` weighs it.
+    private static func buttonInfo(_ button: AXUIElement) -> ComputerUseDialogButton.Candidate {
+        .init(title: string(of: button, kAXTitleAttribute), description: string(of: button, kAXDescriptionAttribute),
+              identifier: string(of: button, "AXIdentifier"), isEnabled: bool(of: button, kAXEnabledAttribute) != false)
     }
 
     /// No header constant exists for it.
