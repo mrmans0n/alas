@@ -661,7 +661,7 @@ extension LiveComputerUseSystem {
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseDelivered? {
         switch input {
-        case .key: break
+        case .key, .type: break
         default: return nil
         }
         let displays = displayFrames()
