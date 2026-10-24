@@ -37,6 +37,21 @@ enum ComputerUseAXReader {
     static let treeBuildProbeDepth = 6
     static let treeBuildProbeNodes = 300
 
+    /// Whether an AX message may go to `pid`: never to this process. Its AppKit accessibility
+    /// handlers would run on the calling thread, the AX queue, and assert off the main thread.
+    /// (`AXUIElementGetPid` itself is answered locally.)
+    static func mayMessage(_ pid: pid_t) -> Bool {
+        pid > 0 && pid != getpid()
+    }
+
+    static let hostRefusal = ComputerUseSystemError.actionFailed("Agents can't use Alas itself.")
+
+    /// `application(_:)`, refused for this process.
+    static func target(_ pid: pid_t) throws -> AXUIElement {
+        guard mayMessage(pid) else { throw hostRefusal }
+        return application(pid)
+    }
+
     /// The app element, with the messaging timeout set. The first time a pid is seen, asks it to
     /// build its Accessibility tree (`AXManualAccessibility`): Chromium and Electron apps expose
     /// little more than nested groups until asked. Other apps refuse the attribute; that's fine.
@@ -60,6 +75,7 @@ enum ComputerUseAXReader {
     /// happen off the queue, so actions and other reads go on meanwhile.
     private static func awaitTreeBuild(_ window: ComputerUseWindow, cancel: CancelFlag) async {
         let pid = window.app.pid
+        guard mayMessage(pid) else { return }
         let asked = manualAccessibilityPIDs.withLock { $0.contains(pid) }
         if asked, !buildingTreePIDs.withLock({ $0.contains(pid) }) { return }
         let deadline = ContinuousClock.now + treeBuildWait
@@ -94,7 +110,7 @@ enum ComputerUseAXReader {
     static func wakeWebContent(_ app: ComputerUseAppIdentity, attribute: String) async -> Bool {
         await withCheckedContinuation { continuation in
             queue.async {
-                let element = application(app.pid)
+                guard let element = try? target(app.pid) else { return continuation.resume(returning: false) }
                 var value: CFTypeRef?
                 var before: Bool?
                 if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
@@ -112,6 +128,7 @@ enum ComputerUseAXReader {
     static func restoreWebContent(_ app: ComputerUseAppIdentity, attribute: String) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.async {
+                guard mayMessage(app.pid) else { return continuation.resume() }
                 let element = AXUIElementCreateApplication(app.pid)
                 AXUIElementSetMessagingTimeout(element, messagingTimeout)
                 _ = AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanFalse)
@@ -234,7 +251,7 @@ enum ComputerUseAXReader {
 
         func tree(for window: ComputerUseWindow) throws
             -> (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles) {
-            let app = ComputerUseAXReader.application(window.app.pid)
+            let app = try ComputerUseAXReader.target(window.app.pid)
 
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
@@ -498,6 +515,8 @@ extension ComputerUseAXReader {
                     budget -= 1
                     return true
                 }
+                // This process draws no system prompt, and must not be messaged here.
+                guard mayMessage(pid) else { return continuation.resume(returning: false) }
                 let application = AXUIElementCreateApplication(pid)
                 AXUIElementSetMessagingTimeout(application, promptProbeMessagingTimeout)
                 func elements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement]? {

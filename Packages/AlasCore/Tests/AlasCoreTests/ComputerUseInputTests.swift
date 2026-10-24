@@ -186,26 +186,22 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.isAppWindowLayer(layer) == listed)
     }
 
-    /// An x/y input goes as events unless another process draws what is at the point inside the
-    /// window (a System Settings pane); then as AX there. Another process's element outside the
-    /// window is refused, and the system's hit test only counts where the window is on top.
+    /// An x/y input goes as events unless the app's own hit test finds another process's element
+    /// at the point inside the window (a System Settings pane); then as AX there. Another
+    /// process's element that doesn't hold the point is refused.
     @Test(arguments: [
-        (Optional(Hit(pid: 10, frame: inner)), Optional(Hit(pid: 10, frame: inner)), true, Route.events),
-        (Hit(pid: 20, frame: inner), nil, false, .appHit),
-        (Hit(pid: 20, frame: nil), nil, false, .appHit),
+        (Optional(Hit(pid: 10, frame: inner)), Route.events),
+        (Hit(pid: 20, frame: inner), .ax),
+        (Hit(pid: 20, frame: nil), .ax),
         // A row half scrolled out of the pane still holds the point.
-        (Hit(pid: 20, frame: halfOut), nil, true, .appHit),
-        (Hit(pid: 20, frame: elsewhere), nil, true, .covered),
-        (Hit(pid: 10, frame: inner), Hit(pid: 20, frame: inner), true, .systemHit),
-        (Hit(pid: 10, frame: inner), Hit(pid: 20, frame: inner), false, .events),
-        (Hit(pid: 10, frame: inner), Hit(pid: 20, frame: elsewhere), true, .covered),
-        (Hit(pid: 10, frame: inner), Hit(pid: 1, frame: inner), true, .events),
-        (nil, nil, true, .events),
-    ] as [(Hit?, Hit?, Bool, Route)])
-    func pointInputsReachContentAnotherProcessDraws(appHit: Hit?, systemHit: Hit?, targetOnTop: Bool, route: Route) {
+        (Hit(pid: 20, frame: halfOut), .ax),
+        (Hit(pid: 20, frame: elsewhere), .covered),
+        (nil, .events),
+    ] as [(Hit?, Route)])
+    func pointInputsReachContentAnotherProcessDraws(appHit: Hit?, route: Route) {
         #expect(ComputerUseInputGeometry.pointRoute(
-            point: CGPoint(x: 750, y: 100), targetPID: 10, hostPID: 1, window: CGRect(x: 0, y: 0, width: 800, height: 600),
-            appHit: appHit, systemHit: systemHit, targetOnTop: targetOnTop) == route)
+            point: CGPoint(x: 750, y: 100), targetPID: 10, window: CGRect(x: 0, y: 0, width: 800, height: 600),
+            appHit: appHit) == route)
     }
 
     typealias Hit = ComputerUseInputGeometry.PointHit

@@ -33,33 +33,23 @@ public enum ComputerUseInputGeometry {
         /// Events posted to the app, as for any point.
         case events
         /// Content another process draws in the window (a System Settings pane is an extension's):
-        /// events posted to the app never reach it, so the input goes as AX on the element there,
-        /// as the app's own hit test (`appHit`) or the system's (`systemHit`) found it.
-        case appHit, systemHit
+        /// events posted to the app never reach it, so the input goes as AX on the element there.
+        case ax
         /// What is at the point is another process's, outside the window: refused.
         case covered
     }
 
-    /// How an x/y click or scroll at `point` reaches it. `appHit` is the target app's own hit test,
-    /// which sees its windows even under other apps'; `systemHit` is the system-wide one, which
-    /// names whatever is on top, so it counts only when the target window is topmost there
-    /// (`targetOnTop`), and never when it is Alas's own (`hostPID`: the drawn cursor).
+    /// How an x/y click or scroll at `point` reaches it, from the target app's own hit test
+    /// (`appHit`), which sees its windows even under other apps'. There is no system-wide hit
+    /// test: it names whatever is on top, Alas's own windows included.
     /// Another process's element counts as in the window when the point is in the window and the
-    /// element's frame holds the point (a row half scrolled out still does); an app hit whose
-    /// frame can't be read counts as in it.
-    public static func pointRoute(
-        point: CGPoint, targetPID: Int32, hostPID: Int32, window: CGRect, appHit: PointHit?, systemHit: PointHit?,
-        targetOnTop: Bool
-    ) -> PointRoute {
-        func inWindow(_ frame: CGRect?, unknown: Bool) -> Bool {
-            guard window.contains(point) else { return false }
-            return frame.map { $0.insetBy(dx: -frameTolerance, dy: -frameTolerance).contains(point) } ?? unknown
-        }
-        if let appHit, appHit.pid != targetPID {
-            return inWindow(appHit.frame, unknown: true) ? .appHit : .covered
-        }
-        guard targetOnTop, let systemHit, systemHit.pid != targetPID, systemHit.pid != hostPID else { return .events }
-        return inWindow(systemHit.frame, unknown: false) ? .systemHit : .covered
+    /// element's frame holds the point (a row half scrolled out still does); one whose frame
+    /// can't be read counts as in it.
+    public static func pointRoute(point: CGPoint, targetPID: Int32, window: CGRect, appHit: PointHit?) -> PointRoute {
+        guard let appHit, appHit.pid != targetPID else { return .events }
+        guard window.contains(point) else { return .covered }
+        let holds = appHit.frame.map { $0.insetBy(dx: -frameTolerance, dy: -frameTolerance).contains(point) } ?? true
+        return holds ? .ax : .covered
     }
 
     /// Points a frame may miss the point by and still count as holding it.

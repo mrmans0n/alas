@@ -59,7 +59,7 @@ enum ComputerUseAXActions {
     /// Proceeds when the focused element can't be read.
     static func refuseSecureFocus(app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled) async throws {
         try await onQueue(isCancelled) {
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             var focused: CFTypeRef?
             guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused)
                 == .success,
@@ -211,24 +211,23 @@ enum ComputerUseAXActions {
         var handles: ComputerUseAXHandles
     }
 
-    /// The element at `point`, global points, as the app hit-tests its own windows and as the
-    /// system-wide hit test finds it, each nil when there is none or it can't be read.
-    static func elements(
+    /// The element at `point`, global points, as the app hit-tests its own windows (also under
+    /// other apps' windows); nil when there is none or it can't be read. Never the system-wide hit
+    /// test: what is on top may be Alas's own window (the drawn cursor), and an AX message to this
+    /// process runs its AppKit handlers right here, off the main thread.
+    static func element(
         at point: CGPoint, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
-    ) async throws -> (app: PointElement?, system: PointElement?) {
+    ) async throws -> PointElement? {
         try await onQueue(isCancelled) {
-            func hit(_ root: AXUIElement) -> PointElement? {
-                AXUIElementSetMessagingTimeout(root, ComputerUseAXReader.messagingTimeout)
-                var element: AXUIElement?
-                guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &element) == .success,
-                      let element
-                else { return nil }
-                AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
-                var pid: pid_t = 0
-                guard AXUIElementGetPid(element, &pid) == .success else { return nil }
-                return PointElement(hit: .init(pid: pid, frame: frame(of: element)), handles: ComputerUseAXHandles([element]))
-            }
-            return (hit(ComputerUseAXReader.application(app.pid)), hit(AXUIElementCreateSystemWide()))
+            let root = try ComputerUseAXReader.target(app.pid)
+            var element: AXUIElement?
+            guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &element) == .success,
+                  let element
+            else { return nil }
+            var pid: pid_t = 0
+            guard AXUIElementGetPid(element, &pid) == .success, ComputerUseAXReader.mayMessage(pid) else { return nil }
+            AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+            return PointElement(hit: .init(pid: pid, frame: frame(of: element)), handles: ComputerUseAXHandles([element]))
         }
     }
 
@@ -276,7 +275,7 @@ enum ComputerUseAXActions {
     ) async throws {
         try await onQueue(isCancelled) {
             let app = window.app
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             let notActive = ComputerUseSystemError.notActiveWindow(
                 "Window \(window.windowID) isn't \(app.name)'s active window. Click in it first or pass delivery: \"direct\".")
             var windowsRef: CFTypeRef?
@@ -300,7 +299,7 @@ enum ComputerUseAXActions {
             let app = window.app
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(
-                ComputerUseAXReader.application(app.pid), kAXWindowsAttribute as CFString, &windowsRef)
+                try ComputerUseAXReader.target(app.pid), kAXWindowsAttribute as CFString, &windowsRef)
             if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
             guard result == .success, let axWindows = windowsRef as? [AXUIElement],
                   let target = axWindow(axWindows, for: window)
@@ -319,7 +318,7 @@ enum ComputerUseAXActions {
     ) async throws -> (isKey: Bool, focusedWindowID: UInt32?) {
         try await onQueue(isCancelled) {
             let app = window.app
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             let focused = elementAttribute(application, kAXFocusedWindowAttribute).map(owningWindow(of:))
             let focusedID = focused.flatMap(ComputerUseSkyLight.windowID(of:))
             var windowsRef: CFTypeRef?
@@ -433,6 +432,10 @@ enum ComputerUseAXActions {
 
     private static func resolve(_ handles: ComputerUseAXHandles, _ handle: Int) throws -> AXUIElement {
         guard let element = handles.element(handle) else { throw ComputerUseSystemError.staleElement }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, ComputerUseAXReader.mayMessage(pid) else {
+            throw ComputerUseAXReader.hostRefusal
+        }
         AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
         return element
     }
@@ -526,7 +529,7 @@ extension ComputerUseAXActions {
                     mask: number(of: item, kAXMenuItemCmdModifiersAttribute), chordVirtualKey: chordVirtualKey)
                     && bool(of: item, kAXEnabledAttribute) == true
             }
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             guard let menuBar = elementAttribute(application, kAXMenuBarAttribute) else { return nil }
             let deadline = ContinuousClock.now + ComputerUseAXReader.deadline
             var items = 0
@@ -591,7 +594,7 @@ extension ComputerUseAXActions {
         }
         let app = window.app
         return try await onQueue({ interrupt() == .cancelled }) {
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
             if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
@@ -677,7 +680,7 @@ extension ComputerUseAXActions {
         var sheets: [AXUIElement] = []
         for start in starts {
             var pid: pid_t = 0
-            guard AXUIElementGetPid(start, &pid) == .success, pid != app.pid,
+            guard AXUIElementGetPid(start, &pid) == .success, pid != app.pid, ComputerUseAXReader.mayMessage(pid),
                   let sheet = ancestor(of: start, levels: sheetAncestorLevels, where: {
                       string(of: $0, kAXRoleAttribute) == kAXSheetRole
                   }),
@@ -866,11 +869,15 @@ extension ComputerUseAXActions {
             case .element(let handles, let handle):
                 start = try resolve(handles, handle)
             case .point(let point):
-                let application = ComputerUseAXReader.application(app.pid)
+                let application = try ComputerUseAXReader.target(app.pid)
                 var hit: AXUIElement?
                 let result = AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit)
                 if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
                 guard result == .success, let hit else { throw Unsupported(error: result) }
+                var pid: pid_t = 0
+                guard AXUIElementGetPid(hit, &pid) == .success, ComputerUseAXReader.mayMessage(pid) else {
+                    throw Unsupported(error: .illegalArgument)
+                }
                 AXUIElementSetMessagingTimeout(hit, ComputerUseAXReader.messagingTimeout)
                 // Another of the app's windows may be on top at that point.
                 guard let hitWindow = elementAttribute(hit, kAXWindowAttribute), axWindow([hitWindow], for: window) != nil
@@ -1219,7 +1226,7 @@ extension ComputerUseAXActions {
     }
 
     private static func focusedElement(of app: ComputerUseAppIdentity) -> AXUIElement? {
-        let application = ComputerUseAXReader.application(app.pid)
+        guard let application = try? ComputerUseAXReader.target(app.pid) else { return nil }
         return elementAttribute(application, kAXFocusedUIElementAttribute)
     }
 

@@ -506,7 +506,7 @@ extension LiveComputerUseSystem {
         // Content another process draws in the window (a System Settings pane) takes no posted
         // events: an x/y click or scroll there goes as AX on the element at the point, also when
         // direct. Where AX has no way, the events go as they always did.
-        if let routed = try await routedToPoint(input, in: window, ignoring: ignoring, isCancelled: isCancelled),
+        if let routed = try await routedToPoint(input, in: window, isCancelled: isCancelled),
            let delivered = try await remoteViaAX(routed, in: window, interrupt: interrupt) {
             return delivered
         }
@@ -638,27 +638,20 @@ extension LiveComputerUseSystem {
     /// the same input on the element there (`ComputerUseInputGeometry.pointRoute`); nil for any
     /// other input. Refuses when another process's element at the point isn't in the window.
     private static func routedToPoint(
-        _ input: ComputerUseInput, in window: ComputerUseWindow, ignoring: @escaping @Sendable () -> Set<UInt32>,
-        isCancelled: @escaping @Sendable () -> Bool
+        _ input: ComputerUseInput, in window: ComputerUseWindow, isCancelled: @escaping @Sendable () -> Bool
     ) async throws -> ComputerUseInput? {
         let point: CGPoint
         switch input {
         case .click(.point(let at), _, _), .scroll(.point(let at), _, _): point = at
         default: return nil
         }
-        let found = try await ComputerUseAXActions.elements(at: point, app: window.app, isCancelled: isCancelled)
-        let onTop = ComputerUseInputGeometry.topmostWindow(at: point, in: screenWindows(), ignoring: ignoring()) == window.windowID
-        let route = ComputerUseInputGeometry.pointRoute(
-            point: point, targetPID: window.app.pid, hostPID: getpid(), window: window.frame, appHit: found.app?.hit,
-            systemHit: found.system?.hit, targetOnTop: onTop)
-        let element: ComputerUseAXActions.PointElement?
-        switch route {
+        let found = try await ComputerUseAXActions.element(at: point, app: window.app, isCancelled: isCancelled)
+        switch ComputerUseInputGeometry.pointRoute(point: point, targetPID: window.app.pid, window: window.frame, appHit: found?.hit) {
         case .events: return nil
         case .covered: throw ComputerUseSystemError.actionFailed(coveredPointRefusal)
-        case .appHit: element = found.app
-        case .systemHit: element = found.system
+        case .ax: break
         }
-        guard let element else { return nil }
+        guard let element = found else { return nil }
         let target = ComputerUseInputTarget.element(element.handles, 0)
         switch input {
         case .click(_, let button, let count): return .click(target, button: button, count: count)
