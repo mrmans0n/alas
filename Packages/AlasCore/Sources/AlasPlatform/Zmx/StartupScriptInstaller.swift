@@ -16,6 +16,13 @@ public enum StartupScriptInstaller: Sendable {
         }
     }
 
+    /// Removes the rc files `plan` wrote for a session, best effort.
+    public static func removeArtifacts(sessionId: String) {
+        let dir = Paths.appSupportRoot.appendingPathComponent("rcfiles", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent(sessionId, isDirectory: true))
+        try? FileManager.default.removeItem(at: dir.appendingPathComponent("\(sessionId).bashrc"))
+    }
+
     /// What to launch for a session, including any env overrides needed to make
     /// the startup script source after the user's normal init.
     public struct Plan: Equatable, Sendable {

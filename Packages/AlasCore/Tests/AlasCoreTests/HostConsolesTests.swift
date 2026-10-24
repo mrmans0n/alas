@@ -111,15 +111,27 @@ struct HostConsolesTests {
 
     /// The launch suspends; a removal that begins or ends meanwhile must not
     /// find the shell missing from its cleanup and then see it registered.
-    @Test(arguments: DuringLaunch.allCases)
-    func aShellLaunchedWhileItsWorktreeGoesIsKilled(_ during: DuringLaunch) async throws {
+    @Test(arguments: DuringLaunch.allCases, [false, true])
+    func aShellLaunchedWhileItsWorktreeGoesIsKilled(_ during: DuringLaunch, isRun: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         fixture.fakes.withLock { $0.duringLaunch = during }
         let consoles = fixture.consoles()
         let expected: PeerConsoleOpenError = during == .removalClaimsIt ? .worktreeBusy : .worktreeUnavailable
 
-        await #expect(throws: expected) { try await consoles.open(worktreeId: fixture.worktree.id) }
+        if isRun {
+            (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+            let script = try fixture.runScript(onExit: .keep)
+            guard case .started = fixture.core.startRun(script, in: fixture.worktree) else {
+                Issue.record("The run did not start")
+                return
+            }
+            await fixture.core.waitForStartingRunsForTesting()
+            // Never started: the previous (no) record is put back.
+            #expect(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key) == nil)
+        } else {
+            await #expect(throws: expected) { try await consoles.open(worktreeId: fixture.worktree.id) }
+        }
         #expect(consoles.summaries().isEmpty)
         #expect(try fixture.savedFile()?.consoles.isEmpty ?? true)
         #expect(fixture.killed == fixture.launches.map { $0.arguments[1] })
@@ -357,6 +369,65 @@ struct HostConsolesTests {
         try await eventually {
             await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.failed(exitCode: 3))
         }
+    }
+
+    enum Ending: CaseIterable { case stop, rerun }
+
+    /// Stopping a run, or running it again over its kept console, ends the
+    /// console it ran in, so a script never has two.
+    @Test(arguments: Ending.allCases)
+    func stoppingOrRerunningARunEndsItsConsole(_ ending: Ending) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started(let runID) = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+        let first = try #require(consoles.summaries().first?.consoleId)
+        let firstName = try #require(fixture.launches.first?.arguments[1])
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        switch ending {
+        case .stop:
+            core.stopRun(scriptKey: script.key, in: fixture.worktree)
+        case .rerun:
+            try fixture.complete(runID: runID, exitCode: 0)
+            try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.succeeded) }
+            _ = core.startRun(script, in: fixture.worktree)
+            await core.waitForStartingRunsForTesting()
+        }
+
+        let fakes = fixture.fakes
+        try await eventually { fakes.withLock { $0.killed.first } == firstName }
+        let expected = ending == .stop ? 0 : 1
+        try await eventually { await MainActor.run { consoles.summaries().count == expected && !consoles.summaries().contains { $0.consoleId == first } } }
+        if ending == .stop {
+            #expect(core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.stopped))
+        }
+    }
+
+    /// A peer terminates a console whose run is still going: the run settles.
+    @Test func terminatingARunConsoleSettlesItsRun() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+        let consoleId = try #require(consoles.summaries().first?.consoleId)
+
+        await consoles.terminate(consoleId)
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.unknown) }
     }
 
     enum NoConsole: CaseIterable { case noZmx, fish }
