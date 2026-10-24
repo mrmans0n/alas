@@ -14,14 +14,19 @@ extension AppState {
         })
         // One overlay for the app's lifetime: the coordinator's cursor closures keep it, and
         // dismiss it whenever the session that showed it ends.
-        let overlay = ComputerUseCursorOverlay(window: ComputerUseSystem.live().window)
+        // One system for both: the overlay looks windows up through it, and its drags look through
+        // the overlay. `overlayRef` is set once, here, before any call can reach a drag.
+        nonisolated(unsafe) var overlayRef: ComputerUseCursorOverlay?
+        let system = ComputerUseSystem.live(cursorWindowIDs: { overlayRef?.windowIDs ?? [] })
+        let overlay = ComputerUseCursorOverlay(window: system.window)
+        overlayRef = overlay
         let cursor = ComputerUseCursor(
             present: { overlay.present(over: $0) },
             perform: { await overlay.perform($0) },
             dismiss: { overlay.dismiss() }
         )
         let coordinator = ComputerUseCoordinator(
-            system: .live(cursorWindowIDs: { overlay.windowIDs }),
+            system: system,
             access: access,
             readiness: {
                 ComputerUseReadiness.evaluate(
