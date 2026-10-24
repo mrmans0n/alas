@@ -690,15 +690,18 @@ final class ComputerUseCoordinator {
 
     private func listApps(sessionID: String) async -> AlasCLIResponse {
         let apps = await system.runningApps()
+        let accesses = apps.map { access.access(for: $0.app, session: sessionID) }
+        // One read for the whole listing; a blocked app's windows aren't listed either way.
+        let withWindows = zip(apps, accesses).filter { $1 != .blocked && !$0.windows.isEmpty }.map(\.0.app.pid)
+        let prompts = withWindows.isEmpty ? [] : await system.credentialPrompts(withWindows)
         var entries: [[String: Any]] = []
-        for entry in apps {
-            let appAccess = access.access(for: entry.app, session: sessionID)
+        for (entry, appAccess) in zip(apps, accesses) {
             var object = Self.app(entry.app)
             object["approval"] = Self.approvalName(appAccess)
             // A blocked app's window titles and frames stay private, and so do an app's while a
             // system password prompt shows in it.
             var windows = appAccess == .blocked ? [] : entry.windows
-            if !windows.isEmpty, await system.credentialPrompt(entry.app.pid) {
+            if prompts.contains(entry.app.pid) {
                 object["credential_prompt"] = true
                 windows = []
             }

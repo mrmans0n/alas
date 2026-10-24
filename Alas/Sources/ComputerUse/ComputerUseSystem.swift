@@ -192,8 +192,14 @@ struct ComputerUseSystem: Sendable {
     /// Whether the app builds its Accessibility tree on request (Chromium, Electron), where an AX
     /// press may only focus the element.
     var usesManualAccessibility: @Sendable (Int32) -> Bool = { _ in false }
-    /// Whether a system password prompt is showing inside the app (`ComputerUseCredentialPrompt`).
-    var credentialPrompt: @Sendable (Int32) async -> Bool = { _ in false }
+    /// The apps among `pids` a system password prompt is showing in (`ComputerUseCredentialPrompt`),
+    /// read with one window list and one process list, within one probe budget.
+    var credentialPrompts: @Sendable (_ pids: [Int32]) async -> Set<Int32> = { _ in [] }
+
+    /// Whether a system password prompt is showing in the app.
+    func credentialPrompt(_ pid: Int32) async -> Bool {
+        await credentialPrompts([pid]).contains(pid)
+    }
     /// The live system. `cursorWindowIDs` names Alas's own overlay windows (the drawn cursor),
     /// which the live drag's hit-tests look through.
     static func live(cursorWindowIDs: @escaping @Sendable () -> Set<UInt32> = { [] }) -> ComputerUseSystem {
@@ -221,7 +227,7 @@ struct ComputerUseSystem: Sendable {
             openApp: { try await LiveComputerUseSystem.openApp($0) },
             releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
             usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) },
-            credentialPrompt: { await LiveComputerUseSystem.credentialPrompt(pid: $0) }
+            credentialPrompts: { await LiveComputerUseSystem.credentialPrompts(pids: $0) }
         )
     }
 }
@@ -270,18 +276,31 @@ private enum LiveComputerUseSystem {
             secureInputKeyIdle: IsSecureEventInputEnabled() ? ComputerUseUserInput.hidKeyIdleSeconds() : nil)
     }
 
-    /// The sheets are read only while a prompt process runs and the app has an untitled window.
-    static func credentialPrompt(pid: Int32) async -> Bool {
-        let hasUntitledWindow = onScreenWindows().contains { $0.pid == pid && $0.title == nil }
-        guard hasUntitledWindow else { return false }
-        let running = await MainActor.run {
-            Set(NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }.compactMap(\.bundleIdentifier))
+    /// How long one call may spend reading sheets over all its apps; past it the rest count as
+    /// unread, which counts as showing (`ComputerUseCredentialPrompt.isShowing`).
+    static let promptProbeBudget: Duration = .milliseconds(600)
+
+    /// Nothing is read unless a prompt process runs; then only apps with an untitled window, the
+    /// user's front app first, since the prompt is usually in the app they just used.
+    static func credentialPrompts(pids: [Int32]) async -> Set<Int32> {
+        let (running, frontPID) = await MainActor.run {
+            (Set(NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }.compactMap(\.bundleIdentifier)),
+             NSWorkspace.shared.frontmostApplication?.processIdentifier)
         }
-        guard ComputerUseCredentialPrompt.needsSheetRead(runningBundleIDs: running, hasUntitledWindow: hasUntitledWindow)
-        else { return false }
-        let secure = await ComputerUseAXReader.secureFieldInSheet(pid: pid)
-        return ComputerUseCredentialPrompt.isShowing(
-            runningBundleIDs: running, hasUntitledWindow: hasUntitledWindow, secureFieldInSheet: secure)
+        guard ComputerUseCredentialPrompt.needsSheetRead(runningBundleIDs: running, hasUntitledWindow: true) else { return [] }
+        let untitled = Set(onScreenWindows().filter { $0.title == nil }.map(\.pid))
+        let withUntitled = pids.filter(untitled.contains)
+        let candidates = withUntitled.filter { $0 == frontPID } + withUntitled.filter { $0 != frontPID }
+        let deadline = ContinuousClock.now + promptProbeBudget
+        var showing: Set<Int32> = []
+        for pid in candidates {
+            let secure = ContinuousClock.now < deadline
+                ? await ComputerUseAXReader.secureFieldInSheet(pid: pid, deadline: deadline) : nil
+            if ComputerUseCredentialPrompt.isShowing(runningBundleIDs: running, hasUntitledWindow: true, secureFieldInSheet: secure) {
+                showing.insert(pid)
+            }
+        }
+        return showing
     }
 
     static func window(_ id: UInt32) async -> ComputerUseWindow? {

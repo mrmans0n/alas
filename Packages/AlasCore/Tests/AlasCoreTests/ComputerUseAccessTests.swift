@@ -99,16 +99,17 @@ struct ComputerUseAccessTests {
         #expect(!access.isStopped(session: "a"))
     }
 
-    /// coreautha runs for days, so it never tells on its own: a secure field in a sheet does, or,
-    /// when the sheets can't be read, a prompt process that only runs for a prompt.
+    /// coreautha runs for days, so only a process started for the prompt lets a secure field in a
+    /// sheet count; a sheet that couldn't be read counts while one runs.
     @Test(arguments: [
         (["com.apple.LocalAuthentication.UIAgent", "com.apple.LocalAuthenticationRemoteService"], true, Bool?(true), true),
-        (["com.apple.LocalAuthentication.UIAgent"], true, true, true),
+        (["com.apple.SecurityAgent"], true, true, true),
+        (["com.apple.LocalAuthentication.UIAgent"], true, true, false),
         ([], true, true, false),
-        // A save sheet while coreautha idles.
-        (["com.apple.LocalAuthentication.UIAgent"], true, false, false),
-        (["com.apple.LocalAuthentication.UIAgent", "com.apple.LocalAuthenticationRemoteService"], false, nil, false),
-        (["com.apple.LocalAuthentication.UIAgent", "com.apple.LocalAuthenticationRemoteService"], true, nil, true),
+        // A save sheet while the prompt shows in another app.
+        (["com.apple.LocalAuthenticationRemoteService"], true, false, false),
+        (["com.apple.LocalAuthenticationRemoteService"], false, nil, false),
+        (["com.apple.LocalAuthenticationRemoteService"], true, nil, true),
         (["com.apple.LocalAuthentication.UIAgent"], true, nil, false),
     ] as [(Set<String>, Bool, Bool?, Bool)])
     func credentialPromptIsToldBySecureSheetsWhileItsProcessesRun(

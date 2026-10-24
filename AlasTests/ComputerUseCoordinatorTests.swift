@@ -509,7 +509,7 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         let notes = Self.notes
         var system = Self.system(recorder: recorder)
-        system.credentialPrompt = { $0 == notes.pid }
+        system.credentialPrompts = { Set($0.filter { $0 == notes.pid }) }
         let f = Self.fixture(system: system, recorder: recorder)
         let response = await f.coordinator.perform(command, sessionID: "s")
         #expect(response == .error("computer_blocked: A system password prompt is showing in Notes; ask the user to answer it."))
@@ -528,7 +528,7 @@ struct ComputerUseCoordinatorTests {
     @Test func anInputThatBringsUpACredentialPromptWithholdsTheWindow() async throws {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
-        system.credentialPrompt = { [recorder] _ in !recorder.inputs.isEmpty }
+        system.credentialPrompts = { [recorder] pids in recorder.inputs.isEmpty ? [] : Set(pids) }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
