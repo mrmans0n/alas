@@ -420,7 +420,7 @@ extension LiveComputerUseSystem {
         switch input {
         case .click(.element(let handles, let handle), .right, _):
             do {
-                try await ComputerUseAXActions.showMenu(handles, handle, app: app, isCancelled: isCancelled)
+                try await ComputerUseAXActions.showMenu(handles, handle, app: app, interrupt: interrupt)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // A right click at its centre may still land.
@@ -428,7 +428,7 @@ extension LiveComputerUseSystem {
         case .click(.element(let handles, let handle), .left, let count) where count <= 2:
             if count == 1 {
                 do {
-                    try await ComputerUseAXActions.press(handles, handle, app: app, isCancelled: isCancelled)
+                    try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
                     return .ax
                 } catch is ComputerUseAXActions.Unsupported {
                     // Static text and cells have no press; something around them may.
@@ -436,7 +436,7 @@ extension LiveComputerUseSystem {
             }
             do {
                 try await ComputerUseAXActions.pressOrSelectNearest(
-                    handles, handle, count: count, app: app, isCancelled: isCancelled)
+                    handles, handle, count: count, app: app, interrupt: interrupt)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // A click at its centre may still land.
@@ -444,7 +444,7 @@ extension LiveComputerUseSystem {
         case .type(let text, .element(let handles, let handle), let replace):
             do {
                 if replace {
-                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, isCancelled: isCancelled)
+                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
                 } else {
                     try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
                 }

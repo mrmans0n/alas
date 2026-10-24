@@ -6,9 +6,12 @@ import Foundation
 /// AX actions on elements retained by a read. They run on the reader's serial
 /// queue, so they never overlap a walk, with the same per-message timeout.
 /// `isCancelled` is checked on the queue right before the AX call, so a Stop
-/// that lands while the call waits behind a walk performs nothing.
+/// that lands while the call waits behind a walk performs nothing. Calls that
+/// change the app take the whole `interrupt`: the user may also have come back
+/// to it while the call waited.
 enum ComputerUseAXActions {
     typealias IsCancelled = @Sendable () -> Bool
+    typealias Interrupt = @Sendable () -> ComputerUseInputInterrupt?
 
     /// An AX call failed in a way an event at the element might still get past.
     struct Unsupported: Error {
@@ -16,15 +19,15 @@ enum ComputerUseAXActions {
     }
 
     static func press(
-        _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
+        _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
     ) async throws {
-        try await perform(kAXPressAction, handles, handle, app: app, isCancelled: isCancelled)
+        try await perform(kAXPressAction, handles, handle, app: app, interrupt: interrupt)
     }
 
     static func showMenu(
-        _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
+        _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
     ) async throws {
-        try await perform(kAXShowMenuAction, handles, handle, app: app, isCancelled: isCancelled)
+        try await perform(kAXShowMenuAction, handles, handle, app: app, interrupt: interrupt)
     }
 
     /// Replaces the element's value. Refuses secure text fields. Throws
@@ -32,9 +35,9 @@ enum ComputerUseAXActions {
     /// can be tried instead.
     static func setValue(
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
-        isCancelled: @escaping IsCancelled
+        interrupt: @escaping Interrupt
     ) async throws {
-        try await onQueue(isCancelled) {
+        try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
             let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
@@ -280,9 +283,9 @@ enum ComputerUseAXActions {
     /// event at its centre can be tried instead.
     private static func perform(
         _ action: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
-        isCancelled: @escaping IsCancelled
+        interrupt: @escaping Interrupt
     ) async throws {
-        try await onQueue(isCancelled) {
+        try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             let result = AXUIElementPerformAction(element, action as CFString)
             guard result == .success else {
@@ -308,6 +311,16 @@ enum ComputerUseAXActions {
 
     /// Runs `body` on the reader's queue. A call cancelled or stopped while
     /// queued makes no AX request.
+    /// `onQueue` for a call that changes the app: refused on the queue when the user is working in it.
+    private static func onQueue<T: Sendable>(
+        interrupt: @escaping Interrupt, _ body: @escaping @Sendable () throws -> T
+    ) async throws -> T {
+        try await onQueue({ interrupt() == .cancelled }) {
+            if interrupt() == .userActive { throw ComputerUseSystemError.userActive }
+            return try body()
+        }
+    }
+
     private static func onQueue<T: Sendable>(
         _ isCancelled: @escaping IsCancelled, _ body: @escaping @Sendable () throws -> T
     ) async throws -> T {
@@ -596,7 +609,7 @@ extension ComputerUseAXActions {
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
-        let element = try await onQueue({ interrupt() == .cancelled }) {
+        let element = try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
             focusKeepingSelection(element, app: app)
@@ -611,7 +624,7 @@ extension ComputerUseAXActions {
         _ text: String, replace: Bool, app: ComputerUseAppIdentity,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
-        let element = try await onQueue({ interrupt() == .cancelled }) { () -> Retained? in
+        let element = try await onQueue(interrupt: interrupt) { () -> Retained? in
             guard let element = focusedElement(of: app) else { throw Unsupported(error: .noValue) }
             try refuseSecure(element, app: app)
             guard replace else { return Retained(element) }
@@ -803,9 +816,9 @@ extension ComputerUseAXActions {
     /// container is. A double click selects the row, then opens it.
     static func pressOrSelectNearest(
         _ handles: ComputerUseAXHandles, _ handle: Int, count: Int, app: ComputerUseAppIdentity,
-        isCancelled: @escaping IsCancelled
+        interrupt: @escaping Interrupt
     ) async throws {
-        let sidebar = try await onQueue(isCancelled) { () -> SidebarOpen? in
+        let sidebar = try await onQueue(interrupt: interrupt) { () -> SidebarOpen? in
             let element = try resolve(handles, handle)
             var elements = [element]
             var links = [(role: string(of: element, kAXRoleAttribute) ?? "AXUnknown", actions: actionNames(of: element))]
@@ -837,7 +850,7 @@ extension ComputerUseAXActions {
         }
         // The selection may navigate by itself; opening the cell as well would navigate twice.
         guard let sidebar, (try? await Task.sleep(for: sidebarNavigationWait)) != nil else { return }
-        _ = try? await onQueue(isCancelled) {
+        _ = try? await onQueue(interrupt: interrupt) {
             guard string(of: sidebar.window.element, kAXTitleAttribute) == sidebar.title else { return }
             _ = try? press(sidebar.cell.element, action: openAction, app: app)
         }
