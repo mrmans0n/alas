@@ -18,6 +18,7 @@ struct HostConsolesTests {
         let base = [
             "PATH": "/login/bin:/usr/bin", "TERM": "dumb", "TERM_PROGRAM": "Apple_Terminal",
             "ZMX_SESSION": "outer", "HOME": "/Users/u", "CLAUDECODE": "1", "CLAUDE_SESSION_ID": "s",
+            "ALAS_SOCKET_PATH": "/stale", "ALAS_SESSION_ID": "old",
             "ALAS_APP_SUPPORT_DIR": "/profile", "ALAS_ZMX_BINARY": "/opt/zmx", "ALAS_REMOTE_WEB_DIR": "/web",
         ]
         let launch = try #require(HostShellLaunch.make(
@@ -31,6 +32,22 @@ struct HostConsolesTests {
             "PATH": "/login/bin:/usr/bin", "HOME": "/Users/u", "TERM": "xterm-256color",
             "COLORTERM": "truecolor", "ZMX_DIR": "/tmp/z", "LANG": "en_US.UTF-8",
         ])
+        // The CLI's context: its bin dir and the worktree, never an inherited identity.
+        let feature = Worktree(
+            id: "/srv/feature", projectId: "p", name: "feature", branch: "feature",
+            path: URL(fileURLWithPath: "/srv/feature"), status: .clean, lastActivity: .distantPast
+        )
+        let withContext = try #require(HostShellLaunch.make(
+            zmx: zmx, sessionName: "alashost-a-b", directory: feature.path, shell: "/bin/zsh",
+            environmentOverrides: HostConsoles.shellContext(
+                worktree: feature, repoName: "repo", cliBinDir: URL(fileURLWithPath: "/profile/bin"), basePATH: base["PATH"]
+            ),
+            baseEnvironment: base
+        ))
+        #expect(withContext.environment["ALAS_WORKTREE"] == "/srv/feature")
+        #expect(withContext.environment["ALAS_REPO"] == "repo")
+        #expect(withContext.environment["PATH"] == "/profile/bin:/login/bin:/usr/bin")
+        #expect(withContext.environment["ALAS_SOCKET_PATH"] == nil && withContext.environment["ALAS_SESSION_ID"] == nil)
         // A locale the login environment set is kept as it is.
         let localized = HostShellLaunch.make(
             zmx: zmx, sessionName: "alashost-a-b", directory: URL(fileURLWithPath: "/srv/feature"),

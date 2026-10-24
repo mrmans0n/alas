@@ -55,6 +55,7 @@ public final class HostConsoles {
     private let applySize: @Sendable (_ socketPath: String, _ rows: Int, _ columns: Int) -> Bool
     private let baseEnvironment: @Sendable () -> [String: String]
     private let shell: String
+    private let cliBinDir: URL?
     private let pruneInterval: Duration
     private var entries: [HostConsoleEntry] = []
     private var pendingSizes: [String: (rows: Int, columns: Int)] = [:]
@@ -70,6 +71,7 @@ public final class HostConsoles {
         applySize: @escaping @Sendable (_ socketPath: String, _ rows: Int, _ columns: Int) -> Bool = ZmxIPCSocket.resize,
         baseEnvironment: @escaping @Sendable () -> [String: String] = { ACPProcessEnvironment.baseEnvironment() },
         shell: String = HostShellLaunch.loginShell(),
+        cliBinDir: URL? = nil,
         pruneInterval: Duration = .seconds(2)
     ) {
         self.core = core
@@ -80,6 +82,7 @@ public final class HostConsoles {
         self.applySize = applySize
         self.baseEnvironment = baseEnvironment
         self.shell = shell
+        self.cliBinDir = cliBinDir
         self.pruneInterval = pruneInterval
         // Loaded now, so the registry guards removals before `restore()`
         // has asked zmx which shells are still running.
@@ -116,15 +119,32 @@ public final class HostConsoles {
     public static func install(
         on core: AlasCoreContext,
         zmx: ZmxClient = ZmxClient(env: .resolve(binaryURL: HostShellLaunch.zmxBinary(executable: Bundle.main.executableURL))),
-        fileURL: URL = Paths.hostConsolesFile
+        fileURL: URL = Paths.hostConsolesFile,
+        cliBinDir: URL? = nil
     ) -> HostConsoles {
-        let consoles = HostConsoles(core: core, zmx: zmx, fileURL: fileURL)
+        let consoles = HostConsoles(core: core, zmx: zmx, fileURL: fileURL, cliBinDir: cliBinDir)
         // A deleted worktree's shells would outlive it unlisted and unclosable;
         // forgetting their project would hide them the same way.
         core.willRemoveWorktree = { try await consoles.terminateConsoles(inWorktree: $0) }
         core.hasHostConsoles = { consoles.hasConsoles(inWorktrees: $0) }
         (core.environment as? HeadlessHostEnvironment)?.runLauncherOverride = consoles
         return consoles
+    }
+
+    /// What a shell needs to use the `alas` CLI against its own worktree.
+    /// Identity (`ALAS_SOCKET_PATH`, `ALAS_SESSION_ID`) is deliberately absent.
+    static func shellContext(worktree: Worktree, repoName: String?, cliBinDir: URL?, basePATH: String?) -> [String: String] {
+        var context = ["ALAS_WORKTREE": worktree.path.path]
+        if let repoName { context["ALAS_REPO"] = repoName }
+        if let cliBinDir { context["PATH"] = TerminalCLIInjection.pathValue(prepending: cliBinDir.path, to: basePATH) }
+        return context
+    }
+
+    private func shellContext(for worktree: Worktree, base: [String: String]) -> [String: String] {
+        Self.shellContext(
+            worktree: worktree, repoName: core.projects.projects.first { $0.id == worktree.projectId }?.name,
+            cliBinDir: cliBinDir, basePATH: base["PATH"]
+        )
     }
 
     public var isAvailable: Bool { zmx.isAvailable }
@@ -188,8 +208,10 @@ public final class HostConsoles {
         await ShellEnvResolver.shared.waitUntilResolved()
         let id = UUID().uuidString
         let name = ZmxSessionName.hostShell(worktreeId: worktreeId, consoleId: id)
+        let base = baseEnvironment()
         guard let shellLaunch = HostShellLaunch.make(
-            zmx: zmx, sessionName: name, directory: worktree.path, shell: shell, baseEnvironment: baseEnvironment()
+            zmx: zmx, sessionName: name, directory: worktree.path, shell: shell,
+            environmentOverrides: shellContext(for: worktree, base: base), baseEnvironment: base
         ) else { throw PeerConsoleOpenError.zmxMissing }
         var failure: Error?
         do {
@@ -377,9 +399,12 @@ extension HostConsoles: RunLauncher {
         // Unregistered, nothing else would remove the rc files.
         defer { if !registered { StartupScriptInstaller.removeArtifacts(sessionId: id) } }
         let plan = try StartupScriptInstaller.plan(shell: shell, startupScript: request.command, sessionId: id)
+        let base = baseEnvironment()
         guard let shellLaunch = HostShellLaunch.make(
             zmx: zmx, sessionName: name, directory: worktree.path, shell: shell,
-            shellArguments: plan.args, environmentOverrides: plan.envOverrides, baseEnvironment: baseEnvironment()
+            shellArguments: plan.args,
+            environmentOverrides: shellContext(for: worktree, base: base).merging(plan.envOverrides) { _, plan in plan },
+            baseEnvironment: base
         ) else { throw PeerConsoleOpenError.zmxMissing }
         let entry = HostConsoleEntry(
             id: id, worktreeId: worktreeId, title: request.script.displayName, zmxName: name,

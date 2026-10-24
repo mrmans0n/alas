@@ -202,7 +202,7 @@ guard let socket = HostSocketServer(server: protocolServer) else {
 // worktree and project removal before any request arrives. They run in
 // zmx, found as the web client is; peers are offered them only with Remote.
 let zmx = ZmxClient(env: .resolve(binaryURL: HostShellLaunch.zmxBinary(executable: Bundle.main.executableURL)))
-let shells = HostConsoles.install(on: host.coreContext, zmx: zmx)
+let shells = HostConsoles.install(on: host.coreContext, zmx: zmx, cliBinDir: cliBinDir)
 
 // One shutdown: a second signal must not exit while the first still flushes.
 var isStopping = false
