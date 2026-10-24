@@ -949,7 +949,7 @@ extension LiveComputerUseSystem {
     /// Returns false, without touching the pasteboard, when its items couldn't be put back as they were.
     private static func paste(_ text: String, pid: Int32) async throws -> Bool {
         let provider = PasteProvider(text: text)
-        let snapshot = await MainActor.run { () -> ([[NSPasteboard.PasteboardType: Data]], Int)? in
+        let snapshot = await MainActor.run { () -> (SavedPasteboard, Int)? in
             let pasteboard = NSPasteboard.general
             guard let saved = savePasteboard(pasteboard) else { return nil }
             pasteboard.clearContents()
@@ -979,23 +979,27 @@ extension LiveComputerUseSystem {
         return true
     }
 
+    /// Per item, its types with their data in the item's declaration order (richest first), so the
+    /// restore keeps the order readers see.
+    private typealias SavedPasteboard = [[(type: NSPasteboard.PasteboardType, data: Data)]]
+
     /// Every item's data by type, or nil when `ComputerUsePastePolicy` says it couldn't come back.
     /// Promise types are refused from the type list alone, and reading stops once the data passes the cap.
     @MainActor
-    private static func savePasteboard(_ pasteboard: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]]? {
+    private static func savePasteboard(_ pasteboard: NSPasteboard) -> SavedPasteboard? {
         let items = pasteboard.pasteboardItems ?? []
         if items.contains(where: { $0.types.contains { ComputerUsePastePolicy.isPromise($0.rawValue) } }) { return nil }
-        var saved: [[NSPasteboard.PasteboardType: Data]] = []
+        var saved: SavedPasteboard = []
         var checked: [[ComputerUsePastePolicy.SavedType]] = []
         var total = 0
         reading: for item in items {
-            saved.append([:])
+            saved.append([])
             checked.append([])
             for type in item.types {
                 let data = item.data(forType: type)
                 checked[checked.count - 1].append(.init(type: type.rawValue, size: data?.count))
                 guard let data else { break reading }
-                saved[saved.count - 1][type] = data
+                saved[saved.count - 1].append((type, data))
                 total += data.count
                 if total > ComputerUsePastePolicy.sizeCap { break reading }
             }
@@ -1005,7 +1009,7 @@ extension LiveComputerUseSystem {
 
     /// Skipped when the pasteboard changed after Alas wrote to it: the user copied something.
     @MainActor
-    private static func restorePasteboard(_ saved: [[NSPasteboard.PasteboardType: Data]], ifUnchangedSince changeCount: Int) {
+    private static func restorePasteboard(_ saved: SavedPasteboard, ifUnchangedSince changeCount: Int) {
         let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount == changeCount else { return }
         pasteboard.clearContents()
