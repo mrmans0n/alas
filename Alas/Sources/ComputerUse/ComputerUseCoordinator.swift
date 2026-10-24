@@ -1442,6 +1442,14 @@ final class ComputerUseCoordinator {
             // A Chromium browser that still shows none gets what VoiceOver sets, for the turn.
             if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: tree.root) {
                 if await system.wakeWebContent(window.app, ComputerUseWebContent.enhancedUserInterface) {
+                    // A stop, turn end or session end during the set already restored what it found:
+                    // this one is turned off at once instead of waiting for a lifecycle hook that ran.
+                    guard (try? checkStillActive(context)) != nil else {
+                        wokenWebContent.remove(window.app.pid)
+                        await system.restoreWebContent(window.app, ComputerUseWebContent.enhancedUserInterface)
+                        try checkStillActive(context)
+                        throw CancellationError()
+                    }
                     enhancedUserInterface[context.sessionID, default: [:]][window.app.pid] = window.app
                 }
                 await sleep(Self.webContentWakeWait)

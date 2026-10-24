@@ -211,6 +211,35 @@ struct ComputerUseCoordinatorTests {
         try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
     }
 
+    /// A session end while AXEnhancedUserInterface is being set finds nothing to restore yet, so
+    /// the call that set it turns it off again itself.
+    @Test func enhancedUserInterfaceSetAsTheSessionEndsIsTurnedOffAgain() async throws {
+        let recorder = Recorder()
+        let gate = Recorder()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window])
+        system.wakeWebContent = { _, attribute in
+            guard attribute == "AXEnhancedUserInterface" else { return false }
+            recorder.recordEvent("wake:\(attribute)")
+            // Held until the session has ended.
+            while gate.events.isEmpty { await Task.yield() }
+            return true
+        }
+        system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
+        system.axTree = { _, _, _, _ in
+            (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
+             nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s") }
+        try await eventually("set in flight") { recorder.events == ["wake:AXEnhancedUserInterface"] }
+        f.coordinator.sessionEnded(sessionID: "s")
+        gate.recordEvent("open")
+        _ = await call.value
+        #expect(recorder.events == ["wake:AXEnhancedUserInterface", "restore:AXEnhancedUserInterface"])
+    }
+
     /// Only an element nothing of which shows carries `visible`.
     @Test func inspectMarksHiddenElements() async throws {
         var system = Self.system()
