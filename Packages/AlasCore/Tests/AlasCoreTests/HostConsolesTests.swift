@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @testable import AlasCore
-@testable import AlasHostCore
+@_spi(AppHost) @testable import AlasHostCore
 
 @MainActor
 struct HostConsolesTests {
@@ -16,7 +16,7 @@ struct HostConsolesTests {
         let zmx = ZmxClient(env: ZmxEnv(binaryURL: URL(fileURLWithPath: "/opt/zmx"), zmxDir: URL(fileURLWithPath: "/tmp/z")))
         let base = [
             "PATH": "/login/bin:/usr/bin", "TERM": "dumb", "TERM_PROGRAM": "Apple_Terminal",
-            "ZMX_SESSION": "outer", "HOME": "/Users/u",
+            "ZMX_SESSION": "outer", "HOME": "/Users/u", "CLAUDECODE": "1", "CLAUDE_SESSION_ID": "s",
         ]
         let launch = try #require(HostShellLaunch.make(
             zmx: zmx, sessionName: "alashost-a-b", directory: URL(fileURLWithPath: "/srv/feature"),
@@ -51,9 +51,231 @@ struct HostConsolesTests {
         let appZmx = try executable("app/zmx/zmx")
         let missing = root.appendingPathComponent("nowhere/zmx")
 
-        #expect(HostShellLaunch.zmxBinary(executable: linked, fallback: missing)?.standardizedFileURL.path
+        #expect(HostShellLaunch.zmxBinary(executable: linked, fallback: appZmx)?.standardizedFileURL.path
             == pkgZmx.resolvingSymlinksInPath().path)
         #expect(HostShellLaunch.zmxBinary(executable: bare, fallback: appZmx) == appZmx)
         #expect(HostShellLaunch.zmxBinary(executable: bare, fallback: missing) == nil)
+    }
+
+    // MARK: - Registry
+
+    @Test func openLaunchesAShellAndListsIt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let id = try await consoles.open(worktreeId: fixture.worktree.id)
+        #expect(fixture.launches.map(\.directory) == [fixture.worktree.path])
+        let summary = try #require(consoles.summaries().first)
+        #expect((summary.consoleId, summary.title, summary.worktreeId, summary.rows, summary.columns, summary.tabIndex)
+            == (id, "Terminal 1", fixture.worktree.id, 24, 120, 0))
+        #expect(consoles.target(id)?.socketPath == fixture.socketPath(of: id))
+    }
+
+    enum Unopenable: CaseIterable { case unknownWorktree, sshProject, noZmx, launchFails }
+
+    @Test(arguments: Unopenable.allCases)
+    func openRefusesWithTheReasonAndRecordsNothing(_ kind: Unopenable) async throws {
+        let fixture = try Fixture(host: kind == .sshProject ? "box" : nil, zmxAvailable: kind != .noZmx)
+        defer { fixture.tearDown() }
+        fixture.fakes.withLock { $0.launchFails = kind == .launchFails }
+        let consoles = fixture.consoles()
+        let expected: PeerConsoleOpenError = switch kind {
+        case .unknownWorktree: .worktreeUnavailable
+        case .sshProject: .sshProject
+        case .noZmx: .zmxMissing
+        case .launchFails: .notStarted
+        }
+        let worktreeId = kind == .unknownWorktree ? "nowhere" : fixture.worktree.id
+
+        await #expect(throws: expected) { try await consoles.open(worktreeId: worktreeId) }
+        #expect(consoles.summaries().isEmpty)
+        #expect(try fixture.savedFile()?.consoles.isEmpty ?? true)
+        // A launcher that failed may have forked the daemon already.
+        #expect(fixture.killed == fixture.launches.map { $0.arguments[1] })
+    }
+
+    @Test func titlesReuseTheLowestFreeNumber() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        var ids: [String] = []
+        for _ in 0..<3 { try await ids.append(consoles.open(worktreeId: fixture.worktree.id)) }
+        consoles.terminate(ids[1])
+        _ = try await consoles.open(worktreeId: fixture.worktree.id)
+        #expect(consoles.summaries().map(\.title) == ["Terminal 1", "Terminal 3", "Terminal 2"])
+    }
+
+    @Test func restoreDropsShellsWhoseSessionIsGone() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let first = try await consoles.open(worktreeId: fixture.worktree.id)
+        _ = try await consoles.open(worktreeId: fixture.worktree.id)
+        let firstName = try #require(fixture.launches.first?.arguments[1])
+        fixture.fakes.withLock { $0.live = [firstName] }
+
+        let restored = fixture.consoles()
+        await restored.restore()
+        #expect(restored.summaries().map(\.consoleId) == [first])
+        #expect(try fixture.savedFile()?.consoles.map(\.id) == [first])
+    }
+
+    @Test func listDropsShellsWhoseSocketIsGone() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let id = try await consoles.open(worktreeId: fixture.worktree.id)
+        try FileManager.default.removeItem(atPath: #require(fixture.socketPath(of: id)))
+
+        #expect(consoles.summaries().isEmpty)
+        #expect(try fixture.savedFile()?.consoles.isEmpty == true)
+    }
+
+    @Test func resizeIsRememberedOnlyWhenZmxTookIt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let id = try await consoles.open(worktreeId: fixture.worktree.id)
+
+        fixture.fakes.withLock { $0.sizeApplies = false }
+        #expect(await consoles.resize(id, rows: 40, columns: 100) == false)
+        #expect(consoles.target(id).map { [$0.rows, $0.columns] } == [24, 120])
+
+        fixture.fakes.withLock { $0.sizeApplies = true }
+        #expect(await consoles.resize(id, rows: 40, columns: 100))
+        #expect(consoles.target(id).map { [$0.rows, $0.columns] } == [40, 100])
+        let names = fixture.launches.map { $0.arguments[1] }
+        fixture.fakes.withLock { $0.live = names }
+        let restored = fixture.consoles()
+        await restored.restore()
+        #expect(restored.target(id).map { [$0.rows, $0.columns] } == [40, 100])
+        #expect(fixture.fakes.withLock { $0.sizes } == ["40x100", "40x100"])
+    }
+
+    @Test func terminateKillsTheSessionAndForgetsIt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let id = try await consoles.open(worktreeId: fixture.worktree.id)
+        let zmxName = try #require(fixture.launches.first?.arguments[1])
+
+        consoles.terminate(id)
+        #expect(consoles.summaries().isEmpty)
+        let fakes = fixture.fakes
+        try await eventually { fakes.withLock { $0.killed } == [zmxName] }
+    }
+
+    struct Fakes {
+        var live: [String] = []
+        var killed: [String] = []
+        var launches: [HostShellLaunch] = []
+        var launchFails = false
+        var sizeApplies = true
+        var sizes: [String] = []
+    }
+
+    final class SharedFakes: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = Fakes()
+
+        func withLock<R>(_ body: (inout Fakes) throws -> R) rethrows -> R {
+            try lock.withLock { try body(&value) }
+        }
+    }
+
+    @MainActor
+    private struct Fixture {
+        let root: URL
+        let zmxDir: URL
+        let projects: ProjectsManager
+        let worktree: Worktree
+        let core: AlasCoreContext
+        let zmx: ZmxClient
+        let fakes: SharedFakes
+        var file: URL { root.appendingPathComponent("host-consoles.json") }
+        var launches: [HostShellLaunch] { fakes.withLock { $0.launches } }
+        var killed: [String] { fakes.withLock { $0.killed } }
+
+        init(host: String? = nil, zmxAvailable: Bool = true) throws {
+            let fm = FileManager.default
+            root = fm.temporaryDirectory.appendingPathComponent("alas-hostconsoles-\(UUID().uuidString)")
+            // Short: zmx socket paths must fit sun_path.
+            zmxDir = URL(fileURLWithPath: "/tmp/hc-\(UUID().uuidString.prefix(8))", isDirectory: true)
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try fm.createDirectory(at: zmxDir, withIntermediateDirectories: true)
+            projects = ProjectsManager(persistedProjects: [
+                ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: .distantPast, host: host),
+            ])
+            let path = root.appendingPathComponent("feature")
+            worktree = Worktree(
+                id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+                path: path, status: .clean, lastActivity: .distantPast
+            )
+            projects.insertOptimisticWorktree(worktree)
+            core = AlasCoreContext(
+                projects: projects,
+                runHistoryStore: nil,
+                workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+                attentionStore: .scratch(),
+                orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
+            )
+            let fakes = SharedFakes()
+            self.fakes = fakes
+            let runner = SubprocessRunner { _, args, _, _ in
+                switch args.first {
+                case "ls":
+                    return .init(exitCode: 0, stdout: fakes.withLock { $0.live }.joined(separator: "\n"), stderr: "")
+                case "kill":
+                    fakes.withLock { $0.killed.append(args[1]) }
+                    return .init(exitCode: 0, stdout: "", stderr: "")
+                default:
+                    return .init(exitCode: 1, stdout: "", stderr: "")
+                }
+            }
+            zmx = ZmxClient(
+                env: ZmxEnv(binaryURL: zmxAvailable ? URL(fileURLWithPath: "/opt/zmx") : nil, zmxDir: zmxDir),
+                runner: runner
+            )
+        }
+
+        func consoles() -> HostConsoles {
+            let fakes = fakes
+            let zmx = zmx
+            return HostConsoles(
+                core: core,
+                zmx: zmx,
+                fileURL: file,
+                launch: { launch in
+                    let fails = fakes.withLock {
+                        $0.launches.append(launch)
+                        return $0.launchFails
+                    }
+                    if fails { throw PeerConsoleOpenError.notStarted }
+                    guard let socket = zmx.socketPath(forSession: launch.arguments[1]) else { throw PeerConsoleOpenError.notStarted }
+                    FileManager.default.createFile(atPath: socket, contents: nil)
+                },
+                applySize: { _, rows, columns in
+                    fakes.withLock {
+                        $0.sizes.append("\(rows)x\(columns)")
+                        return $0.sizeApplies
+                    }
+                },
+                baseEnvironment: { [:] },
+                shell: "/bin/zsh"
+            )
+        }
+
+        func socketPath(of consoleId: String) -> String? {
+            zmx.socketPath(forSession: ZmxSessionName.hostShell(worktreeId: worktree.id, consoleId: consoleId))
+        }
+
+        func savedFile() throws -> HostConsolesFile? {
+            try PersistenceStore().readIfExists(HostConsolesFile.self, from: file)
+        }
+
+        func tearDown() {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: zmxDir)
+        }
     }
 }

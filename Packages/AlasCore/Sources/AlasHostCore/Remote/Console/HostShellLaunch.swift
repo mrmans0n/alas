@@ -1,6 +1,7 @@
 import Foundation
 import AlasFoundation
 import AlasPlatform
+import AlasACP
 
 /// Starts a login shell inside a detached zmx session on a host with no
 /// terminal: `zmx attach` creates the daemon and returns once its stdin (here
@@ -32,7 +33,11 @@ public struct HostShellLaunch: Equatable, Sendable {
             sessionName: sessionName,
             plan: StartupScriptInstaller.Plan(executable: shell, args: shellArguments, envOverrides: [:])
         )
-        var environment = baseEnvironment.filter { !terminalKeys.contains($0.key) }
+        // Agent session markers too: a host started from inside an agent
+        // session must not hand them to the user's shells.
+        var environment = baseEnvironment.filter {
+            !terminalKeys.contains($0.key) && !ACPProcessEnvironment.agentSessionMarkerKeys.contains($0.key)
+        }
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["ZMX_DIR"] = zmxDir.path
