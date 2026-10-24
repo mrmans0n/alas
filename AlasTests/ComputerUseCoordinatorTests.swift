@@ -188,6 +188,23 @@ struct ComputerUseCoordinatorTests {
         #expect(woken.next() == 2)
     }
 
+    /// computer_open_app on an Electron app returns once its front window's web content shows.
+    @Test func openingAWebAppWaitsForItsWebContent() async throws {
+        let reads = Counter()
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { _ in true }
+        system.axTree = { _, _, _, _ in
+            let filled = reads.next() >= 3
+            let area = ComputerUseAXNode(role: "AXWebArea", children: filled ? [ComputerUseAXNode(role: "AXTextField")] : [])
+            return (ComputerUseAXNode(role: "AXWindow", children: [area]), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        #expect(Self.text(await f.coordinator.perform(.init(action: .openApp, name: "Notes"), sessionID: "s")) != nil)
+        #expect(reads.next() == 4)
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll])
+    }
+
     /// A Chromium browser still showing no web area after AXManualAccessibility gets
     /// AXEnhancedUserInterface, which the turn's end turns off again.
     @Test func chromeGetsEnhancedUserInterfaceOnlyAsASecondTryAndUntilTheTurnEnds() async throws {

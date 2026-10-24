@@ -182,6 +182,28 @@ final class ComputerUseCoordinator {
         self.now = now
     }
 
+    /// Reads `window` until its web content shows, for at most `ComputerUseWebContent.openDeadline`
+    /// by the clock, when it is a Chromium or Electron app's; true when it waited.
+    private func awaitWebContent(afterOpening window: ComputerUseWindow, context: CallContext) async throws -> Bool {
+        let clock = ContinuousClock()
+        let start = clock.now
+        var slept = Duration.zero
+        while true {
+            let tree = try await system.axTree(
+                window, ComputerUseCommand.maxDepthLimit, Self.queryNodeBudget, Self.webContentReadLimit)
+            // The first read asks the app for its tree, and tells whether it took the ask.
+            let webApp = system.usesManualAccessibility(window.app.pid)
+                || ComputerUseWebContent.chromeBundleIDs.contains(window.app.bundleID ?? "")
+            guard webApp, ComputerUseWebContent.keepsWaiting(
+                root: tree.root, cut: tree.cut, waited: max(slept, clock.now - start),
+                deadline: ComputerUseWebContent.openDeadline)
+            else { return slept > .zero }
+            await sleep(Self.webContentPoll)
+            slept += Self.webContentPoll
+            try checkStillActive(context)
+        }
+    }
+
     /// The approval card's reason line: one approval covers seeing and operating the app.
     static func approvalReason(appName: String) -> String {
         "It can see and operate \(appName): read its controls, click, type and press keys."
@@ -433,6 +455,11 @@ final class ComputerUseCoordinator {
                 throw Refusal(Message.blocked(running))
             }
             var windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? []
+            // A launched Chromium or Electron app shows its window before its web content: the
+            // agent's first read would come back empty.
+            if let front = windows.first, try await awaitWebContent(afterOpening: front, context: context) {
+                windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? windows
+            }
             var payload: [String: Any] = ["version": 1, "app": Self.app(running)]
             // It may have been showing one before it was unhidden.
             if await system.credentialPrompt(running.pid) {

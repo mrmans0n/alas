@@ -33,9 +33,14 @@ public enum ComputerUseWebContent {
 
     /// Whether to read the window again after `waited` since the wake, read time included: its
     /// web content isn't there yet (`showsContent`) and the deadline hasn't passed.
-    public static func keepsWaiting(root: ComputerUseAXNode, cut: ComputerUseReadCut?, waited: Duration) -> Bool {
-        !showsContent(root: root, cut: cut) && waited < contentDeadline
+    public static func keepsWaiting(
+        root: ComputerUseAXNode, cut: ComputerUseReadCut?, waited: Duration, deadline: Duration = contentDeadline
+    ) -> Bool {
+        !showsContent(root: root, cut: cut) && waited < deadline
     }
+
+    /// The longest `computer_open_app` waits for a launched web app's front window to show content.
+    public static let openDeadline: Duration = .seconds(3)
 
     /// Whether a read can count as showing the window's content: a web area with something in it,
     /// or a read that left elements unread (`cut`, or `childrenUnread` past its depth), which may
@@ -57,13 +62,14 @@ public enum ComputerUseWebContent {
     /// Whether a read is worth repeating after asking for the web content's tree: the app is a
     /// Chromium or Electron one (`acceptsManualAccessibility`, or a Chromium browser by bundle id),
     /// this is the first such try for it, and the window showed no web content: no web area, or
-    /// one without anything in it yet.
+    /// one without anything in it yet, also in a read cut short.
     public static func needsWake(
         acceptsManualAccessibility: Bool, bundleID: String?, alreadyWoken: Bool, root: ComputerUseAXNode,
         cut: ComputerUseReadCut? = nil
     ) -> Bool {
         guard !alreadyWoken, acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "") else { return false }
-        return !showsContent(root: root, cut: cut)
+        // A read cut short still wakes the app: only content it shows makes the wake needless.
+        return !hasWebContent(root)
     }
 
     /// A web area with something in it.
