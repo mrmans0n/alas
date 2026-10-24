@@ -454,6 +454,8 @@ extension LiveComputerUseSystem {
     static let focusSettle: Duration = .milliseconds(50)
     /// After raising a drag's windows, before checking nothing covers its points.
     static let dragRaiseSettle: Duration = .milliseconds(150)
+    /// Between coverage checks while a drag's windows come up (`ComputerUseTakeover.dragRaiseWait`).
+    static let dragRaisePoll: Duration = .milliseconds(50)
     /// How long typing into an element waits for the focus it set to land.
     static let focusWait: Duration = .milliseconds(300)
     static let focusPoll: Duration = .milliseconds(25)
@@ -968,22 +970,37 @@ extension LiveComputerUseSystem {
                 guard dropWindow.frame.contains(point) else { throw ComputerUseSystemError.dropOutOfBounds }
                 end = point
             }
-            func checkCovered() throws {
-                switch ComputerUseInputGeometry.coveredDragPoint(
-                    start: start, in: window.windowID, end: end, in: dropWindow.windowID,
-                    windows: screenWindows(), ignoring: ignoring()) {
-                case .start: throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
-                case .end: throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
-                case nil: break
+            // The app is in front by now (`activated`), but its windows may still be coming up over
+            // the others: coverage only refuses once they had `dragRaiseWait`, and a user back at
+            // the Mac meanwhile is told so instead (`ComputerUseTakeover.dragStep`).
+            func checkCovered() async throws {
+                var waited: TimeInterval = 0
+                while true {
+                    let covered = ComputerUseInputGeometry.coveredDragPoint(
+                        start: start, in: window.windowID, end: end, in: dropWindow.windowID,
+                        windows: screenWindows(), ignoring: ignoring())
+                    switch ComputerUseTakeover.dragStep(
+                        idleSeconds: secondsSinceUserInput(), activated: true, covered: covered, waitedForRaise: waited) {
+                    case .drag, .activate: return
+                    case .userActive: throw ComputerUseSystemError.userActive
+                    case .waitForRaise:
+                        try? await Task.sleep(for: dragRaisePoll)
+                        waited += 0.05
+                        try checkCancelled()
+                    case .covered(.start):
+                        throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
+                    case .covered(.end):
+                        throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
+                    }
                 }
             }
-            try checkCovered()
+            try await checkCovered()
             try checkCancelled()
             if case .element(let handles, let handle) = from {
                 try await ComputerUseAXActions.selectRow(handles, handle, isCancelled: isCancelled)
                 // Selecting may scroll the row.
                 start = try await startPoint()
-                try checkCovered()
+                try await checkCovered()
                 try checkCancelled()
             }
             // Another window over the drop point would take the drop: checked right before the release.

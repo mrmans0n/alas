@@ -18,6 +18,34 @@ public enum ComputerUseTakeover {
         return waited < maxWait ? .wait : .refuse
     }
 
+    /// The next step of a drag, which always goes with the target app in front.
+    public enum DragStep: Equatable, Sendable {
+        /// The user is typing or using the mouse: refused before anything else happens.
+        case userActive
+        /// Bring the target to the front: another app's window over a point is expected until then.
+        case activate
+        /// In front, but a point is still covered: window ordering may lag the activation.
+        case waitForRaise
+        /// Still covered once the raise had its time: refused.
+        case covered(ComputerUseInputGeometry.DragPoint)
+        case drag
+    }
+
+    /// How long a drag waits after activation for its windows to come above the others.
+    public static let dragRaiseWait: TimeInterval = 0.5
+
+    /// User activity first, then activation, then coverage of the start and drop points, which
+    /// only refuses once the target is in front and `dragRaiseWait` passed.
+    public static func dragStep(
+        idleSeconds: TimeInterval, activated: Bool, covered: ComputerUseInputGeometry.DragPoint?,
+        waitedForRaise: TimeInterval
+    ) -> DragStep {
+        if idleSeconds < idleThreshold { return .userActive }
+        guard activated else { return .activate }
+        guard let covered else { return .drag }
+        return waitedForRaise < dragRaiseWait ? .waitForRaise : .covered(covered)
+    }
+
     /// Why an activation didn't bring the target to the front in time.
     public enum ActivationFailure: Equatable, Sendable {
         /// The user's input in the last `idleThreshold` kept the front (macOS doesn't take it from

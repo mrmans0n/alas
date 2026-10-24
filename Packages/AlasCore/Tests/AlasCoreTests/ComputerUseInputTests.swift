@@ -210,6 +210,23 @@ struct ComputerUseInputTests {
     private static let halfOut = CGRect(x: 700, y: 50, width: 400, height: 300)
     private static let elsewhere = CGRect(x: 900, y: 400, width: 100, height: 100)
 
+    /// A drag checks the user first, then activates, and only refuses a covered point once the
+    /// target is in front and its windows had time to come up.
+    @Test(arguments: [
+        (0.5, false, Optional(ComputerUseInputGeometry.DragPoint.start), 0.0, ComputerUseTakeover.DragStep.userActive),
+        (0.5, true, nil, 0.0, .userActive),
+        (60, false, .start, 0, .activate),
+        (60, true, .start, 0.2, .waitForRaise),
+        (60, true, .end, 0.5, .covered(.end)),
+        (60, true, nil, 0, .drag),
+    ] as [(TimeInterval, Bool, ComputerUseInputGeometry.DragPoint?, TimeInterval, ComputerUseTakeover.DragStep)])
+    func dragsCheckTheUserThenActivateThenCoverage(
+        idle: TimeInterval, activated: Bool, covered: ComputerUseInputGeometry.DragPoint?, waited: TimeInterval,
+        step: ComputerUseTakeover.DragStep
+    ) {
+        #expect(ComputerUseTakeover.dragStep(idleSeconds: idle, activated: activated, covered: covered, waitedForRaise: waited) == step)
+    }
+
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
         let windows = [
