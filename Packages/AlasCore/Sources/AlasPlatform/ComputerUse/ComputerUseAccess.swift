@@ -32,6 +32,11 @@ public enum ComputerUseBlocklist {
         "com.lastpass.LastPass",
         "com.dashlane.dashlanephonefinal",
         "org.keepassxc.keepassxc",
+        // System credential prompts: admin and keychain-access dialogs, and the Touch ID /
+        // "Use Password…" sheets. Exact ids still to be confirmed live (phase 5, Task 6).
+        "com.apple.SecurityAgent",
+        "com.apple.coreautha",
+        "com.apple.LocalAuthentication.UIAgent",
     ]
 
     /// Lowercased; matched case-insensitively against the bundle id.
