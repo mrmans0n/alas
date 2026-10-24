@@ -88,6 +88,25 @@ enum ComputerUseAXReader {
         buildingTreePIDs.withLock { _ = $0.remove(pid) }
     }
 
+    /// Asks a Chromium or Electron app to build its web content's tree: each of
+    /// `ComputerUseWebContent.wakeAttributes` is set unless it already reads as set.
+    static func wakeWebContent(_ app: ComputerUseAppIdentity) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async {
+                let element = application(app.pid)
+                for attribute in ComputerUseWebContent.wakeAttributes(bundleID: app.bundleID) {
+                    var value: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                       let value, CFGetTypeID(value) == CFBooleanGetTypeID(), CFBooleanGetValue((value as! CFBoolean)) {
+                        continue
+                    }
+                    _ = AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue)
+                }
+                continuation.resume()
+            }
+        }
+    }
+
     final class CancelFlag: Sendable {
         private let flag = Atomic<Bool>(false)
         func set() { flag.store(true, ordering: .relaxed) }

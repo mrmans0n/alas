@@ -159,6 +159,29 @@ struct ComputerUseCoordinatorTests {
         #expect(json.contains(#""truncated_by":"time_limit""#))
     }
 
+    /// An Electron window that shows only groups at first contact is woken and read once more;
+    /// later reads of the app aren't.
+    @Test func aWebWindowReadAsEmptyGroupsIsWokenAndReadAgainOnce() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let woken = Counter()
+        var system = Self.system()
+        system.usesManualAccessibility = { _ in true }
+        system.wakeWebContent = { _ in _ = woken.next() }
+        system.axTree = { _, _, _, _ in
+            let web = reads.next() > 1
+            let content = ComputerUseAXNode(role: web ? "AXWebArea" : "AXGroup", handle: 1)
+            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
+        #expect(json.contains("AXWebArea"))
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentWakeWait])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        #expect(reads.next() == 4)
+        #expect(woken.next() == 2)
+    }
+
     /// Only an element nothing of which shows carries `visible`.
     @Test func inspectMarksHiddenElements() async throws {
         var system = Self.system()
@@ -830,6 +853,8 @@ struct ComputerUseCoordinatorTests {
         let reads = Counter()
         var saveTree = Self.saveTree
         saveTree.children[0].role = role
+        // Its web content is built already.
+        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea"))
         // A group whose children the read didn't go deep enough to see.
         if postRead == .depthLimited { saveTree.children.append(ComputerUseAXNode(role: "AXGroup", childrenUnread: true)) }
         var system = Self.system(recorder: recorder)
@@ -919,8 +944,10 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { _ in true }
         // Read 1 is the inspect, 2 the window before the press, 3 after it, 4 after the retry.
-        let saveTree = Self.saveTree
-        system.axTree = { _, _, _, _ in (saveTree, retryReadTruncated && reads.next() >= 4 ? .timeLimit : nil, ComputerUseAXHandles()) }
+        var saveTree = Self.saveTree
+        // Its web content is built already.
+        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea"))
+        system.axTree = { [saveTree] _, _, _, _ in (saveTree, retryReadTruncated && reads.next() >= 4 ? .timeLimit : nil, ComputerUseAXHandles()) }
         // Otherwise only the focus moves with the pointer click.
         system.focusState = { _ in
             !retryReadTruncated && recorder.inputs.count > 1 ? .init(role: "AXButton", title: "Save") : nil

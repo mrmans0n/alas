@@ -94,6 +94,8 @@ final class ComputerUseCoordinator {
     /// Windows of background apps an input made key, per session and window id: each is handed
     /// back once its action settled, or at the stop, turn end or session end that cut it short.
     @ObservationIgnored private var backgroundKeyed: [String: [UInt32: ComputerUseWindow]] = [:]
+    /// Chromium and Electron apps asked once to build their web content's tree (`ComputerUseWebContent`).
+    @ObservationIgnored private var wokenWebContent: Set<Int32> = []
 
     private struct SnapshotKey: Hashable {
         var sessionID: String
@@ -1399,7 +1401,19 @@ final class ComputerUseCoordinator {
     ) async throws -> ElementRead {
         // Without a query the walk only needs one node past the limit to report truncation.
         let budget = min(query == nil ? limit + 1 : Self.queryNodeBudget, nodeBudget)
-        let tree = try await system.axTree(window, maxDepth, budget, min(timeLimit, ComputerUseAXReader.deadline))
+        let readLimit = min(timeLimit, ComputerUseAXReader.deadline)
+        var tree = try await system.axTree(window, maxDepth, budget, readLimit)
+        // A Chromium or Electron window may show only empty groups at first contact: its web content
+        // is asked for its tree once, and read again after a moment.
+        if ComputerUseWebContent.needsWake(
+            acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid), bundleID: window.app.bundleID,
+            alreadyWoken: wokenWebContent.contains(window.app.pid), root: tree.root) {
+            wokenWebContent.insert(window.app.pid)
+            await system.wakeWebContent(window.app)
+            await sleep(Self.webContentWakeWait)
+            try checkStillActive(context)
+            tree = try await system.axTree(window, maxDepth, budget, readLimit)
+        }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
@@ -1497,6 +1511,9 @@ final class ComputerUseCoordinator {
         let parts = duration.components
         return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
+
+    /// After asking a web app for its tree, before the read again.
+    static let webContentWakeWait: Duration = .milliseconds(500)
 
     /// Nodes an inspect with a query may read before filtering.
     static let queryNodeBudget = 10_000

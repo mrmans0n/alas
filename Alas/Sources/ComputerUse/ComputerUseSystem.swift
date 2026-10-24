@@ -198,6 +198,8 @@ struct ComputerUseSystem: Sendable {
     var credentialPrompts: @Sendable (_ pids: [Int32]) async -> [Int32: ComputerUseCredentialPrompt.Listing] = { _ in [:] }
     /// Running menu-bar (accessory) apps, which `runningApps` leaves out.
     var accessoryApps: @Sendable () async -> [ComputerUseAppIdentity] = { [] }
+    /// Asks a Chromium or Electron app to build its web content's Accessibility tree.
+    var wakeWebContent: @Sendable (ComputerUseAppIdentity) async -> Void = { _ in }
 
     /// Whether a system password prompt is showing in the app, or may be: one app alone is probed
     /// first, so an unchecked one is the probe not getting to it, and counts as showing.
@@ -232,7 +234,8 @@ struct ComputerUseSystem: Sendable {
             releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
             usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) },
             credentialPrompts: { await LiveComputerUseSystem.credentialPrompts(pids: $0) },
-            accessoryApps: { await LiveComputerUseSystem.accessoryApps() }
+            accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
+            wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0) }
         )
     }
 }
