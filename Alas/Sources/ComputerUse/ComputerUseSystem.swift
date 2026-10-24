@@ -761,7 +761,7 @@ extension LiveComputerUseSystem {
             if replace {
                 try ComputerUseInputPoster.postKey(CGKeyCode(kVK_ANSI_A), flags: .maskCommand, pid: app.pid)
             }
-            // A clipboard that couldn't be put back as it was is left alone, and the text typed instead.
+            // A clipboard holding anything but plain text is left alone, and the text typed instead.
             let pasted = paste ? try await self.paste(text, pid: app.pid) : false
             if !pasted {
                 try await ComputerUseInputPoster.type(text, pid: app.pid, interrupt: interrupt)
@@ -946,7 +946,7 @@ extension LiveComputerUseSystem {
     /// text was read after ⌘V and `pasteRestoreFloor` passed (at most `pasteReadWait`).
     /// A read before ⌘V (a clipboard manager) doesn't count: restoring then would
     /// let the target paste the user's own clipboard.
-    /// Returns false, without touching the pasteboard, when its items couldn't be put back as they were.
+    /// Returns false, without touching the pasteboard, unless it is empty or holds one item of plain text.
     private static func paste(_ text: String, pid: Int32) async throws -> Bool {
         let provider = PasteProvider(text: text)
         let snapshot = await MainActor.run { () -> (SavedPasteboard, Int)? in
@@ -983,12 +983,13 @@ extension LiveComputerUseSystem {
     /// restore keeps the order readers see.
     private typealias SavedPasteboard = [[(type: NSPasteboard.PasteboardType, data: Data)]]
 
-    /// Every item's data by type, or nil when `ComputerUsePastePolicy` says it couldn't come back.
-    /// Promise types are refused from the type list alone, and reading stops once the data passes the cap.
+    /// The clipboard's plain text by type, or nil when `ComputerUsePastePolicy` leaves it alone.
+    /// Anything but one plain-text item is refused from the type list before any data is read,
+    /// and reading stops once the text passes the cap.
     @MainActor
     private static func savePasteboard(_ pasteboard: NSPasteboard) -> SavedPasteboard? {
         let items = pasteboard.pasteboardItems ?? []
-        if items.contains(where: { $0.types.contains { ComputerUsePastePolicy.isPromise($0.rawValue) } }) { return nil }
+        guard ComputerUsePastePolicy.isPlainText(items.map { $0.types.map(\.rawValue) }) else { return nil }
         var saved: SavedPasteboard = []
         var checked: [[ComputerUsePastePolicy.SavedType]] = []
         var total = 0
@@ -1004,7 +1005,7 @@ extension LiveComputerUseSystem {
                 if total > ComputerUsePastePolicy.sizeCap { break reading }
             }
         }
-        return ComputerUsePastePolicy.canRestore(checked) ? saved : nil
+        return ComputerUsePastePolicy.canPaste(checked) ? saved : nil
     }
 
     /// Skipped when the pasteboard changed after Alas wrote to it: the user copied something.

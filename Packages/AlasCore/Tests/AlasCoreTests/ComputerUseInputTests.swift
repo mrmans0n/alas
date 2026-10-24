@@ -348,14 +348,20 @@ struct ComputerUseInputTests {
     }
 
     @Test(arguments: [
-        ([[SavedType(type: "public.utf8-plain-text", size: 12)]], true),
-        ([[SavedType(type: "public.png", size: 20 * 1024 * 1024)]], false),
-        ([[SavedType(type: "com.apple.pasteboard.promised-file-url", size: nil)]], false),
-        ([[SavedType(type: "public.utf8-plain-text", size: 5)], [SavedType(type: "dyn.ah62d4rv4ge8", size: nil)]], false),
+        // One plain-text item, in every flavour it may carry: pasted and put back.
+        ([[SavedType(type: "public.utf16-external-plain-text", size: 24), SavedType(type: "public.utf8-plain-text", size: 12)]], true),
         ([], true),
+        // A two-file Finder copy: file URLs and their names as text.
+        ([[SavedType(type: "public.file-url", size: 40), SavedType(type: "public.utf8-plain-text", size: 14)],
+          [SavedType(type: "public.file-url", size: 42), SavedType(type: "public.utf8-plain-text", size: 28)]], false),
+        ([[SavedType(type: "public.png", size: 2_000_000), SavedType(type: "public.tiff", size: 30_000_000)]], false),
+        ([[SavedType(type: "public.utf8-plain-text", size: 3)], [SavedType(type: "public.utf8-plain-text", size: 3)]], false),
+        ([[SavedType(type: "public.rtf", size: 300), SavedType(type: "public.utf8-plain-text", size: 12)]], false),
+        ([[SavedType(type: "public.utf8-plain-text", size: 5), SavedType(type: "dyn.ah62d4rv4ge8", size: nil)]], false),
+        ([[SavedType(type: "public.utf8-plain-text", size: 20 * 1024 * 1024)]], false),
     ] as [([[ComputerUsePastePolicy.SavedType]], Bool)])
-    func pastesOnlyWhenTheClipboardCanComeBack(items: [[ComputerUsePastePolicy.SavedType]], restorable: Bool) {
-        #expect(ComputerUsePastePolicy.canRestore(items) == restorable)
+    func pastesOnlyOverAPlainTextClipboard(items: [[ComputerUsePastePolicy.SavedType]], pastes: Bool) {
+        #expect(ComputerUsePastePolicy.canPaste(items) == pastes)
     }
 }
 
