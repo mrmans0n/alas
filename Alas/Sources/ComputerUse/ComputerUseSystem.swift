@@ -508,6 +508,18 @@ extension LiveComputerUseSystem {
            let button = try await ComputerUseAXActions.pressDialogButton(chord, in: window, interrupt: interrupt) {
             return ComputerUseDelivered(delivery: .ax, button: button)
         }
+        // Keys posted to a window off screen reach nothing: only a menu item press can stand in.
+        if case .key(let chord) = input {
+            let displays = displayFrames()
+            let onScreen = displays.isEmpty || ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays)
+            if !onScreen {
+                let menuItem = try await ComputerUseAXActions.pressMenuShortcut(chord, app: window.app, interrupt: interrupt)
+                switch ComputerUseInputGeometry.offScreenKey(windowOnScreen: false, menuItemPressed: menuItem != nil) {
+                case .menuItem: return ComputerUseDelivered(delivery: .ax, menuItem: menuItem)
+                case .refuse, .events: throw ComputerUseSystemError.actionFailed(offScreenKeyRefusal(window.app))
+                }
+            }
+        }
         // Content another process draws in the window (a System Settings pane) takes no posted
         // events: an x/y click or scroll there goes as AX on the element at the point, also when
         // direct. Where AX has no way, the events go as they always did.
@@ -647,6 +659,11 @@ extension LiveComputerUseSystem {
     private struct Routed {
         var input: ComputerUseInput
         var offScreen = false
+    }
+
+    static func offScreenKeyRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name)'s window is off screen (it may be on another Space or workspace), so a key only reaches it as a "
+            + "sheet button or menu item, and this one is neither. Use element refs, or ask the user to bring the window on screen."
     }
 
     static func offScreenRefusal(_ app: ComputerUseAppIdentity) -> String {

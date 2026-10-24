@@ -679,6 +679,17 @@ extension ComputerUseAXActions {
             if let subrole = string(of: target, kAXSubroleAttribute), [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole) {
                 candidates.append(target)
             }
+            // A sheet some apps list as a window of their own, over the window it belongs to.
+            if candidates.isEmpty, let targetFrame = frame(of: target) {
+                for other in axWindows where !CFEqual(other, target) && isMessageable(other) {
+                    let role = string(of: other, kAXRoleAttribute)
+                    let subrole = string(of: other, kAXSubroleAttribute)
+                    guard role == kAXSheetRole || [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole ?? ""),
+                          let otherFrame = frame(of: other), otherFrame.intersects(targetFrame)
+                    else { continue }
+                    candidates.append(other)
+                }
+            }
             // A sheet a pane hosted in another process opens (System Settings') sits deeper in the
             // window's tree, among the pane's own elements.
             // Only where a sheet can be that deep: an app hosting its content remotely, or a window

@@ -67,6 +67,22 @@ public enum ComputerUseInputGeometry {
         displays.contains { $0.contains(point) }
     }
 
+    public enum OffScreenKey: Sendable, Equatable {
+        /// Posted as events, as for any window.
+        case events
+        /// Delivered as the menu item press that has its shortcut.
+        case menuItem
+        /// Posted keys reach no window off screen: refused rather than reported delivered.
+        case refuse
+    }
+
+    /// How a key reaches a window, once no sheet or dialog button took it: an off-screen window
+    /// (another Space, an AeroSpace workspace) only through a menu item with that shortcut.
+    public static func offScreenKey(windowOnScreen: Bool, menuItemPressed: Bool) -> OffScreenKey {
+        if windowOnScreen { return .events }
+        return menuItemPressed ? .menuItem : .refuse
+    }
+
     /// Whether a window's frame is on screen: its centre is on a display, or at least
     /// `onScreenShare` of its area is. The 1-point sliver AeroSpace leaves of a parked window isn't.
     public static func frameIsOnScreen(_ frame: CGRect, displays: [CGRect]) -> Bool {

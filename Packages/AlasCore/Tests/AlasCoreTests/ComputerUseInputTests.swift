@@ -264,6 +264,16 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.frameIsOnScreen(frame, displays: [CGRect(x: 0, y: 0, width: 1728, height: 1117)]) == onScreen)
     }
 
+    /// A key for an off-screen window goes only through a menu item; never as events reported delivered.
+    @Test(arguments: [
+        (true, false, ComputerUseInputGeometry.OffScreenKey.events),
+        (false, true, .menuItem),
+        (false, false, .refuse),
+    ])
+    func keysForOffScreenWindowsGoOnlyThroughMenuItems(onScreen: Bool, menuItem: Bool, route: ComputerUseInputGeometry.OffScreenKey) {
+        #expect(ComputerUseInputGeometry.offScreenKey(windowOnScreen: onScreen, menuItemPressed: menuItem) == route)
+    }
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)
