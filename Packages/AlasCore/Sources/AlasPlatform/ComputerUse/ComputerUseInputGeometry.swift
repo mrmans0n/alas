@@ -4,17 +4,22 @@ import Foundation
 /// Pure geometry for synthesized pointer input.
 public enum ComputerUseInputGeometry {
     /// Maps a screenshot pixel to a global point using the frame and scale the screenshot was
-    /// taken with. nil when the result falls outside `currentFrame`, because the window moved
-    /// or resized since the screenshot.
+    /// taken with. nil when the window moved or resized since the screenshot (the pixel may now
+    /// show something else, even inside the window), or when the point falls outside it.
     public static func globalPoint(
         pixel: CGPoint, screenshotFrame: CGRect, scale: CGFloat, currentFrame: CGRect
     ) -> CGPoint? {
-        guard scale > 0 else { return nil }
+        guard scale > 0, !screenshotStale(screenshotFrame: screenshotFrame, currentFrame: currentFrame) else { return nil }
         let point = CGPoint(
             x: screenshotFrame.minX + pixel.x / scale,
             y: screenshotFrame.minY + pixel.y / scale
         )
         return currentFrame.contains(point) ? point : nil
+    }
+
+    /// Whether the window's frame no longer is the one its screenshot was taken with.
+    public static func screenshotStale(screenshotFrame: CGRect, currentFrame: CGRect) -> Bool {
+        windowMoved(from: screenshotFrame, to: currentFrame, tolerance: 0.5)
     }
 
     /// An on-screen window as WindowServer hit-tests it, at any layer.

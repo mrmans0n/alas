@@ -43,10 +43,12 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.globalPoint(
             pixel: pixel, screenshotFrame: frame, scale: 2, currentFrame: frame
         ) == CGPoint(x: 200, y: 100))
-        #expect(ComputerUseInputGeometry.globalPoint(
-            pixel: pixel, screenshotFrame: frame, scale: 2,
-            currentFrame: CGRect(x: 900, y: 50, width: 800, height: 600)
-        ) == nil)
+        // Moved or resized since the screenshot, even where the old point stays inside.
+        for current in [CGRect(x: 150, y: 50, width: 800, height: 600), CGRect(x: 100, y: 50, width: 900, height: 600)] {
+            #expect(ComputerUseInputGeometry.globalPoint(
+                pixel: pixel, screenshotFrame: frame, scale: 2, currentFrame: current
+            ) == nil)
+        }
         #expect(ComputerUseInputGeometry.globalPoint(
             pixel: CGPoint(x: 1700, y: 100), screenshotFrame: frame, scale: 2, currentFrame: frame
         ) == nil)

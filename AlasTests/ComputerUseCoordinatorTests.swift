@@ -627,21 +627,24 @@ struct ComputerUseCoordinatorTests {
     /// An AX press in an Electron app may only focus the element: a click that changed nothing
     /// there is clicked once more with the pointer. Elsewhere, after a change, and on a toggle a
     /// second press could undo, it stands.
+    /// How much of the window the reads around the press see.
+    enum PostRead: Sendable { case full, depthLimited, queryFiltered }
+
     @Test(arguments: [
-        (true, false, "AXButton", false, true), (true, true, "AXButton", false, false),
-        (false, false, "AXButton", false, false), (true, false, "AXCheckBox", false, false),
-        // A depth-limited read can't tell the press changed nothing.
-        (true, false, "AXButton", true, false),
-    ])
+        (true, false, "AXButton", .full, true), (true, true, "AXButton", .full, false),
+        (false, false, "AXButton", .full, false), (true, false, "AXCheckBox", .full, false),
+        // A read that leaves elements out can't tell the press changed nothing.
+        (true, false, "AXButton", .depthLimited, false), (true, false, "AXButton", .queryFiltered, false),
+    ] as [(Bool, Bool, String, PostRead, Bool)])
     func electronClickThatChangedNothingIsRetriedWithThePointer(
-        manualAccessibility: Bool, changed: Bool, role: String, deep: Bool, retries: Bool
+        manualAccessibility: Bool, changed: Bool, role: String, postRead: PostRead, retries: Bool
     ) async throws {
         let recorder = Recorder()
         let reads = Counter()
         var saveTree = Self.saveTree
         saveTree.children[0].role = role
         // A group whose children the read didn't go deep enough to see.
-        if deep { saveTree.children.append(ComputerUseAXNode(role: "AXGroup", childrenUnread: true)) }
+        if postRead == .depthLimited { saveTree.children.append(ComputerUseAXNode(role: "AXGroup", childrenUnread: true)) }
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { $0 == 101 && manualAccessibility }
         // Read 1 is the inspect, 2 the window before the click, 3 the one after it.
@@ -657,7 +660,8 @@ struct ComputerUseCoordinatorTests {
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let click = ComputerUseCommand(action: .click, windowID: 1, query: postRead == .queryFiltered ? "save" : nil, ref: "e2")
+        let json = try #require(Self.text(await f.coordinator.perform(click, sessionID: "s")))
         let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let inputs = recorder.inputs
         guard case .click(.element(_, 1), .left, 1) = try #require(inputs.first) else {
@@ -811,7 +815,7 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         let response = await f.coordinator.perform(.init(action: .click, windowID: 1, x: 200, y: 100), sessionID: "s")
-        #expect(response == .error("computer_out_of_bounds: The point is outside window 1."))
+        #expect(response == .error("computer_out_of_bounds: Window 1 moved or resized since its screenshot. Call computer_screenshot again."))
         #expect(recorder.inputs.isEmpty)
     }
 

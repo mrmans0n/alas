@@ -165,6 +165,9 @@ final class ComputerUseCoordinator {
             "computer_needs_screenshot: x/y are pixels in a screenshot of window \(windowID). Call computer_screenshot first."
         }
         static func outOfBounds(_ windowID: UInt32) -> String { "computer_out_of_bounds: The point is outside window \(windowID)." }
+        static func screenshotMoved(_ windowID: UInt32) -> String {
+            "computer_out_of_bounds: Window \(windowID) moved or resized since its screenshot. Call computer_screenshot again."
+        }
         static func userActive(_ app: ComputerUseAppIdentity) -> String {
             "computer_user_active: The user is using \(app.name) right now. Try again in a moment."
         }
@@ -828,12 +831,14 @@ final class ComputerUseCoordinator {
     /// a left single click by ref that went as AX and changed nothing is retried once as a pointer
     /// click. Never in other apps, where an AX press that changed nothing is the app's answer, nor
     /// on a toggle or menu item (`role`, as read), where a second press could undo the first.
+    /// A query-filtered read can't tell either: the press may have changed only elements it hides.
     static func retriesWithPointer(
         _ command: ComputerUseCommand, role: String, delivered: ComputerUseDelivery, unchanged: Bool,
         manualAccessibility: Bool
     ) -> Bool {
         command.action == .click && command.ref != nil && command.button == .left && command.count == 1
-            && !noPointerRetryRoles.contains(role) && delivered == .ax && unchanged && manualAccessibility
+            && (command.query ?? "").isEmpty && !noPointerRetryRoles.contains(role) && delivered == .ax && unchanged
+            && manualAccessibility
     }
 
     static let noPointerRetryRoles: Set<String> = [
@@ -1086,6 +1091,9 @@ final class ComputerUseCoordinator {
         }
         guard let x, let y else { throw Refusal(Message.actionFailed("The action needs a ref or x and y.")) }
         guard let screenshot = snapshot?.lastScreenshot else { throw Refusal(Message.needsScreenshot(window.windowID)) }
+        if ComputerUseInputGeometry.screenshotStale(screenshotFrame: screenshot.frame, currentFrame: window.frame) {
+            throw Refusal(Message.screenshotMoved(window.windowID))
+        }
         guard let point = ComputerUseInputGeometry.globalPoint(
             pixel: CGPoint(x: x, y: y), screenshotFrame: screenshot.frame, scale: screenshot.scale, currentFrame: window.frame)
         else { throw Refusal(Message.outOfBounds(window.windowID)) }
