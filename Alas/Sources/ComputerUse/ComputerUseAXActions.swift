@@ -104,25 +104,6 @@ enum ComputerUseAXActions {
         return string.isEmpty ? nil : string
     }
 
-    /// The element's centre from its current position and size, global points.
-    /// Throws `outOfBounds` when the centre is outside `window` (the window's current frame).
-    static func center(
-        _ handles: ComputerUseAXHandles, _ handle: Int, within window: CGRect, app: ComputerUseAppIdentity,
-        isCancelled: @escaping IsCancelled
-    ) async throws -> CGPoint {
-        try await onQueue(isCancelled) {
-            let element = try resolve(handles, handle)
-            var position = CGPoint.zero
-            var size = CGSize.zero
-            guard AXValueGetValue(try value(element, kAXPositionAttribute, app: app), .cgPoint, &position),
-                  AXValueGetValue(try value(element, kAXSizeAttribute, app: app), .cgSize, &size)
-            else { throw noFrame }
-            let center = ComputerUseInputGeometry.center(of: CGRect(origin: position, size: size))
-            guard window.contains(center) else { throw ComputerUseSystemError.outOfBounds }
-            return center
-        }
-    }
-
     /// Where pointer input lands on the element: the centre of the part its nearest scroll area
     /// and `window` show, global points. Nil when none of it shows, or with `requireOwnCenter` when
     /// its own centre is scrolled or moved out of view.

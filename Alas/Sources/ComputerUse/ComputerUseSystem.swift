@@ -665,13 +665,17 @@ extension LiveComputerUseSystem {
         func requireActiveWindow() async throws {
             try await ComputerUseAXActions.makeActiveWindow(window, raise: !background, isCancelled: isCancelled)
         }
+        // A ref's point is on the part of it its scroll area shows: an element scrolled under
+        // another part of the window (a toolbar) would get the input instead.
         func point(_ input: ComputerUseInputTarget, in bounds: ComputerUseWindow = window) async throws -> CGPoint {
             switch input {
             case .element(let handles, let handle):
-                try await ComputerUseAXActions.center(
-                    handles, handle, within: bounds.frame, app: bounds.app, isCancelled: isCancelled)
+                guard let visible = try await ComputerUseAXActions.visibleCenter(
+                    handles, handle, within: bounds.frame, app: bounds.app, requireOwnCenter: false, isCancelled: isCancelled)
+                else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.") }
+                return visible
             case .point(let point):
-                point
+                return point
             }
         }
         func checkCancelled() throws {
