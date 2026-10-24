@@ -245,6 +245,19 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.events == ["wake:AXEnhancedUserInterface", "restore:AXEnhancedUserInterface"])
     }
 
+    /// A frame an app reports as NaN can't be written as JSON, and writing it would end the app:
+    /// it reads as zeros.
+    @Test func aNaNFrameFromTheAppReadsAsZeros() async throws {
+        var system = Self.system()
+        let tree = ComputerUseAXNode(role: "AXWindow", children: [
+            ComputerUseAXNode(role: "AXLink", title: "Jef Raskin", frame: CGRect(x: CGFloat.nan, y: 10, width: .infinity, height: 20)),
+        ])
+        system.axTree = { _, _, _, _ in (tree, nil, ComputerUseAXHandles()) }
+        let f = Self.fixture(system: system, allowed: [Self.notes])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
+        #expect(json.contains(#""frame":{"height":20,"width":0,"x":0,"y":10}"#))
+    }
+
     /// Only an element nothing of which shows carries `visible`.
     @Test func inspectMarksHiddenElements() async throws {
         var system = Self.system()

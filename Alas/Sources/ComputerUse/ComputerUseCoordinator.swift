@@ -1570,7 +1570,10 @@ final class ComputerUseCoordinator {
     static let queryNodeBudget = 10_000
 
     private static func serialize(_ payload: [String: Any]) -> AlasCLIResponse {
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
+        // JSONSerialization raises an Objective-C exception, which `try?` doesn't catch and which
+        // ends the app, on a value it can't write (a NaN): such a result is refused instead.
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
             return .error(Message.captureFailed("The result could not be encoded."))
         }
         guard data.count <= resultLimit, let json = String(data: data, encoding: .utf8) else {
@@ -1618,8 +1621,10 @@ final class ComputerUseCoordinator {
         ["mime_type": "image/png", "data": shot.png.base64EncodedString()]
     }
 
+    /// An app may report a NaN or infinite position or size; it reads as 0.
     private static func frame(_ rect: CGRect) -> [String: Double] {
-        ["x": rect.origin.x, "y": rect.origin.y, "width": rect.width, "height": rect.height]
+        func finite(_ value: CGFloat) -> Double { value.isFinite ? Double(value) : 0 }
+        return ["x": finite(rect.origin.x), "y": finite(rect.origin.y), "width": finite(rect.width), "height": finite(rect.height)]
     }
 
     private static func element(_ element: ComputerUseInspectElement) -> [String: Any] {
