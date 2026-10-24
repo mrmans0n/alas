@@ -140,6 +140,36 @@ struct HostConsolesTests {
         #expect(fixture.launches.count == 1)
     }
 
+    /// A failed launch's daemon that zmx can't kill stays listed and saved,
+    /// so it can be terminated later instead of running undiscoverable.
+    @Test(arguments: [false, true])
+    func aFailedLaunchZmxCantCleanUpStaysListed(isRun: Bool) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.fakes.withLock {
+            $0.launchFails = true
+            $0.killFails = true
+        }
+        let consoles = fixture.consoles()
+        if isRun {
+            (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+            _ = fixture.core.startRun(try fixture.runScript(onExit: .keep), in: fixture.worktree)
+            await fixture.core.waitForStartingRunsForTesting()
+        } else {
+            await #expect(throws: PeerConsoleOpenError.notStarted) { try await consoles.open(worktreeId: fixture.worktree.id) }
+        }
+        let launch = try #require(fixture.launches.first)
+        let id = try #require(consoles.summaries().first?.consoleId)
+        #expect(try fixture.savedFile()?.consoles.map(\.id) == [id])
+        #expect(fixture.rcFilesExist(of: launch) == isRun)
+
+        fixture.fakes.withLock { $0.killFails = false }
+        #expect(await consoles.terminate(id))
+        #expect(consoles.summaries().isEmpty)
+        #expect(try fixture.savedFile()?.consoles.isEmpty == true)
+        #expect(!fixture.rcFilesExist(of: launch))
+    }
+
     @Test func titlesReuseTheLowestFreeNumber() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -667,6 +697,9 @@ struct HostConsolesTests {
                         $0.launches.append(launch)
                         return $0.launchFails
                     }
+                    // zmx forked the daemon, then the launcher failed.
+                    guard let socket = zmx.socketPath(forSession: launch.arguments[1]) else { throw PeerConsoleOpenError.notStarted }
+                    FileManager.default.createFile(atPath: socket, contents: nil)
                     if fails { throw PeerConsoleOpenError.notStarted }
                     switch fakes.withLock({ $0.duringLaunch }) {
                     case .removalClaimsIt?:
@@ -676,8 +709,6 @@ struct HostConsolesTests {
                     case nil:
                         break
                     }
-                    guard let socket = zmx.socketPath(forSession: launch.arguments[1]) else { throw PeerConsoleOpenError.notStarted }
-                    FileManager.default.createFile(atPath: socket, contents: nil)
                 },
                 applySize: { _, rows, columns in
                     let hold = fakes.withLock {
