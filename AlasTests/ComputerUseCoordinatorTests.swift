@@ -159,8 +159,8 @@ struct ComputerUseCoordinatorTests {
         #expect(json.contains(#""truncated_by":"time_limit""#))
     }
 
-    /// An Electron window that shows only groups at first contact is woken and read once more;
-    /// later reads of the app aren't.
+    /// An Electron window that shows only groups at first contact is woken and read again until its
+    /// web area has content; later reads of the app aren't.
     @Test func aWebWindowReadAsEmptyGroupsIsWokenAndReadAgainOnce() async throws {
         let recorder = Recorder()
         let reads = Counter()
@@ -171,17 +171,19 @@ struct ComputerUseCoordinatorTests {
             _ = woken.next()
             return true
         }
+        // A web area that fills only on the third read.
         system.axTree = { _, _, _, _ in
-            let web = reads.next() > 1
-            let content = ComputerUseAXNode(role: web ? "AXWebArea" : "AXGroup", handle: 1)
+            let read = reads.next()
+            let field = ComputerUseAXNode(role: "AXTextField", handle: 2)
+            let content = ComputerUseAXNode(role: read > 1 ? "AXWebArea" : "AXGroup", children: read > 2 ? [field] : [], handle: 1)
             return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
-        #expect(json.contains("AXWebArea"))
-        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentWakeWait])
+        #expect(json.contains("AXTextField"))
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        #expect(reads.next() == 4)
+        #expect(reads.next() == 5)
         #expect(woken.next() == 2)
     }
 
@@ -198,15 +200,18 @@ struct ComputerUseCoordinatorTests {
             return attribute == "AXEnhancedUserInterface"
         }
         system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
+        // The web content shows only once AXEnhancedUserInterface is set.
         system.axTree = { _, _, _, _ in
-            let web = reads.next() > 2
-            let content = ComputerUseAXNode(role: web ? "AXWebArea" : "AXGroup", handle: 1)
+            let web = recorder.events.contains("wake:AXEnhancedUserInterface")
+            let field = ComputerUseAXNode(role: "AXTextField", handle: 2)
+            let content = ComputerUseAXNode(role: web ? "AXWebArea" : "AXGroup", children: web ? [field] : [], handle: 1)
             return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")))
         #expect(json.contains("AXWebArea"))
-        #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXEnhancedUserInterface"])
+        // No AXManualAccessibility for a Chromium browser: the wait comes first.
+        #expect(recorder.events == ["wake:AXEnhancedUserInterface"])
         f.coordinator.turnEnded(sessionID: "s")
         try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
     }
@@ -912,7 +917,7 @@ struct ComputerUseCoordinatorTests {
         var saveTree = Self.saveTree
         saveTree.children[0].role = role
         // Its web content is built already.
-        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea"))
+        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXGroup")]))
         // A group whose children the read didn't go deep enough to see.
         if postRead == .depthLimited { saveTree.children.append(ComputerUseAXNode(role: "AXGroup", childrenUnread: true)) }
         var system = Self.system(recorder: recorder)
@@ -1004,7 +1009,7 @@ struct ComputerUseCoordinatorTests {
         // Read 1 is the inspect, 2 the window before the press, 3 after it, 4 after the retry.
         var saveTree = Self.saveTree
         // Its web content is built already.
-        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea"))
+        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXGroup")]))
         system.axTree = { [saveTree] _, _, _, _ in (saveTree, retryReadTruncated && reads.next() >= 4 ? .timeLimit : nil, ComputerUseAXHandles()) }
         // Otherwise only the focus moves with the pointer click.
         system.focusState = { _ in

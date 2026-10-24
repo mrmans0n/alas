@@ -1429,16 +1429,26 @@ final class ComputerUseCoordinator {
         let budget = min(query == nil ? limit + 1 : Self.queryNodeBudget, nodeBudget)
         let readLimit = min(timeLimit, ComputerUseAXReader.deadline)
         var tree = try await system.axTree(window, maxDepth, budget, readLimit)
-        // A Chromium or Electron window may show only empty groups at first contact: its web content
-        // is asked for its tree once, and read again after a moment.
+        // A Chromium or Electron window may show only empty groups, or an empty web area, at first
+        // contact: an Electron app is asked for its tree, and the window is read again until its
+        // web content shows, up to a deadline.
+        func awaitWebContent() async throws {
+            var waited = Duration.zero
+            while ComputerUseWebContent.keepsWaiting(root: tree.root, waited: waited) {
+                await sleep(Self.webContentPoll)
+                waited += Self.webContentPoll
+                try checkStillActive(context)
+                tree = try await system.axTree(window, maxDepth, budget, readLimit)
+            }
+        }
         if ComputerUseWebContent.needsWake(
             acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid), bundleID: window.app.bundleID,
             alreadyWoken: wokenWebContent.contains(window.app.pid), root: tree.root) {
             wokenWebContent.insert(window.app.pid)
-            _ = await system.wakeWebContent(window.app, ComputerUseWebContent.manualAccessibility)
-            await sleep(Self.webContentWakeWait)
-            try checkStillActive(context)
-            tree = try await system.axTree(window, maxDepth, budget, readLimit)
+            if let attribute = ComputerUseWebContent.wakeAttribute(bundleID: window.app.bundleID) {
+                _ = await system.wakeWebContent(window.app, attribute)
+            }
+            try await awaitWebContent()
             // A Chromium browser that still shows none gets what VoiceOver sets, for the turn.
             if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: tree.root) {
                 if await system.wakeWebContent(window.app, ComputerUseWebContent.enhancedUserInterface) {
@@ -1452,9 +1462,7 @@ final class ComputerUseCoordinator {
                     }
                     enhancedUserInterface[context.sessionID, default: [:]][window.app.pid] = window.app
                 }
-                await sleep(Self.webContentWakeWait)
-                try checkStillActive(context)
-                tree = try await system.axTree(window, maxDepth, budget, readLimit)
+                try await awaitWebContent()
             }
         }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
@@ -1555,8 +1563,8 @@ final class ComputerUseCoordinator {
         return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
 
-    /// After asking a web app for its tree, before the read again.
-    static let webContentWakeWait: Duration = .milliseconds(500)
+    /// Between reads of a web window waiting for its content (`ComputerUseWebContent.keepsWaiting`).
+    static let webContentPoll: Duration = .milliseconds(250)
 
     /// Nodes an inspect with a query may read before filtering.
     static let queryNodeBudget = 10_000

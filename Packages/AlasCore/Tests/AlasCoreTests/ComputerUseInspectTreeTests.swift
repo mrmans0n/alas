@@ -147,14 +147,19 @@ struct ComputerUseInspectTreeTests {
 struct ComputerUseWebContentTests {
     private static let empty = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup")])
     private static let built = ComputerUseAXNode(role: "AXWindow", children: [
-        ComputerUseAXNode(role: "AXGroup", children: [ComputerUseAXNode(role: "AXWebArea")]),
+        ComputerUseAXNode(role: "AXGroup", children: [
+            ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXTextField")]),
+        ]),
     ])
+    /// A web area the app hasn't filled yet.
+    private static let hollow = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXWebArea")])
 
     /// Only a Chromium or Electron window without a web area, read for the first time, is read again.
     @Test(arguments: [
         (true, String?("com.tinyspeck.slackmacgap"), false, empty, true),
         (false, "com.google.Chrome", false, empty, true),
         (true, "com.tinyspeck.slackmacgap", false, built, false),
+        (true, "com.tinyspeck.slackmacgap", false, hollow, true),
         (true, "com.tinyspeck.slackmacgap", true, empty, false),
         (false, "com.apple.TextEdit", false, empty, false),
     ])
@@ -179,5 +184,17 @@ struct ComputerUseWebContentTests {
     @Test(arguments: [(Bool?(false), true, true), (nil, true, true), (true, true, false), (false, false, false)])
     func onlyWhatAlasTurnedOnIsRestored(before: Bool?, setSucceeded: Bool, restores: Bool) {
         #expect(ComputerUseWebContent.restores(before: before, setSucceeded: setSucceeded) == restores)
+    }
+
+    /// After the wake, the window is read again until its web area has something in it, for at
+    /// most `contentDeadline`.
+    @Test(arguments: [
+        (empty, Duration.zero, true),
+        (hollow, .milliseconds(1250), true),
+        (hollow, .milliseconds(1500), false),
+        (built, .zero, false),
+    ])
+    func firstContactWaitsForWebContentUntilTheDeadline(root: ComputerUseAXNode, waited: Duration, waits: Bool) {
+        #expect(ComputerUseWebContent.keepsWaiting(root: root, waited: waited) == waits)
     }
 }

@@ -15,11 +15,26 @@ public enum ComputerUseWebContent {
     public static let manualAccessibility = "AXManualAccessibility"
     public static let enhancedUserInterface = "AXEnhancedUserInterface"
 
-    /// Whether a Chromium browser whose window still shows no web area after `manualAccessibility`
-    /// and a re-read is asked once more, with `enhancedUserInterface`. That one is app-wide and
-    /// slows window moves under window managers, so it is the second resort, and is undone after.
+    /// What first contact sets: `manualAccessibility`, which Electron apps take; nil for a Chromium
+    /// browser, which gets only the wait first.
+    public static func wakeAttribute(bundleID: String?) -> String? {
+        chromeBundleIDs.contains(bundleID ?? "") ? nil : manualAccessibility
+    }
+
+    /// Whether a Chromium browser whose window still shows no web content after the first wait is
+    /// asked once more, with `enhancedUserInterface`. That one is app-wide and slows window moves
+    /// under window managers, so it is the second resort, and is undone after.
     public static func needsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode) -> Bool {
-        chromeBundleIDs.contains(bundleID ?? "") && !hasWebArea(root)
+        chromeBundleIDs.contains(bundleID ?? "") && !hasWebContent(root)
+    }
+
+    /// The longest a first contact waits for the web content, from the wake.
+    public static let contentDeadline: Duration = .milliseconds(1500)
+
+    /// Whether to read the window again after `waited` since the wake: its web content isn't there
+    /// yet and the deadline hasn't passed.
+    public static func keepsWaiting(root: ComputerUseAXNode, waited: Duration) -> Bool {
+        !hasWebContent(root) && waited < contentDeadline
     }
 
     /// Whether Alas turned an attribute on, and so turns it off again at stop, turn end and
@@ -30,15 +45,17 @@ public enum ComputerUseWebContent {
 
     /// Whether a read is worth repeating after asking for the web content's tree: the app is a
     /// Chromium or Electron one (`acceptsManualAccessibility`, or a Chromium browser by bundle id),
-    /// this is the first such try for it, and the window showed no web area.
+    /// this is the first such try for it, and the window showed no web content: no web area, or
+    /// one without anything in it yet.
     public static func needsWake(
         acceptsManualAccessibility: Bool, bundleID: String?, alreadyWoken: Bool, root: ComputerUseAXNode
     ) -> Bool {
         guard !alreadyWoken, acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "") else { return false }
-        return !hasWebArea(root)
+        return !hasWebContent(root)
     }
 
-    static func hasWebArea(_ node: ComputerUseAXNode) -> Bool {
-        node.role == "AXWebArea" || node.children.contains(where: hasWebArea)
+    /// A web area with something in it.
+    static func hasWebContent(_ node: ComputerUseAXNode) -> Bool {
+        (node.role == "AXWebArea" && !node.children.isEmpty) || node.children.contains(where: hasWebContent)
     }
 }
