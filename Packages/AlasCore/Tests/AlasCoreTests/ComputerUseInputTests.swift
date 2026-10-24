@@ -330,6 +330,8 @@ struct ComputerUseInputTests {
         // Half of it below the window's bottom edge.
         (.scroll, nil, CGRect(x: 0, y: 90, width: 20, height: 20),
          .glide(to: CGPoint(x: 10, y: 95), outline: CGRect(x: 0, y: 90, width: 20, height: 20), click: false)),
+        // Wholly outside the window: the pointer stays where it is rather than leave the panel.
+        (.click, nil, CGRect(x: 200, y: 200, width: 20, height: 10), ComputerUseCursorCue.none),
         (.type, nil, CGRect(x: 0, y: 0, width: 20, height: 10), .outline(CGRect(x: 0, y: 0, width: 20, height: 10))),
         (.type, nil, nil, ComputerUseCursorCue.none),
         (.key, CGPoint(x: 5, y: 5), nil, ComputerUseCursorCue.none),

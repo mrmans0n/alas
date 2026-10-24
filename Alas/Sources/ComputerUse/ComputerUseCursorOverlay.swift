@@ -467,9 +467,12 @@ final class ComputerUseCursorOverlay: NSObject {
     // MARK: - Geometry
 
     /// CG global, top-left point to window-local, top-left; nil without a target.
+    /// Nil outside the target, so the pointer never moves (nor is remembered) off the panel.
     private func localPoint(fromCG point: CGPoint) -> CGPoint? {
         guard let target else { return nil }
-        return CGPoint(x: point.x - target.frame.minX, y: point.y - target.frame.minY)
+        let local = CGPoint(x: point.x - target.frame.minX, y: point.y - target.frame.minY)
+        guard (0 ... target.frame.width).contains(local.x), (0 ... target.frame.height).contains(local.y) else { return nil }
+        return local
     }
 
     /// Window-local, top-left point to the canvas layer's bottom-left space.
