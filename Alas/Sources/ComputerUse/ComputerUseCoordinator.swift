@@ -1016,14 +1016,14 @@ final class ComputerUseCoordinator {
                 // The action may have moved or resized the window; the read matches it by its frame.
                 window = try await currentWindow(window)
                 read = try await readElements(
-                    window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             } catch ComputerUseSystemError.appNotResponding {
                 // An app still busy with what the input opened (a sheet sliding in) answers a moment later.
                 await sleep(Self.postReadRetryDelay)
                 try checkStillActive(context)
                 window = try await currentWindow(window)
                 read = try await readElements(
-                    window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             }
             var verdict = try await check(
                 read, of: window, after: delivered, of: command, target: target, before: before, end: end,
@@ -1042,7 +1042,7 @@ final class ComputerUseCoordinator {
                     do {
                         window = try await currentWindow(window)
                         polled = try await readElements(
-                            window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth,
+                            window, query: command.query, limit: command.limit, maxDepth: command.maxDepth,
                             context: context)
                     } catch is CancellationError {
                         throw CancellationError()
@@ -1112,7 +1112,7 @@ final class ComputerUseCoordinator {
         do {
             let current = try await currentWindow(window)
             let read = try await readElements(
-                current, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+                current, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             entry["truncated"] = read.truncated
             entry["elements"] = read.elements.map(Self.element)
             if read.depthLimited { entry["depth_limited"] = true }
@@ -1145,7 +1145,6 @@ final class ComputerUseCoordinator {
     /// of them after the first read.
     static let dragConfirmPoll: Duration = .milliseconds(250)
     static let dragConfirmDeadline: Duration = .milliseconds(1500)
-    static let postStateDepth = 12
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)
 
@@ -1161,7 +1160,7 @@ final class ComputerUseCoordinator {
         context: CallContext
     ) async -> ComputerUseWindowFingerprint {
         let read = try? await readElements(
-            window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context,
+            window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
             recordRefs: false, nodeBudget: Self.fingerprintNodeBudget, timeLimit: Self.fingerprintTimeLimit)
         return await fingerprint(of: window, read: read, target: target)
     }

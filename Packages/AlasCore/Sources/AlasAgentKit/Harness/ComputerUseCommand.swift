@@ -35,6 +35,12 @@ public struct ComputerUseCommand: Equatable, Sendable {
     /// The deepest tree a read may walk; the default depth stays 12.
     public static let maxDepthLimit = 32
 
+    /// The depth a read walks when the request names none: an input action's read with a query
+    /// searches as deep as a read may go, since the element it looks for may be anywhere.
+    public static func defaultMaxDepth(for action: Action, query: String?) -> Int {
+        action.isInput && query != nil ? maxDepthLimit : 12
+    }
+
     public var action: Action
     public var windowID: UInt32?
     public var query: String?
@@ -164,7 +170,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         }
     }
 
-    private static let postAction: Set<String> = ["window_id", "limit", "query", "include_screenshot", "call_id"]
+    private static let postAction: Set<String> = ["window_id", "limit", "query", "max_depth", "include_screenshot", "call_id"]
     private static let pointTarget: Set<String> = ["ref", "x", "y"]
 
     private static func allowedParams(for action: Action) -> Set<String> {
@@ -189,7 +195,8 @@ public struct ComputerUseCommand: Equatable, Sendable {
         }
         let command = Self(
             action: action, windowID: params?.window_id, query: params?.query,
-            limit: params?.limit, maxDepth: params?.max_depth ?? 12, callID: params?.call_id,
+            limit: params?.limit,
+            maxDepth: params?.max_depth ?? defaultMaxDepth(for: action, query: params?.query), callID: params?.call_id,
             ref: params?.ref, x: params?.x, y: params?.y,
             toWindowID: params?.to_window_id, toRef: params?.to_ref, toX: params?.to_x, toY: params?.to_y,
             button: params?.button ?? .left, count: params?.count ?? 1,
@@ -235,7 +242,10 @@ public struct ComputerUseCommand: Equatable, Sendable {
             try require(windowID != nil)
             try require((1...3000).contains(limit))
         }
-        if action.isInput { try validQuery() }
+        if action.isInput {
+            try validQuery()
+            try require((1...Self.maxDepthLimit).contains(maxDepth))
+        }
         switch action {
         case .cancel:
             try require(callID != nil && windowID == nil && query == nil)

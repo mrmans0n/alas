@@ -376,6 +376,8 @@ pub enum ComputerTarget {
 pub struct ComputerPost {
     pub limit: u64,
     pub query: Option<String>,
+    /// None leaves the depth to the app: 12, or 32 with a query.
+    pub max_depth: Option<u64>,
     pub include_screenshot: bool,
 }
 
@@ -384,6 +386,7 @@ impl Default for ComputerPost {
         Self {
             limit: 100,
             query: None,
+            max_depth: None,
             include_screenshot: false,
         }
     }
@@ -1124,6 +1127,9 @@ fn insert_post(params: &mut serde_json::Map<String, serde_json::Value>, post: &C
     }
     if let Some(query) = &post.query {
         params.insert("query".into(), serde_json::Value::String(query.clone()));
+    }
+    if let Some(max_depth) = post.max_depth {
+        params.insert("max_depth".into(), serde_json::Value::from(max_depth));
     }
     if post.include_screenshot {
         params.insert("include_screenshot".into(), serde_json::Value::Bool(true));
@@ -2247,6 +2253,7 @@ mod tests {
                 post: ComputerPost {
                     limit: 50,
                     query: Some("Save".into()),
+                    max_depth: Some(20),
                     include_screenshot: true,
                 },
                 call_id: Some("42-2".into()),
@@ -2259,7 +2266,7 @@ mod tests {
             click.params,
             Some(serde_json::json!({
                 "window_id": 7, "ref": "e12", "button": "right", "count": 2,
-                "delivery": "direct", "limit": 50, "query": "Save",
+                "delivery": "direct", "limit": 50, "query": "Save", "max_depth": 20,
                 "include_screenshot": true, "call_id": "42-2"
             }))
         );

@@ -800,6 +800,10 @@ fn computer_action_schema(extra: Value, required: &[&str]) -> Value {
         json!({ "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 100." }),
     );
     properties.insert(
+        "max_depth".into(),
+        json!({ "type": "integer", "minimum": 1, "maximum": 32, "description": "Maximum depth of the returned elements' tree, at most 32. Default: 12, or 32 when query is given." }),
+    );
+    properties.insert(
         "include_screenshot".into(),
         json!({ "type": "boolean", "description": "Also return a screenshot of the window afterwards. Default: false." }),
     );
@@ -1323,6 +1327,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "delivery",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1349,6 +1354,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "delivery",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1377,6 +1383,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "delivery",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1408,6 +1415,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "delivery",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1441,6 +1449,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "to_y",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1903,6 +1912,7 @@ fn computer_post(args: &Value) -> Result<alas_client::ComputerPost, String> {
     Ok(alas_client::ComputerPost {
         limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(100),
         query: optional_limited_string_raw(args, "query", 256)?,
+        max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?,
         include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
     })
 }
@@ -4112,7 +4122,7 @@ mod tests {
             ),
             (
                 "computer_type",
-                json!({ "window_id": 7, "text": " hi ", "ref": "e1", "mode": "replace", "include_screenshot": true, "limit": 5, "query": "ok" }),
+                json!({ "window_id": 7, "text": " hi ", "ref": "e1", "mode": "replace", "include_screenshot": true, "limit": 5, "query": "ok", "max_depth": 20 }),
                 ComputerCommand::Type {
                     window_id: 7,
                     text: " hi ".into(),
@@ -4122,6 +4132,7 @@ mod tests {
                     post: alas_client::ComputerPost {
                         limit: 5,
                         query: Some("ok".into()),
+                        max_depth: Some(20),
                         include_screenshot: true,
                     },
                     call_id: None,
@@ -4365,6 +4376,14 @@ mod tests {
             (
                 "computer_inspect",
                 json!({ "window_id": 7, "max_depth": 33 }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "max_depth": 33 }),
+            ),
+            (
+                "computer_open_app",
+                json!({ "name": "Notes", "max_depth": 12 }),
             ),
         ] {
             assert!(

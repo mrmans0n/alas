@@ -96,7 +96,8 @@ public struct ComputerUseInspectElement: Equatable, Sendable {
 public enum ComputerUseInspectTree {
     static let maxStringLength = 200
     public static let depthHint =
-        "Some elements are deeper than max_depth; pass a higher max_depth (up to 32) or a query."
+        "Some elements are deeper than max_depth; pass a higher max_depth (up to 32). An input action given a query "
+            + "reads 32 levels unless it is given a max_depth."
 
     /// Refs are the pre-order index of each node among all nodes visited (root is `e1`),
     /// so a query or limit never renumbers them: the same element has the same ref in a
