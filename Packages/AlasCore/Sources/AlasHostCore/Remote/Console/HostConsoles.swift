@@ -108,13 +108,7 @@ public final class HostConsoles {
     /// Drops shells whose socket is gone (the user typed `exit`), then lists
     /// the ones in a configured worktree.
     public func summaries() -> [PeerConsoleSummary] {
-        let alive = entries.filter { entry in
-            zmx.socketPath(forSession: entry.zmxName).map { FileManager.default.fileExists(atPath: $0) } ?? false
-        }
-        if alive != entries {
-            entries = alive
-            save()
-        }
+        pruneExited()
         // Hidden (archived) worktrees are listed on purpose, so their shells
         // can still be seen and terminated; `open` refuses them.
         return entries.compactMap { entry in
@@ -231,7 +225,19 @@ public final class HostConsoles {
     }
 
     public func hasConsoles(inWorktrees worktreeIDs: Set<String>) -> Bool {
-        entries.contains { worktreeIDs.contains($0.worktreeId) }
+        pruneExited()
+        return entries.contains { worktreeIDs.contains($0.worktreeId) }
+    }
+
+    /// Forgets shells whose socket is gone: they exited (the user typed
+    /// `exit`), whether or not a peer was watching.
+    private func pruneExited() {
+        let alive = entries.filter { entry in
+            zmx.socketPath(forSession: entry.zmxName).map { FileManager.default.fileExists(atPath: $0) } ?? false
+        }
+        guard alive != entries else { return }
+        entries = alive
+        save()
     }
 
     /// Kills and forgets every shell in a worktree that is being deleted,

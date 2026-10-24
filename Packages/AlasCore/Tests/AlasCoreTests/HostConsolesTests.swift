@@ -253,7 +253,8 @@ struct HostConsolesTests {
         await #expect(throws: HostError.projectBusy) { try await fixture.core.removeProject(id: "p") }
         #expect(consoles.summaries().map(\.consoleId) == [id])
 
-        consoles.terminate(id)
+        // The shell exits with no peer listing: its socket goes, nothing else.
+        try FileManager.default.removeItem(atPath: #require(fixture.socketPath(of: id)))
         try await fixture.core.removeProject(id: "p")
         #expect(fixture.projects.projects.isEmpty)
     }
