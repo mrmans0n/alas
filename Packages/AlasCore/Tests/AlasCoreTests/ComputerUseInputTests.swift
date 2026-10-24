@@ -58,6 +58,17 @@ struct ComputerUseInputTests {
         #expect(ComputerUseSecureFocus.isTextEntry(element) == isTextEntry)
     }
 
+    /// Only a web page's field takes the click through AX focus; a native one keeps the plain click.
+    @Test(arguments: [
+        (ComputerUseSecureFocus.Element(role: "AXTextField"), true, true),
+        (.init(role: "AXTextField", subrole: "AXSecureTextField"), true, true),
+        (.init(role: "AXTextField"), false, false),
+        (.init(role: "AXButton"), true, false),
+    ])
+    func onlyWebFieldsTakeClicksThroughFocus(element: ComputerUseSecureFocus.Element, inWebArea: Bool, focuses: Bool) {
+        #expect(ComputerUseSecureFocus.focusesOnClick(element, inWebArea: inWebArea) == focuses)
+    }
+
     @Test func pointsMapThroughTheScreenshotFrameAndAreBoundedByTheCurrentFrame() {
         let frame = CGRect(x: 100, y: 50, width: 800, height: 600)
         let pixel = CGPoint(x: 200, y: 100)

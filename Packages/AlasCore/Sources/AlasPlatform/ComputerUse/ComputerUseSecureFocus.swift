@@ -22,9 +22,17 @@ public enum ComputerUseSecureFocus {
         element.role == secureRole || element.subrole == secureRole
     }
 
-    /// Elements a click should put the keyboard in.
+    /// Elements that take typed text.
     public static func isTextEntry(_ element: Element) -> Bool {
         [element.role, element.subrole].contains { $0.map(textEntryRoles.contains) == true }
+    }
+
+    /// Whether a left click by ref puts the keyboard in the element through AX focus: only a web
+    /// page's field, where an AX press may mark it focused in the page while the keyboard stays
+    /// in the address bar. A native field keeps the plain click: some select all their text on
+    /// taking focus, and a later ref-less type would replace it.
+    public static func focusesOnClick(_ element: Element, inWebArea: Bool) -> Bool {
+        inWebArea && isTextEntry(element)
     }
 
     /// Whether `chord` must be refused, given every element that reads as focused: the app's

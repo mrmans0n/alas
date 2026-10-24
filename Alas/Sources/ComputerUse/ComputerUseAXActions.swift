@@ -88,13 +88,16 @@ enum ComputerUseAXActions {
         if ComputerUseSecureFocus.refuses(chord, focused: focused) { throw secureRefusal }
     }
 
+    static let webAreaAncestorLevels = 32
+    private static let webAreaRole = "AXWebArea"
     static let secureFocusDepth = 32
     static let secureFocusNodes = 3000
     static let secureFocusTime: Duration = .milliseconds(500)
 
-    /// For a left click by ref on a field: puts the keyboard in it, as a click would, where an AX
-    /// press may only mark it focused inside a web page. False, touching nothing, when the element
-    /// takes no text. A secure field may be clicked; only typing into one is refused.
+    /// For a left click by ref on a web page's field: puts the keyboard in it, as a click would,
+    /// where an AX press may only mark it focused inside the page. False, touching nothing, for
+    /// any other element (`ComputerUseSecureFocus.focusesOnClick`). A secure field may be
+    /// clicked; only typing into one is refused.
     static func focusTextEntry(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
     ) async throws -> Bool {
@@ -103,6 +106,10 @@ enum ComputerUseAXActions {
             let identity = ComputerUseSecureFocus.Element(
                 role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute))
             guard ComputerUseSecureFocus.isTextEntry(identity) else { return false }
+            let inWebArea = ancestor(of: element, levels: webAreaAncestorLevels) {
+                string(of: $0, kAXRoleAttribute) == webAreaRole
+            } != nil
+            guard ComputerUseSecureFocus.focusesOnClick(identity, inWebArea: inWebArea) else { return false }
             // Confirmed by the caller through the app's focused element, so the result says nothing.
             AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
             return true
