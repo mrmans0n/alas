@@ -26,6 +26,16 @@ final class NativePeerSidebarModel {
     var collapsedRepoIDs: Set<String> = []
     var headerHovering = false
     var plusHovering = false
+    /// The peer worktree whose rename sheet is open. Held here, not on a
+    /// lazy row, so the sheet survives its row scrolling away.
+    var renamingBranch: NativePeerBranchRename?
+}
+
+struct NativePeerBranchRename: Identifiable {
+    let worktree: PeerHostWorktree
+    let serverId: String
+    let peerName: String
+    var id: String { "\(serverId)\u{1F}\(worktree.snapshot.worktree.id)" }
 }
 
 /// App-scoped peer groups live beside the workspace tree, never inside a
@@ -187,6 +197,11 @@ struct NativePeerSidebarView: View {
             // Folder-project rows have no branch.
             if !summary.branch.isEmpty {
                 Button("Copy Branch Name") { Self.copy(summary.branch) }
+            }
+        }
+        if let host = worktree.host, let hosts = client.hosts, hosts.canRenameBranch(host, serverId: peer.serverId) {
+            Button("Rename Branch…") {
+                model.renamingBranch = NativePeerBranchRename(worktree: host, serverId: peer.serverId, peerName: peer.name)
             }
         }
         if let host = worktree.host, let hosts = client.hosts {

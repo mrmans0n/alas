@@ -67,6 +67,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// acknowledges discarding unsaved editor changes.
     case archiveWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, discardUnsavedEdits: Bool? = nil)
     case unarchiveWorktree(worktree: WorktreeRef)
+    /// Renames a listed worktree's branch to `to`, or a numbered variant
+    /// when taken, under the local menu's rules (`host.worktrees.renameBranch.v1`).
+    case renameBranch(worktree: WorktreeRef, to: String)
     case listWorkspaceCheckouts
     case workspaceCheckout(id: UUID)
     case startRun(scriptKey: String, worktree: WorktreeRef)

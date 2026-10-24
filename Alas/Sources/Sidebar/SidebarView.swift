@@ -412,6 +412,19 @@ struct SidebarView: View {
         .sheet(item: $renamingBranchWorktree) { worktree in
             RenameBranchDialog(state: state, worktree: worktree) { renamingBranchWorktree = nil }
         }
+        .sheet(item: $peerSidebarModel.renamingBranch) { rename in
+            // The suggestion reads the branch's changes, which live on the host.
+            RenameBranchDialog(
+                branch: rename.worktree.snapshot.worktree.branch,
+                subtitle: "\(rename.worktree.snapshot.worktree.path.path) on \(rename.peerName)",
+                suggest: nil,
+                rename: { branch in
+                    guard let hosts = state.nativePeerSessions?.hosts else { return FederatedSessionsProvider.peerUnavailableMessage }
+                    return await hosts.renameBranch(rename.worktree, to: branch, serverId: rename.serverId)
+                },
+                onDismiss: { peerSidebarModel.renamingBranch = nil }
+            )
+        }
     }
 
     /// Matched worktree ids of the active space, in sidebar display order.

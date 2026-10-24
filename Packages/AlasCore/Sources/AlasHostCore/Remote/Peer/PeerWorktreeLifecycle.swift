@@ -28,6 +28,13 @@ public struct PeerHostWorktree: Equatable, Sendable {
         }
         return project.host == nil ? .available : .disabled(reason: PeerWorktreeControls.remoteProjectReason)
     }
+
+    /// The local menu's Rename Branch rule: not the main checkout, a
+    /// detached or branchless one, or one a Workspace checkout manages.
+    public var canRenameBranch: Bool {
+        let worktree = snapshot.worktree
+        return !isMain && !worktree.branch.isEmpty && !worktree.isDetached && workspaceCheckoutName == nil
+    }
 }
 
 extension PeerHostChannel.State {
