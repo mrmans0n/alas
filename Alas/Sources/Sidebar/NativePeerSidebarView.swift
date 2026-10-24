@@ -179,10 +179,19 @@ struct NativePeerSidebarView: View {
                 if let worktreeId { consoles.openTerminal(serverId: peer.serverId, worktreeId: worktreeId) }
             }
             .disabled(worktreeId == nil)
-            if controls != .hidden { Divider() }
+            Divider()
+        }
+        // Paths on the host Mac, copied as the host lists them.
+        if let summary = worktree.worktree {
+            Button("Copy Path") { Self.copy(summary.path) }
+            // Folder-project rows have no branch.
+            if !summary.branch.isEmpty {
+                Button("Copy Branch Name") { Self.copy(summary.branch) }
+            }
         }
         if let host = worktree.host, let hosts = client.hosts {
             if controls != .hidden {
+                Divider()
                 let disabled = controls != .available
                 let delete = { (keepBranch: Bool) in
                     hosts.delete(
@@ -206,6 +215,12 @@ struct NativePeerSidebarView: View {
                 }
             }
         }
+    }
+
+    private static func copy(_ string: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(string, forType: .string)
     }
 }
 
