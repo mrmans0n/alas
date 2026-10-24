@@ -29,7 +29,9 @@ struct AlasHostExecutableTests {
     /// With Remote enabled, a device pairs with a code the running host
     /// mints for its local user, and drives a session with the scripted
     /// agent over the Remote channel. A paired device cannot mint codes.
-    @Test func aDevicePairedWithAHeadlessHostDrivesASessionOverRemote() async throws {
+    /// Terminals are offered only where the host finds zmx.
+    @Test(arguments: [true, false])
+    func aDevicePairedWithAHeadlessHostDrivesASessionOverRemote(hasZmx: Bool) async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remote-\(UUID().uuidString)")
         let dataDirectory = root.appendingPathComponent("data")
         let repo = root.appendingPathComponent("repo")
@@ -47,7 +49,12 @@ struct AlasHostExecutableTests {
         config.agents.registry = [agent]
         let configFile = dataDirectory.appendingPathComponent("app.json")
         try PersistenceStore().write(config, to: configFile)
-        let host = try AlasHostProcess(dataDirectory: dataDirectory)
+        // A stub is enough: the hello only needs zmx found, and no shell opens.
+        let zmx = root.appendingPathComponent(hasZmx ? "zmx" : "missing-zmx")
+        if hasZmx {
+            #expect(FileManager.default.createFile(atPath: zmx.path, contents: Data("#!/bin/sh\n".utf8), attributes: [.posixPermissions: 0o755]))
+        }
+        let host = try AlasHostProcess(dataDirectory: dataDirectory, environment: ["ALAS_ZMX_BINARY": zmx.path])
         _ = try await host.socketPath()
         try await eventually { [host] in host.output.contains("remote ") || !host.process.isRunning }
         let line = try #require(host.output.split(separator: "\n").first { $0.hasPrefix("remote ") }, "\(host.errorOutput)")
@@ -76,12 +83,14 @@ struct AlasHostExecutableTests {
         func send(_ message: RemoteClientMessage) async throws {
             try await socket.send(.string(String(decoding: try JSONEncoder().encode(message), as: UTF8.self)))
         }
-        guard case .hello(let version, let serverId, _, _, _, _)? = try await receive() else {
+        guard case .hello(let version, let serverId, _, _, _, let capabilities)? = try await receive() else {
             Issue.record("expected hello")
             return
         }
         let saved = try #require(try PersistenceStore().readIfExists(AppConfig.self, from: configFile))
         #expect(serverId == saved.remote.serverId)
+        let consoleCapabilities = Set(PeerConsoleCapability.headlessHost)
+        #expect(capabilities.filter(consoleCapabilities.contains).sorted() == (hasZmx ? PeerConsoleCapability.headlessHost.sorted() : []))
         try await send(.helloAck(protocolVersion: version))
         var nextID = 0
         var events: [HostEvent] = []

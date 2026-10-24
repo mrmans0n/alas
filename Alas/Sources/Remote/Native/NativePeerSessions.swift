@@ -205,6 +205,7 @@ final class NativePeerSessions {
         self.consoles = consoles
         self.hosts = hosts
         consoles?.onListChanged = { [weak self] in self?.rebuildSnapshot() }
+        consoles?.onOpened = { [weak self] in self?.selectConsole(serverId: $0, consoleId: $1) }
         hosts?.onChange = { [weak self] in self?.rebuildSnapshot() }
     }
 

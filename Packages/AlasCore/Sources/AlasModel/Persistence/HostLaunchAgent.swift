@@ -40,7 +40,10 @@ public struct HostLaunchAgent: Equatable, Sendable {
             // that was deleted stops it rather than leaving launchd retrying.
             // `uninstall-agent` (`launchctl bootout`) is how it is stopped.
             "KeepAlive": ["PathState": [executable.path: true]],
-            "ProcessType": "Background",
+            // Standard, not Background: shells and agents started from paired
+            // Macs are work the user asked for, and zmx daemons inherit the
+            // job's throttling.
+            "ProcessType": "Standard",
             "StandardOutPath": logURL.path,
             "StandardErrorPath": logURL.path,
         ]

@@ -45,6 +45,15 @@ public final class AlasCoreContext {
     /// ones that never produced an archivable record.
     @ObservationIgnored @_spi(Testing) public internal(set) var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
 
+    /// Called before anything of a worktree being deleted stops. `alas-host`
+    /// closes its shells there, throwing to refuse the delete when it can't;
+    /// the app's own quiesce already closes its terminals, so it leaves this nil.
+    @ObservationIgnored @_spi(AppHost) public var willRemoveWorktree: (@MainActor (_ worktreeID: String) async throws -> Void)?
+    /// Whether `alas-host` has a shell open in any of these worktrees, which
+    /// keeps their project from being removed. The app's terminals don't
+    /// block removal, so it leaves this nil.
+    @ObservationIgnored @_spi(AppHost) public var hasHostConsoles: (@MainActor (_ worktreeIDs: Set<String>) -> Bool)?
+
     /// The on-device text model's files and state.
     @ObservationIgnored public let localTextModelStore: LocalTextModelStore
     /// The on-device text engine every local-text feature shares.
@@ -289,7 +298,7 @@ public final class AlasCoreContext {
     }
 
     /// Forgets project `id` and persists the list. Refuses (`projectBusy`)
-    /// while a session or run is live or starting in one of its worktrees; idle session
+    /// while a session, run or host terminal is live or starting in one of its worktrees; idle session
     /// managers of the worktrees no other project lists are disposed. A
     /// worktree it shadowed goes back to the project that lost it.
     public func removeProject(id: String) async throws {
@@ -306,6 +315,7 @@ public final class AlasCoreContext {
         }
             || processRuns.values.contains { $0.projectID == id || worktreeIDs.contains($0.worktreeID) }
             || pendingRunLaunches.keys.contains { worktreeIDs.contains($0.worktreeID) }
+            || hasHostConsoles?(worktreeIDs) == true
         guard !isLive else { throw HostError.projectBusy }
         // Saved before anything is forgotten, so a failed save changes nothing.
         try store.write(ProjectsFile(projects: projects.projects.filter { $0.id != id }), to: projectsFile)

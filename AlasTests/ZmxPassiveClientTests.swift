@@ -155,6 +155,16 @@ import Testing
         #expect(clock.now - start < .seconds(1))
     }
 
+    /// The installed zmx 0.8.1 ignores a v1-framed `Resize`, so a host must
+    /// size its shells in whichever wire the daemon answers the probe with.
+    @Test(arguments: [ZmxIPC.Wire.v1, .preFreeze])
+    func resizeSpeaksTheDaemonsWire(wire: ZmxIPC.Wire) throws {
+        let listener = try ZmxFakeDaemonListener(scripts: [.reply(zmxInfoReply(wire: wire)), .closeAfterReceiving(count: 16)])
+        defer { listener.tearDown() }
+        #expect(ZmxIPCSocket.resize(path: listener.path, rows: 40, columns: 100))
+        #expect(listener.receivedPerConnection.last == ZmxIPC.encode(.resize, ZmxIPC.sizePayload(rows: 40, cols: 100), wire: wire))
+    }
+
     // MARK: Pre-freeze migration
 
     @Test func migrationStopsOnlyPreFreezeDaemons() throws {
@@ -866,6 +876,31 @@ struct ZmxPassiveClientIntegrationTests {
         try await viewer.awaitSize("40 120", stage: "viewer reconnect")
         #expect(host.dimensionRequests == 2)
         viewer.close()
+    }
+
+    @Test func aHostShellOutlivesItsLauncherAndTakesAOneShotResize() async throws {
+        let binary = try #require(ZmxEnv.resolve().binaryURL)
+        let directory = URL(fileURLWithPath: try zmxShortTempDirectory(), isDirectory: true)
+        let client = ZmxClient(env: ZmxEnv(binaryURL: binary, zmxDir: directory))
+        let name = ZmxSessionName.hostShell(worktreeId: directory.path, consoleId: "c")
+        defer {
+            client.killSession(name: name)
+            try? FileManager.default.removeItem(at: directory)
+        }
+        let launch = try #require(HostShellLaunch.make(
+            zmx: client, sessionName: name, directory: directory,
+            shell: "/bin/bash", shellArguments: ["--noediting", "-i"],
+            baseEnvironment: ProcessInfo.processInfo.environment
+        ))
+        try await launch.run()
+
+        let path = try #require(client.socketPath(forSession: name))
+        #expect(ZmxIPCSocket.probe(path: path, timeout: .seconds(5)) != .unreachable)
+        #expect(ZmxIPCSocket.resize(path: path, rows: 40, columns: 100))
+        let viewer = try PassiveViewer(path: path)
+        defer { viewer.close() }
+        try await viewer.awaitSnapshot()
+        try await viewer.awaitSize("40 100", stage: "one-shot resize")
     }
 }
 

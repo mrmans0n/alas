@@ -171,6 +171,24 @@ Sessions opened from a Mac stay open for every client (laptop, phone, browser)
 and survive a host restart. The host keeps that list itself, separate from the
 app's tabs.
 
+## Terminals
+
+A Mac's peer view offers "New Terminal" on the host's worktrees. It opens a
+login shell in the worktree, with the same PATH the host gives agents. Shells
+run in zmx, so they survive host restarts. The app on the same profile doesn't
+list or kill them, and they reappear in the peer view once the host is back.
+Worktrees of SSH projects are refused.
+
+zmx ships in the cask's zip beside the host. Otherwise the host uses the one in
+`/Applications/Alas.app`; with neither, stderr says so and Macs offer no
+terminals here. Set `ALAS_ZMX_BINARY` to use another zmx; a path that isn't an
+executable turns terminals off.
+
+The launch agent can't show privacy prompts, so a shell in a protected folder
+(Desktop, Documents, Downloads, iCloud Drive, removable volumes) may fail to
+read it without asking. Keep worktrees outside those folders, or grant
+alas-host Full Disk Access in System Settings › Privacy & Security.
+
 ## Start at login
 
 ```bash
@@ -189,12 +207,11 @@ alas-host uninstall-agent
 stops it and removes it. Each profile has its own agent, so run these with the
 same `ALAS_APP_SUPPORT_DIR` you serve.
 
+Rerun `alas-host install-agent` after upgrading from a version before terminals,
+so the agent runs at standard priority.
+
 ## What it does not do yet
 
-- **Terminals.** Terminal tabs and peer consoles need the app; a Remote client
-  can't open them on a headless host. Support for a Mac's peer view comes later.
-- **Run scripts and worktree deletion from a Mac.** A Mac's peer view can't
-  control them yet.
 - **The `alas` CLI and its MCP tools.** They talk to the app, so agents
   running under a headless host can't use them to open reviews, answer review
   comments or start delegated sessions, and Remote clients can't reach those

@@ -110,6 +110,31 @@ enum PeerConsoleLayout {
         let size = (base * Float(scale) * 2).rounded(.down) / 2
         return max(minimumFitFontSize, size)
     }
+
+    /// The inverse of `extent`: the largest grid whose extent fits `pane`.
+    static func grid(fitting pane: CGSize, cell: CGSize) -> AlasGhostty.SurfaceView.GridSize {
+        AlasGhostty.SurfaceView.GridSize(
+            rows: max(1, Int((pane.height / cell.height).rounded(.down)) - 1),
+            columns: max(1, Int((pane.width / cell.width).rounded(.down)) - 1)
+        )
+    }
+
+    /// The grid to ask a resizing host for, within the host's limits, or nil
+    /// when that is what the host has or was last asked for.
+    static func hostGridRequest(
+        pane: CGSize?, cell: CGSize?, hostRows: Int?, hostColumns: Int?,
+        lastRequested: AlasGhostty.SurfaceView.GridSize?
+    ) -> AlasGhostty.SurfaceView.GridSize? {
+        guard let pane, let cell, let hostRows, let hostColumns else { return nil }
+        let fitted = grid(fitting: pane, cell: cell)
+        let limits = PeerConsoleHost.gridLimits
+        let grid = AlasGhostty.SurfaceView.GridSize(
+            rows: min(max(fitted.rows, limits.lowerBound), limits.upperBound),
+            columns: min(max(fitted.columns, limits.lowerBound), limits.upperBound)
+        )
+        guard grid != .init(rows: hostRows, columns: hostColumns), grid != lastRequested else { return nil }
+        return grid
+    }
 }
 
 /// Turns bytes the viewer's surface wrote into `input` requests.
@@ -325,6 +350,12 @@ final class PeerConsoleViewer {
     @ObservationIgnored private var batchTimerArmed = false
     @ObservationIgnored private var writeGate = PeerConsoleWriteGate()
     @ObservationIgnored private var fallbackToken = 0
+    /// Takes control once the first snapshot arrives: set for a console this
+    /// Mac just opened.
+    @ObservationIgnored private var takesControlWhenLive: Bool
+    /// The host resizes its console to this Mac's pane while it holds control.
+    @ObservationIgnored private let supportsResize: Bool
+    @ObservationIgnored private var requestedGrid: AlasGhostty.SurfaceView.GridSize?
     /// How long held bytes wait for the surface to reach the host grid.
     static let gridFallback: Duration = .seconds(2)
 
@@ -336,12 +367,16 @@ final class PeerConsoleViewer {
         title: String,
         scrollbackRows: Int,
         send: @escaping @MainActor (PeerConsoleRequest) -> Void,
-        makeSurface: MakeSurface
+        makeSurface: MakeSurface,
+        takesControlWhenLive: Bool = false,
+        supportsResize: Bool = false
     ) {
         self.serverId = serverId
         self.consoleId = consoleId
         self.title = title
         self.send = send
+        self.takesControlWhenLive = takesControlWhenLive
+        self.supportsResize = supportsResize
         do {
             let bridge = try PeerConsoleBridge { [weak self] data in
                 Task { @MainActor in self?.surfaceWrote(data) }
@@ -383,6 +418,10 @@ final class PeerConsoleViewer {
             relay.observeHostOutput(snapshot, isSnapshot: true)
             deliver(writeGate.snapshot(snapshot))
             phase = .live
+            if takesControlWhenLive {
+                takesControlWhenLive = false
+                takeControl()
+            }
         case .output(_, let sequence, let data):
             switch order.output(sequence: sequence) {
             case .write:
@@ -393,6 +432,7 @@ final class PeerConsoleViewer {
             }
         case .control(_, let control):
             apply(control)
+            requestHostGrid()
         case .geometry(_, let rows, let columns):
             self.rows = rows
             self.columns = columns
@@ -400,7 +440,7 @@ final class PeerConsoleViewer {
             gridChanged()
         case .detached(_, let reason):
             end(Self.message(for: reason), notifyHost: false)
-        case .inputAck, .list:
+        case .inputAck, .list, .opened, .openFailed:
             break
         }
     }
@@ -492,6 +532,7 @@ final class PeerConsoleViewer {
     }
 
     private func gridChanged() {
+        defer { requestHostGrid() }
         if let size = surface?.cellSize, size != cellSize { cellSize = size }
         // Pan the pane, not the scrollback, along an axis the grid overflows.
         if let surface, let extent = gridExtent, let pane {
@@ -500,6 +541,20 @@ final class PeerConsoleViewer {
         guard let rows, let columns, let grid = surface?.gridSize else { return }
         let fits = grid.rows >= rows && grid.columns >= columns
         if let data = writeGate.gridChanged(surfaceFits: fits) { writeToSurface(data) }
+    }
+
+    /// Asks a host that resizes for the grid that fills this pane, only
+    /// while controlling and not under Fit, which shows the host's grid
+    /// as it is and so must never feed back into it.
+    // ponytail: one request per pane change while dragging; debounce if hosts see bursts.
+    private func requestHostGrid() {
+        guard supportsResize, isControlling, !fitsToPane,
+              let grid = PeerConsoleLayout.hostGridRequest(
+                  pane: pane, cell: cellSize, hostRows: rows, hostColumns: columns, lastRequested: requestedGrid
+              )
+        else { return }
+        requestedGrid = grid
+        send(.resize(attachmentId: attachmentId, rows: grid.rows, columns: grid.columns))
     }
 
     /// A surface that stopped draining has lost bytes, so the stream cannot
@@ -524,6 +579,8 @@ final class PeerConsoleViewer {
     private func apply(_ control: PeerConsoleControl) {
         self.control = control
         surface?.setReadOnly(control.owner != .you)
+        // Someone else may resize while this Mac doesn't hold control.
+        if control.owner != .you { requestedGrid = nil }
     }
 
     /// How long a lone ESC may wait for the rest of a sequence before it is
