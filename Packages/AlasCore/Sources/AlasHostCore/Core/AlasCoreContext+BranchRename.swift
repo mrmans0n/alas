@@ -1,8 +1,11 @@
 import Foundation
+import os
 import AlasFeatures
 import AlasModel
 import AlasPlatform
 import AlasIntegrations
+
+private let renameLogger = Logger(subsystem: "io.nlopez.alas", category: "BranchRename")
 
 extension AlasCoreContext {
     /// The worktree has an operation in flight, such as a pending delete.
@@ -41,6 +44,7 @@ extension AlasCoreContext {
     /// an active Workspace checkout manages (it records the branch by name).
     /// Returns the branch name actually used.
     func renameListedWorktreeBranch(_ worktree: Worktree, to branch: String) async throws -> String {
+        try refuseIfStopping()
         guard let project = projects.projects.first(where: { $0.id == worktree.projectId }),
               !WorktreeCleanupScanner.isMainWorktree(worktree, of: project),
               !worktree.branch.isEmpty, !worktree.isDetached
@@ -53,7 +57,13 @@ extension AlasCoreContext {
             projects.removePendingAutoBranchName(projectId: worktree.projectId, worktreeId: worktree.id)
         }
         projects.applyHeadUpdates(projectId: worktree.projectId, branchByWorktreePath: [worktree.path: renamed])
-        try saveProjects()
+        // Git already renamed it: the list is right in memory, so a failed
+        // save does not fail the rename.
+        do {
+            try saveProjects()
+        } catch {
+            renameLogger.error("Could not save projects after renaming a branch: \(error.localizedDescription, privacy: .public)")
+        }
         return renamed
     }
 }

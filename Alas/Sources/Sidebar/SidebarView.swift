@@ -416,7 +416,7 @@ struct SidebarView: View {
             // The suggestion reads the branch's changes, which live on the host.
             RenameBranchDialog(
                 branch: rename.worktree.snapshot.worktree.branch,
-                subtitle: "\(rename.worktree.snapshot.worktree.path.path) on \(rename.peerName)",
+                subtitle: "\((RemotePath.realPath(rename.worktree.snapshot.worktree.path.path) as NSString).abbreviatingWithTildeInPath) on \(rename.peerName)",
                 suggest: nil,
                 rename: { branch in
                     guard let hosts = state.nativePeerSessions?.hosts else { return FederatedSessionsProvider.peerUnavailableMessage }

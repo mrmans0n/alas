@@ -163,7 +163,7 @@ final class NativePeerHosts {
         guard canRenameBranch(worktree, serverId: serverId), let channel = channels[serverId] else {
             return FederatedSessionsProvider.peerUnavailableMessage
         }
-        switch await channel.request(.renameBranch(worktree: Self.ref(worktree), to: branch)) {
+        switch await channel.request(.renameBranch(worktree: Self.ref(worktree), from: worktree.snapshot.worktree.branch, to: branch)) {
         case .done: return nil
         case .failure(let error): return PeerWorktreeRemoval.message(for: error)
         default: return "The host sent an unexpected reply."

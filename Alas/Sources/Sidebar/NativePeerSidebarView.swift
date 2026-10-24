@@ -212,9 +212,10 @@ struct NativePeerSidebarView: View {
                 if let worktreeId { consoles.openTerminal(serverId: peer.serverId, worktreeId: worktreeId) }
             }
             .disabled(worktreeId == nil)
-            Divider()
+            // Everything below needs the summary, which a host record implies.
+            if worktree.worktree != nil { Divider() }
         }
-        // Paths on the host Mac, copied as the host lists them.
+        // Paths on the host Mac, copied as their real paths.
         if let summary = worktree.worktree {
             Button("Copy Path") { Clipboard.copyPath(summary.path) }
             // Folder-project rows have no branch.

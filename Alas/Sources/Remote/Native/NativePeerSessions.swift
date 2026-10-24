@@ -674,10 +674,19 @@ final class NativePeerSessions {
     /// The conversation as the local Copy and Save Session as Markdown write it.
     func transcriptMarkdown(of sessionId: String, title: String, agentName: String?) -> String? {
         guard canExportTranscript(of: sessionId), let transcript else { return nil }
+        let userNotice = RemoteWireMessage.oversizedNotice(kind: "user")
+        let agentNotice = RemoteWireMessage.oversizedNotice(kind: "agent")
         let messages = transcript.messages.compactMap { message -> ACPMessage? in
+            let text = message.text ?? ""
             switch message.kind {
-            case "user": return ACPMessage.user(id: UUID(), messageId: nil, text: message.text ?? "", attachments: [])
-            case "agent": return ACPMessage.agent(id: UUID(), messageId: nil, StreamingText(message.text ?? ""))
+            case "user": return ACPMessage.user(id: UUID(), messageId: nil, text: text, attachments: [])
+            case "agent": return ACPMessage.agent(id: UUID(), messageId: nil, StreamingText(text))
+            // A turn too large to forward keeps its place, with the notice
+            // that replaced it as its body.
+            case "systemNotice" where text == userNotice:
+                return ACPMessage.user(id: UUID(), messageId: nil, text: text, attachments: [])
+            case "systemNotice" where text == agentNotice:
+                return ACPMessage.agent(id: UUID(), messageId: nil, StreamingText(text))
             default: return nil
             }
         }

@@ -35,6 +35,11 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         return count
     }
 
+    /// The notice a row of `kind` too large to send is replaced with.
+    public static func oversizedNotice(kind: String) -> String {
+        "This \(kind) content is too large for remote display. The full content is available on the owning Mac."
+    }
+
     /// The budget must fit the row's identity and a short omission notice.
     /// Returning the count lets callers batch rows without rescanning the body.
     public func boundedForTransport(maximumBytes: Int) -> (message: RemoteWireMessage, byteCount: Int) {
@@ -44,7 +49,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         let notice = RemoteWireMessage(
             stableId: stableId,
             kind: "systemNotice",
-            text: "This \(kind) content is too large for remote display. The full content is available on the owning Mac.",
+            text: Self.oversizedNotice(kind: kind),
             json: nil,
             index: index
         )
