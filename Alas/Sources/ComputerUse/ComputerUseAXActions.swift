@@ -61,6 +61,54 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// Refuses a chord that may edit text while a secure field reads as focused: the app's focused
+    /// element, or one inside the window. In a web page a field can read as focused while the
+    /// keyboard stays in the address bar, which the app reports as its focused element. A read of
+    /// the window cut short checks what it reached; the app-level check still runs either way.
+    static func refuseSecureFocus(
+        _ chord: ComputerUseKeyChord, in window: ComputerUseWindow, isCancelled: @escaping IsCancelled
+    ) async throws {
+        guard chord.mayEditText else { return }
+        let app = window.app
+        var focused = try await onQueue(isCancelled) { () -> [ComputerUseSecureFocus.Element] in
+            guard let element = focusedElement(of: app) else { return [] }
+            return [ComputerUseSecureFocus.Element(
+                role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute))]
+        }
+        if let tree = try? await ComputerUseAXReader.read(
+            window, maxDepth: secureFocusDepth, nodeBudget: secureFocusNodes, timeLimit: secureFocusTime) {
+            func collect(_ node: ComputerUseAXNode) {
+                if node.isFocused { focused.append(.init(role: node.role, subrole: node.subrole)) }
+                node.children.forEach(collect)
+            }
+            collect(tree.root)
+        }
+        try Task.checkCancellation()
+        if isCancelled() { throw CancellationError() }
+        if ComputerUseSecureFocus.refuses(chord, focused: focused) { throw secureRefusal }
+    }
+
+    static let secureFocusDepth = 32
+    static let secureFocusNodes = 3000
+    static let secureFocusTime: Duration = .milliseconds(500)
+
+    /// For a left click by ref on a field: puts the keyboard in it, as a click would, where an AX
+    /// press may only mark it focused inside a web page. False, touching nothing, when the element
+    /// takes no text. A secure field may be clicked; only typing into one is refused.
+    static func focusTextEntry(
+        _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
+    ) async throws -> Bool {
+        try await onQueue(interrupt: interrupt) {
+            let element = try resolve(handles, handle)
+            let identity = ComputerUseSecureFocus.Element(
+                role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute))
+            guard ComputerUseSecureFocus.isTextEntry(identity) else { return false }
+            // Confirmed by the caller through the app's focused element, so the result says nothing.
+            AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            return true
+        }
+    }
+
     /// Focuses the element before typing into it. Refuses secure text fields.
     static func focus(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled

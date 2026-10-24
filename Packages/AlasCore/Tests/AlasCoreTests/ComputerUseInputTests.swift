@@ -37,6 +37,27 @@ struct ComputerUseInputTests {
         #expect(try #require(Chord.parse(text)).mayEditText == edits)
     }
 
+    /// A web field can read as focused in its page while the app's focused element is the
+    /// address bar: a chord that may edit text is refused when any focused element is secure.
+    @Test(arguments: [("ctrl+y", true), ("cmd+delete", true), ("shift+cmd+v", true), ("tab", false), ("return", false)])
+    func editingChordsAreRefusedWhenAnyFocusedElementIsSecure(keys: String, refused: Bool) throws {
+        let chord = try #require(Chord.parse(keys))
+        let addressBar = ComputerUseSecureFocus.Element(role: "AXTextField")
+        let password = ComputerUseSecureFocus.Element(role: "AXTextField", subrole: "AXSecureTextField")
+        #expect(ComputerUseSecureFocus.refuses(chord, focused: [addressBar, password]) == refused)
+        #expect(!ComputerUseSecureFocus.refuses(chord, focused: [addressBar]))
+    }
+
+    @Test(arguments: [
+        (ComputerUseSecureFocus.Element(role: "AXTextField"), true),
+        (.init(role: "AXTextArea"), true), (.init(role: "AXComboBox"), true), (.init(role: "AXSearchField"), true),
+        (.init(role: "AXSecureTextField"), true), (.init(role: "AXTextField", subrole: "AXSecureTextField"), true),
+        (.init(role: "AXButton"), false), (.init(role: "AXStaticText"), false), (.init(role: nil), false),
+    ])
+    func textEntryElementsAreRecognized(element: ComputerUseSecureFocus.Element, isTextEntry: Bool) {
+        #expect(ComputerUseSecureFocus.isTextEntry(element) == isTextEntry)
+    }
+
     @Test func pointsMapThroughTheScreenshotFrameAndAreBoundedByTheCurrentFrame() {
         let frame = CGRect(x: 100, y: 50, width: 800, height: 600)
         let pixel = CGPoint(x: 200, y: 100)

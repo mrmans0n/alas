@@ -415,6 +415,9 @@ extension LiveComputerUseSystem {
         if case .key(let chord) = input, ComputerUseMenuShortcut.isQuit(chord) {
             throw ComputerUseSystemError.actionFailed(ComputerUseCoordinator.Message.noQuitting)
         }
+        if case .key(let chord) = input {
+            try await ComputerUseAXActions.refuseSecureFocus(chord, in: window, isCancelled: isCancelled)
+        }
         // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing the
         // button needs no key window, so nothing is keyed or activated for it, also when direct.
         if case .key(let chord) = input,
@@ -443,6 +446,12 @@ extension LiveComputerUseSystem {
                 // A right click at its centre may still land.
             }
         case .click(.element(let handles, let handle), .left, let count) where count <= 2:
+            if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
+                // A web field may only read as focused in its page: unless the app's focus moved,
+                // the click goes as events at the field, as a user's would.
+                if try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) { return .ax }
+                break
+            }
             if count == 1 {
                 do {
                     try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
