@@ -237,8 +237,8 @@ public final class HeadlessHostEnvironment: AlasHostEnvironment {
         modelCatalog = ACPAgentModelCatalog()
     }
 
-    /// The launcher a host installs to run scripts in its consoles. Weak:
-    /// the consoles hold the core, which holds this environment.
+    /// The launcher a host installs to run scripts in its consoles. Weak, so
+    /// the environment doesn't own the launcher's lifetime.
     @_spi(AppHost) public weak var runLauncherOverride: (any RunLauncher)?
 
     public var runLauncher: any RunLauncher { runLauncherOverride ?? HeadlessRunLauncher.shared }

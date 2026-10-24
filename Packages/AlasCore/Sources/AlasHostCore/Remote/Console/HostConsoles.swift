@@ -55,9 +55,11 @@ public final class HostConsoles {
     private let applySize: @Sendable (_ socketPath: String, _ rows: Int, _ columns: Int) -> Bool
     private let baseEnvironment: @Sendable () -> [String: String]
     private let shell: String
+    private let pruneInterval: Duration
     private var entries: [HostConsoleEntry] = []
     private var pendingSizes: [String: (rows: Int, columns: Int)] = [:]
     private var resizing: Set<String> = []
+    private var runWatcher: Task<Void, Never>?
 
     public init(
         core: AlasCoreContext,
@@ -67,7 +69,8 @@ public final class HostConsoles {
         launch: @escaping @Sendable (HostShellLaunch) async throws -> Void = { try await $0.run() },
         applySize: @escaping @Sendable (_ socketPath: String, _ rows: Int, _ columns: Int) -> Bool = ZmxIPCSocket.resize,
         baseEnvironment: @escaping @Sendable () -> [String: String] = { ACPProcessEnvironment.baseEnvironment() },
-        shell: String = HostShellLaunch.loginShell()
+        shell: String = HostShellLaunch.loginShell(),
+        pruneInterval: Duration = .seconds(2)
     ) {
         self.core = core
         self.zmx = zmx
@@ -77,12 +80,33 @@ public final class HostConsoles {
         self.applySize = applySize
         self.baseEnvironment = baseEnvironment
         self.shell = shell
+        self.pruneInterval = pruneInterval
         // Loaded now, so the registry guards removals before `restore()`
         // has asked zmx which shells are still running.
         do {
             entries = try store.readIfExists(HostConsolesFile.self, from: fileURL)?.consoles ?? []
         } catch {
             consolesLogger.error("Could not read host consoles: \(String(describing: error), privacy: .public)")
+        }
+        watchRuns()
+    }
+
+    /// While a run's console is registered, checks for it ending now and
+    /// then: a run whose shell died without reporting would otherwise read
+    /// Running until a peer next lists consoles. Stops with the host.
+    private func watchRuns() {
+        guard runWatcher == nil, entries.contains(where: { $0.scriptKey != nil }) else { return }
+        let interval = pruneInterval
+        runWatcher = Task { [weak self] in
+            while true {
+                try? await Task.sleep(for: interval)
+                guard let self else { return }
+                if !core.isStopping { pruneExited() }
+                if core.isStopping || !entries.contains(where: { $0.scriptKey != nil }) {
+                    runWatcher = nil
+                    return
+                }
+            }
         }
     }
 
@@ -339,6 +363,9 @@ extension HostConsoles: RunLauncher {
         }
         let id = UUID().uuidString
         let name = ZmxSessionName.hostShell(worktreeId: worktreeId, consoleId: id)
+        var registered = false
+        // Unregistered, nothing else would remove the rc files.
+        defer { if !registered { StartupScriptInstaller.removeArtifacts(sessionId: id) } }
         let plan = try StartupScriptInstaller.plan(shell: shell, startupScript: request.command, sessionId: id)
         guard let shellLaunch = HostShellLaunch.make(
             zmx: zmx, sessionName: name, directory: worktree.path, shell: shell,
@@ -367,7 +394,9 @@ extension HostConsoles: RunLauncher {
             id: id, worktreeId: worktreeId, title: request.script.displayName, zmxName: name,
             rows: Self.launchRows, columns: Self.launchColumns, scriptKey: request.script.key
         ))
+        registered = true
         save()
+        watchRuns()
         return .hosted(sessionID: id)
     }
 
@@ -377,13 +406,22 @@ extension HostConsoles: RunLauncher {
     }
 
     public func endRunHost(scriptKey: String, worktreeID: String) {
-        let doomed = entries.filter { $0.scriptKey == scriptKey && $0.worktreeId == worktreeID }
-        Task { await stop(doomed) }
+        stopInBackground(entries.filter { $0.scriptKey == scriptKey && $0.worktreeId == worktreeID })
     }
 
     public func endRunHost(sessionID: String, worktreeID: String) {
-        let doomed = entries.filter { $0.id == sessionID && $0.worktreeId == worktreeID }
-        Task { await stop(doomed) }
+        stopInBackground(entries.filter { $0.id == sessionID && $0.worktreeId == worktreeID })
+    }
+
+    /// Kept in `stoppingRuns`, so a host shutting down waits for the kill.
+    private func stopInBackground(_ doomed: [HostConsoleEntry]) {
+        guard !doomed.isEmpty else { return }
+        let id = UUID()
+        let core = core
+        core.stoppingRuns[id] = Task { [weak self] in
+            _ = await self?.stop(doomed)
+            core.stoppingRuns[id] = nil
+        }
     }
 
     public func hostSessionExists(_ sessionID: String) -> Bool {

@@ -129,6 +129,8 @@ struct HostConsolesTests {
             await fixture.core.waitForStartingRunsForTesting()
             // Never started: the previous (no) record is put back.
             #expect(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key) == nil)
+            let launch = try #require(fixture.launches.first)
+            #expect(!fixture.rcFilesExist(of: launch))
         } else {
             await #expect(throws: expected) { try await consoles.open(worktreeId: fixture.worktree.id) }
         }
@@ -364,6 +366,8 @@ struct HostConsolesTests {
 
         #expect(fixture.killed == fixture.launches.map { $0.arguments[1] })
         #expect(consoles.summaries().isEmpty)
+        let launch = try #require(fixture.launches.first)
+        #expect(!fixture.rcFilesExist(of: launch))
         let core = fixture.core
         let worktreeID = fixture.worktree.id
         try await eventually {
@@ -440,6 +444,29 @@ struct HostConsolesTests {
 
         StartupScriptInstaller.removeArtifacts(sessionId: id)
         #expect(FileManager.default.fileExists(atPath: sibling.path))
+    }
+
+    /// With no peer listing consoles, a run whose console died without
+    /// reporting completion still settles.
+    @Test func aRunConsoleThatDiesUnwatchedSettlesItsRun() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles(pruneInterval: .milliseconds(20))
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+        let record = try #require(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key))
+        let sessionID = try #require(record.sessionID)
+        try FileManager.default.removeItem(atPath: #require(fixture.socketPath(of: sessionID)))
+
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.unknown) }
+        #expect(try fixture.savedFile()?.consoles.isEmpty == true)
     }
 
     /// A peer terminates a console whose run is still going: the run settles.
@@ -579,7 +606,7 @@ struct HostConsolesTests {
             )
         }
 
-        func consoles(zmx override: ZmxClient? = nil, shell: String = "/bin/zsh") -> HostConsoles {
+        func consoles(zmx override: ZmxClient? = nil, shell: String = "/bin/zsh", pruneInterval: Duration = .seconds(60)) -> HostConsoles {
             let fakes = fakes
             let zmx = override ?? zmx
             let projects = projects
@@ -621,7 +648,8 @@ struct HostConsolesTests {
                     }
                 },
                 baseEnvironment: { [:] },
-                shell: shell
+                shell: shell,
+                pruneInterval: pruneInterval
             )
         }
 
@@ -640,6 +668,10 @@ struct HostConsolesTests {
             let url = URL(fileURLWithPath: path)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try "\(exitCode)\t1.0\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+
+        func rcFilesExist(of launch: HostShellLaunch) -> Bool {
+            launch.environment["ZDOTDIR"].map { FileManager.default.fileExists(atPath: $0) } ?? false
         }
 
         func socketPath(of consoleId: String) -> String? {
