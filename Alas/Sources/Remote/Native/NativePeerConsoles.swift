@@ -1,6 +1,39 @@
 import Foundation
 import Observation
 
+/// Coalesces on-demand list requests per peer: one request in flight, and
+/// any asks that arrive meanwhile collapse into a single follow-up, so a
+/// burst of run events sends two lists at most.
+struct PeerConsoleListCoalescer {
+    private var inFlight: Set<String> = []
+    private var stale: Set<String> = []
+
+    /// Whether to send a list now. When false, the ask is replayed by `answered`.
+    mutating func shouldSend(_ serverId: String) -> Bool {
+        if inFlight.insert(serverId).inserted { return true }
+        stale.insert(serverId)
+        return false
+    }
+
+    /// The peer answered; whether to ask again because something changed since.
+    mutating func answered(_ serverId: String) -> Bool {
+        guard inFlight.remove(serverId) != nil, stale.remove(serverId) != nil else { return false }
+        inFlight.insert(serverId)
+        return true
+    }
+
+    /// Forgets `serverId`, or everything, so a lost reply can't wedge asks.
+    mutating func reset(_ serverId: String? = nil) {
+        guard let serverId else {
+            inFlight = []
+            stale = []
+            return
+        }
+        inFlight.remove(serverId)
+        stale.remove(serverId)
+    }
+}
+
 /// Paired Macs' consoles in the native peer UI, and the one being viewed.
 ///
 /// Console traffic goes straight to one peer by `serverId`; it never passes
@@ -35,6 +68,7 @@ final class NativePeerConsoles {
     @ObservationIgnored private var controlOnOpen: (serverId: String, consoleId: String)?
     @ObservationIgnored private var onlinePeers: Set<String> = []
     @ObservationIgnored private var listRefresh: Task<Void, Never>?
+    @ObservationIgnored private var coalescer = PeerConsoleListCoalescer()
 
     init(
         send: @escaping @MainActor (_ serverId: String, RemoteClientMessage) -> Void,
@@ -60,6 +94,7 @@ final class NativePeerConsoles {
             while !Task.isCancelled {
                 try? await Task.sleep(for: Self.listRefreshInterval)
                 guard let self else { return }
+                coalescer.reset() // a reply lost to a dropped link must not block asks
                 requestLists(for: onlinePeers)
             }
         }
@@ -72,11 +107,13 @@ final class NativePeerConsoles {
         consoles = [:]
         onlinePeers = []
         pendingOpens = [:]
+        coalescer.reset()
     }
 
     /// Reconciles with the peers whose links currently carry sessions.
     func peersChanged(online: Set<String>) {
         let added = online.subtracting(onlinePeers)
+        for gone in onlinePeers.subtracting(online) { coalescer.reset(gone) }
         onlinePeers = online
         consoles = consoles.filter { online.contains($0.key) }
         pendingOpens = pendingOpens.filter { online.contains($0.value) }
@@ -86,6 +123,7 @@ final class NativePeerConsoles {
 
     func receive(serverId: String, _ event: PeerConsoleEvent) {
         if case .list(let list) = event {
+            if coalescer.answered(serverId) { send(serverId, .console(.list)) }
             guard onlinePeers.contains(serverId), consoles[serverId] != list else { return }
             consoles[serverId] = list
             onListChanged?()
@@ -107,6 +145,15 @@ final class NativePeerConsoles {
         }
         guard let viewer, viewer.serverId == serverId, event.attachmentId == viewer.attachmentId else { return }
         viewer.receive(event)
+    }
+
+    /// Asks `serverId` for its console list now instead of at the next poll,
+    /// for when a run starts or ends and its console appears or goes. Bursts
+    /// are coalesced.
+    func refresh(serverId: String) {
+        guard onlinePeers.contains(serverId), supportsConsoles(serverId),
+              coalescer.shouldSend(serverId) else { return }
+        send(serverId, .console(.list))
     }
 
     func select(serverId: String, consoleId: String) {
