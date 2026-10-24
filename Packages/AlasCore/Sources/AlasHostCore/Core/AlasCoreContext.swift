@@ -396,12 +396,20 @@ public final class AlasCoreContext {
 
     /// `defaultSessionManager`, resuming after a usage limit, continuing
     /// interrupted sessions, and capturing Claude session hooks as `config`
-    /// says when each is decided.
+    /// says when each is decided. With `alasTools`, agents also get the
+    /// built-in `alas` MCP server and CLI env.
     public static func sessionManagerFactory(
         config: @escaping @MainActor () -> AppConfig,
-        onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil
+        onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil,
+        alasTools: HeadlessAlasTools? = nil
     ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
         { owner, worktree in
+            var projectContext: ACPSessionManager.MCPProjectContextProvider?
+            var builtInMCP: ACPSessionManager.BuiltInMCPProvider?
+            if let alasTools {
+                projectContext = { alasTools.projectContext(for: worktree) }
+                builtInMCP = { await alasTools.attachment($0, worktree: worktree) }
+            }
             let manager = ACPSessionManager(
                 worktreeId: worktree.id,
                 worktreePath: worktree.path.path,
@@ -409,9 +417,14 @@ public final class AlasCoreContext {
                 persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
                 continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions },
+                mcpProjectContextProvider: projectContext,
+                builtInMCPProvider: builtInMCP,
                 onChipsObserved: onChipsObserved
             )
             manager.sessionHooksProvider = { config().agents.sessionHooks(for: $0) }
+            if let alasTools {
+                manager.alasCLIEnvProvider = { await alasTools.environment(worktreePath: $0, sessionId: $1) }
+            }
             return manager
         }
     }

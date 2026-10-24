@@ -178,9 +178,16 @@ if executableWasReplaced() {
     exit(0)
 }
 
+// The `alas` CLI, for agents' MCP server and shells, installed beside `ao`.
+let cliBinDir = HostShellLaunch.cliBinary(executable: Bundle.main.executableURL)
+    .flatMap { try? TerminalCLIInjection.installExecutables(sourceBinary: $0) }
+if cliBinDir == nil {
+    FileHandle.standardError.write(Data("alas-host: alas CLI not found beside alas-host or in /Applications/Alas.app; agents get no alas tools here\n".utf8))
+}
+
 let host: AlasHost
 do {
-    host = try AlasHost.boot()
+    host = try AlasHost.boot(cliBinDir: cliBinDir)
 } catch {
     fail("cannot load \(Paths.appSupportRoot.path): \(error.localizedDescription)")
 }
