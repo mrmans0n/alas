@@ -76,12 +76,15 @@ struct AlasHostExecutableTests {
         func send(_ message: RemoteClientMessage) async throws {
             try await socket.send(.string(String(decoding: try JSONEncoder().encode(message), as: UTF8.self)))
         }
-        guard case .hello(let version, let serverId, _, _, _, _)? = try await receive() else {
+        guard case .hello(let version, let serverId, _, _, _, let capabilities)? = try await receive() else {
             Issue.record("expected hello")
             return
         }
         let saved = try #require(try PersistenceStore().readIfExists(AppConfig.self, from: configFile))
         #expect(serverId == saved.remote.serverId)
+        // Terminals are offered only where the host found zmx.
+        let servesShells = HostShellLaunch.zmxBinary(executable: AlasHostProcess.binary) != nil
+        #expect(Set(PeerConsoleCapability.headlessHost).isSubset(of: capabilities) == servesShells)
         try await send(.helloAck(protocolVersion: version))
         var nextID = 0
         var events: [HostEvent] = []

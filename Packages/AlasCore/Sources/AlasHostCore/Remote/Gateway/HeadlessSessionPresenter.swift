@@ -27,7 +27,8 @@ public final class HeadlessSessionPresenter: RemoteSessionPresenter {
     private var actionTails: [String: (token: UUID, done: Task<Void, Never>)] = [:]
 
     public let sessionListChanges: ChangeSignal<Void>? = ChangeSignal()
-    public var peerConsoleHost: PeerConsoleHost? { nil }
+    /// Set by `alas-host` when it serves shells.
+    public var peerConsoleHost: PeerConsoleHost?
 
     public init(core: AlasCoreContext, store: any PersistenceStoreProtocol = PersistenceStore(), fileURL: URL = Paths.hostOpenSessionsFile) {
         self.core = core

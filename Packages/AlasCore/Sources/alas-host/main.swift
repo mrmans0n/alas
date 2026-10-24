@@ -259,6 +259,12 @@ if let listen = config.hostRemoteListen {
     if webClient == nil {
         FileHandle.standardError.write(Data("alas-host: no web client found (set ALAS_REMOTE_WEB_DIR); serving pairing and the WebSocket only\n".utf8))
     }
+    // Shells for paired Macs run in zmx, found as the web client is.
+    let zmx = ZmxClient(env: .resolve(binaryURL: HostShellLaunch.zmxBinary(executable: Bundle.main.executableURL)))
+    if !zmx.isAvailable {
+        FileHandle.standardError.write(Data("alas-host: zmx not found beside alas-host or in /Applications/Alas.app; peers can't open terminals here\n".utf8))
+    }
+    let shells = HostConsoles(core: host.coreContext, zmx: zmx)
     let server = RemoteServer(
         pairing: pairing,
         assets: RemoteWebAssets(root: webClient ?? URL(fileURLWithPath: "/dev/null")),
@@ -276,8 +282,13 @@ if let listen = config.hostRemoteListen {
                 name: settings.resolvedDisplayName
             )
         },
-        // No terminals here, so a Mac does not offer them.
-        identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName, consoleCapabilities: []) },
+        // Terminals only with zmx, so a Mac offers none it can't open.
+        identity: {
+            RemoteServerIdentity(
+                serverId: settings.serverId, name: settings.resolvedDisplayName,
+                consoleCapabilities: shells.isAvailable ? PeerConsoleCapability.headlessHost : []
+            )
+        },
         signer: identityKey
     )
     localPeerIdentity = {
@@ -308,6 +319,7 @@ if let listen = config.hostRemoteListen {
         return RemotePairingLink.build(base: base, code: code, addresses: addresses)
     }
     let presenter = HeadlessSessionPresenter(core: host.coreContext)
+    presenter.peerConsoleHost = shells.makePeerConsoleHost()
     server.presenter = presenter
     openSessions = presenter
     // The port can change after the first: a listener that fails rebinds on
@@ -349,7 +361,9 @@ if let listen = config.hostRemoteListen {
     startRemote = {
         // A client's socket reads the open sessions from its first message,
         // and `restore()` replaces them once it finishes: serve only after.
+        // The same goes for the shells it lists.
         await presenter.restore()
+        await shells.restore()
         guard !isStopping else { return }
         do {
             try server.start(port: listen.port, loopbackOnly: listen.loopbackOnly)
@@ -380,6 +394,7 @@ func stop() {
     protocolServer.close()
     socket.stop()
     tailscaleServe?.stop()
+    openSessions?.peerConsoleHost?.shutdown()
     remote?.stop()
     keepAwake.update(enabled: false, serverRunning: false)
     Task { @MainActor in
