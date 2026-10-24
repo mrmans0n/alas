@@ -45,10 +45,10 @@ public final class AlasCoreContext {
     /// ones that never produced an archivable record.
     @ObservationIgnored @_spi(Testing) public internal(set) var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
 
-    /// Called before a worktree's checkout is deleted, after its sessions
-    /// stop. `alas-host` closes its shells there; the app's own quiesce
-    /// already closes its terminals, so it leaves this nil.
-    @ObservationIgnored @_spi(AppHost) public var willRemoveWorktree: (@MainActor (_ worktreeID: String) async -> Void)?
+    /// Called before anything of a worktree being deleted stops. `alas-host`
+    /// closes its shells there, throwing to refuse the delete when it can't;
+    /// the app's own quiesce already closes its terminals, so it leaves this nil.
+    @ObservationIgnored @_spi(AppHost) public var willRemoveWorktree: (@MainActor (_ worktreeID: String) async throws -> Void)?
     /// Whether `alas-host` has a shell open in any of these worktrees, which
     /// keeps their project from being removed. The app's terminals don't
     /// block removal, so it leaves this nil.

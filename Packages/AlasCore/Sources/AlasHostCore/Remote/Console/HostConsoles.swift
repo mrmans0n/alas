@@ -92,7 +92,7 @@ public final class HostConsoles {
         let consoles = HostConsoles(core: core, zmx: zmx, fileURL: fileURL)
         // A deleted worktree's shells would outlive it unlisted and unclosable;
         // forgetting their project would hide them the same way.
-        core.willRemoveWorktree = { await consoles.terminateConsoles(inWorktree: $0) }
+        core.willRemoveWorktree = { try await consoles.terminateConsoles(inWorktree: $0) }
         core.hasHostConsoles = { consoles.hasConsoles(inWorktrees: $0) }
         return consoles
     }
@@ -255,16 +255,30 @@ public final class HostConsoles {
         save()
     }
 
-    /// Kills and forgets every shell in a worktree that is being deleted,
-    /// returning once zmx has been told, so none outlives its checkout
-    /// unlisted. Archive keeps the checkout and its shells.
-    public func terminateConsoles(inWorktree worktreeID: String) async {
-        let names = entries.filter { $0.worktreeId == worktreeID }.map(\.zmxName)
-        guard !names.isEmpty else { return }
-        entries.removeAll { $0.worktreeId == worktreeID }
-        save()
+    /// Some shells could not be stopped; they stay in the registry.
+    public struct StopFailed: Error, Equatable {}
+
+    /// Kills and forgets every shell in a worktree that is being deleted, so
+    /// none outlives its checkout unlisted. A shell zmx can't stop (zmx is
+    /// missing, or the kill failed while its socket remains) is kept, and the
+    /// call throws `StopFailed`. Archive keeps the checkout and its shells.
+    public func terminateConsoles(inWorktree worktreeID: String) async throws {
+        let doomed = entries.filter { $0.worktreeId == worktreeID }
+        guard !doomed.isEmpty else { return }
+        // Without zmx a kill reports success without running.
+        guard zmx.isAvailable else { throw StopFailed() }
         let zmx = zmx
-        await BlockingWork.run { names.forEach { zmx.killSession(name: $0) } }
+        let stopped = await BlockingWork.run {
+            Set(doomed.filter { entry in
+                zmx.killSessionResult(name: entry.zmxName)
+                    || zmx.socketPath(forSession: entry.zmxName).map { !FileManager.default.fileExists(atPath: $0) } == true
+            }.map(\.id))
+        }
+        if !stopped.isEmpty {
+            entries.removeAll { stopped.contains($0.id) }
+            save()
+        }
+        guard stopped.count == doomed.count else { throw StopFailed() }
     }
 
     public func makePeerConsoleHost() -> PeerConsoleHost {

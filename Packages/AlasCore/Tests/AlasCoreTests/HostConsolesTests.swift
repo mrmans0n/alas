@@ -237,23 +237,32 @@ struct HostConsolesTests {
         try await eventually { fakes.withLock { $0.killed } == [zmxName] }
     }
 
-    @Test func deletingAWorktreeClosesItsShells() async throws {
+    /// Deleting a worktree closes its shells first; one zmx can't stop
+    /// (here, zmx is missing) refuses the delete and leaves everything as it was.
+    @Test(arguments: [true, false])
+    func deletingAWorktreeClosesItsShells(zmxFound: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let repo = fixture.root.appendingPathComponent("repo")
         try GitTemplate.repository(at: repo)
         try Self.git(["worktree", "add", "-q", "-b", "feature", fixture.worktree.path.path], in: repo)
-        let consoles = fixture.consoles()
-        fixture.core.willRemoveWorktree = { await consoles.terminateConsoles(inWorktree: $0) }
-        _ = try await consoles.open(worktreeId: fixture.worktree.id)
+        let id = try await fixture.consoles().open(worktreeId: fixture.worktree.id)
         let zmxName = try #require(fixture.launches.first?.arguments[1])
+        let zmx = zmxFound ? fixture.zmx : ZmxClient(env: ZmxEnv(binaryURL: nil, zmxDir: fixture.zmxDir))
+        _ = HostConsoles.install(on: fixture.core, zmx: zmx, fileURL: fixture.file)
 
         let result = await fixture.core.removeWorktree(WorktreeRemovalRequest(
             worktree: fixture.worktree, repoPath: repo, force: true, deleteBranchIfMerged: false
         ))
-        #expect(result == .removed)
-        #expect(fixture.killed == [zmxName])
-        #expect(try fixture.savedFile()?.consoles.isEmpty == true)
+        if zmxFound {
+            #expect(result == .removed)
+            #expect(fixture.killed == [zmxName])
+            #expect(try fixture.savedFile()?.consoles.isEmpty == true)
+        } else {
+            #expect(result == .failed("Close this worktree's terminals first; the host couldn't stop them."))
+            #expect(try fixture.savedFile()?.consoles.map(\.id) == [id])
+            #expect(FileManager.default.fileExists(atPath: fixture.worktree.path.path))
+        }
     }
 
     @Test func aProjectWithAnOpenShellIsNotForgotten() async throws {
