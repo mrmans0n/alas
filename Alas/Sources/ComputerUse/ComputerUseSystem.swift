@@ -727,7 +727,7 @@ extension LiveComputerUseSystem {
             }
         case .key(let chord):
             try await requireActiveWindow()
-            // A printable key, a delete, a control key or ⌘V can change the focused field's text, like typing does.
+            // A printable key, a delete, a control key or any ⌘V can change the focused field's text, like typing does.
             if chord.mayEditText {
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             }

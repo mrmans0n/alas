@@ -17,11 +17,12 @@ public struct ComputerUseKeyChord: Equatable, Sendable {
         self.key = key
     }
 
-    /// What can change the focused field's text: ⌘V; a delete or forward delete with any modifiers
+    /// What can change the focused field's text: ⌘V with any other modifiers (⌥⇧⌘V pastes
+    /// matching style); a delete or forward delete with any modifiers
     /// (⌘⌫ deletes to the line start); a control key, as Cocoa's ⌃Y yanks and ⌃K, ⌃H, ⌃D delete;
     /// a printable key or space without command. Option and shift+option type characters such as å.
     public var mayEditText: Bool {
-        if modifiers == [.command], key == .character("v") { return true }
+        if modifiers.contains(.command), key == .character("v") { return true }
         switch key {
         case .named(.delete), .named(.forwardDelete): return true
         case .character: return modifiers.contains(.control) || !modifiers.contains(.command)

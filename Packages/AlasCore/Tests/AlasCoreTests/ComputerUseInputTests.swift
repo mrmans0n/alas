@@ -30,8 +30,8 @@ struct ComputerUseInputTests {
     @Test(arguments: [
         ("a", true), ("shift+a", true), ("space", true), ("cmd+v", true), ("5", true),
         ("opt+e", true), ("shift+opt+a", true), ("delete", true), ("opt+delete", true), ("forwardDelete", true),
-        ("cmd+delete", true), ("ctrl+y", true), ("ctrl+k", true),
-        ("cmd+a", false), ("cmd+shift+v", false), ("return", false), ("tab", false), ("ctrl+tab", false),
+        ("cmd+delete", true), ("ctrl+y", true), ("ctrl+k", true), ("cmd+shift+v", true), ("cmd+opt+shift+v", true),
+        ("cmd+a", false), ("return", false), ("tab", false), ("ctrl+tab", false),
     ])
     private func chordsThatMayEditText(text: String, edits: Bool) throws {
         #expect(try #require(Chord.parse(text)).mayEditText == edits)
