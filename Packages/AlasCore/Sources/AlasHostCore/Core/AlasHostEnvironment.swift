@@ -105,6 +105,9 @@ public protocol AlasHostEnvironment: AnyObject {
     /// Whether script `scriptKey`'s run console is hidden in `worktreeID`;
     /// nil when no console of it is open.
     func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool?
+    /// Whether `alas notify` is relayed to the host's subscribers, such as
+    /// paired Macs, rather than shown as a banner here.
+    var relaysNotices: Bool { get }
 }
 
 extension AlasHostEnvironment {
@@ -200,6 +203,8 @@ extension AlasHostEnvironment {
 
     public func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { nil }
 
+    public var relaysNotices: Bool { false }
+
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
         await core.disposeSessionManager(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
@@ -259,6 +264,9 @@ public final class HeadlessHostEnvironment: AlasHostEnvironment {
     @_spi(AppHost) public weak var runLauncherOverride: (any RunLauncher)?
 
     public var runLauncher: any RunLauncher { runLauncherOverride ?? HeadlessRunLauncher.shared }
+
+    /// Nobody sees a banner on a host without a UI.
+    public var relaysNotices: Bool { true }
 
     public func configuration() -> AppConfig { config }
 

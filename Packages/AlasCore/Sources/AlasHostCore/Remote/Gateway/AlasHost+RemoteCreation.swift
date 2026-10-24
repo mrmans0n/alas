@@ -143,7 +143,7 @@ extension AlasHost {
     func remoteSessionSummary(id: String, in manager: ACPSessionManager, worktree: RemoteWorktreeSummary?) -> RemoteSessionSummary {
         let session = manager.liveSession(for: id)
         let row = manager.sessionRows.first { $0.id == id }
-        let streamingState = manager.runners[id]?.session.transcript.streamingState ?? session?.transcript.streamingState ?? .idle
+        let streamingState = core.reportedStreamingState(of: id, live: manager.runners[id]?.session.transcript.streamingState ?? session?.transcript.streamingState) ?? .idle
         return RemoteSessionSummary(
             id: id,
             title: session?.title ?? row?.title ?? "",

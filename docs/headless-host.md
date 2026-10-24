@@ -208,6 +208,12 @@ into the data directory's `bin/` at start. Otherwise the host uses the one in
 `alas` tools. Set `ALAS_CLI_BINARY` to use another CLI; a path that isn't an
 executable turns the tools off.
 
+`notify` shows no banner on the host. An agent's notice goes to the paired
+Macs connected to it, which show it as their own notification, and with
+`--needs-input` every Remote client lists the session as waiting for input
+until its next prompt. A host shell's `alas notify` comes from no session, so
+it reaches nobody.
+
 Agents reach the host through the socket in their environment. A host shell
 has none, so `alas` there finds the host by scanning for its socket, which
 works only on the standard profile, not on an `ALAS_APP_SUPPORT_DIR` one.

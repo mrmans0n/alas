@@ -752,6 +752,39 @@ struct HostSessionsTests {
         #expect(fixture.host.sessions.list().isEmpty)
     }
 
+    /// A headless host shows no banner of its own: it relays the notice to
+    /// its subscribers, and reports the session waiting until the user's next
+    /// prompt, not when the turn that sent it ends.
+    @Test func aNoticeOnAHeadlessHostReachesSubscribersAndHoldsTheSessionWaitingUntilItsNextPrompt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.core.harness.notifications.notificationAdder = { _ in Issue.record("no system banner on a host") }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        // Its agent runs, as one that sends a notice does.
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        let subscription = fixture.host.subscribe()
+        let received = Collected(subscription)
+        try fixture.host.attention.notify(
+            "Pick one", title: "Q", needsInput: true,
+            from: .worktree(fixture.worktree, sessionID: id, owner: .worktree(fixture.worktree.id)), caller: .session(id: id)
+        )
+        try await eventually {
+            await received.events.contains { if case .notice(let n) = $0 { n.sessionID == id && n.body == "Pick one" } else { false } }
+        }
+        #expect(HostEvent.notice(HostNotice(id: UUID(), owner: .worktree("w"), sessionID: id, agent: .codex, title: nil, body: "")).optInKind == "notice")
+        #expect(sessions.list().first { $0.id == id }?.streamingState == .awaitingInput)
+        #expect(await fixture.core.remoteSessionSummaries(tabIndex: { _, _ in nil }).first { $0.id == id }?.status
+            == RemoteSessionGateway.stateString(.awaitingInput))
+        // The turn that sent the notice ends: the session still waits.
+        fixture.core.sessionManagers.values.first?.liveSession(for: id)?.transcript.streamingState = .idle
+        #expect(sessions.list().first { $0.id == id }?.streamingState == .awaitingInput)
+        try await sessions.send(id, prompt: "a", caller: .app)
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState != .awaitingInput }
+        // A shell's notify, with no session, is not relayed.
+        try fixture.host.attention.notify("hi", title: nil, needsInput: false, from: .worktree(fixture.worktree, sessionID: nil, owner: nil), caller: .cli)
+    }
+
     @MainActor
     private struct Fixture {
         let root: URL

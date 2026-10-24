@@ -134,6 +134,9 @@ public final class AlasCoreContext {
         didSet { if delegatedSessionParents != oldValue { environment.delegatedSessionParentsChanged() } }
     }
 
+    /// Ends a relayed notice's wait for input at its session's next prompt, by session id.
+    @ObservationIgnored var noticeAwaitingClears: [String: ChangeSubscription] = [:]
+
     /// Launches claimed and still starting, by run slot.
     @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]
     /// Set once `AlasHost.shutdown()` begins: nothing new starts after it,

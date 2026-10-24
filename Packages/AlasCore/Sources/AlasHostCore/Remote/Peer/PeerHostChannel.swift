@@ -52,7 +52,7 @@ public final class PeerHostChannel {
             case .runRemoved(let id):
                 runs.removeAll { $0.id == id }
             case .sessionChanged, .sessionRemoved, .transcript, .pendingRequest, .pendingRequestResolved,
-                 .sessionState, .resync:
+                 .sessionState, .notice, .resync:
                 break
             }
         }
@@ -74,6 +74,8 @@ public final class PeerHostChannel {
     public private(set) var isConnecting = false
     /// Called when `state` or `isSubscribed` changes.
     public var onChange: (@MainActor () -> Void)?
+    /// Called with each notice the peer relays.
+    public var onNotice: (@MainActor (HostNotice) -> Void)?
 
     private let timeout: Duration
     private let send: @MainActor (HostClientMessage) -> Void
@@ -103,7 +105,8 @@ public final class PeerHostChannel {
         state = State(snapshot)
         onChange?()
         subscribeID = nextID
-        _ = await request(.subscribe(after: snapshot.cursor)) // `finish` sets isSubscribed on .subscribed
+        // Channels exist only for `host.events.v1` peers, which serve it.
+        _ = await request(.subscribeAccepting(after: snapshot.cursor, events: ["notice"])) // `finish` sets isSubscribed on .subscribed
     }
 
     /// Sends `request` and waits for its answer, or fails with
@@ -131,6 +134,7 @@ public final class PeerHostChannel {
             finish(id, with: result)
         case .events(let events, _):
             guard isSubscribed, var next = state else { return }
+            for case .notice(let notice) in events { onNotice?(notice) }
             if events.contains(.resync) {
                 isSubscribed = false
                 onChange?()

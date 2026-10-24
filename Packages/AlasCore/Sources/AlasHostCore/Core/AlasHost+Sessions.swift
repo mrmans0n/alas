@@ -104,7 +104,7 @@ extension SessionsAPI {
             }
         }
         guard let row = manager.sessionRows.first(where: { $0.id == session.id }) else { throw SessionRefusal.notFound }
-        return Self.summary(of: row, in: manager, parent: core.delegatedSessionParents[row.id])
+        return Self.summary(of: row, in: manager, core: core)
     }
 
     /// Why a session for `agentID` cannot start in `worktree` now, as

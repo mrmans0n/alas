@@ -5,10 +5,11 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasSessions
 
 extension AlasHost {
     /// Notices that ask for the user, as an agent sends them with `alas notify`.
-    public var attention: AttentionAPI { AttentionAPI(core: core) }
+    public var attention: AttentionAPI { AttentionAPI(core: core, changed: { [weak self] in self?.noteAttention($0) }) }
 }
 
 /// Where a notice comes from, which is what clicking it opens.
@@ -27,19 +28,26 @@ public enum AttentionRefusal: Error, Equatable, Sendable {
 @MainActor
 public struct AttentionAPI {
     let core: AlasCoreContext
+    /// Publishes events about attention, such as a relayed notice.
+    var changed: @MainActor ([HostEvent]) -> Void = { _ in }
 
     /// Shows `body` as a notification from `source`. With `needsInput`, the
-    /// sending session is also marked as waiting for its user.
+    /// sending session is also marked as waiting for its user. A host that
+    /// relays notices hands a session's notice to its subscribers instead,
+    /// and only logs one sent with no session.
     public func notify(_ body: String, title: String?, needsInput: Bool, from source: NoticeSource, caller: HostCaller) throws {
         let harness = core.harness
         let sessionID: String?
         let owner: SessionOwnerID?
+        let noticeOwner: SessionOwnerID
         switch source {
         case .worktree(let worktree, let session, let worktreeOwner):
             caller.log("attention.notify", worktree.id)
             guard let resolved = core.projectAndWorktree(withWorktreeId: worktree.id) else { throw AttentionRefusal.unknownWorktree }
             sessionID = session
             owner = worktreeOwner
+            noticeOwner = worktreeOwner ?? .worktree(worktree.id)
+            guard !core.environment.relaysNotices else { break }
             harness.notifications.notifyAlas(
                 body: body, title: title, agent: agent(of: session),
                 projectId: resolved.project.id, worktreeId: resolved.worktree.id,
@@ -49,13 +57,29 @@ public struct AttentionAPI {
             caller.log("attention.notify", session)
             sessionID = session
             owner = checkoutOwner
+            noticeOwner = checkoutOwner
+            guard !core.environment.relaysNotices else { break }
             harness.notifications.notifyAlas(body: body, title: title, agent: agent(of: session), sessionId: session, owner: checkoutOwner)
         }
-        if needsInput, let sessionID {
+        guard let sessionID else { return }
+        if needsInput {
             harness.setExternalActivity(
                 sessionId: sessionID, owner: owner, agent: agent(of: sessionID), state: .awaitingInput, body: body, requiresUserInput: true
             )
         }
+        guard core.environment.relaysNotices else { return }
+        if needsInput, let session = core.sessionManagers.values.lazy.compactMap({ $0.liveSession(for: sessionID) }).first {
+            // Cleared by the user's next prompt, which every turn starts
+            // with, rather than by any change: the agent usually asks
+            // mid-turn, and the end of that turn is no answer.
+            // ponytail: a notice for a session with no live agent is never cleared; it can't happen from MCP, which needs one
+            core.noticeAwaitingClears[sessionID] = session.transcript.$streamingState.signal.observe { [weak core] state in
+                guard state == .sending, let core else { return }
+                core.harness.forgetSession(sessionID)
+                core.noticeAwaitingClears[sessionID] = nil
+            }
+        }
+        changed([.notice(HostNotice(id: UUID(), owner: noticeOwner, sessionID: sessionID, agent: agent(of: sessionID), title: title, body: body))])
     }
 
     /// The agent behind session `sessionID`, as its hooks or its ACP session
@@ -69,5 +93,17 @@ public struct AttentionAPI {
             if let session = manager.liveSession(for: sessionID) { return AgentKind(acpAgentID: session.agentId) }
         }
         return .codex
+    }
+}
+
+extension AlasCoreContext {
+    /// A session's state as Remote clients see it: on a host that relays
+    /// notices, waiting for its user while a notice asks for input, unless
+    /// the agent waits on a permission answer.
+    func reportedStreamingState(of sessionID: String, live: ACPSession.StreamingState?) -> ACPSession.StreamingState? {
+        guard environment.relaysNotices, let live, live != .awaitingPermission,
+              let activity = harness.activityBySession[sessionID], activity.state == .awaitingInput, activity.requiresUserInput
+        else { return live }
+        return .awaitingInput
     }
 }
