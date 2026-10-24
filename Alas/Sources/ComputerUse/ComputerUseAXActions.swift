@@ -204,6 +204,34 @@ enum ComputerUseAXActions {
 
     static let hiddenRefusal = ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.")
 
+    /// The element at a point as `ComputerUseInputGeometry.pointRoute` weighs it: retained in
+    /// `handles` (handle 0), so an AX action can go to it like to an inspected one.
+    struct PointElement: Sendable {
+        var hit: ComputerUseInputGeometry.PointHit
+        var handles: ComputerUseAXHandles
+    }
+
+    /// The element at `point`, global points, as the app hit-tests its own windows and as the
+    /// system-wide hit test finds it, each nil when there is none or it can't be read.
+    static func elements(
+        at point: CGPoint, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
+    ) async throws -> (app: PointElement?, system: PointElement?) {
+        try await onQueue(isCancelled) {
+            func hit(_ root: AXUIElement) -> PointElement? {
+                AXUIElementSetMessagingTimeout(root, ComputerUseAXReader.messagingTimeout)
+                var element: AXUIElement?
+                guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &element) == .success,
+                      let element
+                else { return nil }
+                AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+                var pid: pid_t = 0
+                guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+                return PointElement(hit: .init(pid: pid, frame: frame(of: element)), handles: ComputerUseAXHandles([element]))
+            }
+            return (hit(ComputerUseAXReader.application(app.pid)), hit(AXUIElementCreateSystemWide()))
+        }
+    }
+
     /// `window` and the element's nearest scroll area: what pointer input at it must land inside.
     private static func clips(of element: AXUIElement, within window: CGRect) -> [CGRect] {
         var clips = [window]
@@ -581,6 +609,11 @@ extension ComputerUseAXActions {
             if let subrole = string(of: target, kAXSubroleAttribute), [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole) {
                 candidates.append(target)
             }
+            // A sheet another process draws in the window (a System Settings pane's) isn't among
+            // the window's own: it is found above the focused element, or the element at the
+            // window's centre, when another process owns that.
+            let remote = candidates.isEmpty ? remoteSheets(in: window, of: app, application: application) : []
+            candidates += remote
             func pressChecked(_ button: AXUIElement, title: String) throws {
                 switch interrupt() {
                 case .cancelled: throw CancellationError()
@@ -615,15 +648,51 @@ extension ComputerUseAXActions {
                 try pressChecked(button, title: title)
                 return title
             }
+            // A posted Escape can't reach a sheet another process draws either: saying it was
+            // delivered would be wrong. One of the app's own may still take the key itself.
+            if !remote.isEmpty { throw ComputerUseSystemError.actionFailed(noCancelButton) }
             return nil
         }
+    }
+
+    static let noCancelButton =
+        "This sheet or dialog has no Cancel button to press for Escape, and a posted key doesn't reach it. Click one of its buttons by ref (computer_inspect lists them)."
+
+    /// Levels above an element searched for the sheet holding it.
+    static let sheetAncestorLevels = 16
+
+    /// Sheets another process draws in `window`: the nearest sheet above the app's focused element
+    /// and above the element at the window's centre, for each that another process owns.
+    private static func remoteSheets(
+        in window: ComputerUseWindow, of app: ComputerUseAppIdentity, application: AXUIElement
+    ) -> [AXUIElement] {
+        var starts: [AXUIElement] = []
+        if let focused = elementAttribute(application, kAXFocusedUIElementAttribute) { starts.append(focused) }
+        var hit: AXUIElement?
+        let center = ComputerUseInputGeometry.center(of: window.frame)
+        if AXUIElementCopyElementAtPosition(application, Float(center.x), Float(center.y), &hit) == .success, let hit {
+            AXUIElementSetMessagingTimeout(hit, ComputerUseAXReader.messagingTimeout)
+            starts.append(hit)
+        }
+        var sheets: [AXUIElement] = []
+        for start in starts {
+            var pid: pid_t = 0
+            guard AXUIElementGetPid(start, &pid) == .success, pid != app.pid,
+                  let sheet = ancestor(of: start, levels: sheetAncestorLevels, where: {
+                      string(of: $0, kAXRoleAttribute) == kAXSheetRole
+                  }),
+                  !sheets.contains(where: { CFEqual($0, sheet) })
+            else { continue }
+            sheets.append(sheet)
+        }
+        return sheets
     }
 
     static let defaultButtonUnreadable =
         "This dialog's default button can't be pressed with a key here. Click the button by ref (computer_inspect lists the dialog's buttons)."
 
     /// Levels below a sheet or dialog searched for its cancel button by title, and how many elements.
-    static let cancelButtonSearchDepth = 4
+    static let cancelButtonSearchDepth = 8
     static let cancelButtonSearchNodes = 300
 
     /// The first enabled button within `cancelButtonSearchDepth` levels of `dialog`, breadth first,

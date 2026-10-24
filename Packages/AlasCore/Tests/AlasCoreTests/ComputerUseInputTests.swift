@@ -186,6 +186,31 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.isAppWindowLayer(layer) == listed)
     }
 
+    /// An x/y input goes as events unless another process draws what is at the point inside the
+    /// window (a System Settings pane); then as AX there. Another process's element outside the
+    /// window is refused, and the system's hit test only counts where the window is on top.
+    @Test(arguments: [
+        (Optional(Hit(pid: 10, frame: inner)), Optional(Hit(pid: 10, frame: inner)), true, Route.events),
+        (Hit(pid: 20, frame: inner), nil, false, .appHit),
+        (Hit(pid: 20, frame: nil), nil, false, .appHit),
+        (Hit(pid: 20, frame: outer), nil, true, .covered),
+        (Hit(pid: 10, frame: inner), Hit(pid: 20, frame: inner), true, .systemHit),
+        (Hit(pid: 10, frame: inner), Hit(pid: 20, frame: inner), false, .events),
+        (Hit(pid: 10, frame: inner), Hit(pid: 20, frame: outer), true, .covered),
+        (Hit(pid: 10, frame: inner), Hit(pid: 1, frame: inner), true, .events),
+        (nil, nil, true, .events),
+    ] as [(Hit?, Hit?, Bool, Route)])
+    func pointInputsReachContentAnotherProcessDraws(appHit: Hit?, systemHit: Hit?, targetOnTop: Bool, route: Route) {
+        #expect(ComputerUseInputGeometry.pointRoute(
+            targetPID: 10, hostPID: 1, window: CGRect(x: 0, y: 0, width: 800, height: 600),
+            appHit: appHit, systemHit: systemHit, targetOnTop: targetOnTop) == route)
+    }
+
+    typealias Hit = ComputerUseInputGeometry.PointHit
+    typealias Route = ComputerUseInputGeometry.PointRoute
+    private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)
+    private static let outer = CGRect(x: 700, y: 50, width: 400, height: 300)
+
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
         let windows = [
