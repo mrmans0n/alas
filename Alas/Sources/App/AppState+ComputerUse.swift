@@ -43,7 +43,8 @@ extension AppState {
             },
             cursor: cursor,
             // Only bounces the Dock icon while Alas isn't the active app.
-            attention: { _ = NSApp.requestUserAttention(.informationalRequest) }
+            attention: { _ = NSApp.requestUserAttention(.informationalRequest) },
+            appIsActive: { NSApp.isActive }
         )
         coordinator.transcript = { link.state?.session(for: $0)?.transcript }
         return coordinator

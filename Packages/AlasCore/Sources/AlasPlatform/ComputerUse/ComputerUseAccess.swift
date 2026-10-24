@@ -22,6 +22,19 @@ public enum ComputerUseAppAccess: Equatable, Sendable {
     case blocked, allowed(ComputerUseGrantScope), denied, needsApproval
 }
 
+/// When a pending approval card asks for the user's attention (the Dock icon bounces).
+public enum ComputerUseApprovalNudge {
+    public static let interval: TimeInterval = 10
+
+    /// For a new card and for a later call waiting on one still up: only while Alas isn't the
+    /// active app, and at most once per `interval` per card (`lastNudgeAt`, nil before the first).
+    public static func shouldNudge(lastNudgeAt: Date?, now: Date, appIsActive: Bool) -> Bool {
+        guard !appIsActive else { return false }
+        guard let lastNudgeAt else { return true }
+        return now.timeIntervalSince(lastNudgeAt) >= interval
+    }
+}
+
 public enum ComputerUseBlocklist {
     public static let bundleIDs: Set<String> = [
         "com.apple.keychainaccess",

@@ -40,21 +40,27 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
         apply(driver, approvals: approvals)
     }
 
+    /// Shown while an agent drives an app, and while an approval card waits: the card shows in
+    /// its own session, which may be out of sight.
     private func apply(_ driver: (String, String)?, approvals: [ComputerUsePendingApproval]) {
-        guard let (session, appName) = driver else {
+        guard driver != nil || !approvals.isEmpty else {
             if let item { NSStatusBar.system.removeStatusItem(item) }
             item = nil
             sessionID = nil
+            stopItem = nil
+            warningItem = nil
             return
         }
         let statusItem = item ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item = statusItem
-        sessionID = session
+        sessionID = driver?.0
         statusItem.button?.image = NSImage(systemSymbolName: "cursorarrow.rays", accessibilityDescription: "Computer use")
         let menu = NSMenu()
-        let header = NSMenuItem(title: label(session, appName), action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
+        if let (session, appName) = driver {
+            let header = NSMenuItem(title: label(session, appName), action: nil, keyEquivalent: "")
+            header.isEnabled = false
+            menu.addItem(header)
+        }
         // A card shows in its own session, which may be out of sight.
         for approval in approvals {
             let waiting = NSMenuItem(
@@ -63,6 +69,12 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
             waiting.target = self
             waiting.representedObject = approval.sessionID
             menu.addItem(waiting)
+        }
+        guard driver != nil else {
+            stopItem = nil
+            warningItem = nil
+            statusItem.menu = menu
+            return
         }
         let show = NSMenuItem(title: "Show Session", action: #selector(showSessionAction), keyEquivalent: "")
         show.target = self

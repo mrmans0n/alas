@@ -135,4 +135,19 @@ struct ComputerUseAccessTests {
         #expect(ComputerUseCredentialPrompt.listing(
             runningBundleIDs: running, hasUntitledWindow: untitled, probed: probed, secureFieldInSheet: secureFieldInSheet) == listing)
     }
+
+    /// A card nudges when it comes up and again for a later call, at most every 10 s, and never
+    /// while Alas is the active app.
+    @Test(arguments: [
+        (Optional<TimeInterval>.none, false, true),
+        (nil, true, false),
+        (9.9, false, false),
+        (10, false, true),
+        (60, true, false),
+    ])
+    func approvalCardsNudgeAtMostEveryTenSecondsWhileAlasIsInactive(sinceLast: TimeInterval?, active: Bool, nudges: Bool) {
+        let now = Date(timeIntervalSinceReferenceDate: 1000)
+        #expect(ComputerUseApprovalNudge.shouldNudge(
+            lastNudgeAt: sinceLast.map { now.addingTimeInterval(-$0) }, now: now, appIsActive: active) == nudges)
+    }
 }

@@ -71,7 +71,7 @@ struct ComputerUseCoordinatorTests {
         system: ComputerUseSystem = system(), approvalWait: Duration = .seconds(60),
         recorder: Recorder = Recorder(), allowed: [ComputerUseAppIdentity] = [],
         sleep: (@Sendable (Duration) async -> Void)? = nil, cursor: ComputerUseCursor = .none,
-        attention: @escaping @MainActor () -> Void = {}
+        attention: @escaping @MainActor () -> Void = {}, now: @escaping @MainActor () -> Date = { Date() }
     ) -> Fixture {
         let lockURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-computer-use-\(UUID().uuidString)/computer-use.lock")
@@ -87,7 +87,8 @@ struct ComputerUseCoordinatorTests {
             approvalWait: approvalWait,
             sleep: sleep ?? { recorder.recordSleep($0) },
             cursor: cursor,
-            attention: attention
+            attention: attention,
+            now: now
         )
         for app in allowed {
             access.record(.allowForSession, for: app, session: "s")
@@ -281,16 +282,22 @@ struct ComputerUseCoordinatorTests {
         #expect(f.coordinator.pendingApprovals.count == 1)
     }
 
-    /// Each new card asks for the user's attention once, however many calls wait on it.
-    @Test func eachApprovalCardAsksForAttentionOnce() async {
+    /// A new card asks for the user's attention, and so does a later call waiting on it once
+    /// 10 s passed; another card asks for its own.
+    @Test func approvalCardsAskForAttentionAgainForLaterCalls() async {
         var asked = 0
-        let f = Self.fixture(approvalWait: .milliseconds(200), attention: { asked += 1 })
+        var clock = Date(timeIntervalSinceReferenceDate: 1000)
+        let f = Self.fixture(approvalWait: .milliseconds(200), attention: { asked += 1 }, now: { clock })
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        clock += 5
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
         #expect(asked == 1)
+        clock += 5
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        #expect(asked == 2)
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 2), sessionID: "s")
         #expect(f.coordinator.pendingApprovals.count == 2)
-        #expect(asked == 2)
+        #expect(asked == 3)
     }
 
     @Test func staleApprovalExpiresAtTurnEnd() async throws {
