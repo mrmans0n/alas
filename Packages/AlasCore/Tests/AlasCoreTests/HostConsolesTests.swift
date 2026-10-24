@@ -410,6 +410,38 @@ struct HostConsolesTests {
         }
     }
 
+    @Test func aSecondStartWhileARunConsoleIsLiveIsRefused() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+        let live = consoles.summaries().map(\.consoleId)
+
+        #expect(fixture.core.startRun(script, in: fixture.worktree)
+            == .refused(title: "Run Script Failed", message: "Dev is already running."))
+        await fixture.core.waitForStartingRunsForTesting()
+        #expect(fixture.killed.isEmpty)
+        #expect(consoles.summaries().map(\.consoleId) == live)
+    }
+
+    /// Ids come from host-consoles.json; a malformed one must not reach
+    /// outside its own rc files.
+    @Test(arguments: ["", "..", "../rcfiles"])
+    func cleaningUpAMalformedIdKeepsOtherRcFiles(_ id: String) throws {
+        let sibling = Paths.appSupportRoot.appendingPathComponent("rcfiles/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sibling) }
+
+        StartupScriptInstaller.removeArtifacts(sessionId: id)
+        #expect(FileManager.default.fileExists(atPath: sibling.path))
+    }
+
     /// A peer terminates a console whose run is still going: the run settles.
     @Test func terminatingARunConsoleSettlesItsRun() async throws {
         let fixture = try Fixture()
