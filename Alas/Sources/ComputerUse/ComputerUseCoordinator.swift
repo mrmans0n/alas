@@ -52,6 +52,11 @@ final class ComputerUseCoordinator {
     /// Takeover polling, the post-action settle and wait polling; tests drive time through it.
     private let sleep: @Sendable (Duration) async -> Void
     private let cursor: ComputerUseCursor
+    /// Asks the user to look at Alas (the Dock icon bounces), once per new approval card: the card
+    /// shows in its session, which may be out of sight.
+    private let attention: @MainActor () -> Void
+    /// The cards `attention` was asked for, while they are up.
+    @ObservationIgnored private var announcedApprovals: Set<UUID> = []
     /// The session that last presented the cursor; its stop, turn end or session end dismisses it.
     @ObservationIgnored private var cursorSession: String?
 
@@ -150,7 +155,8 @@ final class ComputerUseCoordinator {
         lockURL: URL = ComputerUseDriverLock.defaultURL,
         approvalWait: Duration = .seconds(50),
         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-        cursor: ComputerUseCursor = .none
+        cursor: ComputerUseCursor = .none,
+        attention: @escaping @MainActor () -> Void = {}
     ) {
         self.system = system
         self.access = access
@@ -162,6 +168,7 @@ final class ComputerUseCoordinator {
         self.approvalWait = approvalWait
         self.sleep = sleep
         self.cursor = cursor
+        self.attention = attention
     }
 
     /// The approval card's reason line: one approval covers seeing and operating the app.
@@ -668,6 +675,9 @@ final class ComputerUseCoordinator {
         let before = Set(pendingApprovals.map(\.sessionID))
         let next = access.pending.map { ComputerUsePendingApproval(id: $0.id, sessionID: $0.session, app: $0.app) }
         if next != pendingApprovals { pendingApprovals = next }
+        let ids = Set(next.map(\.id))
+        for _ in ids.subtracting(announcedApprovals) { attention() }
+        announcedApprovals = ids
         let after = Set(next.map(\.sessionID))
         for sessionID in after.subtracting(before) {
             guard let transcript = transcript(sessionID),

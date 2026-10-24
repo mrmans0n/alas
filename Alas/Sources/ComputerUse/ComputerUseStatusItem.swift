@@ -32,15 +32,15 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
 
     /// Syncs now and re-arms observation on every change.
     func start() {
-        let driver = withObservationTracking {
-            coordinator.driver.map { ($0.sessionID, $0.app.name) }
+        let (driver, approvals) = withObservationTracking {
+            (coordinator.driver.map { ($0.sessionID, $0.app.name) }, coordinator.pendingApprovals)
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in self?.start() }
         }
-        apply(driver)
+        apply(driver, approvals: approvals)
     }
 
-    private func apply(_ driver: (String, String)?) {
+    private func apply(_ driver: (String, String)?, approvals: [ComputerUsePendingApproval]) {
         guard let (session, appName) = driver else {
             if let item { NSStatusBar.system.removeStatusItem(item) }
             item = nil
@@ -55,6 +55,15 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
         let header = NSMenuItem(title: label(session, appName), action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
+        // A card shows in its own session, which may be out of sight.
+        for approval in approvals {
+            let waiting = NSMenuItem(
+                title: "Waiting for approval: \(approval.app.name) — Show", action: #selector(showApprovalAction(_:)),
+                keyEquivalent: "")
+            waiting.target = self
+            waiting.representedObject = approval.sessionID
+            menu.addItem(waiting)
+        }
         let show = NSMenuItem(title: "Show Session", action: #selector(showSessionAction), keyEquivalent: "")
         show.target = self
         menu.addItem(show)
@@ -115,6 +124,13 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
             }
         }
         return (key, modifiers)
+    }
+
+    @objc private func showApprovalAction(_ sender: NSMenuItem) {
+        guard let sessionID = sender.representedObject as? String else { return }
+        // The card is in Alas's window, which may be behind the app the agent is using.
+        NSApp.activate()
+        showSession(sessionID)
     }
 
     @objc private func showSessionAction() {

@@ -70,7 +70,8 @@ struct ComputerUseCoordinatorTests {
     private static func fixture(
         system: ComputerUseSystem = system(), approvalWait: Duration = .seconds(60),
         recorder: Recorder = Recorder(), allowed: [ComputerUseAppIdentity] = [],
-        sleep: (@Sendable (Duration) async -> Void)? = nil, cursor: ComputerUseCursor = .none
+        sleep: (@Sendable (Duration) async -> Void)? = nil, cursor: ComputerUseCursor = .none,
+        attention: @escaping @MainActor () -> Void = {}
     ) -> Fixture {
         let lockURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-computer-use-\(UUID().uuidString)/computer-use.lock")
@@ -85,7 +86,8 @@ struct ComputerUseCoordinatorTests {
             lockURL: lockURL,
             approvalWait: approvalWait,
             sleep: sleep ?? { recorder.recordSleep($0) },
-            cursor: cursor
+            cursor: cursor,
+            attention: attention
         )
         for app in allowed {
             access.record(.allowForSession, for: app, session: "s")
@@ -177,6 +179,18 @@ struct ComputerUseCoordinatorTests {
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         #expect(response == .error("computer_approval_pending: Waiting for the user to approve Notes. Try again after they answer."))
         #expect(f.coordinator.pendingApprovals.count == 1)
+    }
+
+    /// Each new card asks for the user's attention once, however many calls wait on it.
+    @Test func eachApprovalCardAsksForAttentionOnce() async {
+        var asked = 0
+        let f = Self.fixture(approvalWait: .milliseconds(200), attention: { asked += 1 })
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        #expect(asked == 1)
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 2), sessionID: "s")
+        #expect(f.coordinator.pendingApprovals.count == 2)
+        #expect(asked == 2)
     }
 
     @Test func staleApprovalExpiresAtTurnEnd() async throws {

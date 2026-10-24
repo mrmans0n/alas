@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import Observation
@@ -40,7 +41,9 @@ extension AppState {
             interrupt: { sessionID in
                 try? await link.state?.host.sessions.stop(sessionID, caller: .app)
             },
-            cursor: cursor
+            cursor: cursor,
+            // Only bounces the Dock icon while Alas isn't the active app.
+            attention: { _ = NSApp.requestUserAttention(.informationalRequest) }
         )
         coordinator.transcript = { link.state?.session(for: $0)?.transcript }
         return coordinator
