@@ -1,4 +1,12 @@
 import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+import AlasAgents
+import AlasACP
+import AlasAgentKit
 
 /// The presentation the CLI (and, later, an MCP bridge) drives: opening
 /// files and reviews and switching worktrees. Domain commands go to

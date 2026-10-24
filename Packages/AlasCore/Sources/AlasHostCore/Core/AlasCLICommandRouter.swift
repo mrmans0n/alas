@@ -1,7 +1,15 @@
 import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasCode
+import AlasAgents
+import AlasACP
+import AlasAgentKit
 
 @MainActor
-struct AlasCLICommandRouter {
+public struct AlasCLICommandRouter {
     /// Resolves who sent each command and serves the worktrees it acts on.
     var host: AlasHost
     var openRelativeFile: (String, String) -> Void
@@ -30,6 +38,50 @@ struct AlasCLICommandRouter {
     }
     var activateApp: () -> Void
 
+    public init(
+        host: AlasHost,
+        openRelativeFile: @escaping (String, String) -> Void,
+        openExternalFile: @escaping (URL, String) -> Void,
+        openRelativeFileAtLines: @escaping (String, String, ClosedRange<Int>) -> Void = { _, _, _ in },
+        openExternalFileAtLines: @escaping (URL, String, ClosedRange<Int>) -> Void = { _, _, _ in },
+        focusWorktree: @escaping (Worktree) -> Void = { _ in },
+        createWorktree: @escaping (Worktree, String, String?, HostCaller) async -> AlasCLIResponse = { _, _, _, _ in
+            .error("Creating worktrees from the terminal is not available yet.")
+        },
+        deleteWorktree: @escaping (Worktree, Bool, Bool, HostCaller) async -> AlasCLIResponse = { _, _, _, _ in
+            .error("Deleting worktrees from the terminal is not available yet.")
+        },
+        openReviewChanges: @escaping (Worktree) -> Void = { _ in },
+        openReview: @escaping (Worktree, String, HostCaller) async -> AlasCLIResponse = { _, _, _ in
+            .error("Opening provider reviews from the terminal is not available yet.")
+        },
+        workspaceCommand: @escaping (AlasCLIRequest.WorkspaceCommand, HostCaller) async -> AlasCLIResponse = { _, _ in
+            .error("Workspace automation is not available yet.")
+        },
+        previewCommand: @escaping (WebPreviewCommand, SessionOwnerID, String?) async -> AlasCLIResponse = { _, _, _ in
+            .error("Preview automation is not available.")
+        },
+        computerCommand: @escaping (ComputerUseCommand, String) async -> AlasCLIResponse = { _, _ in
+            .error("Computer use is not available.")
+        },
+        activateApp: @escaping () -> Void
+    ) {
+        self.host = host
+        self.openRelativeFile = openRelativeFile
+        self.openExternalFile = openExternalFile
+        self.openRelativeFileAtLines = openRelativeFileAtLines
+        self.openExternalFileAtLines = openExternalFileAtLines
+        self.focusWorktree = focusWorktree
+        self.createWorktree = createWorktree
+        self.deleteWorktree = deleteWorktree
+        self.openReviewChanges = openReviewChanges
+        self.openReview = openReview
+        self.workspaceCommand = workspaceCommand
+        self.previewCommand = previewCommand
+        self.computerCommand = computerCommand
+        self.activateApp = activateApp
+    }
+
     /// Also used by plugins (`review/comment`), so they take the CLI's paths rather than a copy of them.
     var service: AlasActionService {
         AlasActionService(
@@ -46,11 +98,11 @@ struct AlasCLICommandRouter {
     }
 
     /// The one-line reply to `visual_show`; the MCP bridge reads `presentation` to word its result.
-    static func visualShowReply(id: UUID, presentation: ACPVisualAid.Presentation) -> String {
+    public static func visualShowReply(id: UUID, presentation: ACPVisualAid.Presentation) -> String {
         #"{"visual_id":"\#(id.uuidString)","presentation":"\#(presentation.rawValue)"}"#
     }
 
-    func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
+    public func handle(_ request: AlasCLIRequest) async -> AlasCLIResponse {
         let service = self.service
         let callers = host.callers
         // Attributed to the session only once the host knows it.
