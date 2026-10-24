@@ -1012,7 +1012,6 @@ extension ComputerUseAXActions {
         for (index, chunk) in chunks.enumerated() {
             if index > 0 { await Task.yield() }
             let (typedSoFar, utf16SoFar, startLocation) = (typed, typedUTF16, start)
-            let isLast = index == chunks.count - 1
             start = try await onQueue({ interrupt() == .cancelled }) { () -> Int? in
                 let moved = ComputerUseSystemError.actionFailed(
                     "\(app.name) moved the text cursor; stopped after typing \(typedSoFar) of \(total) characters.")
@@ -1050,14 +1049,6 @@ extension ComputerUseAXActions {
                 if typedSoFar == 0, !chunk.isEmpty, selectionWasEmpty == true, let countBefore,
                    target.characterCount() == countBefore {
                     throw Unsupported(error: .attributeUnsupported)
-                }
-                // Where the next chunk would go; after the last one there is nothing left to misplace.
-                if !isLast, let startLocation {
-                    let expected = startLocation + utf16SoFar + chunk.utf16.count
-                    guard let caret = target.selectedRange(), caret.location == expected, caret.length == 0 else {
-                        throw ComputerUseSystemError.actionFailed(
-                            "\(app.name) moved the text cursor; stopped after typing \(typedSoFar + chunk.count) of \(total) characters.")
-                    }
                 }
                 return startLocation
             }

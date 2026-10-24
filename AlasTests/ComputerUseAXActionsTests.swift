@@ -20,14 +20,10 @@ struct ComputerUseAXActionsTests {
         #expect((input.refusedWhenHidden?.1 == 3) == checked)
     }
 
-    /// When the app moves the caret during chunked typing: right as a chunk goes in, or after
-    /// that chunk's check and before the next one.
-    enum CaretMove: CaseIterable { case withTheChunk, betweenChunks }
-
-    /// Chunked typing stops where the caret moved instead of splitting the text across two places.
-    @Test(arguments: CaretMove.allCases)
-    func chunkedTypingStopsWhenTheCaretMoves(_ move: CaretMove) async throws {
-        let field = FakeTextField(move: move)
+    /// Chunked typing stops where the app moved the caret after a chunk, instead of splitting the
+    /// text across two places.
+    @Test func chunkedTypingStopsWhenTheCaretMoves() async throws {
+        let field = FakeTextField()
         let text = String(repeating: "a", count: 450)
         let app = ComputerUseAppIdentity(name: "Notes", bundleID: "com.apple.Notes", pid: 101)
         await #expect {
@@ -43,13 +39,9 @@ struct ComputerUseAXActionsTests {
 /// A text field whose app moves the caret once the first chunk went in.
 private final class FakeTextField: @unchecked Sendable {
     private let lock = NSLock()
-    private let move: ComputerUseAXActionsTests.CaretMove
     private var length = 0
     private var location = 0
-    private var rangeReads = 0
     private var written: [String] = []
-
-    init(move: ComputerUseAXActionsTests.CaretMove) { self.move = move }
 
     var chunks: [String] { lock.withLock { written } }
 
@@ -58,12 +50,7 @@ private final class FakeTextField: @unchecked Sendable {
             canSetSelectedText: { true },
             characterCount: { self.lock.withLock { self.length } },
             selectedRange: {
-                self.lock.withLock {
-                    self.rangeReads += 1
-                    // Read 1 is before the first chunk, 2 its check, 3 the next chunk's.
-                    if self.move == .betweenChunks, self.rangeReads == 3 { self.location += 5 }
-                    return CFRange(location: self.location, length: 0)
-                }
+                self.lock.withLock { CFRange(location: self.location, length: 0) }
             },
             setSelectedRange: { range in
                 self.lock.withLock { self.location = range.location }
@@ -74,7 +61,8 @@ private final class FakeTextField: @unchecked Sendable {
                     self.written.append(chunk)
                     self.length += chunk.utf16.count
                     self.location += chunk.utf16.count
-                    if self.move == .withTheChunk, self.written.count == 1 { self.location += 5 }
+                    // The app moves the caret once the first chunk is in.
+                    if self.written.count == 1 { self.location += 5 }
                 }
                 return .success
             })
