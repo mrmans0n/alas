@@ -153,6 +153,8 @@ final class ComputerUseCursorOverlay: NSObject {
         pointerLayer.shadowOpacity = 0.3
         pointerLayer.shadowRadius = 2
         pointerLayer.shadowOffset = CGSize(width: 0, height: -1)
+        pointerLayer.shadowPath = pointerLayer.path
+        pointerLayer.contentsScale = panel.backingScaleFactor
         pointerLayer.zPosition = 2
         pointerLayer.isHidden = true
         pointerLayer.actions = Self.noActions
@@ -169,6 +171,11 @@ final class ComputerUseCursorOverlay: NSObject {
         let primaryHeight = NSScreen.screens.first?.frame.height ?? cgFrame.maxY
         let frame = ComputerUseCursorMotion.appKitFrame(fromCG: cgFrame, primaryScreenHeight: primaryHeight)
         if panel.frame != frame { panel.setFrame(frame, display: false) }
+        // Added layers keep a 1x scale unless told; a move to another display may change it.
+        let scale = panel.backingScaleFactor
+        for layer in [pointerLayer, outlineLayer].compactMap({ $0 }) where layer.contentsScale != scale {
+            layer.contentsScale = scale
+        }
         target?.frame = cgFrame
         // The pointer is window-local, so it rides along with the window.
         if let pointer { setPointer(at: pointer) }
@@ -364,6 +371,7 @@ final class ComputerUseCursorOverlay: NSObject {
         ring.fillColor = accentColor.withAlphaComponent(0.15).cgColor
         ring.strokeColor = accentColor.cgColor
         ring.lineWidth = 2
+        ring.contentsScale = panel?.backingScaleFactor ?? 2
         ring.zPosition = 1
         ring.actions = Self.noActions
         ring.position = layerPoint(local)
@@ -402,6 +410,7 @@ final class ComputerUseCursorOverlay: NSObject {
         outline.fillColor = NSColor.clear.cgColor
         outline.strokeColor = accentColor.cgColor
         outline.lineWidth = 2
+        outline.contentsScale = panel?.backingScaleFactor ?? 2
         outline.actions = Self.noActions
         outline.opacity = 0
 
