@@ -272,6 +272,18 @@ struct HostConsolesTests {
         #expect(fixture.projects.projects.isEmpty)
     }
 
+    /// `project remove` boots a host in process, with or without Remote, and
+    /// mutates right away: the saved shells guard it before any restore.
+    @Test func aSavedShellGuardsItsProjectAsSoonAsTheHostBoots() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.consoles().open(worktreeId: fixture.worktree.id)
+
+        let consoles = HostConsoles.install(on: fixture.core, zmx: fixture.zmx, fileURL: fixture.file)
+        await #expect(throws: HostError.projectBusy) { try await fixture.core.removeProject(id: "p") }
+        #expect(consoles.summaries().map(\.consoleId) == [id])
+    }
+
     private static func git(_ arguments: [String], in directory: URL) throws {
         let git = Process()
         git.executableURL = URL(fileURLWithPath: "/usr/bin/git")

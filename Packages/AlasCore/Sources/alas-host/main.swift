@@ -190,6 +190,12 @@ guard let socket = HostSocketServer(server: protocolServer) else {
     fail("cannot serve \(HostSocketServer.defaultPath()): another host serves it, or its directory is not this user's own")
 }
 
+// Shells opened for paired Macs, kept with Remote on or off: they guard
+// worktree and project removal before any request arrives. They run in
+// zmx, found as the web client is; peers are offered them only with Remote.
+let zmx = ZmxClient(env: .resolve(binaryURL: HostShellLaunch.zmxBinary(executable: Bundle.main.executableURL)))
+let shells = HostConsoles.install(on: host.coreContext, zmx: zmx)
+
 // One shutdown: a second signal must not exit while the first still flushes.
 var isStopping = false
 
@@ -256,19 +262,12 @@ if let listen = config.hostRemoteListen {
         },
         URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/RemoteWeb"),
     ].compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("index.html").path) }
-    if webClient == nil {
-        FileHandle.standardError.write(Data("alas-host: no web client found (set ALAS_REMOTE_WEB_DIR); serving pairing and the WebSocket only\n".utf8))
-    }
-    // Shells for paired Macs run in zmx, found as the web client is.
-    let zmx = ZmxClient(env: .resolve(binaryURL: HostShellLaunch.zmxBinary(executable: Bundle.main.executableURL)))
     if !zmx.isAvailable {
         FileHandle.standardError.write(Data("alas-host: zmx not found beside alas-host or in /Applications/Alas.app; peers can't open terminals here\n".utf8))
     }
-    let shells = HostConsoles(core: host.coreContext, zmx: zmx)
-    // A deleted worktree's shells would outlive it unlisted and unclosable.
-    host.coreContext.willRemoveWorktree = { await shells.terminateConsoles(inWorktree: $0) }
-    // Forgetting their project would hide them the same way.
-    host.coreContext.hasHostConsoles = { shells.hasConsoles(inWorktrees: $0) }
+    if webClient == nil {
+        FileHandle.standardError.write(Data("alas-host: no web client found (set ALAS_REMOTE_WEB_DIR); serving pairing and the WebSocket only\n".utf8))
+    }
     let server = RemoteServer(
         pairing: pairing,
         assets: RemoteWebAssets(root: webClient ?? URL(fileURLWithPath: "/dev/null")),
@@ -365,9 +364,7 @@ if let listen = config.hostRemoteListen {
     startRemote = {
         // A client's socket reads the open sessions from its first message,
         // and `restore()` replaces them once it finishes: serve only after.
-        // The same goes for the shells it lists.
         await presenter.restore()
-        await shells.restore()
         guard !isStopping else { return }
         do {
             try server.start(port: listen.port, loopbackOnly: listen.loopbackOnly)
@@ -382,6 +379,8 @@ if let listen = config.hostRemoteListen {
 // Remote follows: restoring the open sessions keeps those of listed
 // worktrees only. Stored sessions load last, so they do not hold up Remote.
 Task {
+    // Before Remote lists them.
+    await shells.restore()
     await host.loadProjectWorktrees()
     await startRemote?()
     await host.coreContext.loadStoredSessionManagers()

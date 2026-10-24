@@ -72,37 +72,51 @@ public final class HostConsoles {
         self.applySize = applySize
         self.baseEnvironment = baseEnvironment
         self.shell = shell
+        // Loaded now, so the registry guards removals before `restore()`
+        // has asked zmx which shells are still running.
+        do {
+            entries = try store.readIfExists(HostConsolesFile.self, from: fileURL)?.consoles ?? []
+        } catch {
+            consolesLogger.error("Could not read host consoles: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// The registry `alas-host` keeps on every boot, Remote on or off,
+    /// guarding worktree and project removal from the start. Serving its
+    /// shells to peers is separate.
+    public static func install(
+        on core: AlasCoreContext,
+        zmx: ZmxClient = ZmxClient(env: .resolve(binaryURL: HostShellLaunch.zmxBinary(executable: Bundle.main.executableURL))),
+        fileURL: URL = Paths.hostConsolesFile
+    ) -> HostConsoles {
+        let consoles = HostConsoles(core: core, zmx: zmx, fileURL: fileURL)
+        // A deleted worktree's shells would outlive it unlisted and unclosable;
+        // forgetting their project would hide them the same way.
+        core.willRemoveWorktree = { await consoles.terminateConsoles(inWorktree: $0) }
+        core.hasHostConsoles = { consoles.hasConsoles(inWorktrees: $0) }
+        return consoles
     }
 
     public var isAvailable: Bool { zmx.isAvailable }
 
-    /// Loads the saved registry, keeping only shells whose zmx session is
-    /// still running: one that exited while the host was down is dropped.
+    /// Drops saved shells whose zmx session is gone: one that exited while
+    /// the host was down.
     public func restore() async {
-        let saved: [HostConsoleEntry]
-        do {
-            saved = try store.readIfExists(HostConsolesFile.self, from: fileURL)?.consoles ?? []
-        } catch {
-            consolesLogger.error("Could not read host consoles: \(String(describing: error), privacy: .public)")
-            return
-        }
+        let listedBefore = Set(entries.map(\.id))
         let zmx = zmx
-        let listed = await BlockingWork.run { zmx.listSessionsIfAvailable() }
-        let kept: [HostConsoleEntry]
-        if let listed {
-            let live = Set(listed)
-            let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
-            kept = saved.filter { live.contains(prefix + $0.zmxName) }
-        } else {
+        guard let listed = await BlockingWork.run({ zmx.listSessionsIfAvailable() }) else {
             // Unknown is not gone: dropping would orphan running daemons.
             // `summaries()` still prunes shells whose socket is missing.
             consolesLogger.error("Could not list zmx sessions; keeping saved host consoles")
-            kept = saved
+            return
         }
-        // Shells opened while `zmx ls` ran are kept too.
-        let savedIds = Set(saved.map(\.id))
-        entries = kept + entries.filter { !savedIds.contains($0.id) }
-        if entries != saved { save() }
+        let live = Set(listed)
+        let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
+        // Shells opened while `zmx ls` ran weren't listed, and are kept.
+        let alive = entries.filter { !listedBefore.contains($0.id) || live.contains(prefix + $0.zmxName) }
+        guard alive != entries else { return }
+        entries = alive
+        save()
     }
 
     /// Drops shells whose socket is gone (the user typed `exit`), then lists

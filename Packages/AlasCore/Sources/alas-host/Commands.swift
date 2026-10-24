@@ -1,4 +1,5 @@
 import AlasCore
+@_spi(AppHost) import AlasHostCore
 import Foundation
 import Synchronization
 
@@ -271,6 +272,9 @@ enum HostCommands {
         case .none(let lock):
             defer { withExtendedLifetime(lock) {} }
             let host = try AlasHost.boot()
+            // Booted only to mutate: its saved shells still guard removals.
+            let shells = HostConsoles.install(on: host.coreContext)
+            await shells.restore()
             do {
                 let result = try await inProcess(host)
                 await host.shutdown()
