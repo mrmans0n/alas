@@ -175,6 +175,29 @@ struct NativePeerSidebarView: View {
                 .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
                 .padding(.trailing, 6)
             }
+            if let hosts = client.hosts, let projectId = repo.projectId {
+                let archived = (hosts.archivedWorktrees[peer.serverId] ?? []).filter { $0.project.id == projectId }
+                ForEach(archived, id: \.snapshot.worktree.id) { worktree in
+                    NativePeerArchivedWorktreeRow(worktree: worktree)
+                        .contextMenu { archivedWorktreeMenu(worktree, hosts: hosts, peer: peer) }
+                        .padding(.top, 1)
+                        .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
+                        .padding(.trailing, 6)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func archivedWorktreeMenu(_ worktree: PeerHostWorktree, hosts: NativePeerHosts, peer: NativePeerGroup) -> some View {
+        let checkout = worktree.snapshot.worktree
+        Button("Copy Path") { Self.copy(checkout.path.path) }
+        if !checkout.branch.isEmpty {
+            Button("Copy Branch Name") { Self.copy(checkout.branch) }
+        }
+        if hosts.canUnarchive(serverId: peer.serverId) {
+            Divider()
+            Button("Unarchive") { hosts.unarchive(worktree, serverId: peer.serverId) }
         }
     }
 
@@ -665,6 +688,32 @@ private struct NativePeerWorktreeRow: View {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
+}
+
+/// An archived peer worktree, dimmed under an archive icon as an archived
+/// Workspace checkout is. Only its menu acts on it.
+private struct NativePeerArchivedWorktreeRow: View {
+    let worktree: PeerHostWorktree
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let title = worktree.snapshot.worktree.title
+        HStack(spacing: 7) {
+            Icon(name: "archivebox", size: 12, color: theme.color("fg-faint"))
+            Text(title)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(theme.color("fg-dim"))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(minHeight: 28)
+        .contentShape(Rectangle())
+        .help("\(title) is archived on the host")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), archived")
+    }
 }
 
 /// E1's agent tile for one peer session. A working session gets the filled

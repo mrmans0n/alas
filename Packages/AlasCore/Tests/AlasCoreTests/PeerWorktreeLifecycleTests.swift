@@ -35,7 +35,7 @@ struct PeerWorktreeLifecycleTests {
         )
     }
 
-    @Test func visibleWorktreesJoinProjectsHideArchivedAndMarkMainAndWorkspaceMembers() {
+    @Test func visibleWorktreesJoinProjectsSplitOffArchivedAndMarkMainAndWorkspaceMembers() {
         var state = PeerHostChannel.State(HostSnapshot(
             cursor: HostCursor(generation: UUID(), sequence: 0),
             projects: [Self.project()],
@@ -56,6 +56,8 @@ struct PeerWorktreeLifecycleTests {
         #expect(visible.map(\.snapshot.worktree.branch) == ["main", "feature", "member"])
         #expect(visible.map(\.isMain) == [true, false, false])
         #expect(visible.map(\.workspaceCheckoutName) == [nil, nil, "Checkout"])
+        // The archived one is listed apart, for its Unarchive row.
+        #expect(state.archivedWorktrees().map(\.snapshot.worktree.branch) == ["archived"])
     }
 
     enum Case: Sendable, CustomTestStringConvertible {
