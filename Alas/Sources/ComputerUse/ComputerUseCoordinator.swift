@@ -805,7 +805,8 @@ final class ComputerUseCoordinator {
         }
         // A read that left elements out for depth may have missed the press's effect, and a second press could undo it.
         let unchanged = changeWarning != nil && payload["depth_limited"] == nil
-        if let target, let targetRef, Self.retriesWithPointer(
+        // A press the app didn't confirm most likely happened: pressing again could undo it.
+        if let target, let targetRef, delivered.warning == nil, Self.retriesWithPointer(
             command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
             manualAccessibility: system.usesManualAccessibility(window.app.pid)) {
             // The first press was delivered: a retry that fails reports why next to its result.
@@ -942,6 +943,11 @@ final class ComputerUseCoordinator {
         var after: ComputerUseWindowFingerprint?
     }
 
+    private static func joined(_ warnings: String?...) -> String? {
+        let present = warnings.compactMap { $0 }
+        return present.isEmpty ? nil : present.joined(separator: " ")
+    }
+
     /// `depth_limited` when the read left elements out for depth, with the hint appended to the warning.
     private static func report(depthLimited: Bool, warning: String?, into payload: inout [String: Any]) {
         payload["depth_limited"] = depthLimited ? true : nil
@@ -1039,7 +1045,7 @@ final class ComputerUseCoordinator {
                         context: context, payload: &payload)
                 }
             }
-            Self.report(depthLimited: read.depthLimited, warning: verdict.warning, into: &payload)
+            Self.report(depthLimited: read.depthLimited, warning: Self.joined(delivered.warning, verdict.warning), into: &payload)
             return verdict
         } catch is CancellationError {
             throw CancellationError()
@@ -1050,7 +1056,7 @@ final class ComputerUseCoordinator {
             // The action changed the window, so the refs from before it are gone either way.
             updateSnapshot(of: window, context: context) { $0.refs = [:] }
             // An earlier attempt's verdict doesn't describe this read.
-            Self.report(depthLimited: false, warning: nil, into: &payload)
+            Self.report(depthLimited: false, warning: delivered.warning, into: &payload)
             payload["truncated"] = true
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription

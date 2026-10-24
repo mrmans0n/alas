@@ -181,6 +181,11 @@ struct ComputerUseInputTests {
             start: start, in: 1, end: end, in: 2, windows: windows) == expected)
     }
 
+    @Test(arguments: [(0, true), (3, true), (8, true), (23, true), (24, false), (25, false), (500, false), (-2147483601, false)])
+    func appWindowsSitBelowTheMenuBar(layer: Int, listed: Bool) {
+        #expect(ComputerUseInputGeometry.isAppWindowLayer(layer) == listed)
+    }
+
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
         let windows = [

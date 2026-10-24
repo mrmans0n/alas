@@ -7,7 +7,7 @@ import os
 import ScreenCaptureKit
 import Synchronization
 
-/// An on-screen, layer-0 window of a running app.
+/// An on-screen window of a running app, below the menu bar's layer: a normal window or a panel.
 struct ComputerUseWindow: Sendable, Equatable {
     var windowID: UInt32
     var title: String?
@@ -89,6 +89,8 @@ struct ComputerUseDelivered: Sendable, Equatable {
     var menuItem: String?
     /// The title of the sheet or dialog button an Escape or Return pressed.
     var button: String?
+    /// Said next to the result: the app didn't confirm an AX press in time.
+    var warning: String?
     /// The input made the window key in an app that isn't the user's front app; the app keeps
     /// treating it as its active key window until `releaseBackgroundFocus` hands it back.
     var keyedInBackground = false
@@ -360,9 +362,10 @@ private enum LiveComputerUseSystem {
         return screens.first(where: { $0.frame.contains(center) })?.backingScaleFactor ?? fallback
     }
 
-    /// The normal-layer windows: the ones apps are driven in.
+    /// The windows apps are driven in: normal ones, and their floating and modal panels below the
+    /// menu bar (an open panel sits at layer 8).
     private static func onScreenWindows() -> [CGWindowEntry] {
-        allOnScreenWindows().filter { $0.layer == 0 }
+        allOnScreenWindows().filter { ComputerUseInputGeometry.isAppWindowLayer($0.layer) }
     }
 
     /// Every on-screen window at every layer, front to back, as a system-wide press or drop is
@@ -427,7 +430,22 @@ extension LiveComputerUseSystem {
     /// its app's key window, without activating the app (`background`); else, when that window
     /// can't be made key, the app is activated around the events as `direct` does.
     /// `ignoring`: windows the drag's hit-tests look through (Alas's drawn cursor).
+    /// An AX press the app didn't answer in time counts as delivered, with a warning.
     static func perform(
+        _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
+        ignoring: @escaping @Sendable () -> Set<UInt32>,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered {
+        do {
+            return try await deliver(input, in: window, direct: direct, ignoring: ignoring, interrupt: interrupt)
+        } catch let unconfirmed as ComputerUseAXActions.Unconfirmed {
+            return ComputerUseDelivered(
+                delivery: .ax, menuItem: unconfirmed.menuItem, button: unconfirmed.button,
+                warning: ComputerUseAXActions.unconfirmedWarning)
+        }
+    }
+
+    private static func deliver(
         _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
         ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?

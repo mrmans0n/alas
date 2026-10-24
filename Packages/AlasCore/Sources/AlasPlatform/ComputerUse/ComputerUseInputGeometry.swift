@@ -40,6 +40,16 @@ public enum ComputerUseInputGeometry {
         }
     }
 
+    /// `kCGMainMenuWindowLevel`: the menu bar, and above it status items, the Dock and pop-up menus.
+    public static let menuBarLayer = 24
+
+    /// Whether an app's window at `layer` is one it is driven in: normal windows, floating panels
+    /// (3) and modal panels (8), such as an open panel. The menu bar and everything above it, and
+    /// the desktop's negative layers, are not.
+    public static func isAppWindowLayer(_ layer: Int) -> Bool {
+        (0 ..< menuBarLayer).contains(layer)
+    }
+
     /// `kCGDraggingWindowLevel`. From it up sit windows no press or drop lands in: drag images,
     /// the software cursor, display shields, the login window.
     public static let draggingLayer = 500

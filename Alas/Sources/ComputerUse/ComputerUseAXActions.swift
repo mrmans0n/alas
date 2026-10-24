@@ -18,6 +18,17 @@ enum ComputerUseAXActions {
         var error: AXError
     }
 
+    /// An AX press the app didn't answer in time (kAXErrorCannotComplete). It most likely took
+    /// effect: a modal panel the press opened keeps the app from replying until it closes. The
+    /// input counts as delivered, with `unconfirmedWarning`, and is never pressed again.
+    struct Unconfirmed: Error {
+        var menuItem: String?
+        var button: String?
+    }
+
+    static let unconfirmedWarning =
+        "The app didn't answer in time; the press probably took effect (a modal panel may be open). Inspect to check."
+
     static func press(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
     ) async throws {
@@ -345,11 +356,7 @@ enum ComputerUseAXActions {
             let element = try resolve(handles, handle)
             let result = AXUIElementPerformAction(element, action as CFString)
             guard result == .success else {
-                // The app timed out answering, which says nothing about whether the press happened.
-                if result == .cannotComplete {
-                    throw ComputerUseSystemError.actionFailed(
-                        "\(app.name) didn't confirm the action; it may have happened. Call computer_inspect before retrying.")
-                }
+                if result == .cannotComplete { throw Unconfirmed() }
                 throw failure(result, app: app)
             }
         }
@@ -524,8 +531,14 @@ extension ComputerUseAXActions {
             case nil: break
             }
             if let focused = focusedElement(of: app), isSecure(focused) { throw secureRefusal }
-            try press(target.item, app: app)
-            return target.path.joined(separator: " > ")
+            let path = target.path.joined(separator: " > ")
+            do {
+                try press(target.item, app: app)
+            } catch var unconfirmed as Unconfirmed {
+                unconfirmed.menuItem = path
+                throw unconfirmed
+            }
+            return path
         }
     }
 
@@ -568,13 +581,18 @@ extension ComputerUseAXActions {
             if let subrole = string(of: target, kAXSubroleAttribute), [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole) {
                 candidates.append(target)
             }
-            func pressChecked(_ button: AXUIElement) throws {
+            func pressChecked(_ button: AXUIElement, title: String) throws {
                 switch interrupt() {
                 case .cancelled: throw CancellationError()
                 case .userActive: throw ComputerUseSystemError.userActive
                 case nil: break
                 }
-                try press(button, app: app)
+                do {
+                    try press(button, app: app)
+                } catch var unconfirmed as Unconfirmed {
+                    unconfirmed.button = title
+                    throw unconfirmed
+                }
             }
             // Panels hosted out of process (TextEdit's Save sheet) list the attribute with no value.
             var unreadable: [AXUIElement] = []
@@ -584,8 +602,9 @@ extension ComputerUseAXActions {
                     continue
                 }
                 guard bool(of: button, kAXEnabledAttribute) != false else { continue }
-                try pressChecked(button)
-                return string(of: button, kAXTitleAttribute) ?? (key == .escape ? "Cancel" : "Default")
+                let title = string(of: button, kAXTitleAttribute) ?? (key == .escape ? "Cancel" : "Default")
+                try pressChecked(button, title: title)
+                return title
             }
             guard !unreadable.isEmpty else { return nil }
             // Such a panel is hosted out of process: a posted Return doesn't reach it, from a field in
@@ -593,7 +612,7 @@ extension ComputerUseAXActions {
             guard key == .escape else { throw ComputerUseSystemError.actionFailed(defaultButtonUnreadable) }
             for candidate in unreadable {
                 guard let (button, title) = cancelButton(in: candidate) else { continue }
-                try pressChecked(button)
+                try pressChecked(button, title: title)
                 return title
             }
             return nil
@@ -978,10 +997,7 @@ extension ComputerUseAXActions {
         let result = AXUIElementPerformAction(element, action as CFString)
         guard result == .success else {
             // A modal panel opened by the action keeps the app from answering in time.
-            if result == .cannotComplete {
-                throw ComputerUseSystemError.actionFailed(
-                    "\(app.name) didn't confirm the action; it may have happened. Call computer_inspect before retrying.")
-            }
+            if result == .cannotComplete { throw Unconfirmed() }
             throw failure(result, app: app)
         }
     }

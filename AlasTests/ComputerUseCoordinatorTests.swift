@@ -792,6 +792,25 @@ struct ComputerUseCoordinatorTests {
         }
     }
 
+    /// A press the app didn't answer in time (a modal panel it opened) counts as delivered with a
+    /// warning, and is never pressed again, also where an Electron press that changed nothing would be.
+    @Test func anUnconfirmedPressIsDeliveredWithAWarningAndNotRetried() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { _ in true }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            return ComputerUseDelivered(delivery: .ax, warning: "The app didn't answer in time.")
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["delivery"] as? String == "ax" && payload["retried"] == nil)
+        #expect((payload["warning"] as? String)?.hasPrefix("The app didn't answer in time.") == true)
+        #expect(recorder.inputs.count == 1)
+    }
+
     /// The first press was delivered either way: a retry the user's return refuses leaves its
     /// result as it was, with the reason.
     @Test func failedPointerRetryKeepsTheFirstResult() async throws {
