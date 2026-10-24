@@ -191,34 +191,40 @@ public final class HostConsoles {
         guard let shellLaunch = HostShellLaunch.make(
             zmx: zmx, sessionName: name, directory: worktree.path, shell: shell, baseEnvironment: baseEnvironment()
         ) else { throw PeerConsoleOpenError.zmxMissing }
+        var failure: Error?
         do {
             try await launch(shellLaunch)
+            // The launch suspended: a removal that claimed or deleted the
+            // worktree meanwhile has already run its cleanup without this shell.
+            _ = try admittedWorktree(worktreeId)
         } catch {
             // A launcher that timed out or failed may have forked the daemon
             // already; without an entry nothing would ever close it.
-            let zmx = zmx
-            await BlockingWork.run { zmx.killSession(name: name) }
-            throw (error as? PeerConsoleOpenError) ?? .notStarted
-        }
-        // The launch suspended: a removal that claimed or deleted the
-        // worktree meanwhile has already run its cleanup without this shell.
-        do {
-            _ = try admittedWorktree(worktreeId)
-        } catch {
-            let zmx = zmx
-            await BlockingWork.run { zmx.killSession(name: name) }
-            throw error
+            failure = error
         }
         // Numbered after the launch, with no suspension before the append,
         // so concurrent opens can't take the same title.
         let taken = Set(entries.filter { $0.worktreeId == worktreeId }.map(\.title))
         let number = (1...).first { !taken.contains("Terminal \($0)") } ?? 1
-        entries.append(HostConsoleEntry(
+        let entry = HostConsoleEntry(
             id: id, worktreeId: worktreeId, title: "Terminal \(number)", zmxName: name,
             rows: Self.launchRows, columns: Self.launchColumns
-        ))
+        )
+        if let failure {
+            await recordThenStop(entry)
+            throw (failure as? PeerConsoleOpenError) ?? .notStarted
+        }
+        entries.append(entry)
         save()
         return id
+    }
+
+    /// Records a shell that must not run, then stops it: one zmx can't stop
+    /// stays listed and saved, terminable later, instead of running unlisted.
+    private func recordThenStop(_ entry: HostConsoleEntry) async {
+        entries.append(entry)
+        save()
+        await stop([entry])
     }
 
     /// The worktree a shell may run in now: listed, visible, local, and not
@@ -375,14 +381,20 @@ extension HostConsoles: RunLauncher {
             zmx: zmx, sessionName: name, directory: worktree.path, shell: shell,
             shellArguments: plan.args, environmentOverrides: plan.envOverrides, baseEnvironment: baseEnvironment()
         ) else { throw PeerConsoleOpenError.zmxMissing }
+        let entry = HostConsoleEntry(
+            id: id, worktreeId: worktreeId, title: request.script.displayName, zmxName: name,
+            rows: Self.launchRows, columns: Self.launchColumns, scriptKey: request.script.key
+        )
+        // From here the entry owns the rc files: forgetting it removes them.
+        registered = true
+        defer { watchRuns() }
         do {
             try await launch(shellLaunch)
         } catch {
             // `attach` also fails when the command exits before it connects,
-            // though it ran. With the daemon killed and no entry, the run
+            // though it ran. Once the daemon is stopped and forgotten, the run
             // settles by its completion file, or as unknown after the grace.
-            let zmx = zmx
-            await BlockingWork.run { zmx.killSession(name: name) }
+            await recordThenStop(entry)
             return .hosted(sessionID: id)
         }
         // The launch suspended: a removal may have claimed or deleted the
@@ -390,17 +402,11 @@ extension HostConsoles: RunLauncher {
         do {
             _ = try admittedWorktree(worktreeId)
         } catch {
-            let zmx = zmx
-            await BlockingWork.run { zmx.killSession(name: name) }
+            await recordThenStop(entry)
             throw error
         }
-        entries.append(HostConsoleEntry(
-            id: id, worktreeId: worktreeId, title: request.script.displayName, zmxName: name,
-            rows: Self.launchRows, columns: Self.launchColumns, scriptKey: request.script.key
-        ))
-        registered = true
+        entries.append(entry)
         save()
-        watchRuns()
         return .hosted(sessionID: id)
     }
 
