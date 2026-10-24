@@ -356,6 +356,24 @@ struct ComputerUseCoordinatorTests {
             : nil))
     }
 
+    /// A blocked menu-bar app is listed, so computer_apps shows why computer_open_app refuses it;
+    /// other menu-bar apps stay out.
+    @Test func menuBarAppsAreListedOnlyWhenBlocked() async throws {
+        var system = Self.system()
+        system.accessoryApps = {
+            [ComputerUseAppIdentity(name: "1Password", bundleID: "com.1password.1password", pid: 201),
+             ComputerUseAppIdentity(name: "Stream Deck", bundleID: "com.elgato.StreamDeck", pid: 202)]
+        }
+        let f = Self.fixture(system: system)
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
+        let names = apps.compactMap { $0["name"] as? String }
+        #expect(names == ["1Password", "Alas Dev", "Keychain Access", "Mail", "Notes"])
+        let blocked = try #require(apps.first)
+        #expect(blocked["approval"] as? String == "blocked")
+        #expect((blocked["windows"] as? [Any])?.isEmpty == true)
+    }
+
     @Test func screenshotOfVanishedWindowReportsNotFound() async {
         let f = Self.fixture(system: Self.system(windows: [:]))
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 42), sessionID: "s")

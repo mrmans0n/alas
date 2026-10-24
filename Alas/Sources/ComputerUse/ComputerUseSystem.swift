@@ -196,6 +196,8 @@ struct ComputerUseSystem: Sendable {
     /// the probe budget having reached them (`ComputerUseCredentialPrompt.listing`), read with one
     /// window list and one process list, within one probe budget. Clear apps have no entry.
     var credentialPrompts: @Sendable (_ pids: [Int32]) async -> [Int32: ComputerUseCredentialPrompt.Listing] = { _ in [:] }
+    /// Running menu-bar (accessory) apps, which `runningApps` leaves out.
+    var accessoryApps: @Sendable () async -> [ComputerUseAppIdentity] = { [] }
 
     /// Whether a system password prompt is showing in the app, or may be: one app alone is probed
     /// first, so an unchecked one is the probe not getting to it, and counts as showing.
@@ -229,7 +231,8 @@ struct ComputerUseSystem: Sendable {
             openApp: { try await LiveComputerUseSystem.openApp($0) },
             releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
             usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) },
-            credentialPrompts: { await LiveComputerUseSystem.credentialPrompts(pids: $0) }
+            credentialPrompts: { await LiveComputerUseSystem.credentialPrompts(pids: $0) },
+            accessoryApps: { await LiveComputerUseSystem.accessoryApps() }
         )
     }
 }
@@ -267,6 +270,14 @@ private enum LiveComputerUseSystem {
                 }
                 return (app: app, windows: windows)
             }
+    }
+
+    static func accessoryApps() async -> [ComputerUseAppIdentity] {
+        await MainActor.run {
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .accessory && !$0.isTerminated }
+                .map(identity(of:))
+        }
     }
 
     /// From the input tap; the HID idle time, which counts Alas's own events, only until it runs.

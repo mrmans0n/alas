@@ -689,7 +689,15 @@ final class ComputerUseCoordinator {
     // MARK: - System calls and results
 
     private func listApps(sessionID: String) async -> AlasCLIResponse {
-        let apps = await system.runningApps()
+        let regular = await system.runningApps()
+        let listed = Set(regular.map(\.app.pid))
+        // Menu-bar apps stay out, except blocked ones (a password manager): computer_open_app
+        // refuses them, and the listing shows why.
+        let blockedAccessory = await system.accessoryApps().filter {
+            !listed.contains($0.pid) && access.access(for: $0, session: sessionID) == .blocked
+        }
+        let apps = (regular + blockedAccessory.map { (app: $0, windows: [ComputerUseWindow]()) })
+            .sorted { $0.app.name.localizedStandardCompare($1.app.name) == .orderedAscending }
         let accesses = apps.map { access.access(for: $0.app, session: sessionID) }
         // One read for the whole listing; a blocked app's windows aren't listed either way.
         let withWindows = zip(apps, accesses).filter { $1 != .blocked && !$0.windows.isEmpty }.map(\.0.app.pid)
@@ -718,7 +726,7 @@ final class ComputerUseCoordinator {
         var payload: [String: Any] = ["version": 1, "apps": entries]
         // While macOS shows its Screen Recording prompt, other apps' windows aren't listed; Alas's
         // own may still be, so they don't count.
-        let others = apps.filter { !access.isAlas($0.app) }
+        let others = regular.filter { !access.isAlas($0.app) }
         if !others.isEmpty, others.allSatisfy({ $0.windows.isEmpty }) { payload["warning"] = Message.noVisibleWindows }
         return Self.serialize(payload)
     }
