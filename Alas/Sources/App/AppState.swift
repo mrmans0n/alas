@@ -7421,7 +7421,8 @@ final class AppState {
         titleOverride: String? = nil,
         runScriptKey: String? = nil,
         isHidden: Bool = false,
-        activates: Bool = true
+        activates: Bool = true,
+        promptsForRepoHooks: Bool = true
     ) async throws -> Tab {
         guard await !checkpointTerminalAdmissionDisabledAfterDiscovery(worktreeId: worktree.id) else {
             throw TerminalLaunchError.checkpointRecoveryRequired
@@ -7442,7 +7443,10 @@ final class AppState {
             project: project,
             worktree: worktree,
             context: .sessionOpen,
-            includeUserStartupScript: includeUserStartupScript
+            includeUserStartupScript: includeUserStartupScript,
+            // Opened for someone not at this screen: approved hooks run,
+            // the rest are skipped without asking.
+            prompter: promptsForRepoHooks ? nil : .skipping
         )
         return try openTerminalTab(
             for: worktree,
@@ -7879,7 +7883,13 @@ final class AppState {
         if case .worktree(let worktreeId) = owner, let owningTab {
             switch tabs.removeLeaf(worktreeId: worktreeId, tabId: owningTab.id, leafId: leafId) {
             case .tabRemoved:
-                closeTabRecordingHistory(worktreeId: worktreeId, projectId: nil, tab: owningTab)
+                // A hidden tab (a peer's shell, a hidden run) was never on
+                // screen, so "Reopen Closed Tab" must not bring it back.
+                if owningTab.isHiddenRunTab {
+                    closeTab(worktreeId: worktreeId, tabId: owningTab.id)
+                } else {
+                    closeTabRecordingHistory(worktreeId: worktreeId, projectId: nil, tab: owningTab)
+                }
             case .leafRemoved:
                 closeRemovedTerminalLeaf(leafId, worktreeId: worktreeId)
             case nil:

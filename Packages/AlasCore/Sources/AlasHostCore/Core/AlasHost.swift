@@ -382,18 +382,24 @@ public struct RunsAPI {
 
     @discardableResult
     public func start(
-        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true, caller: HostCaller
+        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true,
+        promptsForRepoHooks: Bool = true, caller: HostCaller
     ) -> RunStart {
         caller.log("runs.start", script.key)
-        return core.startRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole)
+        return core.startRun(
+            script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole, promptsForRepoHooks: promptsForRepoHooks
+        )
     }
 
     @discardableResult
     public func restart(
-        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true, caller: HostCaller
+        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true,
+        promptsForRepoHooks: Bool = true, caller: HostCaller
     ) -> RunStart {
         caller.log("runs.restart", script.key)
-        return core.restartRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole)
+        return core.restartRun(
+            script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole, promptsForRepoHooks: promptsForRepoHooks
+        )
     }
 
     public func stop(scriptKey: String, in worktree: Worktree, caller: HostCaller) {

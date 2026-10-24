@@ -243,9 +243,11 @@ public final class HostProtocolConnection {
         case .startRun(let scriptKey, let ref):
             guard let script = try await runnableScript(scriptKey, in: ref) else { return Self.archivedRunStart }
             // Whoever asks over the protocol is not at this Mac's screen: the
-            // console follows the script and never takes the active tab.
+            // console follows the script, never takes the active tab, and an
+            // unapproved repository hook is skipped rather than asked about.
             return .runStart(start: host.runs.start(
-                script, in: try worktree(ref), isHidden: script.console == .hidden, activatesConsole: false, caller: caller
+                script, in: try worktree(ref), isHidden: script.console == .hidden, activatesConsole: false,
+                promptsForRepoHooks: false, caller: caller
             ))
         case .restartRun(let scriptKey, let ref):
             guard let script = try await runnableScript(scriptKey, in: ref) else { return Self.archivedRunStart }
@@ -256,7 +258,7 @@ public final class HostProtocolConnection {
                 ?? host.core.environment.runConsoleIsHidden(scriptKey: script.key, worktreeID: worktree.id)
                 ?? (script.console == .hidden)
             return .runStart(start: host.runs.restart(
-                script, in: worktree, isHidden: isHidden, activatesConsole: false, caller: caller
+                script, in: worktree, isHidden: isHidden, activatesConsole: false, promptsForRepoHooks: false, caller: caller
             ))
         case .listRunScripts(let ref):
             // Only a listed worktree, as for `readWorktree`: an archived one

@@ -721,6 +721,41 @@ struct AlasCoreContextTests {
         #expect(context.projects.worktrees(projectId: project.id).map(\.id).contains(worktree.id))
     }
 
+    /// A caller's prompter replaces the environment's, so opens asked for by
+    /// a peer never reach the app's approval queue: approved hooks still run.
+    @Test(arguments: [false, true])
+    func preparedRepoHookAsksOnlyTheCallersPrompter(approvedEarlier: Bool) async throws {
+        let root = URL(fileURLWithPath: "/tmp/alas-hook-\(UUID().uuidString)")
+        let project = ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: Date())
+        let worktree = Worktree(
+            id: Worktree.makeId(path: root), projectId: "p", name: "main", branch: "main", path: root,
+            status: .clean, lastActivity: Date()
+        )
+        let environment = TestHostEnvironment()
+        environment.repoHookLoader = RepoHookLoader { _, _, _ in .data(Data("echo hook\n".utf8)) }
+        // Asking the environment would throw `cancelled`.
+        environment.repoHookPrompter = RepoHookPrompter(decide: { _, _, _ in .cancel }, decideFailure: { _, _ in .cancel })
+        let context = AlasCoreContext(
+            projects: ProjectsManager(persistedProjects: [project]),
+            store: TestPersistenceStore(),
+            runHistoryStore: nil,
+            environment: environment
+        )
+        if approvedEarlier {
+            guard case let .loaded(hook) = await environment.repoHookLoader.load(event: .sessionOpen, worktreeRoot: root, host: nil) else {
+                Issue.record("the fake hook loads")
+                return
+            }
+            #expect(context.projects.approveRepoHook(projectId: project.id, hash: hook.hash))
+        }
+
+        let script = try await context.preparedRepoHook(
+            event: .sessionOpen, project: project, worktree: worktree, context: .sessionOpen, prompter: .skipping
+        )
+
+        #expect(script == (approvedEarlier ? "echo hook\n" : nil))
+    }
+
     /// Archiving claims the worktree, so nothing new starts in it and it
     /// cannot be unarchived until the archive is done.
     @Test func archiveClaimRefusesUnarchive() throws {

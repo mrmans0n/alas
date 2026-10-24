@@ -50,24 +50,27 @@ public enum RepoHookPreflightError: LocalizedError {
 
 extension AlasCoreContext {
     /// The repository's hook for `event`, when the project inherits it and it
-    /// is approved: approved earlier, or now through `repoHookPrompter`. Nil
-    /// when there is none or it is skipped; throws when it is cancelled.
+    /// is approved: approved earlier, or now through `prompter` (the
+    /// environment's `repoHookPrompter` when nil). Nil when there is none or
+    /// it is skipped; throws when it is cancelled.
     @_spi(AppHost) public func preparedRepoHook(
         event: RepoHookEvent,
         project: ProjectConfig,
         worktree: Worktree,
         context: RepoHookApprovalContext,
-        includeUserStartupScript: Bool = true
+        includeUserStartupScript: Bool = true,
+        prompter: RepoHookPrompter? = nil
     ) async throws -> String? {
         guard includeUserStartupScript, Self.usesInheritedRepoHook(event: event, project: project) else {
             return nil
         }
+        let prompter = prompter ?? environment.repoHookPrompter
         while true {
             switch await environment.repoHookLoader.load(event: event, worktreeRoot: worktree.path, host: project.host) {
             case .missing, .empty:
                 return nil
             case let .failed(source, message):
-                switch await environment.repoHookPrompter.decideFailure(.init(event: event, source: source, message: message), context) {
+                switch await prompter.decideFailure(.init(event: event, source: source, message: message), context) {
                 case .retry, .approve: continue
                 case .skip: return nil
                 case .cancel: throw RepoHookPreflightError.cancelled
@@ -76,7 +79,7 @@ extension AlasCoreContext {
                 if projects.isRepoHookApproved(projectId: project.id, hash: hook.hash) {
                     return hook.text
                 }
-                switch await environment.repoHookPrompter.decide(hook, project.id, context) {
+                switch await prompter.decide(hook, project.id, context) {
                 case .approve:
                     while true {
                         do {
@@ -84,7 +87,7 @@ extension AlasCoreContext {
                             return hook.text
                         } catch {
                             let failure = RepoHookFailure(event: event, source: hook.source, message: error.localizedDescription)
-                            switch await environment.repoHookPrompter.decideFailure(failure, context) {
+                            switch await prompter.decideFailure(failure, context) {
                             case .retry, .approve: continue
                             case .skip: return nil
                             case .cancel: throw RepoHookPreflightError.cancelled

@@ -35,7 +35,9 @@ extension AppState {
             )
         }
         do {
-            let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(for: worktree, isHidden: true, activates: false)
+            let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(
+                for: worktree, isHidden: true, activates: false, promptsForRepoHooks: false
+            )
             if case .terminal(let state) = tab, let id = state.root.leaves().first?.id { return id }
         } catch {
             throw PeerConsoleOpenError((error as? LocalizedError)?.errorDescription ?? PeerConsoleOpenError.notStarted.message)
