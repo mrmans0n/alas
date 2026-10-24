@@ -110,7 +110,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab, .rightPaneSchedulesTab:
             return "Opens the right sidebar on this tab; collapses it when the tab is already showing"
         case .commitInComposer:   return "In the draft commit tab"
-        case .stopComputerUse:    return "Anywhere on the Mac: stop the agent that is using computer use"
+        case .stopComputerUse:    return "Anywhere on the Mac: stop the agent using computer use. Stop in the menu bar always works"
         case .dictate:            return "In the chat composer: tap to start or stop, hold to talk until you let go"
         default:                  return nil
         }
