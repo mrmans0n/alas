@@ -348,8 +348,6 @@ public final class HostProtocolConnection {
 
     private var sessions: SessionsAPI { host.sessions }
 
-    /// Forgetting a peer revokes its token and listing shows where it is
-    /// reached, so only the local user may, as with pairing codes.
     /// Someone at this Mac may be asked about a repository hook; a paired
     /// peer may not.
     private var promptsForRepoHooks: Bool {
@@ -357,6 +355,8 @@ public final class HostProtocolConnection {
         return true
     }
 
+    /// Forgetting a peer revokes its token and listing shows where it is
+    /// reached, so only the local user may, as with pairing codes.
     private func localPeers() throws -> RemotePeerManager {
         guard case .localUser = caller, let peers = remotePeers() else {
             throw HostError.failed(message: "This host does not serve Mac peers.")
