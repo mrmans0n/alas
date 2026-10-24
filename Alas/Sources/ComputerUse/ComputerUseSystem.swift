@@ -178,13 +178,10 @@ struct ComputerUseSystem: Sendable {
     /// Whether the app builds its Accessibility tree on request (Chromium, Electron), where an AX
     /// press may only focus the element.
     var usesManualAccessibility: @Sendable (Int32) -> Bool = { _ in false }
-    /// Alas's own overlay windows (the drawn cursor), which a live drag's hit-tests look through.
-    var cursorWindowIDs: @Sendable () -> Set<UInt32> = { [] }
-
-    /// `cursorWindowIDs` is captured by the live `perform` as well as stored, since the drag's
-    /// hit-tests run inside it.
+    /// The live system. `cursorWindowIDs` names Alas's own overlay windows (the drawn cursor),
+    /// which the live drag's hit-tests look through.
     static func live(cursorWindowIDs: @escaping @Sendable () -> Set<UInt32> = { [] }) -> ComputerUseSystem {
-        var system = ComputerUseSystem(
+        ComputerUseSystem(
             runningApps: { await LiveComputerUseSystem.runningApps() },
             window: { await LiveComputerUseSystem.window($0) },
             screenshot: { try await LiveComputerUseSystem.screenshot($0) },
@@ -209,8 +206,6 @@ struct ComputerUseSystem: Sendable {
             releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
             usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) }
         )
-        system.cursorWindowIDs = cursorWindowIDs
-        return system
     }
 }
 
