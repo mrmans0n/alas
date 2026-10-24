@@ -110,11 +110,17 @@ final class ComputerUseCoordinator {
         var handle: Int
         var role: String
         var title: String?
-        /// Where the element was when read, in global points: where the cursor goes for it.
-        var frame: CGRect
+        /// Where the element was when read, relative to its window's origin, so the cursor finds it
+        /// after the window moved.
+        var localFrame: CGRect
         /// Listed to the agent at some point: a later read that doesn't list it must still find
         /// the element the agent saw there, not whatever took its place.
         var shown: Bool
+
+        /// The element's frame in global points, with its window where it is now.
+        func frame(in window: ComputerUseWindow) -> CGRect {
+            localFrame.offsetBy(dx: window.frame.minX, dy: window.frame.minY)
+        }
     }
 
     /// The session state a call started in.
@@ -717,7 +723,8 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         // The cursor moves before the takeover wait. Its pointer is window-local, so a remap after
         // the wait still lands under it.
-        try await moveCursor(Self.cursorCue(for: input, elementFrame: targetRef?.frame), over: window, context: context)
+        let cue = Self.cursorCue(for: input, elementFrame: targetRef?.frame(in: window))
+        try await moveCursor(cue, over: window, context: context)
         if try await waitForUserIdle(in: window, direct: direct, context: context) {
             // The window may have moved or closed while the user had it: map points against where it is now.
             window = try await currentWindow(window)
@@ -780,7 +787,7 @@ final class ComputerUseCoordinator {
     ) async throws {
         try checkStillActive(context)
         let retry = ComputerUseInput.pointerClick(.element(target.0, target.1))
-        try await moveCursor(Self.cursorCue(for: retry, elementFrame: ref.frame), over: window, context: context)
+        try await moveCursor(Self.cursorCue(for: retry, elementFrame: ref.frame(in: window)), over: window, context: context)
         if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
         try checkStillActive(context)
         guard await system.elementMatches(target.0, target.1, ref.role, ref.title) else {
@@ -1270,18 +1277,21 @@ final class ComputerUseCoordinator {
         // saw; otherwise the ref now names something it never saw, and is dropped.
         let previous = snapshot(of: window, context: context)?.refs ?? [:]
         let listed = Set(read.elements.map(\.ref))
+        let origin = window.frame.origin
+        func local(_ frame: CGRect) -> CGRect { frame.offsetBy(dx: -origin.x, dy: -origin.y) }
         var refs: [String: ElementRef] = [:]
         for (ref, handle) in read.refs {
             guard let identity = read.identities[handle] else { continue }
             if listed.contains(ref) {
                 refs[ref] = ElementRef(
-                    handle: handle, role: identity.role, title: identity.title, frame: identity.frame, shown: true)
+                    handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame), shown: true)
             } else if let seen = previous[ref], seen.shown {
                 guard seen.role == identity.role, seen.title == identity.title else { continue }
-                refs[ref] = ElementRef(handle: handle, role: seen.role, title: seen.title, frame: identity.frame, shown: true)
+                refs[ref] = ElementRef(
+                    handle: handle, role: seen.role, title: seen.title, localFrame: local(identity.frame), shown: true)
             } else {
                 refs[ref] = ElementRef(
-                    handle: handle, role: identity.role, title: identity.title, frame: identity.frame, shown: false)
+                    handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame), shown: false)
             }
         }
         updateSnapshot(of: window, context: context) {
