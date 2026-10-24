@@ -86,14 +86,19 @@ public struct HostShellLaunch: Equatable, Sendable {
         return "/bin/zsh"
     }
 
-    /// The first executable among `../zmx/zmx` beside `executable` with links
-    /// resolved (the layout of `Alas.app/Contents/Resources` and the cask
-    /// zip) and `fallback`.
+    /// `ALAS_ZMX_BINARY` when set, if it is an executable: a set path that
+    /// isn't means no zmx, with no fallback. Otherwise the first executable
+    /// among `../zmx/zmx` beside `executable` with links resolved (the layout
+    /// of `Alas.app/Contents/Resources` and the cask zip) and `fallback`.
     public static func zmxBinary(
         executable: URL?,
         fallback: URL = URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/zmx/zmx"),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> URL? {
+        if let override = environment["ALAS_ZMX_BINARY"], !override.isEmpty {
+            return fileManager.isExecutableFile(atPath: override) ? URL(fileURLWithPath: override) : nil
+        }
         let beside = executable.map {
             $0.resolvingSymlinksInPath()
                 .deletingLastPathComponent()

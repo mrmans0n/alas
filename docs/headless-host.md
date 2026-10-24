@@ -181,7 +181,8 @@ Worktrees of SSH projects are refused.
 
 zmx ships in the cask's zip beside the host. Otherwise the host uses the one in
 `/Applications/Alas.app`; with neither, stderr says so and Macs offer no
-terminals here.
+terminals here. Set `ALAS_ZMX_BINARY` to use another zmx; a path that isn't an
+executable turns terminals off.
 
 The launch agent can't show privacy prompts, so a shell in a protected folder
 (Desktop, Documents, Downloads, iCloud Drive, removable volumes) may fail to

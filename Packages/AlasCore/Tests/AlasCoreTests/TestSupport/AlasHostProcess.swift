@@ -27,13 +27,14 @@ final class AlasHostProcess: @unchecked Sendable {
             .appendingPathComponent(".build/debug/alas-host")
     }
 
-    init(dataDirectory: URL, arguments: [String] = [], binary: URL = AlasHostProcess.binary) throws {
+    init(dataDirectory: URL, arguments: [String] = [], binary: URL = AlasHostProcess.binary, environment extra: [String: String] = [:]) throws {
         let root = AlasProfile.canonicalDirectory(dataDirectory) ?? dataDirectory
         runtimeDirectory = AlasProfile.runtimeDirectory(for: root, uid: getuid())
         process.executableURL = binary
         process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
         environment["ALAS_APP_SUPPORT_DIR"] = dataDirectory.path
+        environment.merge(extra) { $1 }
         process.environment = environment
         let stdout = Pipe()
         let stderr = Pipe()

@@ -5,7 +5,8 @@ set -euo pipefail
 # its own, for the alas-host Homebrew cask: alas-host/alas-host beside
 # RemoteWeb/ and zmx/zmx, the layout the host looks for its web client
 # (../RemoteWeb) and zmx (../zmx/zmx) in. The binaries are copied
-# unchanged, so they keep the signature the app's notarization covered. Used by .github/workflows/release.yml.
+# unchanged, so they keep the signature the app's notarization covered.
+# Used by .github/workflows/release.yml.
 #
 # Usage: scripts/package-alas-host.sh <app-path> <output-prefix>
 # Output (next to the .app): <output-prefix>.zip

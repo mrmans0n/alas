@@ -55,6 +55,9 @@ struct HostConsolesTests {
             == pkgZmx.resolvingSymlinksInPath().path)
         #expect(HostShellLaunch.zmxBinary(executable: bare, fallback: appZmx) == appZmx)
         #expect(HostShellLaunch.zmxBinary(executable: bare, fallback: missing) == nil)
+        // The override wins, and a missing one means no zmx rather than the fallback.
+        #expect(HostShellLaunch.zmxBinary(executable: linked, fallback: appZmx, environment: ["ALAS_ZMX_BINARY": appZmx.path]) == appZmx)
+        #expect(HostShellLaunch.zmxBinary(executable: linked, fallback: appZmx, environment: ["ALAS_ZMX_BINARY": missing.path]) == nil)
     }
 
     // MARK: - Registry
