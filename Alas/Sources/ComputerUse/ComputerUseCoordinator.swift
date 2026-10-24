@@ -96,6 +96,9 @@ final class ComputerUseCoordinator {
     @ObservationIgnored private var backgroundKeyed: [String: [UInt32: ComputerUseWindow]] = [:]
     /// Chromium and Electron apps asked once to build their web content's tree (`ComputerUseWebContent`).
     @ObservationIgnored private var wokenWebContent: Set<Int32> = []
+    /// Per session, the apps whose AXEnhancedUserInterface Alas turned on: turned off again at its
+    /// stop, turn end or session end.
+    @ObservationIgnored private var enhancedUserInterface: [String: [Int32: ComputerUseAppIdentity]] = [:]
 
     private struct SnapshotKey: Hashable {
         var sessionID: String
@@ -451,8 +454,10 @@ final class ComputerUseCoordinator {
         }
         syncPending()
         let release = releaseBackgroundFocus(of: sessionID)
+        let restore = restoreWebContent(of: sessionID)
         await interrupt(sessionID)
         await release.value
+        await restore.value
     }
 
     func resume(sessionID: String) {
@@ -474,6 +479,7 @@ final class ComputerUseCoordinator {
         }
         syncPending()
         releaseBackgroundFocus(of: sessionID)
+        restoreWebContent(of: sessionID)
     }
 
     /// Idempotent: the manager may report a runtime end more than once (detach, reconnect).
@@ -486,6 +492,24 @@ final class ComputerUseCoordinator {
         for id in ids { resumeWaiters(of: id, with: .stopped) }
         syncPending()
         releaseBackgroundFocus(of: sessionID)
+        restoreWebContent(of: sessionID)
+    }
+
+    /// Turns AXEnhancedUserInterface off again in the apps the session's reads turned it on in.
+    /// Their next first contact may wake them again.
+    @discardableResult
+    private func restoreWebContent(of sessionID: String) -> Task<Void, Never> {
+        let apps = enhancedUserInterface.removeValue(forKey: sessionID).map { Array($0.values) } ?? []
+        // Another session may still rely on it.
+        let stillUsed = Set(enhancedUserInterface.values.flatMap(\.keys))
+        let restored = apps.filter { !stillUsed.contains($0.pid) }
+        for app in restored { wokenWebContent.remove(app.pid) }
+        let system = system
+        return Task {
+            for app in restored {
+                await system.restoreWebContent(app, ComputerUseWebContent.enhancedUserInterface)
+            }
+        }
     }
 
     /// Hands back the key windows the session's inputs still hold. They are taken out at once,
@@ -1411,10 +1435,19 @@ final class ComputerUseCoordinator {
             acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid), bundleID: window.app.bundleID,
             alreadyWoken: wokenWebContent.contains(window.app.pid), root: tree.root) {
             wokenWebContent.insert(window.app.pid)
-            await system.wakeWebContent(window.app)
+            _ = await system.wakeWebContent(window.app, ComputerUseWebContent.manualAccessibility)
             await sleep(Self.webContentWakeWait)
             try checkStillActive(context)
             tree = try await system.axTree(window, maxDepth, budget, readLimit)
+            // A Chromium browser that still shows none gets what VoiceOver sets, for the turn.
+            if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: tree.root) {
+                if await system.wakeWebContent(window.app, ComputerUseWebContent.enhancedUserInterface) {
+                    enhancedUserInterface[context.sessionID, default: [:]][window.app.pid] = window.app
+                }
+                await sleep(Self.webContentWakeWait)
+                try checkStillActive(context)
+                tree = try await system.axTree(window, maxDepth, budget, readLimit)
+            }
         }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.

@@ -164,4 +164,20 @@ struct ComputerUseWebContentTests {
         #expect(ComputerUseWebContent.needsWake(
             acceptsManualAccessibility: manual, bundleID: bundleID, alreadyWoken: woken, root: root) == wakes)
     }
+
+    /// AXEnhancedUserInterface is only the second try, for a Chromium browser still showing no web area.
+    @Test(arguments: [
+        (String?("com.google.Chrome"), empty, true),
+        ("com.google.Chrome", built, false),
+        ("com.tinyspeck.slackmacgap", empty, false),
+    ])
+    func onlyAChromeWindowStillEmptyGetsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode, sets: Bool) {
+        #expect(ComputerUseWebContent.needsEnhancedUserInterface(bundleID: bundleID, root: root) == sets)
+    }
+
+    /// Only a setting Alas turned on is turned off again.
+    @Test(arguments: [(Bool?(false), true, true), (nil, true, true), (true, true, false), (false, false, false)])
+    func onlyWhatAlasTurnedOnIsRestored(before: Bool?, setSucceeded: Bool, restores: Bool) {
+        #expect(ComputerUseWebContent.restores(before: before, setSucceeded: setSucceeded) == restores)
+    }
 }

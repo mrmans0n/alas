@@ -88,20 +88,33 @@ enum ComputerUseAXReader {
         buildingTreePIDs.withLock { _ = $0.remove(pid) }
     }
 
-    /// Asks a Chromium or Electron app to build its web content's tree: each of
-    /// `ComputerUseWebContent.wakeAttributes` is set unless it already reads as set.
-    static func wakeWebContent(_ app: ComputerUseAppIdentity) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    /// Asks a Chromium or Electron app to build its web content's tree: `attribute` is set to true
+    /// unless it already reads as true. Returns whether Alas turned it on
+    /// (`ComputerUseWebContent.restores`), so it can be turned off again.
+    static func wakeWebContent(_ app: ComputerUseAppIdentity, attribute: String) async -> Bool {
+        await withCheckedContinuation { continuation in
             queue.async {
                 let element = application(app.pid)
-                for attribute in ComputerUseWebContent.wakeAttributes(bundleID: app.bundleID) {
-                    var value: CFTypeRef?
-                    if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
-                       let value, CFGetTypeID(value) == CFBooleanGetTypeID(), CFBooleanGetValue((value as! CFBoolean)) {
-                        continue
-                    }
-                    _ = AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue)
+                var value: CFTypeRef?
+                var before: Bool?
+                if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                   let value, CFGetTypeID(value) == CFBooleanGetTypeID() {
+                    before = CFBooleanGetValue((value as! CFBoolean))
                 }
+                let set = before == true
+                    || AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue) == .success
+                continuation.resume(returning: ComputerUseWebContent.restores(before: before, setSucceeded: set))
+            }
+        }
+    }
+
+    /// Turns off an attribute `wakeWebContent` turned on.
+    static func restoreWebContent(_ app: ComputerUseAppIdentity, attribute: String) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async {
+                let element = AXUIElementCreateApplication(app.pid)
+                AXUIElementSetMessagingTimeout(element, messagingTimeout)
+                _ = AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanFalse)
                 continuation.resume()
             }
         }

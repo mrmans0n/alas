@@ -167,7 +167,10 @@ struct ComputerUseCoordinatorTests {
         let woken = Counter()
         var system = Self.system()
         system.usesManualAccessibility = { _ in true }
-        system.wakeWebContent = { _ in _ = woken.next() }
+        system.wakeWebContent = { _, _ in
+            _ = woken.next()
+            return true
+        }
         system.axTree = { _, _, _, _ in
             let web = reads.next() > 1
             let content = ComputerUseAXNode(role: web ? "AXWebArea" : "AXGroup", handle: 1)
@@ -180,6 +183,32 @@ struct ComputerUseCoordinatorTests {
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
         #expect(reads.next() == 4)
         #expect(woken.next() == 2)
+    }
+
+    /// A Chromium browser still showing no web area after AXManualAccessibility gets
+    /// AXEnhancedUserInterface, which the turn's end turns off again.
+    @Test func chromeGetsEnhancedUserInterfaceOnlyAsASecondTryAndUntilTheTurnEnds() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window])
+        system.wakeWebContent = { _, attribute in
+            recorder.recordEvent("wake:\(attribute)")
+            return attribute == "AXEnhancedUserInterface"
+        }
+        system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
+        system.axTree = { _, _, _, _ in
+            let web = reads.next() > 2
+            let content = ComputerUseAXNode(role: web ? "AXWebArea" : "AXGroup", handle: 1)
+            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")))
+        #expect(json.contains("AXWebArea"))
+        #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXEnhancedUserInterface"])
+        f.coordinator.turnEnded(sessionID: "s")
+        try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
     }
 
     /// Only an element nothing of which shows carries `visible`.

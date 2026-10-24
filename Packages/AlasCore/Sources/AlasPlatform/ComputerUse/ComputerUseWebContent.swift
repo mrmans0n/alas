@@ -15,9 +15,17 @@ public enum ComputerUseWebContent {
     public static let manualAccessibility = "AXManualAccessibility"
     public static let enhancedUserInterface = "AXEnhancedUserInterface"
 
-    /// The attributes that ask the app to build its web content's tree, each set unless it already is.
-    public static func wakeAttributes(bundleID: String?) -> [String] {
-        chromeBundleIDs.contains(bundleID ?? "") ? [manualAccessibility, enhancedUserInterface] : [manualAccessibility]
+    /// Whether a Chromium browser whose window still shows no web area after `manualAccessibility`
+    /// and a re-read is asked once more, with `enhancedUserInterface`. That one is app-wide and
+    /// slows window moves under window managers, so it is the second resort, and is undone after.
+    public static func needsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode) -> Bool {
+        chromeBundleIDs.contains(bundleID ?? "") && !hasWebArea(root)
+    }
+
+    /// Whether Alas turned an attribute on, and so turns it off again at stop, turn end and
+    /// session end: it didn't read as true before (`before`, nil when unreadable) and the set took.
+    public static func restores(before: Bool?, setSucceeded: Bool) -> Bool {
+        before != true && setSucceeded
     }
 
     /// Whether a read is worth repeating after asking for the web content's tree: the app is a
