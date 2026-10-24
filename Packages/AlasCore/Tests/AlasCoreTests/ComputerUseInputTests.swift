@@ -236,6 +236,21 @@ struct ComputerUseInputTests {
         #expect(ComputerUseRemoteContent.target(for: .click, path: path) == 1)
     }
 
+    /// A point is on screen only on a display: AeroSpace parks hidden windows in the corner, with
+    /// a 1-point sliver on the display.
+    @Test(arguments: [
+        (CGPoint(x: 500, y: 500), true),
+        (CGPoint(x: 0, y: 0), true),
+        (CGPoint(x: 1727.5, y: 1100), true),
+        (CGPoint(x: 2562, y: 1148), false),
+        (CGPoint(x: -800, y: 300), true),
+        (CGPoint(x: -800, y: 1200), false),
+    ])
+    func pointsAreOnScreenOnlyOnADisplay(point: CGPoint, onScreen: Bool) {
+        let displays = [CGRect(x: 0, y: 0, width: 1728, height: 1117), CGRect(x: -1920, y: -200, width: 1920, height: 1080)]
+        #expect(ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) == onScreen)
+    }
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)

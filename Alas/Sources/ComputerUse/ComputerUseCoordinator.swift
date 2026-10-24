@@ -439,7 +439,8 @@ final class ComputerUseCoordinator {
                 payload["credential_prompt"] = true
                 windows = []
             }
-            payload["windows"] = windows.map(Self.windowEntry)
+            let displays = system.displays()
+            payload["windows"] = windows.map { Self.windowEntry($0, displays: displays) }
             return (payload, running)
         }
     }
@@ -749,6 +750,7 @@ final class ComputerUseCoordinator {
         // One read for the whole listing; a blocked app's windows aren't listed either way.
         let withWindows = zip(apps, accesses).filter { $1 != .blocked && !$0.windows.isEmpty }.map(\.0.app.pid)
         let prompts = withWindows.isEmpty ? [:] : await system.credentialPrompts(withWindows)
+        let displays = system.displays()
         var entries: [[String: Any]] = []
         for (entry, appAccess) in zip(apps, accesses) {
             var object = Self.app(entry.app)
@@ -767,7 +769,7 @@ final class ComputerUseCoordinator {
             case .clear?, nil:
                 break
             }
-            object["windows"] = windows.map(Self.windowEntry)
+            object["windows"] = windows.map { Self.windowEntry($0, displays: displays) }
             entries.append(object)
         }
         var payload: [String: Any] = ["version": 1, "apps": entries]
@@ -957,8 +959,11 @@ final class ComputerUseCoordinator {
     }
 
     /// A drag that grabbed the window instead of an item moves it; the button is already up then.
+    /// A window that was off screen (another workspace) and came back with the activation moved
+    /// without being grabbed.
     private func refuseIfDragMovedWindow(_ window: ComputerUseWindow) async throws {
-        guard let current = await system.window(window.windowID),
+        guard ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: system.displays()),
+              let current = await system.window(window.windowID),
               ComputerUseInputGeometry.windowMoved(from: window.frame, to: current.frame)
         else { return }
         throw Refusal(Message.actionFailed("The drag moved the window instead of an item; nothing was dropped."))
@@ -1622,8 +1627,10 @@ final class ComputerUseCoordinator {
         return object
     }
 
-    private static func windowEntry(_ window: ComputerUseWindow) -> [String: Any] {
+    /// `off_screen`: none of the window is on a display (another Space, an AeroSpace workspace).
+    private static func windowEntry(_ window: ComputerUseWindow, displays: [CGRect]) -> [String: Any] {
         var info: [String: Any] = ["window_id": Int(window.windowID), "frame": frame(window.frame)]
+        if !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays) { info["off_screen"] = true }
         info["title"] = window.title
         return info
     }

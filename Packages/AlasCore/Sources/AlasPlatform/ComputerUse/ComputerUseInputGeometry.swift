@@ -60,6 +60,18 @@ public enum ComputerUseInputGeometry {
         return frame.map { holds($0, point) } ?? true
     }
 
+    /// Whether `point` is on one of `displays` (CG global, top-left frames). A window AeroSpace
+    /// parks on a hidden workspace sits off every display but a 1-point sliver: input posted at
+    /// a point off screen reaches nothing.
+    public static func pointIsOnScreen(_ point: CGPoint, displays: [CGRect]) -> Bool {
+        displays.contains { $0.contains(point) }
+    }
+
+    /// Whether any of a window's frame is on one of `displays`.
+    public static func frameIsOnScreen(_ frame: CGRect, displays: [CGRect]) -> Bool {
+        displays.contains { $0.intersects(frame) }
+    }
+
     /// Whether `frame` holds `point`, within `frameTolerance`.
     public static func holds(_ frame: CGRect, _ point: CGPoint) -> Bool {
         frame.insetBy(dx: -frameTolerance, dy: -frameTolerance).contains(point)

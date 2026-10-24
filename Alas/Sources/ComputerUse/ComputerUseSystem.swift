@@ -202,6 +202,8 @@ struct ComputerUseSystem: Sendable {
     /// an attribute on; true when Alas turned it on, so `restoreWebContent` turns it off again.
     var wakeWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Bool = { _, _ in false }
     var restoreWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Void = { _, _ in }
+    /// The active displays' frames, CG global, top-left.
+    var displays: @Sendable () -> [CGRect] = { [.infinite] }
 
     /// Whether a system password prompt is showing in the app, or may be: one app alone is probed
     /// first, so an unchecked one is the probe not getting to it, and counts as showing.
@@ -238,7 +240,8 @@ struct ComputerUseSystem: Sendable {
             credentialPrompts: { await LiveComputerUseSystem.credentialPrompts(pids: $0) },
             accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
             wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0, attribute: $1) },
-            restoreWebContent: { await ComputerUseAXReader.restoreWebContent($0, attribute: $1) }
+            restoreWebContent: { await ComputerUseAXReader.restoreWebContent($0, attribute: $1) },
+            displays: { LiveComputerUseSystem.displayFrames() }
         )
     }
 }
@@ -508,9 +511,10 @@ extension LiveComputerUseSystem {
         // Content another process draws in the window (a System Settings pane) takes no posted
         // events: an x/y click or scroll there goes as AX on the element at the point, also when
         // direct. Where AX has no way, the events go as they always did.
-        if let routed = try await routedToPoint(input, in: window, isCancelled: isCancelled),
-           let delivered = try await remoteViaAX(routed, in: window, interrupt: interrupt) {
-            return delivered
+        if let routed = try await routedToPoint(input, in: window, isCancelled: isCancelled) {
+            if let delivered = try await remoteViaAX(routed.input, in: window, interrupt: interrupt) { return delivered }
+            // Events at a point off screen reach nothing: reporting them delivered would be wrong.
+            if routed.offScreen { throw ComputerUseSystemError.actionFailed(offScreenRefusal(window.app)) }
         }
         // Drags always go with the app in front; the coordinator applies the direct takeover rule to them.
         if direct || input.isDrag {
@@ -639,21 +643,46 @@ extension LiveComputerUseSystem {
     /// An x/y click or scroll whose point holds content another process draws in the window, as
     /// the same input on the element there (`ComputerUseInputGeometry.pointRoute`); nil for any
     /// other input. Refuses when another process's element at the point isn't in the window.
+    /// Point is off every display: the input goes as AX or not at all.
+    private struct Routed {
+        var input: ComputerUseInput
+        var offScreen = false
+    }
+
+    static func offScreenRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "That point of \(app.name)'s window is off screen (it may be on another Space or workspace). Use element refs, "
+            + "or ask the user to bring the window on screen."
+    }
+
+    /// The frames of the active displays, CG global, top-left.
+    static func displayFrames() -> [CGRect] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
+        return ids.prefix(Int(count)).map(CGDisplayBounds)
+    }
+
     private static func routedToPoint(
         _ input: ComputerUseInput, in window: ComputerUseWindow, isCancelled: @escaping @Sendable () -> Bool
-    ) async throws -> ComputerUseInput? {
+    ) async throws -> Routed? {
         let point: CGPoint
         switch input {
         case .click(.point(let at), _, _), .scroll(.point(let at), _, _): point = at
         default: return nil
         }
-        // System Settings' panes: the element is found down the window, whatever its process.
-        if ComputerUseRemoteContent.hostsContentRemotely(bundleID: window.app.bundleID) {
-            let kind: ComputerUseRemoteContent.Input = if case .scroll = input { .scroll } else { .click }
+        let kind: ComputerUseRemoteContent.Input = if case .scroll = input { .scroll } else { .click }
+        // A window parked off screen (an AeroSpace workspace, another Space) takes no events at
+        // all, and System Settings' panes none from posted events: the element is found down the
+        // window and driven through AX.
+        let displays = displayFrames()
+        let offScreen = !displays.isEmpty && !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays)
+        if offScreen || ComputerUseRemoteContent.hostsContentRemotely(bundleID: window.app.bundleID) {
             if let handles = try await ComputerUseAXActions.remoteContentElement(
-                at: point, in: window, for: kind, isCancelled: isCancelled) {
-                return converted(input, to: .element(handles, 0))
+                at: point, in: window, for: kind, isCancelled: isCancelled),
+               let routed = converted(input, to: .element(handles, 0)) {
+                return Routed(input: routed, offScreen: offScreen)
             }
+            if offScreen { throw ComputerUseSystemError.actionFailed(offScreenRefusal(window.app)) }
         }
         let found = try await ComputerUseAXActions.element(at: point, in: window, isCancelled: isCancelled)
         switch ComputerUseInputGeometry.pointRoute(point: point, targetPID: window.app.pid, window: window.frame, appHit: found?.hit) {
@@ -661,8 +690,8 @@ extension LiveComputerUseSystem {
         case .covered: throw ComputerUseSystemError.actionFailed(coveredPointRefusal)
         case .ax: break
         }
-        guard let element = found else { return nil }
-        return converted(input, to: .element(element.handles, 0))
+        guard let element = found, let routed = converted(input, to: .element(element.handles, 0)) else { return nil }
+        return Routed(input: routed)
     }
 
     /// The x/y click or scroll `input`, at `target` instead.
@@ -947,18 +976,28 @@ extension LiveComputerUseSystem {
                 try await ComputerUseAXActions.raise(toWindow, isCancelled: isCancelled)
             }
             try? await Task.sleep(for: dragRaiseSettle)
-            let dropWindow = toWindow ?? window
+            // Activation may have brought the windows back on screen (AeroSpace switches to their
+            // workspace): their points map against where they are now.
+            func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
+                await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
+            }
+            func moved(_ point: CGPoint, from shown: ComputerUseWindow, to now: ComputerUseWindow) -> CGPoint {
+                CGPoint(x: point.x - shown.frame.minX + now.frame.minX, y: point.y - shown.frame.minY + now.frame.minY)
+            }
+            let startWindow = await current(window)
+            let dropWindow = await current(toWindow ?? window)
             // A ref's point is on the part of it its scroll area shows: an element scrolled under
             // another part of the window (a sidebar) would press that part instead.
             func startPoint() async throws -> CGPoint {
                 switch from {
                 case .element(let handles, let handle):
                     guard let visible = try await ComputerUseAXActions.visibleCenter(
-                        handles, handle, within: window.frame, app: app, requireOwnCenter: false, isCancelled: isCancelled)
+                        handles, handle, within: startWindow.frame, app: app, requireOwnCenter: false, isCancelled: isCancelled)
                     else { throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.") }
                     return visible
                 case .point(let point):
-                    guard window.frame.contains(point) else { throw ComputerUseSystemError.outOfBounds }
+                    let point = moved(point, from: window, to: startWindow)
+                    guard startWindow.frame.contains(point) else { throw ComputerUseSystemError.outOfBounds }
                     return point
                 }
             }
@@ -979,6 +1018,7 @@ extension LiveComputerUseSystem {
                 }
                 end = visible
             case .point(let point):
+                let point = moved(point, from: toWindow ?? window, to: dropWindow)
                 guard dropWindow.frame.contains(point) else { throw ComputerUseSystemError.dropOutOfBounds }
                 end = point
             }
@@ -986,10 +1026,16 @@ extension LiveComputerUseSystem {
             // the others: coverage only refuses once they had `dragRaiseWait`, and a user back at
             // the Mac meanwhile is told so instead (`ComputerUseTakeover.dragStep`).
             func checkCovered() async throws {
+                // Still off screen once in front: nothing would get the drag's events.
+                let displays = displayFrames()
+                if !displays.isEmpty, !ComputerUseInputGeometry.pointIsOnScreen(start, displays: displays)
+                    || !ComputerUseInputGeometry.pointIsOnScreen(end, displays: displays) {
+                    throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
+                }
                 var waited: TimeInterval = 0
                 while true {
                     let covered = ComputerUseInputGeometry.coveredDragPoint(
-                        start: start, in: window.windowID, end: end, in: dropWindow.windowID,
+                        start: start, in: startWindow.windowID, end: end, in: dropWindow.windowID,
                         windows: screenWindows(), ignoring: ignoring())
                     switch ComputerUseTakeover.dragStep(
                         idleSeconds: secondsSinceUserInput(), activated: true, covered: covered, waitedForRaise: waited) {

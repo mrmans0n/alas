@@ -495,6 +495,21 @@ struct ComputerUseCoordinatorTests {
         #expect((blocked["windows"] as? [Any])?.isEmpty == true)
     }
 
+    /// A window none of which is on a display (an AeroSpace workspace, another Space) says so.
+    @Test func appsMarkWindowsOffEveryDisplay() async throws {
+        var system = Self.system()
+        // Notes' window ends at (400, 300); Mail's reaches into the display.
+        system.displays = { [CGRect(x: 450, y: 350, width: 500, height: 500)] }
+        let f = Self.fixture(system: system)
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
+        let windows = Dictionary(uniqueKeysWithValues: apps.compactMap { app in
+            (app["windows"] as? [[String: Any]])?.first.map { (app["name"] as? String ?? "", $0) }
+        })
+        #expect(windows["Notes"]?["off_screen"] as? Bool == true)
+        #expect(windows["Mail"]?["off_screen"] == nil)
+    }
+
     @Test func screenshotOfVanishedWindowReportsNotFound() async {
         let f = Self.fixture(system: Self.system(windows: [:]))
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 42), sessionID: "s")
