@@ -169,6 +169,19 @@ struct HostConsolesTests {
         #expect(try fixture.savedFile()?.consoles.isEmpty == true)
     }
 
+    @Test func savedShellsSurviveWhileZmxIsMissing() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let id = try await fixture.consoles().open(worktreeId: fixture.worktree.id)
+
+        // Unknown is not gone: zmx may come back, and its daemons with it.
+        let restored = fixture.consoles(zmx: ZmxClient(env: ZmxEnv(binaryURL: nil, zmxDir: fixture.zmxDir)))
+        await restored.restore()
+        #expect(restored.summaries().map(\.consoleId) == [id])
+        #expect(restored.hasConsoles(inWorktrees: [fixture.worktree.id]))
+        #expect(try fixture.savedFile()?.consoles.map(\.id) == [id])
+    }
+
     @Test func resizeIsRememberedOnlyWhenZmxTookIt() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
@@ -350,9 +363,9 @@ struct HostConsolesTests {
             )
         }
 
-        func consoles() -> HostConsoles {
+        func consoles(zmx override: ZmxClient? = nil) -> HostConsoles {
             let fakes = fakes
-            let zmx = zmx
+            let zmx = override ?? zmx
             let projects = projects
             let worktree = worktree
             return HostConsoles(

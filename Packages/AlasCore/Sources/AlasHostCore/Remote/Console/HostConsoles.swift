@@ -230,10 +230,11 @@ public final class HostConsoles {
     }
 
     /// Forgets shells whose socket is gone: they exited (the user typed
-    /// `exit`), whether or not a peer was watching.
+    /// `exit`), whether or not a peer was watching. Without zmx no path
+    /// resolves, and unknown is not gone, so those are kept.
     private func pruneExited() {
         let alive = entries.filter { entry in
-            zmx.socketPath(forSession: entry.zmxName).map { FileManager.default.fileExists(atPath: $0) } ?? false
+            zmx.socketPath(forSession: entry.zmxName).map { FileManager.default.fileExists(atPath: $0) } ?? true
         }
         guard alive != entries else { return }
         entries = alive
