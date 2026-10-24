@@ -239,7 +239,8 @@ public enum BuiltInAlasMCP: Sendable {
         sessionId: String,
         parentSessionId: String? = nil,
         httpEndpoint: HTTPEndpoint? = nil,
-        workspaceContext: WorkspaceContext? = nil
+        workspaceContext: WorkspaceContext? = nil,
+        headless: Bool = false
     ) -> Injection? {
         guard shouldInject(
             enabled: enabled,
@@ -279,6 +280,7 @@ public enum BuiltInAlasMCP: Sendable {
                     .init(name: "ALAS_SESSION_ID", value: sessionId),
                 ] + (parentSessionId.map { [.init(name: "ALAS_PARENT_SESSION_ID", value: $0)] } ?? [])
                     + workspaceEnvironment
+                    + (headless ? [.init(name: "ALAS_MCP_HEADLESS", value: "1")] : [])
             )
             transport = .stdio
         }

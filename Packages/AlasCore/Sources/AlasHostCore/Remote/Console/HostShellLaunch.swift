@@ -95,25 +95,52 @@ public struct HostShellLaunch: Equatable, Sendable {
         return "/bin/zsh"
     }
 
-    /// `ALAS_ZMX_BINARY` when set, if it is an executable: a set path that
-    /// isn't means no zmx, with no fallback. Otherwise the first executable
-    /// among `../zmx/zmx` beside `executable` with links resolved (the layout
-    /// of `Alas.app/Contents/Resources` and the cask zip) and `fallback`.
+    /// `ALAS_ZMX_BINARY` when set, else `zmx/zmx` beside `executable` or
+    /// `fallback`, by the rules of ``bundledBinary(_:overrideKey:executable:fallback:environment:fileManager:)``.
     public static func zmxBinary(
         executable: URL?,
         fallback: URL = URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/zmx/zmx"),
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> URL? {
-        if let override = environment["ALAS_ZMX_BINARY"], !override.isEmpty {
+        bundledBinary(["zmx/zmx"], overrideKey: "ALAS_ZMX_BINARY", executable: executable,
+                      fallback: fallback, environment: environment, fileManager: fileManager)
+    }
+
+    /// The `alas` CLI: `ALAS_CLI_BINARY`, else `alas-cli/alas` (the host zip)
+    /// or `alas-cli/<arch>/alas` (the app bundle) beside `executable`, else
+    /// `fallback`.
+    public static func cliBinary(
+        executable: URL?,
+        fallback: URL = URL(
+            fileURLWithPath: "/Applications/Alas.app/Contents/Resources/alas-cli/\(TerminalCLIInjection.archDirectory)/alas"
+        ),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        bundledBinary(["alas-cli/alas", "alas-cli/\(TerminalCLIInjection.archDirectory)/alas"],
+                      overrideKey: "ALAS_CLI_BINARY", executable: executable,
+                      fallback: fallback, environment: environment, fileManager: fileManager)
+    }
+
+    /// `overrideKey` when set, if it is an executable: a set path that isn't
+    /// means no binary, with no fallback. Otherwise the first executable among
+    /// each of `relativePaths` under the directory above `executable`'s with
+    /// links resolved (the layout of `Alas.app/Contents/Resources` and the
+    /// cask zip), then `fallback`.
+    public static func bundledBinary(
+        _ relativePaths: [String],
+        overrideKey: String,
+        executable: URL?,
+        fallback: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        if let override = environment[overrideKey], !override.isEmpty {
             return fileManager.isExecutableFile(atPath: override) ? URL(fileURLWithPath: override) : nil
         }
-        let beside = executable.map {
-            $0.resolvingSymlinksInPath()
-                .deletingLastPathComponent()
-                .deletingLastPathComponent()
-                .appendingPathComponent("zmx/zmx")
-        }
-        return [beside, fallback].compactMap(\.self).first { fileManager.isExecutableFile(atPath: $0.path) }
+        let root = executable.map { $0.resolvingSymlinksInPath().deletingLastPathComponent().deletingLastPathComponent() }
+        let beside = root.map { root in relativePaths.map { root.appendingPathComponent($0) } } ?? []
+        return (beside + [fallback]).first { fileManager.isExecutableFile(atPath: $0.path) }
     }
 }

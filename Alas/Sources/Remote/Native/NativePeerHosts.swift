@@ -21,6 +21,8 @@ final class NativePeerHosts {
     private let supports: @MainActor (_ serverId: String, _ capability: String) -> Bool
     let confirm: @MainActor (PeerWorktreeRemoval.Confirmation, _ peerName: String) async -> Bool
     let showError: @MainActor (_ title: String, _ message: String) -> Void
+    /// Shows a notice a peer's agent sent, with the peer's server id.
+    private let notice: @MainActor (_ serverId: String, HostNotice) -> Void
     private let timeout: Duration
     @ObservationIgnored private var channels: [String: PeerHostChannel] = [:]
 
@@ -29,12 +31,14 @@ final class NativePeerHosts {
         supports: @escaping @MainActor (_ serverId: String, _ capability: String) -> Bool,
         confirm: @escaping @MainActor (PeerWorktreeRemoval.Confirmation, _ peerName: String) async -> Bool = { _, _ in false },
         showError: @escaping @MainActor (_ title: String, _ message: String) -> Void = { _, _ in },
+        notice: @escaping @MainActor (_ serverId: String, HostNotice) -> Void = { _, _ in },
         timeout: Duration = PeerHostChannel.defaultTimeout
     ) {
         self.send = send
         self.supports = supports
         self.confirm = confirm
         self.showError = showError
+        self.notice = notice
         self.timeout = timeout
     }
 
@@ -160,6 +164,7 @@ final class NativePeerHosts {
             onChange?()
             if runsChanged { onRunsChanged?(serverId) }
         }
+        channel.onNotice = { [notice] in notice(serverId, $0) }
         channels[serverId] = channel
         return channel
     }

@@ -3,9 +3,11 @@ set -euo pipefail
 
 # Packages the headless host from a signed, notarized Alas.app as a zip of
 # its own, for the alas-host Homebrew cask: alas-host/alas-host beside
-# RemoteWeb/ and zmx/zmx, the layout the host looks for its web client
-# (../RemoteWeb) and zmx (../zmx/zmx) in. The binaries are copied
-# unchanged, so they keep the signature the app's notarization covered.
+# RemoteWeb/, zmx/zmx and alas-cli/alas, the layout the host looks for its
+# web client (../RemoteWeb), zmx (../zmx/zmx) and the alas CLI
+# (../alas-cli/alas) in. The CLI is the app's slice for the prefix's
+# architecture (*-arm64 or *-x86_64). The binaries are copied unchanged, so
+# they keep the signature the app's notarization covered.
 # Used by .github/workflows/release.yml.
 #
 # Usage: scripts/package-alas-host.sh <app-path> <output-prefix>
@@ -20,6 +22,15 @@ app_path="$1"
 prefix="$2"
 resources="$app_path/Contents/Resources"
 host="$resources/alas-host/alas-host"
+case "$prefix" in
+  *-arm64) cli_arch=macos-aarch64 ;;
+  *-x86_64) cli_arch=macos-x86_64 ;;
+  *)
+    echo "error: $prefix does not end in -arm64 or -x86_64" >&2
+    exit 2
+    ;;
+esac
+cli="$resources/alas-cli/$cli_arch/alas"
 
 if [ ! -x "$host" ]; then
   echo "error: $host is not an executable" >&2
@@ -33,6 +44,10 @@ if [ ! -x "$resources/zmx/zmx" ]; then
   echo "error: $resources/zmx/zmx is not an executable" >&2
   exit 1
 fi
+if [ ! -x "$cli" ]; then
+  echo "error: $cli is not an executable" >&2
+  exit 1
+fi
 
 out_dir="$(cd "$(dirname "$app_path")" && pwd)"
 stage_dir="$(mktemp -d -t package-alas-host)"
@@ -41,6 +56,7 @@ mkdir -p "$stage_dir/alas-host"
 ditto "$host" "$stage_dir/alas-host/alas-host"
 ditto "$resources/RemoteWeb" "$stage_dir/RemoteWeb"
 ditto "$resources/zmx/zmx" "$stage_dir/zmx/zmx"
+ditto "$cli" "$stage_dir/alas-cli/alas"
 
 # All at the zip's root, where the cask's `binary` stanza finds the host.
 rm -f "$out_dir/$prefix.zip"

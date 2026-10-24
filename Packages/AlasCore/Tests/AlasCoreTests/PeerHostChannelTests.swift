@@ -59,7 +59,7 @@ struct PeerHostChannelTests {
         channel.receive(.response(id: 1, result: .snapshot(snapshot: snapshot([feature]))))
         try await eventually { @MainActor in sent.messages.count == 2 }
         #expect(channel.state?.worktrees == [feature])
-        #expect(sent.messages[1].request == .subscribe(after: cursor))
+        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice"]))
         #expect(!channel.isSubscribed)
         #expect(changes == 1)
 
@@ -82,6 +82,14 @@ struct PeerHostChannelTests {
         #expect(channel.state?.worktrees.first?.isArchived == true)
         channel.receive(.events(events: [.worktreeRemoved(projectID: "p", worktreeID: feature.worktree.id)], cursor: cursor))
         #expect(channel.state?.worktrees == [])
+        // A notice is handed on, and changes no state.
+        var got: [HostNotice] = []
+        channel.onNotice = { got.append($0) }
+        let notice = HostNotice(id: UUID(), owner: .worktree("w"), sessionID: "s", agent: "codex", title: "Q", body: "Pick one")
+        let before = channel.state
+        channel.receive(.events(events: [.notice(notice)], cursor: cursor))
+        #expect(got == [notice])
+        #expect(channel.state == before)
 
         // Batches of the replaced subscription keep coming until the new one starts.
         var deleting = feature

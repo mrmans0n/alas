@@ -43,6 +43,10 @@ public enum HostEvent: Codable, Equatable, Sendable {
     /// A followed session's state besides its transcript changed. Sent over
     /// the host protocol only to clients that accept `sessionState`.
     case sessionState(owner: SessionOwnerID, id: String, state: HostSessionState)
+    /// A session's agent asked for its user with `alas notify`, on a host
+    /// that relays notices. Sent over the host protocol only to clients that
+    /// accept `notice`.
+    case notice(HostNotice)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -52,6 +56,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
     private enum WorkspaceCheckoutChangedCodingKeys: String, CodingKey { case _0 = "checkout" }
     private enum RunChangedCodingKeys: String, CodingKey { case _0 = "run" }
     private enum SessionChangedCodingKeys: String, CodingKey { case _0 = "session" }
+    private enum NoticeCodingKeys: String, CodingKey { case _0 = "notice" }
 
     var key: HostEventKey {
         switch self {
@@ -69,8 +74,29 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .pendingRequest(let owner, let id, let request): .pendingRequest(owner: owner, id: id, request.id)
         case .pendingRequestResolved(let owner, let id, let requestID): .pendingRequest(owner: owner, id: id, requestID)
         case .sessionState(let owner, let id, _): .sessionState(owner: owner, id: id)
+        case .notice(let notice): .notice(notice.id)
         case .resync: .resync
         }
+    }
+}
+
+/// A notification a session's agent sent, for a client to show.
+public struct HostNotice: Codable, Equatable, Sendable {
+    public var id: UUID
+    public var owner: SessionOwnerID
+    public var sessionID: String
+    /// An `AgentKind` raw value, kept as sent: a client may not know a newer host's agents.
+    public var agent: String
+    public var title: String?
+    public var body: String
+
+    public init(id: UUID, owner: SessionOwnerID, sessionID: String, agent: String, title: String?, body: String) {
+        self.id = id
+        self.owner = owner
+        self.sessionID = sessionID
+        self.agent = agent
+        self.title = title
+        self.body = body
     }
 }
 
@@ -84,6 +110,7 @@ enum HostEventKey: Hashable {
     case transcript(owner: SessionOwnerID, id: String)
     case pendingRequest(owner: SessionOwnerID, id: String, HostPendingRequestID)
     case sessionState(owner: SessionOwnerID, id: String)
+    case notice(UUID)
     case resync
 }
 
@@ -505,7 +532,10 @@ extension HostEvent {
     /// The kind a host protocol client must accept to receive this event,
     /// for the kinds a version 1 client cannot decode; nil for the rest.
     var optInKind: String? {
-        if case .sessionState = self { return "sessionState" }
-        return nil
+        switch self {
+        case .sessionState: "sessionState"
+        case .notice: "notice"
+        default: nil
+        }
     }
 }

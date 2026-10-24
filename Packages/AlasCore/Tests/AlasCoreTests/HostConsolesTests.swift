@@ -18,6 +18,7 @@ struct HostConsolesTests {
         let base = [
             "PATH": "/login/bin:/usr/bin", "TERM": "dumb", "TERM_PROGRAM": "Apple_Terminal",
             "ZMX_SESSION": "outer", "HOME": "/Users/u", "CLAUDECODE": "1", "CLAUDE_SESSION_ID": "s",
+            "ALAS_SOCKET_PATH": "/stale", "ALAS_SESSION_ID": "old",
             "ALAS_APP_SUPPORT_DIR": "/profile", "ALAS_ZMX_BINARY": "/opt/zmx", "ALAS_REMOTE_WEB_DIR": "/web",
         ]
         let launch = try #require(HostShellLaunch.make(
@@ -31,6 +32,22 @@ struct HostConsolesTests {
             "PATH": "/login/bin:/usr/bin", "HOME": "/Users/u", "TERM": "xterm-256color",
             "COLORTERM": "truecolor", "ZMX_DIR": "/tmp/z", "LANG": "en_US.UTF-8",
         ])
+        // The CLI's context: its bin dir and the worktree, never an inherited identity.
+        let feature = Worktree(
+            id: "/srv/feature", projectId: "p", name: "feature", branch: "feature",
+            path: URL(fileURLWithPath: "/srv/feature"), status: .clean, lastActivity: .distantPast
+        )
+        let withContext = try #require(HostShellLaunch.make(
+            zmx: zmx, sessionName: "alashost-a-b", directory: feature.path, shell: "/bin/zsh",
+            environmentOverrides: HostConsoles.shellContext(
+                worktree: feature, repoName: "repo", cliBinDir: URL(fileURLWithPath: "/profile/bin"), basePATH: base["PATH"]
+            ),
+            baseEnvironment: base
+        ))
+        #expect(withContext.environment["ALAS_WORKTREE"] == "/srv/feature")
+        #expect(withContext.environment["ALAS_REPO"] == "repo")
+        #expect(withContext.environment["PATH"] == "/profile/bin:/login/bin:/usr/bin")
+        #expect(withContext.environment["ALAS_SOCKET_PATH"] == nil && withContext.environment["ALAS_SESSION_ID"] == nil)
         // A locale the login environment set is kept as it is.
         let localized = HostShellLaunch.make(
             zmx: zmx, sessionName: "alashost-a-b", directory: URL(fileURLWithPath: "/srv/feature"),
@@ -39,7 +56,20 @@ struct HostConsolesTests {
         #expect(localized?.environment["LANG"] == nil)
     }
 
-    @Test func zmxIsFoundBesideTheLinkedExecutableElseInTheApp() throws {
+    enum Tool: CaseIterable {
+        case zmx, cli
+        var relative: String { self == .zmx ? "zmx/zmx" : "alas-cli/alas" }
+        var overrideKey: String { self == .zmx ? "ALAS_ZMX_BINARY" : "ALAS_CLI_BINARY" }
+        func lookup(executable: URL?, fallback: URL, environment: [String: String] = [:]) -> URL? {
+            switch self {
+            case .zmx: HostShellLaunch.zmxBinary(executable: executable, fallback: fallback, environment: environment)
+            case .cli: HostShellLaunch.cliBinary(executable: executable, fallback: fallback, environment: environment)
+            }
+        }
+    }
+
+    @Test(arguments: Tool.allCases)
+    func bundledBinariesAreFoundBesideTheLinkedExecutableElseInTheApp(_ tool: Tool) throws {
         let fm = FileManager.default
         let root = fm.temporaryDirectory.appendingPathComponent("hostconsoles-\(UUID().uuidString)", isDirectory: true)
         defer { try? fm.removeItem(at: root) }
@@ -49,23 +79,29 @@ struct HostConsolesTests {
             #expect(fm.createFile(atPath: url.path, contents: Data(), attributes: [.posixPermissions: 0o755]))
             return url
         }
-        // Homebrew layout: root/bin/alas-host -> root/pkg/alas-host/alas-host, zmx in root/pkg/zmx/zmx.
+        // Homebrew layout: root/bin/alas-host -> root/pkg/alas-host/alas-host, the tool in root/pkg/<relative>.
         _ = try executable("pkg/alas-host/alas-host")
-        let pkgZmx = try executable("pkg/zmx/zmx")
+        let pkgTool = try executable("pkg/\(tool.relative)")
         let linked = root.appendingPathComponent("bin/alas-host")
         try fm.createDirectory(at: linked.deletingLastPathComponent(), withIntermediateDirectories: true)
         try fm.createSymbolicLink(atPath: linked.path, withDestinationPath: "../pkg/alas-host/alas-host")
         let bare = try executable("bare/alas-host/alas-host")
-        let appZmx = try executable("app/zmx/zmx")
-        let missing = root.appendingPathComponent("nowhere/zmx")
+        let appTool = try executable("app/\(tool.relative)")
+        let missing = root.appendingPathComponent("nowhere/tool")
 
-        #expect(HostShellLaunch.zmxBinary(executable: linked, fallback: appZmx)?.standardizedFileURL.path
-            == pkgZmx.resolvingSymlinksInPath().path)
-        #expect(HostShellLaunch.zmxBinary(executable: bare, fallback: appZmx) == appZmx)
-        #expect(HostShellLaunch.zmxBinary(executable: bare, fallback: missing) == nil)
-        // The override wins, and a missing one means no zmx rather than the fallback.
-        #expect(HostShellLaunch.zmxBinary(executable: linked, fallback: appZmx, environment: ["ALAS_ZMX_BINARY": appZmx.path]) == appZmx)
-        #expect(HostShellLaunch.zmxBinary(executable: linked, fallback: appZmx, environment: ["ALAS_ZMX_BINARY": missing.path]) == nil)
+        #expect(tool.lookup(executable: linked, fallback: appTool)?.standardizedFileURL.path
+            == pkgTool.resolvingSymlinksInPath().path)
+        #expect(tool.lookup(executable: bare, fallback: appTool) == appTool)
+        #expect(tool.lookup(executable: bare, fallback: missing) == nil)
+        // The override wins, and a missing one means no tool rather than the fallback.
+        #expect(tool.lookup(executable: linked, fallback: appTool, environment: [tool.overrideKey: appTool.path]) == appTool)
+        #expect(tool.lookup(executable: linked, fallback: appTool, environment: [tool.overrideKey: missing.path]) == nil)
+        if tool == .cli {
+            // Inside Alas.app the CLI sits in a per-architecture directory.
+            let appLayout = try executable("bare/alas-cli/\(TerminalCLIInjection.archDirectory)/alas")
+            #expect(tool.lookup(executable: bare, fallback: appTool)?.standardizedFileURL.path
+                == appLayout.resolvingSymlinksInPath().path)
+        }
     }
 
     // MARK: - Registry

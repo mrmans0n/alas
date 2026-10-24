@@ -178,12 +178,27 @@ if executableWasReplaced() {
     exit(0)
 }
 
+// The `alas` CLI, for agents' MCP server and shells, installed beside `ao`.
+let cliBinDir: URL?
+if let cli = HostShellLaunch.cliBinary(executable: Bundle.main.executableURL) {
+    do {
+        cliBinDir = try TerminalCLIInjection.installExecutables(sourceBinary: cli)
+    } catch {
+        cliBinDir = nil
+        FileHandle.standardError.write(Data("alas-host: cannot install the alas CLI from \(cli.path): \(error.localizedDescription); agents get no alas tools here\n".utf8))
+    }
+} else {
+    cliBinDir = nil
+    FileHandle.standardError.write(Data("alas-host: alas CLI not found beside alas-host or in /Applications/Alas.app; agents get no alas tools here\n".utf8))
+}
+
 let host: AlasHost
 do {
-    host = try AlasHost.boot()
+    host = try AlasHost.boot(cliBinDir: cliBinDir)
 } catch {
     fail("cannot load \(Paths.appSupportRoot.path): \(error.localizedDescription)")
 }
+host.serveCLI()
 
 let protocolServer = HostProtocolServer(host: host)
 guard let socket = HostSocketServer(server: protocolServer) else {
@@ -194,7 +209,7 @@ guard let socket = HostSocketServer(server: protocolServer) else {
 // worktree and project removal before any request arrives. They run in
 // zmx, found as the web client is; peers are offered them only with Remote.
 let zmx = ZmxClient(env: .resolve(binaryURL: HostShellLaunch.zmxBinary(executable: Bundle.main.executableURL)))
-let shells = HostConsoles.install(on: host.coreContext, zmx: zmx)
+let shells = HostConsoles.install(on: host.coreContext, zmx: zmx, cliBinDir: cliBinDir)
 
 // One shutdown: a second signal must not exit while the first still flushes.
 var isStopping = false

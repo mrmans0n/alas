@@ -7,6 +7,7 @@ import AlasCode
 import AlasAgents
 import AlasIntegrations
 import AlasACP
+import AlasAgentKit
 
 /// The host is stopping and starts nothing new.
 public struct HostStopping: Error, Equatable, LocalizedError {
@@ -51,8 +52,11 @@ extension AlasHost {
     /// before anything loads, the login-shell PATH is resolved for git and
     /// agents, and staged worktree trash and stale run files are swept.
     ///
+    /// With `cliBinDir`, the directory holding the installed `alas` CLI, its
+    /// agents get the built-in `alas` MCP server and CLI env.
+    ///
     /// Throws when the project list cannot be read.
-    public static func boot(in directory: URL = Paths.appSupportRoot) throws -> AlasHost {
+    public static func boot(in directory: URL = Paths.appSupportRoot, cliBinDir: URL? = nil) throws -> AlasHost {
         guard directory.standardizedFileURL.path == Paths.appSupportRoot.standardizedFileURL.path else {
             throw HostBootRefusal.notThisProcesssDirectory(directory)
         }
@@ -74,7 +78,12 @@ extension AlasHost {
         let environment = HeadlessHostEnvironment(configuration: config)
         // Every other store keeps its `Paths` default, which is this directory.
         let ordering = environment.config.worktrees.defaultOrdering
-        return AlasHost(core: AlasCoreContext(
+        let harness = HarnessService()
+        weak var builtCore: AlasCoreContext?
+        let alasTools = cliBinDir.map {
+            HeadlessAlasTools(binDir: $0, socketServer: harness.socketServer, config: { environment.config }, core: { builtCore })
+        }
+        let core = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: projects.projects, defaultOrdering: { ordering }),
             store: store,
             makeSessionManager: AlasCoreContext.sessionManagerFactory(
@@ -86,11 +95,15 @@ extension AlasHost {
                         host: host
                     )
                     environment.modelCatalog?.recordEffort(agentID: agentID, thinking: chips.thinking)
-                }
+                },
+                alasTools: alasTools
             ),
             environment: environment,
+            harness: harness,
             usageHistory: try? UsageHistoryStore()
-        ))
+        )
+        builtCore = core
+        return AlasHost(core: core)
     }
 }
 

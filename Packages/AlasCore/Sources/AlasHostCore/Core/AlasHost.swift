@@ -83,6 +83,12 @@ public final class AlasHost {
         return source.log.subscribe(after: source.log.cursor)
     }
 
+    /// Publishes `events`, then what they changed in the host's state.
+    func noteAttention(_ events: [HostEvent]) {
+        eventSource?.log.publish(events)
+        eventSource?.refreshInMemoryState()
+    }
+
     private var events: HostEventSource {
         if let eventSource { return eventSource }
         let source = HostEventSource(core: core)
@@ -445,12 +451,12 @@ public struct SessionsAPI {
     public func list() -> [HostSessionSummary] {
         core.sessionManagers.values.flatMap { manager in
             manager.sessionRows.compactMap { row in
-                row.archived ? nil : Self.summary(of: row, in: manager, parent: core.delegatedSessionParents[row.id])
+                row.archived ? nil : Self.summary(of: row, in: manager, core: core)
             }
         }
     }
 
-    static func summary(of row: ACPSessionRow, in manager: ACPSessionManager, parent: String?) -> HostSessionSummary {
+    static func summary(of row: ACPSessionRow, in manager: ACPSessionManager, core: AlasCoreContext) -> HostSessionSummary {
         let liveRemoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HostSessionSummary(
             owner: manager.owner,
@@ -461,9 +467,9 @@ public struct SessionsAPI {
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
             lastOpenedAt: row.lastOpenedAt,
-            streamingState: manager.runners[row.id]?.session.transcript.streamingState,
+            streamingState: core.reportedStreamingState(of: row.id, live: manager.runners[row.id]?.session.transcript.streamingState),
             isWriter: manager.isWriter(for: row.id),
-            parentID: parent
+            parentID: core.delegatedSessionParents[row.id]
         )
     }
 }

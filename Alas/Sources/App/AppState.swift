@@ -6915,6 +6915,12 @@ final class AppState {
             )
         }
         harness.onContextClickThrough = { [weak self] context in
+            if let serverId = context.peerServerId {
+                self?.nativePeerSessions?.select(
+                    RemoteFederatedSessionID.compose(serverId: serverId, sessionId: context.sessionId)
+                )
+                return
+            }
             guard let owner = context.owner,
                   case .workspaceCheckout = owner
             else { return }

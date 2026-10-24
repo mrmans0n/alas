@@ -10,16 +10,20 @@ public enum TerminalCLIInjection: Sendable {
     public static let aoExecutableName = "ao"
     private static let fallbackPath = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
+    /// The per-architecture directory the app bundles the CLI under.
+    public static var archDirectory: String {
+        #if arch(arm64)
+        "macos-aarch64"
+        #else
+        "macos-x86_64"
+        #endif
+    }
+
     /// The bundled `alas` binary slice for the running architecture, or nil if
     /// it isn't present (e.g. unit tests running outside the app bundle).
     public static func bundledBinaryURL() -> URL? {
         guard let resourceURL = Bundle.main.resourceURL else { return nil }
-        #if arch(arm64)
-        let dir = "macos-aarch64"
-        #else
-        let dir = "macos-x86_64"
-        #endif
-        let url = resourceURL.appendingPathComponent("alas-cli/\(dir)/alas")
+        let url = resourceURL.appendingPathComponent("alas-cli/\(archDirectory)/alas")
         return FileManager.default.isExecutableFile(atPath: url.path) ? url : nil
     }
 
