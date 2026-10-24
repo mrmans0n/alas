@@ -183,6 +183,9 @@ struct ComputerUseSystem: Sendable {
     /// Whether the app builds its Accessibility tree on request (Chromium, Electron), where an AX
     /// press may only focus the element.
     var usesManualAccessibility: @Sendable (Int32) -> Bool = { _ in false }
+    /// Whether other apps' windows are on screen but none can be captured: macOS is showing its
+    /// Screen Recording prompt, and window lists read as empty until the user answers it.
+    var screenRecordingPromptShown: @Sendable () async -> Bool = { false }
     /// The live system. `cursorWindowIDs` names Alas's own overlay windows (the drawn cursor),
     /// which the live drag's hit-tests look through.
     static func live(cursorWindowIDs: @escaping @Sendable () -> Set<UInt32> = { [] }) -> ComputerUseSystem {
@@ -209,7 +212,8 @@ struct ComputerUseSystem: Sendable {
             resolveApp: { await LiveComputerUseSystem.resolveApp(name: $0, bundleID: $1) },
             openApp: { try await LiveComputerUseSystem.openApp($0) },
             releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
-            usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) }
+            usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) },
+            screenRecordingPromptShown: { await LiveComputerUseSystem.screenRecordingPromptShown() }
         )
     }
 }
@@ -256,6 +260,15 @@ private enum LiveComputerUseSystem {
             now: ComputerUseUserInput.now(), lastUserInput: ComputerUseUserInput.lastInput(),
             hidIdle: ComputerUseUserInput.hidIdleSeconds(),
             secureInputKeyIdle: IsSecureEventInputEnabled() ? ComputerUseUserInput.hidKeyIdleSeconds() : nil)
+    }
+
+    static func screenRecordingPromptShown() async -> Bool {
+        let ownPID = getpid()
+        // Titles aren't needed: the window list shows other apps' windows without the grant too.
+        guard onScreenWindows().contains(where: { $0.pid != ownPID }) else { return false }
+        let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let shared = content?.windows.contains { $0.windowLayer == 0 && $0.owningApplication?.processID != ownPID } ?? false
+        return !shared
     }
 
     static func window(_ id: UInt32) async -> ComputerUseWindow? {

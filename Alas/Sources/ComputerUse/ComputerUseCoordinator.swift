@@ -192,6 +192,8 @@ final class ComputerUseCoordinator {
         static func userActive(_ app: ComputerUseAppIdentity) -> String {
             "computer_user_active: The user is using \(app.name) right now. Try again in a moment."
         }
+        static let screenRecordingPrompt =
+            "computer_screen_recording_prompt: macOS is showing a Screen Recording prompt; ask the user to answer it, then retry."
         static let userActiveElsewhere = "computer_user_active: You're using the Mac right now. Try again in a moment."
         static func userTookOver(_ app: ComputerUseAppIdentity, typed: Int, of total: Int) -> String {
             "computer_user_active: The user started using \(app.name); stopped after typing \(typed) of \(total) characters."
@@ -660,6 +662,7 @@ final class ComputerUseCoordinator {
     // MARK: - System calls and results
 
     private func listApps(sessionID: String) async -> AlasCLIResponse {
+        if await system.screenRecordingPromptShown() { return .error(Message.screenRecordingPrompt) }
         let apps = await system.runningApps()
         let entries: [[String: Any]] = apps.map { entry in
             let appAccess = access.access(for: entry.app, session: sessionID)

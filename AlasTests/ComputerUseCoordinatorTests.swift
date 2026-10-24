@@ -331,6 +331,16 @@ struct ComputerUseCoordinatorTests {
         #expect((byName["Notes"]?["windows"] as? [[String: Any]])?.first?["title"] as? String == "Note")
     }
 
+    /// Windows are listed but none can be captured: the Screen Recording prompt is up, and an
+    /// empty list would read as "no windows".
+    @Test func appsReportTheScreenRecordingPromptInsteadOfNoWindows() async {
+        var system = Self.system()
+        system.screenRecordingPromptShown = { true }
+        let f = Self.fixture(system: system)
+        #expect(await f.coordinator.perform(.init(action: .apps), sessionID: "s") == .error(
+            "computer_screen_recording_prompt: macOS is showing a Screen Recording prompt; ask the user to answer it, then retry."))
+    }
+
     @Test func screenshotOfVanishedWindowReportsNotFound() async {
         let f = Self.fixture(system: Self.system(windows: [:]))
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 42), sessionID: "s")
