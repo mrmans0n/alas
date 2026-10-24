@@ -20,6 +20,7 @@ extension SemanticVersion: Codable {
 /// reference behavior the app does not implement.
 public enum WhatsNewAction: String, Codable, CaseIterable, Sendable {
     case openPluginSettings
+    case openComputerUseSettings
 }
 
 public struct WhatsNewHeadline: Codable, Equatable, Sendable {
