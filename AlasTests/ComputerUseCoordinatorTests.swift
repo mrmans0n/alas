@@ -36,6 +36,8 @@ struct ComputerUseCoordinatorTests {
             focusState: { _ in nil },
             elementState: { _, _ in nil },
             elementMatches: { _, _, _, _ in true },
+            // The fake trees give each element one handle across reads.
+            sameElement: { _, old, _, new in old == new },
             secondsSinceUserInput: { 60 },
             isFrontmost: { _ in false },
             resolveApp: { _, _ in notes },
@@ -487,8 +489,11 @@ struct ComputerUseCoordinatorTests {
     }
 
     /// `filteredReadRetitledTheNode`: a read that doesn't list the shown element finds another
-    /// element in its place.
-    enum RefExpiry: CaseIterable { case turnEnd, reinspectWithoutTheNode, elementChanged, filteredReadRetitledTheNode }
+    /// element in its place. `filteredReadShiftedALookalikeIn`: the tree shifted, and another
+    /// element with the same role and title now sits where the shown one was.
+    enum RefExpiry: CaseIterable {
+        case turnEnd, reinspectWithoutTheNode, elementChanged, filteredReadRetitledTheNode, filteredReadShiftedALookalikeIn
+    }
 
     @Test(arguments: RefExpiry.allCases)
     func refsExpireWithTheTurnAndOnReinspect(_ expiry: RefExpiry) async throws {
@@ -498,10 +503,17 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         let retitled = ComputerUseAXNode(
             role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Delete", handle: 1)], handle: 0)
+        let shifted = ComputerUseAXNode(role: "AXWindow", title: "Note", children: [
+            ComputerUseAXNode(role: "AXButton", title: "Save", handle: 2), ComputerUseAXNode(role: "AXButton", title: "Save", handle: 1),
+        ], handle: 0)
         // Only the first read still has the Save button.
         system.axTree = { _, _, _, _ in
             guard reads.next() > 1 else { return (saveTree, true, ComputerUseAXHandles()) }
-            let later = expiry == .filteredReadRetitledTheNode ? retitled : ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0)
+            let later = switch expiry {
+            case .filteredReadRetitledTheNode: retitled
+            case .filteredReadShiftedALookalikeIn: shifted
+            case .turnEnd, .reinspectWithoutTheNode, .elementChanged: ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0)
+            }
             return (later, true, ComputerUseAXHandles())
         }
         // The element behind the handle still exists, but now reads as another button.
@@ -510,6 +522,8 @@ struct ComputerUseCoordinatorTests {
             case .elementChanged: false
             // The live element is the retitled one, so only the ref's expected identity can catch it.
             case .filteredReadRetitledTheNode: handle == 1 && role == "AXButton" && title == "Delete"
+            // Both buttons read as Save, so only the element's identity can tell them apart.
+            case .filteredReadShiftedALookalikeIn: role == "AXButton" && title == "Save"
             case .turnEnd, .reinspectWithoutTheNode: handle == 1 && role == "AXButton" && title == "Save"
             }
         }
@@ -518,7 +532,8 @@ struct ComputerUseCoordinatorTests {
         switch expiry {
         case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
         case .reinspectWithoutTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
-        case .filteredReadRetitledTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Note"), sessionID: "s")
+        case .filteredReadRetitledTheNode, .filteredReadShiftedALookalikeIn:
+            _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Note"), sessionID: "s")
         case .elementChanged: break
         }
         let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
@@ -663,17 +678,24 @@ struct ComputerUseCoordinatorTests {
     /// An AX press in an Electron app may only focus the element: a click that changed nothing
     /// there is clicked once more with the pointer. Elsewhere, after a change, and on a toggle a
     /// second press could undo, it stands.
+    /// How much of the window the reads around the press see.
+    enum PostRead: Sendable { case full, depthLimited, queryFiltered }
+
     @Test(arguments: [
-        (true, false, "AXButton", true), (true, true, "AXButton", false), (false, false, "AXButton", false),
-        (true, false, "AXCheckBox", false),
-    ])
+        (true, false, "AXButton", .full, true), (true, true, "AXButton", .full, false),
+        (false, false, "AXButton", .full, false), (true, false, "AXCheckBox", .full, false),
+        // A read that leaves elements out can't tell the press changed nothing.
+        (true, false, "AXButton", .depthLimited, false), (true, false, "AXButton", .queryFiltered, false),
+    ] as [(Bool, Bool, String, PostRead, Bool)])
     func electronClickThatChangedNothingIsRetriedWithThePointer(
-        manualAccessibility: Bool, changed: Bool, role: String, retries: Bool
+        manualAccessibility: Bool, changed: Bool, role: String, postRead: PostRead, retries: Bool
     ) async throws {
         let recorder = Recorder()
         let reads = Counter()
         var saveTree = Self.saveTree
         saveTree.children[0].role = role
+        // A group whose children the read didn't go deep enough to see.
+        if postRead == .depthLimited { saveTree.children.append(ComputerUseAXNode(role: "AXGroup", childrenUnread: true)) }
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { $0 == 101 && manualAccessibility }
         // Read 1 is the inspect, 2 the window before the click, 3 the one after it.
@@ -689,7 +711,8 @@ struct ComputerUseCoordinatorTests {
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let click = ComputerUseCommand(action: .click, windowID: 1, query: postRead == .queryFiltered ? "save" : nil, ref: "e2")
+        let json = try #require(Self.text(await f.coordinator.perform(click, sessionID: "s")))
         let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         let inputs = recorder.inputs
         guard case .click(.element(_, 1), .left, 1) = try #require(inputs.first) else {
@@ -843,7 +866,7 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         let response = await f.coordinator.perform(.init(action: .click, windowID: 1, x: 200, y: 100), sessionID: "s")
-        #expect(response == .error("computer_out_of_bounds: The point is outside window 1."))
+        #expect(response == .error("computer_out_of_bounds: Window 1 moved or resized since its screenshot. Call computer_screenshot again."))
         #expect(recorder.inputs.isEmpty)
     }
 
@@ -1080,7 +1103,7 @@ struct ComputerUseCoordinatorTests {
         #expect(response == .error("computer_blocked: Keychain Access can't be used by agents."))
     }
 
-    enum WaitCase: CaseIterable { case appears, neverAppears, disappears, neverDisappears, windowCloses }
+    enum WaitCase: CaseIterable { case appears, neverAppears, disappears, neverDisappears, disappearsFromPartialRead, windowCloses }
 
     @Test(arguments: WaitCase.allCases)
     func waitReturnsWhenTheQueryAppearsOrTimesOut(_ waitCase: WaitCase) async throws {
@@ -1096,15 +1119,18 @@ struct ComputerUseCoordinatorTests {
             let read = reads.next()
             let done = switch waitCase {
             case .appears: read >= 4
-            case .neverAppears, .disappears, .windowCloses: false
+            case .neverAppears, .disappears, .disappearsFromPartialRead, .windowCloses: false
             case .neverDisappears: read > 1
             }
             let children = done ? [ComputerUseAXNode(role: "AXStaticText", title: "Done", handle: 1)] : []
-            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), true, ComputerUseAXHandles())
+            // A walk that ran out of budget may have missed "Done".
+            let complete = waitCase != .disappearsFromPartialRead
+            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), complete, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let condition: ComputerUseCommand.WaitCondition = waitCase == .neverDisappears || waitCase == .disappears ? .disappear : .appear
+        let condition: ComputerUseCommand.WaitCondition =
+            [.neverDisappears, .disappears, .disappearsFromPartialRead].contains(waitCase) ? .disappear : .appear
         let wait = ComputerUseCommand(action: .wait, windowID: 1, query: "done", condition: condition, timeoutMS: 1000)
         let response = await f.coordinator.perform(wait, sessionID: "s")
         switch waitCase {
@@ -1118,9 +1144,12 @@ struct ComputerUseCoordinatorTests {
         case .windowCloses:
             #expect(response == .error("computer_window_not_found: No on-screen window 1. Call computer_apps again."))
             #expect(recorder.sleeps == [.milliseconds(250)])
-        case .neverAppears, .neverDisappears:
+        case .neverAppears, .neverDisappears, .disappearsFromPartialRead:
             let verb = condition == .appear ? "appeared" : "disappeared"
-            #expect(response == .error(#"computer_wait_timeout: Nothing matching "done" \#(verb) in window 1 within 1000 ms."#))
+            #expect(response == .error(waitCase == .disappearsFromPartialRead
+                ? #"computer_wait_timeout: Couldn't confirm that "done" disappeared from window 1 within 1000 ms: "#
+                    + "the window's accessibility tree couldn't be read completely, so it may still be there."
+                : #"computer_wait_timeout: Nothing matching "done" \#(verb) in window 1 within 1000 ms."#))
             #expect(recorder.sleeps.reduce(.zero, +) == .seconds(1))
             // The polls the agent never saw don't leave refs behind, nor do the inspect's survive.
             #expect(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e1"), sessionID: "s")

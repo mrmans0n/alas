@@ -164,6 +164,11 @@ struct ComputerUseSystem: Sendable {
     var elementState: @Sendable (ComputerUseAXHandles, Int) async -> Int?
     /// Whether the element behind a handle still has the role and title it was read with.
     var elementMatches: @Sendable (ComputerUseAXHandles, Int, _ role: String, _ title: String?) async -> Bool
+    /// Whether a handle from one read and a handle from another retain the same AX element.
+    var sameElement: @Sendable (ComputerUseAXHandles, Int, ComputerUseAXHandles, Int) -> Bool = { old, oldHandle, new, newHandle in
+        guard let before = old.element(oldHandle), let after = new.element(newHandle) else { return false }
+        return CFEqual(before, after)
+    }
     /// Seconds since the last hardware input; events Alas posts don't count.
     var secondsSinceUserInput: @Sendable () -> TimeInterval
     /// Whether the app is the user's front app, as WindowServer has it.
@@ -428,7 +433,7 @@ extension LiveComputerUseSystem {
         switch input {
         case .click(.element(let handles, let handle), .right, _):
             do {
-                try await ComputerUseAXActions.showMenu(handles, handle, app: app, isCancelled: isCancelled)
+                try await ComputerUseAXActions.showMenu(handles, handle, app: app, interrupt: interrupt)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // A right click at its centre may still land.
@@ -436,7 +441,7 @@ extension LiveComputerUseSystem {
         case .click(.element(let handles, let handle), .left, let count) where count <= 2:
             if count == 1 {
                 do {
-                    try await ComputerUseAXActions.press(handles, handle, app: app, isCancelled: isCancelled)
+                    try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
                     return .ax
                 } catch is ComputerUseAXActions.Unsupported {
                     // Static text and cells have no press; something around them may.
@@ -444,7 +449,7 @@ extension LiveComputerUseSystem {
             }
             do {
                 try await ComputerUseAXActions.pressOrSelectNearest(
-                    handles, handle, count: count, app: app, isCancelled: isCancelled)
+                    handles, handle, count: count, app: app, interrupt: interrupt)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // A click at its centre may still land.
@@ -452,7 +457,7 @@ extension LiveComputerUseSystem {
         case .type(let text, .element(let handles, let handle), let replace):
             do {
                 if replace {
-                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, isCancelled: isCancelled)
+                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
                 } else {
                     try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
                 }
@@ -676,13 +681,17 @@ extension LiveComputerUseSystem {
         func requireActiveWindow() async throws {
             try await ComputerUseAXActions.makeActiveWindow(window, raise: !background, isCancelled: isCancelled)
         }
+        // A ref's point is on the part of it its scroll area shows: an element scrolled under
+        // another part of the window (a toolbar) would get the input instead.
         func point(_ input: ComputerUseInputTarget, in bounds: ComputerUseWindow = window) async throws -> CGPoint {
             switch input {
             case .element(let handles, let handle):
-                try await ComputerUseAXActions.center(
-                    handles, handle, within: bounds.frame, app: bounds.app, isCancelled: isCancelled)
+                guard let visible = try await ComputerUseAXActions.visibleCenter(
+                    handles, handle, within: bounds.frame, app: bounds.app, requireOwnCenter: false, isCancelled: isCancelled)
+                else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.") }
+                return visible
             case .point(let point):
-                point
+                return point
             }
         }
         func checkCancelled() throws {
@@ -738,7 +747,7 @@ extension LiveComputerUseSystem {
             }
         case .key(let chord):
             try await requireActiveWindow()
-            // A printable key, a delete, a control key or ⌘V can change the focused field's text, like typing does.
+            // A printable key, a delete, a control key or any ⌘V can change the focused field's text, like typing does.
             if chord.mayEditText {
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             }
@@ -849,7 +858,8 @@ extension LiveComputerUseSystem {
     }
 
     /// Brings `app` to the front for `body`, then returns the previously
-    /// frontmost app to the front, also when `body` throws. Throws without
+    /// frontmost app to the front, also when `body` throws, unless `app`
+    /// no longer is (the user switched apps meanwhile). Throws without
     /// running `body` when the app does not come to the front in time.
     private static func withActivation(
         of app: ComputerUseAppIdentity, isCancelled: @Sendable () -> Bool, _ body: () async throws -> Void
@@ -896,6 +906,8 @@ extension LiveComputerUseSystem {
 
     private static func restoreActivation(_ previousPID: Int32?, from pid: Int32) async {
         guard let previousPID else { return }
+        // Once the user picked another app, the front is theirs to keep.
+        guard await isFrontmost(pid) else { return }
         await MainActor.run {
             guard let previous = NSRunningApplication(processIdentifier: previousPID) else { return }
             // The target is active now; asking on its behalf passes cooperative activation.

@@ -186,6 +186,9 @@ final class ComputerUseCoordinator {
             "computer_needs_screenshot: x/y are pixels in a screenshot of window \(windowID). Call computer_screenshot first."
         }
         static func outOfBounds(_ windowID: UInt32) -> String { "computer_out_of_bounds: The point is outside window \(windowID)." }
+        static func screenshotMoved(_ windowID: UInt32) -> String {
+            "computer_out_of_bounds: Window \(windowID) moved or resized since its screenshot. Call computer_screenshot again."
+        }
         static func userActive(_ app: ComputerUseAppIdentity) -> String {
             "computer_user_active: The user is using \(app.name) right now. Try again in a moment."
         }
@@ -202,6 +205,10 @@ final class ComputerUseCoordinator {
         static func waitTimeout(_ query: String, _ condition: ComputerUseCommand.WaitCondition, windowID: UInt32, ms: Int) -> String {
             let verb = condition == .appear ? "appeared" : "disappeared"
             return "computer_wait_timeout: Nothing matching \"\(query)\" \(verb) in window \(windowID) within \(ms) ms."
+        }
+        static func waitInconclusive(_ query: String, windowID: UInt32, ms: Int) -> String {
+            "computer_wait_timeout: Couldn't confirm that \"\(query)\" disappeared from window \(windowID) within \(ms) ms: "
+                + "the window's accessibility tree couldn't be read completely, so it may still be there."
         }
     }
 
@@ -744,7 +751,8 @@ final class ComputerUseCoordinator {
         let changeWarning = try await settle(
             after: delivered, of: command, in: &window, target: target, before: before,
             end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload).warning
-        let unchanged = changeWarning != nil
+        // A read that left elements out for depth may have missed the press's effect, and a second press could undo it.
+        let unchanged = changeWarning != nil && payload["depth_limited"] == nil
         if let target, let targetRef, Self.retriesWithPointer(
             command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
             manualAccessibility: system.usesManualAccessibility(window.app.pid)) {
@@ -885,12 +893,14 @@ final class ComputerUseCoordinator {
     /// a left single click by ref that went as AX and changed nothing is retried once as a pointer
     /// click. Never in other apps, where an AX press that changed nothing is the app's answer, nor
     /// on a toggle or menu item (`role`, as read), where a second press could undo the first.
+    /// A query-filtered read can't tell either: the press may have changed only elements it hides.
     static func retriesWithPointer(
         _ command: ComputerUseCommand, role: String, delivered: ComputerUseDelivery, unchanged: Bool,
         manualAccessibility: Bool
     ) -> Bool {
         command.action == .click && command.ref != nil && command.button == .left && command.count == 1
-            && !noPointerRetryRoles.contains(role) && delivered == .ax && unchanged && manualAccessibility
+            && (command.query ?? "").isEmpty && !noPointerRetryRoles.contains(role) && delivered == .ax && unchanged
+            && manualAccessibility
     }
 
     static let noPointerRetryRoles: Set<String> = [
@@ -1143,6 +1153,9 @@ final class ComputerUseCoordinator {
         }
         guard let x, let y else { throw Refusal(Message.actionFailed("The action needs a ref or x and y.")) }
         guard let screenshot = snapshot?.lastScreenshot else { throw Refusal(Message.needsScreenshot(window.windowID)) }
+        if ComputerUseInputGeometry.screenshotStale(screenshotFrame: screenshot.frame, currentFrame: window.frame) {
+            throw Refusal(Message.screenshotMoved(window.windowID))
+        }
         guard let point = ComputerUseInputGeometry.globalPoint(
             pixel: CGPoint(x: x, y: y), screenshotFrame: screenshot.frame, scale: screenshot.scale, currentFrame: window.frame)
         else { throw Refusal(Message.outOfBounds(window.windowID)) }
@@ -1215,7 +1228,10 @@ final class ComputerUseCoordinator {
             // Only the read returned to the agent replaces its refs.
             let read = try await readElements(
                 window, query: query, limit: command.limit, maxDepth: command.maxDepth, context: context, recordRefs: false)
-            if read.elements.isEmpty == (command.condition == .disappear) {
+            // A partial read can miss the element, so only a complete one confirms it is gone.
+            let incomplete = read.truncated || read.depthLimited
+            let met = command.condition == .appear ? !read.elements.isEmpty : read.elements.isEmpty && !incomplete
+            if met {
                 record(refs: read, of: window, context: context)
                 return (read.truncated, read.elements, read.depthLimited)
             }
@@ -1223,6 +1239,9 @@ final class ComputerUseCoordinator {
             if slept >= timeout || clock.now - start >= timeout {
                 // The window changed while the agent waited; the refs it holds may point elsewhere now.
                 updateSnapshot(of: window, context: context) { $0.refs = [:] }
+                if command.condition == .disappear, read.elements.isEmpty {
+                    throw Refusal(Message.waitInconclusive(query, windowID: window.windowID, ms: command.timeoutMS))
+                }
                 throw Refusal(Message.waitTimeout(query, command.condition, windowID: window.windowID, ms: command.timeoutMS))
             }
             await sleep(Self.waitPoll)
@@ -1273,9 +1292,11 @@ final class ComputerUseCoordinator {
 
     private func record(refs read: ElementRead, of window: ComputerUseWindow, context: CallContext) {
         // A query or limit only trims what the agent is shown: every element the read named stays
-        // usable. One the agent was shown before but this read doesn't list must still be what it
-        // saw; otherwise the ref now names something it never saw, and is dropped.
-        let previous = snapshot(of: window, context: context)?.refs ?? [:]
+        // usable. One the agent was shown before but this read doesn't list must still be the very
+        // element it saw (a same-role, same-title one may have shifted into its place); otherwise
+        // the ref now names something it never saw, and is dropped.
+        let before = snapshot(of: window, context: context)
+        let previous = before?.refs ?? [:]
         let listed = Set(read.elements.map(\.ref))
         let origin = window.frame.origin
         func local(_ frame: CGRect) -> CGRect { frame.offsetBy(dx: -origin.x, dy: -origin.y) }
@@ -1286,7 +1307,9 @@ final class ComputerUseCoordinator {
                 refs[ref] = ElementRef(
                     handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame), shown: true)
             } else if let seen = previous[ref], seen.shown {
-                guard seen.role == identity.role, seen.title == identity.title else { continue }
+                guard seen.role == identity.role, seen.title == identity.title, let before,
+                      system.sameElement(before.handles, seen.handle, read.handles, handle)
+                else { continue }
                 refs[ref] = ElementRef(
                     handle: handle, role: seen.role, title: seen.title, localFrame: local(identity.frame), shown: true)
             } else {
