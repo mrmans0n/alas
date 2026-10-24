@@ -230,6 +230,10 @@ public final class HostConsoles {
         BlockingWork.detach { zmx.killSession(name: name) }
     }
 
+    public func hasConsoles(inWorktrees worktreeIDs: Set<String>) -> Bool {
+        entries.contains { worktreeIDs.contains($0.worktreeId) }
+    }
+
     /// Kills and forgets every shell in a worktree that is being deleted,
     /// returning once zmx has been told, so none outlives its checkout
     /// unlisted. Archive keeps the checkout and its shells.

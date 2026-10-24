@@ -226,7 +226,7 @@ public enum HostError: Error, Codable, Equatable, Sendable {
     case notFound(what: String)
     /// Another operation holds the worktree.
     case operationInProgress
-    /// A session or run is live in one of the project's worktrees.
+    /// A session, run or terminal is live in one of the project's worktrees.
     case projectBusy
     case project(error: ProjectCreationError)
     case worktreeCreation(refusal: WorktreeCreationRefusal)

@@ -49,6 +49,10 @@ public final class AlasCoreContext {
     /// stop. `alas-host` closes its shells there; the app's own quiesce
     /// already closes its terminals, so it leaves this nil.
     @ObservationIgnored @_spi(AppHost) public var willRemoveWorktree: (@MainActor (_ worktreeID: String) async -> Void)?
+    /// Whether `alas-host` has a shell open in any of these worktrees, which
+    /// keeps their project from being removed. The app's terminals don't
+    /// block removal, so it leaves this nil.
+    @ObservationIgnored @_spi(AppHost) public var hasHostConsoles: (@MainActor (_ worktreeIDs: Set<String>) -> Bool)?
 
     /// The on-device text model's files and state.
     @ObservationIgnored public let localTextModelStore: LocalTextModelStore
@@ -294,7 +298,7 @@ public final class AlasCoreContext {
     }
 
     /// Forgets project `id` and persists the list. Refuses (`projectBusy`)
-    /// while a session or run is live or starting in one of its worktrees; idle session
+    /// while a session, run or host terminal is live or starting in one of its worktrees; idle session
     /// managers of the worktrees no other project lists are disposed. A
     /// worktree it shadowed goes back to the project that lost it.
     public func removeProject(id: String) async throws {
@@ -311,6 +315,7 @@ public final class AlasCoreContext {
         }
             || processRuns.values.contains { $0.projectID == id || worktreeIDs.contains($0.worktreeID) }
             || pendingRunLaunches.keys.contains { worktreeIDs.contains($0.worktreeID) }
+            || hasHostConsoles?(worktreeIDs) == true
         guard !isLive else { throw HostError.projectBusy }
         // Saved before anything is forgotten, so a failed save changes nothing.
         try store.write(ProjectsFile(projects: projects.projects.filter { $0.id != id }), to: projectsFile)

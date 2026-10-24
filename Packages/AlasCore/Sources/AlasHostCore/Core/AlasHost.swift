@@ -225,7 +225,7 @@ public struct ProjectsAPI {
     }
 
     /// Forgets the project, refusing (`HostError.projectBusy`) while a
-    /// session or run is live in one of its worktrees.
+    /// session, run or terminal is live in one of its worktrees.
     public func remove(projectID: String, caller: HostCaller) async throws {
         caller.log("projects.remove", projectID)
         try await core.removeProject(id: projectID)

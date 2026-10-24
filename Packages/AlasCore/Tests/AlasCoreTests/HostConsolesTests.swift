@@ -243,6 +243,21 @@ struct HostConsolesTests {
         #expect(try fixture.savedFile()?.consoles.isEmpty == true)
     }
 
+    @Test func aProjectWithAnOpenShellIsNotForgotten() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        fixture.core.hasHostConsoles = { consoles.hasConsoles(inWorktrees: $0) }
+        let id = try await consoles.open(worktreeId: fixture.worktree.id)
+
+        await #expect(throws: HostError.projectBusy) { try await fixture.core.removeProject(id: "p") }
+        #expect(consoles.summaries().map(\.consoleId) == [id])
+
+        consoles.terminate(id)
+        try await fixture.core.removeProject(id: "p")
+        #expect(fixture.projects.projects.isEmpty)
+    }
+
     private static func git(_ arguments: [String], in directory: URL) throws {
         let git = Process()
         git.executableURL = URL(fileURLWithPath: "/usr/bin/git")

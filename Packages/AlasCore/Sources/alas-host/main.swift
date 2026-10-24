@@ -267,6 +267,8 @@ if let listen = config.hostRemoteListen {
     let shells = HostConsoles(core: host.coreContext, zmx: zmx)
     // A deleted worktree's shells would outlive it unlisted and unclosable.
     host.coreContext.willRemoveWorktree = { await shells.terminateConsoles(inWorktree: $0) }
+    // Forgetting their project would hide them the same way.
+    host.coreContext.hasHostConsoles = { shells.hasConsoles(inWorktrees: $0) }
     let server = RemoteServer(
         pairing: pairing,
         assets: RemoteWebAssets(root: webClient ?? URL(fileURLWithPath: "/dev/null")),
