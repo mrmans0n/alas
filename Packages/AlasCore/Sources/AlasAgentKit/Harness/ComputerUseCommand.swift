@@ -35,10 +35,10 @@ public struct ComputerUseCommand: Equatable, Sendable {
     /// The deepest tree a read may walk; the default depth stays 12.
     public static let maxDepthLimit = 32
 
-    /// The depth a read walks when the request names none: an inspect's or an input action's read
+    /// The depth a read walks when the request names none: an inspect's, a wait's or an input action's read
     /// with a query searches as deep as a read may go, since what it looks for may be anywhere.
     public static func defaultMaxDepth(for action: Action, query: String?) -> Int {
-        (action.isInput || action == .inspect) && query != nil ? maxDepthLimit : 12
+        (action.isInput || action == .inspect || action == .wait) && query != nil ? maxDepthLimit : 12
     }
 
     public var action: Action

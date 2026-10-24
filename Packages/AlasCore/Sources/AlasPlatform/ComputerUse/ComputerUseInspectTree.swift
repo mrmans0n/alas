@@ -123,9 +123,16 @@ public enum ComputerUseInspectTree {
     }
 
     static let maxStringLength = 200
-    public static let depthHint =
-        "Some elements are deeper than max_depth; pass a higher max_depth (up to 32), or a query, which reads 32 levels "
-            + "unless max_depth is given."
+    /// The warning next to `depth_limited`: only what would read deeper. A read at 32 levels, or
+    /// one that takes no max_depth (computer_wait), can't; a query is suggested only when none was given.
+    public static func depthHint(maxDepth: Int, queryGiven: Bool, takesMaxDepth: Bool) -> String {
+        if maxDepth >= 32 || !takesMaxDepth {
+            return "Some elements are deeper than \(maxDepth) levels, the deepest this read goes."
+        }
+        if queryGiven { return "Some elements are deeper than max_depth; pass a higher max_depth (up to 32)." }
+        return "Some elements are deeper than max_depth; pass a higher max_depth (up to 32), or a query, which reads "
+            + "32 levels unless max_depth is given."
+    }
 
     /// Refs are the pre-order index of each node among all nodes visited (root is `e1`),
     /// so a query or limit never renumbers them: the same element has the same ref in a

@@ -31,6 +31,17 @@ struct ComputerUseInspectTreeTests {
         #expect(ComputerUseInspectTree.truncation(limitReached: limitReached, cut: cut) == truncatedBy)
     }
 
+    /// The depth warning only suggests what would read deeper.
+    @Test(arguments: [
+        (12, false, true, "Some elements are deeper than max_depth; pass a higher max_depth (up to 32), or a query, which reads 32 levels unless max_depth is given."),
+        (20, true, true, "Some elements are deeper than max_depth; pass a higher max_depth (up to 32)."),
+        (32, true, true, "Some elements are deeper than 32 levels, the deepest this read goes."),
+        (32, true, false, "Some elements are deeper than 32 levels, the deepest this read goes."),
+    ])
+    func theDepthWarningOnlySuggestsWhatReadsDeeper(maxDepth: Int, query: Bool, takesMaxDepth: Bool, hint: String) {
+        #expect(ComputerUseInspectTree.depthHint(maxDepth: maxDepth, queryGiven: query, takesMaxDepth: takesMaxDepth) == hint)
+    }
+
     @Test func flattenAssignsPreOrderRefsAndDepths() {
         let result = ComputerUseInspectTree.flatten(sample, query: nil, limit: 100, maxDepth: 10)
         #expect(result.elements.map(\.ref) == ["e1", "e2", "e3", "e4", "e5"])

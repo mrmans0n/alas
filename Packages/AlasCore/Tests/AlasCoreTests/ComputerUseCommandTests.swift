@@ -49,7 +49,7 @@ struct ComputerUseCommandTests {
         #expect(openApp.command == .computer(.init(action: .openApp, bundleID: "com.apple.Notes")))
         let wait = try decode("computer_wait", #"{"window_id":3,"query":"Done"}"#)
         #expect(wait.command == .computer(.init(
-            action: .wait, windowID: 3, query: "Done", limit: 100, condition: .appear, timeoutMS: 5000
+            action: .wait, windowID: 3, query: "Done", limit: 100, maxDepth: 32, condition: .appear, timeoutMS: 5000
         )))
     }
 
@@ -62,6 +62,7 @@ struct ComputerUseCommandTests {
         ("computer_key", #"{"window_id":1,"keys":"tab","max_depth":20}"#, 20),
         ("computer_inspect", #"{"window_id":1,"query":"Save"}"#, 32),
         ("computer_inspect", #"{"window_id":1}"#, 12),
+        ("computer_wait", #"{"window_id":1,"query":"Done"}"#, 32),
     ])
     func defaultsTheReadDepth(command: String, params: String, depth: Int) throws {
         guard case .computer(let computer) = try decode(command, params).command else {

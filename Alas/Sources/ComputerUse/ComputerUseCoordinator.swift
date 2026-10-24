@@ -807,13 +807,13 @@ final class ComputerUseCoordinator {
             payload["truncated"] = read.truncated
             payload["truncated_by"] = read.truncatedBy
             payload["elements"] = read.elements.map(Self.element)
-            Self.report(depthLimited: read.depthLimited, warning: nil, into: &payload)
+            Self.report(depthLimited: read.depthLimited, warning: nil, for: command, into: &payload)
         case .wait:
             let read = try await waitFor(command, in: window, context: context)
             payload["truncated"] = read.truncated
             payload["truncated_by"] = read.truncatedBy
             payload["elements"] = read.elements.map(Self.element)
-            Self.report(depthLimited: read.depthLimited, warning: nil, into: &payload)
+            Self.report(depthLimited: read.depthLimited, warning: nil, for: command, into: &payload)
         case .click, .type, .key, .scroll, .drag:
             try await act(command, in: window, toWindow: toWindow, context: context, payload: &payload)
         }
@@ -955,7 +955,9 @@ final class ComputerUseCoordinator {
                                        end: nil, context: context, payload: &payload)
         // A read that failed reports its error instead; one that can't tell is no success either.
         guard let after = settled.after, !ComputerUseChangeCheck.retryChanged(before: before, after: after) else { return }
-        Self.report(depthLimited: payload["depth_limited"] != nil, warning: settled.warning ?? firstWarning, into: &payload)
+        Self.report(
+            depthLimited: payload["depth_limited"] != nil, warning: settled.warning ?? firstWarning, for: command,
+            into: &payload)
     }
 
     /// A drag that grabbed the window instead of an item moves it; the button is already up then.
@@ -1030,13 +1032,17 @@ final class ComputerUseCoordinator {
     }
 
     /// `depth_limited` when the read left elements out for depth, with the hint appended to the warning.
-    private static func report(depthLimited: Bool, warning: String?, into payload: inout [String: Any]) {
+    private static func report(
+        depthLimited: Bool, warning: String?, for command: ComputerUseCommand, into payload: inout [String: Any]
+    ) {
         payload["depth_limited"] = depthLimited ? true : nil
         guard depthLimited else {
             payload["warning"] = warning
             return
         }
-        payload["warning"] = [warning, ComputerUseInspectTree.depthHint].compactMap { $0 }.joined(separator: " ")
+        let hint = ComputerUseInspectTree.depthHint(
+            maxDepth: command.maxDepth, queryGiven: command.query != nil, takesMaxDepth: command.action != .wait)
+        payload["warning"] = [warning, hint].compactMap { $0 }.joined(separator: " ")
     }
 
     /// Drags always go with the app brought to the front, so the direct takeover rule applies to
@@ -1126,7 +1132,9 @@ final class ComputerUseCoordinator {
                         context: context, payload: &payload)
                 }
             }
-            Self.report(depthLimited: read.depthLimited, warning: Self.joined(delivered.warning, verdict.warning), into: &payload)
+            Self.report(
+                depthLimited: read.depthLimited, warning: Self.joined(delivered.warning, verdict.warning), for: command,
+                into: &payload)
             return verdict
         } catch is CancellationError {
             throw CancellationError()
@@ -1137,7 +1145,7 @@ final class ComputerUseCoordinator {
             // The action changed the window, so the refs from before it are gone either way.
             updateSnapshot(of: window, context: context) { $0.refs = [:] }
             // An earlier attempt's verdict doesn't describe this read.
-            Self.report(depthLimited: false, warning: delivered.warning, into: &payload)
+            Self.report(depthLimited: false, warning: delivered.warning, for: command, into: &payload)
             payload["truncated"] = true
             payload["truncated_by"] = nil
             payload["elements"] = [[String: Any]]()
