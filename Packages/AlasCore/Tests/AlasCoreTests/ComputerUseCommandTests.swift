@@ -53,14 +53,15 @@ struct ComputerUseCommandTests {
         )))
     }
 
-    /// An input action's read searches every level a read may walk when it has a query; an
-    /// inspect keeps its default, and an explicit max_depth always wins.
+    /// An inspect's or input action's read searches every level a read may walk when it has a
+    /// query, and 12 without one; an explicit max_depth always wins.
     @Test(arguments: [
         ("computer_click", #"{"window_id":1,"ref":"e1"}"#, 12),
         ("computer_click", #"{"window_id":1,"ref":"e1","query":"Save"}"#, 32),
         ("computer_type", #"{"window_id":1,"text":"x","query":"Save","max_depth":8}"#, 8),
         ("computer_key", #"{"window_id":1,"keys":"tab","max_depth":20}"#, 20),
-        ("computer_inspect", #"{"window_id":1,"query":"Save"}"#, 12),
+        ("computer_inspect", #"{"window_id":1,"query":"Save"}"#, 32),
+        ("computer_inspect", #"{"window_id":1}"#, 12),
     ])
     func defaultsTheReadDepth(command: String, params: String, depth: Int) throws {
         guard case .computer(let computer) = try decode(command, params).command else {

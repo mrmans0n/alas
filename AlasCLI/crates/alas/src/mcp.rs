@@ -661,7 +661,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_inspect",
-            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter and `limit`/`max_depth` to bound the result. Prefer this over screenshots. Refs hold for the current turn only: after a stop, a resume or a new turn, inspect again before using them. The first use of each app asks the user for approval.",
+            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter (a query searches 32 levels unless max_depth is given) and `limit`/`max_depth` to bound the result. Prefer this over screenshots. Refs hold for the current turn only: after a stop, a resume or a new turn, inspect again before using them. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -669,7 +669,7 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "A window_id from computer_apps." },
                     "query": { "type": "string", "maxLength": 256, "description": "Optional text filter on element role, title and value." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 300." },
-                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Maximum tree depth, at most 32. Default: 12." }
+                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Maximum tree depth, at most 32. Default: 12, or 32 when query is given." }
                 },
                 "required": ["window_id"]
             }
@@ -1305,11 +1305,14 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         }
         "computer_inspect" => {
             reject_arguments(args, name, &["window_id", "query", "limit", "max_depth"])?;
+            let query = optional_limited_string(args, "query", 256)?;
+            // A query searches as deep as a read may go, as on input actions.
+            let default_depth = if query.is_some() { 32 } else { 12 };
             Ok(Command::Computer(alas_client::ComputerCommand::Inspect {
                 window_id: required_window_id(args)?,
-                query: optional_limited_string(args, "query", 256)?,
                 limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(300),
-                max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?.unwrap_or(12),
+                max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?.unwrap_or(default_depth),
+                query,
                 call_id: None,
             }))
         }
@@ -4084,7 +4087,7 @@ mod tests {
                 window_id: 7,
                 query: Some("Save".into()),
                 limit: 300,
-                max_depth: 12,
+                max_depth: 32,
                 call_id: None
             })
         );

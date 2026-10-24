@@ -87,7 +87,7 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
             let rest = &args[2..];
             let mut query = None;
             let mut limit = 300;
-            let mut max_depth = 12;
+            let mut max_depth = None;
             let (mut seen_limit, mut seen_depth) = (false, false);
             let mut i = 0;
             while i < rest.len() {
@@ -111,12 +111,19 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
                     "--max-depth" if !seen_depth => {
                         seen_depth = true;
                         i += 1;
-                        max_depth = bounded_u64(flag_value(rest, i).ok_or(USAGE)?, 1, 32, USAGE)?;
+                        max_depth = Some(bounded_u64(
+                            flag_value(rest, i).ok_or(USAGE)?,
+                            1,
+                            32,
+                            USAGE,
+                        )?);
                     }
                     _ => return Err(USAGE.into()),
                 }
                 i += 1;
             }
+            // A query searches as deep as a read may go, as on input actions.
+            let max_depth = max_depth.unwrap_or(if query.is_some() { 32 } else { 12 });
             Ok(Command::Computer(alas_client::ComputerCommand::Inspect {
                 window_id,
                 query,
@@ -2316,13 +2323,23 @@ mod tests {
                 "--limit",
                 "3000",
                 "--max-depth",
-                "32"
+                "20"
             ])
             .unwrap(),
             Command::Computer(ComputerCommand::Inspect {
                 window_id: 7,
                 query: Some("Save".into()),
                 limit: 3000,
+                max_depth: 20,
+                call_id: None
+            })
+        );
+        assert_eq!(
+            p(&["computer", "inspect", "7", "--query", "Save"]).unwrap(),
+            Command::Computer(ComputerCommand::Inspect {
+                window_id: 7,
+                query: Some("Save".into()),
+                limit: 300,
                 max_depth: 32,
                 call_id: None
             })
