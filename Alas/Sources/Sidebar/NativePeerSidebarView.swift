@@ -160,7 +160,7 @@ struct NativePeerSidebarView: View {
                     onSelect: { client.selectWorktree(selection) },
                     onSelectTab: { client.selectTab($0, in: selection) }
                 )
-                .contextMenu { removalMenu(worktree, peer: peer) }
+                .contextMenu { worktreeMenu(worktree, peer: peer) }
                 .padding(.top, index == 0 ? 0 : 1)
                 .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
                 .padding(.trailing, 6)
@@ -168,11 +168,20 @@ struct NativePeerSidebarView: View {
         }
     }
 
-    /// The local row's Archive and Delete items, for a host that serves them.
+    /// "New Terminal" for a host that opens shells, then the local row's
+    /// Archive and Delete items, for a host that serves them.
     @ViewBuilder
-    private func removalMenu(_ worktree: NativePeerWorktreeGroup, peer: NativePeerGroup) -> some View {
+    private func worktreeMenu(_ worktree: NativePeerWorktreeGroup, peer: NativePeerGroup) -> some View {
+        let controls = worktree.host.flatMap { client.hosts?.controls(for: $0, serverId: peer.serverId) } ?? .hidden
+        if let consoles = client.consoles, consoles.canOpen(serverId: peer.serverId) {
+            let worktreeId = worktree.peerWorktreeId
+            Button("New Terminal") {
+                if let worktreeId { consoles.openTerminal(serverId: peer.serverId, worktreeId: worktreeId) }
+            }
+            .disabled(worktreeId == nil)
+            if controls != .hidden { Divider() }
+        }
         if let host = worktree.host, let hosts = client.hosts {
-            let controls = hosts.controls(for: host, serverId: peer.serverId)
             if controls != .hidden {
                 let disabled = controls != .available
                 let delete = { (keepBranch: Bool) in

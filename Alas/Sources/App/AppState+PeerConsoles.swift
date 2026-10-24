@@ -128,6 +128,12 @@ extension AppState {
             supportsTerminate: { [weak self] serverId in
                 self?.remotePeers.capabilities[serverId]?.contains(PeerConsoleCapability.terminateV1) == true
             },
+            supportsOpen: { [weak self] serverId in
+                self?.remotePeers.capabilities[serverId]?.contains(PeerConsoleCapability.openV1) == true
+            },
+            supportsResize: { [weak self] serverId in
+                self?.remotePeers.capabilities[serverId]?.contains(PeerConsoleCapability.resizeV1) == true
+            },
             makeSurface: { [weak self] executable, args, onExit in
                 guard let self else { throw CancellationError() }
                 return try terminal.makeTransientSurface(
@@ -137,7 +143,8 @@ extension AppState {
                     args: args,
                     onExit: onExit
                 )
-            }
+            },
+            showError: { [weak self] title, message in self?.showFileActionError(title: title, message: message) }
         )
         remotePeers.onConsoleEvent = { [weak consoles] serverId, event in
             consoles?.receive(serverId: serverId, event)

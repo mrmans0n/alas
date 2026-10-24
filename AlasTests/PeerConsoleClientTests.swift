@@ -291,6 +291,37 @@ import Testing
         )
         #expect(size == expected)
     }
+
+    @Test func theFittedGridIsTheInverseOfTheExtent() {
+        let grid = PeerConsoleLayout.grid(fitting: CGSize(width: 648, height: 400), cell: CGSize(width: 8, height: 16))
+        #expect(grid == .init(rows: 24, columns: 80))
+    }
+
+    @Test(arguments: [CGSize(width: 648, height: 400), CGSize(width: 655, height: 415), CGSize(width: 10, height: 10)])
+    func theFittedGridFitsThePane(pane: CGSize) {
+        let cell = CGSize(width: 8, height: 16)
+        let grid = PeerConsoleLayout.grid(fitting: pane, cell: cell)
+        let extent = PeerConsoleLayout.extent(rows: grid.rows, columns: grid.columns, cell: cell)
+        #expect(grid.rows >= 1 && grid.columns >= 1)
+        #expect(pane.width < 16 || extent.width <= pane.width)
+        #expect(pane.height < 32 || extent.height <= pane.height)
+    }
+
+    /// A 648×400 pane of 8×16 cells fits 80×24.
+    @Test(arguments: [
+        (24, 80, nil, false),                     // the host already has it
+        (30, 100, AlasGhostty.SurfaceView.GridSize(rows: 24, columns: 80), false), // already asked
+        (30, 100, nil, true),
+    ] as [(Int, Int, AlasGhostty.SurfaceView.GridSize?, Bool)])
+    func theHostIsAskedOnlyForAGridThatChangesSomething(
+        hostRows: Int, hostColumns: Int, lastRequested: AlasGhostty.SurfaceView.GridSize?, asks: Bool
+    ) {
+        let request = PeerConsoleLayout.hostGridRequest(
+            pane: CGSize(width: 648, height: 400), cell: CGSize(width: 8, height: 16),
+            hostRows: hostRows, hostColumns: hostColumns, lastRequested: lastRequested
+        )
+        #expect(request == (asks ? .init(rows: 24, columns: 80) : nil))
+    }
 }
 
 @Suite struct PeerConsoleInputRelayTests {
@@ -474,6 +505,39 @@ import Testing
         // Only newly online peers are asked again.
         consoles.peersChanged(online: ["srv-old", "srv-new"])
         #expect(sent.count == 2)
+    }
+
+    @Test func openingATerminalNeedsTheCapabilityAndAnswersOnlyItsOwnRequest() {
+        var sent: [(String, RemoteClientMessage)] = []
+        var opened: [String] = []
+        var errors: [String] = []
+        let consoles = NativePeerConsoles(
+            send: { sent.append(($0, $1)) }, supportsConsoles: { _ in true },
+            supportsOpen: { $0 == "srv" }, makeSurface: { _, _, _ in throw CancellationError() },
+            showError: { errors.append("\($0): \($1)") })
+        consoles.onOpened = { opened.append("\($0)/\($1)") }
+        consoles.peersChanged(online: ["srv", "old"])
+        sent.removeAll()
+
+        consoles.openTerminal(serverId: "old", worktreeId: "w")
+        #expect(sent.isEmpty)
+        consoles.openTerminal(serverId: "srv", worktreeId: "w")
+        guard case .console(.open(let first, "w")) = sent.last?.1 else {
+            Issue.record("no open")
+            return
+        }
+        consoles.receive(serverId: "old", .opened(requestId: first, consoleId: "x"))
+        consoles.receive(serverId: "srv", .opened(requestId: first, consoleId: "c"))
+        consoles.receive(serverId: "srv", .opened(requestId: first, consoleId: "c"))
+        #expect(opened == ["srv/c"])
+
+        consoles.openTerminal(serverId: "srv", worktreeId: "w")
+        guard case .console(.open(let second, _)) = sent.last?.1 else {
+            Issue.record("no open")
+            return
+        }
+        consoles.receive(serverId: "srv", .openFailed(requestId: second, message: "SSH"))
+        #expect(errors == ["New Terminal Failed: SSH"])
     }
 }
 

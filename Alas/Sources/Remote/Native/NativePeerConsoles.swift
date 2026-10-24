@@ -18,11 +18,21 @@ final class NativePeerConsoles {
     /// Fired when a peer reports a console list that differs from the last
     /// one, so the sidebar snapshot can fold it in.
     @ObservationIgnored var onListChanged: (() -> Void)?
+    /// Fired when a peer opened the terminal this Mac asked for, so the
+    /// view can select it.
+    @ObservationIgnored var onOpened: ((_ serverId: String, _ consoleId: String) -> Void)?
 
     @ObservationIgnored private let send: @MainActor (_ serverId: String, RemoteClientMessage) -> Void
     @ObservationIgnored private let supportsConsoles: @MainActor (_ serverId: String) -> Bool
     @ObservationIgnored private let supportsTerminate: @MainActor (_ serverId: String) -> Bool
+    @ObservationIgnored private let supportsOpen: @MainActor (_ serverId: String) -> Bool
+    @ObservationIgnored private let supportsResize: @MainActor (_ serverId: String) -> Bool
     @ObservationIgnored private let makeSurface: PeerConsoleViewer.MakeSurface
+    @ObservationIgnored private let showError: @MainActor (_ title: String, _ message: String) -> Void
+    /// `open` requests awaiting a reply, by request id, to the peer asked.
+    @ObservationIgnored private var pendingOpens: [String: String] = [:]
+    /// A console this Mac just opened, whose viewer takes control once live.
+    @ObservationIgnored private var controlOnOpen: (serverId: String, consoleId: String)?
     @ObservationIgnored private var onlinePeers: Set<String> = []
     @ObservationIgnored private var listRefresh: Task<Void, Never>?
 
@@ -30,12 +40,18 @@ final class NativePeerConsoles {
         send: @escaping @MainActor (_ serverId: String, RemoteClientMessage) -> Void,
         supportsConsoles: @escaping @MainActor (_ serverId: String) -> Bool,
         supportsTerminate: @escaping @MainActor (_ serverId: String) -> Bool = { _ in false },
-        makeSurface: @escaping PeerConsoleViewer.MakeSurface
+        supportsOpen: @escaping @MainActor (_ serverId: String) -> Bool = { _ in false },
+        supportsResize: @escaping @MainActor (_ serverId: String) -> Bool = { _ in false },
+        makeSurface: @escaping PeerConsoleViewer.MakeSurface,
+        showError: @escaping @MainActor (_ title: String, _ message: String) -> Void = { _, _ in }
     ) {
         self.send = send
         self.supportsConsoles = supportsConsoles
         self.supportsTerminate = supportsTerminate
+        self.supportsOpen = supportsOpen
+        self.supportsResize = supportsResize
         self.makeSurface = makeSurface
+        self.showError = showError
     }
 
     func start() {
@@ -55,6 +71,7 @@ final class NativePeerConsoles {
         clearSelection()
         consoles = [:]
         onlinePeers = []
+        pendingOpens = [:]
     }
 
     /// Reconciles with the peers whose links currently carry sessions.
@@ -62,6 +79,7 @@ final class NativePeerConsoles {
         let added = online.subtracting(onlinePeers)
         onlinePeers = online
         consoles = consoles.filter { online.contains($0.key) }
+        pendingOpens = pendingOpens.filter { online.contains($0.value) }
         if let viewer, !online.contains(viewer.serverId) { viewer.connectionLost() }
         requestLists(for: added)
     }
@@ -71,6 +89,18 @@ final class NativePeerConsoles {
             guard onlinePeers.contains(serverId), consoles[serverId] != list else { return }
             consoles[serverId] = list
             onListChanged?()
+            return
+        }
+        // Only the peer asked answers an open, and only once.
+        if case .opened(let requestId, let consoleId) = event {
+            guard pendingOpens.removeValue(forKey: requestId) == serverId else { return }
+            controlOnOpen = (serverId, consoleId)
+            onOpened?(serverId, consoleId)
+            return
+        }
+        if case .openFailed(let requestId, let message) = event {
+            guard pendingOpens.removeValue(forKey: requestId) == serverId else { return }
+            showError("New Terminal Failed", message)
             return
         }
         guard let viewer, viewer.serverId == serverId, event.attachmentId == viewer.attachmentId else { return }
@@ -107,8 +137,25 @@ final class NativePeerConsoles {
         send(serverId, .console(.terminate(consoleId: consoleId)))
     }
 
+    /// Whether `serverId` opens terminals for a peer; older hosts would
+    /// drop the request.
+    func canOpen(serverId: String) -> Bool {
+        onlinePeers.contains(serverId) && supportsOpen(serverId)
+    }
+
+    /// Asks the host for a new shell in `worktreeId`. Its `opened` reply
+    /// selects the console and takes control of it.
+    func openTerminal(serverId: String, worktreeId: String) {
+        guard canOpen(serverId: serverId) else { return }
+        let requestId = UUID().uuidString
+        pendingOpens[requestId] = serverId
+        send(serverId, .console(.open(requestId: requestId, worktreeId: worktreeId)))
+    }
+
     private func open(serverId: String, consoleId: String) {
         viewer?.close()
+        let takesControl = controlOnOpen.map { $0.serverId == serverId && $0.consoleId == consoleId } ?? false
+        controlOnOpen = nil
         guard onlinePeers.contains(serverId) else { return }
         let title = consoles[serverId]?.first { $0.consoleId == consoleId }?.title ?? "Console"
         let send = self.send
@@ -118,7 +165,9 @@ final class NativePeerConsoles {
             title: title,
             scrollbackRows: Self.scrollbackRows,
             send: { send(serverId, .console($0)) },
-            makeSurface: makeSurface
+            makeSurface: makeSurface,
+            takesControlWhenLive: takesControl,
+            supportsResize: supportsResize(serverId)
         )
     }
 
