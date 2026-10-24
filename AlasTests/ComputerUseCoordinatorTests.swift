@@ -331,19 +331,24 @@ struct ComputerUseCoordinatorTests {
         #expect((byName["Notes"]?["windows"] as? [[String: Any]])?.first?["title"] as? String == "Note")
     }
 
-    /// Running apps with not one visible window: the Screen Recording prompt may be up, so the
-    /// empty list carries a warning rather than reading as plain "no windows".
-    @Test(arguments: [true, false])
-    func appsWarnWhenNoAppWindowIsVisible(windowsVisible: Bool) async throws {
+    /// Running apps other than Alas with not one visible window: the Screen Recording prompt may
+    /// be up, so the list carries a warning rather than reading as plain "no windows". Alas's own
+    /// windows stay listed meanwhile, so they don't count.
+    @Test(arguments: [(true, false, false), (false, false, true), (false, true, true)])
+    func appsWarnWhenNoAppWindowIsVisible(notesVisible: Bool, alasVisible: Bool, warns: Bool) async throws {
         let notes = Self.windows[1]!
+        let alas = Self.windows[4]!
         var system = Self.system()
-        system.runningApps = { [(app: notes.app, windows: windowsVisible ? [notes] : [])] }
+        system.runningApps = {
+            [(app: notes.app, windows: notesVisible ? [notes] : []), (app: alas.app, windows: alasVisible ? [alas] : [])]
+        }
         let f = Self.fixture(system: system)
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
         let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-        #expect((payload["apps"] as? [Any])?.count == 1)
-        #expect(payload["warning"] as? String == (windowsVisible ? nil
-            : "No app windows are visible. If macOS is showing a Screen Recording prompt, ask the user to answer it, then retry."))
+        #expect((payload["apps"] as? [Any])?.count == 2)
+        #expect(payload["warning"] as? String == (warns
+            ? "No app windows are visible. If macOS is showing a Screen Recording prompt, ask the user to answer it, then retry."
+            : nil))
     }
 
     @Test func screenshotOfVanishedWindowReportsNotFound() async {

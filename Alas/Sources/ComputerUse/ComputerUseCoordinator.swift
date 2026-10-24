@@ -673,8 +673,10 @@ final class ComputerUseCoordinator {
             return object
         }
         var payload: [String: Any] = ["version": 1, "apps": entries]
-        // While macOS shows its Screen Recording prompt, the window list comes back empty.
-        if !apps.isEmpty, apps.allSatisfy({ $0.windows.isEmpty }) { payload["warning"] = Message.noVisibleWindows }
+        // While macOS shows its Screen Recording prompt, other apps' windows aren't listed; Alas's
+        // own may still be, so they don't count.
+        let others = apps.filter { !access.isAlas($0.app) }
+        if !others.isEmpty, others.allSatisfy({ $0.windows.isEmpty }) { payload["warning"] = Message.noVisibleWindows }
         return Self.serialize(payload)
     }
 

@@ -43,7 +43,12 @@ public enum ComputerUseBlocklist {
     /// Other Alas builds can be seen but not driven: their approval and permission prompts
     /// are the user's to answer.
     public static func isInputBlocked(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {
-        if isBlocked(app, hostPID: hostPID) { return true }
+        isBlocked(app, hostPID: hostPID) || isAlas(app, hostPID: hostPID)
+    }
+
+    /// This process, or any Alas build (release, Dev).
+    public static func isAlas(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {
+        if app.pid == hostPID { return true }
         guard let bundleID = app.bundleID else { return false }
         return bundleID == "io.nlopez.alas" || bundleID.hasPrefix("io.nlopez.alas.")
     }
@@ -70,6 +75,9 @@ public final class ComputerUseAccess {
     private let alwaysAllowed: () -> Set<String>
     private var sessions: [String: SessionState] = [:]
     private var pendingEntries: [PendingEntry] = []
+
+    /// This process, or any Alas build: see `ComputerUseBlocklist.isAlas`.
+    public func isAlas(_ app: ComputerUseAppIdentity) -> Bool { ComputerUseBlocklist.isAlas(app, hostPID: hostPID) }
 
     public init(hostPID: Int32, alwaysAllowed: @escaping () -> Set<String>) {
         self.hostPID = hostPID
