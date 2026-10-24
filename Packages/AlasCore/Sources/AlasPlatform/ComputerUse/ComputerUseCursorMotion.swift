@@ -64,10 +64,11 @@ public enum ComputerUseCursorCue: Equatable, Sendable {
     case hide
     case none
 
-    /// An element is glided to the centre of its part inside `window`, when given; one wholly
-    /// outside it gets no cue, so the pointer never leaves the panel.
+    /// An element is glided to the centre of its part inside every clip (the window, its scroll
+    /// area), as an event click lands; one wholly outside them gets no cue, so the pointer never
+    /// leaves the panel. Without clips, to its centre.
     public static func cue(
-        for kind: ComputerUseCursorInputKind, point: CGPoint?, elementFrame: CGRect?, window: CGRect? = nil
+        for kind: ComputerUseCursorInputKind, point: CGPoint?, elementFrame: CGRect?, clips: [CGRect] = []
     ) -> ComputerUseCursorCue {
         switch kind {
         case .drag:
@@ -80,11 +81,8 @@ public enum ComputerUseCursorCue: Equatable, Sendable {
             let click = kind == .click
             if let point { return .glide(to: point, outline: nil, click: click) }
             if let frame = elementFrame {
-                guard let window else {
-                    return .glide(to: ComputerUseInputGeometry.center(of: frame), outline: frame, click: click)
-                }
                 guard let visible = ComputerUseInputGeometry.visibleCenter(
-                    of: frame, clippedTo: [window], requireOwnCenter: false)
+                    of: frame, clippedTo: clips, requireOwnCenter: false)
                 else { return ComputerUseCursorCue.none }
                 return .glide(to: visible, outline: frame, click: click)
             }

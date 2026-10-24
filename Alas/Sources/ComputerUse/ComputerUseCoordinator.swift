@@ -113,6 +113,9 @@ final class ComputerUseCoordinator {
         /// Where the element was when read, relative to its window's origin, so the cursor finds it
         /// after the window moved.
         var localFrame: CGRect
+        /// The frame of its nearest scroll area at read time, window-relative too, which clips
+        /// where pointer input lands on it.
+        var localScrollArea: CGRect?
         /// Listed to the agent at some point: a later read that doesn't list it must still find
         /// the element the agent saw there, not whatever took its place.
         var shown: Bool
@@ -120,6 +123,11 @@ final class ComputerUseCoordinator {
         /// The element's frame in global points, with its window where it is now.
         func frame(in window: ComputerUseWindow) -> CGRect {
             localFrame.offsetBy(dx: window.frame.minX, dy: window.frame.minY)
+        }
+
+        /// What shows of the element, as the event route clips it: the window and its scroll area.
+        func clips(in window: ComputerUseWindow) -> [CGRect] {
+            [window.frame] + [localScrollArea?.offsetBy(dx: window.frame.minX, dy: window.frame.minY)].compactMap { $0 }
         }
     }
 
@@ -497,9 +505,9 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
     }
 
-    /// An element's cue goes to the part of it inside `window`.
+    /// An element's cue goes to the part of it inside its clips in `window`.
     private static func cursorCue(
-        for input: ComputerUseInput, elementFrame: CGRect?, in window: ComputerUseWindow
+        for input: ComputerUseInput, element: ElementRef?, in window: ComputerUseWindow
     ) -> ComputerUseCursorCue {
         let kind: ComputerUseCursorInputKind
         let target: ComputerUseInputTarget?
@@ -512,7 +520,8 @@ final class ComputerUseCoordinator {
         }
         var point: CGPoint?
         if case .point(let at) = target { point = at }
-        return ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: elementFrame, window: window.frame)
+        return ComputerUseCursorCue.cue(
+            for: kind, point: point, elementFrame: element?.frame(in: window), clips: element?.clips(in: window) ?? [window.frame])
     }
 
     private func forgetSnapshots(of sessionID: String) {
@@ -741,7 +750,7 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         // The cursor moves before the takeover wait. Its pointer is window-local, so a remap after
         // the wait still lands under it.
-        let cue = Self.cursorCue(for: input, elementFrame: targetRef?.frame(in: window), in: window)
+        let cue = Self.cursorCue(for: input, element: targetRef, in: window)
         try await moveCursor(cue, over: window, context: context)
         if try await waitForUserIdle(in: window, direct: direct, context: context) {
             // The window may have moved or closed while the user had it: map points against where it is now.
@@ -806,7 +815,7 @@ final class ComputerUseCoordinator {
     ) async throws {
         try checkStillActive(context)
         let retry = ComputerUseInput.pointerClick(.element(target.0, target.1))
-        let retryCue = Self.cursorCue(for: retry, elementFrame: ref.frame(in: window), in: window)
+        let retryCue = Self.cursorCue(for: retry, element: ref, in: window)
         try await moveCursor(retryCue, over: window, context: context)
         if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
         try checkStillActive(context)
@@ -1272,8 +1281,17 @@ final class ComputerUseCoordinator {
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
         var refs: [String: Int]
-        /// Role, title and frame by handle, before the inspect output clips them.
-        var identities: [Int: (role: String, title: String?, frame: CGRect)]
+        /// Role, title, frame and scroll area by handle, before the inspect output clips them.
+        var identities: [Int: Identity]
+    }
+
+    /// An element as read: `scrollArea` is the frame of the nearest scroll area among the
+    /// ancestors the event route searches.
+    private struct Identity {
+        var role: String
+        var title: String?
+        var frame: CGRect
+        var scrollArea: CGRect?
     }
 
     /// Reads the window the way computer_inspect does and, unless told not to, replaces its refs.
@@ -1289,12 +1307,19 @@ final class ComputerUseCoordinator {
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
         // A partial read may have missed elements even when the limit was not reached.
-        var identities: [Int: (role: String, title: String?, frame: CGRect)] = [:]
-        func collect(_ node: ComputerUseAXNode) {
-            if let handle = node.handle { identities[handle] = (node.role, node.title, node.frame) }
-            node.children.forEach(collect)
+        var identities: [Int: Identity] = [:]
+        // Ancestors nearest last, as many as `ComputerUseAXActions.visibleCenter` climbs from the parent.
+        func collect(_ node: ComputerUseAXNode, above: [(role: String, frame: CGRect)]) {
+            if let handle = node.handle {
+                let area = above.last { $0.role == "AXScrollArea" }?.frame
+                identities[handle] = Identity(
+                    role: node.role, title: node.title, frame: node.frame,
+                    scrollArea: area.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil })
+            }
+            let next = Array((above + [(node.role, node.frame)]).suffix(ComputerUseAXActions.scrollAncestorLevels + 1))
+            for child in node.children { collect(child, above: next) }
         }
-        collect(tree.root)
+        collect(tree.root, above: [])
         let read = ElementRead(
             truncated: flat.truncated || !tree.complete, depthLimited: flat.depthLimited, elements: flat.elements,
             handles: tree.handles, refs: flat.refs, identities: identities)
@@ -1317,16 +1342,19 @@ final class ComputerUseCoordinator {
             guard let identity = read.identities[handle] else { continue }
             if listed.contains(ref) {
                 refs[ref] = ElementRef(
-                    handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame), shown: true)
+                    handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame),
+                    localScrollArea: identity.scrollArea.map(local), shown: true)
             } else if let seen = previous[ref], seen.shown {
                 guard seen.role == identity.role, seen.title == identity.title, let before,
                       system.sameElement(before.handles, seen.handle, read.handles, handle)
                 else { continue }
                 refs[ref] = ElementRef(
-                    handle: handle, role: seen.role, title: seen.title, localFrame: local(identity.frame), shown: true)
+                    handle: handle, role: seen.role, title: seen.title, localFrame: local(identity.frame),
+                    localScrollArea: identity.scrollArea.map(local), shown: true)
             } else {
                 refs[ref] = ElementRef(
-                    handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame), shown: false)
+                    handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame),
+                    localScrollArea: identity.scrollArea.map(local), shown: false)
             }
         }
         updateSnapshot(of: window, context: context) {

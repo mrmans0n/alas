@@ -1005,14 +1005,18 @@ struct ComputerUseCoordinatorTests {
 
     /// The element's frame is kept relative to its window, so the cue follows a window that moved
     /// between the inspect and the click.
-    @Test func aClickByRefGlidesToTheElementWhereItsWindowIsNow() async throws {
+    /// It also goes to the part of the element its scroll area shows, as an event click would.
+    @Test func aClickByRefGlidesToTheVisiblePartOfTheElementWhereItsWindowIsNow() async throws {
         let recorder = Recorder()
         let lookups = Counter()
         let original = ComputerUseWindow(windowID: 1, title: "Note", frame: CGRect(x: 100, y: 50, width: 400, height: 300), app: Self.notes)
         var moved = original
         moved.frame.origin = CGPoint(x: 300, y: 150)
+        // The scroll area shows only the button's top half.
         let tree = ComputerUseAXNode(role: "AXWindow", title: "Note", children: [
-            ComputerUseAXNode(role: "AXButton", title: "Save", frame: CGRect(x: 110, y: 60, width: 50, height: 20), handle: 1),
+            ComputerUseAXNode(role: "AXScrollArea", frame: CGRect(x: 100, y: 50, width: 400, height: 20), children: [
+                ComputerUseAXNode(role: "AXButton", title: "Save", frame: CGRect(x: 110, y: 60, width: 50, height: 20), handle: 1),
+            ], handle: 2),
         ], handle: 0)
         var system = Self.system(recorder: recorder)
         // The inspect resolves the original frame; the window has moved by the click.
@@ -1021,9 +1025,9 @@ struct ComputerUseCoordinatorTests {
         let cursor = ComputerUseCursor(present: { _ in }, perform: { recorder.recordEvent("\($0)") }, dismiss: {})
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes], cursor: cursor)
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
-        #expect(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")) != nil)
+        #expect(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e3"), sessionID: "s")) != nil)
         let expected = ComputerUseCursorCue.glide(
-            to: CGPoint(x: 335, y: 170), outline: CGRect(x: 310, y: 160, width: 50, height: 20), click: true)
+            to: CGPoint(x: 335, y: 165), outline: CGRect(x: 310, y: 160, width: 50, height: 20), click: true)
         #expect(recorder.events.first == "\(expected)")
     }
 

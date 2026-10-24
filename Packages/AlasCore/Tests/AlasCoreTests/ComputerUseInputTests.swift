@@ -320,18 +320,20 @@ struct ComputerUseInputTests {
         #expect(Motion.appKitFrame(fromCG: cg, primaryScreenHeight: 1000) == appKit)
     }
 
-    /// Elements are glided to the centre of their part inside the window (0, 0, 100, 100), with an outline.
+    /// Elements are glided to the centre of their part inside the clips, as an event click lands:
+    /// the window (0, 0, 100, 100) and the scroll area (0, 0, 100, 80) holding them. With an outline.
     @Test(arguments: [
         (ComputerUseCursorInputKind.click, CGPoint(x: 5, y: 5), nil,
          ComputerUseCursorCue.glide(to: CGPoint(x: 5, y: 5), outline: nil, click: true)),
         (.scroll, CGPoint(x: 5, y: 5), nil, .glide(to: CGPoint(x: 5, y: 5), outline: nil, click: false)),
         (.click, nil, CGRect(x: 0, y: 0, width: 20, height: 10),
          .glide(to: CGPoint(x: 10, y: 5), outline: CGRect(x: 0, y: 0, width: 20, height: 10), click: true)),
-        // Half of it below the window's bottom edge.
-        (.scroll, nil, CGRect(x: 0, y: 90, width: 20, height: 20),
-         .glide(to: CGPoint(x: 10, y: 95), outline: CGRect(x: 0, y: 90, width: 20, height: 20), click: false)),
-        // Wholly outside the window: the pointer stays where it is rather than leave the panel.
+        // Half of it scrolled below the scroll area's bottom edge.
+        (.scroll, nil, CGRect(x: 0, y: 70, width: 20, height: 20),
+         .glide(to: CGPoint(x: 10, y: 75), outline: CGRect(x: 0, y: 70, width: 20, height: 20), click: false)),
+        // Wholly outside the clips: the pointer stays where it is rather than leave the panel.
         (.click, nil, CGRect(x: 200, y: 200, width: 20, height: 10), ComputerUseCursorCue.none),
+        (.click, nil, CGRect(x: 0, y: 85, width: 20, height: 10), ComputerUseCursorCue.none),
         (.type, nil, CGRect(x: 0, y: 0, width: 20, height: 10), .outline(CGRect(x: 0, y: 0, width: 20, height: 10))),
         (.type, nil, nil, ComputerUseCursorCue.none),
         (.key, CGPoint(x: 5, y: 5), nil, ComputerUseCursorCue.none),
@@ -339,8 +341,8 @@ struct ComputerUseInputTests {
         (.click, nil, nil, ComputerUseCursorCue.none),
     ] as [(ComputerUseCursorInputKind, CGPoint?, CGRect?, ComputerUseCursorCue)])
     func eachInputGetsItsCue(kind: ComputerUseCursorInputKind, point: CGPoint?, frame: CGRect?, expected: ComputerUseCursorCue) {
-        let window = CGRect(x: 0, y: 0, width: 100, height: 100)
-        #expect(ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: frame, window: window) == expected)
+        let clips = [CGRect(x: 0, y: 0, width: 100, height: 100), CGRect(x: 0, y: 0, width: 100, height: 80)]
+        #expect(ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: frame, clips: clips) == expected)
     }
 
     typealias Key = ComputerUseCursorWindowKey
