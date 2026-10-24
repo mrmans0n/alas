@@ -105,19 +105,25 @@ struct HostConsolesTests {
         #expect(consoles.summaries().map(\.title) == ["Terminal 1", "Terminal 3", "Terminal 2"])
     }
 
-    @Test func restoreDropsShellsWhoseSessionIsGone() async throws {
+    @Test(arguments: [false, true])
+    func restoreDropsShellsWhoseSessionIsGone(lsFails: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let consoles = fixture.consoles()
         let first = try await consoles.open(worktreeId: fixture.worktree.id)
-        _ = try await consoles.open(worktreeId: fixture.worktree.id)
+        let second = try await consoles.open(worktreeId: fixture.worktree.id)
         let firstName = try #require(fixture.launches.first?.arguments[1])
-        fixture.fakes.withLock { $0.live = [firstName] }
+        fixture.fakes.withLock {
+            $0.live = [firstName]
+            $0.lsFails = lsFails
+        }
 
         let restored = fixture.consoles()
         await restored.restore()
-        #expect(restored.summaries().map(\.consoleId) == [first])
-        #expect(try fixture.savedFile()?.consoles.map(\.id) == [first])
+        // A failed `zmx ls` proves nothing gone: dropping would orphan the daemons.
+        let expected = lsFails ? [first, second] : [first]
+        #expect(restored.summaries().map(\.consoleId) == expected)
+        #expect(try fixture.savedFile()?.consoles.map(\.id) == expected)
     }
 
     @Test func listDropsShellsWhoseSocketIsGone() async throws {
@@ -170,6 +176,7 @@ struct HostConsolesTests {
         var killed: [String] = []
         var launches: [HostShellLaunch] = []
         var launchFails = false
+        var lsFails = false
         var sizeApplies = true
         var sizes: [String] = []
     }
@@ -224,6 +231,7 @@ struct HostConsolesTests {
             let runner = SubprocessRunner { _, args, _, _ in
                 switch args.first {
                 case "ls":
+                    if fakes.withLock({ $0.lsFails }) { return .init(exitCode: 1, stdout: "", stderr: "") }
                     return .init(exitCode: 0, stdout: fakes.withLock { $0.live }.joined(separator: "\n"), stderr: "")
                 case "kill":
                     fakes.withLock { $0.killed.append(args[1]) }

@@ -85,9 +85,21 @@ public final class HostConsoles {
             return
         }
         let zmx = zmx
-        let live = Set(await BlockingWork.run { zmx.listSessions() })
-        let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
-        entries = saved.filter { live.contains(prefix + $0.zmxName) }
+        let listed = await BlockingWork.run { zmx.listSessionsIfAvailable() }
+        let kept: [HostConsoleEntry]
+        if let listed {
+            let live = Set(listed)
+            let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
+            kept = saved.filter { live.contains(prefix + $0.zmxName) }
+        } else {
+            // Unknown is not gone: dropping would orphan running daemons.
+            // `summaries()` still prunes shells whose socket is missing.
+            consolesLogger.error("Could not list zmx sessions; keeping saved host consoles")
+            kept = saved
+        }
+        // Shells opened while `zmx ls` ran are kept too.
+        let savedIds = Set(saved.map(\.id))
+        entries = kept + entries.filter { !savedIds.contains($0.id) }
         if entries != saved { save() }
     }
 
@@ -101,6 +113,8 @@ public final class HostConsoles {
             entries = alive
             save()
         }
+        // Hidden (archived) worktrees are listed on purpose, so their shells
+        // can still be seen and terminated; `open` refuses them.
         return entries.compactMap { entry in
             guard let (project, worktree) = core.projectAndWorktree(withWorktreeId: entry.worktreeId) else { return nil }
             return PeerConsoleSummary(

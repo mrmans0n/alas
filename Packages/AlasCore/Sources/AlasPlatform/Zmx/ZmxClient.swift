@@ -116,7 +116,13 @@ public final class ZmxClient: Sendable {
     /// key=value fields (`  name=alas-X\tpid=123\t…`), not bare names, so
     /// orphan-sweep callers would otherwise miss every `alas-*` session.
     public func listSessions() -> [String] {
-        guard env.isAvailable, let binary = env.binaryURL else { return [] }
+        listSessionsIfAvailable() ?? []
+    }
+
+    /// As `listSessions`, but nil when zmx is unavailable or `zmx ls` fails
+    /// or times out, so callers can tell "none" from "unknown".
+    public func listSessionsIfAvailable() -> [String]? {
+        guard env.isAvailable, let binary = env.binaryURL else { return nil }
         let result = runner.run(binary, ["ls", "--short"], zmxEnv(), 5.0)
         guard result.exitCode == 0 else {
             if let code = result.exitCode {
@@ -124,7 +130,7 @@ public final class ZmxClient: Sendable {
             } else {
                 logger.warning("zmx ls timed out")
             }
-            return []
+            return nil
         }
         return result.stdout
             .split(separator: "\n", omittingEmptySubsequences: true)
