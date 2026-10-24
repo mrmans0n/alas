@@ -13,8 +13,11 @@ extension AppState {
                 self?.confirmPeerWorktreeRemoval(confirmation, peerName: peerName) ?? false
             },
             showError: { [weak self] title, message in self?.showFileActionError(title: title, message: message) },
-            notice: { [weak self] in
-                self?.harness.notifications.notifyAlas(body: $0.body, title: $0.title, agent: AgentKind(rawValue: $0.agent) ?? .codex, sessionId: $0.sessionID, owner: $0.owner)
+            notice: { [weak self] serverId, notice in
+                self?.harness.notifications.notifyPeerNotice(
+                    body: notice.body, title: notice.title, agent: AgentKind(rawValue: notice.agent) ?? .codex,
+                    serverId: serverId, sessionId: notice.sessionID
+                )
             }
         )
         remotePeers.onHostMessage = { [weak hosts] serverId, message in
