@@ -942,13 +942,22 @@ struct ComputerUseCoordinatorTests {
 
     // MARK: - Cursor
 
-    @Test func aCoordinateClickGlidesBeforeTheInput() async throws {
+    /// The glide comes before the takeover wait, so the wait and the ref re-check stay the last
+    /// steps before the input.
+    @Test func aCoordinateClickGlidesBeforeTheTakeoverWaitAndTheInput() async throws {
         let recorder = Recorder()
+        let polls = Counter()
+        var system = Self.system(recorder: recorder)
+        // The user is busy in Notes at the first poll, then idle.
+        system.isFrontmost = { $0 == 101 }
+        system.secondsSinceUserInput = { polls.next() == 1 ? 0.5 : 60 }
         let f = Self.fixture(
-            system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.notes], cursor: Self.cursor(recorder))
+            system: system, recorder: recorder, allowed: [Self.notes], sleep: { _ in recorder.recordEvent("sleep") },
+            cursor: Self.cursor(recorder))
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         #expect(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, x: 200, y: 100), sessionID: "s")) != nil)
-        #expect(recorder.events.suffix(3) == ["present", "cue:glide", "perform:click"])
+        // The takeover poll, the input, then the post-action settle.
+        #expect(recorder.events == ["present", "cue:glide", "sleep", "perform:click", "sleep"])
     }
 
     @Test func aStopDuringTheGlideDeliversNothing() async throws {

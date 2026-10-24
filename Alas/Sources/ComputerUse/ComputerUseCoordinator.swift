@@ -715,6 +715,9 @@ final class ComputerUseCoordinator {
         var beforeEnd: ComputerUseWindowFingerprint?
         if let toWindow { beforeEnd = await fingerprint(of: toWindow, for: command, target: nil, context: context) }
         try checkStillActive(context)
+        // The cursor moves before the takeover wait. Its pointer is window-local, so a remap after
+        // the wait still lands under it.
+        try await moveCursor(Self.cursorCue(for: input, elementFrame: targetRef?.frame), over: window, context: context)
         if try await waitForUserIdle(in: window, direct: direct, context: context) {
             // The window may have moved or closed while the user had it: map points against where it is now.
             window = try await currentWindow(window)
@@ -724,7 +727,6 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
         try checkStillActive(context)
-        try await moveCursor(Self.cursorCue(for: input, elementFrame: targetRef?.frame), over: window, context: context)
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
         // Parked where the drop landed, over the window it landed in. Cosmetic once the drop is
         // delivered: skipped when the call was stopped meanwhile, and the settle's check decides.
@@ -777,14 +779,14 @@ final class ComputerUseCoordinator {
         context: CallContext, payload: inout [String: Any]
     ) async throws {
         try checkStillActive(context)
+        let retry = ComputerUseInput.pointerClick(.element(target.0, target.1))
+        try await moveCursor(Self.cursorCue(for: retry, elementFrame: ref.frame), over: window, context: context)
         if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
         try checkStillActive(context)
         guard await system.elementMatches(target.0, target.1, ref.role, ref.title) else {
             throw Refusal(Message.stale(command.ref ?? "", windowID: window.windowID))
         }
         try checkStillActive(context)
-        let retry = ComputerUseInput.pointerClick(.element(target.0, target.1))
-        try await moveCursor(Self.cursorCue(for: retry, elementFrame: ref.frame), over: window, context: context)
         let retried = try await deliver(retry, of: command, to: window, toWindow: nil, direct: false, context: context)
         let settled = try await settle(after: retried, of: command, in: &window, target: target, before: before,
                                        end: nil, context: context, payload: &payload)
