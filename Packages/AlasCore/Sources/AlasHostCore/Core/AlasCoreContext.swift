@@ -45,6 +45,11 @@ public final class AlasCoreContext {
     /// ones that never produced an archivable record.
     @ObservationIgnored @_spi(Testing) public internal(set) var runSettlementHandlers: [String: (worktreeID: String, notify: (RunScriptSettlement) -> Void)] = [:]
 
+    /// Called before a worktree's checkout is deleted, after its sessions
+    /// stop. `alas-host` closes its shells there; the app's own quiesce
+    /// already closes its terminals, so it leaves this nil.
+    @ObservationIgnored @_spi(AppHost) public var willRemoveWorktree: (@MainActor (_ worktreeID: String) async -> Void)?
+
     /// The on-device text model's files and state.
     @ObservationIgnored public let localTextModelStore: LocalTextModelStore
     /// The on-device text engine every local-text feature shares.

@@ -265,6 +265,8 @@ if let listen = config.hostRemoteListen {
         FileHandle.standardError.write(Data("alas-host: zmx not found beside alas-host or in /Applications/Alas.app; peers can't open terminals here\n".utf8))
     }
     let shells = HostConsoles(core: host.coreContext, zmx: zmx)
+    // A deleted worktree's shells would outlive it unlisted and unclosable.
+    host.coreContext.willRemoveWorktree = { await shells.terminateConsoles(inWorktree: $0) }
     let server = RemoteServer(
         pairing: pairing,
         assets: RemoteWebAssets(root: webClient ?? URL(fileURLWithPath: "/dev/null")),

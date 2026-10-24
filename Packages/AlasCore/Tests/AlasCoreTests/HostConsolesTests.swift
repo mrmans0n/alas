@@ -202,6 +202,35 @@ struct HostConsolesTests {
         try await eventually { fakes.withLock { $0.killed } == [zmxName] }
     }
 
+    @Test func deletingAWorktreeClosesItsShells() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let repo = fixture.root.appendingPathComponent("repo")
+        try GitTemplate.repository(at: repo)
+        try Self.git(["worktree", "add", "-q", "-b", "feature", fixture.worktree.path.path], in: repo)
+        let consoles = fixture.consoles()
+        fixture.core.willRemoveWorktree = { await consoles.terminateConsoles(inWorktree: $0) }
+        _ = try await consoles.open(worktreeId: fixture.worktree.id)
+        let zmxName = try #require(fixture.launches.first?.arguments[1])
+
+        let result = await fixture.core.removeWorktree(WorktreeRemovalRequest(
+            worktree: fixture.worktree, repoPath: repo, force: true, deleteBranchIfMerged: false
+        ))
+        #expect(result == .removed)
+        #expect(fixture.killed == [zmxName])
+        #expect(try fixture.savedFile()?.consoles.isEmpty == true)
+    }
+
+    private static func git(_ arguments: [String], in directory: URL) throws {
+        let git = Process()
+        git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        git.arguments = arguments
+        git.currentDirectoryURL = directory
+        try git.run()
+        git.waitUntilExit()
+        #expect(git.terminationStatus == 0)
+    }
+
     struct Fakes {
         var live: [String] = []
         var killed: [String] = []

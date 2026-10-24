@@ -136,6 +136,8 @@ extension AlasCoreContext {
         } catch {
             return .failed("Could not stop everything using the worktree: \(error.localizedDescription)")
         }
+        // Delete only: an archived worktree keeps its checkout, and its shells.
+        await willRemoveWorktree?(worktree.id)
 
         let outcome: WorktreeRemovalOutcome
         do {
