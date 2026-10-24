@@ -772,7 +772,7 @@ struct HostSessionsTests {
         try await eventually {
             await received.events.contains { if case .notice(let n) = $0 { n.sessionID == id && n.body == "Pick one" } else { false } }
         }
-        #expect(HostEvent.notice(HostNotice(id: UUID(), owner: .worktree("w"), sessionID: id, agent: .codex, title: nil, body: "")).optInKind == "notice")
+        #expect(HostEvent.notice(HostNotice(id: UUID(), owner: .worktree("w"), sessionID: id, agent: "codex", title: nil, body: "")).optInKind == "notice")
         #expect(sessions.list().first { $0.id == id }?.streamingState == .awaitingInput)
         #expect(await fixture.core.remoteSessionSummaries(tabIndex: { _, _ in nil }).first { $0.id == id }?.status
             == RemoteSessionGateway.stateString(.awaitingInput))
@@ -781,8 +781,25 @@ struct HostSessionsTests {
         #expect(sessions.list().first { $0.id == id }?.streamingState == .awaitingInput)
         try await sessions.send(id, prompt: "a", caller: .app)
         try await eventually { await sessions.list().first { $0.id == id }?.streamingState != .awaitingInput }
-        // A shell's notify, with no session, is not relayed.
+        // A shell's notify, with no session, is not relayed: a change made
+        // after it arrives with no notice before it.
         try fixture.host.attention.notify("hi", title: nil, needsInput: false, from: .worktree(fixture.worktree, sessionID: nil, owner: nil), caller: .cli)
+        try sessions.rename(id, title: "After", caller: .app)
+        try await eventually { await received.events.contains { if case .sessionChanged(let s) = $0 { s.title == "After" } else { false } } }
+        #expect(received.events.filter { if case .notice = $0 { true } else { false } }.count == 1)
+
+        // A session dropped while it waits comes back no longer waiting.
+        try fixture.host.attention.notify(
+            "Again", title: nil, needsInput: true,
+            from: .worktree(fixture.worktree, sessionID: id, owner: .worktree(fixture.worktree.id)), caller: .session(id: id)
+        )
+        #expect(sessions.list().first { $0.id == id }?.streamingState == .awaitingInput)
+        await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        await manager.refreshRecentNow()
+        try await sessions.load(id)
+        await manager.attach(to: id, freshlyCreated: false)
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
     }
 
     @MainActor

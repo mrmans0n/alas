@@ -14,7 +14,7 @@ extension AppState {
             },
             showError: { [weak self] title, message in self?.showFileActionError(title: title, message: message) },
             notice: { [weak self] in
-                self?.harness.notifications.notifyAlas(body: $0.body, title: $0.title, agent: $0.agent, sessionId: $0.sessionID, owner: $0.owner)
+                self?.harness.notifications.notifyAlas(body: $0.body, title: $0.title, agent: AgentKind(rawValue: $0.agent) ?? .codex, sessionId: $0.sessionID, owner: $0.owner)
             }
         )
         remotePeers.onHostMessage = { [weak hosts] serverId, message in

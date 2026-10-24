@@ -134,8 +134,9 @@ public final class AlasCoreContext {
         didSet { if delegatedSessionParents != oldValue { environment.delegatedSessionParentsChanged() } }
     }
 
-    /// Ends a relayed notice's wait for input at its session's next prompt, by session id.
-    @ObservationIgnored var noticeAwaitingClears: [String: ChangeSubscription] = [:]
+    /// Relayed notices waiting for their user's input, by session id. Each
+    /// holds while the session runs on the transcript it was sent from.
+    @ObservationIgnored var noticeAwaitingClears: [String: NoticeAwaitingInput] = [:]
 
     /// Launches claimed and still starting, by run slot.
     @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]

@@ -85,7 +85,7 @@ struct PeerHostChannelTests {
         // A notice is handed on, and changes no state.
         var got: [HostNotice] = []
         channel.onNotice = { got.append($0) }
-        let notice = HostNotice(id: UUID(), owner: .worktree("w"), sessionID: "s", agent: .codex, title: "Q", body: "Pick one")
+        let notice = HostNotice(id: UUID(), owner: .worktree("w"), sessionID: "s", agent: "codex", title: "Q", body: "Pick one")
         let before = channel.state
         channel.receive(.events(events: [.notice(notice)], cursor: cursor))
         #expect(got == [notice])

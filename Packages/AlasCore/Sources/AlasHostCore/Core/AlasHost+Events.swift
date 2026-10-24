@@ -85,11 +85,12 @@ public struct HostNotice: Codable, Equatable, Sendable {
     public var id: UUID
     public var owner: SessionOwnerID
     public var sessionID: String
-    public var agent: AgentKind
+    /// An `AgentKind` raw value, kept as sent: a client may not know a newer host's agents.
+    public var agent: String
     public var title: String?
     public var body: String
 
-    public init(id: UUID, owner: SessionOwnerID, sessionID: String, agent: AgentKind, title: String?, body: String) {
+    public init(id: UUID, owner: SessionOwnerID, sessionID: String, agent: String, title: String?, body: String) {
         self.id = id
         self.owner = owner
         self.sessionID = sessionID

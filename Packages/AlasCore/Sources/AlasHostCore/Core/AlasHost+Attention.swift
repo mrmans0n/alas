@@ -72,14 +72,13 @@ public struct AttentionAPI {
             // Cleared by the user's next prompt, which every turn starts
             // with, rather than by any change: the agent usually asks
             // mid-turn, and the end of that turn is no answer.
-            // ponytail: a notice for a session with no live agent is never cleared; it can't happen from MCP, which needs one
-            core.noticeAwaitingClears[sessionID] = session.transcript.$streamingState.signal.observe { [weak core] state in
-                guard state == .sending, let core else { return }
-                core.harness.forgetSession(sessionID)
-                core.noticeAwaitingClears[sessionID] = nil
+            // ponytail: a notice from a session with no live agent is never reported waiting; it can't happen from MCP, which needs one
+            let clear = session.transcript.$streamingState.signal.observe { [weak core] state in
+                if state == .sending { core?.endNoticeWait(sessionID) }
             }
+            core.noticeAwaitingClears[sessionID] = NoticeAwaitingInput(transcript: session.transcript, clear: clear)
         }
-        changed([.notice(HostNotice(id: UUID(), owner: noticeOwner, sessionID: sessionID, agent: agent(of: sessionID), title: title, body: body))])
+        changed([.notice(HostNotice(id: UUID(), owner: noticeOwner, sessionID: sessionID, agent: agent(of: sessionID).rawValue, title: title, body: body))])
     }
 
     /// The agent behind session `sessionID`, as its hooks or its ACP session
@@ -97,13 +96,30 @@ public struct AttentionAPI {
 }
 
 extension AlasCoreContext {
-    /// A session's state as Remote clients see it: on a host that relays
-    /// notices, waiting for its user while a notice asks for input, unless
-    /// the agent waits on a permission answer.
+    /// A session's state as Remote clients see it: waiting for its user
+    /// while a relayed notice asks for input, unless the agent waits on a
+    /// permission answer.
     func reportedStreamingState(of sessionID: String, live: ACPSession.StreamingState?) -> ACPSession.StreamingState? {
-        guard environment.relaysNotices, let live, live != .awaitingPermission,
-              let activity = harness.activityBySession[sessionID], activity.state == .awaitingInput, activity.requiresUserInput
-        else { return live }
+        guard let waiting = noticeAwaitingClears[sessionID] else { return live }
+        let transcript = sessionManagers.values.lazy.compactMap { $0.liveSession(for: sessionID) }.first?.transcript
+        guard let transcript, waiting.transcript === transcript else {
+            // The session was dropped, and may have come back as another:
+            // nothing watches for its next prompt any more.
+            endNoticeWait(sessionID)
+            return live
+        }
+        guard let live, live != .awaitingPermission else { return live }
         return .awaitingInput
     }
+
+    func endNoticeWait(_ sessionID: String) {
+        noticeAwaitingClears[sessionID] = nil
+        harness.forgetSession(sessionID)
+    }
+}
+
+/// A relayed notice's wait for input, ended by `clear` at its session's next prompt.
+struct NoticeAwaitingInput {
+    weak var transcript: ACPTranscript?
+    let clear: ChangeSubscription
 }
