@@ -48,6 +48,14 @@ public enum ZmxSessionName: Sendable {
         Set(worktreeIds.map(worktreeHash))
     }
 
+    /// A shell a headless host opened for a peer. Deliberately does not start
+    /// with `alas-`: the app's orphan sweeps, Open Sessions list and
+    /// `ZmxPreFreezeMigration` only touch `isAlasName` sessions, so they leave
+    /// host shells alone when the app later runs on the same profile.
+    public static func hostShell(worktreeId: String, consoleId: String) -> String {
+        "alashost-\(worktreeHash(worktreeId))-\(hash16(consoleId))"
+    }
+
     public static func legacy(leafId: String) -> String {
         "alas-\(leafId)"
     }
