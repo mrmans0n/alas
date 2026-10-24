@@ -8919,6 +8919,13 @@ final class AppState {
         manager mgr: ACPSessionManager,
         applyTabTitle: (String) -> Void
     ) {
+        guard let newTitle = promptForSessionTitle(state.title) else { return }
+        mgr.renameSession(id: state.sessionId, title: newTitle, source: .manual)
+        applyTabTitle(newTitle)
+    }
+
+    /// The trimmed title the user chose for a session; nil when cancelled or blank.
+    private func promptForSessionTitle(_ title: String) -> String? {
         let alert = NSAlert()
         alert.messageText = "Rename Session"
         alert.informativeText = "Choose a name for this ACP session."
@@ -8927,15 +8934,37 @@ final class AppState {
         alert.addButton(withTitle: "Cancel")
 
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        field.stringValue = state.title
+        field.stringValue = title
         field.lineBreakMode = .byTruncatingTail
         alert.accessoryView = field
 
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
         let newTitle = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !newTitle.isEmpty else { return }
-        mgr.renameSession(id: state.sessionId, title: newTitle, source: .manual)
-        applyTabTitle(newTitle)
+        return newTitle.isEmpty ? nil : newTitle
+    }
+
+    /// Renames a peer session tab with the local prompt.
+    func renamePeerSessionTab(_ session: RemoteSessionSummary) {
+        guard let client = nativePeerSessions, let title = promptForSessionTitle(session.title) else { return }
+        client.renameSession(session.id, title: title)
+    }
+
+    /// Copy and Save Session as Markdown for a peer session, whose
+    /// transcript is only here while its tab is selected.
+    func copyPeerSessionMarkdown(_ session: RemoteSessionSummary) {
+        guard let markdown = peerSessionMarkdown(session) else { return }
+        Clipboard.copy(markdown)
+    }
+
+    func exportPeerSessionMarkdown(_ session: RemoteSessionSummary) {
+        guard let markdown = peerSessionMarkdown(session) else { return }
+        exportMarkdown(markdown, title: session.title)
+    }
+
+    private func peerSessionMarkdown(_ session: RemoteSessionSummary) -> String? {
+        nativePeerSessions?.transcriptMarkdown(
+            of: session.id, title: session.title, agentName: agent(id: session.agentId)?.displayName
+        )
     }
 
     /// Copy the active ACP session's conversation (user + agent, Markdown)
@@ -8984,15 +9013,21 @@ final class AppState {
     }
 
     private func exportMarkdown(for session: ACPSession) {
-        let markdown = ACPTranscriptMarkdown.document(
-            title: session.title,
-            agentName: agent(id: session.agentId)?.displayName,
-            messages: session.transcript.messages
+        exportMarkdown(
+            ACPTranscriptMarkdown.document(
+                title: session.title,
+                agentName: agent(id: session.agentId)?.displayName,
+                messages: session.transcript.messages
+            ),
+            title: session.title
         )
+    }
+
+    private func exportMarkdown(_ markdown: String, title: String) {
         let panel = NSSavePanel()
         panel.title = "Save Session as Markdown"
         panel.message = "Choose where to save this conversation."
-        panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: session.title)
+        panel.nameFieldStringValue = ACPTranscriptMarkdown.sanitizedFilename(title: title)
         panel.canCreateDirectories = true
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
