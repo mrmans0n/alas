@@ -230,12 +230,12 @@ public final class HostConsoles {
         return applied
     }
 
-    public func terminate(_ consoleId: String) {
-        guard let index = entries.firstIndex(where: { $0.id == consoleId }) else { return }
-        let name = entries.remove(at: index).zmxName
-        save()
-        let zmx = zmx
-        BlockingWork.detach { zmx.killSession(name: name) }
+    /// Stops a shell and forgets it once stopped; true when it was. One
+    /// zmx couldn't stop stays listed, so the user can try again.
+    @discardableResult
+    public func terminate(_ consoleId: String) async -> Bool {
+        guard let entry = entries.first(where: { $0.id == consoleId }) else { return true }
+        return await stop([entry])
     }
 
     public func hasConsoles(inWorktrees worktreeIDs: Set<String>) -> Bool {
@@ -265,8 +265,14 @@ public final class HostConsoles {
     public func terminateConsoles(inWorktree worktreeID: String) async throws {
         let doomed = entries.filter { $0.worktreeId == worktreeID }
         guard !doomed.isEmpty else { return }
+        guard await stop(doomed) else { throw StopFailed() }
+    }
+
+    /// Kills each shell, then forgets those that stopped: the kill succeeded
+    /// or the socket is confirmed gone. True when all of them did.
+    private func stop(_ doomed: [HostConsoleEntry]) async -> Bool {
         // Without zmx a kill reports success without running.
-        guard zmx.isAvailable else { throw StopFailed() }
+        guard zmx.isAvailable else { return false }
         let zmx = zmx
         let stopped = await BlockingWork.run {
             Set(doomed.filter { entry in
@@ -274,11 +280,11 @@ public final class HostConsoles {
                     || zmx.socketPath(forSession: entry.zmxName).map { !FileManager.default.fileExists(atPath: $0) } == true
             }.map(\.id))
         }
-        if !stopped.isEmpty {
+        if entries.contains(where: { stopped.contains($0.id) }) {
             entries.removeAll { stopped.contains($0.id) }
             save()
         }
-        guard stopped.count == doomed.count else { throw StopFailed() }
+        return stopped.count == doomed.count
     }
 
     public func makePeerConsoleHost() -> PeerConsoleHost {
@@ -286,7 +292,7 @@ public final class HostConsoles {
             consoles: { self.summaries() },
             resolve: { self.target($0) },
             setLocalInputSuppressed: { _, _ in },
-            terminate: { self.terminate($0) },
+            terminate: { id in Task { await self.terminate(id) } },
             open: { try await self.open(worktreeId: $0) },
             resize: { await self.resize($0, rows: $1, columns: $2) }
         ))

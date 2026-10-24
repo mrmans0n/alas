@@ -132,7 +132,7 @@ struct HostConsolesTests {
         let consoles = fixture.consoles()
         var ids: [String] = []
         for _ in 0..<3 { try await ids.append(consoles.open(worktreeId: fixture.worktree.id)) }
-        consoles.terminate(ids[1])
+        await consoles.terminate(ids[1])
         _ = try await consoles.open(worktreeId: fixture.worktree.id)
         #expect(consoles.summaries().map(\.title) == ["Terminal 1", "Terminal 3", "Terminal 2"])
     }
@@ -224,17 +224,22 @@ struct HostConsolesTests {
         #expect(consoles.target(id).map { [$0.rows, $0.columns] } == [40, 100])
     }
 
-    @Test func terminateKillsTheSessionAndForgetsIt() async throws {
+    /// A shell is forgotten only once zmx stopped it; one whose kill failed
+    /// stays listed, so the user can try again.
+    @Test(arguments: [false, true])
+    func terminateKillsTheSessionAndForgetsIt(killFails: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let consoles = fixture.consoles()
         let id = try await consoles.open(worktreeId: fixture.worktree.id)
         let zmxName = try #require(fixture.launches.first?.arguments[1])
+        fixture.fakes.withLock { $0.killFails = killFails }
 
-        consoles.terminate(id)
-        #expect(consoles.summaries().isEmpty)
-        let fakes = fixture.fakes
-        try await eventually { fakes.withLock { $0.killed } == [zmxName] }
+        await consoles.terminate(id)
+        #expect(fixture.killed == [zmxName])
+        let expected = killFails ? [id] : []
+        #expect(consoles.summaries().map(\.consoleId) == expected)
+        #expect(try fixture.savedFile()?.consoles.map(\.id) == expected)
     }
 
     /// Deleting a worktree closes its shells first; one zmx can't stop
@@ -309,6 +314,7 @@ struct HostConsolesTests {
         var launches: [HostShellLaunch] = []
         var launchFails = false
         var lsFails = false
+        var killFails = false
         var duringLaunch: DuringLaunch?
         var sizeApplies = true
         var sizes: [String] = []
@@ -372,8 +378,11 @@ struct HostConsolesTests {
                     if fakes.withLock({ $0.lsFails }) { return .init(exitCode: 1, stdout: "", stderr: "") }
                     return .init(exitCode: 0, stdout: fakes.withLock { $0.live }.joined(separator: "\n"), stderr: "")
                 case "kill":
-                    fakes.withLock { $0.killed.append(args[1]) }
-                    return .init(exitCode: 0, stdout: "", stderr: "")
+                    let fails = fakes.withLock {
+                        $0.killed.append(args[1])
+                        return $0.killFails
+                    }
+                    return .init(exitCode: fails ? 1 : 0, stdout: "", stderr: "")
                 default:
                     return .init(exitCode: 1, stdout: "", stderr: "")
                 }
