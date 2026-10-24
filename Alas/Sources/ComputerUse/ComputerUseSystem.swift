@@ -855,7 +855,12 @@ extension LiveComputerUseSystem {
                 if isCancelled() || Task.isCancelled { return .cancelled }
                 // The cursor is shared: any input of the user's since the drag began, in any app,
                 // input watching stopping, or the target leaving the front ends it.
-                if ComputerUseTakeover.tookOverDrag(lastUserInput: ComputerUseUserInput.lastInput(), dragBegan: dragBegan) {
+                // Keys typed under Secure Input never reach the input tap; the HID key time sees them.
+                let secureKeyAt = IsSecureEventInputEnabled()
+                    ? ComputerUseUserInput.now() - ComputerUseUserInput.hidKeyIdleSeconds() : nil
+                if ComputerUseTakeover.tookOverDrag(
+                    lastUserInput: ComputerUseUserInput.lastInput(), dragBegan: dragBegan, secureInputKeyAt: secureKeyAt)
+                {
                     return .userActive
                 }
                 let front = ComputerUseSkyLight.isFrontProcess(pid: pid)

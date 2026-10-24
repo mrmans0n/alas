@@ -255,10 +255,16 @@ struct ComputerUseInputTests {
     }
 
     /// A drag ends on any input of the user's since it began; without the input monitor there is
-    /// no telling theirs from the drag's own, so that ends it too.
-    @Test(arguments: [(nil, true), (99.0, false), (101.0, true)] as [(TimeInterval?, Bool)])
-    private func dragTakeover(lastUserInput: TimeInterval?, tookOver: Bool) {
-        #expect(ComputerUseTakeover.tookOverDrag(lastUserInput: lastUserInput, dragBegan: 100) == tookOver)
+    /// no telling theirs from the drag's own, so that ends it too. Keys typed under Secure Input
+    /// never reach the monitor, so the HID key time (`secureInputKeyAt`) counts as well.
+    @Test(arguments: [
+        (nil, nil, true), (99.0, nil, false), (101.0, nil, true),
+        (99.0, 100.9, true), (99.0, 96.0, false),
+    ] as [(TimeInterval?, TimeInterval?, Bool)])
+    private func dragTakeover(lastUserInput: TimeInterval?, secureInputKeyAt: TimeInterval?, tookOver: Bool) {
+        #expect(
+            ComputerUseTakeover.tookOverDrag(
+                lastUserInput: lastUserInput, dragBegan: 100, secureInputKeyAt: secureInputKeyAt) == tookOver)
     }
 
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.
