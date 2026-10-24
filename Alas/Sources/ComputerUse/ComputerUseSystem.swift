@@ -55,6 +55,13 @@ enum ComputerUseInput: Sendable {
     /// that changed nothing in an app whose AX press only focuses (Electron).
     case pointerClick(ComputerUseInputTarget)
 
+    /// The element a click by ref targets, which must show for the click to go ahead. Typing by
+    /// ref may target a field out of view, and scrolling is how one gets there.
+    var refusedWhenHidden: (ComputerUseAXHandles, Int)? {
+        if case .click(.element(let handles, let handle), _, _) = self { return (handles, handle) }
+        return nil
+    }
+
     var isDrag: Bool {
         if case .drag = self { return true }
         return false
@@ -183,31 +190,35 @@ struct ComputerUseSystem: Sendable {
     /// Whether the app builds its Accessibility tree on request (Chromium, Electron), where an AX
     /// press may only focus the element.
     var usesManualAccessibility: @Sendable (Int32) -> Bool = { _ in false }
-
-    static let live = ComputerUseSystem(
-        runningApps: { await LiveComputerUseSystem.runningApps() },
-        window: { await LiveComputerUseSystem.window($0) },
-        screenshot: { try await LiveComputerUseSystem.screenshot($0) },
-        axTree: { window, maxDepth, nodeBudget, timeLimit in
-            try await ComputerUseAXReader.read(window, maxDepth: maxDepth, nodeBudget: nodeBudget, timeLimit: timeLimit)
-        },
-        perform: { input, window, direct, interrupt in
-            try await LiveComputerUseSystem.perform(input, in: window, direct: direct, interrupt: interrupt)
-        },
-        focusState: { await ComputerUseAXActions.focusState(of: $0.app) },
-        elementState: { await ComputerUseAXActions.stateHash($0, $1) },
-        elementMatches: { handles, handle, role, title in
-            await ComputerUseAXActions.elementMatches(handles, handle, role: role, title: title)
-        },
-        secondsSinceUserInput: { LiveComputerUseSystem.secondsSinceUserInput() },
-        // Synchronous and called off the main actor between an input's events, so without
-        // SkyLight it reads `isActive` directly rather than hopping to the main actor.
-        isFrontmost: { ComputerUseSkyLight.isFrontProcess(pid: $0) ?? NSRunningApplication(processIdentifier: $0)?.isActive ?? false },
-        resolveApp: { await LiveComputerUseSystem.resolveApp(name: $0, bundleID: $1) },
-        openApp: { try await LiveComputerUseSystem.openApp($0) },
-        releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
-        usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) }
-    )
+    /// The live system. `cursorWindowIDs` names Alas's own overlay windows (the drawn cursor),
+    /// which the live drag's hit-tests look through.
+    static func live(cursorWindowIDs: @escaping @Sendable () -> Set<UInt32> = { [] }) -> ComputerUseSystem {
+        ComputerUseSystem(
+            runningApps: { await LiveComputerUseSystem.runningApps() },
+            window: { await LiveComputerUseSystem.window($0) },
+            screenshot: { try await LiveComputerUseSystem.screenshot($0) },
+            axTree: { window, maxDepth, nodeBudget, timeLimit in
+                try await ComputerUseAXReader.read(window, maxDepth: maxDepth, nodeBudget: nodeBudget, timeLimit: timeLimit)
+            },
+            perform: { input, window, direct, interrupt in
+                try await LiveComputerUseSystem.perform(
+                    input, in: window, direct: direct, ignoring: cursorWindowIDs, interrupt: interrupt)
+            },
+            focusState: { await ComputerUseAXActions.focusState(of: $0.app) },
+            elementState: { await ComputerUseAXActions.stateHash($0, $1) },
+            elementMatches: { handles, handle, role, title in
+                await ComputerUseAXActions.elementMatches(handles, handle, role: role, title: title)
+            },
+            secondsSinceUserInput: { LiveComputerUseSystem.secondsSinceUserInput() },
+            // Synchronous and called off the main actor between an input's events, so without
+            // SkyLight it reads `isActive` directly rather than hopping to the main actor.
+            isFrontmost: { ComputerUseSkyLight.isFrontProcess(pid: $0) ?? NSRunningApplication(processIdentifier: $0)?.isActive ?? false },
+            resolveApp: { await LiveComputerUseSystem.resolveApp(name: $0, bundleID: $1) },
+            openApp: { try await LiveComputerUseSystem.openApp($0) },
+            releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
+            usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) }
+        )
+    }
 }
 
 private enum LiveComputerUseSystem {
@@ -398,8 +409,10 @@ extension LiveComputerUseSystem {
     /// Delivery order: an AX action on the element; else events posted to the window once it is
     /// its app's key window, without activating the app (`background`); else, when that window
     /// can't be made key, the app is activated around the events as `direct` does.
+    /// `ignoring`: windows the drag's hit-tests look through (Alas's drawn cursor).
     static func perform(
         _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
+        ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseDelivered {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
@@ -407,6 +420,9 @@ extension LiveComputerUseSystem {
         // The coordinator refuses these first; no delivery path may quit an app either way.
         if case .key(let chord) = input, ComputerUseMenuShortcut.isQuit(chord) {
             throw ComputerUseSystemError.actionFailed(ComputerUseCoordinator.Message.noQuitting)
+        }
+        if case .key(let chord) = input {
+            try await ComputerUseAXActions.refuseSecureFocus(chord, in: window, isCancelled: isCancelled)
         }
         // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing the
         // button needs no key window, so nothing is keyed or activated for it, also when direct.
@@ -417,9 +433,16 @@ extension LiveComputerUseSystem {
         // Drags always go with the app in front; the coordinator applies the direct takeover rule to them.
         if direct || input.isDrag {
             // Raising the window moves the app's key window too; not while another input holds it.
-            return try await keyLocks.run(window.app.pid) { try await activated(input, in: window, interrupt: interrupt) }
+            return try await keyLocks.run(window.app.pid) {
+                try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
+            }
         }
         let app = window.app
+        // An AX press needs no position, so it would reach an element scrolled out of view.
+        if let (handles, handle) = input.refusedWhenHidden,
+           try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
+            throw ComputerUseAXActions.hiddenRefusal
+        }
         // Each case falls through to events only when the element offers no AX way. Typing without
         // a ref and chords act on the key window, so they wait until it is made key below.
         switch input {
@@ -431,6 +454,12 @@ extension LiveComputerUseSystem {
                 // A right click at its centre may still land.
             }
         case .click(.element(let handles, let handle), .left, let count) where count <= 2:
+            if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
+                // A web field may only read as focused in its page: unless the app's focus moved,
+                // the click goes as events at the field, as a user's would.
+                if try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) { return .ax }
+                break
+            }
             if count == 1 {
                 do {
                     try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
@@ -474,7 +503,8 @@ extension LiveComputerUseSystem {
             var keying = KeyAttempt()
             do {
                 try await makeKeyInBackground(window, &keying, interrupt: interrupt)
-                var delivered = try await deliverEvents(input, in: window, keyConfirmed: keying.confirmed, interrupt: interrupt)
+                var delivered = try await deliverEvents(
+                    input, in: window, keyConfirmed: keying.confirmed, ignoring: ignoring, interrupt: interrupt)
                 await keying.restoreUserKeyWindow(window)
                 // Also after an activation fallback: the previous app is back in front by then, so
                 // the release still finds the target in the background and defocuses it.
@@ -493,6 +523,7 @@ extension LiveComputerUseSystem {
     /// ways on the focused window, else with the app activated around them.
     private static func deliverEvents(
         _ input: ComputerUseInput, in window: ComputerUseWindow, keyConfirmed: Bool,
+        ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseDelivered {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
@@ -505,7 +536,7 @@ extension LiveComputerUseSystem {
             if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
             // Making the window key took a few round trips; the user may have come back since.
             if interrupt() == .userActive { throw ComputerUseSystemError.userActive }
-            try await postEvents(input, in: window, paste: false, background: true, interrupt: interrupt)
+            try await postEvents(input, in: window, paste: false, background: true, ignoring: ignoring, interrupt: interrupt)
             return .background
         }
         // Not key: the AX ways still work where the target already is the app's focused window.
@@ -519,7 +550,7 @@ extension LiveComputerUseSystem {
             }
         }
         guard route == .activation else { throw ComputerUseSystemError.userActive }
-        return try await activated(input, in: window, interrupt: interrupt)
+        return try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
     }
 
     private static func actsOnKeyWindow(_ input: ComputerUseInput) -> Bool {
@@ -639,7 +670,7 @@ extension LiveComputerUseSystem {
 
     /// Activates the app around the events; one direct action at a time.
     private static func activated(
-        _ input: ComputerUseInput, in window: ComputerUseWindow,
+        _ input: ComputerUseInput, in window: ComputerUseWindow, ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseDelivered {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
@@ -651,7 +682,7 @@ extension LiveComputerUseSystem {
             // does, a user who is back now isn't waited out again.
             if secondsSinceUserInput() < ComputerUseTakeover.idleThreshold { throw ComputerUseSystemError.userActive }
             try await withActivation(of: window.app, isCancelled: isCancelled) {
-                try await postEvents(input, in: window, paste: true, background: false, interrupt: interrupt)
+                try await postEvents(input, in: window, paste: true, background: false, ignoring: ignoring, interrupt: interrupt)
             }
         }
         return .activation
@@ -662,6 +693,7 @@ extension LiveComputerUseSystem {
     /// so the focused-window checks only confirm it is still key and never raise it.
     private static func postEvents(
         _ input: ComputerUseInput, in window: ComputerUseWindow, paste: Bool, background: Bool,
+        ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
@@ -677,7 +709,7 @@ extension LiveComputerUseSystem {
             case .element(let handles, let handle):
                 guard let visible = try await ComputerUseAXActions.visibleCenter(
                     handles, handle, within: bounds.frame, app: bounds.app, requireOwnCenter: false, isCancelled: isCancelled)
-                else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.") }
+                else { throw ComputerUseAXActions.hiddenRefusal }
                 return visible
             case .point(let point):
                 return point
@@ -798,7 +830,7 @@ extension LiveComputerUseSystem {
             func checkCovered() throws {
                 switch ComputerUseInputGeometry.coveredDragPoint(
                     start: start, in: window.windowID, end: end, in: dropWindow.windowID,
-                    windows: screenWindows()) {
+                    windows: screenWindows(), ignoring: ignoring()) {
                 case .start: throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
                 case .end: throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
                 case nil: break
@@ -818,7 +850,7 @@ extension LiveComputerUseSystem {
             let pid = app.pid
             let dragBegan = ComputerUseUserInput.now()
             try await ComputerUseInputPoster.systemDrag(from: start, to: end, dropIsVisible: {
-                ComputerUseInputGeometry.topmostWindow(at: end, in: screenWindows()) == dropWindowID
+                ComputerUseInputGeometry.topmostWindow(at: end, in: screenWindows(), ignoring: ignoring()) == dropWindowID
             }, interrupt: {
                 if isCancelled() || Task.isCancelled { return .cancelled }
                 // The cursor is shared: any input of the user's since the drag began, in any app,

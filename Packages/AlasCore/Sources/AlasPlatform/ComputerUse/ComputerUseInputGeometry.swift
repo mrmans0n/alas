@@ -45,10 +45,12 @@ public enum ComputerUseInputGeometry {
     public static let draggingLayer = 500
 
     /// The id of the window a system-wide press or drop at `point` lands in: the frontmost one
-    /// over it that shows, below `draggingLayer`. `windows` run front to back.
-    public static func topmostWindow(at point: CGPoint, in windows: [ScreenWindow]) -> UInt32? {
+    /// over it that shows, below `draggingLayer`. `windows` run front to back; ids in `ignoring` (Alas's own overlay) are skipped.
+    public static func topmostWindow(
+        at point: CGPoint, in windows: [ScreenWindow], ignoring: Set<UInt32> = []
+    ) -> UInt32? {
         windows.first { window in
-            window.frame.contains(point) && window.alpha > 0 && window.layer < draggingLayer
+            !ignoring.contains(window.id) && window.frame.contains(point) && window.alpha > 0 && window.layer < draggingLayer
         }?.id
     }
 
@@ -63,10 +65,10 @@ public enum ComputerUseInputGeometry {
     /// `windows` run front to back.
     public static func coveredDragPoint(
         start: CGPoint, in startWindow: UInt32, end: CGPoint, in endWindow: UInt32,
-        windows: [ScreenWindow]
+        windows: [ScreenWindow], ignoring: Set<UInt32> = []
     ) -> DragPoint? {
-        if topmostWindow(at: start, in: windows) != startWindow { return .start }
-        if topmostWindow(at: end, in: windows) != endWindow { return .end }
+        if topmostWindow(at: start, in: windows, ignoring: ignoring) != startWindow { return .start }
+        if topmostWindow(at: end, in: windows, ignoring: ignoring) != endWindow { return .end }
         return nil
     }
 
@@ -87,6 +89,13 @@ public enum ComputerUseInputGeometry {
         let visible = clips.reduce(frame) { $0.intersection($1) }
         guard !visible.isNull, visible.width > 0, visible.height > 0 else { return nil }
         return center(of: visible)
+    }
+
+    /// Whether any of `frame` shows inside every clip, as inspect reports `visible`: an element
+    /// without a size counts as shown, since there is nothing to tell by.
+    public static func isShown(_ frame: CGRect, clippedTo clips: [CGRect]) -> Bool {
+        guard frame.width > 0, frame.height > 0 else { return true }
+        return visibleCenter(of: frame, clippedTo: clips, requireOwnCenter: false) != nil
     }
 
     /// `steps` evenly spaced points from `from` (excluded) to `to` (included).

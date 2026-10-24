@@ -61,6 +61,61 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// Refuses a chord that may edit text while a secure field reads as focused: the app's focused
+    /// element, or one inside the window. In a web page a field can read as focused while the
+    /// keyboard stays in the address bar, which the app reports as its focused element. A read of
+    /// the window cut short checks what it reached; the app-level check still runs either way.
+    static func refuseSecureFocus(
+        _ chord: ComputerUseKeyChord, in window: ComputerUseWindow, isCancelled: @escaping IsCancelled
+    ) async throws {
+        guard chord.mayEditText else { return }
+        let app = window.app
+        var focused = try await onQueue(isCancelled) { () -> [ComputerUseSecureFocus.Element] in
+            guard let element = focusedElement(of: app) else { return [] }
+            return [ComputerUseSecureFocus.Element(
+                role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute))]
+        }
+        if let tree = try? await ComputerUseAXReader.read(
+            window, maxDepth: secureFocusDepth, nodeBudget: secureFocusNodes, timeLimit: secureFocusTime) {
+            func collect(_ node: ComputerUseAXNode) {
+                if node.isFocused { focused.append(.init(role: node.role, subrole: node.subrole)) }
+                node.children.forEach(collect)
+            }
+            collect(tree.root)
+        }
+        try Task.checkCancellation()
+        if isCancelled() { throw CancellationError() }
+        if ComputerUseSecureFocus.refuses(chord, focused: focused) { throw secureRefusal }
+    }
+
+    static let webAreaAncestorLevels = 32
+    private static let webAreaRole = "AXWebArea"
+    static let secureFocusDepth = 32
+    static let secureFocusNodes = 3000
+    static let secureFocusTime: Duration = .milliseconds(500)
+
+    /// For a left click by ref on a web page's field: puts the keyboard in it, as a click would,
+    /// where an AX press may only mark it focused inside the page. False, touching nothing, for
+    /// any other element (`ComputerUseSecureFocus.focusesOnClick`). A secure field may be
+    /// clicked; only typing into one is refused.
+    static func focusTextEntry(
+        _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
+    ) async throws -> Bool {
+        try await onQueue(interrupt: interrupt) {
+            let element = try resolve(handles, handle)
+            let identity = ComputerUseSecureFocus.Element(
+                role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute))
+            guard ComputerUseSecureFocus.isTextEntry(identity) else { return false }
+            let inWebArea = ancestor(of: element, levels: webAreaAncestorLevels) {
+                string(of: $0, kAXRoleAttribute) == webAreaRole
+            } != nil
+            guard ComputerUseSecureFocus.focusesOnClick(identity, inWebArea: inWebArea) else { return false }
+            // Confirmed by the caller through the app's focused element, so the result says nothing.
+            AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
+            return true
+        }
+    }
+
     /// Focuses the element before typing into it. Refuses secure text fields.
     static func focus(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
@@ -118,17 +173,38 @@ enum ComputerUseAXActions {
             guard AXValueGetValue(try value(element, kAXPositionAttribute, app: app), .cgPoint, &position),
                   AXValueGetValue(try value(element, kAXSizeAttribute, app: app), .cgSize, &size)
             else { throw noFrame }
-            var clips = [window]
-            if let parent = elementAttribute(element, kAXParentAttribute),
-               let area = ancestor(of: parent, levels: scrollAncestorLevels, where: {
-                   string(of: $0, kAXRoleAttribute) == kAXScrollAreaRole
-               }),
-               let areaFrame = frame(of: area) {
-                clips.append(areaFrame)
-            }
             return ComputerUseInputGeometry.visibleCenter(
-                of: CGRect(origin: position, size: size), clippedTo: clips, requireOwnCenter: requireOwnCenter)
+                of: CGRect(origin: position, size: size), clippedTo: clips(of: element, within: window),
+                requireOwnCenter: requireOwnCenter)
         }
+    }
+
+    /// Whether any of the element shows in its nearest scroll area and `window`, as inspect's
+    /// `visible` says. An element whose frame can't be read counts as shown, as in inspect: an
+    /// AX action on it needs no position.
+    static func isShown(
+        _ handles: ComputerUseAXHandles, _ handle: Int, within window: CGRect, isCancelled: @escaping IsCancelled
+    ) async throws -> Bool {
+        try await onQueue(isCancelled) {
+            let element = try resolve(handles, handle)
+            guard let frame = frame(of: element) else { return true }
+            return ComputerUseInputGeometry.isShown(frame, clippedTo: clips(of: element, within: window))
+        }
+    }
+
+    static let hiddenRefusal = ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.")
+
+    /// `window` and the element's nearest scroll area: what pointer input at it must land inside.
+    private static func clips(of element: AXUIElement, within window: CGRect) -> [CGRect] {
+        var clips = [window]
+        if let parent = elementAttribute(element, kAXParentAttribute),
+           let area = ancestor(of: parent, levels: scrollAncestorLevels, where: {
+               string(of: $0, kAXRoleAttribute) == kAXScrollAreaRole
+           }),
+           let areaFrame = frame(of: area) {
+            clips.append(areaFrame)
+        }
+        return clips
     }
 
     /// Makes the table or outline row holding the element (itself or up to `rowLevels` above) the
@@ -596,7 +672,7 @@ extension ComputerUseAXActions {
             focusKeepingSelection(element, app: app)
             return Retained(element)
         }
-        try await insert(text, into: element, app: app, interrupt: interrupt)
+        try await insert(text, into: textTarget(element.element), app: app, interrupt: interrupt)
     }
 
     /// Types into the app's focused element: replaces its value or inserts at its caret.
@@ -613,7 +689,7 @@ extension ComputerUseAXActions {
             guard result == .success else { throw failure(result, app: app) }
             return nil
         }
-        if let element { try await insert(text, into: element, app: app, interrupt: interrupt) }
+        if let element { try await insert(text, into: textTarget(element.element), app: app, interrupt: interrupt) }
     }
 
     /// An element carried from one block on the AX queue to the next; only messaged there.
@@ -918,8 +994,8 @@ extension ComputerUseAXActions {
     /// Each chunk goes at the caret the text so far left (from the selection read before the first
     /// one): the user or the app moving the caret in between stops the input rather than splitting
     /// the text across two places. Without a readable selection the chunks go wherever the caret is.
-    private static func insert(
-        _ text: String, into target: Retained, app: ComputerUseAppIdentity,
+    static func insert(
+        _ text: String, into target: TextTarget, app: ComputerUseAppIdentity,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         let total = text.count
@@ -936,18 +1012,16 @@ extension ComputerUseAXActions {
         for (index, chunk) in chunks.enumerated() {
             if index > 0 { await Task.yield() }
             let (typedSoFar, utf16SoFar, startLocation) = (typed, typedUTF16, start)
-            let isLast = index == chunks.count - 1
             start = try await onQueue({ interrupt() == .cancelled }) { () -> Int? in
-                let element = target.element
                 let moved = ComputerUseSystemError.actionFailed(
                     "\(app.name) moved the text cursor; stopped after typing \(typedSoFar) of \(total) characters.")
                 var startLocation = startLocation
                 var countBefore: Int?
                 var selectionWasEmpty: Bool?
                 if typedSoFar == 0 {
-                    guard isSettable(element, kAXSelectedTextAttribute) else { throw Unsupported(error: .attributeUnsupported) }
-                    countBefore = number(of: element, kAXNumberOfCharactersAttribute)
-                    let range = selectedRange(of: element)
+                    guard target.canSetSelectedText() else { throw Unsupported(error: .attributeUnsupported) }
+                    countBefore = target.characterCount()
+                    let range = target.selectedRange()
                     selectionWasEmpty = range.map { $0.length == 0 }
                     startLocation = range?.location
                 } else {
@@ -957,16 +1031,15 @@ extension ComputerUseAXActions {
                     case nil: break
                     }
                     if let startLocation {
-                        var caret = CFRange(location: startLocation + utf16SoFar, length: 0)
+                        let caret = CFRange(location: startLocation + utf16SoFar, length: 0)
                         // The app may have moved the selection since the last chunk's check: stop rather than
                         // put the caret back where the text may no longer belong.
-                        guard let live = selectedRange(of: element), live.location == caret.location, live.length == 0,
-                              let value = AXValueCreate(.cfRange, &caret),
-                              AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
+                        guard let live = target.selectedRange(), live.location == caret.location, live.length == 0,
+                              target.setSelectedRange(caret)
                         else { throw moved }
                     }
                 }
-                let result = AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, chunk as CFString)
+                let result = target.setSelectedText(chunk)
                 guard result == .success else {
                     if typedSoFar == 0 { throw failure(result, app: app) }
                     throw ComputerUseSystemError.actionFailed(
@@ -974,22 +1047,36 @@ extension ComputerUseAXActions {
                 }
                 // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
                 if typedSoFar == 0, !chunk.isEmpty, selectionWasEmpty == true, let countBefore,
-                   number(of: element, kAXNumberOfCharactersAttribute) == countBefore {
+                   target.characterCount() == countBefore {
                     throw Unsupported(error: .attributeUnsupported)
-                }
-                // Where the next chunk would go; after the last one there is nothing left to misplace.
-                if !isLast, let startLocation {
-                    let expected = startLocation + utf16SoFar + chunk.utf16.count
-                    guard let caret = selectedRange(of: element), caret.location == expected, caret.length == 0 else {
-                        throw ComputerUseSystemError.actionFailed(
-                            "\(app.name) moved the text cursor; stopped after typing \(typedSoFar + chunk.count) of \(total) characters.")
-                    }
                 }
                 return startLocation
             }
             typed += chunk.count
             typedUTF16 += chunk.utf16.count
         }
+    }
+
+    /// The text operations chunked insertion uses on one element. Only called on the AX queue.
+    struct TextTarget: @unchecked Sendable {
+        var canSetSelectedText: () -> Bool
+        var characterCount: () -> Int?
+        var selectedRange: () -> CFRange?
+        var setSelectedRange: (CFRange) -> Bool
+        var setSelectedText: (String) -> AXError
+    }
+
+    private static func textTarget(_ element: AXUIElement) -> TextTarget {
+        TextTarget(
+            canSetSelectedText: { isSettable(element, kAXSelectedTextAttribute) },
+            characterCount: { number(of: element, kAXNumberOfCharactersAttribute) },
+            selectedRange: { selectedRange(of: element) },
+            setSelectedRange: { range in
+                var range = range
+                guard let value = AXValueCreate(.cfRange, &range) else { return false }
+                return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
+            },
+            setSelectedText: { AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, $0 as CFString) })
     }
 
     private static func focusedElement(of app: ComputerUseAppIdentity) -> AXUIElement? {

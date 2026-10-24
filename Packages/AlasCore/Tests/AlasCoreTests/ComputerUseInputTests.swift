@@ -37,6 +37,38 @@ struct ComputerUseInputTests {
         #expect(try #require(Chord.parse(text)).mayEditText == edits)
     }
 
+    /// A web field can read as focused in its page while the app's focused element is the
+    /// address bar: a chord that may edit text is refused when any focused element is secure.
+    @Test(arguments: [("ctrl+y", true), ("cmd+delete", true), ("shift+cmd+v", true), ("tab", false), ("return", false)])
+    func editingChordsAreRefusedWhenAnyFocusedElementIsSecure(keys: String, refused: Bool) throws {
+        let chord = try #require(Chord.parse(keys))
+        let addressBar = ComputerUseSecureFocus.Element(role: "AXTextField")
+        let password = ComputerUseSecureFocus.Element(role: "AXTextField", subrole: "AXSecureTextField")
+        #expect(ComputerUseSecureFocus.refuses(chord, focused: [addressBar, password]) == refused)
+        #expect(!ComputerUseSecureFocus.refuses(chord, focused: [addressBar]))
+    }
+
+    @Test(arguments: [
+        (ComputerUseSecureFocus.Element(role: "AXTextField"), true),
+        (.init(role: "AXTextArea"), true), (.init(role: "AXComboBox"), true), (.init(role: "AXSearchField"), true),
+        (.init(role: "AXSecureTextField"), true), (.init(role: "AXTextField", subrole: "AXSecureTextField"), true),
+        (.init(role: "AXButton"), false), (.init(role: "AXStaticText"), false), (.init(role: nil), false),
+    ])
+    func textEntryElementsAreRecognized(element: ComputerUseSecureFocus.Element, isTextEntry: Bool) {
+        #expect(ComputerUseSecureFocus.isTextEntry(element) == isTextEntry)
+    }
+
+    /// Only a web page's field takes the click through AX focus; a native one keeps the plain click.
+    @Test(arguments: [
+        (ComputerUseSecureFocus.Element(role: "AXTextField"), true, true),
+        (.init(role: "AXTextField", subrole: "AXSecureTextField"), true, true),
+        (.init(role: "AXTextField"), false, false),
+        (.init(role: "AXButton"), true, false),
+    ])
+    func onlyWebFieldsTakeClicksThroughFocus(element: ComputerUseSecureFocus.Element, inWebArea: Bool, focuses: Bool) {
+        #expect(ComputerUseSecureFocus.focusesOnClick(element, inWebArea: inWebArea) == focuses)
+    }
+
     @Test func pointsMapThroughTheScreenshotFrameAndAreBoundedByTheCurrentFrame() {
         let frame = CGRect(x: 100, y: 50, width: 800, height: 600)
         let pixel = CGPoint(x: 200, y: 100)
@@ -92,6 +124,17 @@ struct ComputerUseInputTests {
             of: frame, clippedTo: [window, scrollArea], requireOwnCenter: requireOwnCenter) == expected)
     }
 
+    /// A ref click is refused only where inspect reports the element hidden; one without a size can't tell.
+    @Test(arguments: [
+        (CGRect(x: 10, y: 250, width: 100, height: 20), false),
+        (CGRect(x: -150, y: 10, width: 200, height: 20), true),
+        (CGRect(x: 10, y: 250, width: 0, height: 0), true),
+    ])
+    func elementsShowWhereAnyOfThemIsInsideTheClips(frame: CGRect, shown: Bool) {
+        let clips = [CGRect(x: -200, y: 0, width: 700, height: 400), CGRect(x: 0, y: 0, width: 300, height: 200)]
+        #expect(ComputerUseInputGeometry.isShown(frame, clippedTo: clips) == shown)
+    }
+
     /// Both of a drag's points must be on the window it uses there; the start is reported first.
     /// A window above the normal layer that shows (a floating panel, a banner, the Dock, the
     /// dragging app's own panel) takes the press or drop too; from the dragging layer up
@@ -125,6 +168,20 @@ struct ComputerUseInputTests {
         ]
         #expect(ComputerUseInputGeometry.coveredDragPoint(
             start: start, in: 1, end: end, in: 2, windows: windows) == expected)
+    }
+
+    @Test func dragsLookThroughIgnoredWindows() {
+        // Alas's own overlay 3 is frontmost over both windows.
+        let windows = [
+            Window(id: 3, frame: CGRect(x: 0, y: 0, width: 400, height: 400)),
+            Window(id: 1, frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+            Window(id: 2, frame: CGRect(x: 200, y: 200, width: 100, height: 100)),
+        ]
+        let start = CGPoint(x: 20, y: 20), end = CGPoint(x: 220, y: 220)
+        #expect(ComputerUseInputGeometry.coveredDragPoint(
+            start: start, in: 1, end: end, in: 2, windows: windows, ignoring: [3]) == nil)
+        #expect(ComputerUseInputGeometry.coveredDragPoint(
+            start: start, in: 1, end: end, in: 2, windows: windows) == .start)
     }
 
     @Test(arguments: [
@@ -271,5 +328,79 @@ struct ComputerUseInputTests {
     ] as [([Link], ComputerUseClickTarget.Choice)])
     private func clickTargets(chain: [Link], expected: ComputerUseClickTarget.Choice) {
         #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
+    }
+}
+
+@Suite struct ComputerUseCursorMotionTests {
+    typealias Motion = ComputerUseCursorMotion
+
+    @Test(arguments: [
+        (CGPoint.zero, CGPoint.zero, Duration.milliseconds(300)),
+        (CGPoint.zero, CGPoint(x: 750, y: 0), .milliseconds(350)),
+        (CGPoint.zero, CGPoint(x: 3000, y: 4000), .milliseconds(400)),
+    ] as [(CGPoint, CGPoint, Duration)])
+    func glidesTakeThreeToFourHundredMilliseconds(from: CGPoint, to: CGPoint, expected: Duration) {
+        #expect(Motion.glideDuration(from: from, to: to) == expected)
+    }
+
+    @Test func easingStartsAndEndsAtRestAndIsSymmetric() {
+        #expect(Motion.eased(0) == 0)
+        #expect(Motion.eased(1) == 1)
+        #expect(Motion.eased(0.5) == 0.5)
+        #expect(Motion.eased(-1) == 0 && Motion.eased(2) == 1)
+        #expect(Motion.eased(0.1) < 0.1)
+    }
+
+    /// CG frames have a top-left origin on the primary display; AppKit's have a bottom-left one.
+    @Test(arguments: [
+        (CGRect(x: 100, y: 50, width: 400, height: 300), CGRect(x: 100, y: 650, width: 400, height: 300)),
+        // A display above the primary one: negative CG y.
+        (CGRect(x: 0, y: -500, width: 200, height: 100), CGRect(x: 0, y: 1400, width: 200, height: 100)),
+        // A display left of the primary one.
+        (CGRect(x: -800, y: 0, width: 200, height: 100), CGRect(x: -800, y: 900, width: 200, height: 100)),
+    ] as [(CGRect, CGRect)])
+    func cgFramesFlipAgainstThePrimaryDisplay(cg: CGRect, appKit: CGRect) {
+        #expect(Motion.appKitFrame(fromCG: cg, primaryScreenHeight: 1000) == appKit)
+    }
+
+    /// Elements are glided to the centre of their part inside the clips, as an event click lands:
+    /// the window (0, 0, 100, 100) and the scroll area (0, 0, 100, 80) holding them. With an outline.
+    @Test(arguments: [
+        (ComputerUseCursorInputKind.click, CGPoint(x: 5, y: 5), nil,
+         ComputerUseCursorCue.glide(to: CGPoint(x: 5, y: 5), outline: nil, click: true)),
+        (.scroll, CGPoint(x: 5, y: 5), nil, .glide(to: CGPoint(x: 5, y: 5), outline: nil, click: false)),
+        (.click, nil, CGRect(x: 0, y: 0, width: 20, height: 10),
+         .glide(to: CGPoint(x: 10, y: 5), outline: CGRect(x: 0, y: 0, width: 20, height: 10), click: true)),
+        // Half of it scrolled below the scroll area's bottom edge.
+        (.scroll, nil, CGRect(x: 0, y: 70, width: 20, height: 20),
+         .glide(to: CGPoint(x: 10, y: 75), outline: CGRect(x: 0, y: 70, width: 20, height: 20), click: false)),
+        // Wholly outside the clips: the pointer stays where it is rather than leave the panel.
+        (.click, nil, CGRect(x: 200, y: 200, width: 20, height: 10), ComputerUseCursorCue.none),
+        (.click, nil, CGRect(x: 0, y: 85, width: 20, height: 10), ComputerUseCursorCue.none),
+        (.type, nil, CGRect(x: 0, y: 0, width: 20, height: 10), .outline(CGRect(x: 0, y: 0, width: 20, height: 10))),
+        (.type, nil, nil, ComputerUseCursorCue.none),
+        (.key, CGPoint(x: 5, y: 5), nil, ComputerUseCursorCue.none),
+        (.drag, CGPoint(x: 5, y: 5), nil, .hide),
+        (.click, nil, nil, ComputerUseCursorCue.none),
+    ] as [(ComputerUseCursorInputKind, CGPoint?, CGRect?, ComputerUseCursorCue)])
+    func eachInputGetsItsCue(kind: ComputerUseCursorInputKind, point: CGPoint?, frame: CGRect?, expected: ComputerUseCursorCue) {
+        let clips = [CGRect(x: 0, y: 0, width: 100, height: 100), CGRect(x: 0, y: 0, width: 100, height: 80)]
+        #expect(ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: frame, clips: clips) == expected)
+    }
+
+    typealias Key = ComputerUseCursorWindowKey
+
+    /// A glide starts where the pointer last was in that window, kept inside it if the window
+    /// shrank, and at the centre of a window it hasn't been in.
+    @Test(arguments: [
+        (Key(pid: 1, windowID: 10), [Key(pid: 1, windowID: 10): CGPoint(x: 30, y: 40)], CGPoint(x: 30, y: 40)),
+        (Key(pid: 1, windowID: 11), [Key(pid: 1, windowID: 10): CGPoint(x: 30, y: 40)], CGPoint(x: 100, y: 50)),
+        // A recycled window id in another app is another window.
+        (Key(pid: 2, windowID: 10), [Key(pid: 1, windowID: 10): CGPoint(x: 30, y: 40)], CGPoint(x: 100, y: 50)),
+        (Key(pid: 1, windowID: 10), [:], CGPoint(x: 100, y: 50)),
+        (Key(pid: 1, windowID: 10), [Key(pid: 1, windowID: 10): CGPoint(x: 500, y: -5)], CGPoint(x: 200, y: 0)),
+    ] as [(Key, [Key: CGPoint], CGPoint)])
+    func glidesStartWhereThePointerLastWasInThatWindow(window: Key, last: [Key: CGPoint], expected: CGPoint) {
+        #expect(Motion.startPoint(in: window, size: CGSize(width: 200, height: 100), last: last) == expected)
     }
 }

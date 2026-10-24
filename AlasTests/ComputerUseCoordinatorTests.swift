@@ -30,6 +30,7 @@ struct ComputerUseCoordinatorTests {
             axTree: { _, _, _, _ in (saveTree, treeComplete, ComputerUseAXHandles()) },
             perform: { input, _, _, _ in
                 recorder?.record(input)
+                recorder?.recordEvent("perform:\(Self.name(of: input))")
                 return .ax
             },
             focusState: { _ in nil },
@@ -64,7 +65,7 @@ struct ComputerUseCoordinatorTests {
     private static func fixture(
         system: ComputerUseSystem = system(), approvalWait: Duration = .seconds(60),
         recorder: Recorder = Recorder(), allowed: [ComputerUseAppIdentity] = [],
-        sleep: (@Sendable (Duration) async -> Void)? = nil
+        sleep: (@Sendable (Duration) async -> Void)? = nil, cursor: ComputerUseCursor = .none
     ) -> Fixture {
         let lockURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-computer-use-\(UUID().uuidString)/computer-use.lock")
@@ -78,12 +79,47 @@ struct ComputerUseCoordinatorTests {
             interrupt: { calls.interrupts.append($0) },
             lockURL: lockURL,
             approvalWait: approvalWait,
-            sleep: sleep ?? { recorder.recordSleep($0) }
+            sleep: sleep ?? { recorder.recordSleep($0) },
+            cursor: cursor
         )
         for app in allowed {
             access.record(.allowForSession, for: app, session: "s")
         }
         return Fixture(coordinator: coordinator, access: access, lockURL: lockURL, calls: calls, recorder: recorder)
+    }
+
+    private nonisolated static func name(of input: ComputerUseInput) -> String {
+        switch input {
+        case .click: "click"
+        case .type: "type"
+        case .key: "key"
+        case .scroll: "scroll"
+        case .drag: "drag"
+        case .pointerClick: "pointerClick"
+        }
+    }
+
+    /// Logs "present", "cue:<case>" and "dismiss" into the recorder's events, next to the fake
+    /// system's "perform:<input>"; a glide waits for `gate` window 1 when there is one.
+    private static func cursor(_ recorder: Recorder, holdingGlidesAt gate: TreeGate? = nil) -> ComputerUseCursor {
+        ComputerUseCursor(
+            present: { _ in recorder.recordEvent("present") },
+            perform: { cue in
+                recorder.recordEvent("cue:\(Self.name(of: cue))")
+                if case .glide = cue { await gate?.enter(1) }
+            },
+            dismiss: { recorder.recordEvent("dismiss") }
+        )
+    }
+
+    private nonisolated static func name(of cue: ComputerUseCursorCue) -> String {
+        switch cue {
+        case .glide: "glide"
+        case .jump: "jump"
+        case .outline: "outline"
+        case .hide: "hide"
+        case .none: "none"
+        }
     }
 
     private static func text(_ response: AlasCLIResponse) -> String? {
@@ -293,6 +329,26 @@ struct ComputerUseCoordinatorTests {
         #expect(byName["Keychain Access"]?["approval"] as? String == "blocked")
         #expect((byName["Keychain Access"]?["windows"] as? [Any])?.isEmpty == true)
         #expect((byName["Notes"]?["windows"] as? [[String: Any]])?.first?["title"] as? String == "Note")
+    }
+
+    /// Running apps other than Alas with not one visible window: the Screen Recording prompt may
+    /// be up, so the list carries a warning rather than reading as plain "no windows". Alas's own
+    /// windows stay listed meanwhile, so they don't count.
+    @Test(arguments: [(true, false, false), (false, false, true), (false, true, true)])
+    func appsWarnWhenNoAppWindowIsVisible(notesVisible: Bool, alasVisible: Bool, warns: Bool) async throws {
+        let notes = Self.windows[1]!
+        let alas = Self.windows[4]!
+        var system = Self.system()
+        system.runningApps = {
+            [(app: notes.app, windows: notesVisible ? [notes] : []), (app: alas.app, windows: alasVisible ? [alas] : [])]
+        }
+        let f = Self.fixture(system: system)
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect((payload["apps"] as? [Any])?.count == 2)
+        #expect(payload["warning"] as? String == (warns
+            ? "No app windows are visible. If macOS is showing a Screen Recording prompt, ask the user to answer it, then retry."
+            : nil))
     }
 
     @Test func screenshotOfVanishedWindowReportsNotFound() async {
@@ -925,6 +981,126 @@ struct ComputerUseCoordinatorTests {
         let expected = interruption == .stop ? ComputerUseCoordinator.Message.stopped : ComputerUseCoordinator.Message.cancelled
         #expect(await call.value == .error(expected))
         #expect(checks.checks == [false, true])
+    }
+
+    // MARK: - Cursor
+
+    /// The glide comes before the takeover wait, so the wait and the ref re-check stay the last
+    /// steps before the input.
+    @Test func aCoordinateClickGlidesBeforeTheTakeoverWaitAndTheInput() async throws {
+        let recorder = Recorder()
+        let polls = Counter()
+        var system = Self.system(recorder: recorder)
+        // The user is busy in Notes at the first poll, then idle.
+        system.isFrontmost = { $0 == 101 }
+        system.secondsSinceUserInput = { polls.next() == 1 ? 0.5 : 60 }
+        let f = Self.fixture(
+            system: system, recorder: recorder, allowed: [Self.notes], sleep: { _ in recorder.recordEvent("sleep") },
+            cursor: Self.cursor(recorder))
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        #expect(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, x: 200, y: 100), sessionID: "s")) != nil)
+        // The takeover poll, the input, then the post-action settle.
+        #expect(recorder.events == ["present", "cue:glide", "sleep", "perform:click", "sleep"])
+    }
+
+    /// The element's frame is kept relative to its window, so the cue follows a window that moved
+    /// between the inspect and the click.
+    /// It also goes to the part of the element its scroll area shows, as an event click would.
+    @Test func aClickByRefGlidesToTheVisiblePartOfTheElementWhereItsWindowIsNow() async throws {
+        let recorder = Recorder()
+        let lookups = Counter()
+        let original = ComputerUseWindow(windowID: 1, title: "Note", frame: CGRect(x: 100, y: 50, width: 400, height: 300), app: Self.notes)
+        var moved = original
+        moved.frame.origin = CGPoint(x: 300, y: 150)
+        // The scroll area shows only the button's top half.
+        let tree = ComputerUseAXNode(role: "AXWindow", title: "Note", children: [
+            ComputerUseAXNode(role: "AXScrollArea", frame: CGRect(x: 100, y: 50, width: 400, height: 20), children: [
+                ComputerUseAXNode(role: "AXButton", title: "Save", frame: CGRect(x: 110, y: 60, width: 50, height: 20), handle: 1),
+            ], handle: 2),
+        ], handle: 0)
+        var system = Self.system(recorder: recorder)
+        // The inspect resolves the original frame; the window has moved by the click.
+        system.window = { [moved] _ in lookups.next() <= 1 ? original : moved }
+        system.axTree = { _, _, _, _ in (tree, true, ComputerUseAXHandles()) }
+        let cursor = ComputerUseCursor(present: { _ in }, perform: { recorder.recordEvent("\($0)") }, dismiss: {})
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes], cursor: cursor)
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
+        #expect(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e3"), sessionID: "s")) != nil)
+        let expected = ComputerUseCursorCue.glide(
+            to: CGPoint(x: 335, y: 165), outline: CGRect(x: 310, y: 160, width: 50, height: 20), click: true)
+        #expect(recorder.events.first == "\(expected)")
+    }
+
+    @Test func aStopDuringTheGlideDeliversNothing() async throws {
+        let recorder = Recorder()
+        let gate = TreeGate()
+        let f = Self.fixture(
+            system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.notes],
+            cursor: Self.cursor(recorder, holdingGlidesAt: gate))
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let call = Task { await f.coordinator.perform(.init(action: .click, windowID: 1, x: 200, y: 100), sessionID: "s") }
+        try await eventually("gliding") { gate.entered == [1] }
+        await f.coordinator.stop(sessionID: "s")
+        gate.open(1)
+        #expect(await call.value == .error(ComputerUseCoordinator.Message.stopped))
+        #expect(!recorder.events.contains { $0.hasPrefix("perform:") })
+    }
+
+    @Test(arguments: ["stop", "turnEnded", "sessionEnded"])
+    func endingTheSessionDismissesTheCursor(end: String) async throws {
+        let recorder = Recorder()
+        let f = Self.fixture(
+            system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.notes], cursor: Self.cursor(recorder))
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        _ = await f.coordinator.perform(.init(action: .click, windowID: 1, x: 200, y: 100), sessionID: "s")
+        // Another session ending leaves the cursor up.
+        f.coordinator.sessionEnded(sessionID: "other")
+        #expect(recorder.events.last == "perform:click")
+        switch end {
+        case "stop": await f.coordinator.stop(sessionID: "s")
+        case "turnEnded": f.coordinator.turnEnded(sessionID: "s")
+        default: f.coordinator.sessionEnded(sessionID: "s")
+        }
+        #expect(recorder.events.last == "dismiss")
+    }
+
+    @Test func aDragHidesTheCursorAndParksItAtTheDrop() async throws {
+        let recorder = Recorder()
+        let f = Self.fixture(
+            system: Self.system(recorder: recorder), recorder: recorder, allowed: [Self.notes], cursor: Self.cursor(recorder))
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        #expect(Self.text(await f.coordinator.perform(drag, sessionID: "s")) != nil)
+        let events = recorder.events
+        let hide = try #require(events.firstIndex(of: "cue:hide"))
+        let delivered = try #require(events.firstIndex(of: "perform:drag"))
+        let jump = try #require(events.firstIndex(of: "cue:jump"))
+        #expect(hide < delivered && delivered < jump)
+    }
+
+    @Test(arguments: Interruption.allCases)
+    func aDragStoppedMidDeliveryDoesNotParkTheCursor(_ interruption: Interruption) async throws {
+        let recorder = Recorder()
+        let gate = TreeGate()
+        var system = Self.system(recorder: recorder)
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            recorder.recordEvent("perform:drag")
+            await gate.enter(1)
+            return .activation
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes], cursor: Self.cursor(recorder))
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        let call = Task { await f.coordinator.perform(drag, sessionID: "s") }
+        try await eventually("dragging") { gate.entered == [1] }
+        switch interruption {
+        case .stop: await f.coordinator.stop(sessionID: "s")
+        case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
+        }
+        gate.open(1)
+        _ = await call.value
+        #expect(recorder.events.suffix(2) == ["perform:drag", "dismiss"])
     }
 
     @Test(arguments: [

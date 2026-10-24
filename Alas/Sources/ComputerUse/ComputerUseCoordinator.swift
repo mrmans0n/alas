@@ -10,6 +10,14 @@ struct ComputerUsePendingApproval: Identifiable, Equatable {
     let app: ComputerUseAppIdentity
 }
 
+/// The drawn agent cursor the coordinator moves before each pointer input; `.none` draws nothing.
+struct ComputerUseCursor: Sendable {
+    var present: @MainActor @Sendable (ComputerUseWindow) -> Void
+    var perform: @MainActor @Sendable (ComputerUseCursorCue) async -> Void
+    var dismiss: @MainActor @Sendable () -> Void
+    static let none = ComputerUseCursor(present: { _ in }, perform: { _ in }, dismiss: {})
+}
+
 /// Serves `computer_*` calls from ACP sessions: readiness, per-app approval,
 /// the machine-wide driver lock, and the stop/turn/session lifecycle.
 @MainActor
@@ -43,6 +51,9 @@ final class ComputerUseCoordinator {
     private let approvalWait: Duration
     /// Takeover polling, the post-action settle and wait polling; tests drive time through it.
     private let sleep: @Sendable (Duration) async -> Void
+    private let cursor: ComputerUseCursor
+    /// The session that last presented the cursor; its stop, turn end or session end dismisses it.
+    @ObservationIgnored private var cursorSession: String?
 
     @ObservationIgnored private var lock: ComputerUseDriverLock?
     /// The session the lock was taken for; set before the system call, like `driver`.
@@ -99,9 +110,25 @@ final class ComputerUseCoordinator {
         var handle: Int
         var role: String
         var title: String?
+        /// Where the element was when read, relative to its window's origin, so the cursor finds it
+        /// after the window moved.
+        var localFrame: CGRect
+        /// The frame of its nearest scroll area at read time, window-relative too, which clips
+        /// where pointer input lands on it.
+        var localScrollArea: CGRect?
         /// Listed to the agent at some point: a later read that doesn't list it must still find
         /// the element the agent saw there, not whatever took its place.
         var shown: Bool
+
+        /// The element's frame in global points, with its window where it is now.
+        func frame(in window: ComputerUseWindow) -> CGRect {
+            localFrame.offsetBy(dx: window.frame.minX, dy: window.frame.minY)
+        }
+
+        /// What shows of the element, as the event route clips it: the window and its scroll area.
+        func clips(in window: ComputerUseWindow) -> [CGRect] {
+            [window.frame] + [localScrollArea?.offsetBy(dx: window.frame.minX, dy: window.frame.minY)].compactMap { $0 }
+        }
     }
 
     /// The session state a call started in.
@@ -122,7 +149,8 @@ final class ComputerUseCoordinator {
         interrupt: @escaping @MainActor (String) async -> Void,
         lockURL: URL = ComputerUseDriverLock.defaultURL,
         approvalWait: Duration = .seconds(50),
-        sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+        sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        cursor: ComputerUseCursor = .none
     ) {
         self.system = system
         self.access = access
@@ -133,6 +161,7 @@ final class ComputerUseCoordinator {
         self.lockURL = lockURL
         self.approvalWait = approvalWait
         self.sleep = sleep
+        self.cursor = cursor
     }
 
     /// The approval card's reason line: one approval covers seeing and operating the app.
@@ -171,6 +200,9 @@ final class ComputerUseCoordinator {
         static func userActive(_ app: ComputerUseAppIdentity) -> String {
             "computer_user_active: The user is using \(app.name) right now. Try again in a moment."
         }
+        /// Everything may really be hidden or minimized, so it's a warning, not an error.
+        static let noVisibleWindows =
+            "No app windows are visible. If macOS is showing a Screen Recording prompt, ask the user to answer it, then retry."
         static let userActiveElsewhere = "computer_user_active: You're using the Mac right now. Try again in a moment."
         static func userTookOver(_ app: ComputerUseAppIdentity, typed: Int, of total: Int) -> String {
             "computer_user_active: The user started using \(app.name); stopped after typing \(typed) of \(total) characters."
@@ -409,6 +441,7 @@ final class ComputerUseCoordinator {
         for flag in inputFlags[sessionID] ?? [] { flag.set() }
         forgetSnapshots(of: sessionID)
         releaseLock(of: sessionID)
+        dismissCursor(of: sessionID)
         for entry in access.pending where entry.session == sessionID {
             _ = access.resolvePending(entry.id)
             resumeWaiters(of: entry.id, with: .expired)
@@ -455,6 +488,40 @@ final class ComputerUseCoordinator {
         for flag in inputFlags[sessionID] ?? [] { flag.set() }
         forgetSnapshots(of: sessionID)
         releaseLock(of: sessionID)
+        dismissCursor(of: sessionID)
+    }
+
+    private func dismissCursor(of sessionID: String) {
+        guard cursorSession == sessionID else { return }
+        cursorSession = nil
+        cursor.dismiss()
+    }
+
+    /// Shows the cursor over `window` and plays `cue`; a stop or turn end during it delivers nothing.
+    private func moveCursor(_ cue: ComputerUseCursorCue, over window: ComputerUseWindow, context: CallContext) async throws {
+        cursorSession = context.sessionID
+        cursor.present(window)
+        await cursor.perform(cue)
+        try checkStillActive(context)
+    }
+
+    /// An element's cue goes to the part of it inside its clips in `window`.
+    private static func cursorCue(
+        for input: ComputerUseInput, element: ElementRef?, in window: ComputerUseWindow
+    ) -> ComputerUseCursorCue {
+        let kind: ComputerUseCursorInputKind
+        let target: ComputerUseInputTarget?
+        switch input {
+        case .click(let at, _, _), .pointerClick(let at): (kind, target) = (.click, at)
+        case .scroll(let at, _, _): (kind, target) = (.scroll, at)
+        case .type(_, let at, _): (kind, target) = (.type, at)
+        case .key: (kind, target) = (.key, nil)
+        case .drag(let from, _, _): (kind, target) = (.drag, from)
+        }
+        var point: CGPoint?
+        if case .point(let at) = target { point = at }
+        return ComputerUseCursorCue.cue(
+            for: kind, point: point, elementFrame: element?.frame(in: window), clips: element?.clips(in: window) ?? [window.frame])
     }
 
     private func forgetSnapshots(of sessionID: String) {
@@ -614,7 +681,12 @@ final class ComputerUseCoordinator {
             object["windows"] = appAccess == .blocked ? [] : entry.windows.map(Self.windowEntry)
             return object
         }
-        return Self.serialize(["version": 1, "apps": entries])
+        var payload: [String: Any] = ["version": 1, "apps": entries]
+        // While macOS shows its Screen Recording prompt, other apps' windows aren't listed; Alas's
+        // own may still be, so they don't count.
+        let others = apps.filter { !access.isAlas($0.app) }
+        if !others.isEmpty, others.allSatisfy({ $0.windows.isEmpty }) { payload["warning"] = Message.noVisibleWindows }
+        return Self.serialize(payload)
     }
 
     private func run(
@@ -676,6 +748,10 @@ final class ComputerUseCoordinator {
         var beforeEnd: ComputerUseWindowFingerprint?
         if let toWindow { beforeEnd = await fingerprint(of: toWindow, for: command, target: nil, context: context) }
         try checkStillActive(context)
+        // The cursor moves before the takeover wait. Its pointer is window-local, so a remap after
+        // the wait still lands under it.
+        let cue = Self.cursorCue(for: input, element: targetRef, in: window)
+        try await moveCursor(cue, over: window, context: context)
         if try await waitForUserIdle(in: window, direct: direct, context: context) {
             // The window may have moved or closed while the user had it: map points against where it is now.
             window = try await currentWindow(window)
@@ -686,6 +762,11 @@ final class ComputerUseCoordinator {
         try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
         try checkStillActive(context)
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
+        // Parked where the drop landed, over the window it landed in. Cosmetic once the drop is
+        // delivered: skipped when the call was stopped meanwhile, and the settle's check decides.
+        if case .drag(_, .point(let drop), _) = input, (try? checkStillActive(context)) != nil {
+            try? await moveCursor(.jump(to: drop, outline: nil, click: false), over: toWindow ?? window, context: context)
+        }
         if command.action == .drag { try await refuseIfDragMovedWindow(window) }
         let changeWarning = try await settle(
             after: delivered, of: command, in: &window, target: target, before: before,
@@ -733,14 +814,16 @@ final class ComputerUseCoordinator {
         context: CallContext, payload: inout [String: Any]
     ) async throws {
         try checkStillActive(context)
+        let retry = ComputerUseInput.pointerClick(.element(target.0, target.1))
+        let retryCue = Self.cursorCue(for: retry, element: ref, in: window)
+        try await moveCursor(retryCue, over: window, context: context)
         if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
         try checkStillActive(context)
         guard await system.elementMatches(target.0, target.1, ref.role, ref.title) else {
             throw Refusal(Message.stale(command.ref ?? "", windowID: window.windowID))
         }
         try checkStillActive(context)
-        let retried = try await deliver(
-            .pointerClick(.element(target.0, target.1)), of: command, to: window, toWindow: nil, direct: false, context: context)
+        let retried = try await deliver(retry, of: command, to: window, toWindow: nil, direct: false, context: context)
         let settled = try await settle(after: retried, of: command, in: &window, target: target, before: before,
                                        end: nil, context: context, payload: &payload)
         // A read that failed reports its error instead; one that can't tell is no success either.
@@ -1198,8 +1281,17 @@ final class ComputerUseCoordinator {
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
         var refs: [String: Int]
-        /// Role and title by handle, before the inspect output clips them.
-        var identities: [Int: (role: String, title: String?)]
+        /// Role, title, frame and scroll area by handle, before the inspect output clips them.
+        var identities: [Int: Identity]
+    }
+
+    /// An element as read: `scrollArea` is the frame of the nearest scroll area among the
+    /// ancestors the event route searches.
+    private struct Identity {
+        var role: String
+        var title: String?
+        var frame: CGRect
+        var scrollArea: CGRect?
     }
 
     /// Reads the window the way computer_inspect does and, unless told not to, replaces its refs.
@@ -1215,12 +1307,19 @@ final class ComputerUseCoordinator {
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
         // A partial read may have missed elements even when the limit was not reached.
-        var identities: [Int: (role: String, title: String?)] = [:]
-        func collect(_ node: ComputerUseAXNode) {
-            if let handle = node.handle { identities[handle] = (node.role, node.title) }
-            node.children.forEach(collect)
+        var identities: [Int: Identity] = [:]
+        // Ancestors nearest last, as many as `ComputerUseAXActions.visibleCenter` climbs from the parent.
+        func collect(_ node: ComputerUseAXNode, above: [(role: String, frame: CGRect)]) {
+            if let handle = node.handle {
+                let area = above.last { $0.role == "AXScrollArea" }?.frame
+                identities[handle] = Identity(
+                    role: node.role, title: node.title, frame: node.frame,
+                    scrollArea: area.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil })
+            }
+            let next = Array((above + [(node.role, node.frame)]).suffix(ComputerUseAXActions.scrollAncestorLevels + 1))
+            for child in node.children { collect(child, above: next) }
         }
-        collect(tree.root)
+        collect(tree.root, above: [])
         let read = ElementRead(
             truncated: flat.truncated || !tree.complete, depthLimited: flat.depthLimited, elements: flat.elements,
             handles: tree.handles, refs: flat.refs, identities: identities)
@@ -1236,18 +1335,26 @@ final class ComputerUseCoordinator {
         let before = snapshot(of: window, context: context)
         let previous = before?.refs ?? [:]
         let listed = Set(read.elements.map(\.ref))
+        let origin = window.frame.origin
+        func local(_ frame: CGRect) -> CGRect { frame.offsetBy(dx: -origin.x, dy: -origin.y) }
         var refs: [String: ElementRef] = [:]
         for (ref, handle) in read.refs {
             guard let identity = read.identities[handle] else { continue }
             if listed.contains(ref) {
-                refs[ref] = ElementRef(handle: handle, role: identity.role, title: identity.title, shown: true)
+                refs[ref] = ElementRef(
+                    handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame),
+                    localScrollArea: identity.scrollArea.map(local), shown: true)
             } else if let seen = previous[ref], seen.shown {
                 guard seen.role == identity.role, seen.title == identity.title, let before,
                       system.sameElement(before.handles, seen.handle, read.handles, handle)
                 else { continue }
-                refs[ref] = ElementRef(handle: handle, role: seen.role, title: seen.title, shown: true)
+                refs[ref] = ElementRef(
+                    handle: handle, role: seen.role, title: seen.title, localFrame: local(identity.frame),
+                    localScrollArea: identity.scrollArea.map(local), shown: true)
             } else {
-                refs[ref] = ElementRef(handle: handle, role: identity.role, title: identity.title, shown: false)
+                refs[ref] = ElementRef(
+                    handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame),
+                    localScrollArea: identity.scrollArea.map(local), shown: false)
             }
         }
         updateSnapshot(of: window, context: context) {
