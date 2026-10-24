@@ -612,10 +612,9 @@ extension ComputerUseAXActions {
             if let subrole = string(of: target, kAXSubroleAttribute), [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole) {
                 candidates.append(target)
             }
-            // A sheet another process draws in the window (a System Settings pane's) isn't among
-            // the window's own: it is found above the focused element, or the element at the
-            // window's centre, when another process owns that.
-            let remote = candidates.isEmpty ? remoteSheets(in: window, of: app, application: application) : []
+            // A sheet a pane hosted in another process opens (System Settings') sits deeper in the
+            // window's tree, among the pane's own elements.
+            let remote = candidates.isEmpty ? nestedSheets(in: target) : []
             candidates += remote
             func pressChecked(_ button: AXUIElement, title: String) throws {
                 switch interrupt() {
@@ -661,32 +660,32 @@ extension ComputerUseAXActions {
     static let noCancelButton =
         "This sheet or dialog has no Cancel button to press for Escape, and a posted key doesn't reach it. Click one of its buttons by ref (computer_inspect lists them)."
 
-    /// Levels above an element searched for the sheet holding it.
-    static let sheetAncestorLevels = 16
+    /// How deep, how wide and how long the search of a window's tree for a nested sheet goes.
+    static let nestedSheetDepth = 16
+    static let nestedSheetNodes = 200
+    static let nestedSheetTime: Duration = .seconds(1)
 
-    /// Sheets another process draws in `window`: the nearest sheet above the app's focused element
-    /// and above the element at the window's centre, for each that another process owns.
-    private static func remoteSheets(
-        in window: ComputerUseWindow, of app: ComputerUseAppIdentity, application: AXUIElement
-    ) -> [AXUIElement] {
-        var starts: [AXUIElement] = []
-        if let focused = elementAttribute(application, kAXFocusedUIElementAttribute) { starts.append(focused) }
-        var hit: AXUIElement?
-        let center = ComputerUseInputGeometry.center(of: window.frame)
-        if AXUIElementCopyElementAtPosition(application, Float(center.x), Float(center.y), &hit) == .success, let hit {
-            AXUIElementSetMessagingTimeout(hit, ComputerUseAXReader.messagingTimeout)
-            starts.append(hit)
-        }
+    /// The sheets anywhere in `window`'s tree below its own children, breadth first, within
+    /// `nestedSheetDepth` levels, `nestedSheetNodes` elements and `nestedSheetTime`. A sheet's own
+    /// contents aren't searched.
+    private static func nestedSheets(in window: AXUIElement) -> [AXUIElement] {
+        let deadline = ContinuousClock.now + nestedSheetTime
+        var level = children(of: window)
+        var visited = 0
         var sheets: [AXUIElement] = []
-        for start in starts {
-            var pid: pid_t = 0
-            guard AXUIElementGetPid(start, &pid) == .success, pid != app.pid, ComputerUseAXReader.mayMessage(pid),
-                  let sheet = ancestor(of: start, levels: sheetAncestorLevels, where: {
-                      string(of: $0, kAXRoleAttribute) == kAXSheetRole
-                  }),
-                  !sheets.contains(where: { CFEqual($0, sheet) })
-            else { continue }
-            sheets.append(sheet)
+        for _ in 0 ..< nestedSheetDepth {
+            var next: [AXUIElement] = []
+            for element in level {
+                visited += 1
+                guard visited <= nestedSheetNodes, ContinuousClock.now < deadline else { return sheets }
+                if string(of: element, kAXRoleAttribute) == kAXSheetRole {
+                    sheets.append(element)
+                } else {
+                    next += children(of: element)
+                }
+            }
+            guard !next.isEmpty else { break }
+            level = next
         }
         return sheets
     }
