@@ -119,14 +119,19 @@ enum PeerConsoleLayout {
         )
     }
 
-    /// The grid to ask a resizing host for, or nil when the pane's fitted
-    /// grid is what the host has or was last asked for.
+    /// The grid to ask a resizing host for, within the host's limits, or nil
+    /// when that is what the host has or was last asked for.
     static func hostGridRequest(
         pane: CGSize?, cell: CGSize?, hostRows: Int?, hostColumns: Int?,
         lastRequested: AlasGhostty.SurfaceView.GridSize?
     ) -> AlasGhostty.SurfaceView.GridSize? {
         guard let pane, let cell, let hostRows, let hostColumns else { return nil }
-        let grid = grid(fitting: pane, cell: cell)
+        let fitted = grid(fitting: pane, cell: cell)
+        let limits = PeerConsoleHost.gridLimits
+        let grid = AlasGhostty.SurfaceView.GridSize(
+            rows: min(max(fitted.rows, limits.lowerBound), limits.upperBound),
+            columns: min(max(fitted.columns, limits.lowerBound), limits.upperBound)
+        )
         guard grid != .init(rows: hostRows, columns: hostColumns), grid != lastRequested else { return nil }
         return grid
     }

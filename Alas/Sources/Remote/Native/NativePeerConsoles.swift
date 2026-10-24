@@ -93,13 +93,15 @@ final class NativePeerConsoles {
         }
         // Only the peer asked answers an open, and only once.
         if case .opened(let requestId, let consoleId) = event {
-            guard pendingOpens.removeValue(forKey: requestId) == serverId else { return }
+            guard pendingOpens[requestId] == serverId else { return }
+            pendingOpens[requestId] = nil
             controlOnOpen = (serverId, consoleId)
             onOpened?(serverId, consoleId)
             return
         }
         if case .openFailed(let requestId, let message) = event {
-            guard pendingOpens.removeValue(forKey: requestId) == serverId else { return }
+            guard pendingOpens[requestId] == serverId else { return }
+            pendingOpens[requestId] = nil
             showError("New Terminal Failed", message)
             return
         }

@@ -307,20 +307,21 @@ import Testing
         #expect(pane.height < 32 || extent.height <= pane.height)
     }
 
+    typealias Grid = AlasGhostty.SurfaceView.GridSize
+
     /// A 648×400 pane of 8×16 cells fits 80×24.
     @Test(arguments: [
-        (24, 80, nil, false),                     // the host already has it
-        (30, 100, AlasGhostty.SurfaceView.GridSize(rows: 24, columns: 80), false), // already asked
-        (30, 100, nil, true),
-    ] as [(Int, Int, AlasGhostty.SurfaceView.GridSize?, Bool)])
-    func theHostIsAskedOnlyForAGridThatChangesSomething(
-        hostRows: Int, hostColumns: Int, lastRequested: AlasGhostty.SurfaceView.GridSize?, asks: Bool
-    ) {
+        (CGSize(width: 648, height: 400), Grid(rows: 24, columns: 80), nil, nil), // the host already has it
+        (CGSize(width: 648, height: 400), Grid(rows: 30, columns: 100), Grid(rows: 24, columns: 80), nil), // already asked
+        (CGSize(width: 648, height: 400), Grid(rows: 30, columns: 100), nil, Grid(rows: 24, columns: 80)),
+        (CGSize(width: 10, height: 10), Grid(rows: 24, columns: 80), nil, Grid(rows: 2, columns: 2)), // the host's minimum
+    ] as [(CGSize, Grid, Grid?, Grid?)])
+    func theHostIsAskedOnlyForAGridThatChangesSomething(pane: CGSize, host: Grid, lastRequested: Grid?, expected: Grid?) {
         let request = PeerConsoleLayout.hostGridRequest(
-            pane: CGSize(width: 648, height: 400), cell: CGSize(width: 8, height: 16),
-            hostRows: hostRows, hostColumns: hostColumns, lastRequested: lastRequested
+            pane: pane, cell: CGSize(width: 8, height: 16),
+            hostRows: host.rows, hostColumns: host.columns, lastRequested: lastRequested
         )
-        #expect(request == (asks ? .init(rows: 24, columns: 80) : nil))
+        #expect(request == expected)
     }
 }
 

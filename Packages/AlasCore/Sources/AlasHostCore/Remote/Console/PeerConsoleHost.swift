@@ -108,7 +108,7 @@ public final class PeerConsoleHost {
     /// Largest accepted input message (a big paste); larger input is rejected.
     public static let maxInputBytes = 1024 * 1024
     /// Rows and columns a peer may resize a console to.
-    public static let gridLimits: ClosedRange<Int> = 2...1000
+    public nonisolated static let gridLimits: ClosedRange<Int> = 2...1000
 
     /// Console id → name of the peer controlling it, for host-side UI.
     public private(set) var controllers: [String: String] = [:]
