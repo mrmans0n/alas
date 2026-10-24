@@ -48,8 +48,21 @@ public enum ComputerUseInputGeometry {
     public static func pointRoute(point: CGPoint, targetPID: Int32, window: CGRect, appHit: PointHit?) -> PointRoute {
         guard let appHit, appHit.pid != targetPID else { return .events }
         guard window.contains(point) else { return .covered }
-        let holds = appHit.frame.map { $0.insetBy(dx: -frameTolerance, dy: -frameTolerance).contains(point) } ?? true
-        return holds ? .ax : .covered
+        return appHit.frame.map { holds($0, point) } ?? true ? .ax : .covered
+    }
+
+    /// Whether an app's own hit test at `point` found an element there. It answers with its menu
+    /// bar, or an element elsewhere, for a point it has nothing at (a window AeroSpace parked off
+    /// screen): that counts as no hit, and the element is found from the window instead. One
+    /// whose frame can't be read counts as a hit.
+    public static func isRealHit(role: String?, frame: CGRect?, point: CGPoint) -> Bool {
+        guard role != "AXMenuBar" else { return false }
+        return frame.map { holds($0, point) } ?? true
+    }
+
+    /// Whether `frame` holds `point`, within `frameTolerance`.
+    public static func holds(_ frame: CGRect, _ point: CGPoint) -> Bool {
+        frame.insetBy(dx: -frameTolerance, dy: -frameTolerance).contains(point)
     }
 
     /// Points a frame may miss the point by and still count as holding it.

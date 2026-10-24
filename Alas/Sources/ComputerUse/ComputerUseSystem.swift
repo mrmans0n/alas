@@ -647,7 +647,7 @@ extension LiveComputerUseSystem {
         case .click(.point(let at), _, _), .scroll(.point(let at), _, _): point = at
         default: return nil
         }
-        let found = try await ComputerUseAXActions.element(at: point, app: window.app, isCancelled: isCancelled)
+        let found = try await ComputerUseAXActions.element(at: point, in: window, isCancelled: isCancelled)
         switch ComputerUseInputGeometry.pointRoute(point: point, targetPID: window.app.pid, window: window.frame, appHit: found?.hit) {
         case .events: return nil
         case .covered: throw ComputerUseSystemError.actionFailed(coveredPointRefusal)

@@ -204,6 +204,18 @@ struct ComputerUseInputTests {
             appHit: appHit) == route)
     }
 
+    /// The app's hit test at a point it has nothing at answers with its menu bar or an element
+    /// elsewhere: no hit. An unreadable frame still counts.
+    @Test(arguments: [
+        (String?("AXMenuBar"), Optional(CGRect(x: 0, y: 0, width: 1728, height: 33)), false),
+        ("AXButton", CGRect(x: 740, y: 90, width: 20, height: 20), true),
+        ("AXButton", CGRect(x: 0, y: 0, width: 20, height: 20), false),
+        ("AXButton", nil, true),
+    ])
+    func aHitOnlyCountsWhereItHoldsThePoint(role: String?, frame: CGRect?, real: Bool) {
+        #expect(ComputerUseInputGeometry.isRealHit(role: role, frame: frame, point: CGPoint(x: 750, y: 100)) == real)
+    }
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)

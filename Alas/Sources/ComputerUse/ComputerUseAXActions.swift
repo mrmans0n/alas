@@ -212,23 +212,73 @@ enum ComputerUseAXActions {
     }
 
     /// The element at `point`, global points, as the app hit-tests its own windows (also under
-    /// other apps' windows); nil when there is none or it can't be read. Never the system-wide hit
-    /// test: what is on top may be Alas's own window (the drawn cursor), and an AX message to this
-    /// process runs its AppKit handlers right here, off the main thread.
+    /// other apps' windows), or, when that finds nothing real there
+    /// (`ComputerUseInputGeometry.isRealHit`), the deepest element of `window` holding the point
+    /// (`path(at:in:application:)`); nil when there is none or it can't be read. Never the
+    /// system-wide hit test: what is on top may be Alas's own window (the drawn cursor), and an AX
+    /// message to this process runs its AppKit handlers right here, off the main thread.
     static func element(
-        at point: CGPoint, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
+        at point: CGPoint, in window: ComputerUseWindow, isCancelled: @escaping IsCancelled
     ) async throws -> PointElement? {
         try await onQueue(isCancelled) {
-            let root = try ComputerUseAXReader.target(app.pid)
-            var element: AXUIElement?
-            guard AXUIElementCopyElementAtPosition(root, Float(point.x), Float(point.y), &element) == .success,
-                  let element
-            else { return nil }
+            let application = try ComputerUseAXReader.target(window.app.pid)
+            guard let element = hit(at: point, in: window, application: application) else { return nil }
             var pid: pid_t = 0
-            guard AXUIElementGetPid(element, &pid) == .success, ComputerUseAXReader.mayMessage(pid) else { return nil }
-            AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+            guard AXUIElementGetPid(element, &pid) == .success else { return nil }
             return PointElement(hit: .init(pid: pid, frame: frame(of: element)), handles: ComputerUseAXHandles([element]))
         }
+    }
+
+    /// The app's own hit at `point` when it is real, else the deepest element of `window` holding
+    /// the point; never an element of this process. Call on the AX queue.
+    private static func hit(at point: CGPoint, in window: ComputerUseWindow, application: AXUIElement) -> AXUIElement? {
+        var element: AXUIElement?
+        if AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &element) == .success,
+           let element, isMessageable(element) {
+            AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+            if ComputerUseInputGeometry.isRealHit(role: string(of: element, kAXRoleAttribute), frame: frame(of: element), point: point) {
+                return element
+            }
+        }
+        let path = path(at: point, in: window, application: application)
+        // The window alone is no element at the point.
+        return path.count > 1 ? path.last : nil
+    }
+
+    /// How deep, how wide and how long the walk down a window to the element at a point goes.
+    static let descentDepth = 16
+    static let descentNodes = 200
+    static let descentTime: Duration = .seconds(1)
+
+    /// `window`'s AX window, then at each level the first child whose frame holds `point`, down to
+    /// the deepest; empty when the window can't be found. Never an element of this process.
+    /// Call on the AX queue.
+    static func path(at point: CGPoint, in window: ComputerUseWindow, application: AXUIElement) -> [AXUIElement] {
+        guard let root = axWindow(elements(of: application, kAXWindowsAttribute), for: window) else { return [] }
+        let deadline = ContinuousClock.now + descentTime
+        var path = [root]
+        var visited = 0
+        for _ in 0 ..< descentDepth {
+            var next: AXUIElement?
+            for child in children(of: path[path.count - 1]) {
+                visited += 1
+                guard visited <= descentNodes, ContinuousClock.now < deadline else { return path }
+                guard isMessageable(child) else { continue }
+                if let childFrame = frame(of: child), ComputerUseInputGeometry.holds(childFrame, point) {
+                    next = child
+                    break
+                }
+            }
+            guard let next else { break }
+            path.append(next)
+        }
+        return path
+    }
+
+    /// Whether the element is another process's, which AX messages may go to (P5-R13).
+    private static func isMessageable(_ element: AXUIElement) -> Bool {
+        var pid: pid_t = 0
+        return AXUIElementGetPid(element, &pid) == .success && ComputerUseAXReader.mayMessage(pid)
     }
 
     /// `window` and the element's nearest scroll area: what pointer input at it must land inside.
@@ -869,18 +919,14 @@ extension ComputerUseAXActions {
                 start = try resolve(handles, handle)
             case .point(let point):
                 let application = try ComputerUseAXReader.target(app.pid)
-                var hit: AXUIElement?
-                let result = AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit)
-                if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
-                guard result == .success, let hit else { throw Unsupported(error: result) }
-                var pid: pid_t = 0
-                guard AXUIElementGetPid(hit, &pid) == .success, ComputerUseAXReader.mayMessage(pid) else {
+                guard let hit = hit(at: point, in: window, application: application) else {
                     throw Unsupported(error: .illegalArgument)
                 }
-                AXUIElementSetMessagingTimeout(hit, ComputerUseAXReader.messagingTimeout)
-                // Another of the app's windows may be on top at that point.
-                guard let hitWindow = elementAttribute(hit, kAXWindowAttribute), axWindow([hitWindow], for: window) != nil
-                else { throw Unsupported(error: .illegalArgument) }
+                // Another of the app's windows may be on top at that point; an element found from
+                // the window is in it.
+                if let hitWindow = elementAttribute(hit, kAXWindowAttribute), axWindow([hitWindow], for: window) == nil {
+                    throw Unsupported(error: .illegalArgument)
+                }
                 start = hit
             }
             guard let area = ancestor(of: start, levels: scrollAncestorLevels, where: {
