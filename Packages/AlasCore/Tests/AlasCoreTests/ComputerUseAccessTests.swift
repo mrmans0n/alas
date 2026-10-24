@@ -28,6 +28,24 @@ struct ComputerUseAccessTests {
         #expect(access.access(for: app, session: "s", input: true) == (inputBlocked ? .blocked : .allowed(.session)))
     }
 
+    /// Password managers are blocked by vendor prefix or by name; terminals and System Settings stay approvable.
+    @Test(arguments: [
+        ("Proton Pass", "me.proton.pass.electron", true),
+        ("NordPass", "com.nordsec.nordpass", true),
+        ("1Password Safari", "com.1password.safari", true),
+        ("Password Manager Pro", nil, true),
+        ("Keychain Access", nil, true),
+        ("System Settings", "com.apple.systempreferences", false),
+        ("Terminal", "com.apple.Terminal", false),
+        ("iTerm2", "com.googlecode.iterm2", false),
+        ("Ghostty", "com.mitchellh.ghostty", false),
+        ("TextEdit", "com.apple.TextEdit", false),
+    ] as [(String, String?, Bool)])
+    func blocklistMatchesVendorPrefixesAndNames(name: String, bundleID: String?, blocked: Bool) {
+        let app = ComputerUseAppIdentity(name: name, bundleID: bundleID, pid: 400)
+        #expect(ComputerUseBlocklist.isBlocked(app, hostPID: hostPID) == blocked)
+    }
+
     @Test func grantScopesExpireAtTheirBoundary() {
         let access = makeAccess(always: ["com.example.always"])
         let always = ComputerUseAppIdentity(name: "A", bundleID: "com.example.always", pid: 1)

@@ -34,10 +34,22 @@ public enum ComputerUseBlocklist {
         "org.keepassxc.keepassxc",
     ]
 
+    /// Lowercased; matched case-insensitively against the bundle id.
+    public static let bundleIDPrefixes: [String] = [
+        "com.1password.", "com.agilebits.", "com.bitwarden.", "com.lastpass.", "com.dashlane.",
+        "org.keepassxc.", "me.proton.pass", "com.nordsec.nordpass", "com.keepersecurity.",
+        "in.sinew.enpass", "com.siber.roboform",
+    ]
+
     public static func isBlocked(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {
         if app.pid == hostPID { return true }
-        if let bundleID = app.bundleID { return bundleIDs.contains(bundleID) }
-        return false
+        if let bundleID = app.bundleID {
+            if bundleIDs.contains(bundleID) { return true }
+            let lowered = bundleID.lowercased()
+            if bundleIDPrefixes.contains(where: { lowered.hasPrefix($0) }) { return true }
+        }
+        let name = app.name.lowercased()
+        return name.contains("password") || name.contains("keychain")
     }
 
     /// Other Alas builds can be seen but not driven: their approval and permission prompts
