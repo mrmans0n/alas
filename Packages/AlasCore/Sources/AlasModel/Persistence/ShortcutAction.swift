@@ -21,7 +21,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
          createProject, newWorktree, focusMainWorktree, newTerminalTab,
          launchAgent, launchAgentInTerminal, launchAgentInChat,
          openReviewPalette, runScript, selectPreviousTab, selectNextTab,
-         increaseFontSize, decreaseFontSize, resetFontSize
+         increaseFontSize, decreaseFontSize, resetFontSize, stopComputerUse
     // Chat
     case dictate
     // Code editor
@@ -38,7 +38,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
              .createProject, .newWorktree, .focusMainWorktree, .newTerminalTab,
              .launchAgent, .launchAgentInTerminal, .launchAgentInChat,
              .openReviewPalette, .runScript, .selectPreviousTab, .selectNextTab,
-             .increaseFontSize, .decreaseFontSize, .resetFontSize:
+             .increaseFontSize, .decreaseFontSize, .resetFontSize, .stopComputerUse:
             return .global
         case .dictate:
             return .chat
@@ -80,6 +80,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .increaseFontSize:         return "Increase Font Size"
         case .decreaseFontSize:         return "Decrease Font Size"
         case .resetFontSize:            return "Reset Font Size"
+        case .stopComputerUse:          return "Stop Computer Use"
         case .dictate:                  return "Dictate"
         case .splitSelectionIntoLines:  return "Split Selection into Lines"
         case .toggleMarkdownPreview:    return "Toggle Markdown Preview"
@@ -109,6 +110,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .rightPaneChangesTab, .rightPaneFilesTab, .rightPaneAgentTab, .rightPaneRunTab, .rightPaneSchedulesTab:
             return "Opens the right sidebar on this tab; collapses it when the tab is already showing"
         case .commitInComposer:   return "In the draft commit tab"
+        case .stopComputerUse:    return "Anywhere on the Mac: stop the agent that is using computer use"
         case .dictate:            return "In the chat composer: tap to start or stop, hold to talk until you let go"
         default:                  return nil
         }
@@ -118,10 +120,12 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
     /// surface. `false` for code-editor- or composer-scoped actions: those
     /// have no responder when the terminal is focused, so reserving them
     /// would swallow the keystroke instead of letting the shell receive it.
+    /// Stop Computer Use is a system hot key, registered only while an agent
+    /// drives; it takes the keystroke before any terminal sees it.
     public var appliesInTerminal: Bool {
         switch self {
         case .splitSelectionIntoLines, .toggleMarkdownPreview,
-             .commitInComposer, .findAndReplace, .replaceInEditor, .dictate:
+             .commitInComposer, .findAndReplace, .replaceInEditor, .dictate, .stopComputerUse:
             return false
         default:
             return true
@@ -159,6 +163,7 @@ public enum ShortcutAction: String, CaseIterable, Codable, Sendable {
         case .increaseFontSize:         return .init(key: "=",          modifiers: [.command])
         case .decreaseFontSize:         return .init(key: "-",          modifiers: [.command])
         case .resetFontSize:            return .init(key: "0",          modifiers: [.command])
+        case .stopComputerUse:          return .init(key: ".",          modifiers: [.control, .option, .command])
         // ⌃⌘D is macOS Look Up and ⌥⌘D toggles the Dock. Modifiers follow
         // the recorder's order so a re-recorded ⌃⌥D compares equal.
         case .dictate:                  return .init(key: "d",          modifiers: [.option, .control])

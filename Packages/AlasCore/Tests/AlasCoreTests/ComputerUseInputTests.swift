@@ -1,11 +1,21 @@
 import CoreGraphics
 import Foundation
 import Testing
+import AlasModel
 @testable import AlasPlatform
 
 struct ComputerUseInputTests {
     private typealias Chord = ComputerUseKeyChord
     private typealias Window = ComputerUseInputGeometry.ScreenWindow
+
+    @Test(arguments: [
+        (ShortcutBinding?.some(.init(key: ".", modifiers: [.control, .option, .command])), true, true),
+        (.some(.init(key: ".", modifiers: [.control, .option, .command])), false, false),
+        (nil, true, false),
+    ] as [(ShortcutBinding?, Bool, Bool)])
+    func theStopShortcutIsRegisteredOnlyWhileAnAgentDrives(binding: ShortcutBinding?, driving: Bool, registered: Bool) {
+        #expect((ComputerUseStopShortcut.registration(binding: binding, driverActive: driving) != nil) == registered)
+    }
 
     @Test(arguments: [
         ("cmd+shift+s", Chord(modifiers: [.command, .shift], key: .character("s"))),

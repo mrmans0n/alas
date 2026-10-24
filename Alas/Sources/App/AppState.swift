@@ -319,6 +319,7 @@ final class AppState {
     /// Serves computer_* calls: approvals, the driver lock, stop/resume.
     let computerUse: ComputerUseCoordinator
     @ObservationIgnored var computerUseStatusItem: ComputerUseStatusItem?
+    @ObservationIgnored var computerUseStopHotKey: ComputerUseStopHotKey?
     /// The models each ACP agent last advertised, for surfaces that configure
     /// a session before it exists (the schedule editor's model picker).
     let acpModelCatalog: ACPAgentModelCatalog
@@ -1703,6 +1704,7 @@ final class AppState {
         // All stored properties are initialized; we can safely capture `self`.
         computerUseLink.state = self
         startComputerUseStatusItem()
+        startComputerUseStopHotKey()
         // Wire the live default-ordering source so the manager reads the
         // current `config.worktrees.defaultOrdering` on every sort.
         self.projectsManager.setDefaultOrdering { [weak self] in
