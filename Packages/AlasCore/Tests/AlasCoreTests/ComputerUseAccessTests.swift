@@ -13,40 +13,38 @@ struct ComputerUseAccessTests {
         ComputerUseAccess(hostPID: hostPID, alwaysAllowed: { always })
     }
 
-    /// Another Alas build stays visible but can't be driven: its approval cards are not the agent's to click.
+    /// Password managers and credential prompts are blocked by bundle id, vendor prefix or name, even
+    /// with a stored "Always"; another Alas build stays visible but can't be driven (its approval cards
+    /// are not the agent's to click); terminals and System Settings stay approvable.
     @Test(arguments: [
         (ComputerUseAppIdentity(name: "Host", bundleID: "io.nlopez.alas", pid: 100), true, true),
         (ComputerUseAppIdentity(name: "Keychain", bundleID: "com.apple.keychainaccess", pid: 5), true, true),
+        (ComputerUseAppIdentity(name: "1Password Safari", bundleID: "com.1password.safari", pid: 6), true, true),
+        (ComputerUseAppIdentity(name: "Proton Pass", bundleID: "me.proton.pass.electron", pid: 7), true, true),
+        (ComputerUseAppIdentity(name: "NordPass", bundleID: "com.nordsec.nordpass", pid: 8), true, true),
+        (ComputerUseAppIdentity(name: "Password Manager Pro", bundleID: nil, pid: 9), true, true),
+        (ComputerUseAppIdentity(name: "Keychain Access", bundleID: nil, pid: 10), true, true),
+        (ComputerUseAppIdentity(name: "SecurityAgent", bundleID: "com.apple.SecurityAgent", pid: 11), true, true),
+        (ComputerUseAppIdentity(name: "coreautha", bundleID: "com.apple.coreautha", pid: 12), true, true),
+        (
+            ComputerUseAppIdentity(
+                name: "LocalAuthenticationUIAgent", bundleID: "com.apple.LocalAuthentication.UIAgent", pid: 13
+            ), true, true
+        ),
         (ComputerUseAppIdentity(name: "Alas", bundleID: "io.nlopez.alas", pid: 200), false, true),
         (ComputerUseAppIdentity(name: "Alas Dev", bundleID: "io.nlopez.alas.dev", pid: 201), false, true),
         (ComputerUseAppIdentity(name: "Alaska", bundleID: "io.nlopez.alaska", pid: 202), false, false),
+        (ComputerUseAppIdentity(name: "System Settings", bundleID: "com.apple.systempreferences", pid: 14), false, false),
+        (ComputerUseAppIdentity(name: "Terminal", bundleID: "com.apple.Terminal", pid: 15), false, false),
+        (ComputerUseAppIdentity(name: "iTerm2", bundleID: "com.googlecode.iterm2", pid: 16), false, false),
+        (ComputerUseAppIdentity(name: "Ghostty", bundleID: "com.mitchellh.ghostty", pid: 17), false, false),
+        (ComputerUseAppIdentity(name: "TextEdit", bundleID: "com.apple.TextEdit", pid: 18), false, false),
     ])
     func onlyBlocklistedAppsAreBlocked(app: ComputerUseAppIdentity, blocked: Bool, inputBlocked: Bool) {
-        let access = makeAccess(always: ["com.apple.keychainaccess"])
+        let access = makeAccess(always: ["com.apple.keychainaccess", "com.1password.safari"])
         access.record(.allowForSession, for: app, session: "s")
         #expect(access.access(for: app, session: "s") == (blocked ? .blocked : .allowed(.session)))
         #expect(access.access(for: app, session: "s", input: true) == (inputBlocked ? .blocked : .allowed(.session)))
-    }
-
-    /// Password managers are blocked by vendor prefix or by name; terminals and System Settings stay approvable.
-    @Test(arguments: [
-        ("Proton Pass", "me.proton.pass.electron", true),
-        ("NordPass", "com.nordsec.nordpass", true),
-        ("1Password Safari", "com.1password.safari", true),
-        ("Password Manager Pro", nil, true),
-        ("Keychain Access", nil, true),
-        ("SecurityAgent", "com.apple.SecurityAgent", true),
-        ("coreautha", "com.apple.coreautha", true),
-        ("LocalAuthenticationUIAgent", "com.apple.LocalAuthentication.UIAgent", true),
-        ("System Settings", "com.apple.systempreferences", false),
-        ("Terminal", "com.apple.Terminal", false),
-        ("iTerm2", "com.googlecode.iterm2", false),
-        ("Ghostty", "com.mitchellh.ghostty", false),
-        ("TextEdit", "com.apple.TextEdit", false),
-    ] as [(String, String?, Bool)])
-    func blocklistMatchesVendorPrefixesAndNames(name: String, bundleID: String?, blocked: Bool) {
-        let app = ComputerUseAppIdentity(name: name, bundleID: bundleID, pid: 400)
-        #expect(ComputerUseBlocklist.isBlocked(app, hostPID: hostPID) == blocked)
     }
 
     @Test func grantScopesExpireAtTheirBoundary() {
