@@ -12,8 +12,16 @@ extension AppState {
         let access = ComputerUseAccess(hostPID: getpid(), alwaysAllowed: {
             Set(link.state?.config.computerUse.alwaysAllowedApps ?? [])
         })
+        // One overlay for the app's lifetime: the coordinator's cursor closures keep it, and
+        // dismiss it whenever the session that showed it ends.
+        let overlay = ComputerUseCursorOverlay(window: ComputerUseSystem.live().window)
+        let cursor = ComputerUseCursor(
+            present: { overlay.present(over: $0) },
+            perform: { await overlay.perform($0) },
+            dismiss: { overlay.dismiss() }
+        )
         let coordinator = ComputerUseCoordinator(
-            system: .live,
+            system: .live(cursorWindowIDs: { overlay.windowIDs }),
             access: access,
             readiness: {
                 ComputerUseReadiness.evaluate(
@@ -25,7 +33,8 @@ extension AppState {
             persistAlwaysAllowed: { link.state?.persistComputerUseAlwaysAllowed($0) },
             interrupt: { sessionID in
                 try? await link.state?.host.sessions.stop(sessionID, caller: .app)
-            }
+            },
+            cursor: cursor
         )
         coordinator.transcript = { link.state?.session(for: $0)?.transcript }
         return coordinator
