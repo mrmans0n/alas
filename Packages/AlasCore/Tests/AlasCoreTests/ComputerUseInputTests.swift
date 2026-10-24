@@ -217,6 +217,12 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.center(of: CGRect(x: 10, y: 20, width: 100, height: 40)) == CGPoint(x: 60, y: 40))
     }
 
+    /// A drag's activation that the user's typing elsewhere kept from the front reads as the user being active.
+    @Test(arguments: [(0.5, ComputerUseTakeover.ActivationFailure.userActive), (1.9, .userActive), (2.0, .notFrontmost), (60.0, .notFrontmost)])
+    func anActivationRefusedDuringUserInputIsTheUserBeingActive(idle: TimeInterval, failure: ComputerUseTakeover.ActivationFailure) {
+        #expect(ComputerUseTakeover.activationFailure(idleSeconds: idle) == failure)
+    }
+
     @Test(arguments: [
         (true, 0.5, true, 0.0, ComputerUseTakeover.Decision.wait),
         (true, 5.0, true, 0.0, .proceed),

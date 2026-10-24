@@ -18,6 +18,18 @@ public enum ComputerUseTakeover {
         return waited < maxWait ? .wait : .refuse
     }
 
+    /// Why an activation didn't bring the target to the front in time.
+    public enum ActivationFailure: Equatable, Sendable {
+        /// The user's input in the last `idleThreshold` kept the front (macOS doesn't take it from
+        /// an app the user is typing in): the agent should wait, not retry.
+        case userActive
+        case notFrontmost
+    }
+
+    public static func activationFailure(idleSeconds: TimeInterval) -> ActivationFailure {
+        idleSeconds < idleThreshold ? .userActive : .notFrontmost
+    }
+
     /// Seconds since the user's own input: from the input monitor's last event (`lastUserInput`,
     /// on the same clock as `now`), which events Alas posts never reach; the HID idle time, which
     /// counts those too, only while the monitor isn't running (nil).

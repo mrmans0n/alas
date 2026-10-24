@@ -946,7 +946,10 @@ extension LiveComputerUseSystem {
         }
         guard frontmost else {
             await restoreActivation(previousPID, from: app.pid)
-            throw ComputerUseSystemError.actionFailed("\(app.name) could not be brought to the front.")
+            switch ComputerUseTakeover.activationFailure(idleSeconds: secondsSinceUserInput()) {
+            case .userActive: throw ComputerUseSystemError.userActive
+            case .notFrontmost: throw ComputerUseSystemError.actionFailed("\(app.name) could not be brought to the front.")
+            }
         }
         do {
             try await body()
