@@ -643,7 +643,7 @@ fn computer_tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "computer_apps",
-            "description": "List running apps on the user's Mac and their on-screen windows (window_id, title, frame) with each app's approval state. An app showing a system password prompt has `credential_prompt: true` and no windows: it can't be seen or driven until the user answers the prompt. Does not need approval.",
+            "description": "List running apps on the user's Mac and their on-screen windows (window_id, title, frame) with each app's approval state. An app showing a system password prompt has `credential_prompt: true` and no windows: it can't be seen or driven until the user answers the prompt. `credential_prompt: \"unchecked\"` means a prompt may be showing and the app wasn't checked in time; its windows are left out too. computer_open_app on that app checks it alone and lists its windows when no prompt shows. Does not need approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": { "type": "object", "properties": {} }
         }),

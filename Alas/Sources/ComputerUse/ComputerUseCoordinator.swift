@@ -693,17 +693,24 @@ final class ComputerUseCoordinator {
         let accesses = apps.map { access.access(for: $0.app, session: sessionID) }
         // One read for the whole listing; a blocked app's windows aren't listed either way.
         let withWindows = zip(apps, accesses).filter { $1 != .blocked && !$0.windows.isEmpty }.map(\.0.app.pid)
-        let prompts = withWindows.isEmpty ? [] : await system.credentialPrompts(withWindows)
+        let prompts = withWindows.isEmpty ? [:] : await system.credentialPrompts(withWindows)
         var entries: [[String: Any]] = []
         for (entry, appAccess) in zip(apps, accesses) {
             var object = Self.app(entry.app)
             object["approval"] = Self.approvalName(appAccess)
             // A blocked app's window titles and frames stay private, and so do an app's while a
-            // system password prompt shows in it.
+            // system password prompt shows in it, or may: one the probe budget didn't reach is
+            // "unchecked", not claimed to show one.
             var windows = appAccess == .blocked ? [] : entry.windows
-            if prompts.contains(entry.app.pid) {
+            switch prompts[entry.app.pid] {
+            case .showing?:
                 object["credential_prompt"] = true
                 windows = []
+            case .unchecked?:
+                object["credential_prompt"] = ComputerUseCredentialPrompt.Listing.unchecked.rawValue
+                windows = []
+            case .clear?, nil:
+                break
             }
             object["windows"] = windows.map(Self.windowEntry)
             entries.append(object)

@@ -24,6 +24,27 @@ public enum ComputerUseCredentialPrompt {
             && secureFieldInSheet != false
     }
 
+    /// What `computer_apps` says about an app's prompt.
+    public enum Listing: String, Equatable, Sendable {
+        /// No prompt can be showing, or the sheets were read and hold no secure field.
+        case clear
+        case showing
+        /// A prompt may be showing, but the listing's probe budget ran out before the app's turn.
+        case unchecked
+    }
+
+    /// `probed`: the listing reached the app within its probe budget, so `secureFieldInSheet`
+    /// is what its read found (nil: unreadable or cut short, which counts as showing). An app the
+    /// budget never reached isn't claimed to show a prompt; its windows are still withheld.
+    public static func listing(
+        runningBundleIDs: Set<String>, hasUntitledWindow: Bool, probed: Bool, secureFieldInSheet: Bool?
+    ) -> Listing {
+        guard needsSheetRead(runningBundleIDs: runningBundleIDs, hasUntitledWindow: hasUntitledWindow) else { return .clear }
+        guard probed else { return .unchecked }
+        return isShowing(runningBundleIDs: runningBundleIDs, hasUntitledWindow: hasUntitledWindow,
+                         secureFieldInSheet: secureFieldInSheet) ? .showing : .clear
+    }
+
     /// Whether the sheets are worth reading: without a prompt process or an untitled window,
     /// nothing can make `isShowing` true.
     public static func needsSheetRead(runningBundleIDs: Set<String>, hasUntitledWindow: Bool) -> Bool {

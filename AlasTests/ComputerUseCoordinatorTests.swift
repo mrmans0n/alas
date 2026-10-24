@@ -48,6 +48,11 @@ struct ComputerUseCoordinatorTests {
         )
     }
 
+    /// A prompt listing that has every one of `pids` showing a prompt.
+    nonisolated private static func showing(_ pids: [Int32]) -> [Int32: ComputerUseCredentialPrompt.Listing] {
+        Dictionary(uniqueKeysWithValues: pids.map { ($0, .showing) })
+    }
+
     private final class Calls {
         var interrupts: [String] = []
     }
@@ -509,7 +514,13 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         let notes = Self.notes
         var system = Self.system(recorder: recorder)
-        system.credentialPrompts = { Set($0.filter { $0 == notes.pid }) }
+        let mail = Self.mail
+        system.credentialPrompts = { pids in
+            var listings: [Int32: ComputerUseCredentialPrompt.Listing] = [:]
+            if pids.contains(notes.pid) { listings[notes.pid] = .showing }
+            if pids.contains(mail.pid) { listings[mail.pid] = .unchecked }
+            return listings
+        }
         let f = Self.fixture(system: system, recorder: recorder)
         let response = await f.coordinator.perform(command, sessionID: "s")
         #expect(response == .error("computer_blocked: A system password prompt is showing in Notes; ask the user to answer it."))
@@ -521,14 +532,17 @@ struct ComputerUseCoordinatorTests {
         let listed = try #require(apps.first { $0["name"] as? String == "Notes" })
         #expect(listed["credential_prompt"] as? Bool == true)
         #expect((listed["windows"] as? [Any])?.isEmpty == true)
-        #expect(apps.first { $0["name"] as? String == "Mail" }?["credential_prompt"] == nil)
+        // Past the listing's probe budget: its windows are withheld, but no prompt is claimed.
+        let unchecked = try #require(apps.first { $0["name"] as? String == "Mail" })
+        #expect(unchecked["credential_prompt"] as? String == "unchecked")
+        #expect((unchecked["windows"] as? [Any])?.isEmpty == true)
     }
 
     /// A click that brings the prompt up went through, but the window's elements and refs are withheld.
     @Test func anInputThatBringsUpACredentialPromptWithholdsTheWindow() async throws {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
-        system.credentialPrompts = { [recorder] pids in recorder.inputs.isEmpty ? [] : Set(pids) }
+        system.credentialPrompts = { [recorder] pids in recorder.inputs.isEmpty ? [:] : Self.showing(pids) }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
@@ -553,7 +567,7 @@ struct ComputerUseCoordinatorTests {
             return .ax
         }
         system.credentialPrompts = { [recorder] pids in
-            recorder.inputs.contains { if case .pointerClick = $0 { true } else { false } } ? Set(pids) : []
+            recorder.inputs.contains { if case .pointerClick = $0 { true } else { false } } ? Self.showing(pids) : [:]
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")

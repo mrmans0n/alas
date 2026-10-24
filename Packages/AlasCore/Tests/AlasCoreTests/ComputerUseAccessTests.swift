@@ -118,4 +118,21 @@ struct ComputerUseAccessTests {
         #expect(ComputerUseCredentialPrompt.isShowing(
             runningBundleIDs: running, hasUntitledWindow: untitled, secureFieldInSheet: secureFieldInSheet) == showing)
     }
+
+    /// Only an app the listing's probe reached can be said to show a prompt; one past the budget
+    /// is unchecked, and nothing is said while no prompt process runs or it has no untitled window.
+    @Test(arguments: [
+        (["com.apple.LocalAuthenticationRemoteService"], true, true, Bool?(true), ComputerUseCredentialPrompt.Listing.showing),
+        (["com.apple.LocalAuthenticationRemoteService"], true, true, nil, .showing),
+        (["com.apple.LocalAuthenticationRemoteService"], true, true, false, .clear),
+        (["com.apple.LocalAuthenticationRemoteService"], true, false, nil, .unchecked),
+        (["com.apple.LocalAuthenticationRemoteService"], false, false, nil, .clear),
+        ([], true, false, nil, .clear),
+    ] as [(Set<String>, Bool, Bool, Bool?, ComputerUseCredentialPrompt.Listing)])
+    func aListingOnlyClaimsPromptsInAppsItProbed(
+        running: Set<String>, untitled: Bool, probed: Bool, secureFieldInSheet: Bool?, listing: ComputerUseCredentialPrompt.Listing
+    ) {
+        #expect(ComputerUseCredentialPrompt.listing(
+            runningBundleIDs: running, hasUntitledWindow: untitled, probed: probed, secureFieldInSheet: secureFieldInSheet) == listing)
+    }
 }
