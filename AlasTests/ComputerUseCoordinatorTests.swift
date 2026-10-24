@@ -541,6 +541,33 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.count == 1)
     }
 
+    /// An Electron press that changed nothing is retried as a pointer click; when that click brings
+    /// the prompt up, neither the retry's read nor the screenshot comes back.
+    @Test func aPointerRetryThatBringsUpACredentialPromptWithholdsTheWindow() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { _ in true }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            if case .pointerClick = input { return .background }
+            return .ax
+        }
+        system.credentialPrompts = { [recorder] pids in
+            recorder.inputs.contains { if case .pointerClick = $0 { true } else { false } } ? Set(pids) : []
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let click = ComputerUseCommand(action: .click, windowID: 1, ref: "e2", includeScreenshot: true)
+        let json = try #require(Self.text(await f.coordinator.perform(click, sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["retried"] as? String == "pointer")
+        #expect(payload["credential_prompt"] as? Bool == true)
+        #expect((payload["elements"] as? [Any])?.isEmpty == true)
+        #expect(payload["image"] == nil)
+        #expect(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
+            == .error("computer_blocked: A system password prompt is showing in Notes; ask the user to answer it."))
+    }
+
     @Test(arguments: ["cmd+q", "cmd+opt+q"])
     func quitChordsAreRefusedBeforeAnyInput(_ keys: String) async throws {
         let recorder = Recorder()

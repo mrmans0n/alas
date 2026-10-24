@@ -809,10 +809,12 @@ final class ComputerUseCoordinator {
         // A read that left elements out for depth may have missed the press's effect, and a second press could undo it.
         let unchanged = changeWarning != nil && payload["depth_limited"] == nil
         // A press the app didn't confirm most likely happened: pressing again could undo it.
+        var retried = false
         if let target, let targetRef, delivered.warning == nil, Self.retriesWithPointer(
             command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
             manualAccessibility: system.usesManualAccessibility(window.app.pid)) {
             // The first press was delivered: a retry that fails reports why next to its result.
+            retried = true
             let first = (payload: payload, window: window)
             do {
                 try await retryWithPointer(
@@ -826,6 +828,12 @@ final class ComputerUseCoordinator {
                 window = first.window
                 payload["retry_error"] = Self.message(for: error)
             }
+        }
+        // The retry's click may have brought the prompt up, and it may have come up since the
+        // check above: neither the retry's read nor a screenshot shows it.
+        if retried || command.includeScreenshot, await system.credentialPrompt(window.app.pid) {
+            withholdElements(of: window, toWindow: toWindow, context: context, payload: &payload)
+            return
         }
         guard command.includeScreenshot else { return }
         do {
