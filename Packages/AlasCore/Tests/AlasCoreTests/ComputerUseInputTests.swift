@@ -7,6 +7,7 @@ import AlasModel
 struct ComputerUseInputTests {
     private typealias Chord = ComputerUseKeyChord
     private typealias Window = ComputerUseInputGeometry.ScreenWindow
+    private typealias SavedType = ComputerUsePastePolicy.SavedType
 
     @Test(arguments: [
         (ShortcutBinding?.some(.init(key: ".", modifiers: [.control, .option, .command])), true, true),
@@ -338,6 +339,17 @@ struct ComputerUseInputTests {
     ] as [([Link], ComputerUseClickTarget.Choice)])
     private func clickTargets(chain: [Link], expected: ComputerUseClickTarget.Choice) {
         #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
+    }
+
+    @Test(arguments: [
+        ([[SavedType(type: "public.utf8-plain-text", size: 12)]], true),
+        ([[SavedType(type: "public.png", size: 20 * 1024 * 1024)]], false),
+        ([[SavedType(type: "com.apple.pasteboard.promised-file-url", size: nil)]], false),
+        ([[SavedType(type: "public.utf8-plain-text", size: 5)], [SavedType(type: "dyn.ah62d4rv4ge8", size: nil)]], false),
+        ([], true),
+    ] as [([[ComputerUsePastePolicy.SavedType]], Bool)])
+    func pastesOnlyWhenTheClipboardCanComeBack(items: [[ComputerUsePastePolicy.SavedType]], restorable: Bool) {
+        #expect(ComputerUsePastePolicy.canRestore(items) == restorable)
     }
 }
 

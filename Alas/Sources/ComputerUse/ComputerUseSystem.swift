@@ -761,9 +761,9 @@ extension LiveComputerUseSystem {
             if replace {
                 try ComputerUseInputPoster.postKey(CGKeyCode(kVK_ANSI_A), flags: .maskCommand, pid: app.pid)
             }
-            if paste {
-                try await self.paste(text, pid: app.pid)
-            } else {
+            // A clipboard that couldn't be put back as it was is left alone, and the text typed instead.
+            let pasted = paste ? try await self.paste(text, pid: app.pid) : false
+            if !pasted {
                 try await ComputerUseInputPoster.type(text, pid: app.pid, interrupt: interrupt)
             }
         case .key(let chord):
@@ -941,17 +941,12 @@ extension LiveComputerUseSystem {
     /// text was read after ⌘V and `pasteRestoreFloor` passed (at most `pasteReadWait`).
     /// A read before ⌘V (a clipboard manager) doesn't count: restoring then would
     /// let the target paste the user's own clipboard.
-    private static func paste(_ text: String, pid: Int32) async throws {
+    /// Returns false, without touching the pasteboard, when its items couldn't be put back as they were.
+    private static func paste(_ text: String, pid: Int32) async throws -> Bool {
         let provider = PasteProvider(text: text)
-        let (saved, changeCount) = await MainActor.run { () -> ([[NSPasteboard.PasteboardType: Data]], Int) in
+        let snapshot = await MainActor.run { () -> ([[NSPasteboard.PasteboardType: Data]], Int)? in
             let pasteboard = NSPasteboard.general
-            let saved = (pasteboard.pasteboardItems ?? []).map { item in
-                var types: [NSPasteboard.PasteboardType: Data] = [:]
-                for type in item.types {
-                    types[type] = item.data(forType: type)
-                }
-                return types
-            }
+            guard let saved = savePasteboard(pasteboard) else { return nil }
             pasteboard.clearContents()
             let item = NSPasteboardItem()
             item.setDataProvider(provider, forTypes: [.string])
@@ -960,6 +955,7 @@ extension LiveComputerUseSystem {
             pasteboard.writeObjects([item])
             return (saved, pasteboard.changeCount)
         }
+        guard let (saved, changeCount) = snapshot else { return false }
         provider.keyPosted.set()
         do {
             try ComputerUseInputPoster.postKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand, pid: pid)
@@ -975,6 +971,31 @@ extension LiveComputerUseSystem {
         }
         await MainActor.run { restorePasteboard(saved, ifUnchangedSince: changeCount) }
         withExtendedLifetime(provider) {}
+        return true
+    }
+
+    /// Every item's data by type, or nil when `ComputerUsePastePolicy` says it couldn't come back.
+    /// Promise types are refused from the type list alone, and reading stops once the data passes the cap.
+    @MainActor
+    private static func savePasteboard(_ pasteboard: NSPasteboard) -> [[NSPasteboard.PasteboardType: Data]]? {
+        let items = pasteboard.pasteboardItems ?? []
+        if items.contains(where: { $0.types.contains { ComputerUsePastePolicy.isPromise($0.rawValue) } }) { return nil }
+        var saved: [[NSPasteboard.PasteboardType: Data]] = []
+        var checked: [[ComputerUsePastePolicy.SavedType]] = []
+        var total = 0
+        reading: for item in items {
+            saved.append([:])
+            checked.append([])
+            for type in item.types {
+                let data = item.data(forType: type)
+                checked[checked.count - 1].append(.init(type: type.rawValue, size: data?.count))
+                guard let data else { break reading }
+                saved[saved.count - 1][type] = data
+                total += data.count
+                if total > ComputerUsePastePolicy.sizeCap { break reading }
+            }
+        }
+        return ComputerUsePastePolicy.canRestore(checked) ? saved : nil
     }
 
     /// Skipped when the pasteboard changed after Alas wrote to it: the user copied something.
