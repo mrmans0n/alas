@@ -14,7 +14,15 @@ final class ComputerUseStopHotKey {
     private let onPress: @MainActor () -> Void
     private var handler: EventHandlerRef?
     private var hotKey: EventHotKeyRef?
-    private var registered: ShortcutBinding?
+    /// The binding last passed to `update`, so config saves that don't change it do nothing.
+    private var requested: ShortcutBinding?
+    /// The last binding a failure was logged for, so repeated drives don't log it again.
+    private var loggedFailure: ShortcutBinding?
+    private var handlerInstalled = false
+
+    /// Why the requested binding isn't live, for the status item's menu; nil when it is
+    /// registered or none is requested.
+    private(set) var unavailableReason: String?
 
     init(onPress: @escaping @MainActor () -> Void) {
         self.onPress = onPress
@@ -28,13 +36,21 @@ final class ComputerUseStopHotKey {
 
     /// Unregisters the previous hot key and registers `binding`, or none when nil.
     func update(_ binding: ShortcutBinding?) {
-        guard binding != registered else { return }
+        guard binding != requested else { return }
+        requested = binding
         if let hotKey { UnregisterEventHotKey(hotKey) }
         hotKey = nil
-        registered = nil
+        unavailableReason = nil
         guard let binding else { return }
+        guard handlerInstalled else {
+            fail(binding, reason: "Stop shortcut unavailable", log: "handler is not installed")
+            return
+        }
         guard let keyCode = Self.keyCode(for: binding) else {
-            Self.log.error("Stop shortcut \(binding.displayString, privacy: .public) has no key code")
+            fail(
+                binding, reason: "Stop shortcut \(Self.inline(binding)) can't be used as a system-wide shortcut",
+                log: "has no key code"
+            )
             return
         }
         var ref: EventHotKeyRef?
@@ -45,11 +61,25 @@ final class ComputerUseStopHotKey {
         )
         guard status == noErr, let ref else {
             // Another app may own the combo already.
-            Self.log.error("Could not register stop shortcut \(binding.displayString, privacy: .public): \(status)")
+            fail(
+                binding, reason: "Stop shortcut unavailable: another app uses \(Self.inline(binding))",
+                log: "could not be registered (\(status))"
+            )
             return
         }
         hotKey = ref
-        registered = binding
+    }
+
+    private func fail(_ binding: ShortcutBinding, reason: String, log: String) {
+        unavailableReason = reason
+        guard loggedFailure != binding else { return }
+        loggedFailure = binding
+        Self.log.error("Stop shortcut \(binding.displayString, privacy: .public) \(log, privacy: .public)")
+    }
+
+    /// "⌃⌥⌘." rather than the chip's spaced "⌃ ⌥ ⌘ .", to read inside a sentence.
+    private static func inline(_ binding: ShortcutBinding) -> String {
+        binding.displayString.replacingOccurrences(of: " ", with: "")
     }
 
     private func installHandler() {
@@ -70,7 +100,8 @@ final class ComputerUseStopHotKey {
             MainActor.assumeIsolated { hotKey.onPress() }
             return noErr
         }, 1, &spec, context, &handler)
-        if status != noErr {
+        handlerInstalled = status == noErr
+        if !handlerInstalled {
             Self.log.error("Could not install the stop shortcut handler: \(status)")
         }
     }

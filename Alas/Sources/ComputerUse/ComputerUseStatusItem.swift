@@ -3,21 +3,25 @@ import Observation
 
 /// Menu-bar item present only while an agent is driving an app.
 @MainActor
-final class ComputerUseStatusItem: NSObject {
+final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
     private let coordinator: ComputerUseCoordinator
     private let label: (String, String) -> String
     private let showSession: (String) -> Void
+    private let stopShortcutWarning: () -> String?
+    private var warningItem: NSMenuItem?
     private var item: NSStatusItem?
     private var sessionID: String?
 
     init(
         coordinator: ComputerUseCoordinator,
         agentName: @escaping (String) -> String,
-        showSession: @escaping (String) -> Void
+        showSession: @escaping (String) -> Void,
+        stopShortcutWarning: @escaping () -> String?
     ) {
         self.coordinator = coordinator
         self.label = { agentName($0) + " is using " + $1 }
         self.showSession = showSession
+        self.stopShortcutWarning = stopShortcutWarning
         super.init()
     }
 
@@ -53,7 +57,21 @@ final class ComputerUseStatusItem: NSObject {
         let stop = NSMenuItem(title: "Stop", action: #selector(stopAction), keyEquivalent: "")
         stop.target = self
         menu.addItem(stop)
+        let warning = NSMenuItem(title: "", action: nil, keyEquivalent: "")
+        warning.isEnabled = false
+        warning.isHidden = true
+        menu.addItem(warning)
+        warningItem = warning
+        menu.delegate = self
         statusItem.menu = menu
+    }
+
+    /// Read when the menu opens: the hot key registers after the driver changes, so the menu
+    /// built on that change can't know yet whether it succeeded.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        let warning = stopShortcutWarning()
+        warningItem?.title = warning ?? ""
+        warningItem?.isHidden = warning == nil
     }
 
     @objc private func showSessionAction() {
