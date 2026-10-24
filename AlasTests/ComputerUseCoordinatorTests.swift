@@ -35,6 +35,8 @@ struct ComputerUseCoordinatorTests {
             focusState: { _ in nil },
             elementState: { _, _ in nil },
             elementMatches: { _, _, _, _ in true },
+            // The fake trees give each element one handle across reads.
+            sameElement: { _, old, _, new in old == new },
             secondsSinceUserInput: { 60 },
             isFrontmost: { _ in false },
             resolveApp: { _, _ in notes },
@@ -451,8 +453,11 @@ struct ComputerUseCoordinatorTests {
     }
 
     /// `filteredReadRetitledTheNode`: a read that doesn't list the shown element finds another
-    /// element in its place.
-    enum RefExpiry: CaseIterable { case turnEnd, reinspectWithoutTheNode, elementChanged, filteredReadRetitledTheNode }
+    /// element in its place. `filteredReadShiftedALookalikeIn`: the tree shifted, and another
+    /// element with the same role and title now sits where the shown one was.
+    enum RefExpiry: CaseIterable {
+        case turnEnd, reinspectWithoutTheNode, elementChanged, filteredReadRetitledTheNode, filteredReadShiftedALookalikeIn
+    }
 
     @Test(arguments: RefExpiry.allCases)
     func refsExpireWithTheTurnAndOnReinspect(_ expiry: RefExpiry) async throws {
@@ -462,10 +467,17 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         let retitled = ComputerUseAXNode(
             role: "AXWindow", title: "Note", children: [ComputerUseAXNode(role: "AXButton", title: "Delete", handle: 1)], handle: 0)
+        let shifted = ComputerUseAXNode(role: "AXWindow", title: "Note", children: [
+            ComputerUseAXNode(role: "AXButton", title: "Save", handle: 2), ComputerUseAXNode(role: "AXButton", title: "Save", handle: 1),
+        ], handle: 0)
         // Only the first read still has the Save button.
         system.axTree = { _, _, _, _ in
             guard reads.next() > 1 else { return (saveTree, true, ComputerUseAXHandles()) }
-            let later = expiry == .filteredReadRetitledTheNode ? retitled : ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0)
+            let later = switch expiry {
+            case .filteredReadRetitledTheNode: retitled
+            case .filteredReadShiftedALookalikeIn: shifted
+            case .turnEnd, .reinspectWithoutTheNode, .elementChanged: ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0)
+            }
             return (later, true, ComputerUseAXHandles())
         }
         // The element behind the handle still exists, but now reads as another button.
@@ -474,6 +486,8 @@ struct ComputerUseCoordinatorTests {
             case .elementChanged: false
             // The live element is the retitled one, so only the ref's expected identity can catch it.
             case .filteredReadRetitledTheNode: handle == 1 && role == "AXButton" && title == "Delete"
+            // Both buttons read as Save, so only the element's identity can tell them apart.
+            case .filteredReadShiftedALookalikeIn: role == "AXButton" && title == "Save"
             case .turnEnd, .reinspectWithoutTheNode: handle == 1 && role == "AXButton" && title == "Save"
             }
         }
@@ -482,7 +496,8 @@ struct ComputerUseCoordinatorTests {
         switch expiry {
         case .turnEnd: f.coordinator.turnEnded(sessionID: "s")
         case .reinspectWithoutTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
-        case .filteredReadRetitledTheNode: _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Note"), sessionID: "s")
+        case .filteredReadRetitledTheNode, .filteredReadShiftedALookalikeIn:
+            _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Note"), sessionID: "s")
         case .elementChanged: break
         }
         let response = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")

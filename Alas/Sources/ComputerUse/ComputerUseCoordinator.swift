@@ -1230,9 +1230,11 @@ final class ComputerUseCoordinator {
 
     private func record(refs read: ElementRead, of window: ComputerUseWindow, context: CallContext) {
         // A query or limit only trims what the agent is shown: every element the read named stays
-        // usable. One the agent was shown before but this read doesn't list must still be what it
-        // saw; otherwise the ref now names something it never saw, and is dropped.
-        let previous = snapshot(of: window, context: context)?.refs ?? [:]
+        // usable. One the agent was shown before but this read doesn't list must still be the very
+        // element it saw (a same-role, same-title one may have shifted into its place); otherwise
+        // the ref now names something it never saw, and is dropped.
+        let before = snapshot(of: window, context: context)
+        let previous = before?.refs ?? [:]
         let listed = Set(read.elements.map(\.ref))
         var refs: [String: ElementRef] = [:]
         for (ref, handle) in read.refs {
@@ -1240,7 +1242,9 @@ final class ComputerUseCoordinator {
             if listed.contains(ref) {
                 refs[ref] = ElementRef(handle: handle, role: identity.role, title: identity.title, shown: true)
             } else if let seen = previous[ref], seen.shown {
-                guard seen.role == identity.role, seen.title == identity.title else { continue }
+                guard seen.role == identity.role, seen.title == identity.title, let before,
+                      system.sameElement(before.handles, seen.handle, read.handles, handle)
+                else { continue }
                 refs[ref] = ElementRef(handle: handle, role: seen.role, title: seen.title, shown: true)
             } else {
                 refs[ref] = ElementRef(handle: handle, role: identity.role, title: identity.title, shown: false)

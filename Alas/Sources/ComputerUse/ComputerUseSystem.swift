@@ -164,6 +164,11 @@ struct ComputerUseSystem: Sendable {
     var elementState: @Sendable (ComputerUseAXHandles, Int) async -> Int?
     /// Whether the element behind a handle still has the role and title it was read with.
     var elementMatches: @Sendable (ComputerUseAXHandles, Int, _ role: String, _ title: String?) async -> Bool
+    /// Whether a handle from one read and a handle from another retain the same AX element.
+    var sameElement: @Sendable (ComputerUseAXHandles, Int, ComputerUseAXHandles, Int) -> Bool = { old, oldHandle, new, newHandle in
+        guard let before = old.element(oldHandle), let after = new.element(newHandle) else { return false }
+        return CFEqual(before, after)
+    }
     /// Seconds since the last hardware input; events Alas posts don't count.
     var secondsSinceUserInput: @Sendable () -> TimeInterval
     /// Whether the app is the user's front app, as WindowServer has it.
