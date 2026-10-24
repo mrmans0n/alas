@@ -455,19 +455,19 @@ struct ComputerUseInputTests {
 
     @Test(arguments: [
         // A Chromium field that reported success and kept its value, after ⌘A and at the caret.
-        ("kotlin", "compose", (0, 7), "compose", Verdict.unchanged),
-        ("kotlin", "compose", (7, 0), "compose", .unchanged),
-        ("kotlin", "compose", (7, 0), "composekotlin", .landed),
-        ("kotlin", "compose", (0, 7), "kotlin", .landed),
+        ("kotlin", "compose", (location: 0, length: 7), "compose", Verdict.unchanged),
+        ("kotlin", "compose", (location: 7, length: 0), "compose", .unchanged),
+        ("kotlin", "compose", (location: 7, length: 0), "composekotlin", .landed),
+        ("kotlin", "compose", (location: 0, length: 7), "kotlin", .landed),
         // A field that formats what it takes still changed: typing again would double it.
-        ("5551234", "", (0, 0), "(555) 1234", .landed),
+        ("5551234", "", (location: 0, length: 0), "(555) 1234", .landed),
         // Text put over the same selected text leaves the value as it was.
-        ("pose", "compose", (3, 4), "compose", .landed),
-        ("kotlin", nil, (0, 0), "kotlin", .unknown),
+        ("pose", "compose", (location: 3, length: 4), "compose", .landed),
+        ("kotlin", nil, (location: 0, length: 0), "kotlin", .unknown),
         ("kotlin", "compose", nil, nil, .unknown),
-    ] as [(String, String?, (Int, Int)?, String?, Verdict)])
+    ] as [(String, String?, (location: Int, length: Int)?, String?, Verdict)])
     func anInsertLandedWhenTheValueChanged(
-        inserted: String, before: String?, selection: (Int, Int)?, after: String?, verdict: Verdict
+        inserted: String, before: String?, selection: (location: Int, length: Int)?, after: String?, verdict: Verdict
     ) {
         #expect(ComputerUseTextCheck.insert(inserted, before: before, selection: selection, after: after) == verdict)
     }

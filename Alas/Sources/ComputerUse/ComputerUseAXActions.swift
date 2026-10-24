@@ -1067,7 +1067,7 @@ extension ComputerUseAXActions {
                 if typedSoFar == 0, !chunk.isEmpty {
                     let landed = awaitLanded {
                         ComputerUseTextCheck.insert(
-                            chunk, before: valueBefore, selection: selection.map { ($0.location, $0.length) },
+                            chunk, before: valueBefore, selection: selection.map { (location: $0.location, length: $0.length) },
                             after: valueBefore == nil ? nil : target.value())
                     }
                     switch landed {
