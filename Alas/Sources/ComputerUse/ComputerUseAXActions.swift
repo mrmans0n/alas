@@ -977,7 +977,10 @@ extension ComputerUseAXActions {
                     }
                     if let startLocation {
                         var caret = CFRange(location: startLocation + utf16SoFar, length: 0)
-                        guard let value = AXValueCreate(.cfRange, &caret),
+                        // The app may have moved the selection since the last chunk's check: stop rather than
+                        // put the caret back where the text may no longer belong.
+                        guard let live = selectedRange(of: element), live.location == caret.location, live.length == 0,
+                              let value = AXValueCreate(.cfRange, &caret),
                               AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
                         else { throw moved }
                     }
