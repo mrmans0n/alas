@@ -67,20 +67,24 @@ public enum ComputerUseInputGeometry {
         displays.contains { $0.contains(point) }
     }
 
-    public enum OffScreenKey: Sendable, Equatable {
+    public enum OffScreenInput: Sendable, Equatable {
         /// Posted as events, as for any window.
         case events
-        /// Delivered as the menu item press that has its shortcut.
-        case menuItem
+        /// Delivered through AX: a menu item with the key's shortcut, or text set in the element.
+        case ax
         /// Posted keys reach no window off screen: refused rather than reported delivered.
         case refuse
     }
 
-    /// How a key reaches a window, once no sheet or dialog button took it: an off-screen window
-    /// (another Space, an AeroSpace workspace) only through a menu item with that shortcut.
-    public static func offScreenKey(windowOnScreen: Bool, menuItemPressed: Bool) -> OffScreenKey {
+    /// How a key or typed text reaches a window, once no sheet or dialog button took it. An
+    /// off-screen window (another Space, an AeroSpace workspace) only takes it through AX, and only
+    /// while it is its app's focused window (`targetIsFocusedWindow`; always true for text typed by
+    /// ref), so a menu item or the focused element can't belong to another of the app's windows.
+    public static func offScreenInput(
+        windowOnScreen: Bool, targetIsFocusedWindow: Bool, deliveredThroughAX: Bool
+    ) -> OffScreenInput {
         if windowOnScreen { return .events }
-        return menuItemPressed ? .menuItem : .refuse
+        return targetIsFocusedWindow && deliveredThroughAX ? .ax : .refuse
     }
 
     /// Whether a window's frame is on screen: its centre is on a display, or at least

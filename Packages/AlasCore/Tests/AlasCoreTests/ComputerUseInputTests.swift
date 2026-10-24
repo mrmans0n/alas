@@ -264,14 +264,20 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.frameIsOnScreen(frame, displays: [CGRect(x: 0, y: 0, width: 1728, height: 1117)]) == onScreen)
     }
 
-    /// A key for an off-screen window goes only through a menu item; never as events reported delivered.
+    /// A key or text for an off-screen window goes only through AX, and only while that window is
+    /// its app's focused one; never as events reported delivered.
     @Test(arguments: [
-        (true, false, ComputerUseInputGeometry.OffScreenKey.events),
-        (false, true, .menuItem),
-        (false, false, .refuse),
+        (true, false, false, ComputerUseInputGeometry.OffScreenInput.events),
+        (false, true, true, .ax),
+        (false, true, false, .refuse),
+        // Another of the app's windows is focused: its menu item or field isn't this window's.
+        (false, false, true, .refuse),
     ])
-    func keysForOffScreenWindowsGoOnlyThroughMenuItems(onScreen: Bool, menuItem: Bool, route: ComputerUseInputGeometry.OffScreenKey) {
-        #expect(ComputerUseInputGeometry.offScreenKey(windowOnScreen: onScreen, menuItemPressed: menuItem) == route)
+    func inputForOffScreenWindowsGoesOnlyThroughAXWhileFocused(
+        onScreen: Bool, focused: Bool, delivered: Bool, route: ComputerUseInputGeometry.OffScreenInput
+    ) {
+        #expect(ComputerUseInputGeometry.offScreenInput(
+            windowOnScreen: onScreen, targetIsFocusedWindow: focused, deliveredThroughAX: delivered) == route)
     }
 
     typealias Hit = ComputerUseInputGeometry.PointHit

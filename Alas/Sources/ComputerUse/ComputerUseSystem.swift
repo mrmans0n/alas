@@ -508,18 +508,8 @@ extension LiveComputerUseSystem {
            let button = try await ComputerUseAXActions.pressDialogButton(chord, in: window, interrupt: interrupt) {
             return ComputerUseDelivered(delivery: .ax, button: button)
         }
-        // Keys posted to a window off screen reach nothing: only a menu item press can stand in.
-        if case .key(let chord) = input {
-            let displays = displayFrames()
-            let onScreen = displays.isEmpty || ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays)
-            if !onScreen {
-                let menuItem = try await ComputerUseAXActions.pressMenuShortcut(chord, app: window.app, interrupt: interrupt)
-                switch ComputerUseInputGeometry.offScreenKey(windowOnScreen: false, menuItemPressed: menuItem != nil) {
-                case .menuItem: return ComputerUseDelivered(delivery: .ax, menuItem: menuItem)
-                case .refuse, .events: throw ComputerUseSystemError.actionFailed(offScreenKeyRefusal(window.app))
-                }
-            }
-        }
+        // Keys and text posted to a window off screen reach nothing: only AX can stand in.
+        if let delivered = try await offScreenViaAX(input, in: window, interrupt: interrupt) { return delivered }
         // Content another process draws in the window (a System Settings pane) takes no posted
         // events: an x/y click or scroll there goes as AX on the element at the point, also when
         // direct. Where AX has no way, the events go as they always did.
@@ -660,6 +650,79 @@ extension LiveComputerUseSystem {
     private struct Routed {
         var input: ComputerUseInput
         var offScreen = false
+    }
+
+    /// A key or typed text for an off-screen window, through AX (`ComputerUseInputGeometry.offScreenInput`):
+    /// the menu item with the key's shortcut, or the text into the element (by ref) or the focused
+    /// one, which must be in this window. Refuses what AX can't take; nil for any other input, or a
+    /// window on screen.
+    private static func offScreenViaAX(
+        _ input: ComputerUseInput, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered? {
+        switch input {
+        case .key: break
+        default: return nil
+        }
+        let displays = displayFrames()
+        guard !displays.isEmpty, !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays) else { return nil }
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        let app = window.app
+        // As the background path does: nothing moves key status in the app meanwhile.
+        let (focused, delivered) = try await keyLocks.run(app.pid) { () -> (Bool, ComputerUseDelivered?) in
+            var focused = true
+            if case .type(_, .element, _) = input {
+                // Typing by ref goes to that element, whichever window is focused.
+            } else {
+                do {
+                    try await ComputerUseAXActions.makeActiveWindow(window, raise: false, isCancelled: isCancelled)
+                } catch ComputerUseSystemError.notActiveWindow {
+                    focused = false
+                }
+            }
+            guard focused else { return (false, nil) }
+            switch input {
+            case .key(let chord):
+                let item = try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, interrupt: interrupt)
+                return (true, item.map { ComputerUseDelivered(delivery: .ax, menuItem: $0) })
+            case .type(let text, .element(let handles, let handle), let replace):
+                do {
+                    if replace {
+                        try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
+                    } else {
+                        try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
+                    }
+                    return (true, .ax)
+                } catch is ComputerUseAXActions.Unsupported {
+                    return (true, nil)
+                }
+            case .type(let text, _, let replace):
+                do {
+                    // Refuses a secure focused element, as typing does.
+                    try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
+                    return (true, .ax)
+                } catch is ComputerUseAXActions.Unsupported {
+                    return (true, nil)
+                }
+            default:
+                return (true, nil)
+            }
+        }
+        switch ComputerUseInputGeometry.offScreenInput(
+            windowOnScreen: false, targetIsFocusedWindow: focused, deliveredThroughAX: delivered != nil) {
+        case .ax:
+            if let delivered { return delivered }
+            fallthrough
+        case .refuse, .events:
+            if case .type = input { throw ComputerUseSystemError.actionFailed(offScreenTypeRefusal(app)) }
+            throw ComputerUseSystemError.actionFailed(offScreenKeyRefusal(app))
+        }
+    }
+
+    static func offScreenTypeRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches it through "
+            + "accessibility, and the element doesn't take it that way (or another of its windows has focus). Use a ref "
+            + "to a text field, or ask the user to bring the window on screen."
     }
 
     static func offScreenKeyRefusal(_ app: ComputerUseAppIdentity) -> String {
@@ -1063,6 +1126,8 @@ extension LiveComputerUseSystem {
                     case .raiseDrop:
                         try await ComputerUseAXActions.raise(dropWindow, isCancelled: isCancelled)
                         raisedDrop = true
+                        // The raise takes a moment to show; judging the overlap sooner would refuse early.
+                        try? await Task.sleep(for: dragRaiseSettle)
                     case .hidden(.start):
                         throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.")
                     case .hidden(.end):
