@@ -647,6 +647,14 @@ extension LiveComputerUseSystem {
         case .click(.point(let at), _, _), .scroll(.point(let at), _, _): point = at
         default: return nil
         }
+        // System Settings' panes: the element is found down the window, whatever its process.
+        if ComputerUseRemoteContent.hostsContentRemotely(bundleID: window.app.bundleID) {
+            let kind: ComputerUseRemoteContent.Input = if case .scroll = input { .scroll } else { .click }
+            if let handles = try await ComputerUseAXActions.remoteContentElement(
+                at: point, in: window, for: kind, isCancelled: isCancelled) {
+                return converted(input, to: .element(handles, 0))
+            }
+        }
         let found = try await ComputerUseAXActions.element(at: point, in: window, isCancelled: isCancelled)
         switch ComputerUseInputGeometry.pointRoute(point: point, targetPID: window.app.pid, window: window.frame, appHit: found?.hit) {
         case .events: return nil
@@ -654,11 +662,15 @@ extension LiveComputerUseSystem {
         case .ax: break
         }
         guard let element = found else { return nil }
-        let target = ComputerUseInputTarget.element(element.handles, 0)
+        return converted(input, to: .element(element.handles, 0))
+    }
+
+    /// The x/y click or scroll `input`, at `target` instead.
+    private static func converted(_ input: ComputerUseInput, to target: ComputerUseInputTarget) -> ComputerUseInput? {
         switch input {
-        case .click(_, let button, let count): return .click(target, button: button, count: count)
-        case .scroll(_, let dx, let dy): return .scroll(target, dx: dx, dy: dy)
-        default: return nil
+        case .click(_, let button, let count): .click(target, button: button, count: count)
+        case .scroll(_, let dx, let dy): .scroll(target, dx: dx, dy: dy)
+        default: nil
         }
     }
 

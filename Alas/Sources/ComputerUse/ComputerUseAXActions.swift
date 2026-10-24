@@ -229,6 +229,23 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// In an app that hosts content remotely (`ComputerUseRemoteContent`), the element an x/y
+    /// input at `point` goes to as AX: the deepest pressable element (click) or scroll area
+    /// (scroll) on the way down `window` to the point; nil when there is none.
+    static func remoteContentElement(
+        at point: CGPoint, in window: ComputerUseWindow, for input: ComputerUseRemoteContent.Input,
+        isCancelled: @escaping IsCancelled
+    ) async throws -> ComputerUseAXHandles? {
+        try await onQueue(isCancelled) {
+            let application = try ComputerUseAXReader.target(window.app.pid)
+            let path = path(at: point, in: window, application: application)
+            let steps = path.map {
+                ComputerUseRemoteContent.Step(role: string(of: $0, kAXRoleAttribute) ?? "AXUnknown", actions: actionNames(of: $0))
+            }
+            return ComputerUseRemoteContent.target(for: input, path: steps).map { ComputerUseAXHandles([path[$0]]) }
+        }
+    }
+
     /// The app's own hit at `point` when it is real, else the deepest element of `window` holding
     /// the point; never an element of this process. Call on the AX queue.
     private static func hit(at point: CGPoint, in window: ComputerUseWindow, application: AXUIElement) -> AXUIElement? {

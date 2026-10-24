@@ -216,6 +216,26 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.isRealHit(role: role, frame: frame, point: CGPoint(x: 750, y: 100)) == real)
     }
 
+    /// In content another process draws, a click goes to the deepest pressable element at the
+    /// point and a scroll to the deepest scroll area; neither to the window, and none means events.
+    @Test(arguments: [
+        (ComputerUseRemoteContent.Input.click, ["AXWindow", "AXScrollArea", "AXGroup", "AXButton", "AXStaticText"], Int?(3)),
+        (.click, ["AXWindow", "AXScrollArea", "AXGroup", "AXStaticText"], nil),
+        (.click, ["AXWindow"], nil),
+        (.scroll, ["AXWindow", "AXScrollArea", "AXGroup", "AXScrollArea", "AXButton"], 3),
+        (.scroll, ["AXWindow", "AXGroup"], nil),
+    ])
+    func remoteContentInputGoesToTheDeepestElementThatTakesIt(
+        input: ComputerUseRemoteContent.Input, roles: [String], target: Int?
+    ) {
+        #expect(ComputerUseRemoteContent.target(for: input, path: roles.map { .init(role: $0) }) == target)
+    }
+
+    @Test func remoteContentClickAlsoTakesAnyElementWithAPress() {
+        let path: [ComputerUseRemoteContent.Step] = [.init(role: "AXWindow"), .init(role: "AXGroup", actions: ["AXPress"]), .init(role: "AXImage")]
+        #expect(ComputerUseRemoteContent.target(for: .click, path: path) == 1)
+    }
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)
