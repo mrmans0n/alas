@@ -82,6 +82,7 @@ Valid `action` identifiers (defined by `WhatsNewAction` in
 | Action | Effect |
 |---|---|
 | `openPluginSettings` | Opens Settings → Plugins |
+| `openComputerUseSettings` | Opens Settings → Computer Use |
 
 Adding an action is an app change (a new `WhatsNewAction` case plus its
 handling in `RootView`), shipped with the feature it showcases.

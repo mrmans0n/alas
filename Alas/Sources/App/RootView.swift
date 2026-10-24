@@ -984,6 +984,8 @@ private struct WhatsNewCardHost: View {
                     switch action {
                     case .openPluginSettings:
                         NotificationCenter.default.post(name: .alasOpenSettings, object: SettingsSection.plugins)
+                    case .openComputerUseSettings:
+                        NotificationCenter.default.post(name: .alasOpenSettings, object: SettingsSection.computerUse)
                     }
                 },
                 onReleaseNotes: {

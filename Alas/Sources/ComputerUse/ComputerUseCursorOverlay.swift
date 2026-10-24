@@ -8,12 +8,14 @@ import Synchronization
 @MainActor
 final class ComputerUseCursorOverlay: NSObject {
     private let lookupWindow: @Sendable (UInt32) async -> ComputerUseWindow?
-    private let accentColor: NSColor
 
     private var panel: ComputerUseCursorPanel?
     private var canvas: NSView?
-    private var pointerLayer: CAShapeLayer?
-    private var outlineLayer: CAShapeLayer?
+    /// Positioned at the pointer tip; holds the body and its beam.
+    private var pointerLayer: CALayer?
+    /// The stroke mask whose moving segment reveals the pointer's beam gradient.
+    private var pointerBeamMask: CAShapeLayer?
+    private var outlineLayer: CALayer?
 
     private var target: ComputerUseWindow?
     /// Pointer tip in window-local, top-left points; nil while it has no place in the target.
@@ -39,12 +41,8 @@ final class ComputerUseCursorOverlay: NSObject {
     /// The overlay's own window number while it is on screen, otherwise empty.
     nonisolated var windowIDs: Set<UInt32> { shownWindowIDs.withLock { $0 } }
 
-    init(
-        window: @escaping @Sendable (UInt32) async -> ComputerUseWindow?,
-        accentColor: NSColor = .controlAccentColor
-    ) {
+    init(window: @escaping @Sendable (UInt32) async -> ComputerUseWindow?) {
         lookupWindow = window
-        self.accentColor = accentColor
         super.init()
     }
 
@@ -58,7 +56,7 @@ final class ComputerUseCursorOverlay: NSObject {
         if reset {
             finishMotion()
             pointer = nil
-            pointerLayer?.isHidden = true
+            hidePointer()
             removeOutline()
         }
         target = window
@@ -70,8 +68,7 @@ final class ComputerUseCursorOverlay: NSObject {
             let start = ComputerUseCursorMotion.startPoint(in: key, size: window.frame.size, last: lastPointers)
             pointer = start
             setPointer(at: start)
-            pointerLayer?.opacity = 1
-            pointerLayer?.isHidden = false
+            showPointer()
         }
         panel.order(.above, relativeTo: Int(window.windowID))
         shownWindowIDs.withLock { $0 = [UInt32(panel.windowNumber)] }
@@ -90,7 +87,7 @@ final class ComputerUseCursorOverlay: NSObject {
         removeOutline()
         target = nil
         pointer = nil
-        pointerLayer?.isHidden = true
+        hidePointer()
         if let panel {
             panel.orderOut(nil)
             panel.alphaValue = 1
@@ -113,7 +110,7 @@ final class ComputerUseCursorOverlay: NSObject {
             return
         case .hide:
             finishMotion()
-            pointerLayer?.isHidden = true
+            hidePointer()
         case .outline(let frame):
             showOutline(cgRect: frame)
         case .glide(let point, let outline, let click):
@@ -161,22 +158,32 @@ final class ComputerUseCursorOverlay: NSObject {
         canvas.autoresizingMask = [.width, .height]
         panel.contentView = canvas
 
-        let pointerLayer = CAShapeLayer()
-        pointerLayer.path = Self.pointerPath()
-        pointerLayer.fillColor = accentColor.cgColor
-        pointerLayer.strokeColor = NSColor.white.cgColor
-        pointerLayer.lineWidth = 1.5
-        pointerLayer.lineJoin = .round
-        pointerLayer.shadowColor = NSColor.black.cgColor
-        pointerLayer.shadowOpacity = 0.3
-        pointerLayer.shadowRadius = 2
-        pointerLayer.shadowOffset = CGSize(width: 0, height: -1)
-        pointerLayer.shadowPath = pointerLayer.path
-        pointerLayer.contentsScale = panel.backingScaleFactor
+        let scale = panel.backingScaleFactor
+        let path = Self.pointerPath()
+        let pointerLayer = CALayer()
         pointerLayer.zPosition = 2
         pointerLayer.isHidden = true
         pointerLayer.actions = Self.noActions
+
+        let body = CAShapeLayer()
+        body.path = path
+        body.fillColor = Self.pointerFill.cgColor
+        body.strokeColor = NSColor.white.withAlphaComponent(0.9).cgColor
+        body.lineWidth = 2
+        body.lineJoin = .round
+        body.shadowColor = NSColor.black.cgColor
+        body.shadowOpacity = 0.3
+        body.shadowRadius = 2
+        body.shadowOffset = CGSize(width: 0, height: -1)
+        body.shadowPath = path
+        body.actions = Self.noActions
+        pointerLayer.addSublayer(body)
+
+        let (beam, mask) = Self.beamLayer(along: path)
+        pointerLayer.addSublayer(beam)
+        Self.setContentsScale(scale, of: pointerLayer)
         canvas.layer?.addSublayer(pointerLayer)
+        pointerBeamMask = mask
 
         self.panel = panel
         self.canvas = canvas
@@ -191,9 +198,7 @@ final class ComputerUseCursorOverlay: NSObject {
         if panel.frame != frame { panel.setFrame(frame, display: false) }
         // Added layers keep a 1x scale unless told; a move to another display may change it.
         let scale = panel.backingScaleFactor
-        for layer in [pointerLayer, outlineLayer].compactMap({ $0 }) where layer.contentsScale != scale {
-            layer.contentsScale = scale
-        }
+        for layer in [pointerLayer, outlineLayer].compactMap({ $0 }) { Self.setContentsScale(scale, of: layer) }
         target?.frame = cgFrame
         // The pointer is window-local, so it rides along with the window.
         if let pointer { setPointer(at: pointer) }
@@ -250,6 +255,7 @@ final class ComputerUseCursorOverlay: NSObject {
                 self.followTask = nil
                 self.finishMotion()
                 self.removeOutline()
+                self.stopPointerBeam()
                 panel.orderOut(nil)
                 panel.alphaValue = 1
                 self.shownWindowIDs.withLock { $0 = [] }
@@ -300,8 +306,7 @@ final class ComputerUseCursorOverlay: NSObject {
         let id = motionCounter
         pointer = from
         setPointer(at: from)
-        pointerLayer?.opacity = 1
-        pointerLayer?.isHidden = false
+        showPointer()
         guard !Task.isCancelled else { return false }
 
         return await withTaskCancellationHandler {
@@ -386,13 +391,37 @@ final class ComputerUseCursorOverlay: NSObject {
         withoutActions { pointerLayer?.position = layerPoint(local) }
     }
 
+    private func showPointer() {
+        withoutActions {
+            pointerLayer?.opacity = 1
+            pointerLayer?.isHidden = false
+        }
+        startPointerBeam()
+    }
+
+    private func hidePointer() {
+        withoutActions { pointerLayer?.isHidden = true }
+        stopPointerBeam()
+    }
+
+    /// Runs the pointer's beam while the pointer is shown; idempotent.
+    private func startPointerBeam() {
+        guard let pointerBeamMask, pointerBeamMask.animation(forKey: Self.beamKey) == nil else { return }
+        Self.runBeam(on: pointerBeamMask, fraction: Self.pointerBeamFraction, lap: Self.pointerBeamLap)
+    }
+
+    /// Nothing keeps animating once the pointer is hidden or the panel is ordered out.
+    private func stopPointerBeam() {
+        pointerBeamMask?.removeAnimation(forKey: Self.beamKey)
+    }
+
     private func ripple(at local: CGPoint) {
         guard let root = canvas?.layer else { return }
         let radius: CGFloat = 14
         let ring = CAShapeLayer()
         ring.path = CGPath(ellipseIn: CGRect(x: -radius, y: -radius, width: radius * 2, height: radius * 2), transform: nil)
-        ring.fillColor = accentColor.withAlphaComponent(0.15).cgColor
-        ring.strokeColor = accentColor.cgColor
+        ring.fillColor = Self.beamColors[0].withAlphaComponent(0.15).cgColor
+        ring.strokeColor = Self.beamColors[0].cgColor
         ring.lineWidth = 2
         ring.contentsScale = panel?.backingScaleFactor ?? 2
         ring.zPosition = 1
@@ -428,14 +457,23 @@ final class ComputerUseCursorOverlay: NSObject {
         ).insetBy(dx: -3, dy: -3)
         let bottomLeft = CGRect(x: local.minX, y: target.frame.height - local.maxY, width: local.width, height: local.height)
 
-        let outline = CAShapeLayer()
-        outline.path = CGPath(roundedRect: bottomLeft, cornerWidth: 4, cornerHeight: 4, transform: nil)
-        outline.fillColor = NSColor.clear.cgColor
-        outline.strokeColor = accentColor.cgColor
-        outline.lineWidth = 2
-        outline.contentsScale = panel?.backingScaleFactor ?? 2
+        let path = CGPath(roundedRect: bottomLeft, cornerWidth: 4, cornerHeight: 4, transform: nil)
+        let outline = CALayer()
         outline.actions = Self.noActions
         outline.opacity = 0
+
+        let ring = CAShapeLayer()
+        ring.path = path
+        ring.fillColor = NSColor.clear.cgColor
+        ring.strokeColor = Self.beamColors[0].withAlphaComponent(0.25).cgColor
+        ring.lineWidth = 2
+        ring.actions = Self.noActions
+        outline.addSublayer(ring)
+
+        let (beam, mask) = Self.beamLayer(along: path)
+        outline.addSublayer(beam)
+        Self.runBeam(on: mask, fraction: Self.outlineBeamFraction, lap: Self.outlineBeamLap)
+        Self.setContentsScale(panel?.backingScaleFactor ?? 2, of: outline)
 
         // Fully visible for `outlineDuration`, then fade out.
         let hold = ComputerUseCursorMotion.outlineDuration.seconds
@@ -489,19 +527,103 @@ final class ComputerUseCursorOverlay: NSObject {
 
     private static let noActions: [String: any CAAction] = [
         "position": NSNull(), "opacity": NSNull(), "hidden": NSNull(), "path": NSNull(),
+        "strokeStart": NSNull(), "strokeEnd": NSNull(),
     ]
 
-    /// A classic arrow pointer, about 22 pt tall, tip at the origin, in a bottom-left space.
+    // MARK: - Beam
+
+    private static let beamKey = "beam"
+    private static let beamWidth: CGFloat = 2.6
+    private static let pointerBeamFraction: CGFloat = 0.2
+    private static let pointerBeamLap: CFTimeInterval = 1.6
+    private static let outlineBeamFraction: CGFloat = 0.17
+    private static let outlineBeamLap: CFTimeInterval = 2.2
+
+    private static let pointerFill = NSColor(srgbRed: 0x16 / 255, green: 0x16 / 255, blue: 0x1A / 255, alpha: 1)
+    /// The AI gradient, #7B5CFF → #3AB8FF → #FF5CC8 → #FFB347.
+    private static let beamColors: [NSColor] = [
+        NSColor(srgbRed: 0x7B / 255, green: 0x5C / 255, blue: 0xFF / 255, alpha: 1),
+        NSColor(srgbRed: 0x3A / 255, green: 0xB8 / 255, blue: 0xFF / 255, alpha: 1),
+        NSColor(srgbRed: 0xFF / 255, green: 0x5C / 255, blue: 0xC8 / 255, alpha: 1),
+        NSColor(srgbRed: 0xFF / 255, green: 0xB3 / 255, blue: 0x47 / 255, alpha: 1),
+    ]
+
+    /// A gradient covering `path`, masked by a stroke of it; returns the gradient and its mask.
+    /// The mask strokes the path twice in a row, so a segment can wrap past the start point.
+    private static func beamLayer(along path: CGPath) -> (CAGradientLayer, CAShapeLayer) {
+        let frame = path.boundingBoxOfPath.insetBy(dx: -beamWidth, dy: -beamWidth)
+        let gradient = CAGradientLayer()
+        gradient.frame = frame
+        gradient.colors = beamColors.map(\.cgColor)
+        gradient.startPoint = CGPoint(x: 0, y: 1)
+        gradient.endPoint = CGPoint(x: 1, y: 0)
+        gradient.actions = noActions
+
+        let offset = CGAffineTransform(translationX: -frame.minX, y: -frame.minY)
+        let twice = CGMutablePath()
+        twice.addPath(path, transform: offset)
+        twice.addPath(path, transform: offset)
+        let mask = CAShapeLayer()
+        mask.frame = gradient.bounds
+        mask.path = twice
+        mask.fillColor = nil
+        mask.strokeColor = NSColor.black.cgColor
+        mask.lineWidth = beamWidth
+        mask.lineCap = .round
+        mask.lineJoin = .round
+        mask.actions = noActions
+        gradient.mask = mask
+        return (gradient, mask)
+    }
+
+    /// Sends a segment `fraction` of one lap long around the doubled path, one lap per `lap`
+    /// seconds. With Reduce Motion the whole outline stays lit instead.
+    private static func runBeam(on mask: CAShapeLayer, fraction: CGFloat, lap: CFTimeInterval) {
+        guard !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else {
+            mask.strokeStart = 0
+            mask.strokeEnd = 0.5
+            return
+        }
+        mask.strokeStart = 0
+        mask.strokeEnd = fraction / 2
+        let head = CABasicAnimation(keyPath: "strokeEnd")
+        head.fromValue = fraction / 2
+        head.toValue = 0.5 + fraction / 2
+        let tail = CABasicAnimation(keyPath: "strokeStart")
+        tail.fromValue = 0
+        tail.toValue = 0.5
+        let group = CAAnimationGroup()
+        group.animations = [head, tail]
+        group.duration = lap
+        group.repeatCount = .infinity
+        group.timingFunction = CAMediaTimingFunction(name: .linear)
+        mask.add(group, forKey: beamKey)
+    }
+
+    private static func setContentsScale(_ scale: CGFloat, of layer: CALayer) {
+        if layer.contentsScale != scale { layer.contentsScale = scale }
+        if let mask = layer.mask { setContentsScale(scale, of: mask) }
+        for sublayer in layer.sublayers ?? [] { setContentsScale(scale, of: sublayer) }
+    }
+
+    /// A rounded arrowhead with no tail, about 22 pt tall, tip at the origin, in a bottom-left space.
     private static func pointerPath() -> CGPath {
-        // Designed top-left with y growing down; flipped to y-up below.
-        let points: [CGPoint] = [
-            CGPoint(x: 0, y: 0), CGPoint(x: 0, y: 17), CGPoint(x: 4.3, y: 13.2),
-            CGPoint(x: 7.2, y: 19.6), CGPoint(x: 10.2, y: 18.3), CGPoint(x: 7.4, y: 12.1),
-            CGPoint(x: 13, y: 12.1),
-        ]
-        let scale: CGFloat = 22.0 / 19.6
+        // The approved mockup's path in a 44 x 44 top-left box; its tip, the outline's
+        // extreme toward the top-left, sits at about (6.3, 2.3).
+        let tip = CGPoint(x: 6.3, y: 2.3)
+        let scale: CGFloat = 22.0 / 36
+        func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: (x - tip.x) * scale, y: -(y - tip.y) * scale)
+        }
         let path = CGMutablePath()
-        path.addLines(between: points.map { CGPoint(x: $0.x * scale, y: -$0.y * scale) })
+        path.move(to: p(6, 4.5))
+        path.addCurve(to: p(8.7, 2), control1: p(5.2, 2.6), control2: p(6.9, 1.2))
+        path.addLine(to: p(36, 14.6))
+        path.addCurve(to: p(35.7, 19.1), control1: p(38.1, 15.6), control2: p(37.9, 18.5))
+        path.addLine(to: p(23.6, 22.4))
+        path.addCurve(to: p(21.7, 24.2), control1: p(22.7, 22.6), control2: p(22, 23.3))
+        path.addLine(to: p(18.2, 36))
+        path.addCurve(to: p(13.8, 36.2), control1: p(17.6, 38.2), control2: p(14.6, 38.3))
         path.closeSubpath()
         return path
     }
