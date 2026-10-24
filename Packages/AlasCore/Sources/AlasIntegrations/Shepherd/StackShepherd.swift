@@ -8,31 +8,35 @@ import AlasPlatform
 private let stackShepherdLogger = Logger(subsystem: "io.nlopez.alas", category: "StackShepherd")
 
 /// The stack shepherd's records on disk, at `Paths.stackShepherdsFile`,
-/// decoded per record like `ReviewShepherdsFile`.
+/// decoded per record like `ReviewShepherdsFile`, with the Ship popover
+/// choices still waiting for a `stack_ship`.
 public struct StackShepherdsFile: Codable, Equatable, Sendable {
     public var version: Int = 1
     public var records: [StackShepherdRecord] = []
+    public var pendingShips: [PendingStackShip] = []
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case version, records
+        case version, records, pendingShips
     }
 
-    public init(records: [StackShepherdRecord] = []) {
+    public init(records: [StackShepherdRecord] = [], pendingShips: [PendingStackShip] = []) {
         self.records = records
+        self.pendingShips = pendingShips
     }
 
-    private struct LenientRecord: Decodable {
-        let record: StackShepherdRecord?
+    private struct Lenient<Value: Decodable>: Decodable {
+        let value: Value?
 
         init(from decoder: Decoder) throws {
-            record = try? StackShepherdRecord(from: decoder)
+            value = try? Value(from: decoder)
         }
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         version = (try? c.decode(Int.self, forKey: .version)) ?? 1
-        records = ((try? c.decode([LenientRecord].self, forKey: .records)) ?? []).compactMap(\.record)
+        records = ((try? c.decode([Lenient<StackShepherdRecord>].self, forKey: .records)) ?? []).compactMap(\.value)
+        pendingShips = ((try? c.decode([Lenient<PendingStackShip>].self, forKey: .pendingShips)) ?? []).compactMap(\.value)
     }
 }
 
@@ -82,8 +86,13 @@ public final class StackShepherd {
         public var worktreeContext: @MainActor (_ worktreeID: String) -> WorktreeContext?
         /// The stack gg reports for the worktree at `path`, nil off-stack.
         public var loadStack: @MainActor (_ path: URL) async throws -> GGStack?
-        /// `gg sync` through the guarded path the stack drawer's Sync uses.
-        public var syncStack: @MainActor (_ worktreeID: String) async throws -> Void
+        /// `gg sync` of `plan` through the guarded path the stack drawer's
+        /// Sync uses.
+        public var syncStack: @MainActor (_ worktreeID: String, _ plan: StackShipPlan) async throws -> Void
+        /// `gg rebase` onto the stack's base through the guarded path the
+        /// stack drawer's Rebase uses. Drops entries that already landed.
+        /// Refuses unless the worktree is still on `expected` when it runs.
+        public var rebaseStack: @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void
         public var sessionState: @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState
         /// Queues `prompt` on the session; `isStillWanted` is checked right
         /// before the session's queue changes.
@@ -104,7 +113,8 @@ public final class StackShepherd {
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
             loadStack: @escaping @MainActor (_ path: URL) async throws -> GGStack?,
-            syncStack: @escaping @MainActor (_ worktreeID: String) async throws -> Void,
+            syncStack: @escaping @MainActor (_ worktreeID: String, _ plan: StackShipPlan) async throws -> Void,
+            rebaseStack: @escaping @MainActor (_ worktreeID: String, _ expected: GGStackIdentity) async throws -> Void,
             sessionState: @escaping @MainActor (_ sessionID: String, _ worktreeID: String) async -> ShepherdSessionState,
             deliverPrompt: @escaping @MainActor (
                 _ sessionID: String,
@@ -123,6 +133,7 @@ public final class StackShepherd {
             self.worktreeContext = worktreeContext
             self.loadStack = loadStack
             self.syncStack = syncStack
+            self.rebaseStack = rebaseStack
             self.sessionState = sessionState
             self.deliverPrompt = deliverPrompt
             self.rules = rules
@@ -137,6 +148,9 @@ public final class StackShepherd {
     public private(set) var requests: [StackShepherdRecordID: [Int: ReviewRequest]] = [:]
     /// `StackShepherdPolicy`'s ready gate from the latest decision per record.
     public private(set) var gatePasses: [StackShepherdRecordID: Bool] = [:]
+    /// The plan the Ship popover chose for each session's next `stack_ship`,
+    /// by session ID. Taken when that publish succeeds.
+    @ObservationIgnored public private(set) var pendingShipPlans: [String: PendingStackShip] = [:]
 
     @ObservationIgnored private let store: any PersistenceStoreProtocol
     @ObservationIgnored private let fileURL: URL
@@ -258,9 +272,12 @@ public final class StackShepherd {
         var current = StackShepherdPolicy.reconcile(latest, with: stack, now: now())
         let listed = Set(stack.entries.filter { $0.prNumber != nil }.map(\.id))
         current.entries.removeAll { !listed.contains($0.entryID) && $0.shepherd.phase != .merged }
+        let landed = StackShepherdPolicy.landedEntryIDs(of: current, in: stack)
         return StackShepherdPolicy.isReady(
             current, requests: freshRequests,
-            isStackPublished: StackShepherdPolicy.publication(of: stack, local: probed.local).isPublished,
+            isStackPublished: StackShepherdPolicy.publication(
+                of: stack, local: probed.local, landed: landed, shipPlan: latest.shipPlan ?? .wholeStack
+            ).isPublished,
             capabilities: provider.capabilities, rules: rules, headReviewers: headReviewers, now: now()
         )
     }
@@ -282,7 +299,8 @@ public final class StackShepherd {
     /// never reach its attempt budget. The session's other live stack records
     /// are dropped. `requests` are the entries' requests, read by the caller;
     /// with `contextRules` the session is sent the context prompt built with
-    /// them.
+    /// them. `shipPlan` is what Ship publishes, kept for every later
+    /// `stack_ship`.
     @discardableResult
     public func bind(
         sessionID: String,
@@ -292,6 +310,7 @@ public final class StackShepherd {
         remote: CodeHostRemote,
         autoFix: Bool,
         maxFixAttempts: Int,
+        shipPlan: StackShipPlan = .wholeStack,
         contextRules: ShepherdRules?
     ) async -> StackShepherdRecord {
         let id = StackShepherdRecordID(worktreeID: worktreeID, stackName: stack.name)
@@ -312,7 +331,16 @@ public final class StackShepherd {
         record.autoFix = autoFix
         record.maxFixAttempts = ShepherdDefaults.clampedFixAttempts(maxFixAttempts)
         record.finishedAt = nil
+        record.shipPlan = shipPlan == .wholeStack ? nil : shipPlan
         record = StackShepherdPolicy.reconcile(record, with: stack, now: now)
+        // A publish that rebased the landed entries away settles them now,
+        // not on the next poll; a new owner is told about a landing again.
+        if StackShepherdPolicy.landedEntryIDs(of: record, in: stack).isEmpty {
+            record.landedEntryIDs = nil
+            record.restackRequestedFor = nil
+        } else if newOwner {
+            record.restackRequestedFor = nil
+        }
         // Every entry that has not merged takes the owner and settings, a
         // closed one included: a reopen later brings it back under them. Only
         // a live entry starts over; a closed one keeps its phase until then.
@@ -349,6 +377,34 @@ public final class StackShepherd {
         }
         pump()
         return records[id] ?? record
+    }
+
+    /// Remembers what the Ship popover chose for session `sessionID`'s next
+    /// `stack_ship` of stack `id`, replacing an earlier choice. A choice is
+    /// kept until a publish carries it out or another replaces it; the whole
+    /// stack is what a missing choice means, so it only clears the earlier one.
+    public func setPendingShipPlan(_ plan: StackShipPlan, sessionID: String, id: StackShepherdRecordID) {
+        pendingShipPlans[sessionID] = plan == .wholeStack
+            ? nil
+            : PendingStackShip(sessionID: sessionID, id: id, plan: plan, chosenAt: now())
+        persist()
+    }
+
+    /// The plan session `sessionID`'s next `stack_ship` of stack `id`
+    /// publishes: the popover's pending choice, else the boundary of the
+    /// session's live record, else the whole stack.
+    public func shipPlan(sessionID: String, id: StackShepherdRecordID) -> StackShipPlan {
+        if let pending = pendingShipPlans[sessionID], pending.id == id { return pending.plan }
+        guard let record = records[id], record.sessionID == sessionID, !record.isFinished else { return .wholeStack }
+        return record.shipPlan ?? .wholeStack
+    }
+
+    /// Drops session `sessionID`'s pending plan for stack `id` once a
+    /// publish carried it out.
+    public func clearPendingShipPlan(sessionID: String, id: StackShepherdRecordID) {
+        guard pendingShipPlans[sessionID]?.id == id else { return }
+        pendingShipPlans[sessionID] = nil
+        persist()
     }
 
     public func setAutoFix(_ on: Bool, for id: StackShepherdRecordID) {
@@ -573,10 +629,15 @@ public final class StackShepherd {
         // decide on the current record, and not at all for another owner.
         guard let current = records[id], current.sessionID == owner, !current.isFinished else { return }
         failureCounts[id] = nil
-        let publication = StackShepherdPolicy.publication(of: onStack, local: probed.local)
+        let publication = StackShepherdPolicy.publication(
+            of: onStack, local: probed.local,
+            landed: onStack.map { StackShepherdPolicy.landedEntryIDs(of: current, in: $0) } ?? [],
+            shipPlan: current.shipPlan ?? .wholeStack
+        )
         let observation = StackShepherdObservation(
             requests: fetched,
             presentEntryIDs: onStack.map { Set($0.entries.filter { $0.prNumber != nil }.map(\.id)) },
+            listedEntryIDs: onStack.map { Set($0.entries.map(\.id)) },
             local: probed.local,
             capabilities: provider.capabilities,
             headReviewers: reviewers,
@@ -633,7 +694,7 @@ public final class StackShepherd {
             if outcome == .merged { await archiveAfterMerge(id) }
             return
         }
-        guard !decision.fixes.isEmpty else { return }
+        guard !decision.fixes.isEmpty || !decision.restack.isEmpty else { return }
         deliveringFix[id] = generation
         defer {
             if deliveringFix[id] == generation { deliveringFix[id] = nil }
@@ -643,7 +704,9 @@ public final class StackShepherd {
             logs[fix.entry.requestNumber] = await checkLogs(for: fix, path: path)
         }
         guard isCurrent(id, generation, before: "fix delivery") else { return }
-        let prompt = StackShepherdPromptBuilder.fixPrompt(record: record, fixes: decision.fixes, logs: logs, rules: rules)
+        let prompt = StackShepherdPromptBuilder.fixPrompt(
+            record: record, fixes: decision.fixes, landed: decision.restack, logs: logs, rules: rules
+        )
         let delivery = await effects.deliverPrompt(record.sessionID, id.worktreeID, prompt) { [weak self] in
             self?.isCurrent(id, generation, before: "fix delivery") ?? false
         }
@@ -658,8 +721,10 @@ public final class StackShepherd {
             failed.entries[index].shepherd.lastDispatchedFingerprint = previous.lastDispatchedFingerprint
             failed.entries[index].shepherd.viewerCommentIDsAtDispatch = previous.viewerCommentIDsAtDispatch
         }
+        // Nor was the landing announced: the next poll after Resume says it.
+        failed.restackRequestedFor = before.restackRequestedFor
         put(failed)
-        escalate(id, entries: decision.fixes.map(\.entry), reason: .deliveryFailed)
+        escalate(id, entries: decision.fixes.isEmpty ? failed.openEntries : decision.fixes.map(\.entry), reason: .deliveryFailed)
     }
 
     /// Logs for at most `ShepherdPromptBuilder.maxCheckLogs` failing checks
@@ -833,6 +898,9 @@ public final class StackShepherd {
                 return now.timeIntervalSince(record.finishedAt ?? record.updatedAt) < ShepherdRecordRetention.finishedLifetime
             }
             records = Dictionary(kept.map { ($0.id, $0) }) { lhs, rhs in lhs.updatedAt >= rhs.updatedAt ? lhs : rhs }
+            pendingShipPlans = Dictionary(file.pendingShips.map { ($0.sessionID, $0) }) { lhs, rhs in
+                lhs.chosenAt >= rhs.chosenAt ? lhs : rhs
+            }
             if kept.count != file.records.count {
                 persist()
             }
@@ -842,7 +910,10 @@ public final class StackShepherd {
     }
 
     private func persist() {
-        let file = StackShepherdsFile(records: records.values.sorted { $0.createdAt < $1.createdAt })
+        let file = StackShepherdsFile(
+            records: records.values.sorted { $0.createdAt < $1.createdAt },
+            pendingShips: pendingShipPlans.values.sorted { $0.chosenAt < $1.chosenAt }
+        )
         do {
             try store.write(file, to: fileURL)
         } catch {

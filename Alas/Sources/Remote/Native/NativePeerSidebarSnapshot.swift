@@ -59,13 +59,18 @@ struct NativePeerGroup: Identifiable, Equatable {
     let sessions: [RemoteSessionSummary]
     var consoles: [PeerConsoleSummary] = []
     var projects: [RemoteProjectOption] = []
+    /// The host's visible worktrees, or nil for a peer without the host
+    /// channel, whose worktrees are only those its rows name.
+    var hostWorktrees: [PeerHostWorktree]?
     let attentionCount: Int
 
     var id: String { serverId }
 
     /// All peer projects, with sessions and consoles folded into worktrees.
     func repos(ordering: AppConfig.WorktreeSortMode) -> [NativePeerRepoGroup] {
-        NativePeerRepoGroup.build(sessions: sessions, consoles: consoles, projects: projects, ordering: ordering)
+        NativePeerRepoGroup.build(
+            sessions: sessions, consoles: consoles, projects: projects, hostWorktrees: hostWorktrees, ordering: ordering
+        )
     }
 }
 
@@ -100,10 +105,13 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
     /// repos retain session recency order; inventory-only projects follow
     /// in the peer's order. Inventory labels take precedence after a rename.
     /// Main worktrees are pinned first; `.manual` keeps arrival order.
+    /// Every host worktree gets a row, joined by the rows naming its id;
+    /// rows naming a worktree the host does not list keep their own.
     static func build(
         sessions: [RemoteSessionSummary],
         consoles: [PeerConsoleSummary] = [],
         projects: [RemoteProjectOption] = [],
+        hostWorktrees: [PeerHostWorktree]? = nil,
         ordering: AppConfig.WorktreeSortMode = .lastUpdateDesc
     ) -> [NativePeerRepoGroup] {
         var repoOrder: [String] = []
@@ -111,6 +119,7 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
         var worktreeOrder: [String: [String]] = [:]
         var sessionBuckets: [String: [RemoteSessionSummary]] = [:]
         var consoleBuckets: [String: [PeerConsoleSummary]] = [:]
+        var hostBuckets: [String: PeerHostWorktree] = [:]
         // Worktree keys are namespaced by repo identity too, so a worktree id
         // or path that happens to repeat across two differently-identified
         // projects still can't merge rows.
@@ -120,7 +129,7 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
                 repoOrder.append(repo)
                 repoNames[repo] = name()
             }
-            if sessionBuckets[key] == nil, consoleBuckets[key] == nil {
+            if sessionBuckets[key] == nil, consoleBuckets[key] == nil, hostBuckets[key] == nil {
                 worktreeOrder[repo, default: []].append(key)
             }
             return key
@@ -141,6 +150,12 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
             )
             consoleBuckets[key, default: []].append(console)
         }
+        for host in hostWorktrees ?? [] {
+            let repo = repoKey(projectId: host.project.id)
+            let key = place(repo: repo, worktreeKey: "id:\(host.snapshot.worktree.id)", name: host.project.name)
+            hostBuckets[key] = host
+            repoNames[repo] = host.project.name
+        }
         for project in projects {
             let repo = repoKey(projectId: project.id)
             if repoNames[repo] == nil { repoOrder.append(repo) }
@@ -155,7 +170,8 @@ struct NativePeerRepoGroup: Identifiable, Equatable {
                         NativePeerWorktreeGroup(
                             id: key,
                             sessions: sessionBuckets[key] ?? [],
-                            consoles: consoleBuckets[key] ?? []
+                            consoles: consoleBuckets[key] ?? [],
+                            host: hostBuckets[key]
                         )
                     },
                     ordering: ordering
@@ -196,7 +212,11 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
     let sessions: [RemoteSessionSummary]
     /// In the order the peer listed them: tab order, then pane order.
     var consoles: [PeerConsoleSummary] = []
+    /// The host's own record of the worktree, for a peer serving the host channel.
+    var host: PeerHostWorktree?
 
+    /// An agent mid-turn; the only status that tints the branch icon.
+    static let running = WorktreeRowView.StatusPresentation(note: "running", colorToken: "add", pulses: true)
     static let waitingStatuses: Set<String> = ["awaitingPermission", "awaitingInput"]
 
     static func key(for session: RemoteSessionSummary) -> String {
@@ -213,15 +233,22 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         return "console:\(console.consoleId)"
     }
 
-    /// Sessions' summaries come first: only they carry git metrics.
+    /// Sessions' summaries come first: only they carry git metrics. An idle
+    /// host worktree gets one built from the host's record.
     var worktree: RemoteWorktreeSummary? {
-        sessions.lazy.compactMap(\.worktree).first ?? consoles.lazy.compactMap(\.worktree).first
+        sessions.lazy.compactMap(\.worktree).first ?? consoles.lazy.compactMap(\.worktree).first ?? host.map {
+            RemoteWorktreeSummaryBuilder.make(
+                projectName: $0.project.name, worktree: $0.snapshot.worktree, isMain: $0.isMain,
+                isFolder: $0.project.kind == .folder, metrics: .unavailable
+            )
+        }
     }
     var isMain: Bool { worktree?.isMain == true }
     var isFolder: Bool { worktree?.isFolder == true }
     /// The peer's own worktree id; nil when its rows carry none.
     var peerWorktreeId: String? {
         (sessions.map(\.worktreeId) + consoles.map(\.worktreeId)).lazy.compactMap { $0 }.first { !$0.isEmpty }
+            ?? host?.snapshot.worktree.id
     }
 
     /// Main first, then `ordering` over the rest — the same shape as
@@ -297,19 +324,35 @@ struct NativePeerWorktreeGroup: Identifiable, Equatable {
         return consoles.first?.title ?? ""
     }
 
-    /// Mirrors `WorktreeRowView.StatusPresentation`: waiting outranks
-    /// streaming, and an idle worktree draws no chip.
+    /// Mirrors `WorktreeRowView.StatusPresentation`: the host's operation
+    /// outranks waiting, waiting outranks streaming, and an idle worktree
+    /// draws no chip.
     var status: WorktreeRowView.StatusPresentation? {
+        if let operation = host?.snapshot.operation { return Self.status(for: operation) }
         if sessions.contains(where: { $0.status == "awaitingPermission" }) {
             return .init(note: "needs permission", colorToken: "mod", pulses: false)
         }
         if sessions.contains(where: { $0.status == "awaitingInput" }) {
             return .init(note: "needs input", colorToken: "mod", pulses: false)
         }
-        if sessions.contains(where: { $0.status == "streaming" }) {
-            return .init(note: "running", colorToken: "add", pulses: true)
-        }
+        if sessions.contains(where: { $0.status == "streaming" }) { return Self.running }
         return nil
+    }
+
+    /// The wording of `WorktreeRowView.statusText`.
+    static func status(for operation: WorktreeOperation) -> WorktreeRowView.StatusPresentation {
+        func failed(_ verb: String, _ message: String) -> WorktreeRowView.StatusPresentation {
+            .init(note: "\(verb) failed: \(message.trimmingCharacters(in: .whitespacesAndNewlines))", colorToken: "del", pulses: false)
+        }
+        switch operation {
+        case .creating: return .init(note: "Creating…", colorToken: "fg-muted", pulses: true)
+        case .preparingDelete: return .init(note: "Preparing deletion…", colorToken: "fg-muted", pulses: true)
+        case .deleting: return .init(note: "Deleting…", colorToken: "fg-muted", pulses: true)
+        case .archiving: return .init(note: "Archiving…", colorToken: "fg-muted", pulses: true)
+        case .createFailed(let message): return failed("Create", message)
+        case .launchFailed(let message): return failed("Launch", message)
+        case .deleteFailed(let message): return failed("Delete", message)
+        }
     }
 }
 
@@ -324,7 +367,8 @@ struct NativePeerSidebarSnapshot: Equatable {
         peers: [RemoteHelloPeer],
         rows: [RemoteSessionSummary],
         consoles: [String: [PeerConsoleSummary]] = [:],
-        projects: [String: [RemoteProjectOption]] = [:]
+        projects: [String: [RemoteProjectOption]] = [:],
+        hostWorktrees: [String: [PeerHostWorktree]] = [:]
     ) -> Self {
         var uniqueRows: [String: [String: RemoteSessionSummary]] = [:]
         for row in rows {
@@ -354,6 +398,7 @@ struct NativePeerSidebarSnapshot: Equatable {
                 sessions: sessions,
                 consoles: state.carriesSessions ? consoles[peer.serverId] ?? [] : [],
                 projects: state.carriesSessions ? projects[peer.serverId] ?? [] : [],
+                hostWorktrees: state.carriesSessions ? hostWorktrees[peer.serverId] : nil,
                 attentionCount: sessions.count { waitingStatuses.contains($0.status) }
             )
         }.sorted { ($0.name, $0.serverId) < ($1.name, $1.serverId) }

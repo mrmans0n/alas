@@ -31,6 +31,10 @@ public struct RunLaunchRequest: Sendable {
     public let command: String
     /// The run's console stays out of sight unless asked for.
     public let isHidden: Bool
+    /// A shown console becomes its worktree's active tab; false for runs
+    /// asked for from elsewhere, which leave the host's screen alone unless
+    /// the worktree has none active.
+    public let activatesConsole: Bool
 }
 
 /// How a `RunLauncher` started a run, and so how its completion arrives.
@@ -56,6 +60,9 @@ public protocol RunLauncher: AnyObject {
     /// Whether something the launcher owns hosts the script's latest run in
     /// the worktree, such as its run tab.
     func hostsRun(scriptKey: String, worktreeID: String) -> Bool
+    /// Whether that host is what its worktree shows, such as its active tab,
+    /// so a restart's replacement takes its place.
+    func runHostIsActive(scriptKey: String, worktreeID: String) -> Bool
     /// Ends that host, for a run stopped on purpose or about to restart.
     func endRunHost(scriptKey: String, worktreeID: String)
     /// Ends the host session a launch opened, for a launch stopped while starting.
@@ -71,6 +78,7 @@ public protocol RunLauncher: AnyObject {
 extension RunLauncher {
     public func refusal(for script: RunScript, in worktree: Worktree, project: ProjectConfig) -> String? { nil }
     public func hostsRun(scriptKey: String, worktreeID: String) -> Bool { false }
+    public func runHostIsActive(scriptKey: String, worktreeID: String) -> Bool { false }
     public func endRunHost(scriptKey: String, worktreeID: String) {}
     public func endRunHost(sessionID: String, worktreeID: String) {}
     public func hostSessionExists(_ sessionID: String) -> Bool { false }
@@ -137,6 +145,7 @@ extension AlasCoreContext {
         _ script: RunScript,
         in worktree: Worktree,
         isHidden: Bool = false,
+        activatesConsole: Bool = true,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
         guard !isStopping else { return Self.stoppingRefusal }
@@ -218,7 +227,8 @@ extension AlasCoreContext {
                         capturePaths: location.paths,
                         executionIdentity: RunScriptExecutionIdentity(runID: runID, worktreeID: worktree.id, projectID: project.id)
                     ),
-                    isHidden: isHidden
+                    isHidden: isHidden,
+                    activatesConsole: activatesConsole
                 )
                 let launch: RunLaunch
                 do {
@@ -257,23 +267,32 @@ extension AlasCoreContext {
 
     static let stoppingRefusal = RunStart.refused(title: "Host stopping", message: "The host is stopping and starts no new runs.")
 
-    /// Stops whatever the script's slot holds, then starts it again.
+    /// Stops whatever the script's slot holds, then starts it again. A
+    /// replacement for the console its worktree shows is shown in its place,
+    /// even when `activatesConsole` is false.
     @discardableResult
     public func restartRun(
         _ script: RunScript,
         in worktree: Worktree,
         isHidden: Bool = false,
+        activatesConsole: Bool = true,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
         guard !isStopping else { return Self.stoppingRefusal }
         let key = RunSlotKey(worktreeID: worktree.id, scriptKey: script.key)
         let runID = runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.id
+        let launcher = environment.runLauncher
+        // Asked before the stop ends the host it asks about.
+        let replacesActiveHost = launcher.runHostIsActive(scriptKey: script.key, worktreeID: worktree.id)
         if pendingRunLaunches[key] != nil
             || runID.map({ processRuns[$0] != nil }) == true
-            || environment.runLauncher.hostsRun(scriptKey: script.key, worktreeID: worktree.id) {
+            || launcher.hostsRun(scriptKey: script.key, worktreeID: worktree.id) {
             stopRun(scriptKey: script.key, in: worktree)
         }
-        return startRun(script, in: worktree, isHidden: isHidden, onSettled: onSettled)
+        return startRun(
+            script, in: worktree, isHidden: isHidden,
+            activatesConsole: activatesConsole || replacesActiveHost, onSettled: onSettled
+        )
     }
 
     /// Whether the script's launch in `worktree`, still starting, hides its

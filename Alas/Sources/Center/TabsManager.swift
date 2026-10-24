@@ -369,12 +369,15 @@ final class TabsManager {
         title: String,
         sessionId: String,
         runScriptKey: String? = nil,
-        isHidden: Bool = false
+        isHidden: Bool = false,
+        activates: Bool = true
     ) -> Tab {
         var state = TerminalTabState(id: UUID().uuidString, title: title, sessionId: sessionId, runScriptKey: runScriptKey)
         state.isHidden = isHidden
         let tab = Tab.terminal(state)
-        append(tab, to: worktreeId, activate: !isHidden)
+        // A console that does not take focus still becomes active in a worktree
+        // with no active tab, so the center does not stay empty.
+        append(tab, to: worktreeId, activate: !isHidden && (activates || activeTabId(forWorktree: worktreeId) == nil))
         return tab
     }
 

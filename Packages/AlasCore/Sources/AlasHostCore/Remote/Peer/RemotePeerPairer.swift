@@ -18,7 +18,11 @@ public struct RemotePeerPairer {
         /// key at all (an older build), which pairs but leaves the record
         /// unverified — never "offered one we could not check", which is
         /// `identityUnproven` instead.
-        case paired(token: String, serverId: String?, name: String?, publicKey: String?, origin: String)
+        ///
+        /// `inboundOnly` means the far side will not pair back; it is only
+        /// ever true alongside a proven `publicKey`.
+        case paired(token: String, serverId: String?, name: String?, publicKey: String?, origin: String,
+                    inboundOnly: Bool = false)
         case expiredCode
         case originRejected
         case approvalExpired
@@ -29,6 +33,9 @@ public struct RemotePeerPairer {
         /// is not a network problem and retrying cannot fix it: something
         /// there is claiming a key it does not have.
         case identityUnproven
+        /// A host that does not pair back already holds this Mac's identity
+        /// pinned to a different key, and refused before redeeming the code.
+        case identityRebindRefused
     }
 
     // Not `@Sendable`: tests inject closures that record into plain classes,
@@ -79,6 +86,7 @@ public struct RemotePeerPairer {
             let name: String?
             let publicKey: String?
             let signature: String?
+            let inboundOnly: Bool?
         }
         // One challenge for the whole attempt, not one per origin: whichever
         // origin answers has to sign THIS value, and it is never reused
@@ -103,6 +111,7 @@ public struct RemotePeerPairer {
         // that answers with a key it cannot back must not stop a later origin
         // where the real peer still lives. Reported only if nothing works.
         var sawUnprovenIdentity = false
+        var sawRebindRefused = false
         for origin in origins {
             // Origins reach this type from two directions: a link the user
             // pasted, and a peer's self-reported advertisement, which is
@@ -138,19 +147,31 @@ public struct RemotePeerPairer {
                     }
                     verifiedKey = claimedKey
                 }
+                // Without a pair-back nothing else ever vouches for the far
+                // side, so an inbound-only reply has to prove its key.
+                let inboundOnly = reply.inboundOnly == true
+                if inboundOnly, verifiedKey == nil {
+                    sawUnprovenIdentity = true
+                    continue
+                }
                 return .paired(token: reply.token, serverId: reply.serverId, name: reply.name,
-                               publicKey: verifiedKey, origin: normalized)
+                               publicKey: verifiedKey, origin: normalized, inboundOnly: inboundOnly)
             case 401:
                 sawExpiredCode = true
                 continue
             case 403:
-                sawOriginRejected = true
+                if String(decoding: data, as: UTF8.self).contains(RemoteHTTPResponder.rebindRefusedError) {
+                    sawRebindRefused = true
+                } else {
+                    sawOriginRejected = true
+                }
                 continue
             default:
                 continue
             }
         }
         if sawExpiredCode { return .expiredCode }
+        if sawRebindRefused { return .identityRebindRefused }
         if sawOriginRejected { return .originRejected }
         // Below the two above: a dead code and a peers-off setting are both
         // more fundamental, and both are things the user can act on directly.
@@ -166,9 +187,9 @@ extension RemotePeerPairer.Outcome: CustomStringConvertible {
     /// string. Redact it at the type, so no caller has to remember.
     public var description: String {
         switch self {
-        case .paired(_, let serverId, let name, let publicKey, let origin):
+        case .paired(_, let serverId, let name, let publicKey, let origin, let inboundOnly):
             return "paired(token: <redacted>, serverId: \(serverId ?? "nil"), name: \(name ?? "nil"), "
-                + "publicKey: \(publicKey ?? "nil"), origin: \(origin))"
+                + "publicKey: \(publicKey ?? "nil"), origin: \(origin), inboundOnly: \(inboundOnly))"
         case .expiredCode:
             return "expiredCode"
         case .originRejected:
@@ -181,6 +202,8 @@ extension RemotePeerPairer.Outcome: CustomStringConvertible {
             return "unreachable"
         case .identityUnproven:
             return "identityUnproven"
+        case .identityRebindRefused:
+            return "identityRebindRefused"
         }
     }
 }

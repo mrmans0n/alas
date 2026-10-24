@@ -4125,6 +4125,10 @@ function restoreRejectedPrompt() {
 function renderConfigAffordances() {
   const cfg = sessionConfig;
   $("attach").classList.toggle("hidden", !(cfg && cfg.acceptsImages));
+  // Why the host's agent cannot run (setup, sign-in, spawn failure).
+  const issue = cfg && cfg.agentIssue;
+  $("agent-issue").textContent = issue ? issue.message : "";
+  $("agent-issue").classList.toggle("hidden", !issue);
   renderConfigSheet();
   renderUsage();
   renderSlash();

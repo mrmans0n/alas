@@ -28,8 +28,7 @@ struct AlasHostExecutableTests {
 
     /// With Remote enabled, a device pairs with a code the running host
     /// mints for its local user, and drives a session with the scripted
-    /// agent over the Remote channel. A paired device cannot mint codes, and
-    /// a Mac paired earlier, with no key pinned, cannot connect.
+    /// agent over the Remote channel. A paired device cannot mint codes.
     @Test func aDevicePairedWithAHeadlessHostDrivesASessionOverRemote() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remote-\(UUID().uuidString)")
         let dataDirectory = root.appendingPathComponent("data")
@@ -48,8 +47,6 @@ struct AlasHostExecutableTests {
         config.agents.registry = [agent]
         let configFile = dataDirectory.appendingPathComponent("app.json")
         try PersistenceStore().write(config, to: configFile)
-        let earlierPairing = RemotePairingService(store: FileDeviceStore(url: dataDirectory.appendingPathComponent("remote-devices.json")))
-        let macToken = try earlierPairing.redeemPeer(code: earlierPairing.beginPairing(), deviceName: "Old Mac", peerServerId: "old-mac").token
         let host = try AlasHostProcess(dataDirectory: dataDirectory)
         _ = try await host.socketPath()
         try await eventually { [host] in host.output.contains("remote ") || !host.process.isRunning }
@@ -59,7 +56,7 @@ struct AlasHostExecutableTests {
 
         let pair = try AlasHostProcess(dataDirectory: dataDirectory, arguments: ["pair"])
         #expect(try await pair.exitStatus() == 0)
-        let code = pair.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = String(pair.output.prefix { $0 != "\n" })
         var redeem = URLRequest(url: address.appendingPathComponent("pair"))
         redeem.httpMethod = "POST"
         redeem.httpBody = try JSONSerialization.data(withJSONObject: ["code": code, "deviceName": "e2e"])
@@ -69,10 +66,6 @@ struct AlasHostExecutableTests {
         var components = try #require(URLComponents(url: address, resolvingAgainstBaseURL: false))
         components.scheme = "ws"
         components.path = "/ws"
-        let macSocket = URLSession.shared.webSocketTask(with: try #require(components.url), protocols: [macToken])
-        macSocket.resume()
-        defer { macSocket.cancel() }
-        #expect((try? await macSocket.receive()) == nil)
         let socket = URLSession.shared.webSocketTask(with: try #require(components.url), protocols: [token])
         socket.resume()
         defer { socket.cancel() }
@@ -233,6 +226,54 @@ struct AlasHostExecutableTests {
             guard case .snapshot(let snapshot) = try? await client.request(.snapshot) else { return false }
             return snapshot.worktrees.contains { $0.worktree.path.standardizedFileURL == repo.standardizedFileURL }
         }
+    }
+
+    /// A Mac pairs with the host through the link `alas-host pair` prints,
+    /// and the host proves the identity key it answers with, the same one
+    /// after a restart.
+    @Test func aMacCanPairWithTheHostAndProveItsIdentity() async throws {
+        let dataDirectory = FileManager.default.temporaryDirectory.appendingPathComponent("alas-peer-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dataDirectory) }
+        var config = AppConfig.defaults
+        config.host = HostSettings(reachability: .lan, port: try freePort())
+        try PersistenceStore().write(config, to: dataDirectory.appendingPathComponent("app.json"))
+        // No counter code: the host treats this as the reciprocal leg of a
+        // pairing it started and never pairs back, so nothing need listen
+        // where the Mac says it is.
+        let mac = RemotePeerAdvertisement(
+            serverId: "laptop", name: "Laptop", origins: ["http://127.0.0.1:\(try freePort())"], counterCode: nil
+        )
+        func pairAsMac() async throws -> String? {
+            let host = try AlasHostProcess(dataDirectory: dataDirectory)
+            _ = try await host.socketPath()
+            try await eventually { [host] in host.output.contains("remote ") || !host.process.isRunning }
+            let line = try #require(host.output.split(separator: "\n").first { $0.hasPrefix("remote ") }, "\(host.errorOutput)")
+            let pair = try AlasHostProcess(dataDirectory: dataDirectory, arguments: ["pair"])
+            #expect(try await pair.exitStatus() == 0, "\(pair.errorOutput)")
+            let lines = pair.output.split(separator: "\n").map(String.init)
+            #expect(lines.count == 2, "\(pair.output)")
+            let link = try #require(RemotePairingLink.parse(lines.last ?? ""), "\(pair.output)")
+            #expect(link.code == lines.first)
+            // The link names this machine's interfaces; loopback alone is
+            // reachable wherever the test runs.
+            #expect(link.origins.contains { !RunEndpointPolicy.isLoopback(URL(string: $0)!) }, "\(link.origins)")
+            let outcome = await RemotePeerPairer.live.pair(
+                origins: [String(line.dropFirst("remote ".count))], code: link.code, deviceName: "Laptop", advertisement: mac
+            )
+            // Stopped before the next start, which needs the data directory.
+            host.process.terminate()
+            #expect(try await host.exitStatus() == 0)
+            guard case .paired(_, _, _, let publicKey, _, _) = outcome else {
+                Issue.record("expected the host to pair, got \(outcome)")
+                return nil
+            }
+            return publicKey
+        }
+
+        let key = try #require(try await pairAsMac())
+        #expect(!key.isEmpty)
+        #expect(try await pairAsMac() == key)
     }
 
     /// A port nothing listens on now, for a host to bind.

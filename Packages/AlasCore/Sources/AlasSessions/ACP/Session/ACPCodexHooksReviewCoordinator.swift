@@ -76,7 +76,7 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
         do {
             let snapshot = try await list()
             guard valid, generation == current else { return }
-            guard snapshot.cwd == context.cwd else { throw ReviewFailure("The hook review belongs to a different working directory.") }
+            guard sameDirectory(snapshot.cwd) else { throw ReviewFailure("The hook review belongs to a different working directory.") }
             apply(snapshot, id: id, error: nil)
             if !snapshot.requiresReview { finish(snapshot.reviewToken) }
         } catch {
@@ -101,7 +101,7 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
         do {
             let fresh = try await list()
             guard valid, generation == current else { return }
-            guard fresh.cwd == context.cwd else { throw ReviewFailure("The hook review belongs to a different working directory.") }
+            guard sameDirectory(fresh.cwd) else { throw ReviewFailure("The hook review belongs to a different working directory.") }
             let accepted = pairs.allSatisfy { identity in
                 fresh.isUnique(identity) && fresh.hooks.contains { $0.identity == identity && $0.isKnown && $0.trustStatus == "trusted" }
             }
@@ -147,6 +147,12 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
     }
     private func actionable(_ id: UUID?) -> Bool {
         valid && presentation != nil && presentation?.isBusy == false && (id == nil || presentation?.id == id)
+    }
+    /// Codex reports the agent-side path: an SSH worktree's real remote path
+    /// rather than its `/.alas-remote/<host>/…` id, and a local path with
+    /// symlinks resolved.
+    private func sameDirectory(_ reported: String) -> Bool {
+        ACPSessionBrowserPaths.key(reported, context: context.cwd) == ACPSessionBrowserPaths.key(context.cwd, context: context.cwd)
     }
     private func apply(_ snapshot: ACPCodexHooksList, id: UUID, error: String?) {
         reviewToken = snapshot.reviewToken

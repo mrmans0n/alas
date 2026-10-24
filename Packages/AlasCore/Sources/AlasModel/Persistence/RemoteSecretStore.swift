@@ -137,6 +137,41 @@ public final class RemoteKeychainSecretStore: RemoteSecretStore, @unchecked Send
     }
 }
 
+/// The headless host's store: reads like the app does, but writes only to the
+/// file store. An app and a host taking turns on one profile must keep the same
+/// identity key, and `RemoteKeychainSecretStore` deletes the file copy whenever
+/// it writes to the Keychain, so the host never goes through it to write.
+/// This holds only while the app has no application-identifier entitlement:
+/// with one, the app migrates the key into its Keychain group and deletes the
+/// file, and an unentitled host then mints a new key. Keep both on the same
+/// signing mode (AGENTS.md forbids automatic or Apple Development signing).
+public final class RemoteHostSecretStore: RemoteSecretStore, Sendable {
+    private let reading: any RemoteSecretStore
+    private let writing: any RemoteSecretStore
+
+    public init(
+        reading: any RemoteSecretStore = RemoteKeychainSecretStore(fallback: RemoteFileSecretStore()),
+        writing: any RemoteSecretStore = RemoteFileSecretStore()
+    ) {
+        self.reading = reading
+        self.writing = writing
+    }
+
+    /// What the host wrote wins: the reading store may hold a copy the app
+    /// left in the Keychain that the host has since replaced or removed.
+    public func secret(for account: String) -> Data? {
+        guard let written = writing.secret(for: account) else { return reading.secret(for: account) }
+        return written.isEmpty ? nil : written
+    }
+
+    /// A removal is written as empty data, so the reading store's copy does
+    /// not come back.
+    @discardableResult
+    public func setSecret(_ data: Data?, for account: String) -> Bool {
+        writing.setSecret(data ?? Data(), for: account)
+    }
+}
+
 /// Owner-only (0600) files under Application Support. The fallback for builds
 /// the data protection keychain refuses, and the source a pre-Keychain secret
 /// is migrated out of.

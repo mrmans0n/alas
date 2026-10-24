@@ -56,14 +56,26 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case createWorktree(projectID: String, base: String, branch: String, destination: String)
     /// `lineageID` and `branch` are the worktree's as the client last saw
     /// it: a checkout replaced or switched since is refused as changed.
-    case deleteWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, force: Bool, deleteBranchIfMerged: Bool)
-    /// Like a delete, names the lineage and branch the client last saw.
-    case archiveWorktree(worktree: WorktreeRef, lineageID: String?, branch: String)
+    /// `discardUnsavedEdits`: whether the user agreed to discard unsaved
+    /// editor changes on the host (`host.worktrees.lifecycle.v1`). Nil from an
+    /// older client, refused like false with an untyped message.
+    case deleteWorktree(
+        worktree: WorktreeRef, lineageID: String?, branch: String, force: Bool, deleteBranchIfMerged: Bool,
+        discardUnsavedEdits: Bool? = nil
+    )
+    /// Like a delete, names the lineage and branch the client last saw, and
+    /// acknowledges discarding unsaved editor changes.
+    case archiveWorktree(worktree: WorktreeRef, lineageID: String?, branch: String, discardUnsavedEdits: Bool? = nil)
     case unarchiveWorktree(worktree: WorktreeRef)
     case listWorkspaceCheckouts
     case workspaceCheckout(id: UUID)
     case startRun(scriptKey: String, worktree: WorktreeRef)
     case stopRun(scriptKey: String, worktree: WorktreeRef)
+    /// The scripts a listed worktree's Run tab lists (`host.runs.scripts.v1`).
+    case listRunScripts(worktree: WorktreeRef)
+    /// Stops whatever the script's slot holds, then starts it again
+    /// (`host.runs.scripts.v1`).
+    case restartRun(scriptKey: String, worktree: WorktreeRef)
     case createSession(target: SessionTarget, agentID: String, modelID: String?, autoRun: Bool)
     case sendPrompt(sessionID: String, prompt: String)
     case stopSession(sessionID: String)
@@ -100,6 +112,74 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// a host that serves Remote headlessly and to a local client only. A
     /// host that serves no Remote, or the app, refuses it.
     case remotePairingCode
+    /// The Macs paired with a host that serves Remote headlessly, to a local
+    /// client only. A host that serves no Remote, or the app, refuses it.
+    case listPeers
+    /// Forgets a paired Mac and revokes its token; local client only.
+    case forgetPeer(peerID: String)
+    /// Reads a listed worktree's code as a session in it would
+    /// (`host.worktrees.read.v1`).
+    case readWorktree(worktree: WorktreeRef, read: HostWorktreeRead)
+}
+
+/// One read of a worktree's code, as the Remote session requests of the same name.
+public enum HostWorktreeRead: Codable, Equatable, Sendable {
+    case changes(comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case fileDiff(path: String, stage: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case files(path: String?, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case commitFiles(sha: String)
+    case commitDiff(sha: String, path: String)
+    case file(path: String)
+}
+
+/// A run script as a worktree's Run tab lists it.
+public struct HostRunScript: Codable, Equatable, Sendable {
+    public var scope: RunScriptScope
+    public var fileName: String
+    public var name: String
+    /// Working directory relative to the worktree root. Nil = worktree root.
+    public var cwd: String?
+    /// Where a run executes: the host and working directory.
+    public var target: RunExecutionTarget
+
+    public var key: String { "\(scope.rawValue):\(fileName)" }
+
+    public init(scope: RunScriptScope, fileName: String, name: String, cwd: String?, target: RunExecutionTarget) {
+        self.scope = scope
+        self.fileName = fileName
+        self.name = name
+        self.cwd = cwd
+        self.target = target
+    }
+
+    public init(_ script: RunScript, target: RunExecutionTarget) {
+        self.init(scope: script.scope, fileName: script.fileName, name: script.displayName, cwd: script.cwd, target: target)
+    }
+}
+
+/// A paired Mac as `alas-host peers list` shows it; never its token.
+public struct HostPeerSummary: Codable, Equatable, Sendable {
+    public var id: String
+    public var serverId: String
+    public var name: String
+    public var origins: [String]
+
+    public init(id: String, serverId: String, name: String, origins: [String]) {
+        self.id = id
+        self.serverId = serverId
+        self.name = name
+        self.origins = origins
+    }
+
+    /// The peer `query` names: its id or server id, else a name only one peer has.
+    public static func resolve(_ query: String, in peers: [HostPeerSummary]) throws -> HostPeerSummary {
+        if let peer = peers.first(where: { $0.id == query || $0.serverId == query }) { return peer }
+        let named = peers.filter { $0.name == query }
+        if named.count == 1 { return named[0] }
+        if named.isEmpty { throw HostError.failed(message: "No paired Mac has the id, name or server id \(query).") }
+        let candidates = named.map { "  \($0.id)  \($0.name)" }.joined(separator: "\n")
+        throw HostError.failed(message: "More than one paired Mac is named \(query); remove one by id:\n\(candidates)")
+    }
 }
 
 public enum HostServerMessage: Codable, Equatable, Sendable {
@@ -124,7 +204,15 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case session(session: HostSessionSummary)
     case capabilities(capabilities: [String])
     case runOutput(output: HostRunOutput)
-    case remotePairingCode(code: String, expiresAt: Date)
+    /// `link` is absent from an older host, and where the host has no address for one.
+    case remotePairingCode(code: String, expiresAt: Date, link: String?)
+    case peers(peers: [HostPeerSummary])
+    /// The message a session in the worktree gets for the same read, with
+    /// the worktree's id as its `sessionId`. Indirect: a Remote message
+    /// carries host messages.
+    indirect case worktreeRead(reply: RemoteServerMessage)
+    /// The answer to `listRunScripts`.
+    case runScripts(scripts: [HostRunScript])
     case failure(error: HostError)
 }
 

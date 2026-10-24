@@ -66,10 +66,6 @@ public final class RemoteServer {
     /// connection, so setting it affects sockets opened from then on; the
     /// app sets it before `start()`.
     public var federation: FederatedSessionsProvider?
-    /// False where other Macs must not connect, as a headless host refuses
-    /// them: a peer can neither pair nor open a socket, a peer paired
-    /// before keys were pinned included. Read per request.
-    public var admitsPeers = true
     public private(set) var port: UInt16?
     /// Set once we've already retried on an OS-assigned port after a fixed-port
     /// bind failure, so we don't loop.
@@ -84,6 +80,10 @@ public final class RemoteServer {
     public var onConnectionDeviceCountsChange: (([String: Int]) -> Void)?
     /// Fired on the main actor after another Alas instance paired here.
     public var onPeerPaired: (@MainActor (RemotePeerPairingRequest) -> Void)?
+    /// See `RemoteHTTPResponder.pairsBackWithPeers`. Off only on alas-host.
+    public var pairsBackWithPeers = true
+    /// See `RemoteHTTPResponder.admitsInboundOnlyPeer`.
+    public var admitsInboundOnlyPeer: (@MainActor (RemotePeerAdvertisement) -> Bool)?
     public var onApprovedPeerPaired: (@MainActor (RemotePeerPairingRequest, String, ApprovalPeer) -> Void)?
     /// Bonjour advertisement applied to the live listener, and to any listener
     /// `start()` creates later (a port-fallback restart must keep advertising).
@@ -268,8 +268,9 @@ public final class RemoteServer {
             diagnostics: { self.diagnosticsSnapshot() },
             originPolicy: originPolicy
         )
-        configured.admitsPeers = admitsPeers
         configured.onPeerPaired = { [weak self] request in self?.onPeerPaired?(request) }
+        configured.pairsBackWithPeers = pairsBackWithPeers
+        configured.admitsInboundOnlyPeer = admitsInboundOnlyPeer
         configured.onApprovedPeerPaired = { [weak self] request, requestID, localPeer in
             self?.onApprovedPeerPaired?(request, requestID, localPeer)
         }
@@ -289,7 +290,6 @@ public final class RemoteServer {
             responder: { req, body in responder.response(for: req, body: body) },
             authorize: { [weak self] token in
                 guard let self, let id = self.pairing.validate(token: token) else { return nil }
-                if !self.admitsPeers, self.pairing.devices.first(where: { $0.id == id })?.kind == .alasInstance { return nil }
                 self.pairing.touch(deviceId: id)
                 return id
             },

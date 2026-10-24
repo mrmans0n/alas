@@ -9,34 +9,48 @@ public enum StackShepherdPromptBuilder {
     public static let header = "Alas stack shepherd"
 
     /// Sent by the toolbar's Ship stack button. The agent organizes the work
-    /// into the stack; `stack_ship` publishes it and starts the shepherd.
-    public static func shipPrompt(kind: CodeHostKind) -> String {
+    /// into the stack; `stack_ship` publishes what `plan` chose and starts the
+    /// shepherd.
+    public static func shipPrompt(kind: CodeHostKind, plan: StackShipPlan) -> String {
         let requests = kind == .gitlab ? "merge requests" : "pull requests"
         let request = kind == .gitlab ? "merge request" : "pull request"
-        return "Ship this gg stack: publish each entry as its own \(request) and have Alas watch the \(requests). "
+        var prompt = "Ship this gg stack: publish each entry as its own \(request) and have Alas watch the \(requests). "
             + "If there are uncommitted changes that belong to this work, fold them into the stack first, one logical change per commit: "
             + "`gg absorb` (or `gg mv <entry id>` then `gg sc --staged-only`) for changes to existing entries, new commits for new changes. "
             + "gg turns each commit message into its \(request)'s title and description, so make every message describe its change. "
             + "Then run `gg last` to return to the top of the stack and call stack_ship."
+        if plan != .wholeStack {
+            prompt += " The user chose in Alas which entries to publish and whether their new \(requests) open as drafts; "
+                + "stack_ship applies that choice, so never publish the other entries yourself."
+        }
+        return prompt
     }
 
-    /// One turn for every entry in `fixes`, bottom-up. `logs` holds the
-    /// failing-check logs by request number.
+    /// One turn for every entry in `fixes`, bottom-up, and for the `landed`
+    /// entries gg still lists, which `stack_ship` rebases away. `logs` holds
+    /// the failing-check logs by request number.
     public static func fixPrompt(
         record: StackShepherdRecord,
         fixes: [StackShepherdFix],
+        landed: [StackShepherdEntry] = [],
         logs: [Int: [ShepherdCheckLog]],
         rules: ShepherdRules
     ) -> ShepherdPrompt {
         let label = record.remote.kind == .gitlab ? "merge requests" : "pull requests"
-        var sections = [
-            identity(record),
-            "Some \(label) in this stack need attention. Fix them from the bottom of the stack up, then call stack_ship to publish the stack.",
-        ]
-        sections += fixes.map { entrySection($0, logs: logs[$0.entry.requestNumber] ?? []) }
-        sections.append(howToWork(record))
-        if let rulesSection = ShepherdPromptBuilder.projectRulesSection(rules) { sections.append(rulesSection) }
-        return ShepherdPrompt(text: sections.joined(separator: "\n\n"), card: fixCard(record: record, fixes: fixes, logs: logs))
+        var sections = [identity(record)]
+        if !landed.isEmpty {
+            sections.append(landedSection(record, landed: landed, alsoFixing: !fixes.isEmpty))
+        }
+        if !fixes.isEmpty {
+            sections.append("Some \(label) in this stack need attention. Fix them from the bottom of the stack up, then call stack_ship to publish the stack.")
+            sections += fixes.map { entrySection($0, logs: logs[$0.entry.requestNumber] ?? []) }
+            sections.append(howToWork(record))
+            if let rulesSection = ShepherdPromptBuilder.projectRulesSection(rules) { sections.append(rulesSection) }
+        }
+        return ShepherdPrompt(
+            text: sections.joined(separator: "\n\n"),
+            card: fixCard(record: record, fixes: fixes, landed: landed, logs: logs)
+        )
     }
 
     /// Context for a session that just became the stack's owner. Lists
@@ -115,6 +129,21 @@ public enum StackShepherdPromptBuilder {
         return sections.joined(separator: "\n\n")
     }
 
+    /// Landing an entry merges its request but leaves its commit in the
+    /// local stack; `stack_ship` rebases it away before it syncs.
+    private static func landedSection(_ record: StackShepherdRecord, landed: [StackShepherdEntry], alsoFixing: Bool) -> String {
+        let kind = record.remote.kind
+        let lines = landed.map { "- Entry \($0.position) · \(reference($0, kind: kind)) \"\($0.title)\"" }
+        let when = alsoFixing ? "Once the fixes below are in, call stack_ship" : "Call stack_ship now"
+        let requests = kind == .gitlab ? "merge requests" : "pull requests"
+        return (["# Landed on \(record.base)"] + lines + [
+            "These merged, but this worktree's stack still holds their commits. \(when) from the top of the stack (`gg last`): "
+                + "it rebases the stack onto the latest \(record.base), which drops what landed, then publishes the remaining entries with gg sync and retargets their \(requests). "
+                + "Don't run gg sync yourself first: before the rebase it would push the landed commits again. "
+                + "If the rebase stops on a conflict, resolve it, run `gg continue`, and call stack_ship again.",
+        ]).joined(separator: "\n")
+    }
+
     private static func howToWork(_ record: StackShepherdRecord) -> String {
         let bullets = [
             "Work from the bottom of the stack up: changing an entry rewrites every entry above it.",
@@ -138,8 +167,19 @@ public enum StackShepherdPromptBuilder {
         )
     }
 
-    private static func fixCard(record: StackShepherdRecord, fixes: [StackShepherdFix], logs: [Int: [ShepherdCheckLog]]) -> ACPPromptCard {
-        let sections = fixes.map { fix -> ACPPromptCard.Section in
+    private static func fixCard(
+        record: StackShepherdRecord,
+        fixes: [StackShepherdFix],
+        landed: [StackShepherdEntry],
+        logs: [Int: [ShepherdCheckLog]]
+    ) -> ACPPromptCard {
+        var sections: [ACPPromptCard.Section] = []
+        if !landed.isEmpty {
+            sections.append(.init(title: "Landed on \(record.base): restack with stack_ship", items: landed.map {
+                .init(bodyMarkdown: "Entry \($0.position) · \(reference($0, kind: record.remote.kind)) \($0.title)")
+            }))
+        }
+        sections += fixes.map { fix -> ACPPromptCard.Section in
             var items: [ACPPromptCard.Item] = []
             if fix.problems.hasConflict {
                 items.append(.init(bodyMarkdown: "Conflicts with `\(fix.request.baseRefName)`", status: .conflict))

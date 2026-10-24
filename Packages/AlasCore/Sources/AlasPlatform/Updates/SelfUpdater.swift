@@ -13,14 +13,17 @@ public struct SelfUpdateCommand: Equatable, Sendable {
     public struct Step: Equatable, Sendable {
         public let executable: String
         public let arguments: [String]
+        /// Plain-language label shown while the step runs.
+        public let title: String
 
         public var displayCommandLine: String {
             ((executable as NSString).lastPathComponent as String) + " " + arguments.joined(separator: " ")
         }
 
-        public init(executable: String, arguments: [String]) {
+        public init(executable: String, arguments: [String], title: String? = nil) {
             self.executable = executable
             self.arguments = arguments
+            self.title = title ?? ((executable as NSString).lastPathComponent as String)
         }
     }
 
@@ -43,8 +46,8 @@ public struct SelfUpdateCommand: Equatable, Sendable {
         let host = InstallerHost.detect()
         let brew = host.detected[.brew]?.executable ?? "/opt/homebrew/bin/brew"
         return SelfUpdateCommand(steps: [
-            Step(executable: brew, arguments: ["update"]),
-            Step(executable: brew, arguments: ["upgrade", "--cask", alasHomebrewCask]),
+            Step(executable: brew, arguments: ["update"], title: "Refreshing Homebrew"),
+            Step(executable: brew, arguments: ["upgrade", "--cask", alasHomebrewCask], title: "Downloading and installing"),
         ])
     }
 
@@ -70,6 +73,8 @@ public final class SelfUpdater {
 
     public private(set) var state: State = .idle
     public private(set) var logLines: [String] = []
+    /// Title of the step currently running; nil when idle.
+    public private(set) var currentStepTitle: String?
 
     private var currentProcess: Process?
     private var watchdog: Task<Void, Never>?
@@ -117,6 +122,7 @@ public final class SelfUpdater {
         }
         state = .idle
         logLines = []
+        currentStepTitle = nil
         currentProcess = nil
         watchdog?.cancel()
         watchdog = nil
@@ -158,6 +164,7 @@ public final class SelfUpdater {
                 return
             }
 
+            currentStepTitle = step.title
             let outcome = await _runStep(step, generation: myGeneration)
             guard generation == myGeneration else { return }
             currentProcess = nil

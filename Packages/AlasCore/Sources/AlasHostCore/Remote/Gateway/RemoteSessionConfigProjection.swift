@@ -5,6 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import AlasAgentKit
 import AlasACP
 import AlasSessions
 
@@ -31,7 +32,55 @@ public enum RemoteSessionConfigProjection: Sendable {
                              lastTurn: session.lastTurnQuota, cumulative: session.sessionQuotaTotal)
         config.supportsQueueReorder = true
         config.supportsMentions = true
+        config.agentIssue = agentIssue(session: session)
         return config
+    }
+
+    public static func agentIssue(session: ACPSession) -> RemoteAgentIssue? {
+        agentIssue(
+            agentName: AgentBuiltins.entry(id: session.agentId)?.displayName ?? session.agentId,
+            managedAdapter: ACPManagedAdapterDescriptor.descriptor(for: session.agentId) != nil,
+            agentState: session.agentState, setupState: session.setupState, lastError: session.lastError)
+    }
+
+    /// Why the agent cannot run, in the words of the banner `ACPTabView`
+    /// shows on the host: its error banner first, then the sign-in or
+    /// setup nudge. Nil while the agent is fine or still connecting and
+    /// no error is showing.
+    public nonisolated static func agentIssue(
+        agentName: String, managedAdapter: Bool,
+        agentState: ACPSession.AgentState, setupState: ACPSession.SetupState, lastError: String?
+    ) -> RemoteAgentIssue? {
+        let kind: String
+        let setupMessage: String?
+        switch setupState {
+        case .needsSetup(let reason):
+            kind = "needsSetup"
+            setupMessage = managedAdapter
+                ? ACPSetupNudgeBannerCopy.idleMessage(mode: .install, agentDisplayName: agentName) : reason
+        case .needsAuth(let methods, let reason):
+            kind = "needsAuth"
+            setupMessage = methods.contains(where: { $0.kind == .terminal })
+                ? ACPAuthNudgeBannerCopy.message(agentDisplayName: agentName, reason: reason)
+                : ACPAuthNudgeBannerCopy.unsupportedMessage(agentDisplayName: agentName)
+        case .setupError(let reason):
+            kind = "setupError"
+            setupMessage = reason
+        case .checking, .ready:
+            if case .failed = agentState {
+                kind = "failed"
+            } else if let lastError, !lastError.isEmpty {
+                // A prompt failed on an otherwise running agent; the host
+                // still shows its error banner.
+                kind = "error"
+            } else {
+                return nil
+            }
+            setupMessage = nil
+        }
+        if let lastError, !lastError.isEmpty { return RemoteAgentIssue(kind: kind, message: lastError) }
+        if kind == "failed", case .failed(let reason) = agentState { return RemoteAgentIssue(kind: kind, message: reason) }
+        return setupMessage.map { RemoteAgentIssue(kind: kind, message: $0) }
     }
 
     /// Nil when there is nothing for the ring or its popover to show, so a

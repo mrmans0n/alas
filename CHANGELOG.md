@@ -6,13 +6,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Let Ship's "ship below" line move on gg stacks that were never synced. Entries without a GG-ID can now hold the line, matched by their title after the agent amends them, and the line follows the pointer and settles where the rows part.
+
+## [0.21.12] - 2026-10-23
+
 ### ✨ Features
 
-- Let plugins limit themselves to projects with a GitHub or GitLab remote with `requires.codeHost`, new in plugin API 17 (#2174).
+- Explain to Remote clients why a session's agent cannot run, including missing adapters, authentication, setup errors, and launch failures (#2183).
+- Allow up to 30 shepherd fix attempts while keeping the default at three (#2182).
+- Turn Homebrew self-updates into a normal app-update flow with concise progress, hidden logs, retry controls, and a Relaunch Now action (#2180).
+- Choose how much of a gg stack Ship publishes, open new requests as drafts, hold back upper entries, and publish them later with Ship more (#2176).
+- Pair a headless `alas-host` with the Mac app as a peer and manage its paired Macs from the command line (#2178).
+- Let agents list apps and windows, capture screenshots, and inspect accessibility trees, with dedicated development identity and permission onboarding (#2167, #2173).
+- Let plugins target only GitHub or GitLab projects with the plugin API 17 `requires.codeHost` field (#2174).
+- Search, install, and uninstall ACP registry agents from the `alas-host` command line (#2171).
+- Configure session-scoped Claude hooks that persist across restarts, SSH takeovers, and same-agent forks (#2172).
 
 ### 🐛 Fixes
 
-- Show a "Preparing to ship…" row in the transcript while Ship reads the branch or gg stack, so the button no longer looks unresponsive before its card appears.
+- Accept Codex hook reviews for SSH worktrees by comparing normalized agent-side paths (#2181).
+- Advertise the Mac's real Bonjour name instead of constructing invalid `.local` names from reverse DNS (#2179).
+- Keep shipped gg stacks moving after their bottom entry lands by restacking before the next sync (#2177).
+- Show Preparing to ship feedback while Alas reads branch or stack state, and prevent duplicate Ship requests (#2169).
+- Load existing projects' worktrees when `alas-host` starts and avoid stalling on unavailable terminal state (#2168).
+
+### 🎨 Changed
+
+- Make the Ship pill prominent when available, distinguish branches from gg stacks, and expand its popover with behavior, defaults, and stack-entry details (#2175).
+- Group `alas-host config list` by section and make interactive setup scroll and fit the current terminal (#2170).
 
 ## [0.21.11] - 2026-10-22
 

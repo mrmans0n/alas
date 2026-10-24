@@ -325,6 +325,7 @@ struct SidebarView: View {
                                             onSettings()
                                         },
                                         worktreeOrdering: state.config.worktrees.defaultOrdering,
+                                        showKeepBranchOption: state.config.worktrees.deleteBranchOnRemove,
                                         topSpacing: SidebarFilterRowMetrics.slotSpacing
                                     )
                                 }
@@ -535,6 +536,7 @@ private struct SidebarAttentionHeader: View {
             peerAttentionRows: peerRows,
             pluginUpdates: pluginUpdates,
             appUpdate: appUpdate,
+            appUpdateReadyToRelaunch: state.updates.isReadyToRelaunch,
             cleanupReminders: cleanupReminders,
             attentionLoadError: state.attentionStore.loadError?.localizedDescription,
             attentionWriteError: state.attentionStore.writeError?.localizedDescription,
@@ -552,7 +554,11 @@ private struct SidebarAttentionHeader: View {
             },
             onOpenAppUpdate: {
                 state.isAttentionInboxOpen = false
-                state.updates.presentAvailableUpdate()
+                if state.updates.isReadyToRelaunch {
+                    AppRelaunch.relaunch()
+                } else {
+                    state.updates.presentAvailableUpdate()
+                }
             },
             onOpenWorktreeCleanup: { projectId in
                 state.isAttentionInboxOpen = false

@@ -26,6 +26,19 @@ public struct StackShipResultWire: Encodable, Equatable, Sendable {
         }
     }
 
+    /// An entry the user chose not to publish yet.
+    public struct HeldBackEntry: Encodable, Equatable, Sendable {
+        public var position: Int
+        public var entryId: String
+        public var title: String
+
+        public init(position: Int, entryId: String, title: String) {
+            self.position = position
+            self.entryId = entryId
+            self.title = title
+        }
+    }
+
     public struct Shepherd: Encodable, Equatable, Sendable {
         public var autoFix: Bool
 
@@ -39,21 +52,34 @@ public struct StackShipResultWire: Encodable, Equatable, Sendable {
     public var provider: String
     /// Bottom-up.
     public var entries: [Entry]
+    /// Bottom-up; left local by the user's choice in the Ship popover.
+    public var heldBack: [HeldBackEntry]
     public var uncommittedChanges: Bool
+    /// The stack was rebased onto its base before the sync, dropping entries
+    /// that had already landed.
+    public var restacked: Bool
     public var shepherd: Shepherd
 
-    public init(stack: String, base: String, provider: String, entries: [Entry], uncommittedChanges: Bool, shepherd: Shepherd) {
+    public init(
+        stack: String, base: String, provider: String, entries: [Entry], heldBack: [HeldBackEntry],
+        uncommittedChanges: Bool, restacked: Bool, shepherd: Shepherd
+    ) {
         self.stack = stack
         self.base = base
         self.provider = provider
         self.entries = entries
+        self.heldBack = heldBack
         self.uncommittedChanges = uncommittedChanges
+        self.restacked = restacked
         self.shepherd = shepherd
     }
 }
 
 extension StackShipResultWire {
-    public init(record: StackShepherdRecord, requests: [Int: ReviewRequest], uncommittedChanges: Bool) {
+    public init(
+        record: StackShepherdRecord, requests: [Int: ReviewRequest], heldBack: [GGStackEntry],
+        uncommittedChanges: Bool, restacked: Bool
+    ) {
         self.init(
             stack: record.id.stackName,
             base: record.base,
@@ -66,7 +92,9 @@ extension StackShipResultWire {
                     state: request.state.rawValue, draft: request.isDraft
                 )
             },
+            heldBack: heldBack.map { HeldBackEntry(position: $0.position, entryId: $0.id, title: $0.title) },
             uncommittedChanges: uncommittedChanges,
+            restacked: restacked,
             shepherd: Shepherd(autoFix: record.autoFix)
         )
     }
@@ -125,14 +153,21 @@ public struct StackStatusWire: Encodable, Equatable, Sendable {
         public var fixAttempts: Int
         public var maxFixAttempts: Int
         public var readyToLand: Bool
+        /// An entry landed while the local stack still holds its commit:
+        /// `stack_ship` rebases it away and publishes the rest.
+        public var restackNeeded: Bool
         public var rulesSource: String
 
-        public init(phase: String, autoFix: Bool, fixAttempts: Int, maxFixAttempts: Int, readyToLand: Bool, rulesSource: String) {
+        public init(
+            phase: String, autoFix: Bool, fixAttempts: Int, maxFixAttempts: Int,
+            readyToLand: Bool, restackNeeded: Bool, rulesSource: String
+        ) {
             self.phase = phase
             self.autoFix = autoFix
             self.fixAttempts = fixAttempts
             self.maxFixAttempts = maxFixAttempts
             self.readyToLand = readyToLand
+            self.restackNeeded = restackNeeded
             self.rulesSource = rulesSource
         }
     }
@@ -157,13 +192,14 @@ public struct StackStatusWire: Encodable, Equatable, Sendable {
 }
 
 extension StackStatusWire.Shepherd {
-    public init(record: StackShepherdRecord, readyToLand: Bool, rules: ShepherdRules) {
+    public init(record: StackShepherdRecord, readyToLand: Bool, restackNeeded: Bool, rules: ShepherdRules) {
         self.init(
             phase: PRStatusWire.Shepherd.wireName(record.phase),
             autoFix: record.autoFix,
             fixAttempts: record.fixAttempts,
             maxFixAttempts: record.fixAttemptBudget,
             readyToLand: readyToLand,
+            restackNeeded: restackNeeded,
             rulesSource: PRStatusWire.Shepherd.wireName(rules.source)
         )
     }

@@ -30,6 +30,8 @@ struct RunRowInput {
     let hasTerminal: Bool
     let hasReport: Bool
     let target: RunExecutionTarget
+    /// A peer's scripts live on the host, so they cannot be edited from here.
+    var isEditable: Bool = true
 }
 
 struct RunRowPresentation: Equatable, Identifiable {
@@ -54,7 +56,9 @@ enum RunTabPresentation {
         inputs.map { row($0, now: now) }
     }
 
-    static func row(_ input: RunRowInput, now: Date) -> RunRowPresentation {
+    /// `hostLabel` names the machine when the target has no host of its own,
+    /// as a peer's runs do: they are local to the host, not to this Mac.
+    static func row(_ input: RunRowInput, now: Date, hostLabel: String? = nil) -> RunRowPresentation {
         let status = input.record?.status ?? .notRun
         return RunRowPresentation(
             id: input.script.key,
@@ -65,10 +69,35 @@ enum RunTabPresentation {
             isActive: status.isActive,
             detail: detail(record: input.record, now: now),
             locationLabel: locationLabel(script: input.script, target: input.target),
-            locationDetail: locationDetail(target: input.target),
+            locationDetail: locationDetail(target: input.target, hostLabel: hostLabel),
             conflictLabel: input.record?.portConflict.map(conflictLabel),
             actions: actions(input: input, status: status)
         )
+    }
+
+    /// A peer's row follows the local rules, without a terminal to jump to
+    /// or a script to edit.
+    static func peerRow(_ row: PeerRuns.Row, hostName: String, now: Date) -> RunRowPresentation {
+        let script = RunScript(
+            scope: row.script.scope,
+            fileName: row.script.fileName,
+            // Never read: the script file lives on the host.
+            fileURL: URL(fileURLWithPath: row.script.fileName),
+            displayName: row.script.name,
+            onExit: .keep,
+            cwd: row.script.cwd,
+            isExecutable: true
+        )
+        let hasReport = if case .finished = row.record?.status { true } else { false }
+        let input = RunRowInput(
+            script: script,
+            record: row.record,
+            hasTerminal: false,
+            hasReport: hasReport,
+            target: row.record?.target ?? row.script.target,
+            isEditable: false
+        )
+        return self.row(input, now: now, hostLabel: hostName)
     }
 
     // MARK: - Status
@@ -176,8 +205,8 @@ enum RunTabPresentation {
         }
     }
 
-    private static func locationDetail(target: RunExecutionTarget) -> String {
-        "\(target.hostLabel) · \(target.workingDirectory)"
+    private static func locationDetail(target: RunExecutionTarget, hostLabel: String?) -> String {
+        "\(target.host ?? hostLabel ?? target.hostLabel) · \(target.workingDirectory)"
     }
 
     static func conflictLabel(_ conflict: RunPortConflict) -> String {
@@ -211,7 +240,9 @@ enum RunTabPresentation {
         if input.hasTerminal {
             actions.append(.openTerminal)
         }
-        actions.append(.edit)
+        if input.isEditable {
+            actions.append(.edit)
+        }
         return actions
     }
 }

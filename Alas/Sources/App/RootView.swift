@@ -398,33 +398,33 @@ struct RootView: View {
     /// The selected peer tab's content. A peer document opens over it.
     @ViewBuilder
     private func peerCenterContent(_ client: NativePeerSessions) -> some View {
-        if client.selectedSessionId != nil {
-            if let document = client.workspace.document {
-                NativePeerDocumentView(
-                    document: document,
-                    content: client.workspace.documentContent,
-                    codeFontFamily: state.config.code.fontFamily,
-                    codeFontSize: CGFloat(state.config.code.fontSize),
-                    onClose: { client.closeDocument() }
-                )
-                .id(document)
-            } else {
-                NativePeerSessionView(
-                    client: client,
-                    typography: ACPChatTypography(
-                        fontFamily: state.config.agents.chatFontFamily,
-                        fontSize: state.config.agents.chatFontSize
-                    ),
-                    collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
-                    sendOnEnter: state.config.harness.acpSendOnEnter,
-                    dictationPreferences: state.config.harness.dictationPreferences,
-                    onChangeDictationPreferences: { [state] preferences in
-                        state.config.harness.dictationPreferences = preferences
-                        state.saveConfig()
-                    }
-                )
-                .id(client.selectedSessionId)
-            }
+        // A session's document, or one of a selected idle worktree read
+        // over its host's channel.
+        if client.canReadWorkspace, let document = client.workspace.document {
+            NativePeerDocumentView(
+                document: document,
+                content: client.workspace.documentContent,
+                codeFontFamily: state.config.code.fontFamily,
+                codeFontSize: CGFloat(state.config.code.fontSize),
+                onClose: { client.closeDocument() }
+            )
+            .id(document)
+        } else if client.selectedSessionId != nil {
+            NativePeerSessionView(
+                client: client,
+                typography: ACPChatTypography(
+                    fontFamily: state.config.agents.chatFontFamily,
+                    fontSize: state.config.agents.chatFontSize
+                ),
+                collapsesFinishedToolCalls: state.config.harness.acpCollapseFinishedToolCalls,
+                sendOnEnter: state.config.harness.acpSendOnEnter,
+                dictationPreferences: state.config.harness.dictationPreferences,
+                onChangeDictationPreferences: { [state] preferences in
+                    state.config.harness.dictationPreferences = preferences
+                    state.saveConfig()
+                }
+            )
+            .id(client.selectedSessionId)
         } else if let consoles = client.consoles, let viewer = consoles.viewer {
             NativePeerConsoleView(
                 viewer: viewer,
@@ -932,9 +932,7 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                 guard state.pendingSelfUpdate else { return }
                 state.pendingSelfUpdate = false
                 state.presentUpdateProgress = true
-                Task {
-                    try? await state.selfUpdater.start(command: .homebrew)
-                }
+                Task { await state.runSelfUpdate() }
             }) { info in
                 UpdateAvailableSheet(
                     info: info,
@@ -949,9 +947,20 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
             .sheet(isPresented: $state.presentUpdateProgress) {
-                UpdateProgressSheet(updater: state.selfUpdater) {
-                    state.presentUpdateProgress = false
-                }
+                UpdateProgressSheet(
+                    updater: state.selfUpdater,
+                    update: state.updates.availableUpdate,
+                    isInstalled: state.updates.isReadyToRelaunch,
+                    onRetry: {
+                        state.selfUpdater.reset()
+                        Task { await state.runSelfUpdate() }
+                    },
+                    onRelaunch: { AppRelaunch.relaunch() },
+                    onDone: {
+                        state.selfUpdater.reset()
+                        state.presentUpdateProgress = false
+                    }
+                )
                 .environment(\.theme, state.themeStore.current)
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }

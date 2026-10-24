@@ -158,6 +158,12 @@ public struct ShepherdPresentation: Equatable, Sendable {
         case .awaitingPush: return (.waiting, "waiting for stack_ship")
         case .merging, .queued, .watching: break
         }
+        if let landedIDs = record.landedEntryIDs {
+            let landed = entryList(record.entries.filter { landedIDs.contains($0.entryID) })
+            return record.autoFix
+                ? (.waiting, "\(landed) landed: waiting for stack_ship to restack")
+                : (.attention, "auto-fix off: \(landed) landed, restack with stack_ship")
+        }
         if gatePasses { return (.ready, "ready to land") }
         let open = record.openEntries
         let openRequests = open.compactMap { requests[$0.requestNumber] }
@@ -232,6 +238,27 @@ public enum ShepherdShipAction: Equatable, Sendable {
         if !snapshot.providerAvailable { return "\(cli) isn't installed. Install it with brew install \(cli)." }
         if !snapshot.providerAuthenticated { return "\(cli) isn't signed in. Run \(cli) auth login." }
         return nil
+    }
+
+    /// Whether the toolbar pill should stand out: its popover leads to an
+    /// action that can run now. Taking over another session's request can
+    /// once its request has loaded, and adopting an open request always can;
+    /// Ship with agent needs an idle session and, when `snapshot` is known, a
+    /// usable code host. An unknown snapshot counts as usable because the
+    /// popover checks again before it acts.
+    public static func invitesShip(
+        record: ShepherdRecord?,
+        otherRecord: ShepherdRecord?,
+        request: ReviewRequest?,
+        snapshot: ReviewLoopSnapshot?,
+        isBusy: Bool
+    ) -> Bool {
+        guard record == nil else { return false }
+        if otherRecord != nil { return request != nil }
+        if request?.state == .open { return true }
+        if isBusy { return false }
+        guard let snapshot else { return true }
+        return createUnavailableReason(isBusy: false, snapshot: snapshot, isLoading: false) == nil
     }
 }
 
@@ -314,5 +341,21 @@ public enum StackShipAction: Equatable, Sendable {
         if !stack.entries.isEmpty, stack.entries.allSatisfy({ $0.prNumber != nil }) { return .adopt }
         if isBusy { return .unavailable("Wait for the current turn to finish.") }
         return .create
+    }
+
+    /// Whether the toolbar pill should stand out: the popover's action can
+    /// run now. Any record of this session, finished ones included, puts the
+    /// popover on its bound view, which offers no Ship. Otherwise it follows
+    /// `resolve`, except that an unknown `stack` counts as shippable once the
+    /// turn ends because the popover reads gg again before it acts.
+    public static func invitesShip(
+        record: StackShepherdRecord?, otherRecord: StackShepherdRecord?, stack: GGStack?, isBusy: Bool
+    ) -> Bool {
+        guard record == nil else { return false }
+        switch resolve(record: nil, otherRecord: otherRecord, stack: stack, isBusy: isBusy) {
+        case .adopt, .create: return true
+        case .unavailable: return stack == nil && !isBusy
+        case .shepherding: return false
+        }
     }
 }

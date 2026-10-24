@@ -18,9 +18,13 @@ extension AppState {
                 let localOnly = GGAvailability.shared.capabilities.localStackSnapshot
                 return try await GGService().currentStack(worktreePath: path.path, refreshRemote: !localOnly)
             },
-            syncStack: { [weak self] worktreeID in
+            syncStack: { [weak self] worktreeID, plan in
                 guard let self else { throw GGMutationError.staleConfirmation }
-                try await self.syncStackForShip(worktreeID: worktreeID)
+                try await self.syncStackForShip(worktreeID: worktreeID, plan: plan)
+            },
+            rebaseStack: { [weak self] worktreeID, expected in
+                guard let self else { throw GGMutationError.staleConfirmation }
+                try await self.ggPane(worktreeID: worktreeID).rebaseGGForShip(expected: expected)
             },
             sessionState: { [weak self] sessionID, worktreeID in
                 await self?.shepherdSessionState(sessionID: sessionID, worktreeID: worktreeID) ?? .missing
@@ -78,33 +82,44 @@ extension AppState {
     /// `gg sync` through the worktree's Changes pane state, the path the
     /// stack drawer's Sync and Commit & sync use: the same preflight, paused
     /// operation guard, progress and refresh.
-    private func syncStackForShip(worktreeID: String) async throws {
+    private func syncStackForShip(worktreeID: String, plan: StackShipPlan) async throws {
+        let pane = try ggPane(worktreeID: worktreeID)
+        guard plan != .wholeStack else {
+            try await pane.syncGGForCommitPublish(.sync)
+            return
+        }
+        guard GGAvailability.shared.capabilities.syncUntilDraft else { throw GGMutationError.scopedSyncUnsupported }
+        try await pane.syncGGForCommitPublish(.syncUntil(target: plan.shipThroughEntryID, draft: plan.opensDrafts))
+    }
+
+    /// The worktree's Changes pane state, which runs its gg mutations.
+    private func ggPane(worktreeID: String) throws -> RightPaneState {
         guard let worktree = worktree(withId: worktreeID) else { throw GGMutationError.staleConfirmation }
-        let pane = rightPaneStore.state(
+        return rightPaneStore.state(
             for: worktree,
             baseBranch: config.worktrees.baseBranch,
             comparisonMode: config.changes.comparisonMode,
             activates: false
         )
-        try await pane.syncGGForCommitPublish()
     }
 
     // MARK: - Ship
 
-    /// The toolbar's Ship stack button: asks the session to fold its work
-    /// into the stack and call `stack_ship`.
-    func requestShipStack(sessionID: String, worktree: Worktree) {
+    /// The toolbar's Ship stack button: remembers what to publish for the
+    /// session's `stack_ship`, then asks the session to fold its work into
+    /// the stack and call it.
+    func requestShipStack(sessionID: String, worktree: Worktree, plan: StackShipPlan) {
         let session = acpManager(for: worktree)?.liveSession(for: sessionID)
         Task { @MainActor [weak self] in
             guard let self else { return }
             await preparingShip(session: session) {
-                await sendShipStackPrompt(sessionID: sessionID, worktree: worktree)
+                await sendShipStackPrompt(sessionID: sessionID, worktree: worktree, plan: plan)
             }
         }
     }
 
     /// Returns once the session took the prompt or it was refused.
-    private func sendShipStackPrompt(sessionID: String, worktree: Worktree) async {
+    private func sendShipStackPrompt(sessionID: String, worktree: Worktree, plan: StackShipPlan) async {
         guard let manager = acpManager(for: worktree) else { return }
         let stackName = shepherdStackName(for: worktree) ?? worktree.branch
         let remotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
@@ -116,9 +131,13 @@ extension AppState {
             )
             return
         }
+        // Set even for the whole stack, so an earlier choice never carries over.
+        stackShepherd.setPendingShipPlan(
+            plan, sessionID: sessionID, id: StackShepherdRecordID(worktreeID: worktree.id, stackName: stackName)
+        )
         await manager.sendPrompt(
             for: sessionID,
-            text: StackShepherdPromptBuilder.shipPrompt(kind: kind),
+            text: StackShepherdPromptBuilder.shipPrompt(kind: kind, plan: plan),
             attachments: [],
             delegatedSource: .shipStack(stackName: stackName, kind: kind, messageID: UUID()),
             normalUserTurn: false
@@ -129,6 +148,15 @@ extension AppState {
                 severity: .error,
                 worktreeID: worktree.id
             )
+        }
+    }
+
+    /// The shepherding popover's Ship more: publishes `plan` straight away,
+    /// without an agent turn, since the held-back entries are already
+    /// committed.
+    func shipMoreStack(sessionID: String, worktree: Worktree, plan: StackShipPlan) async {
+        if case .error(let message) = await core.shipStack(sessionID: sessionID, worktreeID: worktree.id, plan: plan) {
+            inAppNotifications.post("Couldn't ship more of the stack: \(message)", severity: .error, worktreeID: worktree.id)
         }
     }
 
@@ -165,7 +193,7 @@ extension AppState {
         case .adopt:
             await shepherdStackWithSession(session.id, worktree: worktree)
         case .create:
-            await sendShipStackPrompt(sessionID: session.id, worktree: worktree)
+            await sendShipStackPrompt(sessionID: session.id, worktree: worktree, plan: .wholeStack)
         case .unavailable(let reason):
             session.lastError = reason
         }

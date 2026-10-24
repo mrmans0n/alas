@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Alas
 
@@ -251,6 +252,71 @@ struct NativePeerSidebarSnapshotTests {
         #expect(NativePeerWorktreeGroup.reconciledTab(
             tab(selected), previous: ["a", "b", "c"].map(tab), current: current.map(tab)
         ) == expected.map(tab))
+    }
+
+    private func hostWorktree(
+        _ branch: String, project: String = "p", isMain: Bool = false, operation: WorktreeOperation? = nil
+    ) -> PeerHostWorktree {
+        let path = URL(fileURLWithPath: "/srv/\(project)/\(branch)")
+        return PeerHostWorktree(
+            snapshot: WorktreeSnapshot(
+                worktree: Worktree(id: Worktree.makeId(path: path), projectId: project, name: branch, branch: branch,
+                                   path: path, status: .clean, lastActivity: .distantPast),
+                operation: operation, isArchived: false
+            ),
+            project: ProjectSnapshot(ProjectConfig(
+                id: project, name: "repo", path: "/srv/\(project)", color: "blue", addedAt: .distantPast
+            )),
+            isMain: isMain, workspaceCheckoutName: nil
+        )
+    }
+
+    @Test func hostWorktreesListIdleOnesAndJoinSessionRowsByWorktreeId() {
+        let (main, feature, idle) = (hostWorktree("main", isMain: true), hostWorktree("feature"), hostWorktree("idle"))
+        let snapshot = NativePeerSidebarSnapshot.build(
+            peers: [RemoteHelloPeer(serverId: "b", name: "Mac B", state: "online")],
+            rows: [worktreeRow("s", project: "repo", worktreeId: feature.snapshot.worktree.id, branch: "feature", projectId: "p")],
+            hostWorktrees: ["b": [main, feature, idle]]
+        )
+
+        let repos = snapshot.groups[0].repos(ordering: .manual)
+        #expect(repos.map(\.name) == ["repo"])
+        let worktrees = repos[0].worktrees
+        #expect(worktrees.map(\.title) == ["main", "feature", "idle"])
+        #expect(worktrees[1].sessions.map(\.id) == ["b:s"])
+        #expect(worktrees[1].host == feature)
+        #expect(worktrees[2].sessions.isEmpty)
+        #expect(worktrees[2].worktree?.branch == "idle")
+        #expect(worktrees[2].peerWorktreeId == idle.snapshot.worktree.id)
+    }
+
+    @Test func peersWithoutTheHostChannelKeepSessionDerivedGrouping() {
+        let peers = [
+            RemoteHelloPeer(serverId: "b", name: "Mac B", state: "online"),
+            RemoteHelloPeer(serverId: "c", name: "Mac C", state: "online")
+        ]
+        let rows = [
+            worktreeRow("s", project: "repo", worktreeId: "w", projectId: "p"),
+            row("t", peer: "c", status: "idle")
+        ]
+        let withHosts = NativePeerSidebarSnapshot.build(peers: peers, rows: rows, hostWorktrees: ["b": [hostWorktree("idle")]])
+
+        #expect(withHosts.groups[1] == NativePeerSidebarSnapshot.build(peers: peers, rows: rows).groups[1])
+        #expect(withHosts.groups[1].hostWorktrees == nil)
+    }
+
+    @Test(arguments: [
+        (WorktreeOperation.deleting, "Deleting…", "fg-muted", true),
+        (.archiving, "Archiving…", "fg-muted", true),
+        (.preparingDelete, "Preparing deletion…", "fg-muted", true),
+        (.deleteFailed(message: "locked\n"), "Delete failed: locked", "del", false),
+    ] as [(WorktreeOperation, String, String, Bool)])
+    func hostOperationsOutrankSessionStatus(_ operation: WorktreeOperation, note: String, colorToken: String, pulses: Bool) {
+        let group = NativePeerWorktreeGroup(
+            id: "w", sessions: [worktreeRow("a", project: "repo", worktreeId: "w", status: "streaming")],
+            host: hostWorktree("feature", operation: operation)
+        )
+        #expect(group.status == .init(note: note, colorToken: colorToken, pulses: pulses))
     }
 
     @Test func peerWorktreeStatusRanksWaitingOverRunningAndHidesIdle() {

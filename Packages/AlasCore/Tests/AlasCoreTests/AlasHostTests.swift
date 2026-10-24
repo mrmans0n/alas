@@ -39,9 +39,11 @@ struct AlasHostTests {
         case createAtATakenRemoteDestination
         case deleteWorkspaceOwned
         case deleteWithUnsavedEdits
+        case forceDeleteWithUnsavedEdits
+        case archiveWithUnsavedEdits
     }
 
-    /// The create and delete verbs check what every caller would, whatever
+    /// The create, delete and archive verbs check what every caller would, whatever
     /// the transport: nothing is listed or claimed for a refused request.
     @Test(arguments: VerbCheck.allCases)
     func worktreeVerbsRefuseWhatTheirChecksRefuse(_ check: VerbCheck) async throws {
@@ -57,7 +59,6 @@ struct AlasHostTests {
         let environment = CheckingEnvironment()
         let core = AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch(), environment: environment)
         let host = AlasHost(core: core)
-        let refusal: WorktreeCheckRefusal
         switch check {
         case .createAtATakenRemoteDestination:
             core.worktreeDestinationPreparer = { _, destination in
@@ -66,15 +67,13 @@ struct AlasHostTests {
             core.remoteCommandRunner = { _, _, command in
                 ProcessResult(exitCode: command.contains("/home/remote/new") ? 0 : 1, stdout: "", stderr: "")
             }
-            refusal = .destinationTaken
-            await #expect(throws: refusal) {
+            await #expect(throws: WorktreeCheckRefusal.destinationTaken) {
                 try await host.worktrees.create(
                     WorktreeCreateRequest(projectID: "p", base: "main", branch: "new", destination: URL(fileURLWithPath: "/Users/local/new")),
                     caller: .localUser(uid: 501)
                 )
             }
         case .createWithInvalidBranch:
-            refusal = .invalidBranch("")
             await #expect(throws: WorktreeCheckRefusal.self) {
                 try await host.worktrees.create(
                     WorktreeCreateRequest(projectID: "p", base: "main", branch: "bad..name", destination: URL(fileURLWithPath: "/srv/new")),
@@ -83,15 +82,21 @@ struct AlasHostTests {
             }
         case .deleteWorkspaceOwned:
             environment.workspaceRefusal = "A Workspace checkout manages this worktree."
-            refusal = .workspaceOwned("A Workspace checkout manages this worktree.")
-        case .deleteWithUnsavedEdits:
-            environment.unsavedEdits = true
-            refusal = .unsavedChanges
-        }
-        if check != .createWithInvalidBranch, check != .createAtATakenRemoteDestination {
-            await #expect(throws: refusal) {
+            await #expect(throws: WorktreeDeletionRefusal.ownedByWorkspaceCheckout("A Workspace checkout manages this worktree.")) {
                 try await host.worktrees.delete(worktree, caller: .localUser(uid: 501))
             }
+        case .deleteWithUnsavedEdits, .forceDeleteWithUnsavedEdits:
+            environment.unsavedEdits = true
+            // Force means only "despite git changes": it discards no edits.
+            await #expect(throws: WorktreeDeletionRefusal.unsavedEdits) {
+                try await host.worktrees.delete(worktree, force: check == .forceDeleteWithUnsavedEdits, caller: .localUser(uid: 501))
+            }
+        case .archiveWithUnsavedEdits:
+            environment.unsavedEdits = true
+            await #expect(throws: WorktreeArchiveRefusal.unsavedEdits) {
+                try await host.worktrees.archive(worktree, caller: .localUser(uid: 501))
+            }
+            #expect(!projects.isWorktreeHidden(projectId: "p", path: worktree.path))
         }
         #expect(projects.worktrees(projectId: "p") == [worktree])
         #expect(projects.operationState(for: worktree) == nil)

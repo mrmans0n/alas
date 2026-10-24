@@ -629,7 +629,8 @@ final class AppRunLauncher: RunLauncher {
             includeUserStartupScript: true,
             titleOverride: request.script.displayName,
             runScriptKey: request.script.key,
-            isHidden: request.isHidden
+            isHidden: request.isHidden,
+            activates: request.activatesConsole
         )
         // A terminal with no run leaf gives nothing to observe.
         guard case .terminal(let terminalState) = tab, let sessionID = terminalState.runScriptLeafId else {
@@ -641,6 +642,11 @@ final class AppRunLauncher: RunLauncher {
 
     func hostsRun(scriptKey: String, worktreeID: String) -> Bool {
         app?.scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) != nil
+    }
+
+    func runHostIsActive(scriptKey: String, worktreeID: String) -> Bool {
+        guard let app, let tab = app.scriptTab(scriptKey: scriptKey, worktreeID: worktreeID) else { return false }
+        return app.tabs.activeTabId(forWorktree: worktreeID) == tab.id
     }
 
     func endRunHost(scriptKey: String, worktreeID: String) {

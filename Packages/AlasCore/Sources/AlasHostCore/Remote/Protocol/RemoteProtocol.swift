@@ -36,11 +36,15 @@ public struct RemoteServerIdentity: Equatable, Sendable {
     public let serverId: String
     public let name: String
     public let peers: [RemoteHelloPeer]
+    /// False for a server with no terminal consoles to attach to (a headless
+    /// host), so its hello does not advertise the console capabilities.
+    public let servesPeerConsoles: Bool
 
-    public init(serverId: String, name: String, peers: [RemoteHelloPeer] = []) {
+    public init(serverId: String, name: String, peers: [RemoteHelloPeer] = [], servesPeerConsoles: Bool = true) {
         self.serverId = serverId
         self.name = name
         self.peers = peers
+        self.servesPeerConsoles = servesPeerConsoles
     }
 }
 
@@ -112,8 +116,12 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
     /// Set by hosts that serve `searchMentions` and resolve `sendPrompt`
     /// mentions. Older hosts would drop both.
     public var supportsMentions: Bool? = nil
+    /// Why the session's agent cannot run on the host, or the error it last
+    /// hit, as the host's own banner words it. Nil when nothing is wrong,
+    /// and on older hosts.
+    public var agentIssue: RemoteAgentIssue? = nil
 
-    public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil) {
+    public init(sessionId: String, models: [RemoteModelInfo], modes: [RemoteModelInfo], currentModel: String? = nil, currentMode: String? = nil, autoRunEnabled: Bool, acceptsImages: Bool, chips: RemoteChipState? = nil, supportsSteering: Bool? = nil, availableCommands: [RemoteSlashCommand]? = nil, usage: RemoteUsage? = nil, supportsQueueReorder: Bool? = nil, supportsMentions: Bool? = nil, agentIssue: RemoteAgentIssue? = nil) {
         self.sessionId = sessionId
         self.models = models
         self.modes = modes
@@ -127,6 +135,19 @@ public struct RemoteSessionConfig: Codable, Equatable, Sendable {
         self.usage = usage
         self.supportsQueueReorder = supportsQueueReorder
         self.supportsMentions = supportsMentions
+        self.agentIssue = agentIssue
+    }
+}
+
+public struct RemoteAgentIssue: Codable, Equatable, Sendable {
+    /// `needsSetup`, `needsAuth`, `setupError`, `failed` (the agent could
+    /// not start or attach) or `error` (a prompt failed on a running agent).
+    public var kind: String
+    public var message: String
+
+    public init(kind: String, message: String) {
+        self.kind = kind
+        self.message = message
     }
 }
 
@@ -823,8 +844,9 @@ public enum RemoteServerMessage: Equatable, Sendable {
     case sessionClosed(sessionId: String)
     /// The server dropped a `sendPrompt` (caller is no longer the writer, or
     /// the prompt was empty), so the client should restore the user's text
-    /// instead of silently losing it.
-    case promptRejected(sessionId: String)
+    /// instead of silently losing it. `reason` is why the session's agent
+    /// cannot take it, when the host knows; nil on older hosts.
+    case promptRejected(sessionId: String, reason: String? = nil)
     /// The server refused a `visualAidResponse` (reason: notWriter, notFound,
     /// alreadyAnswered, invalid or failed), so the phone re-enables the card.
     /// `requestId` echoes the response's token when it carried one.
@@ -880,7 +902,7 @@ extension RemoteServerMessage: Codable {
         case type, sessions, sessionId, projectId, streamingState, canDrive, messages, upserts, payload, requestId, message
         case hasCancellableBackgroundWork
         case worktrees, agents, session, projects, branches, preferredBase, stage, worktreeId
-        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions
+        case chips, supportsSteering, availableCommands, usage, supportsQueueReorder, supportsMentions, agentIssue
         case query, candidates
         case models, modes, currentModel, currentMode, autoRunEnabled, acceptsImages, title
         case firstIndex, totalCount, epoch, revision
@@ -1008,7 +1030,10 @@ extension RemoteServerMessage: Codable {
                 visualId: try c.decode(String.self, forKey: .visualId),
                 reason: try c.decode(String.self, forKey: .reason),
                 requestId: try c.decodeIfPresent(String.self, forKey: .requestId))
-        case "promptRejected": self = .promptRejected(sessionId: try c.decode(String.self, forKey: .sessionId))
+        case "promptRejected":
+            self = .promptRejected(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                reason: try? c.decodeIfPresent(String.self, forKey: .reason) ?? nil)
         case "sessionTabActionSucceeded":
             self = .sessionTabActionSucceeded(sessionId: try c.decode(String.self, forKey: .sessionId))
         case "sessionTabActionFailed":
@@ -1032,6 +1057,7 @@ extension RemoteServerMessage: Codable {
             config.usage = try? c.decodeIfPresent(RemoteUsage.self, forKey: .usage) ?? nil
             config.supportsQueueReorder = try? c.decodeIfPresent(Bool.self, forKey: .supportsQueueReorder) ?? nil
             config.supportsMentions = try? c.decodeIfPresent(Bool.self, forKey: .supportsMentions) ?? nil
+            config.agentIssue = try? c.decodeIfPresent(RemoteAgentIssue.self, forKey: .agentIssue) ?? nil
             self = .sessionConfig(config)
         case "sessionRenamed":
             self = .sessionRenamed(
@@ -1258,8 +1284,9 @@ extension RemoteServerMessage: Codable {
             try c.encode(requestId, forKey: .requestId)
         case .sessionClosed(let id): try c.encode("sessionClosed", forKey: .type)
         try c.encode(id, forKey: .sessionId)
-        case .promptRejected(let id): try c.encode("promptRejected", forKey: .type)
+        case .promptRejected(let id, let reason): try c.encode("promptRejected", forKey: .type)
         try c.encode(id, forKey: .sessionId)
+        try c.encodeIfPresent(reason, forKey: .reason)
         case .visualAidRejected(let s, let v, let r, let requestId):
             try c.encode("visualAidRejected", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1288,6 +1315,7 @@ extension RemoteServerMessage: Codable {
             try c.encodeIfPresent(cfg.usage, forKey: .usage)
             try c.encodeIfPresent(cfg.supportsQueueReorder, forKey: .supportsQueueReorder)
             try c.encodeIfPresent(cfg.supportsMentions, forKey: .supportsMentions)
+            try c.encodeIfPresent(cfg.agentIssue, forKey: .agentIssue)
         case .sessionRenamed(let id, let title):
             try c.encode("sessionRenamed", forKey: .type)
             try c.encode(id, forKey: .sessionId)
@@ -1405,9 +1433,9 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: [
-                PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1, PeerSessionTabsCapability.v1,
-            ] + HostProtocolCapability.served)
+            capabilities: (identity.servesPeerConsoles
+                ? [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1] : [])
+                + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
     }
 }
 
@@ -1428,8 +1456,17 @@ public enum HostProtocolCapability: Sendable {
     public static let eventsV1 = "host.events.v1"
     /// Hosts that serve `runOutput`.
     public static let runsOutputV1 = "host.runs.output.v1"
+    /// Hosts whose `deleteWorktree` and `archiveWorktree` take
+    /// `discardUnsavedEdits` and answer typed unsaved-edits and Workspace refusals.
+    public static let worktreesLifecycleV1 = "host.worktrees.lifecycle.v1"
+    /// Hosts that serve `readWorktree`.
+    public static let worktreesReadV1 = "host.worktrees.read.v1"
+    /// Hosts that serve `listRunScripts` and `restartRun`.
+    public static let runsScriptsV1 = "host.runs.scripts.v1"
     /// Everything this host serves of the host protocol.
-    public static let served = [v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1]
+    public static let served = [
+        v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
+    ]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

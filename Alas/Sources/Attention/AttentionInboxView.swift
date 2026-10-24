@@ -75,6 +75,7 @@ struct AttentionInboxPresentation {
     let peerRows: [RemoteSessionSummary]
     let pluginUpdates: [PluginManager.CatalogUpdate]
     let appUpdate: ReleaseInfo?
+    let appUpdateReadyToRelaunch: Bool
     let cleanupReminders: [WorktreeCleanupReminder]
     let historyRows: [AttentionInboxRowPresentation]
     let errors: [PersistenceError]
@@ -95,11 +96,13 @@ struct AttentionInboxPresentation {
 
     init(aggregation: AttentionAggregation, loadError: String?, writeError: String? = nil,
          peerRows: [RemoteSessionSummary] = [], pluginUpdates: [PluginManager.CatalogUpdate] = [],
-         appUpdate: ReleaseInfo? = nil, cleanupReminders: [WorktreeCleanupReminder] = [], now: Date = Date()) {
+         appUpdate: ReleaseInfo? = nil, appUpdateReadyToRelaunch: Bool = false,
+         cleanupReminders: [WorktreeCleanupReminder] = [], now: Date = Date()) {
         activeRows = aggregation.items.map { AttentionInboxRowPresentation(item: $0, now: now) }
         self.peerRows = peerRows
         self.pluginUpdates = pluginUpdates
         self.appUpdate = appUpdate
+        self.appUpdateReadyToRelaunch = appUpdateReadyToRelaunch
         self.cleanupReminders = cleanupReminders
         historyRows = aggregation.history.map { AttentionInboxRowPresentation(item: $0, now: now) }
         errors = [
@@ -114,6 +117,7 @@ struct AttentionInboxView: View {
     let peerRows: [RemoteSessionSummary]
     var pluginUpdates: [PluginManager.CatalogUpdate] = []
     var appUpdate: ReleaseInfo? = nil
+    var appUpdateReadyToRelaunch = false
     var cleanupReminders: [WorktreeCleanupReminder] = []
     let loadError: String?
     let writeError: String?
@@ -142,7 +146,7 @@ struct AttentionInboxView: View {
             let presentation = AttentionInboxPresentation(
                 aggregation: aggregation, loadError: loadError, writeError: writeError,
                 peerRows: peerRows, pluginUpdates: pluginUpdates, appUpdate: appUpdate,
-                cleanupReminders: cleanupReminders, now: context.date
+                appUpdateReadyToRelaunch: appUpdateReadyToRelaunch, cleanupReminders: cleanupReminders, now: context.date
             )
             VStack(spacing: 0) {
                 HStack(spacing: 9) {
@@ -295,19 +299,21 @@ struct AttentionInboxList: View {
                         .foregroundStyle(theme.color("accent"))
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Alas").font(.system(size: 13, weight: .medium))
+                        let status = presentation.appUpdateReadyToRelaunch ? "installed" : "available"
                         switch update {
                         case .stable(let release):
-                            Text("Version \(release.version.description) available")
+                            Text("Version \(release.version.description) \(status)")
                                 .font(.system(size: 11))
                                 .foregroundStyle(theme.color("fg-muted"))
                         case .nightly(let release):
-                            Text("Nightly \(release.shortSHA) available")
+                            Text("Nightly \(release.shortSHA) \(status)")
                                 .font(.system(size: 11))
                                 .foregroundStyle(theme.color("fg-muted"))
                         }
                     }
                     Spacer()
-                    Button("View update", action: onOpenAppUpdate)
+                    Button(presentation.appUpdateReadyToRelaunch ? "Relaunch" : "View update",
+                           action: onOpenAppUpdate)
                         .controlSize(.small)
                 }
                 .padding(10)

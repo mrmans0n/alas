@@ -1,8 +1,8 @@
 import SwiftUI
 
 /// The right pane for a selected peer worktree: its changes and files,
-/// read-only, and its sessions. Tabs that only make sense on this Mac (run,
-/// schedules) are not offered.
+/// read-only, and its sessions. Run is offered by hosts that serve their
+/// scripts; schedules only make sense on this Mac and are not offered.
 struct NativePeerRightPaneView: View {
     @Bindable var state: AppState
     @Bindable var client: NativePeerSessions
@@ -14,8 +14,10 @@ struct NativePeerRightPaneView: View {
     @State private var openPaths: Set<String> = []
     @State private var bookmarkOpenPaths: Set<String> = []
     @State private var railBodyWidth: Double = 0
+    @State private var runRefreshGeneration = 0
 
     var body: some View {
+        let tabs = self.tabs
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
             SidebarMaterialBackground(
@@ -26,7 +28,7 @@ struct NativePeerRightPaneView: View {
                 if !collapsed {
                     VStack(spacing: 0) {
                         toolbar
-                        tabContent
+                        tabContent(shownTab(in: tabs))
                             .scrollIndicators(.hidden)
                     }
                     // Short content (a one-line message) must not let the
@@ -40,11 +42,12 @@ struct NativePeerRightPaneView: View {
                     ))
                 }
                 RightPaneRail(
-                    activeTab: shownTab,
+                    activeTab: shownTab(in: tabs),
                     collapsed: collapsed,
                     changesCount: changesCount,
-                    tabs: RightPaneTab.peerAvailable(isFolder: isFolder),
-                    onAction: handle
+                    activeRunCount: activeRunCount,
+                    tabs: tabs,
+                    onAction: { handle($0, tabs: tabs) }
                 )
             }
             .sidebarChromeTheme(textContrast: override.textContrast)
@@ -52,9 +55,9 @@ struct NativePeerRightPaneView: View {
         .onReceive(NotificationCenter.default.publisher(for: .alasSelectRightPaneTab)) { notification in
             guard let raw = notification.object as? String,
                   let tab = RightPaneTab(rawValue: raw),
-                  RightPaneTab.peerAvailable(isFolder: isFolder).contains(tab)
+                  tabs.contains(tab)
             else { return }
-            handle(RightPaneRailAction.resolve(tapped: tab, active: shownTab, collapsed: collapsed))
+            handle(RightPaneRailAction.resolve(tapped: tab, active: shownTab(in: tabs), collapsed: collapsed), tabs: tabs)
         }
         .onChange(of: client.selectedWorktree) { _, _ in openPaths = [] }
         .onChange(of: state.config.changes.comparisonMode) { _, _ in
@@ -76,6 +79,7 @@ struct NativePeerRightPaneView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             ToolbarBtn(icon: "arrow.clockwise", tooltip: "Refresh from peer") {
                 client.reloadWorkspace()
+                runRefreshGeneration += 1
             }
         }
         .padding(.leading, 10)
@@ -86,23 +90,33 @@ struct NativePeerRightPaneView: View {
     }
 
     @ViewBuilder
-    private var tabContent: some View {
+    private func tabContent(_ shownTab: RightPaneTab) -> some View {
         if shownTab == .agent {
             agentTab
-        } else if client.selectedSessionId == nil {
-            // Changes and files are served per session.
+        } else if shownTab == .run, let runTarget, let hosts = client.hosts {
+            // Runs come from the host channel, so they need no session.
+            NativePeerRunTabView(
+                hosts: hosts,
+                serverId: runTarget.serverId,
+                worktree: runTarget.worktree,
+                hostName: client.selectedWorktreePeer?.name ?? "The host",
+                refreshGeneration: runRefreshGeneration
+            )
+        } else if !client.canReadWorkspace {
+            // Changes and files are served per session, or per worktree by a
+            // host that reads worktrees.
             NativePeerRailMessage(text: "Select a session to see this worktree's changes and files.")
         } else if shownTab == .files {
             filesTab
         } else {
             NativePeerChangesView(
                 changes: client.workspace.changes,
-                worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
+                worktreePath: URL(fileURLWithPath: client.workspaceWorktreePath ?? "/"),
                 commitFiles: client.workspace.commitFiles,
                 onLoadCommitFiles: { client.loadCommitFiles(sha: $0) },
                 onOpen: { client.open($0) }
             )
-            .id(client.selectedSessionId)
+            .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
         }
     }
 
@@ -153,7 +167,7 @@ struct NativePeerRightPaneView: View {
                     fileTreeGeneration: 0,
                     fileTreeRefreshRevision: client.workspace.fileTreeRevision,
                     // Only used to build copied full paths; the path is the peer's.
-                    worktreePath: URL(fileURLWithPath: client.selectedRow?.worktree?.path ?? "/"),
+                    worktreePath: URL(fileURLWithPath: client.workspaceWorktreePath ?? "/"),
                     openPaths: $openPaths,
                     onSelectFile: { client.open(.file(path: $0.path)) },
                     onFileHistory: { _ in },
@@ -174,17 +188,37 @@ struct NativePeerRightPaneView: View {
 
     /// A folder project has no Changes tab, so it shows Files in its place.
     private var isFolder: Bool { client.selectedWorktreeGroup?.isFolder == true }
-    private var shownTab: RightPaneTab { isFolder && activeTab == .changes ? .files : activeTab }
+    /// The selected worktree on a host that serves its Run tab.
+    private var runTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard let selection = client.selectedWorktree, let host = client.selectedWorktreeGroup?.host,
+              client.hosts?.servesRuns(serverId: selection.serverId) == true
+        else { return nil }
+        return (selection.serverId, host)
+    }
+
+    private var tabs: [RightPaneTab] { RightPaneTab.peerAvailable(isFolder: isFolder, servesRuns: runTarget != nil) }
+
+    /// Keeps the folder rule (Files in place of Changes) and drops a Run tab
+    /// the host no longer serves.
+    private func shownTab(in tabs: [RightPaneTab]) -> RightPaneTab {
+        tabs.contains(activeTab) ? activeTab : tabs[0]
+    }
+
+    private var activeRunCount: Int {
+        guard let runTarget else { return 0 }
+        let worktreeID = runTarget.worktree.snapshot.worktree.id
+        return client.hosts?.runs[runTarget.serverId]?.count(where: { $0.worktreeID == worktreeID && $0.status.isActive }) ?? 0
+    }
 
     private var changesCount: Int {
         if case .loaded(let changes) = client.workspace.changes { return changes.branchFiles.count }
         return client.selectedWorktreeGroup?.worktree?.changedFileCount ?? 0
     }
 
-    private func handle(_ action: RightPaneRailAction) {
+    private func handle(_ action: RightPaneRailAction, tabs: [RightPaneTab]) {
         let outcome = RightPaneRailModel.apply(
             action,
-            currentTab: shownTab,
+            currentTab: shownTab(in: tabs),
             currentVisible: state.config.rightPaneVisible
         )
         activeTab = outcome.tab

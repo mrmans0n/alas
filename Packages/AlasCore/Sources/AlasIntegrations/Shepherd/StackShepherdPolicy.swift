@@ -11,6 +11,10 @@ public struct StackShepherdObservation: Sendable {
     /// The ids of the published entries gg lists for this stack, or nil when
     /// the worktree is not on it (nothing can be dropped then).
     public let presentEntryIDs: Set<String>?
+    /// The ids of every entry gg lists for this stack, published or not, or
+    /// nil when the worktree is not on it. A merged entry still listed here
+    /// landed without the stack being rebased since.
+    public let listedEntryIDs: Set<String>?
     /// The worktree's own state. Entries are never checked out on their own,
     /// so it only fills the snapshot `ShepherdPolicy` reads.
     public let local: ReviewLoopLocalState
@@ -39,6 +43,7 @@ public struct StackShepherdObservation: Sendable {
     public init(
         requests: [Int: ReviewRequest],
         presentEntryIDs: Set<String>?,
+        listedEntryIDs: Set<String>? = nil,
         local: ReviewLoopLocalState,
         capabilities: CodeHostProviderCapabilities,
         headReviewers: [Int: Set<String>],
@@ -51,6 +56,7 @@ public struct StackShepherdObservation: Sendable {
     ) {
         self.requests = requests
         self.presentEntryIDs = presentEntryIDs
+        self.listedEntryIDs = listedEntryIDs
         self.local = local
         self.capabilities = capabilities
         self.headReviewers = headReviewers
@@ -94,6 +100,10 @@ public struct StackShepherdDecision: Equatable, Sendable {
     public var finished: ShepherdOutcome?
     /// Nothing is left to shepherd: the record should be removed.
     public var isRetired = false
+    /// Entries that landed while gg still lists their commits, bottom-up,
+    /// when the owner is to be told now to restack the rest with
+    /// `stack_ship`. Empty when no turn is due for it.
+    public var restack: [StackShepherdEntry] = []
 
     public init(record: StackShepherdRecord) {
         self.record = record
@@ -109,17 +119,55 @@ public enum StackShepherdPolicy {
     /// gg lists for the worktree, nil when it is on another stack. Uncommitted
     /// edits count as unpublished work, as in a single PR's merge gate: green
     /// requests must not announce, or finish, a stack with edits in it.
+    /// `landed` are entries gg still lists after their request merged (see
+    /// `landedEntryIDs`): they are not unpublished work, but the stack is not
+    /// published either until a rebase drops them and the rest is synced.
+    /// Entries above `shipPlan`'s boundary are held back on purpose: they keep
+    /// the record alive but don't stop the shipped entries from being
+    /// published. A boundary gg no longer lists holds back every entry
+    /// without a request.
     public static func publication(
         of stack: GGStack?,
-        local: ReviewLoopLocalState
+        local: ReviewLoopLocalState,
+        landed: Set<String> = [],
+        shipPlan: StackShipPlan = .wholeStack
     ) -> (isPublished: Bool, hasUnpublishedEntries: Bool?) {
         let hasEdits = local.hasWorkingTreeChanges || local.hasStagedChanges
         // Off the stack nothing is known about its publication: not ready,
         // and no verdict on unpublished work either.
         guard let stack else { return (false, nil) }
-        let hasUnpublished = stack.entries.contains { $0.prNumber == nil } || hasEdits
-        let isSynced = stack.syncedCommits == stack.totalCommits
-        return (!hasUnpublished && isSynced, hasUnpublished)
+        // `gg land` forgets a landed entry's request, so until the stack is
+        // rebased it reads like a commit that was never published.
+        let hasUnpublished = stack.entries.contains { $0.prNumber == nil && !landed.contains($0.id) } || hasEdits
+        // Shipped is what Held back leaves: with a boundary gg no longer
+        // lists, every entry that has a request. A landed entry is never held
+        // back, even with its request forgotten.
+        let heldBackIDs = Set(shipPlan.heldBackEntries(of: stack).map(\.id))
+            .subtracting(landed)
+        let shipped = stack.entries.filter { !heldBackIDs.contains($0.id) }
+        // gg counts the entries whose branch matches the remote; held-back
+        // entries have no branch, so the shipped ones are synced when the
+        // count covers them.
+        let isSynced = stack.syncedCommits >= shipped.count
+        return (!hasEdits && landed.isEmpty && shipped.allSatisfy { $0.prNumber != nil } && isSynced, hasUnpublished)
+    }
+
+    /// The entries of `record` whose request merged into the stack's base
+    /// while `stack` still lists their commits: they landed, and the local
+    /// stack was not rebased since. Until it is, `gg sync` would push the
+    /// landed commits again (and open a new request for one `gg land`
+    /// already forgot), and the entries above keep the landed change in
+    /// their history.
+    public static func landedEntryIDs(of record: StackShepherdRecord, in stack: GGStack) -> Set<String> {
+        guard stack.name == record.id.stackName else { return [] }
+        let listed = Set(stack.entries.map(\.id))
+        return Set(record.entries.filter { hasLanded($0, in: record) && listed.contains($0.entryID) }.map(\.entryID))
+    }
+
+    /// Merged into the stack's base. An upper entry merged into the entry
+    /// below it has merged without landing: a rebase onto the base keeps it.
+    private static func hasLanded(_ entry: StackShepherdEntry, in record: StackShepherdRecord) -> Bool {
+        entry.shepherd.phase == .merged && entry.shepherd.baseBranch == record.base
     }
 
     /// The record's entries in step with `stack`'s published entries,
@@ -255,12 +303,29 @@ public enum StackShepherdPolicy {
         var next = record
         next.entries = entries
         if let unpublished = observation.hasUnpublishedEntries { next.hasUnpublishedEntries = unpublished }
-        decision.gatePasses = isReady(
+        let open = next.openEntries
+        // The bottom of the stack landed while gg still lists it: the rest
+        // has to be rebased onto the base before it can publish again, or be
+        // ready. The owner is told once per landing, as a fix would be;
+        // `stack_ship` does the rebase. Off the stack the record keeps what
+        // it last saw.
+        if let listed = observation.listedEntryIDs {
+            let landed = open.isEmpty ? [] : next.entries.filter { hasLanded($0, in: next) && listed.contains($0.entryID) }
+            next.landedEntryIDs = landed.isEmpty ? nil : landed.map(\.entryID)
+        }
+        if let landed = next.landedEntryIDs {
+            if next.autoFix, session == .idle, !next.phase.isResumable, next.restackRequestedFor != landed {
+                next.restackRequestedFor = landed
+                decision.restack = next.entries.filter { landed.contains($0.entryID) }
+            }
+        } else {
+            next.restackRequestedFor = nil
+        }
+        decision.gatePasses = next.landedEntryIDs == nil && isReady(
             next, requests: observation.requests, isStackPublished: observation.isStackPublished,
             capabilities: observation.capabilities, rules: observation.rules,
             headReviewers: observation.headReviewers, now: observation.now
         )
-        let open = next.openEntries
         if decision.gatePasses {
             let heads = open.map { "\($0.requestNumber):\(observation.requests[$0.requestNumber]?.headSHA ?? "")" }
             if next.notifiedReadyHeads != heads {

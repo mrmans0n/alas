@@ -18,6 +18,8 @@ private let hostLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasHost
 @MainActor
 public final class AlasHost {
     let core: AlasCoreContext
+    /// For what a headless host builds over the core, such as its session presenter.
+    @_spi(AppHost) public var coreContext: AlasCoreContext { core }
     /// Started by the first snapshot: nobody holds a cursor before it.
     private var eventSource: HostEventSource?
     /// Test hook that replaces the session step of a Remote client's
@@ -120,6 +122,18 @@ public struct HostSnapshot: Codable, Equatable, Sendable {
     public var workspaceCheckouts: [WorkspaceCheckoutSnapshot]
     public var runs: [RunRecord]
     public var sessions: [HostSessionSummary]
+
+    public init(
+        cursor: HostCursor, projects: [ProjectSnapshot], worktrees: [WorktreeSnapshot],
+        workspaceCheckouts: [WorkspaceCheckoutSnapshot], runs: [RunRecord], sessions: [HostSessionSummary]
+    ) {
+        self.cursor = cursor
+        self.projects = projects
+        self.worktrees = worktrees
+        self.workspaceCheckouts = workspaceCheckouts
+        self.runs = runs
+        self.sessions = sessions
+    }
 }
 
 /// A project as clients see it. Its configuration stays with the host: it
@@ -153,6 +167,12 @@ public struct WorktreeSnapshot: Codable, Equatable, Sendable {
     /// The operation holding the worktree, if any.
     public var operation: WorktreeOperation?
     public var isArchived: Bool
+
+    public init(worktree: Worktree, operation: WorktreeOperation?, isArchived: Bool) {
+        self.worktree = worktree
+        self.operation = operation
+        self.isArchived = isArchived
+    }
 }
 
 /// What holds a worktree, as clients see it: the kind of operation, and the
@@ -255,11 +275,17 @@ public struct WorktreesAPI {
     /// Deletes a worktree nobody needs to confirm, refusing (with a
     /// `WorktreeDeletionRefusal`) one whose checkout no longer matches it:
     /// another lineage or branch at the path, a remote or unidentified
-    /// checkout, the main checkout, or one another operation holds.
-    public func delete(_ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false, caller: HostCaller) async throws {
+    /// checkout, the main checkout, or one another operation holds. Unsaved
+    /// editor changes refuse it, whatever `force`, unless `discardUnsavedEdits`.
+    public func delete(
+        _ worktree: Worktree, force: Bool = false, deleteBranchIfMerged: Bool = false,
+        discardUnsavedEdits: Bool = false, caller: HostCaller
+    ) async throws {
         caller.log("worktrees.delete", worktree.path.path)
-        try deletionCheck(worktree, force: force)
-        try await core.deleteWorktree(worktree, force: force, deleteBranchIfMerged: deleteBranchIfMerged)
+        try deletionCheck(worktree, discardUnsavedEdits: discardUnsavedEdits)
+        try await core.deleteWorktree(
+            worktree, force: force, deleteBranchIfMerged: deleteBranchIfMerged, discardUnsavedEdits: discardUnsavedEdits
+        )
     }
 
     /// Claims a worktree for a deletion its caller confirms first; pass the
@@ -297,9 +323,16 @@ public struct WorktreesAPI {
 
     /// With `verifiesCheckout`, refuses (`changed`) a checkout whose lineage
     /// or branch on disk no longer matches `worktree`, as late as possible.
-    public func archive(_ worktree: Worktree, verifiesCheckout: Bool = false, caller: HostCaller) async throws {
+    /// Unsaved editor changes, including any made while it runs, refuse it
+    /// unless `discardUnsavedEdits`.
+    public func archive(
+        _ worktree: Worktree, verifiesCheckout: Bool = false, discardUnsavedEdits: Bool = false, caller: HostCaller
+    ) async throws {
         caller.log("worktrees.archive", worktree.path.path)
-        try await core.archiveWorktree(worktree, verifiesCheckout: verifiesCheckout)
+        if !discardUnsavedEdits, core.environment.hasUnsavedEditorChanges(in: worktree) {
+            throw WorktreeArchiveRefusal.unsavedEdits
+        }
+        try await core.archiveWorktree(worktree, verifiesCheckout: verifiesCheckout, refusesUnsavedEdits: !discardUnsavedEdits)
     }
 
     /// Reads project `projectID`'s worktrees from disk again, saving the
@@ -348,15 +381,19 @@ public struct RunsAPI {
     }
 
     @discardableResult
-    public func start(_ script: RunScript, in worktree: Worktree, isHidden: Bool = false, caller: HostCaller) -> RunStart {
+    public func start(
+        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true, caller: HostCaller
+    ) -> RunStart {
         caller.log("runs.start", script.key)
-        return core.startRun(script, in: worktree, isHidden: isHidden)
+        return core.startRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole)
     }
 
     @discardableResult
-    public func restart(_ script: RunScript, in worktree: Worktree, isHidden: Bool = false, caller: HostCaller) -> RunStart {
+    public func restart(
+        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true, caller: HostCaller
+    ) -> RunStart {
         caller.log("runs.restart", script.key)
-        return core.restartRun(script, in: worktree, isHidden: isHidden)
+        return core.restartRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole)
     }
 
     public func stop(scriptKey: String, in worktree: Worktree, caller: HostCaller) {

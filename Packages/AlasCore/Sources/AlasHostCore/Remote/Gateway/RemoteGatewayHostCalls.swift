@@ -122,6 +122,63 @@ public protocol RemoteWorktreeInspecting: AnyObject {
 
 @_spi(Testing) extension AlasCoreContext: RemoteWorktreeInspecting {}
 
+extension RemoteWorktreeInspecting {
+    /// The message a Remote client gets for `read` of session `id`: the one
+    /// place a read's result becomes its reply, for sessions and worktrees.
+    func remoteRead(_ read: HostWorktreeRead, sessionId id: String) async -> RemoteServerMessage {
+        switch read {
+        case .changes(let comparisonMode):
+            switch await remoteChangeList(sessionId: id, comparisonMode: comparisonMode) {
+            case .success(let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated):
+                return .changeList(
+                    sessionId: id, comparisonRef: ref, metricsAvailable: available,
+                    files: files, staged: staged, unstaged: unstaged, commits: commits,
+                    truncated: truncated, commitsTruncated: commitsTruncated)
+            case .failure(let reason, let message):
+                return .changeListFailed(sessionId: id, reason: reason, message: message)
+            }
+        case .fileDiff(let path, let stage, let comparisonMode):
+            switch await remoteFileDiff(sessionId: id, path: path, stage: stage, comparisonMode: comparisonMode) {
+            case .success(let hunks, let truncated, let metadataNote):
+                return .fileDiffResult(
+                    sessionId: id, path: path, stage: stage, hunks: hunks, truncated: truncated,
+                    metadataNote: metadataNote)
+            case .failure(let reason, let message):
+                return .fileDiffFailed(sessionId: id, path: path, stage: stage, reason: reason, message: message)
+            }
+        case .commitFiles(let sha):
+            switch await remoteCommitFiles(sessionId: id, sha: sha) {
+            case .success(let files, let truncated):
+                return .commitFiles(sessionId: id, sha: sha, files: files, truncated: truncated)
+            case .failure(let reason, let message):
+                return .commitFilesFailed(sessionId: id, sha: sha, reason: reason, message: message)
+            }
+        case .commitDiff(let sha, let path):
+            switch await remoteCommitDiff(sessionId: id, sha: sha, path: path) {
+            case .success(let hunks, let truncated, let metadataNote):
+                return .commitDiffResult(sessionId: id, sha: sha, path: path, hunks: hunks,
+                                         truncated: truncated, metadataNote: metadataNote)
+            case .failure(let reason, let message):
+                return .commitDiffFailed(sessionId: id, sha: sha, path: path, reason: reason, message: message)
+            }
+        case .files(let path, let comparisonMode):
+            switch await remoteFileTree(sessionId: id, path: path, comparisonMode: comparisonMode) {
+            case .success(let nodes, let truncated):
+                return .fileTree(sessionId: id, path: path, nodes: nodes, truncated: truncated)
+            case .failure(let reason, let message):
+                return .fileTreeFailed(sessionId: id, path: path, reason: reason, message: message)
+            }
+        case .file(let path):
+            switch await remoteFileContents(sessionId: id, path: path) {
+            case .success(let text, let truncated):
+                return .fileContents(sessionId: id, path: path, text: text, truncated: truncated)
+            case .failure(let reason, let byteSize, let message):
+                return .fileUnavailable(sessionId: id, path: path, reason: reason, byteSize: byteSize, message: message)
+            }
+        }
+    }
+}
+
 /// Without a host there is no session to read.
 @_spi(Testing) @MainActor
 public final class NoRemoteWorktreeInspection: RemoteWorktreeInspecting {

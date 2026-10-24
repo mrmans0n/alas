@@ -150,6 +150,41 @@ struct RemoteHTTPResponderTests {
         return responder
     }
 
+    /// Only a host that does not pair back answers inbound-only, only to a
+    /// peer that asked for it, and only with a reply that proves its key.
+    /// Everyone else gets today's exchange, pair-back included.
+    @Test(arguments: [
+        (pairsBack: false, accepts: true as Bool?, challenge: true, inboundOnly: true),
+        (pairsBack: false, accepts: nil, challenge: true, inboundOnly: false),
+        (pairsBack: true, accepts: true, challenge: true, inboundOnly: false),
+        (pairsBack: false, accepts: true, challenge: false, inboundOnly: false),
+    ])
+    func pairAnswersInboundOnlyOnlyWhenBothSidesCan(
+        _ setup: (pairsBack: Bool, accepts: Bool?, challenge: Bool, inboundOnly: Bool)
+    ) throws {
+        let pairing = RemotePairingService(store: InMemoryDeviceStore())
+        let sink = PeerSink()
+        var responder = makePeerResponder(pairing: pairing, sink: sink, signingKey: Curve25519.Signing.PrivateKey())
+        responder.pairsBackWithPeers = setup.pairsBack
+        struct Body: Encodable {
+            let code: String
+            let deviceName: String
+            let peer: RemotePeerAdvertisement
+            let challenge: String?
+        }
+        let body = try JSONEncoder().encode(Body(
+            code: pairing.beginPairing(), deviceName: "Mac B",
+            peer: RemotePeerAdvertisement(serverId: "srv-b", name: "Mac B", origins: ["http://10.0.0.2:8765"],
+                                          counterCode: "COUNTER", acceptsInboundOnly: setup.accepts),
+            challenge: setup.challenge ? RemoteIdentityCrypto.randomChallenge() : nil))
+        let out = responder.response(for: request("POST", "/pair"), body: body)
+        let json = try #require(text(out).components(separatedBy: "\r\n\r\n").last)
+        let reply = try #require(JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(reply["token"] is String)
+        #expect(reply["inboundOnly"] as? Bool == (setup.inboundOnly ? true : nil))
+        #expect(sink.requests.map(\.inboundOnly) == [setup.inboundOnly])
+    }
+
     /// The `/pair` reply is where a record's key binding is committed to, so
     /// the key must arrive WITH a signature over the caller's own challenge.
     /// A key alone is public information and would prove nothing.

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @_spi(Testing) @_spi(AppHost) @testable import AlasCore
 @_spi(Testing) @_spi(AppHost) @testable import AlasHostCore
@@ -342,6 +343,71 @@ struct HostSessionsTests {
         subscription.cancel()
     }
 
+    /// A follower hears why the agent cannot run, and that it is fixed once
+    /// a takeover finds the agent set up.
+    @Test func followingCarriesWhyTheAgentCannotRun() async throws {
+        let setup = Mutex(ACPSetupResult.missing(reason: "gemini is not installed"))
+        let fixture = try Fixture(setupEvaluator: { _ in setup.withLock { $0 } })
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let subscription = fixture.host.subscribe()
+        defer { subscription.cancel() }
+        let received = Collected(subscription)
+        try subscription.follow(id)
+        try await eventually { await received.states(of: id).last?.config.agentIssue != nil }
+        #expect(received.states(of: id).last?.config.agentIssue
+            == RemoteAgentIssue(kind: "needsSetup", message: "gemini is not installed"))
+
+        setup.withLock { $0 = .ready }
+        try await sessions.takeOver(id, caller: .app)
+        try await eventually { await received.states(of: id).last?.config.agentIssue == nil }
+    }
+
+    /// A Remote client whose prompt fails hears why with the rejection, as
+    /// the sessionConfig saying so may come later or not at all.
+    @Test func aRejectedRemotePromptCarriesItsReason() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        try await eventually { await manager.liveSession(for: id)?.agentState == .ready }
+        fixture.agent.script(method: "session/prompt") { _ in throw JSONRPCError(code: -32603, message: "boom", data: nil) }
+        let sent = Mutex<[RemoteServerMessage]>([])
+        let gateway = RemoteSessionGateway(host: fixture.host) { message in sent.withLock { $0.append(message) } }
+        defer { gateway.close() }
+
+        await gateway.handle(.sendPrompt(sessionId: id, text: "hi", attachments: [], intent: "auto"))
+        try await eventually {
+            sent.withLock {
+                $0.contains { if case .promptRejected(id, let reason) = $0 { reason?.hasPrefix("prompt failed:") == true } else { false } }
+            }
+        }
+    }
+
+    @Test(arguments: [
+        (ACPSession.AgentState.ready, ACPSession.SetupState.ready, nil, nil),
+        (.spawning, .checking, nil, nil),
+        (.disconnected, .ready, nil, nil),
+        (.failed("spawn failed"), .ready, nil, RemoteAgentIssue(kind: "failed", message: "spawn failed")),
+        (.failed("spawn failed"), .ready, "Broken pipe", RemoteAgentIssue(kind: "failed", message: "Broken pipe")),
+        (.ready, .ready, "Prompt failed: rate limited", RemoteAgentIssue(kind: "error", message: "Prompt failed: rate limited")),
+        (.failed("x"), .needsAuth(methods: [.init(id: "login", name: "Login", kind: .terminal)], reason: "Token expired."), nil,
+         RemoteAgentIssue(kind: "needsAuth", message: "Codex needs sign-in before it can continue. Token expired.")),
+        (.failed("x"), .needsSetup(reason: "missing"), nil,
+         RemoteAgentIssue(kind: "needsSetup", message: "Codex requires the ACP adapter to be installed.")),
+        (.failed("x"), .setupError(reason: "Probe timed out"), nil,
+         RemoteAgentIssue(kind: "setupError", message: "Probe timed out")),
+    ] as [(ACPSession.AgentState, ACPSession.SetupState, String?, RemoteAgentIssue?)])
+    func agentIssueWordsItAsTheHostBannerDoes(
+        agentState: ACPSession.AgentState, setupState: ACPSession.SetupState, lastError: String?, issue: RemoteAgentIssue?
+    ) {
+        #expect(RemoteSessionConfigProjection.agentIssue(
+            agentName: "Codex", managedAdapter: true,
+            agentState: agentState, setupState: setupState, lastError: lastError) == issue)
+    }
+
     /// A host socket client creates a session against a scripted agent,
     /// follows it, prompts it, watches the transcript stream, answers its
     /// permission request mid-turn and stops it.
@@ -510,6 +576,22 @@ struct HostSessionsTests {
         await #expect(throws: SessionRefusal.notWriter) {
             try await sessions.setModel(id, modelID: "fast", caller: .app)
         }
+    }
+
+    /// A client with a stale view may ask to take over a session this
+    /// instance already drives; the agent keeps running and takes the prompt.
+    @Test func aTakeoverByTheWriterKeepsItsAgent() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        try await eventually { await manager.liveSession(for: id)?.agentState == .ready }
+
+        try await sessions.takeOver(id, caller: .app)
+        #expect(manager.liveSession(for: id)?.agentState == .ready)
+        try await sessions.send(id, prompt: "hello", caller: .app)
+        #expect(fixture.agent.sent.filter { $0.method == "initialize" }.count == 1)
     }
 
     /// An attachment of this instance can hold the session's lease before
@@ -683,7 +765,8 @@ struct HostSessionsTests {
         init(
             environment: any AlasHostEnvironment = HeadlessHostEnvironment(),
             projectHost: String? = nil,
-            otherProjects: [ProjectConfig] = []
+            otherProjects: [ProjectConfig] = [],
+            setupEvaluator: @escaping ACPSessionManager.ACPSetupEvaluator = { _ in .ready }
         ) throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-sessions-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -712,7 +795,7 @@ struct HostSessionsTests {
                         worktreePath: worktree.path.path,
                         owner: owner,
                         persistence: ACPSessionPersistence(path: database.path),
-                        setupEvaluator: { _ in .ready },
+                        setupEvaluator: setupEvaluator,
                         connectionFactory: { _, _, _ in ACPConnection(client: agent) }
                     )
                 },

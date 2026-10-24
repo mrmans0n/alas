@@ -510,6 +510,9 @@ public struct GGService: Sendable {
             stagedOnlyAmend: sc?.exitCode == 0
                 && sc?.stdout.contains("--staged-only") == true,
             syncJSONL: sync?.exitCode == 0 && sync?.stdout.contains("--jsonl") == true,
+            syncUntilDraft: sync?.exitCode == 0
+                && sync?.stdout.contains("--until") == true
+                && sync?.stdout.contains("--draft") == true,
             landJSONL: land?.exitCode == 0 && land?.stdout.contains("--jsonl") == true,
             localStackSnapshot: ls?.exitCode == 0
                 && ls?.stdout.contains("--no-refresh") == true
@@ -643,16 +646,21 @@ public struct GGService: Sendable {
 
     /// Streams sync events when the cached `--jsonl` capability is supported;
     /// older gg builds fall back to `--json` and yield a summary event on success.
+    /// `until` syncs only up to that entry (position, GG-ID or SHA); `draft`
+    /// opens the requests this sync creates as drafts.
     public func sync(
         worktreePath: String,
-        supportsJSONL: Bool
+        supportsJSONL: Bool,
+        until: String? = nil,
+        draft: Bool = false
     ) -> AsyncThrowingStream<GGSyncEvent, Error> {
+        let scope = (until.map { ["--until", $0] } ?? []) + (draft ? ["--draft"] : [])
         return AsyncThrowingStream { continuation in
             Task {
                 do {
                     if supportsJSONL {
                         let lines = runner.runStreaming(
-                            args: ["sync", "--jsonl"],
+                            args: ["sync", "--jsonl"] + scope,
                             cwd: URL(fileURLWithPath: worktreePath)
                         )
                         var sawSummary = false
@@ -688,7 +696,7 @@ public struct GGService: Sendable {
                         }
                     } else {
                         let result = try await runChecked(
-                            args: ["sync", "--json"],
+                            args: ["sync", "--json"] + scope,
                             worktreePath: worktreePath
                         )
                         let events = GGSyncEvent.parseEvents(line: result.stdout)

@@ -31,4 +31,46 @@ enum GitTemplate {
     static func repository(at destination: URL) throws {
         try FileManager.default.copyItem(at: template, to: destination)
     }
+
+    /// The template with three more commits on `main` that `origin/main`
+    /// lacks, as a gg stack nothing has landed from: `origin` is a copy of
+    /// the template, so every copy of this fetches the same base. The three
+    /// SHAs, bottom-up.
+    private static let aheadOfOrigin: (repo: URL, shas: [String]) = {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-git-ahead-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let origin = root.appendingPathComponent("origin")
+        let repo = root.appendingPathComponent("repo")
+        try! repository(at: origin)
+        try! repository(at: repo)
+        run(["remote", "add", "origin", origin.path], in: repo)
+        run(["fetch", "-q", "origin", "main"], in: repo)
+        for index in 1...3 {
+            run(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "--allow-empty", "-m", "entry \(index)"], in: repo)
+        }
+        let shas = run(["rev-list", "--reverse", "origin/main..HEAD"], in: repo).split(separator: "\n").map(String.init)
+        return (repo, shas)
+    }()
+
+    /// A copy of the ahead-of-origin repository at `destination`, whose
+    /// parent must exist; returns its three unlanded commits, bottom-up.
+    static func repositoryAheadOfOrigin(at destination: URL) throws -> [String] {
+        try FileManager.default.copyItem(at: aheadOfOrigin.repo, to: destination)
+        return aheadOfOrigin.shas
+    }
+
+    @discardableResult
+    private static func run(_ arguments: [String], in repo: URL) -> String {
+        let git = Process()
+        let output = Pipe()
+        git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        git.arguments = arguments
+        git.currentDirectoryURL = repo
+        git.standardOutput = output
+        try! git.run()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        git.waitUntilExit()
+        precondition(git.terminationStatus == 0, "git \(arguments.joined(separator: " ")) failed")
+        return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }

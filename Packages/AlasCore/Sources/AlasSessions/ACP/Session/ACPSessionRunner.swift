@@ -4234,6 +4234,9 @@ extension ACPSessionRunner {
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
         activePromptID = promptID
+        // The error showing when this prompt was sent; its success makes it
+        // stale, but not one raised while the turn ran.
+        let lastErrorAtSend = session.lastError
         let connectionIsCurrent = isConnectionCurrent
         let queueDispatchHandoffTracker = self.queueDispatchHandoffTracker
         latestPromptTask = Task {
@@ -4618,6 +4621,7 @@ extension ACPSessionRunner {
                             }
                         }
                         self.activePromptID = nil
+                        if !wasCancelled, self.session.lastError == lastErrorAtSend { self.session.lastError = nil }
                         self.emitTurnCompleted(wasCancelled ? .cancelled : .completed, promptID: promptID, quota: promptOutcome.quota)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in

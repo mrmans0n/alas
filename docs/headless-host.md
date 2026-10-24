@@ -142,11 +142,34 @@ On the host Mac, while the host runs:
 alas-host pair
 ```
 
-It prints a pairing code, valid for two minutes, to enter in the Alas phone app
-or the web client. Devices you paired with the app on this profile stay paired.
+It prints the code on the first line of stdout and a pairing link on the
+second. The code is valid for two minutes (stderr says until when); enter it in
+the Alas phone app or the web client. Devices you paired with the app on this
+profile stay paired. When every address the host serves is loopback, stderr
+also notes that only this Mac or a tunnel reaches it.
 
-Other Macs cannot pair with a headless host or connect to it as a peer: Mac
-pairing needs an approval prompt and an identity key that only the app holds.
+### Pair a Mac
+
+A Mac running the app pairs with the host as a peer and sees its projects and
+sessions. On the host Mac, run `alas-host pair`. On the other Mac, paste the
+link into Settings > Remote > Peers > Add peer.
+
+That Mac's Remote must be on. A Mac on this version pairs with the host over
+the LAN or tailnet with no connection back to it. An older app version still
+needs the host to reach it, for example over Tailscale, because the host pairs
+back to it.
+
+```bash
+alas-host peers list                  # id, name, serverId
+alas-host peers remove <id|name|serverId>
+```
+
+`peers remove` revokes the peer and disconnects it. Like the other commands,
+both go through the running host when one serves the profile.
+
+Sessions opened from a Mac stay open for every client (laptop, phone, browser)
+and survive a host restart. The host keeps that list itself, separate from the
+app's tabs.
 
 ## Start at login
 
@@ -169,7 +192,9 @@ same `ALAS_APP_SUPPORT_DIR` you serve.
 ## What it does not do yet
 
 - **Terminals.** Terminal tabs and peer consoles need the app; a Remote client
-  can't open them on a headless host.
+  can't open them on a headless host. Support for a Mac's peer view comes later.
+- **Run scripts and worktree deletion from a Mac.** A Mac's peer view can't
+  control them yet.
 - **The `alas` CLI and its MCP tools.** They talk to the app, so agents
   running under a headless host can't use them to open reviews, answer review
   comments or start delegated sessions, and Remote clients can't reach those

@@ -117,13 +117,13 @@ extension WorktreesAPI {
     }
 
     /// Why `worktree` cannot be deleted before it is claimed: its Workspace
-    /// checkout, or, unless `force`, unsaved editor changes.
-    func deletionCheck(_ worktree: Worktree, force: Bool) throws {
+    /// checkout, or, unless `discardUnsavedEdits`, unsaved editor changes.
+    func deletionCheck(_ worktree: Worktree, discardUnsavedEdits: Bool) throws {
         if let refusal = core.environment.workspaceDeletionRefusal(for: worktree) {
-            throw WorktreeCheckRefusal.workspaceOwned(refusal)
+            throw WorktreeDeletionRefusal.ownedByWorkspaceCheckout(refusal)
         }
-        if !force, core.environment.hasUnsavedEditorChanges(in: worktree) {
-            throw WorktreeCheckRefusal.unsavedChanges
+        if !discardUnsavedEdits, core.environment.hasUnsavedEditorChanges(in: worktree) {
+            throw WorktreeDeletionRefusal.unsavedEdits
         }
     }
 

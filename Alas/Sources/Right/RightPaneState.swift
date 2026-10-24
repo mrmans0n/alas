@@ -12,9 +12,11 @@ enum RightPaneTab: String {
     }
 
     /// A peer worktree exposes read-only changes and files, and its sessions;
-    /// run scripts and schedules belong to this Mac.
-    static func peerAvailable(isFolder: Bool = false) -> [Self] {
-        isFolder ? [.files, .agent] : [.changes, .files, .agent]
+    /// schedules belong to this Mac; Run needs a host that serves
+    /// `host.runs.scripts.v1`.
+    static func peerAvailable(isFolder: Bool = false, servesRuns: Bool = false) -> [Self] {
+        let tabs: [Self] = isFolder ? [.files, .agent] : [.changes, .files, .agent]
+        return servesRuns ? tabs + [.run] : tabs
     }
 }
 
@@ -2833,23 +2835,39 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
+    /// `request` is `.sync` or a scoped `.syncUntil`.
     func syncGGForCommitPublish(
+        _ request: GGMutationRequest = .sync,
         target: GGStackTargetIdentity? = nil,
         markExecutionStarted: @escaping @MainActor () -> Void = {}
     ) async throws {
         try await requireCheckpointMutationAllowedAfterJournalRevalidation()
         guard let operation = ggMutationCoordinator.startApplying(
-            .sync,
+            request,
             confirmedAgainst: nil,
             expectedTarget: target,
             onExecutionStarted: markExecutionStarted
         ) else {
             throw GGMutationError.operationInFlight
         }
-        try await completeGGMutation(operation, request: .sync).value
+        try await completeGGMutation(operation, request: request).value
         if ggActionState.syncHasTerminalFailure {
             throw GGMutationError.syncTerminalFailure(message: ggActionState.lastError ?? "GG sync failed.")
         }
+    }
+
+    /// `gg rebase` onto the stack's base, the drawer's Rebase, for
+    /// `stack_ship` to drop entries that already landed before it syncs.
+    /// gg fetches the base and rebases onto its origin. Throws
+    /// `staleConfirmation` unless the worktree is still on `expected` right
+    /// before gg runs, and throws when gg stops, a conflict included; the
+    /// paused operation is left for `gg continue`.
+    func rebaseGGForShip(expected: GGStackIdentity) async throws {
+        try await requireCheckpointMutationAllowedAfterJournalRevalidation()
+        guard let operation = ggMutationCoordinator.startApplying(.rebase(target: nil), confirmedAgainst: expected) else {
+            throw GGMutationError.operationInFlight
+        }
+        try await completeGGMutation(operation, request: .rebase(target: nil)).value
     }
 
     private func completeGGMutation(

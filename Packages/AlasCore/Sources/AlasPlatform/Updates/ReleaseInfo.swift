@@ -107,6 +107,15 @@ public enum ReleaseInfo: Equatable, Identifiable, Sendable {
         }
     }
 
+    /// Whether a build with `identity` includes this release, such as the
+    /// bundle Homebrew just wrote to disk.
+    public func isContained(in identity: BuildIdentity) -> Bool {
+        switch self {
+        case .stable(let s): return identity.version >= s.version
+        case .nightly(let n): return identity.gitSHA == n.fullSHA
+        }
+    }
+
     public static func makeStable(from release: GitHubRelease, arch: String) -> ReleaseInfo? {
         guard let version = SemanticVersion(parsing: release.tagName) else { return nil }
         let dmgName = "Alas-\(version)-\(arch).dmg"

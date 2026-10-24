@@ -108,7 +108,7 @@ enum HostSetup {
             return "Start the host, then pair with: alas-host pair"
         }
         switch response {
-        case .remotePairingCode(let code, let expiresAt):
+        case .remotePairingCode(let code, let expiresAt, _):
             var notice = "Pairing code: \(code) (valid until \(expiresAt.formatted(date: .omitted, time: .standard)))"
             if reachability == .loopback {
                 notice += "\nThis host listens on loopback only: phones reach it through an SSH tunnel or Tailscale."

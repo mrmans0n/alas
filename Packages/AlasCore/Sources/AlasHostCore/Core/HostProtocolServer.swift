@@ -23,6 +23,12 @@ public final class HostProtocolServer {
     /// The pairing of the Remote server this host serves headlessly, which
     /// mints codes for local clients; nil where the app shows codes itself.
     public var remotePairing: RemotePairingService?
+    /// The Macs paired with that server, which a local client lists and
+    /// forgets; nil where the app manages them itself.
+    public var remotePeers: RemotePeerManager?
+    /// The pairing link for a code that `remotePairing` minted, with the
+    /// addresses the server is reached at now; nil leaves the code alone.
+    public var remotePairingLink: (@MainActor (String) -> String?)?
 
     public init(
         host: AlasHost,
@@ -44,7 +50,8 @@ public final class HostProtocolServer {
             host: host, caller: caller, discoverScripts: discoverScripts,
             // Held by the connection: a caller may keep only the connection
             // (the Remote gateway does), and the server keeps no connection.
-            isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing }, send: send
+            isServerClosed: { [self] in isClosed }, remotePairing: { [self] in remotePairing },
+            remotePeers: { [self] in remotePeers }, remotePairingLink: { [self] in remotePairingLink }, send: send
         )
     }
 
@@ -62,6 +69,8 @@ public final class HostProtocolConnection {
     private let discoverScripts: HostProtocolServer.ScriptDiscovery
     private let isServerClosed: @MainActor () -> Bool
     private let remotePairing: @MainActor () -> RemotePairingService?
+    private let remotePeers: @MainActor () -> RemotePeerManager?
+    private let remotePairingLink: @MainActor () -> (@MainActor (String) -> String?)?
     private let send: @MainActor (HostServerMessage) async -> Void
     private var subscription: HostSubscription?
     /// The last message handed to the transport. Every send waits for the
@@ -76,6 +85,8 @@ public final class HostProtocolConnection {
         discoverScripts: @escaping HostProtocolServer.ScriptDiscovery,
         isServerClosed: @escaping @MainActor () -> Bool = { false },
         remotePairing: @escaping @MainActor () -> RemotePairingService? = { nil },
+        remotePeers: @escaping @MainActor () -> RemotePeerManager? = { nil },
+        remotePairingLink: @escaping @MainActor () -> (@MainActor (String) -> String?)? = { nil },
         send: @escaping @MainActor (HostServerMessage) async -> Void
     ) {
         self.host = host
@@ -83,6 +94,8 @@ public final class HostProtocolConnection {
         self.discoverScripts = discoverScripts
         self.isServerClosed = isServerClosed
         self.remotePairing = remotePairing
+        self.remotePeers = remotePeers
+        self.remotePairingLink = remotePairingLink
         self.send = send
     }
 
@@ -179,7 +192,7 @@ public final class HostProtocolConnection {
                 projectID: projectID, base: base, branch: branch, destination: URL(fileURLWithPath: destination)
             )
             return .worktree(worktree: try await host.worktrees.create(request, caller: caller))
-        case .deleteWorktree(let ref, let lineageID, let branch, let force, let deleteBranchIfMerged):
+        case .deleteWorktree(let ref, let lineageID, let branch, let force, let deleteBranchIfMerged, let discardUnsavedEdits):
             let listed = try worktree(ref)
             // What the client saw must still be what is listed; the host then
             // checks what is listed against the checkout on disk.
@@ -192,11 +205,16 @@ public final class HostProtocolConnection {
                AlasCoreContext.checkoutChange(listed, lineageID: lineageID) != nil {
                 throw WorktreeDeletionRefusal.changed("The checkout at this path changed.")
             }
-            try await host.worktrees.delete(
-                listed, force: force, deleteBranchIfMerged: deleteBranchIfMerged, caller: caller
-            )
+            do {
+                try await host.worktrees.delete(
+                    listed, force: force, deleteBranchIfMerged: deleteBranchIfMerged,
+                    discardUnsavedEdits: discardUnsavedEdits ?? false, caller: caller
+                )
+            } catch {
+                throw Self.lifecycleRefusal(error, typed: discardUnsavedEdits != nil)
+            }
             return .done
-        case .archiveWorktree(let ref, let lineageID, let branch):
+        case .archiveWorktree(let ref, let lineageID, let branch, let discardUnsavedEdits):
             let listed = try worktree(ref)
             guard listed.lineageID == lineageID, listed.branch == branch else {
                 throw WorktreeArchiveRefusal.changed("The worktree changed since it was listed.")
@@ -207,7 +225,13 @@ public final class HostProtocolConnection {
             guard let lineageID, AlasCoreContext.checkoutChange(listed, lineageID: lineageID) == nil else {
                 throw WorktreeArchiveRefusal.changed("The checkout at this path changed.")
             }
-            try await host.worktrees.archive(listed, verifiesCheckout: true, caller: caller)
+            do {
+                try await host.worktrees.archive(
+                    listed, verifiesCheckout: true, discardUnsavedEdits: discardUnsavedEdits ?? false, caller: caller
+                )
+            } catch {
+                throw Self.lifecycleRefusal(error, typed: discardUnsavedEdits != nil)
+            }
             return .done
         case .unarchiveWorktree(let ref):
             try host.worktrees.unarchive(path: try worktree(ref).path, projectID: ref.projectID, caller: caller)
@@ -217,16 +241,34 @@ public final class HostProtocolConnection {
         case .workspaceCheckout(let id):
             return .workspaceCheckout(checkout: try await host.workspaces.checkout(id: id))
         case .startRun(let scriptKey, let ref):
-            let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
-            if let refusal = try archivedRunRefusal(ref) { return refusal }
-            let scripts = await discoverScripts(try worktree(ref).path, projectHost)
-            guard let script = scripts.first(where: { $0.key == scriptKey }) else {
-                throw HostError.notFound(what: "script \(scriptKey)")
+            guard let script = try await runnableScript(scriptKey, in: ref) else { return Self.archivedRunStart }
+            // Whoever asks over the protocol is not at this Mac's screen: the
+            // console follows the script and never takes the active tab.
+            return .runStart(start: host.runs.start(
+                script, in: try worktree(ref), isHidden: script.console == .hidden, activatesConsole: false, caller: caller
+            ))
+        case .restartRun(let scriptKey, let ref):
+            guard let script = try await runnableScript(scriptKey, in: ref) else { return Self.archivedRunStart }
+            let worktree = try worktree(ref)
+            // The open console's visibility wins over the script's, as for a
+            // local restart.
+            let isHidden = host.core.startingRunIsHidden(scriptKey: script.key, worktreeID: worktree.id)
+                ?? host.core.environment.runConsoleIsHidden(scriptKey: script.key, worktreeID: worktree.id)
+                ?? (script.console == .hidden)
+            return .runStart(start: host.runs.restart(
+                script, in: worktree, isHidden: isHidden, activatesConsole: false, caller: caller
+            ))
+        case .listRunScripts(let ref):
+            // Only a listed worktree, as for `readWorktree`: an archived one
+            // is refused as an unknown one is.
+            let listed = try worktree(ref)
+            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
+                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
             }
-            // Discovery can take a while on a remote host: the worktree may
-            // have been archived or removed meanwhile.
-            if let refusal = try archivedRunRefusal(ref) { return refusal }
-            return .runStart(start: host.runs.start(script, in: try worktree(ref), caller: caller))
+            let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
+            return .runScripts(scripts: await discoverScripts(listed.path, projectHost).map {
+                HostRunScript($0, target: host.core.runExecutionTarget(for: $0, in: listed))
+            })
         case .stopRun(let scriptKey, let ref):
             host.runs.stop(scriptKey: scriptKey, in: try worktree(ref), caller: caller)
             return .done
@@ -278,12 +320,43 @@ public final class HostProtocolConnection {
                 throw HostError.failed(message: "This host does not mint Remote pairing codes.")
             }
             let code = pairing.beginPairing()
-            return .remotePairingCode(code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL))
+            return .remotePairingCode(
+                code: code, expiresAt: Date().addingTimeInterval(RemotePairingService.codeTTL), link: remotePairingLink()?(code)
+            )
+        case .listPeers:
+            return .peers(peers: try localPeers().peers.map(Self.summary))
+        case .forgetPeer(let peerID):
+            let peers = try localPeers()
+            guard peers.peers.contains(where: { $0.id == peerID }) else { throw HostError.notFound(what: "peer \(peerID)") }
+            peers.forget(peerId: peerID)
+            return .done
+        case .readWorktree(let ref, let read):
+            // Needs no lease, as for a session: seeing a worktree is enough
+            // to read its code. Only a listed worktree is read: an archived
+            // one is refused as an unknown one is.
+            let listed = try worktree(ref)
+            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
+                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
+            }
+            return .worktreeRead(reply: await host.core.remoteRead(read, in: listed, replyingAs: listed.id))
         }
         return .done
     }
 
     private var sessions: SessionsAPI { host.sessions }
+
+    /// Forgetting a peer revokes its token and listing shows where it is
+    /// reached, so only the local user may, as with pairing codes.
+    private func localPeers() throws -> RemotePeerManager {
+        guard case .localUser = caller, let peers = remotePeers() else {
+            throw HostError.failed(message: "This host does not serve Mac peers.")
+        }
+        return peers
+    }
+
+    private static func summary(_ peer: RemotePeer) -> HostPeerSummary {
+        HostPeerSummary(id: peer.id, serverId: peer.serverId, name: peer.name, origins: peer.origins)
+    }
 
     /// Following acts on the connection's subscription, so it needs one.
     private func subscribed() throws -> HostSubscription {
@@ -307,10 +380,26 @@ public final class HostProtocolConnection {
 
     /// Archiving stopped everything in a worktree; nothing starts there
     /// again until it is unarchived.
-    private func archivedRunRefusal(_ ref: WorktreeRef) throws -> HostResponse? {
-        let listed = try worktree(ref)
-        guard host.core.projects.isWorktreeHidden(projectId: ref.projectID, path: listed.path) else { return nil }
-        return .runStart(start: .refused(title: "Worktree archived", message: "Unarchive the worktree to run scripts in it."))
+    private func isArchived(_ ref: WorktreeRef) throws -> Bool {
+        host.core.projects.isWorktreeHidden(projectId: ref.projectID, path: try worktree(ref).path)
+    }
+
+    private static let archivedRunStart = HostResponse.runStart(
+        start: .refused(title: "Worktree archived", message: "Unarchive the worktree to run scripts in it.")
+    )
+
+    /// The discovered script `scriptKey` names, or nil when the worktree is archived.
+    private func runnableScript(_ scriptKey: String, in ref: WorktreeRef) async throws -> RunScript? {
+        let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
+        if try isArchived(ref) { return nil }
+        let scripts = await discoverScripts(try worktree(ref).path, projectHost)
+        guard let script = scripts.first(where: { $0.key == scriptKey }) else {
+            throw HostError.notFound(what: "script \(scriptKey)")
+        }
+        // Discovery can take a while on a remote host: the worktree may
+        // have been archived or removed meanwhile.
+        if try isArchived(ref) { return nil }
+        return script
     }
 
     /// The listed, unarchived or archived, worktree a reference names.
@@ -320,6 +409,19 @@ public final class HostProtocolConnection {
             .first(where: { $0.path.standardizedFileURL.path == path })
         else { throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)") }
         return worktree
+    }
+
+    /// The refusals `host.worktrees.lifecycle.v1` added, as a message for a
+    /// client that did not send `discardUnsavedEdits` and cannot decode them.
+    static func lifecycleRefusal(_ error: any Error, typed: Bool) -> any Error {
+        guard !typed else { return error }
+        switch error {
+        case WorktreeDeletionRefusal.unsavedEdits, WorktreeDeletionRefusal.ownedByWorkspaceCheckout,
+             WorktreeArchiveRefusal.unsavedEdits:
+            return HostError.failed(message: error.localizedDescription)
+        default:
+            return error
+        }
     }
 
     static func hostError(_ error: any Error) -> HostError {
