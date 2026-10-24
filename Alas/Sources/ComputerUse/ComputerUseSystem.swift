@@ -503,11 +503,15 @@ extension LiveComputerUseSystem {
            let button = try await ComputerUseAXActions.pressDialogButton(chord, in: window, interrupt: interrupt) {
             return ComputerUseDelivered(delivery: .ax, button: button)
         }
-        // Content another process draws in the window takes no posted events: the input goes as AX
-        // on the element at the point, also when direct, and fails rather than post events there.
-        let (input, remote) = try await routedToPoint(input, in: window, ignoring: ignoring, isCancelled: isCancelled)
+        // Content another process draws in the window (a System Settings pane) takes no posted
+        // events: an x/y click or scroll there goes as AX on the element at the point, also when
+        // direct. Where AX has no way, the events go as they always did.
+        if let routed = try await routedToPoint(input, in: window, ignoring: ignoring, isCancelled: isCancelled),
+           let delivered = try await remoteViaAX(routed, in: window, interrupt: interrupt) {
+            return delivered
+        }
         // Drags always go with the app in front; the coordinator applies the direct takeover rule to them.
-        if (direct || input.isDrag) && !remote {
+        if direct || input.isDrag {
             // Raising the window moves the app's key window too; not while another input holds it.
             return try await keyLocks.run(window.app.pid) {
                 try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
@@ -519,60 +523,7 @@ extension LiveComputerUseSystem {
            try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
             throw ComputerUseAXActions.hiddenRefusal
         }
-        // Each case falls through to events only when the element offers no AX way. Typing without
-        // a ref and chords act on the key window, so they wait until it is made key below.
-        switch input {
-        case .click(.element(let handles, let handle), .right, _):
-            do {
-                try await ComputerUseAXActions.showMenu(handles, handle, app: app, interrupt: interrupt)
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // A right click at its centre may still land.
-            }
-        case .click(.element(let handles, let handle), .left, let count) where count <= 2:
-            if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
-                // A web field may only read as focused in its page: unless the app's focus moved,
-                // the click goes as events at the field, as a user's would.
-                if try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) { return .ax }
-                break
-            }
-            if count == 1 {
-                do {
-                    try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
-                    return .ax
-                } catch is ComputerUseAXActions.Unsupported {
-                    // Static text and cells have no press; something around them may.
-                }
-            }
-            do {
-                try await ComputerUseAXActions.pressOrSelectNearest(
-                    handles, handle, count: count, app: app, interrupt: interrupt)
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // A click at its centre may still land.
-            }
-        case .type(let text, .element(let handles, let handle), let replace):
-            do {
-                if replace {
-                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
-                } else {
-                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
-                }
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // The text isn't settable; focus it and type instead.
-            }
-        case .scroll(let at, let dx, let dy):
-            do {
-                try await ComputerUseAXActions.scroll(at, dx: dx, dy: dy, in: window, interrupt: interrupt)
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // No scroll bar to move; a wheel event at the point may still land.
-            }
-        default:
-            break
-        }
-        if remote { throw ComputerUseSystemError.actionFailed(remoteContentRefusal) }
+        if let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
         // From making the window key until it is handed back below, no other input may move key
         // status in this app: its events would land in whichever window the other one left key.
         return try await keyLocks.run(app.pid) {
@@ -596,24 +547,104 @@ extension LiveComputerUseSystem {
         }
     }
 
-    static let remoteContentRefusal =
-        "That point is in content another process draws (as in System Settings' panes), which takes no posted "
-            + "clicks or scrolls, and the element there has no accessibility action for it. Use a ref from computer_inspect."
+    /// The AX ways to deliver an input, nil when the element offers none. Typing without a ref and
+    /// chords act on the key window, so they wait until it is made key.
+    private static func viaAX(
+        _ input: ComputerUseInput, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered? {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        let app = window.app
+        // Each case falls through to events only when the element offers no AX way. Typing without
+        // a ref and chords act on the key window, so they wait until it is made key below.
+        switch input {
+        case .click(.element(let handles, let handle), .right, _):
+            do {
+                try await ComputerUseAXActions.showMenu(handles, handle, app: app, interrupt: interrupt)
+                return ComputerUseDelivered.ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // A right click at its centre may still land.
+            }
+        case .click(.element(let handles, let handle), .left, let count) where count <= 2:
+            if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
+                // A web field may only read as focused in its page: unless the app's focus moved,
+                // the click goes as events at the field, as a user's would.
+                if try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) { return ComputerUseDelivered.ax }
+                break
+            }
+            if count == 1 {
+                do {
+                    try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
+                    return ComputerUseDelivered.ax
+                } catch is ComputerUseAXActions.Unsupported {
+                    // Static text and cells have no press; something around them may.
+                }
+            }
+            do {
+                try await ComputerUseAXActions.pressOrSelectNearest(
+                    handles, handle, count: count, app: app, interrupt: interrupt)
+                return ComputerUseDelivered.ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // A click at its centre may still land.
+            }
+        case .type(let text, .element(let handles, let handle), let replace):
+            do {
+                if replace {
+                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
+                } else {
+                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
+                }
+                return ComputerUseDelivered.ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // The text isn't settable; focus it and type instead.
+            }
+        case .scroll(let at, let dx, let dy):
+            do {
+                try await ComputerUseAXActions.scroll(at, dx: dx, dy: dy, in: window, interrupt: interrupt)
+                return ComputerUseDelivered.ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // No scroll bar to move; a wheel event at the point may still land.
+            }
+        default:
+            break
+        }
+        return nil
+    }
+
+    /// `viaAX` for an input rewritten onto another process's element (`routedToPoint`): nil, so the
+    /// original input goes as events, when AX has no way or fails other than by a stop, the
+    /// user's return or a press the app didn't confirm (which most likely took effect).
+    private static func remoteViaAX(
+        _ input: ComputerUseInput, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered? {
+        do {
+            return try await viaAX(input, in: window, interrupt: interrupt)
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as ComputerUseAXActions.Unconfirmed {
+            throw error
+        } catch ComputerUseSystemError.userActive {
+            throw ComputerUseSystemError.userActive
+        } catch {
+            return nil
+        }
+    }
+
     static let coveredPointRefusal =
         "Another app's content is at that point; nothing was sent. Use a ref from computer_inspect."
 
     /// An x/y click or scroll whose point holds content another process draws in the window, as
-    /// the same input on the element there (`ComputerUseInputGeometry.pointRoute`), with true;
-    /// any other input as it is, with false. Refuses when another process's element at the point
-    /// isn't in the window.
+    /// the same input on the element there (`ComputerUseInputGeometry.pointRoute`); nil for any
+    /// other input. Refuses when another process's element at the point isn't in the window.
     private static func routedToPoint(
         _ input: ComputerUseInput, in window: ComputerUseWindow, ignoring: @escaping @Sendable () -> Set<UInt32>,
         isCancelled: @escaping @Sendable () -> Bool
-    ) async throws -> (ComputerUseInput, Bool) {
+    ) async throws -> ComputerUseInput? {
         let point: CGPoint
         switch input {
         case .click(.point(let at), _, _), .scroll(.point(let at), _, _): point = at
-        default: return (input, false)
+        default: return nil
         }
         let found = try await ComputerUseAXActions.elements(at: point, app: window.app, isCancelled: isCancelled)
         let onTop = ComputerUseInputGeometry.topmostWindow(at: point, in: screenWindows(), ignoring: ignoring()) == window.windowID
@@ -622,17 +653,17 @@ extension LiveComputerUseSystem {
             systemHit: found.system?.hit, targetOnTop: onTop)
         let element: ComputerUseAXActions.PointElement?
         switch route {
-        case .events: return (input, false)
+        case .events: return nil
         case .covered: throw ComputerUseSystemError.actionFailed(coveredPointRefusal)
         case .appHit: element = found.app
         case .systemHit: element = found.system
         }
-        guard let element else { return (input, false) }
+        guard let element else { return nil }
         let target = ComputerUseInputTarget.element(element.handles, 0)
         switch input {
-        case .click(_, let button, let count): return (.click(target, button: button, count: count), true)
-        case .scroll(_, let dx, let dy): return (.scroll(target, dx: dx, dy: dy), true)
-        default: return (input, false)
+        case .click(_, let button, let count): return .click(target, button: button, count: count)
+        case .scroll(_, let dx, let dy): return .scroll(target, dx: dx, dy: dy)
+        default: return nil
         }
     }
 
