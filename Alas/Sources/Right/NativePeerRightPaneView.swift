@@ -100,7 +100,9 @@ struct NativePeerRightPaneView: View {
                 serverId: runTarget.serverId,
                 worktree: runTarget.worktree,
                 hostName: client.selectedWorktreePeer?.name ?? "The host",
-                refreshGeneration: runRefreshGeneration
+                refreshGeneration: runRefreshGeneration,
+                consoleIds: Set(client.consoles?.consoles[runTarget.serverId]?.map(\.consoleId) ?? []),
+                openConsole: { client.selectConsole(serverId: runTarget.serverId, consoleId: $0) }
             )
         } else if !client.canReadWorkspace {
             // Changes and files are served per session, or per worktree by a

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AlasCore
 @_spi(Testing) import AlasIntegrations
-@_spi(AppHost) @testable import AlasHostCore
+@_spi(AppHost) @_spi(Testing) @testable import AlasHostCore
 
 @MainActor
 struct HostConsolesTests {
@@ -111,15 +111,29 @@ struct HostConsolesTests {
 
     /// The launch suspends; a removal that begins or ends meanwhile must not
     /// find the shell missing from its cleanup and then see it registered.
-    @Test(arguments: DuringLaunch.allCases)
-    func aShellLaunchedWhileItsWorktreeGoesIsKilled(_ during: DuringLaunch) async throws {
+    @Test(arguments: DuringLaunch.allCases, [false, true])
+    func aShellLaunchedWhileItsWorktreeGoesIsKilled(_ during: DuringLaunch, isRun: Bool) async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         fixture.fakes.withLock { $0.duringLaunch = during }
         let consoles = fixture.consoles()
         let expected: PeerConsoleOpenError = during == .removalClaimsIt ? .worktreeBusy : .worktreeUnavailable
 
-        await #expect(throws: expected) { try await consoles.open(worktreeId: fixture.worktree.id) }
+        if isRun {
+            (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+            let script = try fixture.runScript(onExit: .keep)
+            guard case .started = fixture.core.startRun(script, in: fixture.worktree) else {
+                Issue.record("The run did not start")
+                return
+            }
+            await fixture.core.waitForStartingRunsForTesting()
+            // Never started: the previous (no) record is put back.
+            #expect(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key) == nil)
+            let launch = try #require(fixture.launches.first)
+            #expect(!fixture.rcFilesExist(of: launch))
+        } else {
+            await #expect(throws: expected) { try await consoles.open(worktreeId: fixture.worktree.id) }
+        }
         #expect(consoles.summaries().isEmpty)
         #expect(try fixture.savedFile()?.consoles.isEmpty ?? true)
         #expect(fixture.killed == fixture.launches.map { $0.arguments[1] })
@@ -298,6 +312,244 @@ struct HostConsolesTests {
         #expect(consoles.summaries().map(\.consoleId) == [id])
     }
 
+    // MARK: - Runs
+
+    @Test func aConsolesFileFromBeforeRunsReadsAsShells() throws {
+        let json = #"{"consoles":[{"id":"c","worktreeId":"w","title":"Terminal 1","zmxName":"alashost-a-b","rows":24,"columns":120}]}"#
+        let file = try JSONDecoder().decode(HostConsolesFile.self, from: Data(json.utf8))
+        #expect(file.consoles.map(\.scriptKey) == [nil])
+    }
+
+    @Test func aRunLaunchesInAShellThatSourcesTheCapturedCommand() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started(let runID) = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+
+        let launch = try #require(fixture.launches.first)
+        #expect(Array(launch.arguments.dropFirst(2)) == ["/bin/zsh", "-l", "-i"])
+        let rc = try String(contentsOfFile: #require(launch.environment["ZDOTDIR"]) + "/.zshrc", encoding: .utf8)
+        #expect(rc.contains("__alas_run_script_capture") && rc.contains(script.fileURL.path))
+        let record = try #require(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key))
+        let summary = try #require(consoles.summaries().first)
+        #expect((record.sessionID, summary.title) == (summary.consoleId, "Dev"))
+        #expect(try fixture.savedFile()?.consoles.map(\.scriptKey) == [script.key])
+
+        try fixture.complete(runID: runID, exitCode: 0)
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.succeeded) }
+        #expect(consoles.summaries().map(\.consoleId) == [summary.consoleId]) // keep: the console stays
+    }
+
+    /// zmx's `attach` fails when the command exits before it connects, though
+    /// the command ran: the run settles by its completion, not as never started.
+    @Test func aRunWhoseAttachFailsSettlesByItsCompletion() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.fakes.withLock { $0.launchFails = true }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .close)
+        guard case .started(let runID) = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        try fixture.complete(runID: runID, exitCode: 3)
+        await fixture.core.waitForStartingRunsForTesting()
+
+        #expect(fixture.killed == fixture.launches.map { $0.arguments[1] })
+        #expect(consoles.summaries().isEmpty)
+        let launch = try #require(fixture.launches.first)
+        #expect(!fixture.rcFilesExist(of: launch))
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        try await eventually {
+            await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.failed(exitCode: 3))
+        }
+    }
+
+    enum Ending: CaseIterable { case stop, rerun }
+
+    /// Stopping a run, or running it again over its kept console, ends the
+    /// console it ran in, so a script never has two.
+    @Test(arguments: Ending.allCases)
+    func stoppingOrRerunningARunEndsItsConsole(_ ending: Ending) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started(let runID) = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+        let first = try #require(consoles.summaries().first?.consoleId)
+        let firstName = try #require(fixture.launches.first?.arguments[1])
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        switch ending {
+        case .stop:
+            core.stopRun(scriptKey: script.key, in: fixture.worktree)
+        case .rerun:
+            try fixture.complete(runID: runID, exitCode: 0)
+            try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.succeeded) }
+            _ = core.startRun(script, in: fixture.worktree)
+            await core.waitForStartingRunsForTesting()
+        }
+
+        let fakes = fixture.fakes
+        try await eventually { fakes.withLock { $0.killed.first } == firstName }
+        let expected = ending == .stop ? 0 : 1
+        try await eventually { await MainActor.run { consoles.summaries().count == expected && !consoles.summaries().contains { $0.consoleId == first } } }
+        if ending == .stop {
+            #expect(core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.stopped))
+        }
+    }
+
+    @Test func aSecondStartWhileARunConsoleIsLiveIsRefused() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+        let live = consoles.summaries().map(\.consoleId)
+
+        #expect(fixture.core.startRun(script, in: fixture.worktree)
+            == .refused(title: "Run Script Failed", message: "Dev is already running."))
+        await fixture.core.waitForStartingRunsForTesting()
+        #expect(fixture.killed.isEmpty)
+        #expect(consoles.summaries().map(\.consoleId) == live)
+    }
+
+    /// Ids come from host-consoles.json; a malformed one must not reach
+    /// outside its own rc files.
+    @Test(arguments: ["", "..", "../rcfiles"])
+    func cleaningUpAMalformedIdKeepsOtherRcFiles(_ id: String) throws {
+        let sibling = Paths.appSupportRoot.appendingPathComponent("rcfiles/\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: sibling) }
+
+        StartupScriptInstaller.removeArtifacts(sessionId: id)
+        #expect(FileManager.default.fileExists(atPath: sibling.path))
+    }
+
+    /// A rerun replaces the script's kept console; one zmx can't stop stays
+    /// the script's only console, and the rerun is refused.
+    @Test func aRunWhosePreviousConsoleCantBeStoppedIsRefused() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let core = fixture.core
+        (core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        let first = try await fixture.finishedKeptRun(script, consoles: consoles)
+        fixture.fakes.withLock { $0.killFails = true }
+
+        var settlement: RunScriptSettlement?
+        _ = core.startRun(script, in: fixture.worktree, onSettled: { settlement = $0 })
+        await core.waitForStartingRunsForTesting()
+        try await eventually { await MainActor.run { settlement != nil } }
+        #expect(settlement == .launchFailed("The previous run of Dev couldn't be stopped; terminate its console and try again."))
+        #expect(fixture.launches.count == 1)
+        #expect(consoles.summaries().map(\.consoleId) == [first])
+    }
+
+    /// Stopped while it was still preparing, a run never starts its shell.
+    @Test func aRunStoppedWhilePreparingNeverLaunches() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let core = fixture.core
+        (core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        _ = try await fixture.finishedKeptRun(script, consoles: consoles)
+        let fakes = fixture.fakes
+        fakes.withLock { $0.holdKill = true }
+
+        _ = core.startRun(script, in: fixture.worktree)
+        // Preparing: stopping the earlier console.
+        try await eventually { fakes.withLock { $0.killed.count } == 1 }
+        core.stopRun(scriptKey: script.key, in: fixture.worktree)
+        fakes.release.signal()
+        try await eventually { await MainActor.run { core.stoppingRuns.isEmpty } }
+        #expect(fixture.launches.count == 1)
+    }
+
+    /// With no peer listing consoles, a run whose console died without
+    /// reporting completion still settles.
+    @Test func aRunConsoleThatDiesUnwatchedSettlesItsRun() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles(pruneInterval: .milliseconds(20))
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+        let record = try #require(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key))
+        let sessionID = try #require(record.sessionID)
+        try FileManager.default.removeItem(atPath: #require(fixture.socketPath(of: sessionID)))
+
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.unknown) }
+        #expect(try fixture.savedFile()?.consoles.isEmpty == true)
+    }
+
+    /// A peer terminates a console whose run is still going: the run settles.
+    @Test func terminatingARunConsoleSettlesItsRun() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .keep)
+        guard case .started = fixture.core.startRun(script, in: fixture.worktree) else {
+            Issue.record("The run did not start")
+            return
+        }
+        await fixture.core.waitForStartingRunsForTesting()
+        let consoleId = try #require(consoles.summaries().first?.consoleId)
+
+        await consoles.terminate(consoleId)
+        let core = fixture.core
+        let worktreeID = fixture.worktree.id
+        try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.unknown) }
+    }
+
+    enum NoConsole: CaseIterable { case noZmx, fish }
+
+    @Test(arguments: NoConsole.allCases)
+    func withoutZmxOrAnInjectableShellARunIsAPlainProcess(_ kind: NoConsole) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles(
+            zmx: kind == .noZmx ? ZmxClient(env: ZmxEnv(binaryURL: nil, zmxDir: fixture.zmxDir)) : nil,
+            shell: kind == .fish ? "/opt/homebrew/bin/fish" : "/bin/zsh"
+        )
+        (fixture.core.environment as! HeadlessHostEnvironment).runLauncherOverride = consoles
+        let script = try fixture.runScript(onExit: .close)
+
+        #expect(try await fixture.core.runScript(script, in: fixture.worktree) == .succeeded)
+        #expect(fixture.launches.isEmpty)
+        #expect(consoles.summaries().isEmpty)
+        #expect(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key)?.sessionID == nil)
+    }
+
     private static func git(_ arguments: [String], in directory: URL) throws {
         let git = Process()
         git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
@@ -315,6 +567,8 @@ struct HostConsolesTests {
         var launchFails = false
         var lsFails = false
         var killFails = false
+        /// The next kill blocks until `release` is signaled.
+        var holdKill = false
         var duringLaunch: DuringLaunch?
         var sizeApplies = true
         var sizes: [String] = []
@@ -368,6 +622,9 @@ struct HostConsolesTests {
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
                 attentionStore: .scratch(),
+                // Short enough for `eventually`, not zero: an already-written
+                // `.done` wins over the idle check.
+                runHostGrace: RunHostGrace(local: .milliseconds(200), any: .milliseconds(200)),
                 orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
             )
             let fakes = SharedFakes()
@@ -378,10 +635,13 @@ struct HostConsolesTests {
                     if fakes.withLock({ $0.lsFails }) { return .init(exitCode: 1, stdout: "", stderr: "") }
                     return .init(exitCode: 0, stdout: fakes.withLock { $0.live }.joined(separator: "\n"), stderr: "")
                 case "kill":
-                    let fails = fakes.withLock {
-                        $0.killed.append(args[1])
-                        return $0.killFails
+                    let (fails, hold) = fakes.withLock { fakes in
+                        fakes.killed.append(args[1])
+                        let hold = fakes.holdKill
+                        fakes.holdKill = false
+                        return (fakes.killFails, hold)
                     }
+                    if hold { fakes.release.wait() }
                     return .init(exitCode: fails ? 1 : 0, stdout: "", stderr: "")
                 default:
                     return .init(exitCode: 1, stdout: "", stderr: "")
@@ -393,7 +653,7 @@ struct HostConsolesTests {
             )
         }
 
-        func consoles(zmx override: ZmxClient? = nil) -> HostConsoles {
+        func consoles(zmx override: ZmxClient? = nil, shell: String = "/bin/zsh", pruneInterval: Duration = .seconds(60)) -> HostConsoles {
             let fakes = fakes
             let zmx = override ?? zmx
             let projects = projects
@@ -435,8 +695,41 @@ struct HostConsolesTests {
                     }
                 },
                 baseEnvironment: { [:] },
-                shell: "/bin/zsh"
+                shell: shell,
+                pruneInterval: pruneInterval
             )
+        }
+
+        func runScript(onExit: RunScriptOnExit) throws -> RunScript {
+            let url = worktree.path.appendingPathComponent(".alas/scripts/dev.sh")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "exit 0\n".write(to: url, atomically: true, encoding: .utf8)
+            return RunScript(
+                scope: .repo, fileName: "dev.sh", fileURL: url, displayName: "Dev",
+                onExit: onExit, cwd: nil, isExecutable: false
+            )
+        }
+
+        func complete(runID: String, exitCode: Int32) throws {
+            let path = try RunScriptCompletionMonitor.paths(runID: runID, host: nil).paths.completion
+            let url = URL(fileURLWithPath: path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "\(exitCode)\t1.0\n".write(to: url, atomically: true, encoding: .utf8)
+        }
+
+        /// Runs a keep script to completion; its console stays. Returns it.
+        func finishedKeptRun(_ script: RunScript, consoles: HostConsoles) async throws -> String {
+            guard case .started(let runID) = core.startRun(script, in: worktree) else { throw CancellationError() }
+            await core.waitForStartingRunsForTesting()
+            try complete(runID: runID, exitCode: 0)
+            let core = core
+            let worktreeID = worktree.id
+            try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.succeeded) }
+            return try #require(consoles.summaries().first?.consoleId)
+        }
+
+        func rcFilesExist(of launch: HostShellLaunch) -> Bool {
+            launch.environment["ZDOTDIR"].map { FileManager.default.fileExists(atPath: $0) } ?? false
         }
 
         func socketPath(of consoleId: String) -> String? {
