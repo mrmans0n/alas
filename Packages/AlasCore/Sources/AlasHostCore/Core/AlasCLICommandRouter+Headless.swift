@@ -1,7 +1,10 @@
 import Foundation
+import os
 import AlasModel
 import AlasACP
 import AlasAgentKit
+
+private let headlessLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasHost")
 
 extension AlasCLICommandRouter {
     public static let headlessRefusal = AlasCLIResponse.error("Not available on a headless host.")
@@ -31,7 +34,12 @@ extension AlasCLICommandRouter {
                         projectID: origin.projectId, branch: branch, base: base, caller: caller
                     )
                     let pending = try await host.worktrees.beginCreate(prepared.request, caller: caller)
-                    Task { _ = await host.worktrees.finishCreate(pending) }
+                    Task {
+                        // The command has answered; nobody else hears how it ended.
+                        if case .failed(let message, _) = await host.worktrees.finishCreate(pending) {
+                            headlessLogger.error("Creating worktree \(branch, privacy: .private) failed: \(message, privacy: .public)")
+                        }
+                    }
                     return .text(["creating \(branch) at \(prepared.shownPath)"])
                 } catch {
                     return .error(error.localizedDescription)

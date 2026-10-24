@@ -789,10 +789,10 @@ struct NativePeerSessionsTests {
             try await eventually("snapshot request") { sent.count { $0.request == .snapshot } == snapshots }
             let snapshotID = try #require(last { $0 == .snapshot }?.id)
             hosts.receive(serverId: "B", .response(id: snapshotID, result: .snapshot(snapshot: snapshot)))
-            try await eventually("subscribe request") { sent.count { if case .subscribe = $0.request { true } else { false } } == snapshots }
+            try await eventually("subscribe request") { sent.count { if case .subscribeAccepting = $0.request { true } else { false } } == snapshots }
         }
         func subscribed() throws {
-            let subscribeID = try #require(last { if case .subscribe = $0 { true } else { false } }?.id)
+            let subscribeID = try #require(last { if case .subscribeAccepting = $0 { true } else { false } }?.id)
             hosts.receive(serverId: "B", .response(id: subscribeID, result: .subscribed))
         }
         func readCount() -> Int { sent.count { if case .readWorktree = $0.request { true } else { false } } }

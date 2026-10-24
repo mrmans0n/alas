@@ -179,9 +179,16 @@ if executableWasReplaced() {
 }
 
 // The `alas` CLI, for agents' MCP server and shells, installed beside `ao`.
-let cliBinDir = HostShellLaunch.cliBinary(executable: Bundle.main.executableURL)
-    .flatMap { try? TerminalCLIInjection.installExecutables(sourceBinary: $0) }
-if cliBinDir == nil {
+let cliBinDir: URL?
+if let cli = HostShellLaunch.cliBinary(executable: Bundle.main.executableURL) {
+    do {
+        cliBinDir = try TerminalCLIInjection.installExecutables(sourceBinary: cli)
+    } catch {
+        cliBinDir = nil
+        FileHandle.standardError.write(Data("alas-host: cannot install the alas CLI from \(cli.path): \(error.localizedDescription); agents get no alas tools here\n".utf8))
+    }
+} else {
+    cliBinDir = nil
     FileHandle.standardError.write(Data("alas-host: alas CLI not found beside alas-host or in /Applications/Alas.app; agents get no alas tools here\n".utf8))
 }
 
