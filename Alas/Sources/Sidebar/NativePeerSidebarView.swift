@@ -191,9 +191,9 @@ struct NativePeerSidebarView: View {
     @ViewBuilder
     private func archivedWorktreeMenu(_ worktree: PeerHostWorktree, hosts: NativePeerHosts, peer: NativePeerGroup) -> some View {
         let checkout = worktree.snapshot.worktree
-        Button("Copy Path") { Self.copy(checkout.path.path) }
+        Button("Copy Path") { Clipboard.copyPath(checkout.path.path) }
         if !checkout.branch.isEmpty {
-            Button("Copy Branch Name") { Self.copy(checkout.branch) }
+            Button("Copy Branch Name") { Clipboard.copy(checkout.branch) }
         }
         if hosts.canUnarchive(serverId: peer.serverId) {
             Divider()
@@ -216,10 +216,10 @@ struct NativePeerSidebarView: View {
         }
         // Paths on the host Mac, copied as the host lists them.
         if let summary = worktree.worktree {
-            Button("Copy Path") { Self.copy(summary.path) }
+            Button("Copy Path") { Clipboard.copyPath(summary.path) }
             // Folder-project rows have no branch.
             if !summary.branch.isEmpty {
-                Button("Copy Branch Name") { Self.copy(summary.branch) }
+                Button("Copy Branch Name") { Clipboard.copy(summary.branch) }
             }
         }
         if let host = worktree.host, let hosts = client.hosts, hosts.canRenameBranch(host, serverId: peer.serverId) {
@@ -253,12 +253,6 @@ struct NativePeerSidebarView: View {
                 }
             }
         }
-    }
-
-    private static func copy(_ string: String) {
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        pb.setString(string, forType: .string)
     }
 }
 
