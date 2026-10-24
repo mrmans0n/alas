@@ -55,6 +55,13 @@ enum ComputerUseInput: Sendable {
     /// that changed nothing in an app whose AX press only focuses (Electron).
     case pointerClick(ComputerUseInputTarget)
 
+    /// The element a click by ref targets, which must show for the click to go ahead. Typing by
+    /// ref may target a field out of view, and scrolling is how one gets there.
+    var refusedWhenHidden: (ComputerUseAXHandles, Int)? {
+        if case .click(.element(let handles, let handle), _, _) = self { return (handles, handle) }
+        return nil
+    }
+
     var isDrag: Bool {
         if case .drag = self { return true }
         return false
@@ -420,6 +427,11 @@ extension LiveComputerUseSystem {
             return try await keyLocks.run(window.app.pid) { try await activated(input, in: window, interrupt: interrupt) }
         }
         let app = window.app
+        // An AX press needs no position, so it would reach an element scrolled out of view.
+        if let (handles, handle) = input.refusedWhenHidden,
+           try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
+            throw ComputerUseAXActions.hiddenRefusal
+        }
         // Each case falls through to events only when the element offers no AX way. Typing without
         // a ref and chords act on the key window, so they wait until it is made key below.
         switch input {
@@ -677,7 +689,7 @@ extension LiveComputerUseSystem {
             case .element(let handles, let handle):
                 guard let visible = try await ComputerUseAXActions.visibleCenter(
                     handles, handle, within: bounds.frame, app: bounds.app, requireOwnCenter: false, isCancelled: isCancelled)
-                else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.") }
+                else { throw ComputerUseAXActions.hiddenRefusal }
                 return visible
             case .point(let point):
                 return point

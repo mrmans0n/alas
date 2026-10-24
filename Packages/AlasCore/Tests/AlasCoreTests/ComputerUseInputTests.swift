@@ -92,6 +92,17 @@ struct ComputerUseInputTests {
             of: frame, clippedTo: [window, scrollArea], requireOwnCenter: requireOwnCenter) == expected)
     }
 
+    /// A ref click is refused only where inspect reports the element hidden; one without a size can't tell.
+    @Test(arguments: [
+        (CGRect(x: 10, y: 250, width: 100, height: 20), false),
+        (CGRect(x: -150, y: 10, width: 200, height: 20), true),
+        (CGRect(x: 10, y: 250, width: 0, height: 0), true),
+    ])
+    func elementsShowWhereAnyOfThemIsInsideTheClips(frame: CGRect, shown: Bool) {
+        let clips = [CGRect(x: -200, y: 0, width: 700, height: 400), CGRect(x: 0, y: 0, width: 300, height: 200)]
+        #expect(ComputerUseInputGeometry.isShown(frame, clippedTo: clips) == shown)
+    }
+
     /// Both of a drag's points must be on the window it uses there; the start is reported first.
     /// A window above the normal layer that shows (a floating panel, a banner, the Dock, the
     /// dragging app's own panel) takes the press or drop too; from the dragging layer up

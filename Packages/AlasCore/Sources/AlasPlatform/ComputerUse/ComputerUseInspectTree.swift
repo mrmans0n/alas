@@ -134,8 +134,7 @@ public enum ComputerUseInspectTree {
         /// Whether any of the node's frame shows inside `clips` (the window and enclosing scroll
         /// areas); a node without a frame counts as shown.
         func isVisible(_ node: ComputerUseAXNode, clips: [CGRect]) -> Bool {
-            guard node.frame.width > 0, node.frame.height > 0 else { return true }
-            return ComputerUseInputGeometry.visibleCenter(of: node.frame, clippedTo: clips, requireOwnCenter: false) != nil
+            ComputerUseInputGeometry.isShown(node.frame, clippedTo: clips)
         }
 
         // Past the limit the walk goes on only to name the remaining nodes' refs.

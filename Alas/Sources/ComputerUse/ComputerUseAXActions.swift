@@ -118,17 +118,38 @@ enum ComputerUseAXActions {
             guard AXValueGetValue(try value(element, kAXPositionAttribute, app: app), .cgPoint, &position),
                   AXValueGetValue(try value(element, kAXSizeAttribute, app: app), .cgSize, &size)
             else { throw noFrame }
-            var clips = [window]
-            if let parent = elementAttribute(element, kAXParentAttribute),
-               let area = ancestor(of: parent, levels: scrollAncestorLevels, where: {
-                   string(of: $0, kAXRoleAttribute) == kAXScrollAreaRole
-               }),
-               let areaFrame = frame(of: area) {
-                clips.append(areaFrame)
-            }
             return ComputerUseInputGeometry.visibleCenter(
-                of: CGRect(origin: position, size: size), clippedTo: clips, requireOwnCenter: requireOwnCenter)
+                of: CGRect(origin: position, size: size), clippedTo: clips(of: element, within: window),
+                requireOwnCenter: requireOwnCenter)
         }
+    }
+
+    /// Whether any of the element shows in its nearest scroll area and `window`, as inspect's
+    /// `visible` says. An element whose frame can't be read counts as shown, as in inspect: an
+    /// AX action on it needs no position.
+    static func isShown(
+        _ handles: ComputerUseAXHandles, _ handle: Int, within window: CGRect, isCancelled: @escaping IsCancelled
+    ) async throws -> Bool {
+        try await onQueue(isCancelled) {
+            let element = try resolve(handles, handle)
+            guard let frame = frame(of: element) else { return true }
+            return ComputerUseInputGeometry.isShown(frame, clippedTo: clips(of: element, within: window))
+        }
+    }
+
+    static let hiddenRefusal = ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.")
+
+    /// `window` and the element's nearest scroll area: what pointer input at it must land inside.
+    private static func clips(of element: AXUIElement, within window: CGRect) -> [CGRect] {
+        var clips = [window]
+        if let parent = elementAttribute(element, kAXParentAttribute),
+           let area = ancestor(of: parent, levels: scrollAncestorLevels, where: {
+               string(of: $0, kAXRoleAttribute) == kAXScrollAreaRole
+           }),
+           let areaFrame = frame(of: area) {
+            clips.append(areaFrame)
+        }
+        return clips
     }
 
     /// Makes the table or outline row holding the element (itself or up to `rowLevels` above) the
