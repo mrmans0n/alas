@@ -681,7 +681,12 @@ extension ComputerUseAXActions {
             }
             // A sheet a pane hosted in another process opens (System Settings') sits deeper in the
             // window's tree, among the pane's own elements.
-            let remote = candidates.isEmpty ? nestedSheets(in: target) : []
+            // Only where a sheet can be that deep: an app hosting its content remotely, or a window
+            // off screen, whose sheet can't take posted keys either.
+            let displays = ComputerUseAXReader.displayFrames()
+            let searchesTree = ComputerUseRemoteContent.hostsContentRemotely(bundleID: app.bundleID)
+                || (!displays.isEmpty && !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays))
+            let remote = candidates.isEmpty && searchesTree ? nestedSheets(in: target) : []
             candidates += remote
             func pressChecked(_ button: AXUIElement, title: String) throws {
                 switch interrupt() {
@@ -745,6 +750,7 @@ extension ComputerUseAXActions {
             for element in level {
                 visited += 1
                 guard visited <= nestedSheetNodes, ContinuousClock.now < deadline else { return sheets }
+                guard isMessageable(element) else { continue }
                 if string(of: element, kAXRoleAttribute) == kAXSheetRole {
                     sheets.append(element)
                 } else {

@@ -67,10 +67,20 @@ public enum ComputerUseInputGeometry {
         displays.contains { $0.contains(point) }
     }
 
-    /// Whether any of a window's frame is on one of `displays`.
+    /// Whether a window's frame is on screen: its centre is on a display, or at least
+    /// `onScreenShare` of its area is. The 1-point sliver AeroSpace leaves of a parked window isn't.
     public static func frameIsOnScreen(_ frame: CGRect, displays: [CGRect]) -> Bool {
-        displays.contains { $0.intersects(frame) }
+        if pointIsOnScreen(center(of: frame), displays: displays) { return true }
+        let area = frame.width * frame.height
+        guard area > 0 else { return false }
+        let shown = displays.reduce(CGFloat(0)) { sum, display in
+            let overlap = display.intersection(frame)
+            return overlap.isNull ? sum : sum + overlap.width * overlap.height
+        }
+        return shown / area >= onScreenShare
     }
+
+    public static let onScreenShare: CGFloat = 0.25
 
     /// Whether `frame` holds `point`, within `frameTolerance`.
     public static func holds(_ frame: CGRect, _ point: CGPoint) -> Bool {

@@ -44,6 +44,14 @@ enum ComputerUseAXReader {
         pid > 0 && pid != getpid()
     }
 
+    /// The frames of the active displays, CG global, top-left.
+    static func displayFrames() -> [CGRect] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
+        return ids.prefix(Int(count)).map(CGDisplayBounds)
+    }
+
     static let hostRefusal = ComputerUseSystemError.actionFailed("Agents can't use Alas itself.")
 
     /// `application(_:)`, refused for this process.

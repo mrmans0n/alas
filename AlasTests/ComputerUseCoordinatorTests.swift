@@ -498,8 +498,9 @@ struct ComputerUseCoordinatorTests {
     /// A window none of which is on a display (an AeroSpace workspace, another Space) says so.
     @Test func appsMarkWindowsOffEveryDisplay() async throws {
         var system = Self.system()
-        // Notes' window ends at (400, 300); Mail's reaches into the display.
-        system.displays = { [CGRect(x: 450, y: 350, width: 500, height: 500)] }
+        // Notes' centre (200, 150) is off the display, with under a quarter of it on; Mail's
+        // centre (260, 210) is on.
+        system.displays = { [CGRect(x: 210, y: 160, width: 500, height: 500)] }
         let f = Self.fixture(system: system)
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
         let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])

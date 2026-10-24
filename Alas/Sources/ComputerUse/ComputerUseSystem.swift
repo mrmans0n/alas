@@ -654,13 +654,7 @@ extension LiveComputerUseSystem {
             + "or ask the user to bring the window on screen."
     }
 
-    /// The frames of the active displays, CG global, top-left.
-    static func displayFrames() -> [CGRect] {
-        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
-        return ids.prefix(Int(count)).map(CGDisplayBounds)
-    }
+    static func displayFrames() -> [CGRect] { ComputerUseAXReader.displayFrames() }
 
     private static func routedToPoint(
         _ input: ComputerUseInput, in window: ComputerUseWindow, isCancelled: @escaping @Sendable () -> Bool

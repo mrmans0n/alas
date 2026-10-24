@@ -251,6 +251,19 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) == onScreen)
     }
 
+    /// A window is on screen when its centre or a quarter of it is: AeroSpace's 1-point sliver of a
+    /// parked window isn't.
+    @Test(arguments: [
+        (CGRect(x: 100, y: 100, width: 800, height: 600), true),
+        (CGRect(x: 1727, y: 1065, width: 876, height: 625), false),
+        (CGRect(x: 1400, y: 100, width: 800, height: 600), true),
+        (CGRect(x: 1500, y: 900, width: 800, height: 600), false),
+        (CGRect(x: 3000, y: 3000, width: 100, height: 100), false),
+    ])
+    func windowsAreOnScreenWhenTheirCentreOrAQuarterIs(frame: CGRect, onScreen: Bool) {
+        #expect(ComputerUseInputGeometry.frameIsOnScreen(frame, displays: [CGRect(x: 0, y: 0, width: 1728, height: 1117)]) == onScreen)
+    }
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)
