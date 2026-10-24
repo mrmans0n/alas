@@ -888,6 +888,7 @@ final class ComputerUseCoordinator {
         }
         payload["elements"] = [[String: Any]]()
         payload["truncated"] = true
+        payload["truncated_by"] = nil
         payload["depth_limited"] = nil
         if toWindow != nil { payload["to_window"] = ["window_id": Int((toWindow ?? window).windowID)] }
         payload["credential_prompt"] = true
@@ -1098,6 +1099,7 @@ final class ComputerUseCoordinator {
             // An earlier attempt's verdict doesn't describe this read.
             Self.report(depthLimited: false, warning: delivered.warning, into: &payload)
             payload["truncated"] = true
+            payload["truncated_by"] = nil
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription
             return Settled()
