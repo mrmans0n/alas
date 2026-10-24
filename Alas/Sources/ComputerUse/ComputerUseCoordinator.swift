@@ -687,7 +687,8 @@ final class ComputerUseCoordinator {
         let changeWarning = try await settle(
             after: delivered, of: command, in: &window, target: target, before: before,
             end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload).warning
-        let unchanged = changeWarning != nil
+        // A read that left elements out for depth may have missed the press's effect, and a second press could undo it.
+        let unchanged = changeWarning != nil && payload["depth_limited"] == nil
         if let target, let targetRef, Self.retriesWithPointer(
             command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
             manualAccessibility: system.usesManualAccessibility(window.app.pid)) {

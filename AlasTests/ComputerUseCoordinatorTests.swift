@@ -628,16 +628,20 @@ struct ComputerUseCoordinatorTests {
     /// there is clicked once more with the pointer. Elsewhere, after a change, and on a toggle a
     /// second press could undo, it stands.
     @Test(arguments: [
-        (true, false, "AXButton", true), (true, true, "AXButton", false), (false, false, "AXButton", false),
-        (true, false, "AXCheckBox", false),
+        (true, false, "AXButton", false, true), (true, true, "AXButton", false, false),
+        (false, false, "AXButton", false, false), (true, false, "AXCheckBox", false, false),
+        // A depth-limited read can't tell the press changed nothing.
+        (true, false, "AXButton", true, false),
     ])
     func electronClickThatChangedNothingIsRetriedWithThePointer(
-        manualAccessibility: Bool, changed: Bool, role: String, retries: Bool
+        manualAccessibility: Bool, changed: Bool, role: String, deep: Bool, retries: Bool
     ) async throws {
         let recorder = Recorder()
         let reads = Counter()
         var saveTree = Self.saveTree
         saveTree.children[0].role = role
+        // A group whose children the read didn't go deep enough to see.
+        if deep { saveTree.children.append(ComputerUseAXNode(role: "AXGroup", childrenUnread: true)) }
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { $0 == 101 && manualAccessibility }
         // Read 1 is the inspect, 2 the window before the click, 3 the one after it.
