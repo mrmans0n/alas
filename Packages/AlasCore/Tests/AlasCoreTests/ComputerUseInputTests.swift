@@ -320,10 +320,16 @@ struct ComputerUseInputTests {
         #expect(Motion.appKitFrame(fromCG: cg, primaryScreenHeight: 1000) == appKit)
     }
 
+    /// Elements are glided to the centre of their part inside the window (0, 0, 100, 100), with an outline.
     @Test(arguments: [
-        (ComputerUseCursorInputKind.click, CGPoint(x: 5, y: 5), nil, ComputerUseCursorCue.glide(to: CGPoint(x: 5, y: 5), click: true)),
-        (.scroll, CGPoint(x: 5, y: 5), nil, .glide(to: CGPoint(x: 5, y: 5), click: false)),
-        (.click, nil, CGRect(x: 0, y: 0, width: 20, height: 10), .jump(to: CGPoint(x: 10, y: 5), outline: CGRect(x: 0, y: 0, width: 20, height: 10), click: true)),
+        (ComputerUseCursorInputKind.click, CGPoint(x: 5, y: 5), nil,
+         ComputerUseCursorCue.glide(to: CGPoint(x: 5, y: 5), outline: nil, click: true)),
+        (.scroll, CGPoint(x: 5, y: 5), nil, .glide(to: CGPoint(x: 5, y: 5), outline: nil, click: false)),
+        (.click, nil, CGRect(x: 0, y: 0, width: 20, height: 10),
+         .glide(to: CGPoint(x: 10, y: 5), outline: CGRect(x: 0, y: 0, width: 20, height: 10), click: true)),
+        // Half of it below the window's bottom edge.
+        (.scroll, nil, CGRect(x: 0, y: 90, width: 20, height: 20),
+         .glide(to: CGPoint(x: 10, y: 95), outline: CGRect(x: 0, y: 90, width: 20, height: 20), click: false)),
         (.type, nil, CGRect(x: 0, y: 0, width: 20, height: 10), .outline(CGRect(x: 0, y: 0, width: 20, height: 10))),
         (.type, nil, nil, ComputerUseCursorCue.none),
         (.key, CGPoint(x: 5, y: 5), nil, ComputerUseCursorCue.none),
@@ -331,6 +337,23 @@ struct ComputerUseInputTests {
         (.click, nil, nil, ComputerUseCursorCue.none),
     ] as [(ComputerUseCursorInputKind, CGPoint?, CGRect?, ComputerUseCursorCue)])
     func eachInputGetsItsCue(kind: ComputerUseCursorInputKind, point: CGPoint?, frame: CGRect?, expected: ComputerUseCursorCue) {
-        #expect(ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: frame) == expected)
+        let window = CGRect(x: 0, y: 0, width: 100, height: 100)
+        #expect(ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: frame, window: window) == expected)
+    }
+
+    typealias Key = ComputerUseCursorWindowKey
+
+    /// A glide starts where the pointer last was in that window, kept inside it if the window
+    /// shrank, and at the centre of a window it hasn't been in.
+    @Test(arguments: [
+        (Key(pid: 1, windowID: 10), [Key(pid: 1, windowID: 10): CGPoint(x: 30, y: 40)], CGPoint(x: 30, y: 40)),
+        (Key(pid: 1, windowID: 11), [Key(pid: 1, windowID: 10): CGPoint(x: 30, y: 40)], CGPoint(x: 100, y: 50)),
+        // A recycled window id in another app is another window.
+        (Key(pid: 2, windowID: 10), [Key(pid: 1, windowID: 10): CGPoint(x: 30, y: 40)], CGPoint(x: 100, y: 50)),
+        (Key(pid: 1, windowID: 10), [:], CGPoint(x: 100, y: 50)),
+        (Key(pid: 1, windowID: 10), [Key(pid: 1, windowID: 10): CGPoint(x: 500, y: -5)], CGPoint(x: 200, y: 0)),
+    ] as [(Key, [Key: CGPoint], CGPoint)])
+    func glidesStartWhereThePointerLastWasInThatWindow(window: Key, last: [Key: CGPoint], expected: CGPoint) {
+        #expect(Motion.startPoint(in: window, size: CGSize(width: 200, height: 100), last: last) == expected)
     }
 }

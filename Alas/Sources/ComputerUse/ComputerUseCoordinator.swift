@@ -494,7 +494,10 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
     }
 
-    private static func cursorCue(for input: ComputerUseInput, elementFrame: CGRect?) -> ComputerUseCursorCue {
+    /// An element's cue goes to the part of it inside `window`.
+    private static func cursorCue(
+        for input: ComputerUseInput, elementFrame: CGRect?, in window: ComputerUseWindow
+    ) -> ComputerUseCursorCue {
         let kind: ComputerUseCursorInputKind
         let target: ComputerUseInputTarget?
         switch input {
@@ -506,7 +509,7 @@ final class ComputerUseCoordinator {
         }
         var point: CGPoint?
         if case .point(let at) = target { point = at }
-        return ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: elementFrame)
+        return ComputerUseCursorCue.cue(for: kind, point: point, elementFrame: elementFrame, window: window.frame)
     }
 
     private func forgetSnapshots(of sessionID: String) {
@@ -730,7 +733,7 @@ final class ComputerUseCoordinator {
         try checkStillActive(context)
         // The cursor moves before the takeover wait. Its pointer is window-local, so a remap after
         // the wait still lands under it.
-        let cue = Self.cursorCue(for: input, elementFrame: targetRef?.frame(in: window))
+        let cue = Self.cursorCue(for: input, elementFrame: targetRef?.frame(in: window), in: window)
         try await moveCursor(cue, over: window, context: context)
         if try await waitForUserIdle(in: window, direct: direct, context: context) {
             // The window may have moved or closed while the user had it: map points against where it is now.
@@ -795,7 +798,8 @@ final class ComputerUseCoordinator {
     ) async throws {
         try checkStillActive(context)
         let retry = ComputerUseInput.pointerClick(.element(target.0, target.1))
-        try await moveCursor(Self.cursorCue(for: retry, elementFrame: ref.frame(in: window)), over: window, context: context)
+        let retryCue = Self.cursorCue(for: retry, elementFrame: ref.frame(in: window), in: window)
+        try await moveCursor(retryCue, over: window, context: context)
         if try await waitForUserIdle(in: window, direct: false, context: context) { window = try await currentWindow(window) }
         try checkStillActive(context)
         guard await system.elementMatches(target.0, target.1, ref.role, ref.title) else {

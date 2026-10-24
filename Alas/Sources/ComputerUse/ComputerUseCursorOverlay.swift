@@ -16,8 +16,14 @@ final class ComputerUseCursorOverlay: NSObject {
     private var outlineLayer: CAShapeLayer?
 
     private var target: ComputerUseWindow?
-    /// Pointer tip in window-local, top-left points; nil until the first cue after `present`.
-    private var pointer: CGPoint?
+    /// Pointer tip in window-local, top-left points; nil while it has no place in the target.
+    private var pointer: CGPoint? {
+        didSet {
+            if let pointer, let target { lastPointers[Self.key(target)] = pointer }
+        }
+    }
+    /// Where the pointer last was in each window, window-local, across fades and re-presents.
+    private var lastPointers: [ComputerUseCursorWindowKey: CGPoint] = [:]
 
     private var followTask: Task<Void, Never>?
     private var idleTask: Task<Void, Never>?
@@ -48,7 +54,9 @@ final class ComputerUseCursorOverlay: NSObject {
     func present(over window: ComputerUseWindow) {
         let panel = panel ?? makePanel()
         let wasShown = panel.isVisible && !shownWindowIDs.withLock { $0.isEmpty }
-        if !wasShown || target?.windowID != window.windowID || target?.app.pid != window.app.pid {
+        let reset = !wasShown || target?.windowID != window.windowID || target?.app.pid != window.app.pid
+        if reset {
+            finishMotion()
             pointer = nil
             pointerLayer?.isHidden = true
             removeOutline()
@@ -56,6 +64,15 @@ final class ComputerUseCursorOverlay: NSObject {
         target = window
         cancelFade()
         reframe(to: window.frame)
+        // Back where it last was in this window, so the next glide starts there.
+        let key = Self.key(window)
+        if reset, lastPointers[key] != nil {
+            let start = ComputerUseCursorMotion.startPoint(in: key, size: window.frame.size, last: lastPointers)
+            pointer = start
+            setPointer(at: start)
+            pointerLayer?.opacity = 1
+            pointerLayer?.isHidden = false
+        }
         panel.order(.above, relativeTo: Int(window.windowID))
         shownWindowIDs.withLock { $0 = [UInt32(panel.windowNumber)] }
         startFollowing()
@@ -99,9 +116,10 @@ final class ComputerUseCursorOverlay: NSObject {
             pointerLayer?.isHidden = true
         case .outline(let frame):
             showOutline(cgRect: frame)
-        case .glide(let point, let click):
+        case .glide(let point, let outline, let click):
             guard let to = localPoint(fromCG: point) else { return }
-            let from = pointer ?? windowCentre
+            if let outline { showOutline(cgRect: outline) }
+            let from = pointer ?? startPoint
             let duration = ComputerUseCursorMotion.glideDuration(from: from, to: to)
             if await move(.glide, from: from, to: to, duration: duration), click {
                 ripple(at: to)
@@ -109,7 +127,7 @@ final class ComputerUseCursorOverlay: NSObject {
         case .jump(let point, let outline, let click):
             guard let to = localPoint(fromCG: point) else { return }
             if let outline { showOutline(cgRect: outline) }
-            let from = pointer ?? windowCentre
+            let from = pointer ?? startPoint
             if await move(.jump, from: from, to: to, duration: ComputerUseCursorMotion.jumpDuration), click {
                 ripple(at: to)
             }
@@ -265,9 +283,14 @@ final class ComputerUseCursorOverlay: NSObject {
         var safety: Task<Void, Never>
     }
 
-    private var windowCentre: CGPoint {
+    private static func key(_ window: ComputerUseWindow) -> ComputerUseCursorWindowKey {
+        ComputerUseCursorWindowKey(pid: window.app.pid, windowID: window.windowID)
+    }
+
+    /// Where a motion starts when the pointer has no place in the target yet.
+    private var startPoint: CGPoint {
         guard let target else { return .zero }
-        return CGPoint(x: target.frame.width / 2, y: target.frame.height / 2)
+        return ComputerUseCursorMotion.startPoint(in: Self.key(target), size: target.frame.size, last: lastPointers)
     }
 
     /// Animates the pointer to `to`; true when it arrived, false when cancelled or superseded.

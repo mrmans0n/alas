@@ -985,7 +985,7 @@ struct ComputerUseCoordinatorTests {
 
     /// The element's frame is kept relative to its window, so the cue follows a window that moved
     /// between the inspect and the click.
-    @Test func aClickByRefJumpsToTheElementWhereItsWindowIsNow() async throws {
+    @Test func aClickByRefGlidesToTheElementWhereItsWindowIsNow() async throws {
         let recorder = Recorder()
         let lookups = Counter()
         let original = ComputerUseWindow(windowID: 1, title: "Note", frame: CGRect(x: 100, y: 50, width: 400, height: 300), app: Self.notes)
@@ -1002,7 +1002,7 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes], cursor: cursor)
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
         #expect(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")) != nil)
-        let expected = ComputerUseCursorCue.jump(
+        let expected = ComputerUseCursorCue.glide(
             to: CGPoint(x: 335, y: 170), outline: CGRect(x: 310, y: 160, width: 50, height: 20), click: true)
         #expect(recorder.events.first == "\(expected)")
     }
