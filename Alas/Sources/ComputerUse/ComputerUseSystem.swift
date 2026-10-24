@@ -55,6 +55,13 @@ enum ComputerUseInput: Sendable {
     /// that changed nothing in an app whose AX press only focuses (Electron).
     case pointerClick(ComputerUseInputTarget)
 
+    /// The element a click by ref targets, which must show for the click to go ahead. Typing by
+    /// ref may target a field out of view, and scrolling is how one gets there.
+    var refusedWhenHidden: (ComputerUseAXHandles, Int)? {
+        if case .click(.element(let handles, let handle), _, _) = self { return (handles, handle) }
+        return nil
+    }
+
     var isDrag: Bool {
         if case .drag = self { return true }
         return false
@@ -414,6 +421,9 @@ extension LiveComputerUseSystem {
         if case .key(let chord) = input, ComputerUseMenuShortcut.isQuit(chord) {
             throw ComputerUseSystemError.actionFailed(ComputerUseCoordinator.Message.noQuitting)
         }
+        if case .key(let chord) = input {
+            try await ComputerUseAXActions.refuseSecureFocus(chord, in: window, isCancelled: isCancelled)
+        }
         // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing the
         // button needs no key window, so nothing is keyed or activated for it, also when direct.
         if case .key(let chord) = input,
@@ -428,6 +438,11 @@ extension LiveComputerUseSystem {
             }
         }
         let app = window.app
+        // An AX press needs no position, so it would reach an element scrolled out of view.
+        if let (handles, handle) = input.refusedWhenHidden,
+           try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
+            throw ComputerUseAXActions.hiddenRefusal
+        }
         // Each case falls through to events only when the element offers no AX way. Typing without
         // a ref and chords act on the key window, so they wait until it is made key below.
         switch input {
@@ -439,6 +454,12 @@ extension LiveComputerUseSystem {
                 // A right click at its centre may still land.
             }
         case .click(.element(let handles, let handle), .left, let count) where count <= 2:
+            if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
+                // A web field may only read as focused in its page: unless the app's focus moved,
+                // the click goes as events at the field, as a user's would.
+                if try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) { return .ax }
+                break
+            }
             if count == 1 {
                 do {
                     try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
@@ -688,7 +709,7 @@ extension LiveComputerUseSystem {
             case .element(let handles, let handle):
                 guard let visible = try await ComputerUseAXActions.visibleCenter(
                     handles, handle, within: bounds.frame, app: bounds.app, requireOwnCenter: false, isCancelled: isCancelled)
-                else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.") }
+                else { throw ComputerUseAXActions.hiddenRefusal }
                 return visible
             case .point(let point):
                 return point

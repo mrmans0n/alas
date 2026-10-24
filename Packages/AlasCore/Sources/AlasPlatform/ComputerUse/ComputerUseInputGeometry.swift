@@ -91,6 +91,13 @@ public enum ComputerUseInputGeometry {
         return center(of: visible)
     }
 
+    /// Whether any of `frame` shows inside every clip, as inspect reports `visible`: an element
+    /// without a size counts as shown, since there is nothing to tell by.
+    public static func isShown(_ frame: CGRect, clippedTo clips: [CGRect]) -> Bool {
+        guard frame.width > 0, frame.height > 0 else { return true }
+        return visibleCenter(of: frame, clippedTo: clips, requireOwnCenter: false) != nil
+    }
+
     /// `steps` evenly spaced points from `from` (excluded) to `to` (included).
     public static func interpolate(from: CGPoint, to: CGPoint, steps: Int) -> [CGPoint] {
         guard steps >= 1 else { return [to] }

@@ -37,6 +37,38 @@ struct ComputerUseInputTests {
         #expect(try #require(Chord.parse(text)).mayEditText == edits)
     }
 
+    /// A web field can read as focused in its page while the app's focused element is the
+    /// address bar: a chord that may edit text is refused when any focused element is secure.
+    @Test(arguments: [("ctrl+y", true), ("cmd+delete", true), ("shift+cmd+v", true), ("tab", false), ("return", false)])
+    func editingChordsAreRefusedWhenAnyFocusedElementIsSecure(keys: String, refused: Bool) throws {
+        let chord = try #require(Chord.parse(keys))
+        let addressBar = ComputerUseSecureFocus.Element(role: "AXTextField")
+        let password = ComputerUseSecureFocus.Element(role: "AXTextField", subrole: "AXSecureTextField")
+        #expect(ComputerUseSecureFocus.refuses(chord, focused: [addressBar, password]) == refused)
+        #expect(!ComputerUseSecureFocus.refuses(chord, focused: [addressBar]))
+    }
+
+    @Test(arguments: [
+        (ComputerUseSecureFocus.Element(role: "AXTextField"), true),
+        (.init(role: "AXTextArea"), true), (.init(role: "AXComboBox"), true), (.init(role: "AXSearchField"), true),
+        (.init(role: "AXSecureTextField"), true), (.init(role: "AXTextField", subrole: "AXSecureTextField"), true),
+        (.init(role: "AXButton"), false), (.init(role: "AXStaticText"), false), (.init(role: nil), false),
+    ])
+    func textEntryElementsAreRecognized(element: ComputerUseSecureFocus.Element, isTextEntry: Bool) {
+        #expect(ComputerUseSecureFocus.isTextEntry(element) == isTextEntry)
+    }
+
+    /// Only a web page's field takes the click through AX focus; a native one keeps the plain click.
+    @Test(arguments: [
+        (ComputerUseSecureFocus.Element(role: "AXTextField"), true, true),
+        (.init(role: "AXTextField", subrole: "AXSecureTextField"), true, true),
+        (.init(role: "AXTextField"), false, false),
+        (.init(role: "AXButton"), true, false),
+    ])
+    func onlyWebFieldsTakeClicksThroughFocus(element: ComputerUseSecureFocus.Element, inWebArea: Bool, focuses: Bool) {
+        #expect(ComputerUseSecureFocus.focusesOnClick(element, inWebArea: inWebArea) == focuses)
+    }
+
     @Test func pointsMapThroughTheScreenshotFrameAndAreBoundedByTheCurrentFrame() {
         let frame = CGRect(x: 100, y: 50, width: 800, height: 600)
         let pixel = CGPoint(x: 200, y: 100)
@@ -90,6 +122,17 @@ struct ComputerUseInputTests {
         let scrollArea = CGRect(x: 0, y: 0, width: 300, height: 200)
         #expect(ComputerUseInputGeometry.visibleCenter(
             of: frame, clippedTo: [window, scrollArea], requireOwnCenter: requireOwnCenter) == expected)
+    }
+
+    /// A ref click is refused only where inspect reports the element hidden; one without a size can't tell.
+    @Test(arguments: [
+        (CGRect(x: 10, y: 250, width: 100, height: 20), false),
+        (CGRect(x: -150, y: 10, width: 200, height: 20), true),
+        (CGRect(x: 10, y: 250, width: 0, height: 0), true),
+    ])
+    func elementsShowWhereAnyOfThemIsInsideTheClips(frame: CGRect, shown: Bool) {
+        let clips = [CGRect(x: -200, y: 0, width: 700, height: 400), CGRect(x: 0, y: 0, width: 300, height: 200)]
+        #expect(ComputerUseInputGeometry.isShown(frame, clippedTo: clips) == shown)
     }
 
     /// Both of a drag's points must be on the window it uses there; the start is reported first.
