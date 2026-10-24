@@ -499,6 +499,48 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.isEmpty)
     }
 
+    /// While a system password prompt shows in an app, nothing of it is seen or driven, and no
+    /// card asks for it; computer_apps lists the app without its windows.
+    @Test(arguments: [
+        ComputerUseCommand(action: .screenshot, windowID: 1), .init(action: .inspect, windowID: 1),
+        .init(action: .key, windowID: 1, keys: "return"), .init(action: .type, windowID: 1, text: "hunter2"),
+    ])
+    func aCredentialPromptBlocksTheWholeApp(_ command: ComputerUseCommand) async throws {
+        let recorder = Recorder()
+        let notes = Self.notes
+        var system = Self.system(recorder: recorder)
+        system.credentialPrompt = { $0 == notes.pid }
+        let f = Self.fixture(system: system, recorder: recorder)
+        let response = await f.coordinator.perform(command, sessionID: "s")
+        #expect(response == .error("computer_blocked: A system password prompt is showing in Notes; ask the user to answer it."))
+        #expect(recorder.inputs.isEmpty)
+        #expect(f.coordinator.pendingApprovals.isEmpty)
+
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
+        let listed = try #require(apps.first { $0["name"] as? String == "Notes" })
+        #expect(listed["credential_prompt"] as? Bool == true)
+        #expect((listed["windows"] as? [Any])?.isEmpty == true)
+        #expect(apps.first { $0["name"] as? String == "Mail" }?["credential_prompt"] == nil)
+    }
+
+    /// A click that brings the prompt up went through, but the window's elements and refs are withheld.
+    @Test func anInputThatBringsUpACredentialPromptWithholdsTheWindow() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.credentialPrompt = { [recorder] _ in !recorder.inputs.isEmpty }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["delivery"] as? String == "ax")
+        #expect(payload["credential_prompt"] as? Bool == true)
+        #expect((payload["elements"] as? [Any])?.isEmpty == true)
+        let again = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
+        #expect(again == .error("computer_blocked: A system password prompt is showing in Notes; ask the user to answer it."))
+        #expect(recorder.inputs.count == 1)
+    }
+
     @Test(arguments: ["cmd+q", "cmd+opt+q"])
     func quitChordsAreRefusedBeforeAnyInput(_ keys: String) async throws {
         let recorder = Recorder()

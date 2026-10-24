@@ -363,3 +363,62 @@ enum ComputerUseAXReader {
         }
     }
 }
+
+// MARK: - Credential prompts
+
+extension ComputerUseAXReader {
+    /// How deep, how wide and how long the read of an app's sheets for a secure field looks.
+    static let promptProbeDepth = 8
+    static let promptProbeNodes = 400
+    static let promptProbeTime: Duration = .milliseconds(400)
+    /// Shorter than `messagingTimeout`: an app that doesn't answer reads as unknown, quickly.
+    static let promptProbeMessagingTimeout: Float = 0.25
+
+    /// Whether a sheet of one of the app's windows, or an untitled window, holds a secure text
+    /// field, as LocalAuthentication's password prompt does. Nil when the app's windows couldn't
+    /// be read or the read was cut short before it found one. Doesn't ask the app to build its
+    /// tree (`application(_:)`), so a probe changes nothing in it.
+    static func secureFieldInSheet(pid: pid_t) async -> Bool? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let deadline = ContinuousClock.now + promptProbeTime
+                let application = AXUIElementCreateApplication(pid)
+                AXUIElementSetMessagingTimeout(application, promptProbeMessagingTimeout)
+                func elements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement]? {
+                    var value: CFTypeRef?
+                    let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+                    if result == .noValue || result == .attributeUnsupported { return [] }
+                    guard result == .success, let list = value as? [AXUIElement] else { return nil }
+                    for item in list { AXUIElementSetMessagingTimeout(item, promptProbeMessagingTimeout) }
+                    return list
+                }
+                func string(_ element: AXUIElement, _ attribute: String) -> String? {
+                    var value: CFTypeRef?
+                    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+                    return value as? String
+                }
+                guard let windows = elements(application, kAXWindowsAttribute) else {
+                    return continuation.resume(returning: nil)
+                }
+                var pending: [(element: AXUIElement, depth: Int)] = []
+                for window in windows {
+                    if (string(window, kAXTitleAttribute) ?? "").isEmpty { pending.append((window, 0)) }
+                    for child in elements(window, kAXChildrenAttribute) ?? [] where string(child, kAXRoleAttribute) == kAXSheetRole {
+                        pending.append((child, 0))
+                    }
+                }
+                var budget = promptProbeNodes
+                while let (element, depth) = pending.popLast() {
+                    guard budget > 0, ContinuousClock.now < deadline else { return continuation.resume(returning: nil) }
+                    budget -= 1
+                    let identity = ComputerUseSecureFocus.Element(
+                        role: string(element, kAXRoleAttribute), subrole: string(element, kAXSubroleAttribute))
+                    if ComputerUseSecureFocus.isSecure(identity) { return continuation.resume(returning: true) }
+                    guard depth < promptProbeDepth else { continue }
+                    pending += (elements(element, kAXChildrenAttribute) ?? []).map { ($0, depth + 1) }
+                }
+                continuation.resume(returning: false)
+            }
+        }
+    }
+}

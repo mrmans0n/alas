@@ -407,23 +407,19 @@ enum ComputerUseAXActions {
 
     /// Read live rather than trusting the cached node: the element may have changed.
     private static func refuseSecure(_ element: AXUIElement, app: ComputerUseAppIdentity) throws {
+        var identity: [String?] = []
         for attribute in [kAXRoleAttribute, kAXSubroleAttribute] {
             var value: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
             if let error = mapped(result, app: app) { throw error }
-            if result == .success, let string = value as? String, string == kAXSecureTextFieldSubrole {
-                throw secureRefusal
-            }
+            identity.append(result == .success ? value as? String : nil)
         }
+        if ComputerUseSecureFocus.isSecure(.init(role: identity[0], subrole: identity[1])) { throw secureRefusal }
     }
 
     /// Some apps expose a password field as the role rather than the subrole.
     private static func isSecure(_ element: AXUIElement) -> Bool {
-        [kAXRoleAttribute, kAXSubroleAttribute].contains { attribute in
-            var value: CFTypeRef?
-            return AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success
-                && (value as? String) == kAXSecureTextFieldSubrole
-        }
+        ComputerUseSecureFocus.isSecure(.init(role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute)))
     }
 
     private static let noFrame = ComputerUseSystemError.actionFailed("The element has no position on screen.")

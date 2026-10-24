@@ -176,6 +176,13 @@ final class ComputerUseCoordinator {
         static let cancelled = "computer_cancelled: The call was cancelled."
         static let limit = "computer_limit: The result exceeds the response limit. Inspect with a query or a smaller limit."
         static func blocked(_ app: ComputerUseAppIdentity) -> String { "computer_blocked: \(app.name) can't be used by agents." }
+        static func credentialPrompt(_ app: ComputerUseAppIdentity) -> String {
+            "computer_blocked: A system password prompt is showing in \(app.name); ask the user to answer it."
+        }
+        static func credentialPromptAfterInput(_ app: ComputerUseAppIdentity) -> String {
+            "The input was delivered, and now a system password prompt is showing in \(app.name), so its elements are "
+                + "withheld; ask the user to answer it."
+        }
         static func denied(_ app: ComputerUseAppIdentity) -> String { "computer_denied: The user denied access to \(app.name) for this turn." }
         static func approvalPending(_ app: ComputerUseAppIdentity) -> String {
             "computer_approval_pending: Waiting for the user to approve \(app.name). Try again after they answer."
@@ -256,6 +263,8 @@ final class ComputerUseCoordinator {
         let epoch = context.epoch
         guard var window = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
+        // Before any card: the prompt's text and field show in the app's own windows.
+        if await system.credentialPrompt(window.app.pid) { return .error(Message.credentialPrompt(window.app)) }
         // A drop into another window of the same app; another app's window is refused before any card.
         var toWindow: ComputerUseWindow?
         if command.action == .drag, let toID = command.toWindowID, toID != windowID {
@@ -278,6 +287,7 @@ final class ComputerUseCoordinator {
             window = current
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
             if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID, input: input) { return refused }
+            if await system.credentialPrompt(window.app.pid) { return .error(Message.credentialPrompt(window.app)) }
             if let end = toWindow {
                 guard let current = await system.window(end.windowID), current.app.pid == end.app.pid else {
                     return .error(Message.windowNotFound(end.windowID))
@@ -386,6 +396,7 @@ final class ComputerUseCoordinator {
             return .error(Message.openFailed(reason))
         }
         if let overtaken = overtaken(sessionID, since: context.epoch) { return overtaken }
+        if identity.pid > 0, await system.credentialPrompt(identity.pid) { return .error(Message.credentialPrompt(identity)) }
         switch await approval(for: identity, sessionID: sessionID, epoch: context.epoch, input: true) {
         case .refused(let response): return response
         case .allowed: break
@@ -397,8 +408,14 @@ final class ComputerUseCoordinator {
             if access.access(for: running, session: sessionID, input: true) == .blocked {
                 throw Refusal(Message.blocked(running))
             }
-            let windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? []
-            let payload: [String: Any] = ["version": 1, "app": Self.app(running), "windows": windows.map(Self.windowEntry)]
+            var windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? []
+            var payload: [String: Any] = ["version": 1, "app": Self.app(running)]
+            // It may have been showing one before it was unhidden.
+            if await system.credentialPrompt(running.pid) {
+                payload["credential_prompt"] = true
+                windows = []
+            }
+            payload["windows"] = windows.map(Self.windowEntry)
             return (payload, running)
         }
     }
@@ -673,13 +690,20 @@ final class ComputerUseCoordinator {
 
     private func listApps(sessionID: String) async -> AlasCLIResponse {
         let apps = await system.runningApps()
-        let entries: [[String: Any]] = apps.map { entry in
+        var entries: [[String: Any]] = []
+        for entry in apps {
             let appAccess = access.access(for: entry.app, session: sessionID)
             var object = Self.app(entry.app)
             object["approval"] = Self.approvalName(appAccess)
-            // A blocked app's window titles and frames stay private.
-            object["windows"] = appAccess == .blocked ? [] : entry.windows.map(Self.windowEntry)
-            return object
+            // A blocked app's window titles and frames stay private, and so do an app's while a
+            // system password prompt shows in it.
+            var windows = appAccess == .blocked ? [] : entry.windows
+            if !windows.isEmpty, await system.credentialPrompt(entry.app.pid) {
+                object["credential_prompt"] = true
+                windows = []
+            }
+            object["windows"] = windows.map(Self.windowEntry)
+            entries.append(object)
         }
         var payload: [String: Any] = ["version": 1, "apps": entries]
         // While macOS shows its Screen Recording prompt, other apps' windows aren't listed; Alas's
@@ -760,6 +784,8 @@ final class ComputerUseCoordinator {
         }
         try checkStillActive(context)
         try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
+        // The prompt may have come up during the takeover wait.
+        if await system.credentialPrompt(window.app.pid) { throw Refusal(Message.credentialPrompt(window.app)) }
         try checkStillActive(context)
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
         // Parked where the drop landed, over the window it landed in. Cosmetic once the drop is
@@ -771,6 +797,12 @@ final class ComputerUseCoordinator {
         let changeWarning = try await settle(
             after: delivered, of: command, in: &window, target: target, before: before,
             end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload).warning
+        // The input may have brought the prompt up (an unlock button): it went through, but what
+        // the window shows now is withheld, and nothing is pressed again.
+        if await system.credentialPrompt(window.app.pid) {
+            withholdElements(of: window, toWindow: toWindow, context: context, payload: &payload)
+            return
+        }
         // A read that left elements out for depth may have missed the press's effect, and a second press could undo it.
         let unchanged = changeWarning != nil && payload["depth_limited"] == nil
         if let target, let targetRef, Self.retriesWithPointer(
@@ -803,6 +835,22 @@ final class ComputerUseCoordinator {
         } catch {
             payload["screenshot_error"] = error.localizedDescription
         }
+    }
+
+    /// The post-action read of a window a system password prompt now shows in: its elements and
+    /// refs are dropped, and the warning says why.
+    private func withholdElements(
+        of window: ComputerUseWindow, toWindow: ComputerUseWindow?, context: CallContext, payload: inout [String: Any]
+    ) {
+        for shown in [window, toWindow].compactMap({ $0 }) {
+            updateSnapshot(of: shown, context: context) { $0.refs = [:] }
+        }
+        payload["elements"] = [[String: Any]]()
+        payload["truncated"] = true
+        payload["depth_limited"] = nil
+        if toWindow != nil { payload["to_window"] = ["window_id": Int((toWindow ?? window).windowID)] }
+        payload["credential_prompt"] = true
+        payload["warning"] = Message.credentialPromptAfterInput(window.app)
     }
 
     /// The pointer click after an AX press that changed nothing, with the same checks as the first
@@ -1252,6 +1300,8 @@ final class ComputerUseCoordinator {
             // A partial read can miss the element, so only a complete one confirms it is gone.
             let incomplete = read.truncated || read.depthLimited
             let met = command.condition == .appear ? !read.elements.isEmpty : read.elements.isEmpty && !incomplete
+            // A prompt that came up during the wait may be what appeared.
+            if met, await system.credentialPrompt(window.app.pid) { throw Refusal(Message.credentialPrompt(window.app)) }
             if met {
                 record(refs: read, of: window, context: context)
                 return (read.truncated, read.elements, read.depthLimited)
