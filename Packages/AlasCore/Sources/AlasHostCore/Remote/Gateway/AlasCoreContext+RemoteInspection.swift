@@ -703,7 +703,7 @@ extension AlasCoreContext {
 
     /// The message a session in `worktree` would get for `read`, answered as
     /// `id`: the session path's own mapping, over the worktree's reads.
-    func remoteRead(_ read: HostWorktreeRead, in worktree: Worktree, replyingAs id: String) async -> RemoteServerMessage {
+    @_spi(Testing) public func remoteRead(_ read: HostWorktreeRead, in worktree: Worktree, replyingAs id: String) async -> RemoteServerMessage {
         await WorktreeInspection(core: self, worktree: worktree).remoteRead(read, sessionId: id)
     }
 
