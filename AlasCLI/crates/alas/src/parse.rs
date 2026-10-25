@@ -87,7 +87,7 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
             let rest = &args[2..];
             let mut query = None;
             let mut limit = 300;
-            let mut max_depth = 12;
+            let mut max_depth = None;
             let (mut seen_limit, mut seen_depth) = (false, false);
             let mut i = 0;
             while i < rest.len() {
@@ -111,12 +111,19 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
                     "--max-depth" if !seen_depth => {
                         seen_depth = true;
                         i += 1;
-                        max_depth = bounded_u64(flag_value(rest, i).ok_or(USAGE)?, 1, 32, USAGE)?;
+                        max_depth = Some(bounded_u64(
+                            flag_value(rest, i).ok_or(USAGE)?,
+                            1,
+                            32,
+                            USAGE,
+                        )?);
                     }
                     _ => return Err(USAGE.into()),
                 }
                 i += 1;
             }
+            // A query searches as deep as a read may go, as on input actions.
+            let max_depth = max_depth.unwrap_or(if query.is_some() { 32 } else { 12 });
             Ok(Command::Computer(alas_client::ComputerCommand::Inspect {
                 window_id,
                 query,
@@ -177,17 +184,17 @@ fn limited_raw(value: &str, max_bytes: usize) -> Result<String, String> {
 fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<Command, String> {
     let usage = match action {
         "click" => {
-            "usage: alas computer click <window-id> (--ref <eN> | --x <px> --y <px>) [--button left|right] [--count 1|2] [--direct]"
+            "usage: alas computer click <window-id> (--ref <eN> | --x <px> --y <px>) [--button left|right] [--count 1|2] [--max-depth <1...32>] [--direct]"
         }
         "type" => {
-            "usage: alas computer type <window-id> <text> [--ref <eN>] [--replace] [--direct]"
+            "usage: alas computer type <window-id> <text> [--ref <eN>] [--replace] [--max-depth <1...32>] [--direct]"
         }
-        "key" => "usage: alas computer key <window-id> <keys> [--direct]",
+        "key" => "usage: alas computer key <window-id> <keys> [--max-depth <1...32>] [--direct]",
         "scroll" => {
-            "usage: alas computer scroll <window-id> (--ref <eN> | --x <px> --y <px>) [--dx <-100...100>] [--dy <-100...100>] [--direct]"
+            "usage: alas computer scroll <window-id> (--ref <eN> | --x <px> --y <px>) [--dx <-100...100>] [--dy <-100...100>] [--max-depth <1...32>] [--direct]"
         }
         "drag" => {
-            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) [--to-window-id <window-id>] (--to-ref <eN> | --to-x <px> --to-y <px>) [--direct]"
+            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) [--to-window-id <window-id>] (--to-ref <eN> | --to-x <px> --to-y <px>) [--max-depth <1...32>] [--direct]"
         }
         _ => {
             "usage: alas computer wait <window-id> <query> [--disappear] [--timeout-ms <100...20000>]"
@@ -202,10 +209,26 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
         _ => (None, rest),
     };
     let allowed: &[&str] = match action {
-        "click" => &["--ref", "--x", "--y", "--button", "--count", "--direct"],
-        "type" => &["--ref", "--replace", "--direct"],
-        "key" => &["--direct"],
-        "scroll" => &["--ref", "--x", "--y", "--dx", "--dy", "--direct"],
+        "click" => &[
+            "--ref",
+            "--x",
+            "--y",
+            "--button",
+            "--count",
+            "--max-depth",
+            "--direct",
+        ],
+        "type" => &["--ref", "--replace", "--max-depth", "--direct"],
+        "key" => &["--max-depth", "--direct"],
+        "scroll" => &[
+            "--ref",
+            "--x",
+            "--y",
+            "--dx",
+            "--dy",
+            "--max-depth",
+            "--direct",
+        ],
         "drag" => &[
             "--ref",
             "--x",
@@ -214,6 +237,7 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
             "--to-ref",
             "--to-x",
             "--to-y",
+            "--max-depth",
             "--direct",
         ],
         _ => &["--disappear", "--timeout-ms"],
@@ -257,7 +281,12 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
         }
     };
     let direct = flag("--direct").is_some();
-    let post = alas_client::ComputerPost::default();
+    let post = alas_client::ComputerPost {
+        max_depth: flag("--max-depth")
+            .map(|value| bounded_u64(value, 1, 32, usage))
+            .transpose()?,
+        ..Default::default()
+    };
     use alas_client::ComputerCommand as C;
     let command = match action {
         "click" => C::Click {
@@ -2294,13 +2323,23 @@ mod tests {
                 "--limit",
                 "3000",
                 "--max-depth",
-                "32"
+                "20"
             ])
             .unwrap(),
             Command::Computer(ComputerCommand::Inspect {
                 window_id: 7,
                 query: Some("Save".into()),
                 limit: 3000,
+                max_depth: 20,
+                call_id: None
+            })
+        );
+        assert_eq!(
+            p(&["computer", "inspect", "7", "--query", "Save"]).unwrap(),
+            Command::Computer(ComputerCommand::Inspect {
+                window_id: 7,
+                query: Some("Save".into()),
+                limit: 300,
                 max_depth: 32,
                 call_id: None
             })
@@ -2308,8 +2347,20 @@ mod tests {
         let post = || alas_client::ComputerPost::default();
         assert_eq!(
             p(&[
-                "computer", "click", "7", "--x", "10.5", "--y", "20", "--button", "right",
-                "--count", "2", "--direct"
+                "computer",
+                "click",
+                "7",
+                "--x",
+                "10.5",
+                "--y",
+                "20",
+                "--button",
+                "right",
+                "--count",
+                "2",
+                "--max-depth",
+                "32",
+                "--direct"
             ])
             .unwrap(),
             Command::Computer(ComputerCommand::Click {
@@ -2318,7 +2369,10 @@ mod tests {
                 button: "right".into(),
                 count: 2,
                 direct: true,
-                post: post(),
+                post: alas_client::ComputerPost {
+                    max_depth: Some(32),
+                    ..post()
+                },
                 call_id: None
             })
         );
@@ -2423,6 +2477,8 @@ mod tests {
             &["computer", "inspect", "7", "--query", "  "],
             &["computer", "inspect", "7", "--query"],
             &["computer", "click", "7"],
+            &["computer", "click", "7", "--ref", "e1", "--max-depth", "0"],
+            &["computer", "wait", "7", "Done", "--max-depth", "12"],
             &[
                 "computer",
                 "drag",

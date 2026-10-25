@@ -1,9 +1,9 @@
 {
-  "version": "0.21.13",
+  "version": "0.22.0",
   "headline": {
     "title": "Computer use",
     "body": "Your agent can now see and operate Mac apps in the background, with its own cursor so you can watch.",
-    "media": "media/0.21.13-computer-use.gif",
+    "media": "media/0.22.0-computer-use.gif",
     "action": "openComputerUseSettings",
     "actionLabel": "Set up computer use"
   }

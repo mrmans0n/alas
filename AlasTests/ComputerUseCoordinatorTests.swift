@@ -27,7 +27,7 @@ struct ComputerUseCoordinatorTests {
             runningApps: { windows.values.map { (app: $0.app, windows: [$0]) } },
             window: { windows[$0] },
             screenshot: { _ in ComputerUseScreenshot(png: Data([0x89]), pixelSize: CGSize(width: 800, height: 600), scale: 2) },
-            axTree: { _, _, _, _ in (saveTree, treeComplete, ComputerUseAXHandles()) },
+            axTree: { _, _, _, _ in (saveTree, treeComplete ? nil : .timeLimit, ComputerUseAXHandles()) },
             perform: { input, _, _, _ in
                 recorder?.record(input)
                 recorder?.recordEvent("perform:\(Self.name(of: input))")
@@ -48,6 +48,11 @@ struct ComputerUseCoordinatorTests {
         )
     }
 
+    /// A prompt listing that has every one of `pids` showing a prompt.
+    nonisolated private static func showing(_ pids: [Int32]) -> [Int32: ComputerUseCredentialPrompt.Listing] {
+        Dictionary(uniqueKeysWithValues: pids.map { ($0, .showing) })
+    }
+
     private final class Calls {
         var interrupts: [String] = []
     }
@@ -65,7 +70,8 @@ struct ComputerUseCoordinatorTests {
     private static func fixture(
         system: ComputerUseSystem = system(), approvalWait: Duration = .seconds(60),
         recorder: Recorder = Recorder(), allowed: [ComputerUseAppIdentity] = [],
-        sleep: (@Sendable (Duration) async -> Void)? = nil, cursor: ComputerUseCursor = .none
+        sleep: (@Sendable (Duration) async -> Void)? = nil, cursor: ComputerUseCursor = .none,
+        attention: @escaping @MainActor () -> Void = {}, now: @escaping @MainActor () -> Date = { Date() }
     ) -> Fixture {
         let lockURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("alas-computer-use-\(UUID().uuidString)/computer-use.lock")
@@ -80,7 +86,9 @@ struct ComputerUseCoordinatorTests {
             lockURL: lockURL,
             approvalWait: approvalWait,
             sleep: sleep ?? { recorder.recordSleep($0) },
-            cursor: cursor
+            cursor: cursor,
+            attention: attention,
+            now: now
         )
         for app in allowed {
             access.record(.allowForSession, for: app, session: "s")
@@ -149,6 +157,147 @@ struct ComputerUseCoordinatorTests {
         f.access.record(.allowForSession, for: Self.notes, session: "s")
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
         #expect(json.contains(#""truncated":true"#))
+        #expect(json.contains(#""truncated_by":"time_limit""#))
+    }
+
+    /// An Electron window that shows only groups at first contact is woken and read again until its
+    /// web area has content; later reads of the app aren't.
+    @Test func aWebWindowReadAsEmptyGroupsIsWokenAndReadAgainOnce() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let woken = Counter()
+        var system = Self.system()
+        system.usesManualAccessibility = { _ in true }
+        system.wakeWebContent = { _, _ in
+            _ = woken.next()
+            return true
+        }
+        // A web area that fills only on the third read.
+        system.axTree = { _, _, _, _ in
+            let read = reads.next()
+            let field = ComputerUseAXNode(role: "AXTextField", handle: 2)
+            let content = ComputerUseAXNode(role: read > 1 ? "AXWebArea" : "AXGroup", children: read > 2 ? [field] : [], handle: 1)
+            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
+        #expect(json.contains("AXTextField"))
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        #expect(reads.next() == 5)
+        #expect(woken.next() == 2)
+    }
+
+    /// computer_open_app on an Electron app returns once its front window's web content shows.
+    @Test func openingAWebAppWaitsForItsWebContent() async throws {
+        let reads = Counter()
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { _ in true }
+        system.axTree = { _, _, _, _ in
+            let filled = reads.next() >= 3
+            let area = ComputerUseAXNode(role: "AXWebArea", children: filled ? [ComputerUseAXNode(role: "AXTextField")] : [])
+            return (ComputerUseAXNode(role: "AXWindow", children: [area]), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        #expect(Self.text(await f.coordinator.perform(.init(action: .openApp, name: "Notes"), sessionID: "s")) != nil)
+        #expect(reads.next() == 4)
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll])
+    }
+
+    /// A Chromium browser still showing no web area after AXManualAccessibility gets
+    /// AXEnhancedUserInterface, which the turn's end turns off again.
+    @Test func chromeGetsEnhancedUserInterfaceOnlyAsASecondTryAndUntilTheTurnEnds() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window])
+        system.wakeWebContent = { _, attribute in
+            recorder.recordEvent("wake:\(attribute)")
+            return attribute == "AXEnhancedUserInterface"
+        }
+        system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
+        // The web content shows only once AXEnhancedUserInterface is set.
+        system.axTree = { _, _, _, _ in
+            let web = recorder.events.contains("wake:AXEnhancedUserInterface")
+            let field = ComputerUseAXNode(role: "AXTextField", handle: 2)
+            let content = ComputerUseAXNode(role: web ? "AXWebArea" : "AXGroup", children: web ? [field] : [], handle: 1)
+            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")))
+        #expect(json.contains("AXWebArea"))
+        // No AXManualAccessibility for a Chromium browser: the wait comes first.
+        #expect(recorder.events == ["wake:AXEnhancedUserInterface"])
+        f.coordinator.turnEnded(sessionID: "s")
+        try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
+    }
+
+    /// A read cut short can't tell whether Chrome needs AXEnhancedUserInterface, so it doesn't use
+    /// up the try: the next complete read still sets it.
+    @Test func chromeReadCutShortLeavesEnhancedUserInterfaceToALaterCompleteRead() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window])
+        system.wakeWebContent = { _, attribute in
+            recorder.recordEvent("wake:\(attribute)")
+            return true
+        }
+        // The first inspect's read is cut short; later ones are complete, without a web area.
+        system.axTree = { _, _, _, _ in
+            let cut: ComputerUseReadCut? = reads.next() == 1 ? .nodeBudget : nil
+            return (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
+                    cut, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
+        #expect(recorder.events.isEmpty)
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
+        #expect(recorder.events == ["wake:AXEnhancedUserInterface"])
+    }
+
+    /// A session end while AXEnhancedUserInterface is being set finds nothing to restore yet, so
+    /// the call that set it turns it off again itself.
+    @Test func enhancedUserInterfaceSetAsTheSessionEndsIsTurnedOffAgain() async throws {
+        let recorder = Recorder()
+        let gate = Recorder()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window])
+        system.wakeWebContent = { _, attribute in
+            guard attribute == "AXEnhancedUserInterface" else { return false }
+            recorder.recordEvent("wake:\(attribute)")
+            // Held until the session has ended; given up at the deadline if the test goes wrong first.
+            return (try? await eventually("the session end", { !gate.events.isEmpty })) != nil
+        }
+        system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
+        system.axTree = { _, _, _, _ in
+            (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
+             nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s") }
+        try await eventually("set in flight") { recorder.events == ["wake:AXEnhancedUserInterface"] }
+        f.coordinator.sessionEnded(sessionID: "s")
+        gate.recordEvent("open")
+        _ = await call.value
+        #expect(recorder.events == ["wake:AXEnhancedUserInterface", "restore:AXEnhancedUserInterface"])
+    }
+
+    /// A frame an app reports as NaN can't be written as JSON, and writing it would end the app:
+    /// it reads as zeros.
+    @Test func aNaNFrameFromTheAppReadsAsZeros() async throws {
+        var system = Self.system()
+        let tree = ComputerUseAXNode(role: "AXWindow", children: [
+            ComputerUseAXNode(role: "AXLink", title: "Jef Raskin", frame: CGRect(x: CGFloat.nan, y: 10, width: .infinity, height: 20)),
+        ])
+        system.axTree = { _, _, _, _ in (tree, nil, ComputerUseAXHandles()) }
+        let f = Self.fixture(system: system, allowed: [Self.notes])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
+        #expect(json.contains(#""frame":{"height":20,"width":0,"x":0,"y":10}"#))
     }
 
     /// Only an element nothing of which shows carries `visible`.
@@ -158,7 +307,7 @@ struct ComputerUseCoordinatorTests {
             ComputerUseAXNode(role: "AXButton", title: "Shown", frame: CGRect(x: 10, y: 10, width: 50, height: 20)),
             ComputerUseAXNode(role: "AXButton", title: "Off", frame: CGRect(x: 10, y: 320, width: 50, height: 20)),
         ])
-        system.axTree = { _, _, _, _ in (tree, true, ComputerUseAXHandles()) }
+        system.axTree = { _, _, _, _ in (tree, nil, ComputerUseAXHandles()) }
         let f = Self.fixture(system: system)
         f.access.record(.allowForSession, for: Self.notes, session: "s")
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
@@ -172,6 +321,24 @@ struct ComputerUseCoordinatorTests {
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         #expect(response == .error("computer_approval_pending: Waiting for the user to approve Notes. Try again after they answer."))
         #expect(f.coordinator.pendingApprovals.count == 1)
+    }
+
+    /// A new card asks for the user's attention, and so does a later call waiting on it once
+    /// 10 s passed; another card asks for its own.
+    @Test func approvalCardsAskForAttentionAgainForLaterCalls() async {
+        var asked = 0
+        var clock = Date(timeIntervalSinceReferenceDate: 1000)
+        let f = Self.fixture(approvalWait: .milliseconds(200), attention: { asked += 1 }, now: { clock })
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        clock += 5
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        #expect(asked == 1)
+        clock += 5
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        #expect(asked == 2)
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 2), sessionID: "s")
+        #expect(f.coordinator.pendingApprovals.count == 2)
+        #expect(asked == 3)
     }
 
     @Test func staleApprovalExpiresAtTurnEnd() async throws {
@@ -199,7 +366,7 @@ struct ComputerUseCoordinatorTests {
 
     @Test func failedCallKeepsTheLockWhileASiblingIsCapturing() async throws {
         let gate = TreeGate()
-        let tree = (root: ComputerUseAXNode(role: "AXWindow", title: "Inbox"), complete: true, handles: ComputerUseAXHandles())
+        let tree = (root: ComputerUseAXNode(role: "AXWindow", title: "Inbox"), cut: ComputerUseReadCut?.none, handles: ComputerUseAXHandles())
         var system = Self.system()
         system.runningApps = { [] }
         system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
@@ -234,7 +401,7 @@ struct ComputerUseCoordinatorTests {
         system.screenshot = { _ in throw ComputerUseSystemError.captureFailed("unused") }
         system.axTree = { window, _, _, _ in
             await gate.enter(window.windowID)
-            return (root: ComputerUseAXNode(role: "AXWindow", title: "Note"), complete: true, handles: ComputerUseAXHandles())
+            return (root: ComputerUseAXNode(role: "AXWindow", title: "Note"), cut: nil, handles: ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system)
         f.access.record(.allowForSession, for: Self.notes, session: "s")
@@ -351,6 +518,78 @@ struct ComputerUseCoordinatorTests {
             : nil))
     }
 
+    /// A blocked menu-bar app is listed, so computer_apps shows why computer_open_app refuses it;
+    /// other menu-bar apps stay out.
+    @Test func menuBarAppsAreListedOnlyWhenBlocked() async throws {
+        var system = Self.system()
+        system.accessoryApps = {
+            [ComputerUseAppIdentity(name: "1Password", bundleID: "com.1password.1password", pid: 201),
+             ComputerUseAppIdentity(name: "Stream Deck", bundleID: "com.elgato.StreamDeck", pid: 202)]
+        }
+        let f = Self.fixture(system: system)
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
+        let names = apps.compactMap { $0["name"] as? String }
+        #expect(names == ["1Password", "Alas Dev", "Keychain Access", "Mail", "Notes"])
+        let blocked = try #require(apps.first)
+        #expect(blocked["approval"] as? String == "blocked")
+        #expect((blocked["windows"] as? [Any])?.isEmpty == true)
+    }
+
+    /// The untitled window backing a sheet isn't listed: the sheet is in its parent's tree, and no
+    /// AX window answers for the backing one.
+    @Test func appsLeaveOutSheetBackingWindows() async throws {
+        var system = Self.system()
+        let note = Self.windows[1]!
+        let sheetFrame = CGRect(x: 100, y: 20, width: 200, height: 150)
+        let backing = ComputerUseWindow(windowID: 9, title: nil, frame: sheetFrame, app: Self.notes)
+        system.runningApps = { [(app: note.app, windows: [note, backing])] }
+        system.sheetFrames = { pids in pids.contains(101) ? [101: [sheetFrame]] : [:] }
+        let f = Self.fixture(system: system)
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
+        let windows = try #require(apps.first?["windows"] as? [[String: Any]])
+        #expect(windows.map { $0["window_id"] as? Int } == [1])
+    }
+
+    /// computer_open_app waits on the app's real front window, not the untitled one backing a
+    /// sheet in front of it, which no AX window answers for.
+    @Test func openAppSkipsASheetBackingWindowInFront() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        let note = Self.windows[1]!
+        let sheetFrame = CGRect(x: 100, y: 20, width: 200, height: 150)
+        let backing = ComputerUseWindow(windowID: 9, title: nil, frame: sheetFrame, app: Self.notes)
+        system.runningApps = { [(app: note.app, windows: [backing, note])] }
+        system.sheetFrames = { pids in pids.contains(101) ? [101: [sheetFrame]] : [:] }
+        system.axTree = { window, _, _, _ in
+            recorder.recordEvent("read:\(window.windowID)")
+            guard window.windowID == 1 else { throw ComputerUseSystemError.windowUnreadable(window.windowID) }
+            return (ComputerUseAXNode(role: "AXWindow"), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .openApp, name: "Notes"), sessionID: "s")))
+        let windows = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["windows"] as? [[String: Any]])
+        #expect(windows.map { $0["window_id"] as? Int } == [1])
+        #expect(recorder.events.filter { $0.hasPrefix("read:") } == ["read:1"])
+    }
+
+    /// A window none of which is on a display (an AeroSpace workspace, another Space) says so.
+    @Test func appsMarkWindowsOffEveryDisplay() async throws {
+        var system = Self.system()
+        // Notes' centre (200, 150) is off the display, with under a quarter of it on; Mail's
+        // centre (260, 210) is on.
+        system.displays = { [CGRect(x: 210, y: 160, width: 500, height: 500)] }
+        let f = Self.fixture(system: system)
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
+        let windows = Dictionary(uniqueKeysWithValues: apps.compactMap { app in
+            (app["windows"] as? [[String: Any]])?.first.map { (app["name"] as? String ?? "", $0) }
+        })
+        #expect(windows["Notes"]?["off_screen"] as? Bool == true)
+        #expect(windows["Mail"]?["off_screen"] == nil)
+    }
+
     @Test func screenshotOfVanishedWindowReportsNotFound() async {
         let f = Self.fixture(system: Self.system(windows: [:]))
         let response = await f.coordinator.perform(.init(action: .screenshot, windowID: 42), sessionID: "s")
@@ -428,7 +667,7 @@ struct ComputerUseCoordinatorTests {
             var tree = saveTree
             if change == .elements, read == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
             let cut = (change == .truncatedBefore && read == 2) || (change == .truncatedAfter && read == 3)
-            return (tree, !cut, ComputerUseAXHandles())
+            return (tree, cut ? .timeLimit : nil, ComputerUseAXHandles())
         }
         system.focusState = { _ in
             let caret = change == .focus && focusReads.next() == 2 ? 5 : 0
@@ -499,6 +738,96 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.isEmpty)
     }
 
+    /// A blocked app is told as blocked even while a password prompt shows in it.
+    @Test func aBlockedAppIsRefusedAsBlockedOverAPrompt() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.credentialPrompts = { pids in Self.showing(pids) }
+        let f = Self.fixture(system: system, recorder: recorder)
+        let response = await f.coordinator.perform(.init(action: .key, windowID: 4, keys: "return"), sessionID: "s")
+        #expect(response == .error("computer_blocked: Alas Dev can't be used by agents."))
+        #expect(recorder.inputs.isEmpty)
+        #expect(f.coordinator.pendingApprovals.isEmpty)
+    }
+
+    /// While a system password prompt shows in an app, nothing of it is seen or driven, and no
+    /// card asks for it; computer_apps lists the app without its windows.
+    @Test(arguments: [
+        ComputerUseCommand(action: .screenshot, windowID: 1), .init(action: .inspect, windowID: 1),
+        .init(action: .key, windowID: 1, keys: "return"), .init(action: .type, windowID: 1, text: "hunter2"),
+    ])
+    func aCredentialPromptBlocksTheWholeApp(_ command: ComputerUseCommand) async throws {
+        let recorder = Recorder()
+        let notes = Self.notes
+        var system = Self.system(recorder: recorder)
+        let mail = Self.mail
+        system.credentialPrompts = { pids in
+            var listings: [Int32: ComputerUseCredentialPrompt.Listing] = [:]
+            if pids.contains(notes.pid) { listings[notes.pid] = .showing }
+            if pids.contains(mail.pid) { listings[mail.pid] = .unchecked }
+            return listings
+        }
+        let f = Self.fixture(system: system, recorder: recorder)
+        let response = await f.coordinator.perform(command, sessionID: "s")
+        #expect(response == .error("computer_blocked: A system password prompt is showing in Notes; ask the user to answer it."))
+        #expect(recorder.inputs.isEmpty)
+        #expect(f.coordinator.pendingApprovals.isEmpty)
+
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
+        let listed = try #require(apps.first { $0["name"] as? String == "Notes" })
+        #expect(listed["credential_prompt"] as? Bool == true)
+        #expect((listed["windows"] as? [Any])?.isEmpty == true)
+        // Past the listing's probe budget: its windows are withheld, but no prompt is claimed.
+        let unchecked = try #require(apps.first { $0["name"] as? String == "Mail" })
+        #expect(unchecked["credential_prompt"] as? String == "unchecked")
+        #expect((unchecked["windows"] as? [Any])?.isEmpty == true)
+    }
+
+    /// A click that brings the prompt up went through, but the window's elements and refs are withheld.
+    @Test func anInputThatBringsUpACredentialPromptWithholdsTheWindow() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.credentialPrompts = { [recorder] pids in recorder.inputs.isEmpty ? [:] : Self.showing(pids) }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["delivery"] as? String == "ax")
+        #expect(payload["credential_prompt"] as? Bool == true)
+        #expect((payload["elements"] as? [Any])?.isEmpty == true)
+        let again = await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
+        #expect(again == .error("computer_blocked: A system password prompt is showing in Notes; ask the user to answer it."))
+        #expect(recorder.inputs.count == 1)
+    }
+
+    /// An Electron press that changed nothing is retried as a pointer click; when that click brings
+    /// the prompt up, neither the retry's read nor the screenshot comes back.
+    @Test func aPointerRetryThatBringsUpACredentialPromptWithholdsTheWindow() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { _ in true }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            if case .pointerClick = input { return .background }
+            return .ax
+        }
+        system.credentialPrompts = { [recorder] pids in
+            recorder.inputs.contains { if case .pointerClick = $0 { true } else { false } } ? Self.showing(pids) : [:]
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let click = ComputerUseCommand(action: .click, windowID: 1, ref: "e2", includeScreenshot: true)
+        let json = try #require(Self.text(await f.coordinator.perform(click, sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["retried"] as? String == "pointer")
+        #expect(payload["credential_prompt"] as? Bool == true)
+        #expect((payload["elements"] as? [Any])?.isEmpty == true)
+        #expect(payload["image"] == nil)
+        #expect(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")
+            == .error("computer_blocked: A system password prompt is showing in Notes; ask the user to answer it."))
+    }
+
     @Test(arguments: ["cmd+q", "cmd+opt+q"])
     func quitChordsAreRefusedBeforeAnyInput(_ keys: String) async throws {
         let recorder = Recorder()
@@ -528,13 +857,13 @@ struct ComputerUseCoordinatorTests {
         ], handle: 0)
         // Only the first read still has the Save button.
         system.axTree = { _, _, _, _ in
-            guard reads.next() > 1 else { return (saveTree, true, ComputerUseAXHandles()) }
+            guard reads.next() > 1 else { return (saveTree, nil, ComputerUseAXHandles()) }
             let later = switch expiry {
             case .filteredReadRetitledTheNode: retitled
             case .filteredReadShiftedALookalikeIn: shifted
             case .turnEnd, .reinspectWithoutTheNode, .elementChanged: ComputerUseAXNode(role: "AXWindow", title: "Note", handle: 0)
             }
-            return (later, true, ComputerUseAXHandles())
+            return (later, nil, ComputerUseAXHandles())
         }
         // The element behind the handle still exists, but now reads as another button.
         system.elementMatches = { _, handle, role, title in
@@ -581,7 +910,8 @@ struct ComputerUseCoordinatorTests {
     }
 
     /// `mappedLate`: the end window shows the drop only on a re-read, as Finder does.
-    enum CrossWindowDrop: CaseIterable { case mapped, mappedLate, outOfBounds, staleRef, otherApp }
+    /// `sourceLate`: the end window shows it at once, the start window (a moved file leaving it) a moment later.
+    enum CrossWindowDrop: CaseIterable { case mapped, mappedLate, sourceLate, outOfBounds, staleRef, otherApp }
 
     /// The drop end resolves in the end window: its screenshot, its frame and its refs. The end
     /// window is read back too, so a drop that changed only it isn't reported as no change, nor
@@ -590,6 +920,7 @@ struct ComputerUseCoordinatorTests {
     func dragIntoAnotherWindowUsesThatWindow(_ drop: CrossWindowDrop) async throws {
         let recorder = Recorder()
         let endReads = Counter()
+        let startReads = Counter()
         var windows = Self.windows
         windows[5] = ComputerUseWindow(windowID: 5, title: "Other", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: Self.notes)
         var system = Self.system(windows: windows, recorder: recorder)
@@ -601,18 +932,26 @@ struct ComputerUseCoordinatorTests {
             if window.windowID == 5 {
                 let read = endReads.next()
                 if drop == .mappedLate ? read >= 3 : read == 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
+            } else if drop == .sourceLate, startReads.next() >= 5 {
+                // From its fifth read, a few polls after the drop, the moved item is gone from it.
+                tree.children.removeAll()
             }
-            return (tree, true, ComputerUseAXHandles())
+            return (tree, nil, ComputerUseAXHandles())
         }
         system.perform = { input, _, _, _ in
             recorder.record(input)
             return .activation
         }
+        // The activation and the mouse-down move focus and selection at once, before the start
+        // window shows the drop.
+        if drop == .sourceLate {
+            system.focusState = { _ in recorder.inputs.isEmpty ? nil : .init(role: "AXRow", title: "alas-drag-test.txt") }
+        }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
         let drag: ComputerUseCommand = switch drop {
-        case .mapped, .mappedLate: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
+        case .mapped, .mappedLate, .sourceLate: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
         case .outOfBounds: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 2000, toY: 2000)
         // Window 5 was never inspected, so e1 there is unknown even though window 1 has none either.
         case .staleRef: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toRef: "e1")
@@ -620,7 +959,7 @@ struct ComputerUseCoordinatorTests {
         }
         let response = await f.coordinator.perform(drag, sessionID: "s")
         switch drop {
-        case .mapped, .mappedLate:
+        case .mapped, .mappedLate, .sourceLate:
             let json = try #require(Self.text(response))
             let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
             guard case .drag(.point(let start), .point(let point), let toWindow) = try #require(recorder.inputs.first) else {
@@ -630,10 +969,12 @@ struct ComputerUseCoordinatorTests {
             // The end window sits at (10, 10); its screenshot has 2 pixels per point.
             #expect(start == CGPoint(x: 5, y: 5) && point == CGPoint(x: 60, y: 60) && toWindow?.windowID == 5)
             let end = try #require(payload["to_window"] as? [String: Any])
-            #expect(end["window_id"] as? Int == 5 && (end["elements"] as? [Any])?.count == 3)
-            // The start window looks the same, but the drop changed the end window.
+            #expect(end["window_id"] as? Int == 5)
+            // The drop changed the end window; a start window that looks the same is read again
+            // until the deadline, or until it shows the drop.
             #expect(payload["warning"] == nil)
-            #expect(recorder.sleeps.contains(ComputerUseCoordinator.dragConfirmPoll) == (drop == .mappedLate))
+            #expect(recorder.sleeps.contains(ComputerUseCoordinator.dragConfirmPoll))
+            #expect((payload["elements"] as? [Any])?.count == (drop == .sourceLate ? 1 : 2))
         case .outOfBounds:
             #expect(response == .error("computer_out_of_bounds: The point is outside window 5."))
             #expect(recorder.inputs.isEmpty)
@@ -714,6 +1055,8 @@ struct ComputerUseCoordinatorTests {
         let reads = Counter()
         var saveTree = Self.saveTree
         saveTree.children[0].role = role
+        // Its web content is built already.
+        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXGroup")]))
         // A group whose children the read didn't go deep enough to see.
         if postRead == .depthLimited { saveTree.children.append(ComputerUseAXNode(role: "AXGroup", childrenUnread: true)) }
         var system = Self.system(recorder: recorder)
@@ -722,7 +1065,7 @@ struct ComputerUseCoordinatorTests {
         system.axTree = { [saveTree] _, _, _, _ in
             var tree = saveTree
             if changed, reads.next() >= 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
-            return (tree, true, ComputerUseAXHandles())
+            return (tree, nil, ComputerUseAXHandles())
         }
         system.perform = { input, _, _, _ in
             recorder.record(input)
@@ -748,6 +1091,25 @@ struct ComputerUseCoordinatorTests {
         } else {
             #expect(inputs.count == 1 && payload["delivery"] as? String == "ax" && payload["retried"] == nil)
         }
+    }
+
+    /// A press the app didn't answer in time (a modal panel it opened) counts as delivered with a
+    /// warning, and is never pressed again, also where an Electron press that changed nothing would be.
+    @Test func anUnconfirmedPressIsDeliveredWithAWarningAndNotRetried() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.usesManualAccessibility = { _ in true }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            return ComputerUseDelivered(delivery: .ax, warning: "The app didn't answer in time.")
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .click, windowID: 1, ref: "e2"), sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["delivery"] as? String == "ax" && payload["retried"] == nil)
+        #expect((payload["warning"] as? String)?.hasPrefix("The app didn't answer in time.") == true)
+        #expect(recorder.inputs.count == 1)
     }
 
     /// The first press was delivered either way: a retry the user's return refuses leaves its
@@ -784,8 +1146,10 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { _ in true }
         // Read 1 is the inspect, 2 the window before the press, 3 after it, 4 after the retry.
-        let saveTree = Self.saveTree
-        system.axTree = { _, _, _, _ in (saveTree, !(retryReadTruncated && reads.next() >= 4), ComputerUseAXHandles()) }
+        var saveTree = Self.saveTree
+        // Its web content is built already.
+        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXGroup")]))
+        system.axTree = { [saveTree] _, _, _, _ in (saveTree, retryReadTruncated && reads.next() >= 4 ? .timeLimit : nil, ComputerUseAXHandles()) }
         // Otherwise only the focus moves with the pointer click.
         system.focusState = { _ in
             !retryReadTruncated && recorder.inputs.count > 1 ? .init(role: "AXButton", title: "Save") : nil
@@ -812,7 +1176,7 @@ struct ComputerUseCoordinatorTests {
         let saveTree = Self.saveTree
         system.axTree = { _, _, _, _ in
             if reads.next() == 3 { throw ComputerUseSystemError.appNotResponding("Notes") }
-            return (saveTree, true, ComputerUseAXHandles())
+            return (saveTree, nil, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
@@ -902,7 +1266,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         system.axTree = { _, _, _, _ in
             guard reads.next() == 1 || failure == .windowCloses else { throw ComputerUseSystemError.captureFailed("gone") }
-            return (saveTree, true, ComputerUseAXHandles())
+            return (saveTree, nil, ComputerUseAXHandles())
         }
         // Lookup 3 is the re-fetch before the post-action read.
         system.window = { _ in failure == .windowCloses && lookups.next() == 3 ? nil : window }
@@ -927,7 +1291,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         system.axTree = { _, _, _, _ in
             recorder.recordEvent("read")
-            return (saveTree, true, ComputerUseAXHandles())
+            return (saveTree, nil, ComputerUseAXHandles())
         }
         system.perform = { _, _, _, _ in ComputerUseDelivered(delivery: .background, keyedInBackground: true) }
         system.releaseBackgroundFocus = { recorder.recordEvent("release \($0.windowID)") }
@@ -1021,7 +1385,7 @@ struct ComputerUseCoordinatorTests {
         var system = Self.system(recorder: recorder)
         // The inspect resolves the original frame; the window has moved by the click.
         system.window = { [moved] _ in lookups.next() <= 1 ? original : moved }
-        system.axTree = { _, _, _, _ in (tree, true, ComputerUseAXHandles()) }
+        system.axTree = { _, _, _, _ in (tree, nil, ComputerUseAXHandles()) }
         let cursor = ComputerUseCursor(present: { _ in }, perform: { recorder.recordEvent("\($0)") }, dismiss: {})
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes], cursor: cursor)
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1, query: "Save"), sessionID: "s")
@@ -1148,8 +1512,8 @@ struct ComputerUseCoordinatorTests {
             }
             let children = done ? [ComputerUseAXNode(role: "AXStaticText", title: "Done", handle: 1)] : []
             // A walk that ran out of budget may have missed "Done".
-            let complete = waitCase != .disappearsFromPartialRead
-            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), complete, ComputerUseAXHandles())
+            let cut: ComputerUseReadCut? = waitCase == .disappearsFromPartialRead ? .nodeBudget : nil
+            return (ComputerUseAXNode(role: "AXWindow", title: "Note", children: children, handle: 0), cut, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")

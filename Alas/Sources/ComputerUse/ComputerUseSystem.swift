@@ -7,7 +7,7 @@ import os
 import ScreenCaptureKit
 import Synchronization
 
-/// An on-screen, layer-0 window of a running app.
+/// An on-screen window of a running app, below the menu bar's layer: a normal window or a panel.
 struct ComputerUseWindow: Sendable, Equatable {
     var windowID: UInt32
     var title: String?
@@ -89,6 +89,8 @@ struct ComputerUseDelivered: Sendable, Equatable {
     var menuItem: String?
     /// The title of the sheet or dialog button an Escape or Return pressed.
     var button: String?
+    /// Said next to the result: the app didn't confirm an AX press in time.
+    var warning: String?
     /// The input made the window key in an app that isn't the user's front app; the app keeps
     /// treating it as its active key window until `releaseBackgroundFocus` hands it back.
     var keyedInBackground = false
@@ -101,6 +103,8 @@ struct ComputerUseDelivered: Sendable, Equatable {
 
 enum ComputerUseSystemError: Error, LocalizedError {
     case windowNotFound(UInt32)
+    /// On screen, but no AX window of its app answers for it (a sheet's backing window).
+    case windowUnreadable(UInt32)
     case captureFailed(String)
     /// The app didn't answer an Accessibility read in time (kAXErrorCannotComplete, a stalled read).
     case appNotResponding(String)
@@ -134,6 +138,7 @@ enum ComputerUseSystemError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .windowNotFound(let id): "Window \(id) is no longer on screen"
+        case .windowUnreadable(let id): "Window \(id) can't be read"
         case .captureFailed(let reason): "Capture failed: \(reason)"
         case .appNotResponding(let app): "Capture failed: \(app) is not responding"
         case .staleElement, .staleDropElement: "The element is no longer valid"
@@ -154,10 +159,10 @@ struct ComputerUseSystem: Sendable {
     var runningApps: @Sendable () async -> [(app: ComputerUseAppIdentity, windows: [ComputerUseWindow])]
     var window: @Sendable (UInt32) async -> ComputerUseWindow?
     var screenshot: @Sendable (ComputerUseWindow) async throws -> ComputerUseScreenshot
-    /// `complete` is false when the read stopped early (node budget, time limit, stalled app).
-    /// `handles` retains the elements behind each node's `handle`.
+    /// `cut` says why the read stopped early (node budget, time limit, stalled app); nil when
+    /// it read everything. `handles` retains the elements behind each node's `handle`.
     var axTree: @Sendable (ComputerUseWindow, _ maxDepth: Int, _ nodeBudget: Int, _ timeLimit: Duration) async throws
-        -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles)
+        -> (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles)
     /// Delivers one input. Throws `CancellationError` when `interrupt` reports
     /// `.cancelled` before the first event, or after the event sequence in flight;
     /// `.userActive` stops long sequences (typed text, drags) between their events.
@@ -190,6 +195,27 @@ struct ComputerUseSystem: Sendable {
     /// Whether the app builds its Accessibility tree on request (Chromium, Electron), where an AX
     /// press may only focus the element.
     var usesManualAccessibility: @Sendable (Int32) -> Bool = { _ in false }
+    /// The apps among `pids` a system password prompt is showing in, or may be showing in without
+    /// the probe budget having reached them (`ComputerUseCredentialPrompt.listing`), read with one
+    /// window list and one process list, within one probe budget. Clear apps have no entry.
+    var credentialPrompts: @Sendable (_ pids: [Int32]) async -> [Int32: ComputerUseCredentialPrompt.Listing] = { _ in [:] }
+    /// Running menu-bar (accessory) apps, which `runningApps` leaves out.
+    var accessoryApps: @Sendable () async -> [ComputerUseAppIdentity] = { [] }
+    /// Asks a Chromium or Electron app to build its web content's Accessibility tree by turning
+    /// an attribute on; true when Alas turned it on, so `restoreWebContent` turns it off again.
+    var wakeWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Bool = { _, _ in false }
+    var restoreWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Void = { _, _ in }
+    /// The online displays' frames, CG global, top-left (`ComputerUseAXReader.displayFrames`).
+    var displays: @Sendable () -> [CGRect] = { [.infinite] }
+    /// The frames of the AXSheets in each app's windows, read for the apps among `pids`, so the
+    /// windows backing them stay out of listings (`ComputerUseInputGeometry.isSheetBacking`).
+    var sheetFrames: @Sendable (_ pids: [Int32]) async -> [Int32: [CGRect]] = { _ in [:] }
+
+    /// Whether a system password prompt is showing in the app, or may be: one app alone is probed
+    /// first, so an unchecked one is the probe not getting to it, and counts as showing.
+    func credentialPrompt(_ pid: Int32) async -> Bool {
+        await credentialPrompts([pid])[pid] != nil
+    }
     /// The live system. `cursorWindowIDs` names Alas's own overlay windows (the drawn cursor),
     /// which the live drag's hit-tests look through.
     static func live(cursorWindowIDs: @escaping @Sendable () -> Set<UInt32> = { [] }) -> ComputerUseSystem {
@@ -216,7 +242,13 @@ struct ComputerUseSystem: Sendable {
             resolveApp: { await LiveComputerUseSystem.resolveApp(name: $0, bundleID: $1) },
             openApp: { try await LiveComputerUseSystem.openApp($0) },
             releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
-            usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) }
+            usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) },
+            credentialPrompts: { await LiveComputerUseSystem.credentialPrompts(pids: $0) },
+            accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
+            wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0, attribute: $1) },
+            restoreWebContent: { await ComputerUseAXReader.restoreWebContent($0, attribute: $1) },
+            displays: { LiveComputerUseSystem.displayFrames() },
+            sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) }
         )
     }
 }
@@ -256,6 +288,14 @@ private enum LiveComputerUseSystem {
             }
     }
 
+    static func accessoryApps() async -> [ComputerUseAppIdentity] {
+        await MainActor.run {
+            NSWorkspace.shared.runningApplications
+                .filter { $0.activationPolicy == .accessory && !$0.isTerminated }
+                .map(identity(of:))
+        }
+    }
+
     /// From the input tap; the HID idle time, which counts Alas's own events, only until it runs.
     /// While Secure Event Input is on the tap gets no keys, so the HID idle time for keys counts too.
     static func secondsSinceUserInput() -> TimeInterval {
@@ -263,6 +303,33 @@ private enum LiveComputerUseSystem {
             now: ComputerUseUserInput.now(), lastUserInput: ComputerUseUserInput.lastInput(),
             hidIdle: ComputerUseUserInput.hidIdleSeconds(),
             secureInputKeyIdle: IsSecureEventInputEnabled() ? ComputerUseUserInput.hidKeyIdleSeconds() : nil)
+    }
+
+    /// How long one call may spend reading sheets over all its apps; past it the rest are
+    /// unchecked (`ComputerUseCredentialPrompt.listing`).
+    static let promptProbeBudget: Duration = .milliseconds(600)
+
+    /// Nothing is read unless a prompt process runs; then only apps with an untitled window, the
+    /// user's front app first, since the prompt is usually in the app they just used.
+    static func credentialPrompts(pids: [Int32]) async -> [Int32: ComputerUseCredentialPrompt.Listing] {
+        let (running, frontPID) = await MainActor.run {
+            (Set(NSWorkspace.shared.runningApplications.filter { !$0.isTerminated }.compactMap(\.bundleIdentifier)),
+             NSWorkspace.shared.frontmostApplication?.processIdentifier)
+        }
+        guard ComputerUseCredentialPrompt.needsSheetRead(runningBundleIDs: running, hasUntitledWindow: true) else { return [:] }
+        let untitled = Set(onScreenWindows().filter { $0.title == nil }.map(\.pid))
+        let withUntitled = pids.filter(untitled.contains)
+        let candidates = withUntitled.filter { $0 == frontPID } + withUntitled.filter { $0 != frontPID }
+        let deadline = ContinuousClock.now + promptProbeBudget
+        var listings: [Int32: ComputerUseCredentialPrompt.Listing] = [:]
+        for pid in candidates {
+            let probed = ContinuousClock.now < deadline
+            let secure = probed ? await ComputerUseAXReader.secureFieldInSheet(pid: pid, deadline: deadline) : nil
+            let listing = ComputerUseCredentialPrompt.listing(
+                runningBundleIDs: running, hasUntitledWindow: true, probed: probed, secureFieldInSheet: secure)
+            if listing != .clear { listings[pid] = listing }
+        }
+        return listings
     }
 
     static func window(_ id: UInt32) async -> ComputerUseWindow? {
@@ -343,9 +410,10 @@ private enum LiveComputerUseSystem {
         return screens.first(where: { $0.frame.contains(center) })?.backingScaleFactor ?? fallback
     }
 
-    /// The normal-layer windows: the ones apps are driven in.
+    /// The windows apps are driven in: normal ones, and their floating and modal panels below the
+    /// menu bar (an open panel sits at layer 8).
     private static func onScreenWindows() -> [CGWindowEntry] {
-        allOnScreenWindows().filter { $0.layer == 0 }
+        allOnScreenWindows().filter { ComputerUseInputGeometry.isAppWindowLayer($0.layer) }
     }
 
     /// Every on-screen window at every layer, front to back, as a system-wide press or drop is
@@ -396,6 +464,8 @@ extension LiveComputerUseSystem {
     static let focusSettle: Duration = .milliseconds(50)
     /// After raising a drag's windows, before checking nothing covers its points.
     static let dragRaiseSettle: Duration = .milliseconds(150)
+    /// Between looks while a drag's windows come up (`ComputerUseTakeover.dragSettleWait`).
+    static let dragRaisePoll: Duration = .milliseconds(50)
     /// How long typing into an element waits for the focus it set to land.
     static let focusWait: Duration = .milliseconds(300)
     static let focusPoll: Duration = .milliseconds(25)
@@ -410,7 +480,22 @@ extension LiveComputerUseSystem {
     /// its app's key window, without activating the app (`background`); else, when that window
     /// can't be made key, the app is activated around the events as `direct` does.
     /// `ignoring`: windows the drag's hit-tests look through (Alas's drawn cursor).
+    /// An AX press the app didn't answer in time counts as delivered, with a warning.
     static func perform(
+        _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
+        ignoring: @escaping @Sendable () -> Set<UInt32>,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered {
+        do {
+            return try await deliver(input, in: window, direct: direct, ignoring: ignoring, interrupt: interrupt)
+        } catch let unconfirmed as ComputerUseAXActions.Unconfirmed {
+            return ComputerUseDelivered(
+                delivery: .ax, menuItem: unconfirmed.menuItem, button: unconfirmed.button,
+                warning: ComputerUseAXActions.unconfirmedWarning)
+        }
+    }
+
+    private static func deliver(
         _ input: ComputerUseInput, in window: ComputerUseWindow, direct: Bool,
         ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -430,6 +515,16 @@ extension LiveComputerUseSystem {
            let button = try await ComputerUseAXActions.pressDialogButton(chord, in: window, interrupt: interrupt) {
             return ComputerUseDelivered(delivery: .ax, button: button)
         }
+        // Keys and text posted to a window off screen reach nothing: only AX can stand in.
+        if let delivered = try await offScreenViaAX(input, in: window, interrupt: interrupt) { return delivered }
+        // Content another process draws in the window (a System Settings pane) takes no posted
+        // events: an x/y click or scroll there goes as AX on the element at the point, also when
+        // direct. Where AX has no way, the events go as they always did.
+        if let routed = try await routedToPoint(input, in: window, isCancelled: isCancelled) {
+            if let delivered = try await remoteViaAX(routed.input, in: window, interrupt: interrupt) { return delivered }
+            // Events at a point off screen reach nothing: reporting them delivered would be wrong.
+            if routed.offScreen { throw ComputerUseSystemError.actionFailed(offScreenRefusal(window.app)) }
+        }
         // Drags always go with the app in front; the coordinator applies the direct takeover rule to them.
         if direct || input.isDrag {
             // Raising the window moves the app's key window too; not while another input holds it.
@@ -443,59 +538,7 @@ extension LiveComputerUseSystem {
            try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
             throw ComputerUseAXActions.hiddenRefusal
         }
-        // Each case falls through to events only when the element offers no AX way. Typing without
-        // a ref and chords act on the key window, so they wait until it is made key below.
-        switch input {
-        case .click(.element(let handles, let handle), .right, _):
-            do {
-                try await ComputerUseAXActions.showMenu(handles, handle, app: app, interrupt: interrupt)
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // A right click at its centre may still land.
-            }
-        case .click(.element(let handles, let handle), .left, let count) where count <= 2:
-            if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
-                // A web field may only read as focused in its page: unless the app's focus moved,
-                // the click goes as events at the field, as a user's would.
-                if try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) { return .ax }
-                break
-            }
-            if count == 1 {
-                do {
-                    try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
-                    return .ax
-                } catch is ComputerUseAXActions.Unsupported {
-                    // Static text and cells have no press; something around them may.
-                }
-            }
-            do {
-                try await ComputerUseAXActions.pressOrSelectNearest(
-                    handles, handle, count: count, app: app, interrupt: interrupt)
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // A click at its centre may still land.
-            }
-        case .type(let text, .element(let handles, let handle), let replace):
-            do {
-                if replace {
-                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
-                } else {
-                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
-                }
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // The text isn't settable; focus it and type instead.
-            }
-        case .scroll(let at, let dx, let dy):
-            do {
-                try await ComputerUseAXActions.scroll(at, dx: dx, dy: dy, in: window, interrupt: interrupt)
-                return .ax
-            } catch is ComputerUseAXActions.Unsupported {
-                // No scroll bar to move; a wheel event at the point may still land.
-            }
-        default:
-            break
-        }
+        if let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
         // From making the window key until it is handed back below, no other input may move key
         // status in this app: its events would land in whichever window the other one left key.
         return try await keyLocks.run(app.pid) {
@@ -516,6 +559,229 @@ extension LiveComputerUseSystem {
                 if keying.keyedInBackground { defocusIfInBackground(window) }
                 throw error
             }
+        }
+    }
+
+    /// The AX ways to deliver an input, nil when the element offers none. Typing without a ref and
+    /// chords act on the key window, so they wait until it is made key.
+    private static func viaAX(
+        _ input: ComputerUseInput, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered? {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        let app = window.app
+        // Each case falls through to events only when the element offers no AX way. Typing without
+        // a ref and chords act on the key window, so they wait until it is made key below.
+        switch input {
+        case .click(.element(let handles, let handle), .right, _):
+            do {
+                try await ComputerUseAXActions.showMenu(handles, handle, app: app, interrupt: interrupt)
+                return ComputerUseDelivered.ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // A right click at its centre may still land.
+            }
+        case .click(.element(let handles, let handle), .left, let count) where count <= 2:
+            if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
+                // A web field may only read as focused in its page: unless the app's focus moved,
+                // the click goes as events at the field, as a user's would.
+                if try await waitForFocus(handles, handle, app: app, isCancelled: isCancelled) { return ComputerUseDelivered.ax }
+                break
+            }
+            if count == 1 {
+                do {
+                    try await ComputerUseAXActions.press(handles, handle, app: app, interrupt: interrupt)
+                    return ComputerUseDelivered.ax
+                } catch is ComputerUseAXActions.Unsupported {
+                    // Static text and cells have no press; something around them may.
+                }
+            }
+            do {
+                try await ComputerUseAXActions.pressOrSelectNearest(
+                    handles, handle, count: count, app: app, interrupt: interrupt)
+                return ComputerUseDelivered.ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // A click at its centre may still land.
+            }
+        case .type(let text, .element(let handles, let handle), let replace):
+            do {
+                if replace {
+                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
+                } else {
+                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
+                }
+                return ComputerUseDelivered.ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // The text isn't settable; focus it and type instead.
+            }
+        case .scroll(let at, let dx, let dy):
+            do {
+                try await ComputerUseAXActions.scroll(at, dx: dx, dy: dy, in: window, interrupt: interrupt)
+                return ComputerUseDelivered.ax
+            } catch is ComputerUseAXActions.Unsupported {
+                // No scroll bar to move; a wheel event at the point may still land.
+            }
+        default:
+            break
+        }
+        return nil
+    }
+
+    /// `viaAX` for an input rewritten onto another process's element (`routedToPoint`): nil, so the
+    /// original input goes as events, when AX has no way or fails other than by a stop, the
+    /// user's return or a press the app didn't confirm (which most likely took effect).
+    private static func remoteViaAX(
+        _ input: ComputerUseInput, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered? {
+        do {
+            return try await viaAX(input, in: window, interrupt: interrupt)
+        } catch let error as CancellationError {
+            throw error
+        } catch let error as ComputerUseAXActions.Unconfirmed {
+            throw error
+        } catch ComputerUseSystemError.userActive {
+            throw ComputerUseSystemError.userActive
+        } catch {
+            return nil
+        }
+    }
+
+    static let dragOverlapRefusal = "The two windows overlap at the drag's points; move one so both show."
+    static let coveredPointRefusal =
+        "Another app's content is at that point; nothing was sent. Use a ref from computer_inspect."
+
+    /// An x/y click or scroll whose point holds content another process draws in the window, as
+    /// the same input on the element there (`ComputerUseInputGeometry.pointRoute`); nil for any
+    /// other input. Refuses when another process's element at the point isn't in the window.
+    /// Point is off every display: the input goes as AX or not at all.
+    private struct Routed {
+        var input: ComputerUseInput
+        var offScreen = false
+    }
+
+    /// A key or typed text for an off-screen window, through AX (`ComputerUseInputGeometry.offScreenInput`):
+    /// the menu item with the key's shortcut, or the text into the element (by ref) or the focused
+    /// one, which must be in this window. Refuses what AX can't take; nil for any other input, or a
+    /// window on screen.
+    private static func offScreenViaAX(
+        _ input: ComputerUseInput, in window: ComputerUseWindow,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseDelivered? {
+        switch input {
+        case .key, .type: break
+        default: return nil
+        }
+        let displays = displayFrames()
+        guard !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays) else { return nil }
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        let app = window.app
+        // As the background path does: nothing moves key status in the app meanwhile.
+        let (focused, delivered) = try await keyLocks.run(app.pid) { () -> (Bool, ComputerUseDelivered?) in
+            var focused = true
+            if case .type(_, .element, _) = input {
+                // Typing by ref goes to that element, whichever window is focused.
+            } else {
+                do {
+                    try await ComputerUseAXActions.makeActiveWindow(window, raise: false, isCancelled: isCancelled)
+                } catch ComputerUseSystemError.notActiveWindow {
+                    focused = false
+                }
+            }
+            guard focused else { return (false, nil) }
+            switch input {
+            case .key(let chord):
+                let item = try await ComputerUseAXActions.pressMenuShortcut(chord, app: app, interrupt: interrupt)
+                return (true, item.map { ComputerUseDelivered(delivery: .ax, menuItem: $0) })
+            case .type(let text, .element(let handles, let handle), let replace):
+                do {
+                    if replace {
+                        try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
+                    } else {
+                        try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
+                    }
+                    return (true, .ax)
+                } catch is ComputerUseAXActions.Unsupported {
+                    return (true, nil)
+                }
+            case .type(let text, _, let replace):
+                do {
+                    // Refuses a secure focused element, as typing does.
+                    try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
+                    return (true, .ax)
+                } catch is ComputerUseAXActions.Unsupported {
+                    return (true, nil)
+                }
+            default:
+                return (true, nil)
+            }
+        }
+        switch ComputerUseInputGeometry.offScreenInput(
+            windowOnScreen: false, targetIsFocusedWindow: focused, deliveredThroughAX: delivered != nil) {
+        case .ax:
+            if let delivered { return delivered }
+            fallthrough
+        case .refuse, .events:
+            if case .type = input { throw ComputerUseSystemError.actionFailed(offScreenTypeRefusal(app)) }
+            throw ComputerUseSystemError.actionFailed(offScreenKeyRefusal(app))
+        }
+    }
+
+    static func offScreenTypeRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches it through "
+            + "accessibility, and the element doesn't take it that way (or another of its windows has focus). Use a ref "
+            + "to a text field, or ask the user to bring the window on screen."
+    }
+
+    static func offScreenKeyRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name)'s window is off screen (it may be on another Space or workspace), so a key only reaches it as a "
+            + "sheet button or menu item, and this one is neither. Use element refs, or ask the user to bring the window on screen."
+    }
+
+    static func offScreenRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "That point of \(app.name)'s window is off screen (it may be on another Space or workspace). Use element refs, "
+            + "or ask the user to bring the window on screen."
+    }
+
+    static func displayFrames() -> [CGRect] { ComputerUseAXReader.displayFrames() }
+
+    private static func routedToPoint(
+        _ input: ComputerUseInput, in window: ComputerUseWindow, isCancelled: @escaping @Sendable () -> Bool
+    ) async throws -> Routed? {
+        let point: CGPoint
+        switch input {
+        case .click(.point(let at), _, _), .scroll(.point(let at), _, _): point = at
+        default: return nil
+        }
+        let kind: ComputerUseRemoteContent.Input = if case .scroll = input { .scroll } else { .click }
+        // A window parked off screen (an AeroSpace workspace, another Space) takes no events at
+        // all, and System Settings' panes none from posted events: the element is found down the
+        // window and driven through AX.
+        let displays = displayFrames()
+        let offScreen = !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays)
+        if offScreen || ComputerUseRemoteContent.hostsContentRemotely(bundleID: window.app.bundleID) {
+            if let handles = try await ComputerUseAXActions.remoteContentElement(
+                at: point, in: window, for: kind, isCancelled: isCancelled),
+               let routed = converted(input, to: .element(handles, 0)) {
+                return Routed(input: routed, offScreen: offScreen)
+            }
+            if offScreen { throw ComputerUseSystemError.actionFailed(offScreenRefusal(window.app)) }
+        }
+        let found = try await ComputerUseAXActions.element(at: point, in: window, isCancelled: isCancelled)
+        switch ComputerUseInputGeometry.pointRoute(point: point, targetPID: window.app.pid, window: window.frame, appHit: found?.hit) {
+        case .events: return nil
+        case .covered: throw ComputerUseSystemError.actionFailed(coveredPointRefusal)
+        case .ax: break
+        }
+        guard let element = found, let routed = converted(input, to: .element(element.handles, 0)) else { return nil }
+        return Routed(input: routed)
+    }
+
+    /// The x/y click or scroll `input`, at `target` instead.
+    private static func converted(_ input: ComputerUseInput, to target: ComputerUseInputTarget) -> ComputerUseInput? {
+        switch input {
+        case .click(_, let button, let count): .click(target, button: button, count: count)
+        case .scroll(_, let dx, let dy): .scroll(target, dx: dx, dy: dy)
+        default: nil
         }
     }
 
@@ -710,10 +976,18 @@ extension LiveComputerUseSystem {
                 guard let visible = try await ComputerUseAXActions.visibleCenter(
                     handles, handle, within: bounds.frame, app: bounds.app, requireOwnCenter: false, isCancelled: isCancelled)
                 else { throw ComputerUseAXActions.hiddenRefusal }
-                return visible
+                return try onScreen(visible)
             case .point(let point):
-                return point
+                return try onScreen(point)
             }
+        }
+        /// Events at a point off every display reach nothing: the AX ways were tried before them.
+        func onScreen(_ point: CGPoint) throws -> CGPoint {
+            let displays = displayFrames()
+            guard ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) else {
+                throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
+            }
+            return point
         }
         func checkCancelled() throws {
             if isCancelled() { throw CancellationError() }
@@ -730,9 +1004,9 @@ extension LiveComputerUseSystem {
                 guard let visible = try await ComputerUseAXActions.visibleCenter(
                     handles, handle, within: window.frame, app: app, requireOwnCenter: true, isCancelled: isCancelled)
                 else { throw ComputerUseSystemError.actionFailed("The element is scrolled out of view; it wasn't clicked again.") }
-                location = visible
+                location = try onScreen(visible)
             case .point(let point):
-                location = point
+                location = try onScreen(point)
             }
             try checkCancelled()
             try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
@@ -748,7 +1022,7 @@ extension LiveComputerUseSystem {
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case .point(let location):
                 try checkCancelled()
-                try await ComputerUseInputPoster.click(at: location, button: .left, count: 1, target: target)
+                try await ComputerUseInputPoster.click(at: try onScreen(location), button: .left, count: 1, target: target)
                 // Let the click move focus before checking what has it.
                 try? await Task.sleep(for: focusSettle)
                 try await requireActiveWindow()
@@ -761,9 +1035,9 @@ extension LiveComputerUseSystem {
             if replace {
                 try ComputerUseInputPoster.postKey(CGKeyCode(kVK_ANSI_A), flags: .maskCommand, pid: app.pid)
             }
-            if paste {
-                try await self.paste(text, pid: app.pid)
-            } else {
+            // A clipboard holding anything but plain text is left alone, and the text typed instead.
+            let pasted = paste ? try await self.paste(text, pid: app.pid) : false
+            if !pasted {
                 try await ComputerUseInputPoster.type(text, pid: app.pid, interrupt: interrupt)
             }
         case .key(let chord):
@@ -786,76 +1060,130 @@ extension LiveComputerUseSystem {
                 throw ComputerUseSystemError.actionFailed(
                     "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own.")
             }
-            try await requireActiveWindow()
-            // Activation fronts only the app's key window; another app's window can still cover the drop window.
-            if let toWindow, toWindow.windowID != window.windowID {
-                try await ComputerUseAXActions.raise(toWindow, isCancelled: isCancelled)
+            // The app is in front (`activated`). From here on the points are read again on every
+            // look: a parked window comes back (AeroSpace switches to its workspace) and windows come
+            // up a moment after the activation (`ComputerUseTakeover.dragStep`).
+            func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
+                await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
             }
-            try? await Task.sleep(for: dragRaiseSettle)
-            let dropWindow = toWindow ?? window
-            // A ref's point is on the part of it its scroll area shows: an element scrolled under
-            // another part of the window (a sidebar) would press that part instead.
-            func startPoint() async throws -> CGPoint {
-                switch from {
+            func moved(_ point: CGPoint, from shown: ComputerUseWindow, to now: ComputerUseWindow) -> CGPoint {
+                CGPoint(x: point.x - shown.frame.minX + now.frame.minX, y: point.y - shown.frame.minY + now.frame.minY)
+            }
+            let sourceShown = window
+            let dropShown = toWindow ?? window
+            var startWindow = window
+            var dropWindow = dropShown
+            /// Where an end of the drag is now; nil while its element doesn't show.
+            func resolve(
+                _ target: ComputerUseInputTarget, shown: ComputerUseWindow, now: ComputerUseWindow, isDrop: Bool
+            ) async throws -> CGPoint? {
+                switch target {
                 case .element(let handles, let handle):
-                    guard let visible = try await ComputerUseAXActions.visibleCenter(
-                        handles, handle, within: window.frame, app: app, requireOwnCenter: false, isCancelled: isCancelled)
-                    else { throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.") }
-                    return visible
+                    do {
+                        // A ref's point is on the part of it its scroll area shows: an element scrolled
+                        // under another part of the window (a sidebar) would get the press instead.
+                        return try await ComputerUseAXActions.visibleCenter(
+                            handles, handle, within: now.frame, app: now.app, requireOwnCenter: false, isCancelled: isCancelled)
+                    } catch ComputerUseSystemError.staleElement where isDrop {
+                        throw ComputerUseSystemError.staleDropElement
+                    }
                 case .point(let point):
-                    guard window.frame.contains(point) else { throw ComputerUseSystemError.outOfBounds }
+                    let point = moved(point, from: shown, to: now)
+                    guard now.frame.contains(point) else {
+                        throw isDrop ? ComputerUseSystemError.dropOutOfBounds : ComputerUseSystemError.outOfBounds
+                    }
                     return point
                 }
             }
-            var start = try await startPoint()
-            let end: CGPoint
-            switch to {
-            case .element(let handles, let handle):
-                let visible: CGPoint?
-                do {
-                    visible = try await ComputerUseAXActions.visibleCenter(
-                        handles, handle, within: dropWindow.frame, app: dropWindow.app, requireOwnCenter: false,
-                        isCancelled: isCancelled)
-                } catch ComputerUseSystemError.staleElement {
-                    throw ComputerUseSystemError.staleDropElement
-                }
-                guard let visible else {
-                    throw ComputerUseSystemError.actionFailed("The drop element is scrolled out of view or hidden.")
-                }
-                end = visible
-            case .point(let point):
-                guard dropWindow.frame.contains(point) else { throw ComputerUseSystemError.dropOutOfBounds }
-                end = point
+            func state(_ point: CGPoint?, own: UInt32, other: UInt32, displays: [CGRect]) -> ComputerUseTakeover.DragPointState {
+                guard let point else { return .hidden }
+                if !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) { return .offScreen }
+                let top = ComputerUseInputGeometry.topmostWindow(at: point, in: screenWindows(), ignoring: ignoring())
+                if top == own { return .clear }
+                return top == other && own != other ? .byOtherDragWindow : .byOther
             }
-            func checkCovered() throws {
-                switch ComputerUseInputGeometry.coveredDragPoint(
-                    start: start, in: window.windowID, end: end, in: dropWindow.windowID,
-                    windows: screenWindows(), ignoring: ignoring()) {
-                case .start: throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
-                case .end: throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
-                case nil: break
+            func raiseSource() async {
+                try? await ComputerUseAXActions.makeActiveWindow(window, raise: true, isCancelled: isCancelled)
+            }
+            var start = CGPoint.zero
+            var end = CGPoint.zero
+            /// Looks until the drag may go, raising windows as `dragStep` says.
+            /// Bounded by the clock as well as by its sleeps: each look also reads both windows and,
+            /// for elements, the app, which a slow app answers late.
+            func settle() async throws {
+                let began = ContinuousClock.now
+                var slept: TimeInterval = 0
+                func elapsed() -> TimeInterval {
+                    let parts = (ContinuousClock.now - began).components
+                    return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+                }
+                var raisedDrop = false
+                while true {
+                    try checkCancelled()
+                    startWindow = await current(sourceShown)
+                    dropWindow = await current(dropShown)
+                    let startPoint = try await resolve(from, shown: sourceShown, now: startWindow, isDrop: false)
+                    let endPoint = try await resolve(to, shown: dropShown, now: dropWindow, isDrop: true)
+                    let displays = displayFrames()
+                    let step = ComputerUseTakeover.dragStep(
+                        idleSeconds: secondsSinceUserInput(), activated: true,
+                        start: state(startPoint, own: startWindow.windowID, other: dropWindow.windowID, displays: displays),
+                        drop: state(endPoint, own: dropWindow.windowID, other: startWindow.windowID, displays: displays),
+                        raisedDrop: raisedDrop, waited: max(slept, elapsed()))
+                    switch step {
+                    case .drag, .activate:
+                        if let startPoint, let endPoint { (start, end) = (startPoint, endPoint) }
+                        return
+                    case .userActive: throw ComputerUseSystemError.userActive
+                    case .raiseSource:
+                        await raiseSource()
+                    case .raiseDrop:
+                        try await ComputerUseAXActions.raise(dropWindow, isCancelled: isCancelled)
+                        raisedDrop = true
+                        // The raise takes a moment to show; judging the overlap sooner would refuse early.
+                        try? await Task.sleep(for: dragRaiseSettle)
+                    case .hidden(.start):
+                        throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.")
+                    case .hidden(.end):
+                        throw ComputerUseSystemError.actionFailed("The drop element is scrolled out of view or hidden.")
+                    case .offScreen: throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
+                    case .overlap: throw ComputerUseSystemError.actionFailed(dragOverlapRefusal)
+                    case .covered(.start):
+                        throw ComputerUseSystemError.actionFailed("The drag's start point is covered by another window.")
+                    case .covered(.end):
+                        throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
+                    }
+                    try? await Task.sleep(for: dragRaisePoll)
+                    slept += 0.05
                 }
             }
-            try checkCovered()
+            await raiseSource()
+            try? await Task.sleep(for: dragRaiseSettle)
+            try await settle()
             try checkCancelled()
             if case .element(let handles, let handle) = from {
                 try await ComputerUseAXActions.selectRow(handles, handle, isCancelled: isCancelled)
                 // Selecting may scroll the row.
-                start = try await startPoint()
-                try checkCovered()
+                try await settle()
                 try checkCancelled()
             }
             // Another window over the drop point would take the drop: checked right before the release.
             let dropWindowID = dropWindow.windowID
             let pid = app.pid
+            let (dragStart, dragEnd) = (start, end)
             let dragBegan = ComputerUseUserInput.now()
-            try await ComputerUseInputPoster.systemDrag(from: start, to: end, dropIsVisible: {
-                ComputerUseInputGeometry.topmostWindow(at: end, in: screenWindows(), ignoring: ignoring()) == dropWindowID
+            try await ComputerUseInputPoster.systemDrag(from: dragStart, to: dragEnd, dropIsVisible: {
+                ComputerUseInputGeometry.topmostWindow(at: dragEnd, in: screenWindows(), ignoring: ignoring()) == dropWindowID
             }, interrupt: {
                 if isCancelled() || Task.isCancelled { return .cancelled }
                 // The cursor is shared: any input of the user's since the drag began, in any app,
                 // input watching stopping, or the target leaving the front ends it.
-                if ComputerUseTakeover.tookOverDrag(lastUserInput: ComputerUseUserInput.lastInput(), dragBegan: dragBegan) {
+                // Keys typed under Secure Input never reach the input tap; the HID key time sees them.
+                let secureKeyAt = IsSecureEventInputEnabled()
+                    ? ComputerUseUserInput.now() - ComputerUseUserInput.hidKeyIdleSeconds() : nil
+                if ComputerUseTakeover.tookOverDrag(
+                    lastUserInput: ComputerUseUserInput.lastInput(), dragBegan: dragBegan, secureInputKeyAt: secureKeyAt)
+                {
                     return .userActive
                 }
                 let front = ComputerUseSkyLight.isFrontProcess(pid: pid)
@@ -906,7 +1234,10 @@ extension LiveComputerUseSystem {
         }
         guard frontmost else {
             await restoreActivation(previousPID, from: app.pid)
-            throw ComputerUseSystemError.actionFailed("\(app.name) could not be brought to the front.")
+            switch ComputerUseTakeover.activationFailure(idleSeconds: secondsSinceUserInput()) {
+            case .userActive: throw ComputerUseSystemError.userActive
+            case .notFrontmost: throw ComputerUseSystemError.actionFailed("\(app.name) could not be brought to the front.")
+            }
         }
         do {
             try await body()
@@ -941,17 +1272,12 @@ extension LiveComputerUseSystem {
     /// text was read after ⌘V and `pasteRestoreFloor` passed (at most `pasteReadWait`).
     /// A read before ⌘V (a clipboard manager) doesn't count: restoring then would
     /// let the target paste the user's own clipboard.
-    private static func paste(_ text: String, pid: Int32) async throws {
+    /// Returns false, without touching the pasteboard, unless it is empty or holds one item of plain text.
+    private static func paste(_ text: String, pid: Int32) async throws -> Bool {
         let provider = PasteProvider(text: text)
-        let (saved, changeCount) = await MainActor.run { () -> ([[NSPasteboard.PasteboardType: Data]], Int) in
+        let snapshot = await MainActor.run { () -> (SavedPasteboard, Int)? in
             let pasteboard = NSPasteboard.general
-            let saved = (pasteboard.pasteboardItems ?? []).map { item in
-                var types: [NSPasteboard.PasteboardType: Data] = [:]
-                for type in item.types {
-                    types[type] = item.data(forType: type)
-                }
-                return types
-            }
+            guard let saved = savePasteboard(pasteboard) else { return nil }
             pasteboard.clearContents()
             let item = NSPasteboardItem()
             item.setDataProvider(provider, forTypes: [.string])
@@ -960,6 +1286,7 @@ extension LiveComputerUseSystem {
             pasteboard.writeObjects([item])
             return (saved, pasteboard.changeCount)
         }
+        guard let (saved, changeCount) = snapshot else { return false }
         provider.keyPosted.set()
         do {
             try ComputerUseInputPoster.postKey(CGKeyCode(kVK_ANSI_V), flags: .maskCommand, pid: pid)
@@ -975,11 +1302,41 @@ extension LiveComputerUseSystem {
         }
         await MainActor.run { restorePasteboard(saved, ifUnchangedSince: changeCount) }
         withExtendedLifetime(provider) {}
+        return true
+    }
+
+    /// Per item, its types with their data in the item's declaration order (richest first), so the
+    /// restore keeps the order readers see.
+    private typealias SavedPasteboard = [[(type: NSPasteboard.PasteboardType, data: Data)]]
+
+    /// The clipboard's plain text by type, or nil when `ComputerUsePastePolicy` leaves it alone.
+    /// Anything but one plain-text item is refused from the type list before any data is read,
+    /// and reading stops once the text passes the cap.
+    @MainActor
+    private static func savePasteboard(_ pasteboard: NSPasteboard) -> SavedPasteboard? {
+        let items = pasteboard.pasteboardItems ?? []
+        guard ComputerUsePastePolicy.isPlainText(items.map { $0.types.map(\.rawValue) }) else { return nil }
+        var saved: SavedPasteboard = []
+        var checked: [[ComputerUsePastePolicy.SavedType]] = []
+        var total = 0
+        reading: for item in items {
+            saved.append([])
+            checked.append([])
+            for type in item.types {
+                let data = item.data(forType: type)
+                checked[checked.count - 1].append(.init(type: type.rawValue, size: data?.count))
+                guard let data else { break reading }
+                saved[saved.count - 1].append((type, data))
+                total += data.count
+                if total > ComputerUsePastePolicy.sizeCap { break reading }
+            }
+        }
+        return ComputerUsePastePolicy.canPaste(checked) ? saved : nil
     }
 
     /// Skipped when the pasteboard changed after Alas wrote to it: the user copied something.
     @MainActor
-    private static func restorePasteboard(_ saved: [[NSPasteboard.PasteboardType: Data]], ifUnchangedSince changeCount: Int) {
+    private static func restorePasteboard(_ saved: SavedPasteboard, ifUnchangedSince changeCount: Int) {
         let pasteboard = NSPasteboard.general
         guard pasteboard.changeCount == changeCount else { return }
         pasteboard.clearContents()

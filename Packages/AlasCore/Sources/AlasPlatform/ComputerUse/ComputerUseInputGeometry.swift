@@ -17,6 +17,130 @@ public enum ComputerUseInputGeometry {
         return currentFrame.contains(point) ? point : nil
     }
 
+    /// The element under a point, and the process it belongs to.
+    public struct PointHit: Sendable, Equatable {
+        public var pid: Int32
+        /// Global points; nil when it couldn't be read.
+        public var frame: CGRect?
+
+        public init(pid: Int32, frame: CGRect?) {
+            self.pid = pid
+            self.frame = frame
+        }
+    }
+
+    public enum PointRoute: Sendable, Equatable {
+        /// Events posted to the app, as for any point.
+        case events
+        /// Content another process draws in the window (a System Settings pane is an extension's):
+        /// events posted to the app never reach it, so the input goes as AX on the element there.
+        case ax
+        /// What is at the point is another process's, outside the window: refused.
+        case covered
+    }
+
+    /// How an x/y click or scroll at `point` reaches it, from the target app's own hit test
+    /// (`appHit`), which sees its windows even under other apps'. There is no system-wide hit
+    /// test: it names whatever is on top, Alas's own windows included.
+    /// Another process's element counts as in the window when the point is in the window and the
+    /// element's frame holds the point (a row half scrolled out still does); one whose frame
+    /// can't be read counts as in it.
+    public static func pointRoute(point: CGPoint, targetPID: Int32, window: CGRect, appHit: PointHit?) -> PointRoute {
+        guard let appHit, appHit.pid != targetPID else { return .events }
+        guard window.contains(point) else { return .covered }
+        return appHit.frame.map { holds($0, point) } ?? true ? .ax : .covered
+    }
+
+    /// Whether an app's own hit test at `point` found an element there. It answers with its menu
+    /// bar, or an element elsewhere, for a point it has nothing at (a window AeroSpace parked off
+    /// screen): that counts as no hit, and the element is found from the window instead. One
+    /// whose frame can't be read counts as a hit.
+    public static func isRealHit(role: String?, frame: CGRect?, point: CGPoint) -> Bool {
+        guard role != "AXMenuBar" else { return false }
+        return frame.map { holds($0, point) } ?? true
+    }
+
+    /// Whether a CG window is the one backing a sheet: untitled, with the frame of an AXSheet in
+    /// one of its app's windows (`frameTolerance`). The sheet is reached through its parent window,
+    /// so the backing window isn't listed on its own: no AX window answers for it.
+    public static func isSheetBacking(title: String?, frame: CGRect, sheetFrames: [CGRect]) -> Bool {
+        guard title == nil else { return false }
+        return sheetFrames.contains { sheet in
+            abs(sheet.minX - frame.minX) <= frameTolerance && abs(sheet.minY - frame.minY) <= frameTolerance
+                && abs(sheet.width - frame.width) <= frameTolerance && abs(sheet.height - frame.height) <= frameTolerance
+        }
+    }
+
+    /// Whether `point` is on one of `displays` (CG global, top-left frames). A window AeroSpace
+    /// parks on a hidden workspace sits off every display but a 1-point sliver: input posted at
+    /// a point off screen reaches nothing. With no display listed (none could be read) every
+    /// point counts as on screen, so the listing and delivery agree and input goes as for any window.
+    public static func pointIsOnScreen(_ point: CGPoint, displays: [CGRect]) -> Bool {
+        displays.isEmpty || displays.contains { $0.contains(point) }
+    }
+
+    /// `displays` with each frame once: mirrored displays share their bounds.
+    public static func distinctDisplays(_ displays: [CGRect]) -> [CGRect] {
+        displays.reduce(into: []) { distinct, display in
+            if !distinct.contains(display) { distinct.append(display) }
+        }
+    }
+
+    public enum OffScreenInput: Sendable, Equatable {
+        /// Posted as events, as for any window.
+        case events
+        /// Delivered through AX: a menu item with the key's shortcut, or text set in the element.
+        case ax
+        /// Posted keys reach no window off screen: refused rather than reported delivered.
+        case refuse
+    }
+
+    /// How a key or typed text reaches a window, once no sheet or dialog button took it. An
+    /// off-screen window (another Space, an AeroSpace workspace) only takes it through AX, and only
+    /// while it is its app's focused window (`targetIsFocusedWindow`; always true for text typed by
+    /// ref), so a menu item or the focused element can't belong to another of the app's windows.
+    public static func offScreenInput(
+        windowOnScreen: Bool, targetIsFocusedWindow: Bool, deliveredThroughAX: Bool
+    ) -> OffScreenInput {
+        if windowOnScreen { return .events }
+        return targetIsFocusedWindow && deliveredThroughAX ? .ax : .refuse
+    }
+
+    /// Whether a window's frame is on screen: its centre is on a display, or at least
+    /// `onScreenShare` of its area is (a mirrored display counted once). The 1-point sliver
+    /// AeroSpace leaves of a parked window isn't. With no display listed, on screen.
+    public static func frameIsOnScreen(_ frame: CGRect, displays: [CGRect]) -> Bool {
+        if pointIsOnScreen(center(of: frame), displays: displays) { return true }
+        let area = frame.width * frame.height
+        guard area > 0 else { return false }
+        let shown = distinctDisplays(displays).reduce(CGFloat(0)) { sum, display in
+            let overlap = display.intersection(frame)
+            return overlap.isNull ? sum : sum + overlap.width * overlap.height
+        }
+        return shown / area >= onScreenShare
+    }
+
+    public static let onScreenShare: CGFloat = 0.25
+
+    /// Which of an element's children a walk down to `point` enters: a sheet, popover or dialog
+    /// holding the point, else the last child holding it. AX children come back to front, so the
+    /// full-size content group behind a sheet holds every point the sheet does. Nil when none holds
+    /// it; an unreadable frame holds nothing.
+    public static func frontmostChild(holding point: CGPoint, in children: [(role: String?, frame: CGRect?)]) -> Int? {
+        let holding = children.indices.filter { children[$0].frame.map { holds($0, point) } ?? false }
+        return holding.last { children[$0].role.map(frontLayerRoles.contains) ?? false } ?? holding.last
+    }
+
+    static let frontLayerRoles: Set<String> = ["AXSheet", "AXPopover", "AXDialog"]
+
+    /// Whether `frame` holds `point`, within `frameTolerance`.
+    public static func holds(_ frame: CGRect, _ point: CGPoint) -> Bool {
+        frame.insetBy(dx: -frameTolerance, dy: -frameTolerance).contains(point)
+    }
+
+    /// Points a frame may miss the point by and still count as holding it.
+    static let frameTolerance: CGFloat = 2
+
     /// Whether the window's frame no longer is the one its screenshot was taken with.
     public static func screenshotStale(screenshotFrame: CGRect, currentFrame: CGRect) -> Bool {
         windowMoved(from: screenshotFrame, to: currentFrame, tolerance: 0.5)
@@ -38,6 +162,16 @@ public enum ComputerUseInputGeometry {
             self.alpha = alpha
             self.frame = frame
         }
+    }
+
+    /// `kCGMainMenuWindowLevel`: the menu bar, and above it status items, the Dock and pop-up menus.
+    public static let menuBarLayer = 24
+
+    /// Whether an app's window at `layer` is one it is driven in: normal windows, floating panels
+    /// (3) and modal panels (8), such as an open panel. The menu bar and everything above it, and
+    /// the desktop's negative layers, are not.
+    public static func isAppWindowLayer(_ layer: Int) -> Bool {
+        (0 ..< menuBarLayer).contains(layer)
     }
 
     /// `kCGDraggingWindowLevel`. From it up sit windows no press or drop lands in: drag images,

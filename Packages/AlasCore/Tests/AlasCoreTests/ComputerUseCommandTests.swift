@@ -30,7 +30,7 @@ struct ComputerUseCommandTests {
             #"{"window_id":3,"ref":"e12","button":"right","count":2,"delivery":"direct","query":"ok","limit":3000,"include_screenshot":true}"#
         )
         #expect(rightClick.command == .computer(.init(
-            action: .click, windowID: 3, query: "ok", limit: 3000, ref: "e12", button: .right, count: 2,
+            action: .click, windowID: 3, query: "ok", limit: 3000, maxDepth: 32, ref: "e12", button: .right, count: 2,
             delivery: .direct, includeScreenshot: true
         )))
         let type = try decode("computer_type", #"{"window_id":3,"text":"hi","ref":"e1","mode":"replace"}"#)
@@ -49,12 +49,34 @@ struct ComputerUseCommandTests {
         #expect(openApp.command == .computer(.init(action: .openApp, bundleID: "com.apple.Notes")))
         let wait = try decode("computer_wait", #"{"window_id":3,"query":"Done"}"#)
         #expect(wait.command == .computer(.init(
-            action: .wait, windowID: 3, query: "Done", limit: 100, condition: .appear, timeoutMS: 5000
+            action: .wait, windowID: 3, query: "Done", limit: 100, maxDepth: 32, condition: .appear, timeoutMS: 5000
         )))
+    }
+
+    /// An inspect's or input action's read searches every level a read may walk when it has a
+    /// query, and 12 without one; an explicit max_depth always wins.
+    @Test(arguments: [
+        ("computer_click", #"{"window_id":1,"ref":"e1"}"#, 12),
+        ("computer_click", #"{"window_id":1,"ref":"e1","query":"Save"}"#, 32),
+        ("computer_type", #"{"window_id":1,"text":"x","query":"Save","max_depth":8}"#, 8),
+        ("computer_key", #"{"window_id":1,"keys":"tab","max_depth":20}"#, 20),
+        ("computer_inspect", #"{"window_id":1,"query":"Save"}"#, 32),
+        ("computer_inspect", #"{"window_id":1}"#, 12),
+        ("computer_wait", #"{"window_id":1,"query":"Done"}"#, 32),
+    ])
+    func defaultsTheReadDepth(command: String, params: String, depth: Int) throws {
+        guard case .computer(let computer) = try decode(command, params).command else {
+            Issue.record("not a computer command")
+            return
+        }
+        #expect(computer.maxDepth == depth)
     }
 
     @Test(arguments: [
         ("computer_screenshot", "{}"),
+        ("computer_click", #"{"window_id":1,"ref":"e1","max_depth":33}"#),
+        ("computer_scroll", #"{"window_id":1,"ref":"e1","dy":1,"max_depth":0}"#),
+        ("computer_wait", #"{"window_id":1,"query":"a","max_depth":12}"#),
         ("computer_inspect", #"{"window_id":1,"limit":0}"#),
         ("computer_inspect", #"{"window_id":1,"limit":3001}"#),
         ("computer_inspect", #"{"window_id":1,"max_depth":33}"#),

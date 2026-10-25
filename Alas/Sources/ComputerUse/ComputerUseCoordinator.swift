@@ -52,6 +52,13 @@ final class ComputerUseCoordinator {
     /// Takeover polling, the post-action settle and wait polling; tests drive time through it.
     private let sleep: @Sendable (Duration) async -> Void
     private let cursor: ComputerUseCursor
+    /// Asks the user to look at Alas (the Dock icon bounces) for a pending approval card, which
+    /// shows in its session and may be out of sight (`ComputerUseApprovalNudge`).
+    private let attention: @MainActor () -> Void
+    private let appIsActive: @MainActor () -> Bool
+    private let now: @MainActor () -> Date
+    /// When each card still up last asked for attention.
+    @ObservationIgnored private var lastNudges: [UUID: Date] = [:]
     /// The session that last presented the cursor; its stop, turn end or session end dismisses it.
     @ObservationIgnored private var cursorSession: String?
 
@@ -89,6 +96,11 @@ final class ComputerUseCoordinator {
     /// Windows of background apps an input made key, per session and window id: each is handed
     /// back once its action settled, or at the stop, turn end or session end that cut it short.
     @ObservationIgnored private var backgroundKeyed: [String: [UInt32: ComputerUseWindow]] = [:]
+    /// Chromium and Electron apps asked once to build their web content's tree (`ComputerUseWebContent`).
+    @ObservationIgnored private var wokenWebContent: Set<Int32> = []
+    /// Per session, the apps whose AXEnhancedUserInterface Alas turned on: turned off again at its
+    /// stop, turn end or session end.
+    @ObservationIgnored private var enhancedUserInterface: [String: [Int32: ComputerUseAppIdentity]] = [:]
 
     private struct SnapshotKey: Hashable {
         var sessionID: String
@@ -150,7 +162,10 @@ final class ComputerUseCoordinator {
         lockURL: URL = ComputerUseDriverLock.defaultURL,
         approvalWait: Duration = .seconds(50),
         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-        cursor: ComputerUseCursor = .none
+        cursor: ComputerUseCursor = .none,
+        attention: @escaping @MainActor () -> Void = {},
+        appIsActive: @escaping @MainActor () -> Bool = { false },
+        now: @escaping @MainActor () -> Date = { Date() }
     ) {
         self.system = system
         self.access = access
@@ -162,6 +177,31 @@ final class ComputerUseCoordinator {
         self.approvalWait = approvalWait
         self.sleep = sleep
         self.cursor = cursor
+        self.attention = attention
+        self.appIsActive = appIsActive
+        self.now = now
+    }
+
+    /// Reads `window` until its web content shows, for at most `ComputerUseWebContent.openDeadline`
+    /// by the clock, when it is a Chromium or Electron app's; true when it waited.
+    private func awaitWebContent(afterOpening window: ComputerUseWindow, context: CallContext) async throws -> Bool {
+        let clock = ContinuousClock()
+        let start = clock.now
+        var slept = Duration.zero
+        while true {
+            let tree = try await system.axTree(
+                window, ComputerUseCommand.maxDepthLimit, Self.queryNodeBudget, Self.webContentReadLimit)
+            // The first read asks the app for its tree, and tells whether it took the ask.
+            let webApp = system.usesManualAccessibility(window.app.pid)
+                || ComputerUseWebContent.chromeBundleIDs.contains(window.app.bundleID ?? "")
+            guard webApp, ComputerUseWebContent.keepsWaiting(
+                root: tree.root, cut: tree.cut, waited: max(slept, clock.now - start),
+                deadline: ComputerUseWebContent.openDeadline)
+            else { return slept > .zero }
+            await sleep(Self.webContentPoll)
+            slept += Self.webContentPoll
+            try checkStillActive(context)
+        }
     }
 
     /// The approval card's reason line: one approval covers seeing and operating the app.
@@ -176,12 +216,23 @@ final class ComputerUseCoordinator {
         static let cancelled = "computer_cancelled: The call was cancelled."
         static let limit = "computer_limit: The result exceeds the response limit. Inspect with a query or a smaller limit."
         static func blocked(_ app: ComputerUseAppIdentity) -> String { "computer_blocked: \(app.name) can't be used by agents." }
+        static func credentialPrompt(_ app: ComputerUseAppIdentity) -> String {
+            "computer_blocked: A system password prompt is showing in \(app.name); ask the user to answer it."
+        }
+        static func credentialPromptAfterInput(_ app: ComputerUseAppIdentity) -> String {
+            "The input was delivered, and now a system password prompt is showing in \(app.name), so its elements are "
+                + "withheld; ask the user to answer it."
+        }
         static func denied(_ app: ComputerUseAppIdentity) -> String { "computer_denied: The user denied access to \(app.name) for this turn." }
         static func approvalPending(_ app: ComputerUseAppIdentity) -> String {
             "computer_approval_pending: Waiting for the user to approve \(app.name). Try again after they answer."
         }
         static func busy(_ label: String) -> String {
             "computer_busy: Another session is using the computer (\(label)). Try again when it finishes."
+        }
+        static func windowUnreadable(_ id: UInt32) -> String {
+            "computer_window_not_found: Window \(id) isn't a window agents can use; it may be a sheet. Inspect its parent "
+                + "window, which holds the sheet's elements."
         }
         static func windowNotFound(_ id: UInt32) -> String {
             "computer_window_not_found: No on-screen window \(id). Call computer_apps again."
@@ -256,6 +307,13 @@ final class ComputerUseCoordinator {
         let epoch = context.epoch
         guard var window = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
+        let input = Self.isInput(command.action)
+        // A blocked app is refused as blocked, prompt or not, and costs no probe.
+        if access.access(for: window.app, session: sessionID, input: input) == .blocked {
+            return .error(Message.blocked(window.app))
+        }
+        // Before any card: the prompt's text and field show in the app's own windows.
+        if await system.credentialPrompt(window.app.pid) { return .error(Message.credentialPrompt(window.app)) }
         // A drop into another window of the same app; another app's window is refused before any card.
         var toWindow: ComputerUseWindow?
         if command.action == .drag, let toID = command.toWindowID, toID != windowID {
@@ -264,7 +322,6 @@ final class ComputerUseCoordinator {
             toWindow = end
         }
 
-        let input = Self.isInput(command.action)
         switch await approval(for: window.app, sessionID: sessionID, epoch: epoch, input: input) {
         case .refused(let response):
             return response
@@ -278,6 +335,7 @@ final class ComputerUseCoordinator {
             window = current
             if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
             if let refused = accessAfterAnswer(for: window.app, sessionID: sessionID, input: input) { return refused }
+            if await system.credentialPrompt(window.app.pid) { return .error(Message.credentialPrompt(window.app)) }
             if let end = toWindow {
                 guard let current = await system.window(end.windowID), current.app.pid == end.app.pid else {
                     return .error(Message.windowNotFound(end.windowID))
@@ -357,6 +415,12 @@ final class ComputerUseCoordinator {
         case .needsApproval:
             let id = access.pendingApproval(session: sessionID, app: app)
             syncPending()
+            // A new card, or one a later call waits on while still up.
+            let time = now()
+            if ComputerUseApprovalNudge.shouldNudge(lastNudgeAt: lastNudges[id], now: time, appIsActive: appIsActive()) {
+                lastNudges[id] = time
+                attention()
+            }
             switch await waitForAnswer(id) {
             case .timedOut: return .refused(.error(Message.approvalPending(app)))
             case .stopped: return .refused(.error(Message.stopped))
@@ -386,6 +450,7 @@ final class ComputerUseCoordinator {
             return .error(Message.openFailed(reason))
         }
         if let overtaken = overtaken(sessionID, since: context.epoch) { return overtaken }
+        if identity.pid > 0, await system.credentialPrompt(identity.pid) { return .error(Message.credentialPrompt(identity)) }
         switch await approval(for: identity, sessionID: sessionID, epoch: context.epoch, input: true) {
         case .refused(let response): return response
         case .allowed: break
@@ -397,10 +462,36 @@ final class ComputerUseCoordinator {
             if access.access(for: running, session: sessionID, input: true) == .blocked {
                 throw Refusal(Message.blocked(running))
             }
-            let windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? []
-            let payload: [String: Any] = ["version": 1, "app": Self.app(running), "windows": windows.map(Self.windowEntry)]
+            var windows = await listedWindows(of: running.pid, otherwise: [])
+            // A launched Chromium or Electron app shows its window before its web content: the
+            // agent's first read would come back empty. The wait is a courtesy: a window that
+            // can't be read doesn't fail an open that succeeded.
+            if let front = windows.first {
+                let waited: Bool
+                do { waited = try await awaitWebContent(afterOpening: front, context: context) } catch is ComputerUseSystemError {
+                    waited = false
+                }
+                if waited { windows = await listedWindows(of: running.pid, otherwise: windows) }
+            }
+            var payload: [String: Any] = ["version": 1, "app": Self.app(running)]
+            // It may have been showing one before it was unhidden.
+            if await system.credentialPrompt(running.pid) {
+                payload["credential_prompt"] = true
+                windows = []
+            }
+            let displays = system.displays()
+            payload["windows"] = windows.map { Self.windowEntry($0, displays: displays) }
             return (payload, running)
         }
+    }
+
+    /// The app's windows front to back, less the untitled ones backing a sheet (its parent's
+    /// tree holds the sheet, and no AX window answers for them); `otherwise` if it's gone.
+    private func listedWindows(of pid: Int32, otherwise: [ComputerUseWindow]) async -> [ComputerUseWindow] {
+        let windows = await system.runningApps().first { $0.app.pid == pid }?.windows ?? otherwise
+        guard windows.contains(where: { $0.title == nil }) else { return windows }
+        let sheets = await system.sheetFrames([pid])[pid] ?? []
+        return windows.filter { !ComputerUseInputGeometry.isSheetBacking(title: $0.title, frame: $0.frame, sheetFrames: sheets) }
     }
 
     func answer(_ id: UUID, _ choice: ComputerUseApprovalChoice) {
@@ -425,8 +516,10 @@ final class ComputerUseCoordinator {
         }
         syncPending()
         let release = releaseBackgroundFocus(of: sessionID)
+        let restore = restoreWebContent(of: sessionID)
         await interrupt(sessionID)
         await release.value
+        await restore.value
     }
 
     func resume(sessionID: String) {
@@ -448,6 +541,7 @@ final class ComputerUseCoordinator {
         }
         syncPending()
         releaseBackgroundFocus(of: sessionID)
+        restoreWebContent(of: sessionID)
     }
 
     /// Idempotent: the manager may report a runtime end more than once (detach, reconnect).
@@ -460,6 +554,24 @@ final class ComputerUseCoordinator {
         for id in ids { resumeWaiters(of: id, with: .stopped) }
         syncPending()
         releaseBackgroundFocus(of: sessionID)
+        restoreWebContent(of: sessionID)
+    }
+
+    /// Turns AXEnhancedUserInterface off again in the apps the session's reads turned it on in.
+    /// Their next first contact may wake them again.
+    @discardableResult
+    private func restoreWebContent(of sessionID: String) -> Task<Void, Never> {
+        let apps = enhancedUserInterface.removeValue(forKey: sessionID).map { Array($0.values) } ?? []
+        // Another session may still rely on it.
+        let stillUsed = Set(enhancedUserInterface.values.flatMap(\.keys))
+        let restored = apps.filter { !stillUsed.contains($0.pid) }
+        for app in restored { wokenWebContent.remove(app.pid) }
+        let system = system
+        return Task {
+            for app in restored {
+                await system.restoreWebContent(app, ComputerUseWebContent.enhancedUserInterface)
+            }
+        }
     }
 
     /// Hands back the key windows the session's inputs still hold. They are taken out at once,
@@ -651,6 +763,8 @@ final class ComputerUseCoordinator {
         let before = Set(pendingApprovals.map(\.sessionID))
         let next = access.pending.map { ComputerUsePendingApproval(id: $0.id, sessionID: $0.session, app: $0.app) }
         if next != pendingApprovals { pendingApprovals = next }
+        let ids = Set(next.map(\.id))
+        lastNudges = lastNudges.filter { ids.contains($0.key) }
         let after = Set(next.map(\.sessionID))
         for sessionID in after.subtracting(before) {
             guard let transcript = transcript(sessionID),
@@ -672,19 +786,50 @@ final class ComputerUseCoordinator {
     // MARK: - System calls and results
 
     private func listApps(sessionID: String) async -> AlasCLIResponse {
-        let apps = await system.runningApps()
-        let entries: [[String: Any]] = apps.map { entry in
-            let appAccess = access.access(for: entry.app, session: sessionID)
+        let regular = await system.runningApps()
+        let listed = Set(regular.map(\.app.pid))
+        // Menu-bar apps stay out, except blocked ones (a password manager): computer_open_app
+        // refuses them, and the listing shows why.
+        let blockedAccessory = await system.accessoryApps().filter {
+            !listed.contains($0.pid) && access.access(for: $0, session: sessionID) == .blocked
+        }
+        let apps = (regular + blockedAccessory.map { (app: $0, windows: [ComputerUseWindow]()) })
+            .sorted { $0.app.name.localizedStandardCompare($1.app.name) == .orderedAscending }
+        let accesses = apps.map { access.access(for: $0.app, session: sessionID) }
+        // One read for the whole listing; a blocked app's windows aren't listed either way.
+        let withWindows = zip(apps, accesses).filter { $1 != .blocked && !$0.windows.isEmpty }.map(\.0.app.pid)
+        let prompts = withWindows.isEmpty ? [:] : await system.credentialPrompts(withWindows)
+        // A sheet's backing window is untitled; its sheet shows in its parent's tree.
+        let untitled = zip(apps, accesses).filter { $1 != .blocked && $0.windows.contains { $0.title == nil } }.map(\.0.app.pid)
+        let sheets = untitled.isEmpty ? [:] : await system.sheetFrames(untitled)
+        let displays = system.displays()
+        var entries: [[String: Any]] = []
+        for (entry, appAccess) in zip(apps, accesses) {
             var object = Self.app(entry.app)
             object["approval"] = Self.approvalName(appAccess)
-            // A blocked app's window titles and frames stay private.
-            object["windows"] = appAccess == .blocked ? [] : entry.windows.map(Self.windowEntry)
-            return object
+            // A blocked app's window titles and frames stay private, and so do an app's while a
+            // system password prompt shows in it, or may: one the probe budget didn't reach is
+            // "unchecked", not claimed to show one.
+            var windows = appAccess == .blocked ? [] : entry.windows.filter {
+                !ComputerUseInputGeometry.isSheetBacking(title: $0.title, frame: $0.frame, sheetFrames: sheets[entry.app.pid] ?? [])
+            }
+            switch prompts[entry.app.pid] {
+            case .showing?:
+                object["credential_prompt"] = true
+                windows = []
+            case .unchecked?:
+                object["credential_prompt"] = ComputerUseCredentialPrompt.Listing.unchecked.rawValue
+                windows = []
+            case .clear?, nil:
+                break
+            }
+            object["windows"] = windows.map { Self.windowEntry($0, displays: displays) }
+            entries.append(object)
         }
         var payload: [String: Any] = ["version": 1, "apps": entries]
         // While macOS shows its Screen Recording prompt, other apps' windows aren't listed; Alas's
         // own may still be, so they don't count.
-        let others = apps.filter { !access.isAlas($0.app) }
+        let others = regular.filter { !access.isAlas($0.app) }
         if !others.isEmpty, others.allSatisfy({ $0.windows.isEmpty }) { payload["warning"] = Message.noVisibleWindows }
         return Self.serialize(payload)
     }
@@ -714,13 +859,15 @@ final class ComputerUseCoordinator {
             let read = try await readElements(
                 window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             payload["truncated"] = read.truncated
+            payload["truncated_by"] = read.truncatedBy
             payload["elements"] = read.elements.map(Self.element)
-            Self.report(depthLimited: read.depthLimited, warning: nil, into: &payload)
+            Self.report(depthLimited: read.depthLimited, warning: nil, for: command, into: &payload)
         case .wait:
             let read = try await waitFor(command, in: window, context: context)
             payload["truncated"] = read.truncated
+            payload["truncated_by"] = read.truncatedBy
             payload["elements"] = read.elements.map(Self.element)
-            Self.report(depthLimited: read.depthLimited, warning: nil, into: &payload)
+            Self.report(depthLimited: read.depthLimited, warning: nil, for: command, into: &payload)
         case .click, .type, .key, .scroll, .drag:
             try await act(command, in: window, toWindow: toWindow, context: context, payload: &payload)
         }
@@ -760,6 +907,8 @@ final class ComputerUseCoordinator {
         }
         try checkStillActive(context)
         try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
+        // The prompt may have come up during the takeover wait.
+        if await system.credentialPrompt(window.app.pid) { throw Refusal(Message.credentialPrompt(window.app)) }
         try checkStillActive(context)
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
         // Parked where the drop landed, over the window it landed in. Cosmetic once the drop is
@@ -771,12 +920,21 @@ final class ComputerUseCoordinator {
         let changeWarning = try await settle(
             after: delivered, of: command, in: &window, target: target, before: before,
             end: toWindow.map { ($0, beforeEnd) }, context: context, payload: &payload).warning
+        // The input may have brought the prompt up (an unlock button): it went through, but what
+        // the window shows now is withheld, and nothing is pressed again.
+        if await system.credentialPrompt(window.app.pid) {
+            withholdElements(of: window, toWindow: toWindow, context: context, payload: &payload)
+            return
+        }
         // A read that left elements out for depth may have missed the press's effect, and a second press could undo it.
         let unchanged = changeWarning != nil && payload["depth_limited"] == nil
-        if let target, let targetRef, Self.retriesWithPointer(
+        // A press the app didn't confirm most likely happened: pressing again could undo it.
+        var retried = false
+        if let target, let targetRef, delivered.warning == nil, Self.retriesWithPointer(
             command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
             manualAccessibility: system.usesManualAccessibility(window.app.pid)) {
             // The first press was delivered: a retry that fails reports why next to its result.
+            retried = true
             let first = (payload: payload, window: window)
             do {
                 try await retryWithPointer(
@@ -791,6 +949,12 @@ final class ComputerUseCoordinator {
                 payload["retry_error"] = Self.message(for: error)
             }
         }
+        // The retry's click may have brought the prompt up, and it may have come up since the
+        // check above: neither the retry's read nor a screenshot shows it.
+        if retried || command.includeScreenshot, await system.credentialPrompt(window.app.pid) {
+            withholdElements(of: window, toWindow: toWindow, context: context, payload: &payload)
+            return
+        }
         guard command.includeScreenshot else { return }
         do {
             let current = await system.window(window.windowID).flatMap { $0.app.pid == window.app.pid ? $0 : nil } ?? window
@@ -803,6 +967,23 @@ final class ComputerUseCoordinator {
         } catch {
             payload["screenshot_error"] = error.localizedDescription
         }
+    }
+
+    /// The post-action read of a window a system password prompt now shows in: its elements and
+    /// refs are dropped, and the warning says why.
+    private func withholdElements(
+        of window: ComputerUseWindow, toWindow: ComputerUseWindow?, context: CallContext, payload: inout [String: Any]
+    ) {
+        for shown in [window, toWindow].compactMap({ $0 }) {
+            updateSnapshot(of: shown, context: context) { $0.refs = [:] }
+        }
+        payload["elements"] = [[String: Any]]()
+        payload["truncated"] = true
+        payload["truncated_by"] = nil
+        payload["depth_limited"] = nil
+        if toWindow != nil { payload["to_window"] = ["window_id": Int((toWindow ?? window).windowID)] }
+        payload["credential_prompt"] = true
+        payload["warning"] = Message.credentialPromptAfterInput(window.app)
     }
 
     /// The pointer click after an AX press that changed nothing, with the same checks as the first
@@ -828,12 +1009,17 @@ final class ComputerUseCoordinator {
                                        end: nil, context: context, payload: &payload)
         // A read that failed reports its error instead; one that can't tell is no success either.
         guard let after = settled.after, !ComputerUseChangeCheck.retryChanged(before: before, after: after) else { return }
-        Self.report(depthLimited: payload["depth_limited"] != nil, warning: settled.warning ?? firstWarning, into: &payload)
+        Self.report(
+            depthLimited: payload["depth_limited"] != nil, warning: settled.warning ?? firstWarning, for: command,
+            into: &payload)
     }
 
     /// A drag that grabbed the window instead of an item moves it; the button is already up then.
+    /// A window that was off screen (another workspace) and came back with the activation moved
+    /// without being grabbed.
     private func refuseIfDragMovedWindow(_ window: ComputerUseWindow) async throws {
-        guard let current = await system.window(window.windowID),
+        guard ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: system.displays()),
+              let current = await system.window(window.windowID),
               ComputerUseInputGeometry.windowMoved(from: window.frame, to: current.frame)
         else { return }
         throw Refusal(Message.actionFailed("The drag moved the window instead of an item; nothing was dropped."))
@@ -892,16 +1078,27 @@ final class ComputerUseCoordinator {
     private struct Settled {
         var warning: String?
         var after: ComputerUseWindowFingerprint?
+        /// The start window's own elements changed (`ComputerUseChangeCheck.elementsChanged`).
+        var startChanged = true
+    }
+
+    private static func joined(_ warnings: String?...) -> String? {
+        let present = warnings.compactMap { $0 }
+        return present.isEmpty ? nil : present.joined(separator: " ")
     }
 
     /// `depth_limited` when the read left elements out for depth, with the hint appended to the warning.
-    private static func report(depthLimited: Bool, warning: String?, into payload: inout [String: Any]) {
+    private static func report(
+        depthLimited: Bool, warning: String?, for command: ComputerUseCommand, into payload: inout [String: Any]
+    ) {
         payload["depth_limited"] = depthLimited ? true : nil
         guard depthLimited else {
             payload["warning"] = warning
             return
         }
-        payload["warning"] = [warning, ComputerUseInspectTree.depthHint].compactMap { $0 }.joined(separator: " ")
+        let hint = ComputerUseInspectTree.depthHint(
+            maxDepth: command.maxDepth, queryGiven: command.query != nil, takesMaxDepth: command.action != .wait)
+        payload["warning"] = [warning, hint].compactMap { $0 }.joined(separator: " ")
     }
 
     /// Drags always go with the app brought to the front, so the direct takeover rule applies to
@@ -951,14 +1148,14 @@ final class ComputerUseCoordinator {
                 // The action may have moved or resized the window; the read matches it by its frame.
                 window = try await currentWindow(window)
                 read = try await readElements(
-                    window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             } catch ComputerUseSystemError.appNotResponding {
                 // An app still busy with what the input opened (a sheet sliding in) answers a moment later.
                 await sleep(Self.postReadRetryDelay)
                 try checkStillActive(context)
                 window = try await currentWindow(window)
                 read = try await readElements(
-                    window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             }
             var verdict = try await check(
                 read, of: window, after: delivered, of: command, target: target, before: before, end: end,
@@ -969,7 +1166,12 @@ final class ComputerUseCoordinator {
                 let clock = ContinuousClock()
                 let start = clock.now
                 var slept = Duration.zero
-                while verdict.warning != nil, slept < Self.dragConfirmDeadline, clock.now - start < Self.dragConfirmDeadline {
+                // A drop into another window may show there first: the start window, which the result
+                // lists, is read until it shows the drop too (a moved file leaves it).
+                // Once a read showed the drop, a later one that shows nothing new doesn't undo it.
+                var dropped = verdict.warning == nil
+                while !dropped || (end != nil && !verdict.startChanged), slept < Self.dragConfirmDeadline,
+                      clock.now - start < Self.dragConfirmDeadline {
                     await sleep(Self.dragConfirmPoll)
                     slept += Self.dragConfirmPoll
                     try checkStillActive(context)
@@ -977,7 +1179,7 @@ final class ComputerUseCoordinator {
                     do {
                         window = try await currentWindow(window)
                         polled = try await readElements(
-                            window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth,
+                            window, query: command.query, limit: command.limit, maxDepth: command.maxDepth,
                             context: context)
                     } catch is CancellationError {
                         throw CancellationError()
@@ -989,9 +1191,12 @@ final class ComputerUseCoordinator {
                     verdict = try await check(
                         read, of: window, after: delivered, of: command, target: target, before: before, end: end,
                         context: context, payload: &payload)
+                    if verdict.warning == nil { dropped = true } else if dropped { verdict.warning = nil }
                 }
             }
-            Self.report(depthLimited: read.depthLimited, warning: verdict.warning, into: &payload)
+            Self.report(
+                depthLimited: read.depthLimited, warning: Self.joined(delivered.warning, verdict.warning), for: command,
+                into: &payload)
             return verdict
         } catch is CancellationError {
             throw CancellationError()
@@ -1002,8 +1207,9 @@ final class ComputerUseCoordinator {
             // The action changed the window, so the refs from before it are gone either way.
             updateSnapshot(of: window, context: context) { $0.refs = [:] }
             // An earlier attempt's verdict doesn't describe this read.
-            Self.report(depthLimited: false, warning: nil, into: &payload)
+            Self.report(depthLimited: false, warning: delivered.warning, for: command, into: &payload)
             payload["truncated"] = true
+            payload["truncated_by"] = nil
             payload["elements"] = [[String: Any]]()
             payload["post_state_error"] = error.localizedDescription
             return Settled()
@@ -1019,11 +1225,15 @@ final class ComputerUseCoordinator {
         payload: inout [String: Any]
     ) async throws -> Settled {
         payload["truncated"] = read.truncated
+        payload["truncated_by"] = read.truncatedBy
         payload["elements"] = read.elements.map(Self.element)
         let after = await fingerprint(of: window, read: read, target: target)
         let kind = Self.changeKind(command.action)
         let asEvents = [.event, .background].contains(delivered.delivery)
         var warning = ComputerUseChangeCheck.warning(before: before, after: after, kind: kind, deliveredAsEvents: asEvents)
+        // The start window shows the drop only when its elements change: activation, the raise and
+        // the mouse-down move focus and selection first.
+        let startChanged = ComputerUseChangeCheck.elementsChanged(before: before, after: after)
         if let end {
             // The drop window read back too: the drop may have changed only that one.
             // An unreadable drop window says nothing either way, so the start window's verdict stands.
@@ -1034,7 +1244,7 @@ final class ComputerUseCoordinator {
                 if endWarning == nil { warning = nil }
             }
         }
-        return Settled(warning: warning, after: after)
+        return Settled(warning: warning, after: after, startChanged: startChanged)
     }
 
     /// Reads the window a drag dropped into, as the start window is read, into `to_window`.
@@ -1047,8 +1257,9 @@ final class ComputerUseCoordinator {
         do {
             let current = try await currentWindow(window)
             let read = try await readElements(
-                current, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context)
+                current, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
             entry["truncated"] = read.truncated
+            entry["truncated_by"] = read.truncatedBy
             entry["elements"] = read.elements.map(Self.element)
             if read.depthLimited { entry["depth_limited"] = true }
             return (current, read)
@@ -1080,7 +1291,6 @@ final class ComputerUseCoordinator {
     /// of them after the first read.
     static let dragConfirmPoll: Duration = .milliseconds(250)
     static let dragConfirmDeadline: Duration = .milliseconds(1500)
-    static let postStateDepth = 12
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)
 
@@ -1096,7 +1306,7 @@ final class ComputerUseCoordinator {
         context: CallContext
     ) async -> ComputerUseWindowFingerprint {
         let read = try? await readElements(
-            window, query: command.query, limit: command.limit, maxDepth: Self.postStateDepth, context: context,
+            window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
             recordRefs: false, nodeBudget: Self.fingerprintNodeBudget, timeLimit: Self.fingerprintTimeLimit)
         return await fingerprint(of: window, read: read, target: target)
     }
@@ -1238,7 +1448,7 @@ final class ComputerUseCoordinator {
 
     private func waitFor(
         _ command: ComputerUseCommand, in window: ComputerUseWindow, context: CallContext
-    ) async throws -> (truncated: Bool, elements: [ComputerUseInspectElement], depthLimited: Bool) {
+    ) async throws -> ElementRead {
         let query = command.query ?? ""
         let timeout = Duration.milliseconds(command.timeoutMS)
         let clock = ContinuousClock()
@@ -1252,9 +1462,11 @@ final class ComputerUseCoordinator {
             // A partial read can miss the element, so only a complete one confirms it is gone.
             let incomplete = read.truncated || read.depthLimited
             let met = command.condition == .appear ? !read.elements.isEmpty : read.elements.isEmpty && !incomplete
+            // A prompt that came up during the wait may be what appeared.
+            if met, await system.credentialPrompt(window.app.pid) { throw Refusal(Message.credentialPrompt(window.app)) }
             if met {
                 record(refs: read, of: window, context: context)
-                return (read.truncated, read.elements, read.depthLimited)
+                return read
             }
             // Slow reads count too, so a stalled app can't stretch the wait.
             if slept >= timeout || clock.now - start >= timeout {
@@ -1275,6 +1487,8 @@ final class ComputerUseCoordinator {
 
     private struct ElementRead {
         var truncated: Bool
+        /// What cut a truncated read short (`ComputerUseInspectTree.truncation`).
+        var truncatedBy: String?
         /// Elements were left out for being deeper than the read's max depth.
         var depthLimited = false
         var elements: [ComputerUseInspectElement]
@@ -1302,7 +1516,57 @@ final class ComputerUseCoordinator {
     ) async throws -> ElementRead {
         // Without a query the walk only needs one node past the limit to report truncation.
         let budget = min(query == nil ? limit + 1 : Self.queryNodeBudget, nodeBudget)
-        let tree = try await system.axTree(window, maxDepth, budget, min(timeLimit, ComputerUseAXReader.deadline))
+        let readLimit = min(timeLimit, ComputerUseAXReader.deadline)
+        var tree = try await system.axTree(window, maxDepth, budget, readLimit)
+        // A Chromium or Electron window may show only empty groups, or an empty web area, at first
+        // contact: an Electron app is asked for its tree, and the window is read again until its
+        // web content shows, up to a deadline.
+        // The deadline counts the reads' time too, and each read gets a short limit; a read cut
+        // short ends the wait, since what it left unread may be the content.
+        func awaitWebContent() async throws {
+            let clock = ContinuousClock()
+            let start = clock.now
+            var slept = Duration.zero
+            while ComputerUseWebContent.keepsWaiting(root: tree.root, cut: tree.cut, waited: max(slept, clock.now - start)) {
+                await sleep(Self.webContentPoll)
+                slept += Self.webContentPoll
+                try checkStillActive(context)
+                tree = try await system.axTree(window, maxDepth, budget, min(readLimit, Self.webContentReadLimit))
+            }
+            // A short read that stopped the wait is read again with the call's own limit.
+            if slept > .zero, tree.cut != nil {
+                tree = try await system.axTree(window, maxDepth, budget, readLimit)
+            }
+        }
+        if ComputerUseWebContent.needsWake(
+            acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid), bundleID: window.app.bundleID,
+            alreadyWoken: wokenWebContent.contains(window.app.pid), root: tree.root, cut: tree.cut) {
+            wokenWebContent.insert(window.app.pid)
+            if let attribute = ComputerUseWebContent.wakeAttribute(bundleID: window.app.bundleID) {
+                _ = await system.wakeWebContent(window.app, attribute)
+            }
+            try await awaitWebContent()
+            // A Chromium browser that still shows none gets what VoiceOver sets, for the turn.
+            if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: tree.root, cut: tree.cut) {
+                if await system.wakeWebContent(window.app, ComputerUseWebContent.enhancedUserInterface) {
+                    // A stop, turn end or session end during the set already restored what it found:
+                    // this one is turned off at once instead of waiting for a lifecycle hook that ran.
+                    guard (try? checkStillActive(context)) != nil else {
+                        wokenWebContent.remove(window.app.pid)
+                        await system.restoreWebContent(window.app, ComputerUseWebContent.enhancedUserInterface)
+                        try checkStillActive(context)
+                        throw CancellationError()
+                    }
+                    enhancedUserInterface[context.sessionID, default: [:]][window.app.pid] = window.app
+                }
+                try await awaitWebContent()
+            } else if ComputerUseWebContent.chromeBundleIDs.contains(window.app.bundleID ?? ""),
+                      !ComputerUseWebContent.hasWebContent(tree.root) {
+                // A read cut short can't tell whether the browser needs AXEnhancedUserInterface:
+                // the try isn't used up, so a complete read later still decides.
+                wokenWebContent.remove(window.app.pid)
+            }
+        }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
@@ -1321,7 +1585,9 @@ final class ComputerUseCoordinator {
         }
         collect(tree.root, above: [])
         let read = ElementRead(
-            truncated: flat.truncated || !tree.complete, depthLimited: flat.depthLimited, elements: flat.elements,
+            truncated: flat.truncated || tree.cut != nil,
+            truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: tree.cut),
+            depthLimited: flat.depthLimited, elements: flat.elements,
             handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
@@ -1399,11 +1665,19 @@ final class ComputerUseCoordinator {
         return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
 
+    /// Between reads of a web window waiting for its content (`ComputerUseWebContent.keepsWaiting`).
+    static let webContentPoll: Duration = .milliseconds(250)
+    /// The time limit of each read during that wait.
+    static let webContentReadLimit: Duration = .milliseconds(500)
+
     /// Nodes an inspect with a query may read before filtering.
     static let queryNodeBudget = 10_000
 
     private static func serialize(_ payload: [String: Any]) -> AlasCLIResponse {
-        guard let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
+        // JSONSerialization raises an Objective-C exception, which `try?` doesn't catch and which
+        // ends the app, on a value it can't write (a NaN): such a result is refused instead.
+        guard JSONSerialization.isValidJSONObject(payload),
+              let data = try? JSONSerialization.data(withJSONObject: payload, options: [.sortedKeys]) else {
             return .error(Message.captureFailed("The result could not be encoded."))
         }
         guard data.count <= resultLimit, let json = String(data: data, encoding: .utf8) else {
@@ -1415,6 +1689,7 @@ final class ComputerUseCoordinator {
     private static func message(for error: any Error) -> String {
         switch error {
         case ComputerUseSystemError.windowNotFound(let id): Message.windowNotFound(id)
+        case ComputerUseSystemError.windowUnreadable(let id): Message.windowUnreadable(id)
         case ComputerUseSystemError.captureFailed(let reason): Message.captureFailed(reason)
         case ComputerUseSystemError.appNotResponding(let app): Message.captureFailed("\(app) is not responding")
         case ComputerUseSystemError.actionFailed(let reason), ComputerUseSystemError.notActiveWindow(let reason):
@@ -1441,8 +1716,10 @@ final class ComputerUseCoordinator {
         return object
     }
 
-    private static func windowEntry(_ window: ComputerUseWindow) -> [String: Any] {
+    /// `off_screen`: none of the window is on a display (another Space, an AeroSpace workspace).
+    private static func windowEntry(_ window: ComputerUseWindow, displays: [CGRect]) -> [String: Any] {
         var info: [String: Any] = ["window_id": Int(window.windowID), "frame": frame(window.frame)]
+        if !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays) { info["off_screen"] = true }
         info["title"] = window.title
         return info
     }
@@ -1451,8 +1728,10 @@ final class ComputerUseCoordinator {
         ["mime_type": "image/png", "data": shot.png.base64EncodedString()]
     }
 
+    /// An app may report a NaN or infinite position or size; it reads as 0.
     private static func frame(_ rect: CGRect) -> [String: Double] {
-        ["x": rect.origin.x, "y": rect.origin.y, "width": rect.width, "height": rect.height]
+        func finite(_ value: CGFloat) -> Double { value.isFinite ? Double(value) : 0 }
+        return ["x": finite(rect.origin.x), "y": finite(rect.origin.y), "width": finite(rect.width), "height": finite(rect.height)]
     }
 
     private static func element(_ element: ComputerUseInspectElement) -> [String: Any] {

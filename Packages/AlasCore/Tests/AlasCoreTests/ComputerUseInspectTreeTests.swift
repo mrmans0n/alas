@@ -15,6 +15,33 @@ struct ComputerUseInspectTreeTests {
         ])
     }
 
+    /// A truncated result names what cut it: the element limit first, then an app that stopped
+    /// answering, then the time limit, which may have kept the read from its node budget.
+    @Test(arguments: [
+        (true, true, true, true, String?("limit")),
+        (false, true, true, true, "app_not_responding"),
+        (false, false, true, true, "time_limit"),
+        (false, false, false, true, "node_budget"),
+        (false, false, false, false, nil),
+    ])
+    func aTruncatedResultNamesWhatCutIt(
+        limitReached: Bool, appNotResponding: Bool, timedOut: Bool, budgetSpent: Bool, truncatedBy: String?
+    ) {
+        let cut = ComputerUseReadCut.reason(appNotResponding: appNotResponding, timedOut: timedOut, budgetSpent: budgetSpent)
+        #expect(ComputerUseInspectTree.truncation(limitReached: limitReached, cut: cut) == truncatedBy)
+    }
+
+    /// The depth warning only suggests what would read deeper.
+    @Test(arguments: [
+        (12, false, true, "Some elements are deeper than max_depth; pass a higher max_depth (up to 32), or a query, which reads 32 levels unless max_depth is given."),
+        (20, true, true, "Some elements are deeper than max_depth; pass a higher max_depth (up to 32)."),
+        (32, true, true, "Some elements are deeper than 32 levels, the deepest this read goes."),
+        (32, true, false, "Some elements are deeper than 32 levels, the deepest this read goes."),
+    ])
+    func theDepthWarningOnlySuggestsWhatReadsDeeper(maxDepth: Int, query: Bool, takesMaxDepth: Bool, hint: String) {
+        #expect(ComputerUseInspectTree.depthHint(maxDepth: maxDepth, queryGiven: query, takesMaxDepth: takesMaxDepth) == hint)
+    }
+
     @Test func flattenAssignsPreOrderRefsAndDepths() {
         let result = ComputerUseInspectTree.flatten(sample, query: nil, limit: 100, maxDepth: 10)
         #expect(result.elements.map(\.ref) == ["e1", "e2", "e3", "e4", "e5"])
@@ -125,5 +152,80 @@ struct ComputerUseInspectTreeTests {
         let out = ComputerUseScreenshotGeometry.output(pointSize: point, backingScale: backing)
         #expect(out.pixelSize == pixels)
         #expect(abs(out.scale - scale) < 0.0001)
+    }
+}
+
+struct ComputerUseWebContentTests {
+    private static let empty = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup")])
+    private static let built = ComputerUseAXNode(role: "AXWindow", children: [
+        ComputerUseAXNode(role: "AXGroup", children: [
+            ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXTextField")]),
+        ]),
+    ])
+    /// A read that stopped at its depth limit above the web content.
+    private static let deep = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", childrenUnread: true)])
+    /// A web area the app hasn't filled yet.
+    private static let hollow = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXWebArea")])
+
+    /// Only a Chromium or Electron window without a web area, read for the first time, is read again.
+    @Test(arguments: [
+        (true, String?("com.tinyspeck.slackmacgap"), false, empty, ComputerUseReadCut?.none, true),
+        (false, "com.google.Chrome", false, empty, nil, true),
+        (true, "com.tinyspeck.slackmacgap", false, built, nil, false),
+        (true, "com.tinyspeck.slackmacgap", false, hollow, nil, true),
+        // A first read cut short still wakes the app.
+        (true, "com.tinyspeck.slackmacgap", false, empty, .timeLimit, true),
+        (true, "com.tinyspeck.slackmacgap", false, deep, nil, true),
+        (true, "com.tinyspeck.slackmacgap", true, empty, nil, false),
+        (false, "com.apple.TextEdit", false, empty, nil, false),
+    ])
+    func aWebWindowWithoutItsWebAreaIsReadOnceMore(
+        manual: Bool, bundleID: String?, woken: Bool, root: ComputerUseAXNode, cut: ComputerUseReadCut?, wakes: Bool
+    ) {
+        #expect(ComputerUseWebContent.needsWake(
+            acceptsManualAccessibility: manual, bundleID: bundleID, alreadyWoken: woken, root: root, cut: cut) == wakes)
+    }
+
+    /// AXEnhancedUserInterface is only the second try, for a Chromium browser still showing no web area.
+    @Test(arguments: [
+        (String?("com.google.Chrome"), empty, true),
+        ("com.google.Chrome", built, false),
+        ("com.tinyspeck.slackmacgap", empty, false),
+    ])
+    func onlyAChromeWindowStillEmptyGetsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode, sets: Bool) {
+        #expect(ComputerUseWebContent.needsEnhancedUserInterface(bundleID: bundleID, root: root, cut: nil) == sets)
+    }
+
+    /// Only a setting Alas turned on is turned off again.
+    @Test(arguments: [(Bool?(false), true, true), (nil, true, true), (true, true, false), (false, false, false)])
+    func onlyWhatAlasTurnedOnIsRestored(before: Bool?, setSucceeded: Bool, restores: Bool) {
+        #expect(ComputerUseWebContent.restores(before: before, setSucceeded: setSucceeded) == restores)
+    }
+
+    /// After the wake, the window is read again until its web area has something in it, for at
+    /// most `contentDeadline`.
+    /// A read cut short, or one that left children unread past its depth, may hold the content:
+    /// it ends the wait, and never asks for AXEnhancedUserInterface.
+    @Test(arguments: [
+        (empty, ComputerUseReadCut?.none, Duration.zero, true),
+        (hollow, nil, .milliseconds(1250), true),
+        (hollow, nil, .milliseconds(1500), false),
+        (built, nil, .zero, false),
+        // computer_open_app waits longer.
+        (hollow, nil, .milliseconds(2500), true),
+        (empty, .nodeBudget, .zero, false),
+        (empty, .timeLimit, .zero, false),
+        (empty, .appNotResponding, .zero, false),
+        (deep, nil, .zero, false),
+    ])
+    func firstContactWaitsForWebContentUntilTheDeadline(
+        root: ComputerUseAXNode, cut: ComputerUseReadCut?, waited: Duration, waits: Bool
+    ) {
+        let deadline = waited > ComputerUseWebContent.contentDeadline
+            ? ComputerUseWebContent.openDeadline : ComputerUseWebContent.contentDeadline
+        #expect(ComputerUseWebContent.keepsWaiting(root: root, cut: cut, waited: waited, deadline: deadline) == waits)
+        // Past the deadline the wait ends either way; the window still has no content.
+        guard waited < ComputerUseWebContent.contentDeadline else { return }
+        #expect(ComputerUseWebContent.needsEnhancedUserInterface(bundleID: "com.google.Chrome", root: root, cut: cut) == waits)
     }
 }

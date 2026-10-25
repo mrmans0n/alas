@@ -1,5 +1,7 @@
+import AppKit
 import Darwin
 import Foundation
+import Observation
 
 /// Lets objects built before `AppState` finishes initializing call back into it.
 @MainActor
@@ -39,7 +41,10 @@ extension AppState {
             interrupt: { sessionID in
                 try? await link.state?.host.sessions.stop(sessionID, caller: .app)
             },
-            cursor: cursor
+            cursor: cursor,
+            // Only bounces the Dock icon while Alas isn't the active app.
+            attention: { _ = NSApp.requestUserAttention(.informationalRequest) },
+            appIsActive: { NSApp.isActive }
         )
         coordinator.transcript = { link.state?.session(for: $0)?.transcript }
         return coordinator
@@ -66,10 +71,35 @@ extension AppState {
                 guard let self, let session = self.session(for: id) else { return "An agent" }
                 return self.agent(id: session.agentId)?.displayName ?? session.agentId
             },
-            showSession: { [weak self] in self?.showComputerUseSession($0) }
+            showSession: { [weak self] in self?.showComputerUseSession($0) },
+            stopShortcutWarning: { [weak self] in self?.computerUseStopHotKey?.unavailableReason },
+            stopShortcut: { [weak self] in self?.binding(for: .stopComputerUse) }
         )
         computerUseStatusItem = item
         item.start()
+    }
+
+    /// Installs the system-wide Stop Computer Use shortcut, live only while an agent drives.
+    func startComputerUseStopHotKey() {
+        computerUseStopHotKey = ComputerUseStopHotKey { [weak self] in
+            // Same as the status item's Stop: the session driving right now.
+            guard let self, let sessionID = self.computerUse.driver?.sessionID else { return }
+            Task { await self.computerUse.stop(sessionID: sessionID) }
+        }
+        syncComputerUseStopHotKey()
+    }
+
+    /// Follows the driver and the user's binding; re-arms observation on every change.
+    private func syncComputerUseStopHotKey() {
+        let registration = withObservationTracking {
+            ComputerUseStopShortcut.registration(
+                binding: binding(for: .stopComputerUse),
+                driverActive: computerUse.driver != nil
+            )
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.syncComputerUseStopHotKey() }
+        }
+        computerUseStopHotKey?.update(registration)
     }
 
     func showComputerUseSession(_ sessionID: String) {

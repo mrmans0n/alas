@@ -77,6 +77,14 @@ public enum ComputerUseChangeCheck {
             || before.targetHash != after.targetHash
     }
 
+    /// Whether the window's elements themselves changed: both reads complete and their elements
+    /// differ. Focus and selection don't count: activating, raising and pressing the mouse move
+    /// them before a drop shows.
+    public static func elementsChanged(before: ComputerUseWindowFingerprint, after: ComputerUseWindowFingerprint?) -> Bool {
+        guard let before = before.elementsHash, let after = after?.elementsHash else { return false }
+        return before != after
+    }
+
     /// A hash of everything an element list shows; equal lists hash equal within a process.
     public static func elementsHash(_ elements: [ComputerUseInspectElement]) -> Int {
         var hasher = Hasher()

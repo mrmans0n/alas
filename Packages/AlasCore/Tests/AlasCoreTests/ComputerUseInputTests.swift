@@ -1,11 +1,22 @@
 import CoreGraphics
 import Foundation
 import Testing
+import AlasModel
 @testable import AlasPlatform
 
 struct ComputerUseInputTests {
     private typealias Chord = ComputerUseKeyChord
     private typealias Window = ComputerUseInputGeometry.ScreenWindow
+    private typealias SavedType = ComputerUsePastePolicy.SavedType
+
+    @Test(arguments: [
+        (ShortcutBinding?.some(.init(key: ".", modifiers: [.control, .option, .command])), true, true),
+        (.some(.init(key: ".", modifiers: [.control, .option, .command])), false, false),
+        (nil, true, false),
+    ] as [(ShortcutBinding?, Bool, Bool)])
+    func theStopShortcutIsRegisteredOnlyWhileAnAgentDrives(binding: ShortcutBinding?, driving: Bool, registered: Bool) {
+        #expect((ComputerUseStopShortcut.registration(binding: binding, driverActive: driving) != nil) == registered)
+    }
 
     @Test(arguments: [
         ("cmd+shift+s", Chord(modifiers: [.command, .shift], key: .character("s"))),
@@ -170,6 +181,219 @@ struct ComputerUseInputTests {
             start: start, in: 1, end: end, in: 2, windows: windows) == expected)
     }
 
+    @Test(arguments: [(0, true), (3, true), (8, true), (23, true), (24, false), (25, false), (500, false), (-2147483601, false)])
+    func appWindowsSitBelowTheMenuBar(layer: Int, listed: Bool) {
+        #expect(ComputerUseInputGeometry.isAppWindowLayer(layer) == listed)
+    }
+
+    /// An x/y input goes as events unless the app's own hit test finds another process's element
+    /// at the point inside the window (a System Settings pane); then as AX there. Another
+    /// process's element that doesn't hold the point is refused.
+    @Test(arguments: [
+        (Optional(Hit(pid: 10, frame: inner)), Route.events),
+        (Hit(pid: 20, frame: inner), .ax),
+        (Hit(pid: 20, frame: nil), .ax),
+        // A row half scrolled out of the pane still holds the point.
+        (Hit(pid: 20, frame: halfOut), .ax),
+        (Hit(pid: 20, frame: elsewhere), .covered),
+        (nil, .events),
+    ] as [(Hit?, Route)])
+    func pointInputsReachContentAnotherProcessDraws(appHit: Hit?, route: Route) {
+        #expect(ComputerUseInputGeometry.pointRoute(
+            point: CGPoint(x: 750, y: 100), targetPID: 10, window: CGRect(x: 0, y: 0, width: 800, height: 600),
+            appHit: appHit) == route)
+    }
+
+    /// The app's hit test at a point it has nothing at answers with its menu bar or an element
+    /// elsewhere: no hit. An unreadable frame still counts.
+    @Test(arguments: [
+        (String?("AXMenuBar"), Optional(CGRect(x: 0, y: 0, width: 1728, height: 33)), false),
+        ("AXButton", CGRect(x: 740, y: 90, width: 20, height: 20), true),
+        ("AXButton", CGRect(x: 0, y: 0, width: 20, height: 20), false),
+        ("AXButton", nil, true),
+    ])
+    func aHitOnlyCountsWhereItHoldsThePoint(role: String?, frame: CGRect?, real: Bool) {
+        #expect(ComputerUseInputGeometry.isRealHit(role: role, frame: frame, point: CGPoint(x: 750, y: 100)) == real)
+    }
+
+    /// A walk down to a point enters the front-most child holding it: a sheet over anything, else
+    /// the last of overlapping siblings (AX children come back to front).
+    @Test(arguments: [
+        ([("AXGroup", content), ("AXToolbar", toolbar), ("AXSheet", sheet), ("AXButton", closeButton)], Int?(2)),
+        ([("AXGroup", content), ("AXSheet", sheet), ("AXGroup", content)], 1),
+        ([("AXGroup", content), ("AXPopover", sheet)], 1),
+        ([("AXGroup", content), ("AXImage", sheet), ("AXButton", toolbar)], 1),
+        ([("AXGroup", content), ("AXSheet", nil)], 0),
+        ([("AXToolbar", toolbar), ("AXSheet", closeButton)], nil),
+    ] as [([(String?, CGRect?)], Int?)])
+    func aWalkDownEntersTheFrontmostChildHoldingThePoint(children: [(String?, CGRect?)], entered: Int?) {
+        #expect(ComputerUseInputGeometry.frontmostChild(
+            holding: CGPoint(x: 400, y: 300), in: children.map { (role: $0.0, frame: $0.1) }) == entered)
+    }
+
+    /// In content another process draws, a click goes to the deepest pressable element at the
+    /// point and a scroll to the deepest scroll area; neither to the window, and none means events.
+    @Test(arguments: [
+        (ComputerUseRemoteContent.Input.click, ["AXWindow", "AXScrollArea", "AXGroup", "AXButton", "AXStaticText"], Int?(3)),
+        (.click, ["AXWindow", "AXScrollArea", "AXGroup", "AXStaticText"], nil),
+        (.click, ["AXWindow"], nil),
+        (.scroll, ["AXWindow", "AXScrollArea", "AXGroup", "AXScrollArea", "AXButton"], 3),
+        (.scroll, ["AXWindow", "AXGroup"], nil),
+    ])
+    func remoteContentInputGoesToTheDeepestElementThatTakesIt(
+        input: ComputerUseRemoteContent.Input, roles: [String], target: Int?
+    ) {
+        #expect(ComputerUseRemoteContent.target(for: input, path: roles.map { .init(role: $0) }) == target)
+    }
+
+    @Test func remoteContentClickAlsoTakesAnyElementWithAPress() {
+        let path: [ComputerUseRemoteContent.Step] = [.init(role: "AXWindow"), .init(role: "AXGroup", actions: ["AXPress"]), .init(role: "AXImage")]
+        #expect(ComputerUseRemoteContent.target(for: .click, path: path) == 1)
+    }
+
+    /// A point is on screen only on a display: AeroSpace parks hidden windows in the corner, with
+    /// a 1-point sliver on the display.
+    @Test(arguments: [
+        (CGPoint(x: 500, y: 500), true),
+        (CGPoint(x: 0, y: 0), true),
+        (CGPoint(x: 1727.5, y: 1100), true),
+        (CGPoint(x: 2562, y: 1148), false),
+        (CGPoint(x: -800, y: 300), true),
+        (CGPoint(x: -800, y: 1200), false),
+    ])
+    func pointsAreOnScreenOnlyOnADisplay(point: CGPoint, onScreen: Bool) {
+        let displays = [CGRect(x: 0, y: 0, width: 1728, height: 1117), CGRect(x: -1920, y: -200, width: 1920, height: 1080)]
+        #expect(ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) == onScreen)
+    }
+
+    /// A window is on screen when its centre or a quarter of it is: AeroSpace's 1-point sliver of a
+    /// parked window isn't. A mirrored display counts once, and with no display read every window
+    /// is on screen.
+    @Test(arguments: [
+        (CGRect(x: 100, y: 100, width: 800, height: 600), [laptop], true),
+        (CGRect(x: 1727, y: 1065, width: 876, height: 625), [laptop], false),
+        (CGRect(x: 1400, y: 100, width: 800, height: 600), [laptop], true),
+        (CGRect(x: 1500, y: 900, width: 800, height: 600), [laptop], false),
+        (CGRect(x: 3000, y: 3000, width: 100, height: 100), [laptop], false),
+        (CGRect(x: 1400, y: 850, width: 800, height: 600), [laptop, laptop], false),
+        (CGRect(x: 3000, y: 3000, width: 100, height: 100), [], true),
+    ])
+    func windowsAreOnScreenWhenTheirCentreOrAQuarterIs(frame: CGRect, displays: [CGRect], onScreen: Bool) {
+        #expect(ComputerUseInputGeometry.frameIsOnScreen(frame, displays: displays) == onScreen)
+    }
+
+    private static let laptop = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+
+    /// A key or text for an off-screen window goes only through AX, and only while that window is
+    /// its app's focused one; never as events reported delivered.
+    @Test(arguments: [
+        (true, false, false, ComputerUseInputGeometry.OffScreenInput.events),
+        (false, true, true, .ax),
+        (false, true, false, .refuse),
+        // Another of the app's windows is focused: its menu item or field isn't this window's.
+        (false, false, true, .refuse),
+    ])
+    func inputForOffScreenWindowsGoesOnlyThroughAXWhileFocused(
+        onScreen: Bool, focused: Bool, delivered: Bool, route: ComputerUseInputGeometry.OffScreenInput
+    ) {
+        #expect(ComputerUseInputGeometry.offScreenInput(
+            windowOnScreen: onScreen, targetIsFocusedWindow: focused, deliveredThroughAX: delivered) == route)
+    }
+
+    /// Escape and Return press a sheet's own cancel or default button first, then a button that
+    /// names the role by identifier, title or description, in any language macOS ships.
+    @Test(arguments: [
+        (Button.Role.cancel, Optional(Button.Candidate(title: "Cancel")), [Button.Candidate](), Button.Resolution.attribute(label: "Cancel")),
+        (.cancel, nil, [Button.Candidate(title: "Delete"), Button.Candidate(title: "Cancel")], .candidate(index: 1, label: "Cancel")),
+        // System Settings: the label only in the description.
+        (.cancel, nil, [Button.Candidate(description: "Aceptar"), Button.Candidate(description: "Cancelar")], .candidate(index: 1, label: "Cancelar")),
+        (.default, nil, [Button.Candidate(description: "Cancelar"), Button.Candidate(description: "Aceptar")], .candidate(index: 1, label: "Aceptar")),
+        (.cancel, nil, [Button.Candidate(description: "Cerrar", identifier: "AX_CANCEL")], .candidate(index: 0, label: "Cerrar")),
+        (.cancel, Button.Candidate(title: "Cancel", isEnabled: false), [Button.Candidate(title: "Cancel", isEnabled: false)], .none),
+        (.cancel, nil, [Button.Candidate(description: "Lenta"), Button.Candidate(description: "Aceptar")], .none),
+        // A title wins over another button's description, and a search field's clear button never counts.
+        (.cancel, nil, [Button.Candidate(description: "Cancel"), Button.Candidate(title: "Cancelar")], .candidate(index: 1, label: "Cancelar")),
+        (.cancel, nil, [Button.Candidate(description: "cancel", subrole: "AXSearchFieldCancelButton")], .none),
+    ] as [(Button.Role, Button.Candidate?, [Button.Candidate], Button.Resolution)])
+    func sheetKeysPressTheButtonThatNamesTheirRole(
+        role: Button.Role, attribute: Button.Candidate?, candidates: [Button.Candidate], resolution: Button.Resolution
+    ) {
+        #expect(Button.resolve(role, attributeButton: attribute, candidates: candidates) == resolution)
+    }
+
+    typealias Button = ComputerUseDialogButton
+
+    /// The untitled CG window backing a sheet isn't listed; a titled one or another frame is.
+    @Test(arguments: [
+        (String?.none, CGRect(x: 1887, y: 1117, width: 556, height: 533), true),
+        (nil, CGRect(x: 1888, y: 1116, width: 557, height: 533), true),
+        ("Zoom", CGRect(x: 1887, y: 1117, width: 556, height: 533), false),
+        (nil, CGRect(x: 1727, y: 1065, width: 876, height: 625), false),
+    ])
+    func sheetBackingWindowsAreNotListed(title: String?, frame: CGRect, backing: Bool) {
+        let sheets = [CGRect(x: 1887, y: 1117, width: 556, height: 533)]
+        #expect(ComputerUseInputGeometry.isSheetBacking(title: title, frame: frame, sheetFrames: sheets) == backing)
+    }
+
+    /// A drop shows in a window only when its elements change, read completely both times; focus
+    /// or selection moving doesn't count.
+    @Test(arguments: [
+        (Optional(1), Optional(2), false, true),
+        (1, 1, true, false),
+        (nil, 2, false, false),
+        (1, nil, false, false),
+    ] as [(Int?, Int?, Bool, Bool)])
+    func aWindowShowsADropOnlyWhenItsElementsChange(before: Int?, after: Int?, focusMoved: Bool, changed: Bool) {
+        let focus = ComputerUseWindowFingerprint.Focus(role: "AXTextField")
+        let moved = ComputerUseWindowFingerprint.Focus(role: "AXRow")
+        #expect(ComputerUseChangeCheck.elementsChanged(
+            before: .init(focus: focus, windowTitle: "Docs", elementsHash: before, targetHash: nil),
+            after: .init(focus: focusMoved ? moved : focus, windowTitle: "Docs", elementsHash: after, targetHash: nil)) == changed)
+    }
+
+    typealias Hit = ComputerUseInputGeometry.PointHit
+    typealias Route = ComputerUseInputGeometry.PointRoute
+    private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)
+    private static let halfOut = CGRect(x: 700, y: 50, width: 400, height: 300)
+    private static let content = CGRect(x: 0, y: 0, width: 800, height: 600)
+    private static let toolbar = CGRect(x: 0, y: 0, width: 800, height: 50)
+    private static let sheet = CGRect(x: 200, y: 100, width: 400, height: 300)
+    private static let closeButton = CGRect(x: 10, y: 10, width: 14, height: 14)
+    private static let elsewhere = CGRect(x: 900, y: 400, width: 100, height: 100)
+
+    /// A drag checks the user first, then activates; then, with its points read again, waits for
+    /// parked or covered windows to come up, raises the drop window when the source covers it, and
+    /// refuses an overlap, a hidden or off-screen point, or a cover that stays.
+    @Test(arguments: [
+        (0.5, false, State.offScreen, State.clear, false, 0.0, Step.userActive),
+        (0.5, true, .clear, .clear, false, 0, .userActive),
+        (60, false, .offScreen, .offScreen, false, 0, .activate),
+        // A parked window comes back after activation.
+        (60, true, .offScreen, .hidden, false, 0.2, .raiseSource),
+        (60, true, .offScreen, .clear, false, 1, .offScreen),
+        (60, true, .hidden, .clear, false, 1, .hidden(.start)),
+        (60, true, .clear, .hidden, false, 1, .hidden(.end)),
+        // Another app's window over the start until the source comes up.
+        (60, true, .byOther, .clear, false, 0.3, .raiseSource),
+        (60, true, .byOther, .clear, false, 1, .covered(.start)),
+        // The same app's drop window over the start: the source is raised.
+        (60, true, .byOtherDragWindow, .clear, false, 0.3, .raiseSource),
+        (60, true, .clear, .byOtherDragWindow, false, 0.3, .raiseDrop),
+        (60, true, .byOtherDragWindow, .clear, true, 0.3, .overlap),
+        (60, true, .clear, .byOtherDragWindow, true, 0.3, .overlap),
+        (60, true, .clear, .byOther, false, 1, .covered(.end)),
+        (60, true, .clear, .clear, true, 0.3, .drag),
+    ] as [(TimeInterval, Bool, State, State, Bool, TimeInterval, Step)])
+    func dragsCheckTheUserThenActivateThenTheirPoints(
+        idle: TimeInterval, activated: Bool, start: State, drop: State, raisedDrop: Bool, waited: TimeInterval, step: Step
+    ) {
+        #expect(ComputerUseTakeover.dragStep(
+            idleSeconds: idle, activated: activated, start: start, drop: drop, raisedDrop: raisedDrop, waited: waited) == step)
+    }
+
+    typealias State = ComputerUseTakeover.DragPointState
+    typealias Step = ComputerUseTakeover.DragStep
+
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
         let windows = [
@@ -199,6 +423,12 @@ struct ComputerUseInputTests {
         #expect(points == [CGPoint(x: 2.5, y: 5), CGPoint(x: 5, y: 10), CGPoint(x: 7.5, y: 15), CGPoint(x: 10, y: 20)])
         #expect(ComputerUseInputGeometry.interpolate(from: .zero, to: CGPoint(x: 1, y: 1), steps: 0) == [CGPoint(x: 1, y: 1)])
         #expect(ComputerUseInputGeometry.center(of: CGRect(x: 10, y: 20, width: 100, height: 40)) == CGPoint(x: 60, y: 40))
+    }
+
+    /// A drag's activation that the user's typing elsewhere kept from the front reads as the user being active.
+    @Test(arguments: [(0.5, ComputerUseTakeover.ActivationFailure.userActive), (1.9, .userActive), (2.0, .notFrontmost), (60.0, .notFrontmost)])
+    func anActivationRefusedDuringUserInputIsTheUserBeingActive(idle: TimeInterval, failure: ComputerUseTakeover.ActivationFailure) {
+        #expect(ComputerUseTakeover.activationFailure(idleSeconds: idle) == failure)
     }
 
     @Test(arguments: [
@@ -244,10 +474,16 @@ struct ComputerUseInputTests {
     }
 
     /// A drag ends on any input of the user's since it began; without the input monitor there is
-    /// no telling theirs from the drag's own, so that ends it too.
-    @Test(arguments: [(nil, true), (99.0, false), (101.0, true)] as [(TimeInterval?, Bool)])
-    private func dragTakeover(lastUserInput: TimeInterval?, tookOver: Bool) {
-        #expect(ComputerUseTakeover.tookOverDrag(lastUserInput: lastUserInput, dragBegan: 100) == tookOver)
+    /// no telling theirs from the drag's own, so that ends it too. Keys typed under Secure Input
+    /// never reach the monitor, so the HID key time (`secureInputKeyAt`) counts as well.
+    @Test(arguments: [
+        (nil, nil, true), (99.0, nil, false), (101.0, nil, true),
+        (99.0, 100.9, true), (99.0, 96.0, false),
+    ] as [(TimeInterval?, TimeInterval?, Bool)])
+    private func dragTakeover(lastUserInput: TimeInterval?, secureInputKeyAt: TimeInterval?, tookOver: Bool) {
+        #expect(
+            ComputerUseTakeover.tookOverDrag(
+                lastUserInput: lastUserInput, dragBegan: 100, secureInputKeyAt: secureInputKeyAt) == tookOver)
     }
 
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.
@@ -329,6 +565,23 @@ struct ComputerUseInputTests {
     private func clickTargets(chain: [Link], expected: ComputerUseClickTarget.Choice) {
         #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
     }
+
+    @Test(arguments: [
+        // One plain-text item, in every flavour it may carry: pasted and put back.
+        ([[SavedType(type: "public.utf16-external-plain-text", size: 24), SavedType(type: "public.utf8-plain-text", size: 12)]], true),
+        ([], true),
+        // A two-file Finder copy: file URLs and their names as text.
+        ([[SavedType(type: "public.file-url", size: 40), SavedType(type: "public.utf8-plain-text", size: 14)],
+          [SavedType(type: "public.file-url", size: 42), SavedType(type: "public.utf8-plain-text", size: 28)]], false),
+        ([[SavedType(type: "public.png", size: 2_000_000), SavedType(type: "public.tiff", size: 30_000_000)]], false),
+        ([[SavedType(type: "public.utf8-plain-text", size: 3)], [SavedType(type: "public.utf8-plain-text", size: 3)]], false),
+        ([[SavedType(type: "public.rtf", size: 300), SavedType(type: "public.utf8-plain-text", size: 12)]], false),
+        ([[SavedType(type: "public.utf8-plain-text", size: 5), SavedType(type: "dyn.ah62d4rv4ge8", size: nil)]], false),
+        ([[SavedType(type: "public.utf8-plain-text", size: 20 * 1024 * 1024)]], false),
+    ] as [([[ComputerUsePastePolicy.SavedType]], Bool)])
+    func pastesOnlyOverAPlainTextClipboard(items: [[ComputerUsePastePolicy.SavedType]], pastes: Bool) {
+        #expect(ComputerUsePastePolicy.canPaste(items) == pastes)
+    }
 }
 
 @Suite struct ComputerUseCursorMotionTests {
@@ -402,5 +655,40 @@ struct ComputerUseInputTests {
     ] as [(Key, [Key: CGPoint], CGPoint)])
     func glidesStartWhereThePointerLastWasInThatWindow(window: Key, last: [Key: CGPoint], expected: CGPoint) {
         #expect(Motion.startPoint(in: window, size: CGSize(width: 200, height: 100), last: last) == expected)
+    }
+}
+
+@Suite struct ComputerUseTextCheckTests {
+    typealias Verdict = ComputerUseTextCheck.Verdict
+
+    @Test(arguments: [
+        // A Chromium field that reported success and kept its value, after ⌘A and at the caret.
+        ("kotlin", "compose", (location: 0, length: 7), "compose", Verdict.unchanged),
+        ("kotlin", "compose", (location: 7, length: 0), "compose", .unchanged),
+        ("kotlin", "compose", (location: 7, length: 0), "composekotlin", .landed),
+        ("kotlin", "compose", (location: 0, length: 7), "kotlin", .landed),
+        // A field that formats what it takes still changed: typing again would double it.
+        ("5551234", "", (location: 0, length: 0), "(555) 1234", .landed),
+        // Text put over the same selected text leaves the value as it was.
+        ("pose", "compose", (location: 3, length: 4), "compose", .landed),
+        ("kotlin", nil, (location: 0, length: 0), "kotlin", .unknown),
+        ("kotlin", "compose", nil, nil, .unknown),
+    ] as [(String, String?, (location: Int, length: Int)?, String?, Verdict)])
+    func anInsertLandedWhenTheValueChanged(
+        inserted: String, before: String?, selection: (location: Int, length: Int)?, after: String?, verdict: Verdict
+    ) {
+        #expect(ComputerUseTextCheck.insert(inserted, before: before, selection: selection, after: after) == verdict)
+    }
+
+    @Test(arguments: [
+        ("kotlin", "compose", "kotlin", Verdict.landed),
+        ("kotlin", "compose", "compose", .unchanged),
+        ("kotlin", "kotlin", "kotlin", .landed),
+        ("5551234", "", "(555) 1234", .landed),
+        ("kotlin", nil, "compose", .unknown),
+        ("kotlin", "compose", nil, .unknown),
+    ] as [(String, String?, String?, Verdict)])
+    func aReplaceLandedWhenTheValueIsTheTextOrChanged(text: String, before: String?, after: String?, verdict: Verdict) {
+        #expect(ComputerUseTextCheck.replace(with: text, before: before, after: after) == verdict)
     }
 }

@@ -687,7 +687,7 @@ fn computer_tool_definitions() -> Vec<Value> {
     vec![
         json!({
             "name": "computer_apps",
-            "description": "List running apps on the user's Mac and their on-screen windows (window_id, title, frame) with each app's approval state. Does not need approval.",
+            "description": "List running apps on the user's Mac and their on-screen windows (window_id, title, frame) with each app's approval state. A window with `off_screen: true` is on another Space or workspace: screenshots and refs still work, x/y clicks and scrolls go through accessibility or are refused, and a drag brings it back by activating the app. An app showing a system password prompt has `credential_prompt: true` and no windows: it can't be seen or driven until the user answers the prompt. `credential_prompt: \"unchecked\"` means a prompt may be showing and the app wasn't checked in time; its windows are left out too. computer_open_app on that app checks it alone and lists its windows when no prompt shows. Does not need approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": { "type": "object", "properties": {} }
         }),
@@ -705,7 +705,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_inspect",
-            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter and `limit`/`max_depth` to bound the result. Prefer this over screenshots. Refs hold for the current turn only: after a stop, a resume or a new turn, inspect again before using them. The first use of each app asks the user for approval.",
+            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter (a query searches 32 levels unless max_depth is given) and `limit`/`max_depth` to bound the result. Prefer this over screenshots. Refs hold for the current turn only: after a stop, a resume or a new turn, inspect again before using them. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -713,7 +713,7 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "A window_id from computer_apps." },
                     "query": { "type": "string", "maxLength": 256, "description": "Optional text filter on element role, title and value." },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 300." },
-                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Maximum tree depth, at most 32. Default: 12." }
+                    "max_depth": { "type": "integer", "minimum": 1, "maximum": 32, "description": "Maximum tree depth, at most 32. Default: 12, or 32 when query is given." }
                 },
                 "required": ["window_id"]
             }
@@ -736,7 +736,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_type",
-            "description": "Type text into a window. With `ref` (from the latest computer_inspect or computer_wait of this window) the element is focused first; `mode: \"replace\"` (needs ref) sets the element's whole value. Without ref the text goes to the focused element. Returns the window's new elements (refs are replaced). Works in the background; `delivery: \"direct\"` briefly activates the app and pastes the text in one step, so the check that the user isn't using the app runs once before it, not between keystrokes. The first use of each app asks the user for approval.",
+            "description": "Type text into a window. With `ref` (from the latest computer_inspect or computer_wait of this window) the element is focused first; `mode: \"replace\"` (needs ref) sets the element's whole value. Without ref the text goes to the focused element. Returns the window's new elements (refs are replaced). Works in the background; `delivery: \"direct\"` briefly activates the app and pastes the text in one step when the user's clipboard is empty or holds only plain text (the check that the user isn't using the app then runs once, before it); otherwise it types the text, checking for the user between chunks, and may stop part-way, reporting how much was typed (\"stopped after typing N of M characters\"). The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
@@ -842,6 +842,10 @@ fn computer_action_schema(extra: Value, required: &[&str]) -> Value {
     properties.insert(
         "limit".into(),
         json!({ "type": "integer", "minimum": 1, "maximum": 3000, "description": "Maximum elements returned. Default: 100." }),
+    );
+    properties.insert(
+        "max_depth".into(),
+        json!({ "type": "integer", "minimum": 1, "maximum": 32, "description": "Maximum depth of the returned elements' tree, at most 32. Default: 12, or 32 when query is given." }),
     );
     properties.insert(
         "include_screenshot".into(),
@@ -1352,11 +1356,14 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
         }
         "computer_inspect" => {
             reject_arguments(args, name, &["window_id", "query", "limit", "max_depth"])?;
+            let query = optional_limited_string(args, "query", 256)?;
+            // A query searches as deep as a read may go, as on input actions.
+            let default_depth = if query.is_some() { 32 } else { 12 };
             Ok(Command::Computer(alas_client::ComputerCommand::Inspect {
                 window_id: required_window_id(args)?,
-                query: optional_limited_string(args, "query", 256)?,
                 limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(300),
-                max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?.unwrap_or(12),
+                max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?.unwrap_or(default_depth),
+                query,
                 call_id: None,
             }))
         }
@@ -1374,6 +1381,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "delivery",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1400,6 +1408,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "delivery",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1428,6 +1437,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "delivery",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1459,6 +1469,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "delivery",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1492,6 +1503,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "to_y",
                     "query",
                     "limit",
+                    "max_depth",
                     "include_screenshot",
                 ],
             )?;
@@ -1954,6 +1966,7 @@ fn computer_post(args: &Value) -> Result<alas_client::ComputerPost, String> {
     Ok(alas_client::ComputerPost {
         limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(100),
         query: optional_limited_string_raw(args, "query", 256)?,
+        max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?,
         include_screenshot: optional_bool(args, "include_screenshot")?.unwrap_or(false),
     })
 }
@@ -4192,7 +4205,7 @@ mod tests {
                 window_id: 7,
                 query: Some("Save".into()),
                 limit: 300,
-                max_depth: 12,
+                max_depth: 32,
                 call_id: None
             })
         );
@@ -4230,7 +4243,7 @@ mod tests {
             ),
             (
                 "computer_type",
-                json!({ "window_id": 7, "text": " hi ", "ref": "e1", "mode": "replace", "include_screenshot": true, "limit": 5, "query": "ok" }),
+                json!({ "window_id": 7, "text": " hi ", "ref": "e1", "mode": "replace", "include_screenshot": true, "limit": 5, "query": "ok", "max_depth": 20 }),
                 ComputerCommand::Type {
                     window_id: 7,
                     text: " hi ".into(),
@@ -4240,6 +4253,7 @@ mod tests {
                     post: alas_client::ComputerPost {
                         limit: 5,
                         query: Some("ok".into()),
+                        max_depth: Some(20),
                         include_screenshot: true,
                     },
                     call_id: None,
@@ -4483,6 +4497,14 @@ mod tests {
             (
                 "computer_inspect",
                 json!({ "window_id": 7, "max_depth": 33 }),
+            ),
+            (
+                "computer_click",
+                json!({ "window_id": 7, "ref": "e1", "max_depth": 33 }),
+            ),
+            (
+                "computer_open_app",
+                json!({ "name": "Notes", "max_depth": 12 }),
             ),
         ] {
             assert!(

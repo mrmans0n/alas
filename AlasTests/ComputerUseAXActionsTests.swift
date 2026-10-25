@@ -34,6 +34,18 @@ struct ComputerUseAXActionsTests {
         }
         #expect(field.chunks.count == 1)
     }
+
+    /// A Chromium field that reports an insert over its selection as done and keeps its value:
+    /// the insert is `Unsupported`, so the text is typed as events instead of reported as typed.
+    @Test func anInsertThatLeftTheValueAsItWasIsUnsupported() async throws {
+        let target = ComputerUseAXActions.TextTarget(
+            canSetSelectedText: { true }, characterCount: { 7 }, selectedRange: { CFRange(location: 0, length: 7) },
+            setSelectedRange: { _ in true }, setSelectedText: { _ in .success }, value: { "compose" })
+        let app = ComputerUseAppIdentity(name: "Slack", bundleID: "com.tinyspeck.slackmacgap", pid: 101)
+        await #expect(throws: ComputerUseAXActions.Unsupported.self) {
+            try await ComputerUseAXActions.insert("kotlin", into: target, app: app, interrupt: { nil })
+        }
+    }
 }
 
 /// A text field whose app moves the caret once the first chunk went in.

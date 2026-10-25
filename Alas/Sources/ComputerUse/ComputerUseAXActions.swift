@@ -18,6 +18,17 @@ enum ComputerUseAXActions {
         var error: AXError
     }
 
+    /// An AX press the app didn't answer in time (kAXErrorCannotComplete). It most likely took
+    /// effect: a modal panel the press opened keeps the app from replying until it closes. The
+    /// input counts as delivered, with `unconfirmedWarning`, and is never pressed again.
+    struct Unconfirmed: Error {
+        var menuItem: String?
+        var button: String?
+    }
+
+    static let unconfirmedWarning =
+        "The app didn't answer in time; the press probably took effect (a modal panel may be open). Inspect to check."
+
     static func press(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
     ) async throws {
@@ -31,8 +42,8 @@ enum ComputerUseAXActions {
     }
 
     /// Replaces the element's value. Refuses secure text fields. Throws
-    /// `Unsupported` when the element doesn't take a value this way, so typing
-    /// can be tried instead.
+    /// `Unsupported` when the element doesn't take a value this way, or reads
+    /// back as it was, so typing can be tried instead.
     static func setValue(
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
         interrupt: @escaping Interrupt
@@ -40,8 +51,7 @@ enum ComputerUseAXActions {
         try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
-            let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
-            guard result == .success else { throw failure(result, app: app) }
+            try setValueChecked(text, element, app: app)
         }
     }
 
@@ -49,7 +59,7 @@ enum ComputerUseAXActions {
     /// Proceeds when the focused element can't be read.
     static func refuseSecureFocus(app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled) async throws {
         try await onQueue(isCancelled) {
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             var focused: CFTypeRef?
             guard AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused)
                 == .success,
@@ -135,8 +145,8 @@ enum ComputerUseAXActions {
     static func elementMatches(_ handles: ComputerUseAXHandles, _ handle: Int, role: String, title: String?) async -> Bool {
         await withCheckedContinuation { continuation in
             ComputerUseAXReader.queue.async {
-                guard let element = handles.element(handle) else { return continuation.resume(returning: false) }
-                AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+                // Gone, or this process's: never messaged (P5-R13).
+                guard let element = try? resolve(handles, handle) else { return continuation.resume(returning: false) }
                 var roleValue: CFTypeRef?
                 let result = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
                 // Gone, or the app isn't answering: either way the ref can't be trusted.
@@ -194,6 +204,102 @@ enum ComputerUseAXActions {
 
     static let hiddenRefusal = ComputerUseSystemError.actionFailed("The element is scrolled out of view or hidden.")
 
+    /// The element at a point as `ComputerUseInputGeometry.pointRoute` weighs it: retained in
+    /// `handles` (handle 0), so an AX action can go to it like to an inspected one.
+    struct PointElement: Sendable {
+        var hit: ComputerUseInputGeometry.PointHit
+        var handles: ComputerUseAXHandles
+    }
+
+    /// The element at `point`, global points, as the app hit-tests its own windows (also under
+    /// other apps' windows), or, when that finds nothing real there
+    /// (`ComputerUseInputGeometry.isRealHit`), the deepest element of `window` holding the point
+    /// (`path(at:in:application:)`); nil when there is none or it can't be read. Never the
+    /// system-wide hit test: what is on top may be Alas's own window (the drawn cursor), and an AX
+    /// message to this process runs its AppKit handlers right here, off the main thread.
+    static func element(
+        at point: CGPoint, in window: ComputerUseWindow, isCancelled: @escaping IsCancelled
+    ) async throws -> PointElement? {
+        try await onQueue(isCancelled) {
+            let application = try ComputerUseAXReader.target(window.app.pid)
+            guard let element = hit(at: point, in: window, application: application) else { return nil }
+            var pid: pid_t = 0
+            guard AXUIElementGetPid(element, &pid) == .success else { return nil }
+            return PointElement(hit: .init(pid: pid, frame: frame(of: element)), handles: ComputerUseAXHandles([element]))
+        }
+    }
+
+    /// In an app that hosts content remotely (`ComputerUseRemoteContent`), the element an x/y
+    /// input at `point` goes to as AX: the deepest pressable element (click) or scroll area
+    /// (scroll) on the way down `window` to the point; nil when there is none.
+    static func remoteContentElement(
+        at point: CGPoint, in window: ComputerUseWindow, for input: ComputerUseRemoteContent.Input,
+        isCancelled: @escaping IsCancelled
+    ) async throws -> ComputerUseAXHandles? {
+        try await onQueue(isCancelled) {
+            let application = try ComputerUseAXReader.target(window.app.pid)
+            let path = path(at: point, in: window, application: application)
+            let steps = path.map {
+                ComputerUseRemoteContent.Step(role: string(of: $0, kAXRoleAttribute) ?? "AXUnknown", actions: actionNames(of: $0))
+            }
+            return ComputerUseRemoteContent.target(for: input, path: steps).map { ComputerUseAXHandles([path[$0]]) }
+        }
+    }
+
+    /// The app's own hit at `point` when it is real, else the deepest element of `window` holding
+    /// the point; never an element of this process. Call on the AX queue.
+    private static func hit(at point: CGPoint, in window: ComputerUseWindow, application: AXUIElement) -> AXUIElement? {
+        var element: AXUIElement?
+        if AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &element) == .success,
+           let element, isMessageable(element) {
+            AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+            if ComputerUseInputGeometry.isRealHit(role: string(of: element, kAXRoleAttribute), frame: frame(of: element), point: point) {
+                return element
+            }
+        }
+        let path = path(at: point, in: window, application: application)
+        // The window alone is no element at the point.
+        return path.count > 1 ? path.last : nil
+    }
+
+    /// How deep, how wide and how long the walk down a window to the element at a point goes.
+    static let descentDepth = 16
+    static let descentNodes = 200
+    static let descentTime: Duration = .seconds(1)
+
+    /// `window`'s AX window, then at each level the front-most child whose frame holds `point`
+    /// (`ComputerUseInputGeometry.frontmostChild`), down to the deepest; empty when the window
+    /// can't be found. Never an element of this process. Call on the AX queue.
+    static func path(at point: CGPoint, in window: ComputerUseWindow, application: AXUIElement) -> [AXUIElement] {
+        guard let root = axWindow(elements(of: application, kAXWindowsAttribute), for: window) else { return [] }
+        let deadline = ContinuousClock.now + descentTime
+        var path = [root]
+        var visited = 0
+        for _ in 0 ..< descentDepth {
+            var candidates: [AXUIElement] = []
+            var layers: [(role: String?, frame: CGRect?)] = []
+            for child in children(of: path[path.count - 1]) {
+                visited += 1
+                // Out of budget mid-level: the front-most child may be among those not read yet.
+                guard visited <= descentNodes, ContinuousClock.now < deadline else { return path }
+                guard isMessageable(child), let childFrame = frame(of: child),
+                      ComputerUseInputGeometry.holds(childFrame, point)
+                else { continue }
+                candidates.append(child)
+                layers.append((string(of: child, kAXRoleAttribute), childFrame))
+            }
+            guard let index = ComputerUseInputGeometry.frontmostChild(holding: point, in: layers) else { break }
+            path.append(candidates[index])
+        }
+        return path
+    }
+
+    /// Whether the element is another process's, which AX messages may go to (P5-R13).
+    private static func isMessageable(_ element: AXUIElement) -> Bool {
+        var pid: pid_t = 0
+        return AXUIElementGetPid(element, &pid) == .success && ComputerUseAXReader.mayMessage(pid)
+    }
+
     /// `window` and the element's nearest scroll area: what pointer input at it must land inside.
     private static func clips(of element: AXUIElement, within window: CGRect) -> [CGRect] {
         var clips = [window]
@@ -238,7 +344,7 @@ enum ComputerUseAXActions {
     ) async throws {
         try await onQueue(isCancelled) {
             let app = window.app
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             let notActive = ComputerUseSystemError.notActiveWindow(
                 "Window \(window.windowID) isn't \(app.name)'s active window. Click in it first or pass delivery: \"direct\".")
             var windowsRef: CFTypeRef?
@@ -262,7 +368,7 @@ enum ComputerUseAXActions {
             let app = window.app
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(
-                ComputerUseAXReader.application(app.pid), kAXWindowsAttribute as CFString, &windowsRef)
+                try ComputerUseAXReader.target(app.pid), kAXWindowsAttribute as CFString, &windowsRef)
             if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
             guard result == .success, let axWindows = windowsRef as? [AXUIElement],
                   let target = axWindow(axWindows, for: window)
@@ -281,7 +387,7 @@ enum ComputerUseAXActions {
     ) async throws -> (isKey: Bool, focusedWindowID: UInt32?) {
         try await onQueue(isCancelled) {
             let app = window.app
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             let focused = elementAttribute(application, kAXFocusedWindowAttribute).map(owningWindow(of:))
             let focusedID = focused.flatMap(ComputerUseSkyLight.windowID(of:))
             var windowsRef: CFTypeRef?
@@ -346,11 +452,7 @@ enum ComputerUseAXActions {
             let element = try resolve(handles, handle)
             let result = AXUIElementPerformAction(element, action as CFString)
             guard result == .success else {
-                // The app timed out answering, which says nothing about whether the press happened.
-                if result == .cannotComplete {
-                    throw ComputerUseSystemError.actionFailed(
-                        "\(app.name) didn't confirm the action; it may have happened. Call computer_inspect before retrying.")
-                }
+                if result == .cannotComplete { throw Unconfirmed() }
                 throw failure(result, app: app)
             }
         }
@@ -399,6 +501,10 @@ enum ComputerUseAXActions {
 
     private static func resolve(_ handles: ComputerUseAXHandles, _ handle: Int) throws -> AXUIElement {
         guard let element = handles.element(handle) else { throw ComputerUseSystemError.staleElement }
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, ComputerUseAXReader.mayMessage(pid) else {
+            throw ComputerUseAXReader.hostRefusal
+        }
         AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
         return element
     }
@@ -407,23 +513,19 @@ enum ComputerUseAXActions {
 
     /// Read live rather than trusting the cached node: the element may have changed.
     private static func refuseSecure(_ element: AXUIElement, app: ComputerUseAppIdentity) throws {
+        var identity: [String?] = []
         for attribute in [kAXRoleAttribute, kAXSubroleAttribute] {
             var value: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
             if let error = mapped(result, app: app) { throw error }
-            if result == .success, let string = value as? String, string == kAXSecureTextFieldSubrole {
-                throw secureRefusal
-            }
+            identity.append(result == .success ? value as? String : nil)
         }
+        if ComputerUseSecureFocus.isSecure(.init(role: identity[0], subrole: identity[1])) { throw secureRefusal }
     }
 
     /// Some apps expose a password field as the role rather than the subrole.
     private static func isSecure(_ element: AXUIElement) -> Bool {
-        [kAXRoleAttribute, kAXSubroleAttribute].contains { attribute in
-            var value: CFTypeRef?
-            return AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success
-                && (value as? String) == kAXSecureTextFieldSubrole
-        }
+        ComputerUseSecureFocus.isSecure(.init(role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute)))
     }
 
     private static let noFrame = ComputerUseSystemError.actionFailed("The element has no position on screen.")
@@ -463,6 +565,12 @@ extension ComputerUseAXActions {
     static let scrollValuePerLine = 0.05
     /// Characters set per AX insert, so a stop or takeover can land between them.
     static let insertChunkCharacters = 200
+    /// Values longer than this aren't read back to check an insert; the length check stands in.
+    static let valueCheckCharacters = 200_000
+    /// After an AX insert or replace left the value as it was, how often and how long it is read
+    /// again before the text counts as not taken: an app may update its value a moment later.
+    static let landedPolls = 8
+    static let landedPoll: TimeInterval = 0.025
 
     /// Presses the enabled menu item whose shortcut is `chord` and returns its path in the app's
     /// menu titles ("Format > Font > Bold"); nil when no enabled menu item has it.
@@ -490,7 +598,7 @@ extension ComputerUseAXActions {
                     mask: number(of: item, kAXMenuItemCmdModifiersAttribute), chordVirtualKey: chordVirtualKey)
                     && bool(of: item, kAXEnabledAttribute) == true
             }
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             guard let menuBar = elementAttribute(application, kAXMenuBarAttribute) else { return nil }
             let deadline = ContinuousClock.now + ComputerUseAXReader.deadline
             var items = 0
@@ -523,19 +631,27 @@ extension ComputerUseAXActions {
             case nil: break
             }
             if let focused = focusedElement(of: app), isSecure(focused) { throw secureRefusal }
-            try press(target.item, app: app)
-            return target.path.joined(separator: " > ")
+            let path = target.path.joined(separator: " > ")
+            do {
+                try press(target.item, app: app)
+            } catch var unconfirmed as Unconfirmed {
+                unconfirmed.menuItem = path
+                throw unconfirmed
+            }
+            return path
         }
     }
 
-    /// Escape and Return on a window with a sheet or dialog up: presses its cancel or default
-    /// button and returns the button's title; nil when the chord isn't a bare Escape or Return or
-    /// there is no such enabled button. Looks at the window's sheets, the app's focused window when
-    /// it is one of them, and the window itself when it is a dialog. Nil as well while the focused
-    /// element takes the key itself: a text area (Return is a new line) or an editable control with
-    /// a popup, menu or completion list open (the key picks or dismisses it). When the dialog's
-    /// button attribute has no value, Escape presses a button titled as a cancel button, and Return
-    /// throws `defaultButtonUnreadable`: posted keys don't reach such a panel either.
+    /// Escape and Return on a window with a sheet or dialog up: presses its cancel or default button
+    /// (`ComputerUseDialogButton.resolve`: the sheet's own attribute, else a button by identifier,
+    /// title or description) and returns the label it shows. Nil when the chord isn't a bare Escape
+    /// or Return, there is no sheet or dialog, or the focused element takes the key itself: a text
+    /// area (Return is a new line) or an editable control with a popup, menu or completion list open.
+    /// Looks at the window's sheets and child sheets, the app's focused sheet, the window itself as
+    /// a dialog, sheets and dialogs the app lists as windows over it, and, for an app hosting its
+    /// content remotely or a window off screen, sheets anywhere in its tree. For such a sheet, and
+    /// for Return on a panel whose default button can't be read, a key that finds no button fails
+    /// rather than going out as events that can't reach it.
     static func pressDialogButton(
         _ chord: ComputerUseKeyChord, in window: ComputerUseWindow,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -549,7 +665,7 @@ extension ComputerUseAXActions {
         }
         let app = window.app
         return try await onQueue({ interrupt() == .cancelled }) {
-            let application = ComputerUseAXReader.application(app.pid)
+            let application = try ComputerUseAXReader.target(app.pid)
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &windowsRef)
             if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
@@ -567,67 +683,152 @@ extension ComputerUseAXActions {
             if let subrole = string(of: target, kAXSubroleAttribute), [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole) {
                 candidates.append(target)
             }
-            func pressChecked(_ button: AXUIElement) throws {
+            // A sheet some apps list as a window of their own, over the window it belongs to: one
+            // whose parent is the window, or, when its parent names no window, one over no other.
+            if candidates.isEmpty, let targetFrame = frame(of: target) {
+                func isDialog(_ element: AXUIElement) -> Bool {
+                    string(of: element, kAXRoleAttribute) == kAXSheetRole
+                        || [kAXDialogSubrole, kAXSystemDialogSubrole].contains(string(of: element, kAXSubroleAttribute) ?? "")
+                }
+                let others = axWindows.filter { !CFEqual($0, target) && isMessageable($0) }
+                for other in others where isDialog(other) {
+                    guard let otherFrame = frame(of: other), otherFrame.intersects(targetFrame) else { continue }
+                    let parent = elementAttribute(other, kAXParentAttribute)
+                    if parent.map({ !CFEqual($0, target) }) ?? true {
+                        // Another document's dialog.
+                        if let parent, string(of: parent, kAXRoleAttribute) == kAXWindowRole { continue }
+                        // Over another document too: whose it is can't be told.
+                        let overOther = others.contains { window in
+                            !CFEqual(window, other) && !isDialog(window) && frame(of: window)?.intersects(otherFrame) == true
+                        }
+                        if overOther { continue }
+                    }
+                    candidates.append(other)
+                }
+            }
+            // A sheet a pane hosted in another process opens (System Settings') sits deeper in the
+            // window's tree, among the pane's own elements.
+            // Only where a sheet can be that deep: an app hosting its content remotely, or a window
+            // off screen, whose sheet can't take posted keys either.
+            let displays = ComputerUseAXReader.displayFrames()
+            let searchesTree = ComputerUseRemoteContent.hostsContentRemotely(bundleID: app.bundleID)
+                || !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays)
+            let remote = candidates.isEmpty && searchesTree ? nestedSheets(in: target) : []
+            candidates += remote
+            func pressChecked(_ button: AXUIElement, title: String) throws {
                 switch interrupt() {
                 case .cancelled: throw CancellationError()
                 case .userActive: throw ComputerUseSystemError.userActive
                 case nil: break
                 }
-                try press(button, app: app)
+                do {
+                    try press(button, app: app)
+                } catch var unconfirmed as Unconfirmed {
+                    unconfirmed.button = title
+                    throw unconfirmed
+                }
             }
-            // Panels hosted out of process (TextEdit's Save sheet) list the attribute with no value.
-            var unreadable: [AXUIElement] = []
+            // Panels hosted out of process (TextEdit's Save sheet, System Settings' sheets) list the
+            // attribute with no value: their buttons are found by identifier or label instead.
+            let role: ComputerUseDialogButton.Role = key == .escape ? .cancel : .default
+            var unreadable = false
             for candidate in candidates {
-                guard let button = elementAttribute(candidate, attribute) else {
-                    unreadable.append(candidate)
+                let own = elementAttribute(candidate, attribute)
+                if own == nil { unreadable = true }
+                let ownInfo = own.map(buttonInfo)
+                let buttons = ownInfo?.isEnabled == true ? [] : dialogButtons(in: candidate)
+                switch ComputerUseDialogButton.resolve(role, attributeButton: ownInfo, candidates: buttons.map(buttonInfo)) {
+                case .attribute(let label):
+                    if let own { try pressChecked(own, title: label) }
+                    return label
+                case .candidate(let index, let label):
+                    try pressChecked(buttons[index], title: label)
+                    return label
+                case .none:
                     continue
                 }
-                guard bool(of: button, kAXEnabledAttribute) != false else { continue }
-                try pressChecked(button)
-                return string(of: button, kAXTitleAttribute) ?? (key == .escape ? "Cancel" : "Default")
             }
-            guard !unreadable.isEmpty else { return nil }
-            // Such a panel is hosted out of process: a posted Return doesn't reach it, from a field in
-            // it either, and which button is the default can't be guessed.
-            guard key == .escape else { throw ComputerUseSystemError.actionFailed(defaultButtonUnreadable) }
-            for candidate in unreadable {
-                guard let (button, title) = cancelButton(in: candidate) else { continue }
-                try pressChecked(button)
-                return title
+            guard !candidates.isEmpty else { return nil }
+            // A posted key can't reach a sheet another process draws, or one in a window off screen:
+            // saying it was delivered would be wrong. One of the app's own may still take the key.
+            if !remote.isEmpty || searchesTree {
+                throw ComputerUseSystemError.actionFailed(key == .escape ? noCancelButton : defaultButtonUnreadable)
             }
+            // Which button is an unreadable panel's default can't be guessed, and a posted Return
+            // doesn't reach it, from a field in it either.
+            if unreadable, key == .return { throw ComputerUseSystemError.actionFailed(defaultButtonUnreadable) }
             return nil
         }
+    }
+
+    static let noCancelButton =
+        "This sheet or dialog has no Cancel button to press for Escape, and a posted key doesn't reach it. Click one of its buttons by ref (computer_inspect lists them)."
+
+    /// How deep, how wide and how long the search of a window's tree for a nested sheet goes.
+    static let nestedSheetDepth = 16
+    static let nestedSheetNodes = 200
+    static let nestedSheetTime: Duration = .seconds(1)
+
+    /// The sheets anywhere in `window`'s tree below its own children, breadth first, within
+    /// `nestedSheetDepth` levels, `nestedSheetNodes` elements and `nestedSheetTime`. A sheet's own
+    /// contents aren't searched.
+    private static func nestedSheets(in window: AXUIElement) -> [AXUIElement] {
+        let deadline = ContinuousClock.now + nestedSheetTime
+        var level = children(of: window)
+        var visited = 0
+        var sheets: [AXUIElement] = []
+        for _ in 0 ..< nestedSheetDepth {
+            var next: [AXUIElement] = []
+            for element in level {
+                visited += 1
+                guard visited <= nestedSheetNodes, ContinuousClock.now < deadline else { return sheets }
+                guard isMessageable(element) else { continue }
+                if string(of: element, kAXRoleAttribute) == kAXSheetRole {
+                    sheets.append(element)
+                } else {
+                    next += children(of: element)
+                }
+            }
+            guard !next.isEmpty else { break }
+            level = next
+        }
+        return sheets
     }
 
     static let defaultButtonUnreadable =
         "This dialog's default button can't be pressed with a key here. Click the button by ref (computer_inspect lists the dialog's buttons)."
 
-    /// Levels below a sheet or dialog searched for its cancel button by title, and how many elements.
-    static let cancelButtonSearchDepth = 4
+    /// Levels below a sheet or dialog searched for its buttons, and how many elements.
+    static let cancelButtonSearchDepth = 8
     static let cancelButtonSearchNodes = 300
 
-    /// The first enabled button within `cancelButtonSearchDepth` levels of `dialog`, breadth first,
-    /// whose title is a cancel title (`ComputerUseDialogButton`), with that title.
-    private static func cancelButton(in dialog: AXUIElement) -> (AXUIElement, String)? {
+    /// The buttons within `cancelButtonSearchDepth` levels of `dialog`, breadth first, at most
+    /// `cancelButtonSearchNodes` elements read, never one of Alas's own.
+    private static func dialogButtons(in dialog: AXUIElement) -> [AXUIElement] {
         var level = [dialog]
         var visited = 0
+        var buttons: [AXUIElement] = []
         for _ in 0 ..< cancelButtonSearchDepth {
             var next: [AXUIElement] = []
             for element in level {
                 for child in children(of: element) {
                     visited += 1
-                    guard visited <= cancelButtonSearchNodes else { return nil }
-                    if string(of: child, kAXRoleAttribute) == kAXButtonRole,
-                       let title = string(of: child, kAXTitleAttribute), ComputerUseDialogButton.isCancelTitle(title),
-                       bool(of: child, kAXEnabledAttribute) != false {
-                        return (child, title)
-                    }
-                    next.append(child)
+                    guard visited <= cancelButtonSearchNodes else { return buttons }
+                    guard isMessageable(child) else { continue }
+                    if string(of: child, kAXRoleAttribute) == kAXButtonRole { buttons.append(child) } else { next.append(child) }
                 }
             }
+            guard !next.isEmpty else { break }
             level = next
         }
-        return nil
+        return buttons
+    }
+
+    /// A button as `ComputerUseDialogButton.resolve` weighs it.
+    private static func buttonInfo(_ button: AXUIElement) -> ComputerUseDialogButton.Candidate {
+        .init(title: string(of: button, kAXTitleAttribute), description: string(of: button, kAXDescriptionAttribute),
+              identifier: string(of: button, "AXIdentifier"), subrole: string(of: button, kAXSubroleAttribute),
+              isEnabled: bool(of: button, kAXEnabledAttribute) != false)
     }
 
     /// No header constant exists for it.
@@ -685,8 +886,7 @@ extension ComputerUseAXActions {
             guard let element = focusedElement(of: app) else { throw Unsupported(error: .noValue) }
             try refuseSecure(element, app: app)
             guard replace else { return Retained(element) }
-            let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
-            guard result == .success else { throw failure(result, app: app) }
+            try setValueChecked(text, element, app: app)
             return nil
         }
         if let element { try await insert(text, into: textTarget(element.element), app: app, interrupt: interrupt) }
@@ -733,8 +933,8 @@ extension ComputerUseAXActions {
     /// Nil when the element is gone. A secure field's value is never read.
     static func stateHash(_ handles: ComputerUseAXHandles, _ handle: Int) async -> Int? {
         try? await onQueue({ false }) {
-            guard let element = handles.element(handle) else { return nil }
-            AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+            // Gone, or this process's: never messaged (P5-R13).
+            guard let element = try? resolve(handles, handle) else { return nil }
             var role: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
             guard result != .invalidUIElement, result != .cannotComplete else { return nil }
@@ -778,15 +978,15 @@ extension ComputerUseAXActions {
             case .element(let handles, let handle):
                 start = try resolve(handles, handle)
             case .point(let point):
-                let application = ComputerUseAXReader.application(app.pid)
-                var hit: AXUIElement?
-                let result = AXUIElementCopyElementAtPosition(application, Float(point.x), Float(point.y), &hit)
-                if result == .cannotComplete || result == .apiDisabled, let error = mapped(result, app: app) { throw error }
-                guard result == .success, let hit else { throw Unsupported(error: result) }
-                AXUIElementSetMessagingTimeout(hit, ComputerUseAXReader.messagingTimeout)
-                // Another of the app's windows may be on top at that point.
-                guard let hitWindow = elementAttribute(hit, kAXWindowAttribute), axWindow([hitWindow], for: window) != nil
-                else { throw Unsupported(error: .illegalArgument) }
+                let application = try ComputerUseAXReader.target(app.pid)
+                guard let hit = hit(at: point, in: window, application: application) else {
+                    throw Unsupported(error: .illegalArgument)
+                }
+                // Another of the app's windows may be on top at that point; an element found from
+                // the window is in it.
+                if let hitWindow = elementAttribute(hit, kAXWindowAttribute), axWindow([hitWindow], for: window) == nil {
+                    throw Unsupported(error: .illegalArgument)
+                }
                 start = hit
             }
             guard let area = ancestor(of: start, levels: scrollAncestorLevels, where: {
@@ -978,18 +1178,17 @@ extension ComputerUseAXActions {
         let result = AXUIElementPerformAction(element, action as CFString)
         guard result == .success else {
             // A modal panel opened by the action keeps the app from answering in time.
-            if result == .cannotComplete {
-                throw ComputerUseSystemError.actionFailed(
-                    "\(app.name) didn't confirm the action; it may have happened. Call computer_inspect before retrying.")
-            }
+            if result == .cannotComplete { throw Unconfirmed() }
             throw failure(result, app: app)
         }
     }
 
     /// Sets the selected text `insertChunkCharacters` characters at a time, checking `interrupt`
     /// between chunks: a stop throws `CancellationError` and a takeover `userTookOver` with the
-    /// characters inserted so far. Checks the first chunk went in, since some apps report success
-    /// and insert nothing; that first failure is `Unsupported`, so events may type the text instead.
+    /// characters inserted so far. Checks the first chunk went in by reading the value back
+    /// (`ComputerUseTextCheck`), or its length where the value can't be read, since some apps
+    /// (Chromium) report success and insert nothing; that first failure is `Unsupported`, so events
+    /// may type the text instead.
     /// Any later failure is a tool error, so nothing already inserted gets typed twice.
     /// Each chunk goes at the caret the text so far left (from the selection read before the first
     /// one): the user or the app moving the caret in between stops the input rather than splitting
@@ -1017,13 +1216,14 @@ extension ComputerUseAXActions {
                     "\(app.name) moved the text cursor; stopped after typing \(typedSoFar) of \(total) characters.")
                 var startLocation = startLocation
                 var countBefore: Int?
-                var selectionWasEmpty: Bool?
+                var selection: CFRange?
+                var valueBefore: String?
                 if typedSoFar == 0 {
                     guard target.canSetSelectedText() else { throw Unsupported(error: .attributeUnsupported) }
                     countBefore = target.characterCount()
-                    let range = target.selectedRange()
-                    selectionWasEmpty = range.map { $0.length == 0 }
-                    startLocation = range?.location
+                    selection = target.selectedRange()
+                    startLocation = selection?.location
+                    if (countBefore ?? 0) <= valueCheckCharacters { valueBefore = target.value() }
                 } else {
                     switch interrupt() {
                     case .cancelled: throw CancellationError()
@@ -1045,16 +1245,40 @@ extension ComputerUseAXActions {
                     throw ComputerUseSystemError.actionFailed(
                         "\(app.name) stopped taking the text after \(typedSoFar) of \(total) characters (AXError \(result.rawValue)).")
                 }
-                // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
-                if typedSoFar == 0, !chunk.isEmpty, selectionWasEmpty == true, let countBefore,
-                   target.characterCount() == countBefore {
-                    throw Unsupported(error: .attributeUnsupported)
+                if typedSoFar == 0, !chunk.isEmpty {
+                    let landed = awaitLanded {
+                        ComputerUseTextCheck.insert(
+                            chunk, before: valueBefore, selection: selection.map { (location: $0.location, length: $0.length) },
+                            after: valueBefore == nil ? nil : target.value())
+                    }
+                    switch landed {
+                    case .landed: break
+                    case .unchanged: throw Unsupported(error: .attributeUnsupported)
+                    case .unknown:
+                        // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
+                        if selection?.length == 0, let countBefore, target.characterCount() == countBefore {
+                            throw Unsupported(error: .attributeUnsupported)
+                        }
+                    }
                 }
                 return startLocation
             }
             typed += chunk.count
             typedUTF16 += chunk.utf16.count
         }
+    }
+
+    /// A text check's verdict, read again while it says unchanged, up to `landedPolls` times.
+    /// Blocks the AX queue it runs on, only while nothing seems to have gone in.
+    private static func awaitLanded(_ check: () -> ComputerUseTextCheck.Verdict) -> ComputerUseTextCheck.Verdict {
+        var verdict = check()
+        var polls = 0
+        while verdict == .unchanged, polls < landedPolls {
+            Thread.sleep(forTimeInterval: landedPoll)
+            polls += 1
+            verdict = check()
+        }
+        return verdict
     }
 
     /// The text operations chunked insertion uses on one element. Only called on the AX queue.
@@ -1064,6 +1288,8 @@ extension ComputerUseAXActions {
         var selectedRange: () -> CFRange?
         var setSelectedRange: (CFRange) -> Bool
         var setSelectedText: (String) -> AXError
+        /// The whole value, empty included; nil when it can't be read.
+        var value: () -> String? = { nil }
     }
 
     private static func textTarget(_ element: AXUIElement) -> TextTarget {
@@ -1076,11 +1302,36 @@ extension ComputerUseAXActions {
                 guard let value = AXValueCreate(.cfRange, &range) else { return false }
                 return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
             },
-            setSelectedText: { AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, $0 as CFString) })
+            setSelectedText: { AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, $0 as CFString) },
+            value: { textValue(of: element) })
+    }
+
+    /// The element's value as text, empty included; nil when it isn't a string or can't be read.
+    private static func textValue(of element: AXUIElement) -> String? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXValueAttribute as CFString, &value) == .success,
+              let value, CFGetTypeID(value) == CFStringGetTypeID()
+        else { return nil }
+        return (value as! String)
+    }
+
+    /// Sets the element's whole value and reads it back; `Unsupported` when it stayed as it was,
+    /// so events can type the text instead. Call on the AX queue.
+    private static func setValueChecked(_ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity) throws {
+        let before = isLong(element) ? nil : textValue(of: element)
+        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
+        guard result == .success else { throw failure(result, app: app) }
+        guard let before else { return }
+        let landed = awaitLanded { ComputerUseTextCheck.replace(with: text, before: before, after: textValue(of: element)) }
+        if landed == .unchanged { throw Unsupported(error: .attributeUnsupported) }
+    }
+
+    private static func isLong(_ element: AXUIElement) -> Bool {
+        (number(of: element, kAXNumberOfCharactersAttribute) ?? 0) > valueCheckCharacters
     }
 
     private static func focusedElement(of app: ComputerUseAppIdentity) -> AXUIElement? {
-        let application = ComputerUseAXReader.application(app.pid)
+        guard let application = try? ComputerUseAXReader.target(app.pid) else { return nil }
         return elementAttribute(application, kAXFocusedUIElementAttribute)
     }
 

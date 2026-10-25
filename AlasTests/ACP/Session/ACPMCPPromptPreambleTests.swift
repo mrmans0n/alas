@@ -120,12 +120,32 @@ struct ACPMCPPromptPreambleTests {
         let full = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .full, isDelegated: false, userServerNames: [], mode: mode))
         #expect(full.contains("alas computer"))
+        switch mode {
+        case .mcp: for phrase in Self.computerTurnGuidance { #expect(full.contains(phrase)) }
+        case .cli: for phrase in Self.computerCLIGuidance { #expect(full.contains(phrase)) }
+        }
         let checkout = try #require(ACPMCPPromptPreamble.text(
             builtInTools: .full, isDelegated: false, userServerNames: [], mode: mode, computerUseAvailable: false))
         #expect(!checkout.contains("computer_"))
         #expect(!checkout.contains("alas computer"))
+        for phrase in Self.computerTurnGuidance + Self.computerCLIGuidance { #expect(!checkout.contains(phrase)) }
         #expect(checkout.contains("preview"))
     }
+
+    private static let computerCLIGuidance = [
+        "Prefer element refs from `alas computer inspect`",
+        "Refs and screenshot x/y last for the current turn; after a stop, resume or new turn, run `alas computer inspect` or `alas computer screenshot` first.",
+        "never repeat a drag on a warning.",
+        "means the user is working there: wait and retry later instead of switching apps.",
+        "Secure fields can't be typed into; ask the user instead.",
+    ]
+
+    private static let computerTurnGuidance = [
+        "Refs and screenshot x/y last for the current turn; after a stop, resume or new turn, call computer_inspect or computer_screenshot first.",
+        "A result with a warning wasn't confirmed: inspect before retrying, and never repeat a drag on a warning.",
+        "computer_user_active means the user is working there: wait and retry later instead of switching apps.",
+        "Secure fields can't be typed into; ask the user instead.",
+    ]
 
     @Test("mcp mode notes the alas CLI fallback for blocked servers")
     func mcpMentionsCLIFallback() {

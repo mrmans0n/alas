@@ -22,6 +22,19 @@ public enum ComputerUseAppAccess: Equatable, Sendable {
     case blocked, allowed(ComputerUseGrantScope), denied, needsApproval
 }
 
+/// When a pending approval card asks for the user's attention (the Dock icon bounces).
+public enum ComputerUseApprovalNudge {
+    public static let interval: TimeInterval = 10
+
+    /// For a new card and for a later call waiting on one still up: only while Alas isn't the
+    /// active app, and at most once per `interval` per card (`lastNudgeAt`, nil before the first).
+    public static func shouldNudge(lastNudgeAt: Date?, now: Date, appIsActive: Bool) -> Bool {
+        guard !appIsActive else { return false }
+        guard let lastNudgeAt else { return true }
+        return now.timeIntervalSince(lastNudgeAt) >= interval
+    }
+}
+
 public enum ComputerUseBlocklist {
     public static let bundleIDs: Set<String> = [
         "com.apple.keychainaccess",
@@ -32,12 +45,29 @@ public enum ComputerUseBlocklist {
         "com.lastpass.LastPass",
         "com.dashlane.dashlanephonefinal",
         "org.keepassxc.keepassxc",
+        // System credential prompts: admin and keychain-access dialogs, and the Touch ID /
+        // "Use Password…" sheets. Exact ids still to be confirmed live (phase 5, Task 6).
+        "com.apple.SecurityAgent",
+        "com.apple.coreautha",
+        "com.apple.LocalAuthentication.UIAgent",
+    ]
+
+    /// Lowercased; matched case-insensitively against the bundle id.
+    public static let bundleIDPrefixes: [String] = [
+        "com.1password.", "com.agilebits.", "com.bitwarden.", "com.lastpass.", "com.dashlane.",
+        "org.keepassxc.", "me.proton.pass", "com.nordsec.nordpass", "com.keepersecurity.",
+        "in.sinew.enpass", "com.siber.roboform",
     ]
 
     public static func isBlocked(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {
         if app.pid == hostPID { return true }
-        if let bundleID = app.bundleID { return bundleIDs.contains(bundleID) }
-        return false
+        if let bundleID = app.bundleID {
+            if bundleIDs.contains(bundleID) { return true }
+            let lowered = bundleID.lowercased()
+            if bundleIDPrefixes.contains(where: { lowered.hasPrefix($0) }) { return true }
+        }
+        let name = app.name.lowercased()
+        return name.contains("password") || name.contains("keychain")
     }
 
     /// Other Alas builds can be seen but not driven: their approval and permission prompts

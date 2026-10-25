@@ -37,6 +37,32 @@ enum ComputerUseAXReader {
     static let treeBuildProbeDepth = 6
     static let treeBuildProbeNodes = 300
 
+    /// Whether an AX message may go to `pid`: never to this process. Its AppKit accessibility
+    /// handlers would run on the calling thread, the AX queue, and assert off the main thread.
+    /// (`AXUIElementGetPid` itself is answered locally.)
+    static func mayMessage(_ pid: pid_t) -> Bool {
+        pid > 0 && pid != getpid()
+    }
+
+    /// The frames of the online displays, CG global, top-left, each once. Online rather than
+    /// active: a display asleep isn't active, and with the only one asleep (an agent working
+    /// while the user is away) the list would be empty. A mirror counts as the display it mirrors.
+    static func displayFrames() -> [CGRect] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
+        let shown = ids.prefix(Int(count)).filter { CGDisplayMirrorsDisplay($0) == kCGNullDirectDisplay }
+        return ComputerUseInputGeometry.distinctDisplays(shown.map(CGDisplayBounds))
+    }
+
+    static let hostRefusal = ComputerUseSystemError.actionFailed("Agents can't use Alas itself.")
+
+    /// `application(_:)`, refused for this process.
+    static func target(_ pid: pid_t) throws -> AXUIElement {
+        guard mayMessage(pid) else { throw hostRefusal }
+        return application(pid)
+    }
+
     /// The app element, with the messaging timeout set. The first time a pid is seen, asks it to
     /// build its Accessibility tree (`AXManualAccessibility`): Chromium and Electron apps expose
     /// little more than nested groups until asked. Other apps refuse the attribute; that's fine.
@@ -60,6 +86,7 @@ enum ComputerUseAXReader {
     /// happen off the queue, so actions and other reads go on meanwhile.
     private static func awaitTreeBuild(_ window: ComputerUseWindow, cancel: CancelFlag) async {
         let pid = window.app.pid
+        guard mayMessage(pid) else { return }
         let asked = manualAccessibilityPIDs.withLock { $0.contains(pid) }
         if asked, !buildingTreePIDs.withLock({ $0.contains(pid) }) { return }
         let deadline = ContinuousClock.now + treeBuildWait
@@ -88,19 +115,52 @@ enum ComputerUseAXReader {
         buildingTreePIDs.withLock { _ = $0.remove(pid) }
     }
 
+    /// Asks a Chromium or Electron app to build its web content's tree: `attribute` is set to true
+    /// unless it already reads as true. Returns whether Alas turned it on
+    /// (`ComputerUseWebContent.restores`), so it can be turned off again.
+    static func wakeWebContent(_ app: ComputerUseAppIdentity, attribute: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                guard let element = try? target(app.pid) else { return continuation.resume(returning: false) }
+                var value: CFTypeRef?
+                var before: Bool?
+                if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                   let value, CFGetTypeID(value) == CFBooleanGetTypeID() {
+                    before = CFBooleanGetValue((value as! CFBoolean))
+                }
+                let set = before == true
+                    || AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue) == .success
+                continuation.resume(returning: ComputerUseWebContent.restores(before: before, setSucceeded: set))
+            }
+        }
+    }
+
+    /// Turns off an attribute `wakeWebContent` turned on.
+    static func restoreWebContent(_ app: ComputerUseAppIdentity, attribute: String) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            queue.async {
+                guard mayMessage(app.pid) else { return continuation.resume() }
+                let element = AXUIElementCreateApplication(app.pid)
+                AXUIElementSetMessagingTimeout(element, messagingTimeout)
+                _ = AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanFalse)
+                continuation.resume()
+            }
+        }
+    }
+
     final class CancelFlag: Sendable {
         private let flag = Atomic<Bool>(false)
         func set() { flag.store(true, ordering: .relaxed) }
         var isSet: Bool { flag.load(ordering: .relaxed) }
     }
 
-    /// Throws `CancellationError` when the calling task is cancelled. `complete`
-    /// is false when the walk stopped early (node budget, deadline, stalled app).
+    /// Throws `CancellationError` when the calling task is cancelled. `cut` says why the walk
+    /// stopped early (node budget, deadline, an app that didn't answer); nil when it read it all.
     /// `handles` retains every element in the tree, indexed by `ComputerUseAXNode.handle`.
     static func read(
         _ window: ComputerUseWindow, maxDepth: Int, nodeBudget: Int, timeLimit: Duration = deadline
     ) async throws
-        -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
+        -> (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles) {
         let cancel = CancelFlag()
         return try await withTaskCancellationHandler {
             await awaitTreeBuild(window, cancel: cancel)
@@ -180,8 +240,12 @@ enum ComputerUseAXReader {
         var count = 0
         /// Every element turned into a node; a node's handle is its index here.
         var elements: [AXUIElement] = []
-        /// Set on the first timeout-class AX error: the app is not answering.
+        /// Set once `ComputerUseReadCut.unansweredLimit` AX messages in a row went unanswered
+        /// (kAXErrorCannotComplete): the app is not answering.
         var appStalled = false
+        var unansweredInARow = 0
+        /// An element the app didn't answer was left without its attributes and children.
+        var skippedUnanswered = false
         /// Set when children were left unread because the budget ran out or the walk halted.
         var cutOff = false
 
@@ -197,8 +261,8 @@ enum ComputerUseAXReader {
         }
 
         func tree(for window: ComputerUseWindow) throws
-            -> (root: ComputerUseAXNode, complete: Bool, handles: ComputerUseAXHandles) {
-            let app = ComputerUseAXReader.application(window.app.pid)
+            -> (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles) {
+            let app = try ComputerUseAXReader.target(window.app.pid)
 
             var windowsRef: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
@@ -214,11 +278,15 @@ enum ComputerUseAXReader {
                 frame: { frame(of: $0) }, title: { string(of: $0, kAXTitleAttribute) }, shouldStop: { isHalted })
             if isCancelled() { throw CancellationError() }
             if appStalled || (target == nil && ContinuousClock.now >= deadline) { throw notResponding(window) }
-            guard let target else { throw ComputerUseSystemError.windowNotFound(window.windowID) }
+            // On screen, but no AX window answers for it: a sheet's backing window, say.
+            guard let target else { throw ComputerUseSystemError.windowUnreadable(window.windowID) }
 
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
-            return (root, !cutOff && !isHalted, ComputerUseAXHandles(elements))
+            let cut = ComputerUseReadCut.reason(
+                appNotResponding: appStalled || skippedUnanswered, timedOut: ContinuousClock.now >= deadline,
+                budgetSpent: cutOff)
+            return (root, cut, ComputerUseAXHandles(elements))
         }
 
         /// Whether the window has a descendant other than an `AXGroup` within `maxDepth` levels and
@@ -262,68 +330,162 @@ enum ComputerUseAXReader {
 
         /// The root is depth 0 and counts toward the budget. Once the walk
         /// halts (stalled app, cancellation, deadline) or the budget runs out,
-        /// the nodes already built are kept and no more are read.
+        /// the nodes already built are kept and no more are read. An element the app doesn't
+        /// answer reads as `AXUnknown` without children, and the walk goes on past it.
         private func node(_ element: AXUIElement, depth: Int) -> ComputerUseAXNode {
             count += 1
             AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
-            let role = string(of: element, kAXRoleAttribute) ?? "AXUnknown"
-            let subrole = string(of: element, kAXSubroleAttribute)
+            let batch = attributes(of: element)
+            let values = batch?.values
+            let role = Self.string(values?[kAXRoleAttribute]) ?? "AXUnknown"
+            let subrole = Self.string(values?[kAXSubroleAttribute])
             // Never read the contents of a password field. Some apps expose it
             // as the role rather than the subrole; both use the same string.
-            let isSecure = role == kAXSecureTextFieldSubrole || subrole == kAXSecureTextFieldSubrole
+            // One whose role or subrole couldn't be read may be one.
+            let isSecure = role == kAXSecureTextFieldSubrole || subrole == kAXSecureTextFieldSubrole || batch?.identityKnown != true
+            let children = (values?[kAXChildrenAttribute] as? [AXUIElement]) ?? []
             var result = ComputerUseAXNode(
                 role: role,
                 subrole: subrole,
-                title: string(of: element, kAXTitleAttribute),
-                value: isSecure ? nil : valueString(of: element),
-                description: string(of: element, kAXDescriptionAttribute),
-                frame: frame(of: element) ?? .zero,
-                isEnabled: bool(of: element, kAXEnabledAttribute) ?? true,
-                isFocused: bool(of: element, kAXFocusedAttribute) ?? false,
+                title: Self.string(values?[kAXTitleAttribute]),
+                value: isSecure || values == nil ? nil : valueString(of: element),
+                description: Self.string(values?[kAXDescriptionAttribute]),
+                frame: Self.frame(position: values?[kAXPositionAttribute], size: values?[kAXSizeAttribute]) ?? .zero,
+                isEnabled: Self.bool(values?[kAXEnabledAttribute]) ?? true,
+                isFocused: Self.bool(values?[kAXFocusedAttribute]) ?? false,
                 handle: elements.count
             )
             elements.append(element)
             if depth < maxDepth {
                 if count < budget, !isHalted {
-                    for child in childElements(of: element) {
+                    for child in children {
                         guard count < budget, !isHalted else {
                             cutOff = true
                             break
                         }
                         result.children.append(node(child, depth: depth + 1))
                     }
-                } else {
-                    // Conservative: the unread element may have had no children.
+                } else if values == nil || !children.isEmpty {
+                    // An element left unread may have had children.
                     cutOff = true
                 }
-            } else if !isHalted {
+            } else {
                 // At the depth limit: only whether there is more below, so the agent can ask for it.
-                var childCount: CFIndex = 0
-                let counted = AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &childCount)
-                if counted == .cannotComplete { appStalled = true }
-                result.childrenUnread = counted == .success && childCount > 0
+                result.childrenUnread = !children.isEmpty
             }
             return result
         }
 
-        /// Skips the IPC once the walk has halted, and flags a stalled app.
-        private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+        /// What `node` reads of every element, in one message.
+        private static let nodeAttributes = [
+            kAXRoleAttribute, kAXSubroleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXPositionAttribute,
+            kAXSizeAttribute, kAXEnabledAttribute, kAXFocusedAttribute, kAXChildrenAttribute,
+        ]
+
+        /// `nodeAttributes` by name, read in one message: a walk sends one per element rather than
+        /// one per attribute, several times faster. Attributes the element lacks are absent. Read
+        /// one at a time where the app doesn't take the batch. Nil when the walk has halted, the
+        /// element is gone, or the app didn't answer, which counts toward a stalled app.
+        /// `identityKnown` is false when its role or subrole read failed (rather than being
+        /// absent), so whether it is a password field can't be told.
+        private func attributes(of element: AXUIElement) -> (values: [String: AnyObject], identityKnown: Bool)? {
             guard !isHalted else { return nil }
+            var list: CFArray?
+            let result = AXUIElementCopyMultipleAttributeValues(
+                element, Self.nodeAttributes as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &list)
+            noteAnswer(result)
+            var byName: [String: AnyObject] = [:]
+            var failed: [String: AXError] = [:]
+            switch result {
+            case .success:
+                guard let values = list as? [AnyObject], values.count == Self.nodeAttributes.count else { return nil }
+                for (name, value) in zip(Self.nodeAttributes, values) {
+                    if Self.isError(value) { failed[name] = Self.axError(value) ?? .failure } else { byName[name] = value }
+                }
+            case .cannotComplete:
+                skippedUnanswered = true
+                return nil
+            case .invalidUIElement:
+                return nil
+            default:
+                for name in Self.nodeAttributes {
+                    let read = read(element, name)
+                    if let value = read.value { byName[name] = value } else { failed[name] = read.error }
+                }
+                if isHalted { return nil }
+            }
+            // Children the app didn't answer for are missing, not none: the read is incomplete.
+            if failed[kAXChildrenAttribute] == .cannotComplete { skippedUnanswered = true }
+            let identityKnown = [kAXRoleAttribute, kAXSubroleAttribute].allSatisfy { failed[$0].map(Self.isAbsent) ?? true }
+            return (byName, identityKnown)
+        }
+
+        /// A failed read that only means the element doesn't have the attribute.
+        private static func isAbsent(_ error: AXError) -> Bool {
+            error == .noValue || error == .attributeUnsupported
+        }
+
+        /// Counts the messages in a row the app didn't answer; the limit's worth halts the walk.
+        private func noteAnswer(_ result: AXError) {
+            guard result == .cannotComplete else {
+                unansweredInARow = 0
+                return
+            }
+            unansweredInARow += 1
+            if unansweredInARow >= ComputerUseReadCut.unansweredLimit { appStalled = true }
+        }
+
+        /// A batch read's entry for an attribute that failed.
+        private static func isError(_ value: AnyObject) -> Bool {
+            CFGetTypeID(value) == AXValueGetTypeID() && AXValueGetType(value as! AXValue) == .axError
+        }
+
+        /// The error a batch read's failed entry carries.
+        private static func axError(_ value: AnyObject) -> AXError? {
+            var raw: Int32 = 0
+            guard AXValueGetValue(value as! AXValue, .axError, &raw) else { return nil }
+            return AXError(rawValue: raw)
+        }
+
+        private static func string(_ value: AnyObject?) -> String? {
+            guard let value, CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
+            let string = value as! String
+            return string.isEmpty ? nil : string
+        }
+
+        private static func bool(_ value: AnyObject?) -> Bool? {
+            guard let value, CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
+            return CFBooleanGetValue((value as! CFBoolean))
+        }
+
+        private static func frame(position: AnyObject?, size: AnyObject?) -> CGRect? {
+            guard let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID()
+            else { return nil }
+            var point = CGPoint.zero
+            var extent = CGSize.zero
+            guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &extent)
+            else { return nil }
+            return CGRect(origin: point, size: extent)
+        }
+
+        /// Skips the IPC once the walk has halted, and counts an unanswered message.
+        private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
+            read(element, name).value
+        }
+
+        /// `attribute`, with the error a failed read returned (`cannotComplete` once halted).
+        private func read(_ element: AXUIElement, _ name: String) -> (value: CFTypeRef?, error: AXError) {
+            guard !isHalted else { return (nil, .cannotComplete) }
             var value: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
-            if result == .cannotComplete { appStalled = true }
-            return result == .success ? value : nil
+            noteAnswer(result)
+            return (result == .success ? value : nil, result)
         }
 
         private func string(of element: AXUIElement, _ name: String) -> String? {
             guard let value = attribute(element, name), CFGetTypeID(value) == CFStringGetTypeID() else { return nil }
             let string = value as! String
             return string.isEmpty ? nil : string
-        }
-
-        private func bool(of element: AXUIElement, _ name: String) -> Bool? {
-            guard let value = attribute(element, name), CFGetTypeID(value) == CFBooleanGetTypeID() else { return nil }
-            return CFBooleanGetValue((value as! CFBoolean))
         }
 
         /// Only text and numbers: other value types (elements, ranges) carry no
@@ -360,6 +522,154 @@ enum ComputerUseAXReader {
                   AXValueGetValue(size as! AXValue, .cgSize, &extent)
             else { return nil }
             return CGRect(origin: point, size: extent)
+        }
+    }
+}
+
+// MARK: - Sheets
+
+extension ComputerUseAXReader {
+    /// How long one listing may spend reading its apps' sheets.
+    static let sheetFramesBudget: Duration = .milliseconds(400)
+
+    /// The frames of the AXSheets in each app's AX windows, for the apps among `pids`, within
+    /// `sheetFramesBudget` overall; apps past it, or never Alas, are left out.
+    static func sheetFrames(pids: [pid_t]) async -> [pid_t: [CGRect]] {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let deadline = ContinuousClock.now + sheetFramesBudget
+                var frames: [pid_t: [CGRect]] = [:]
+                func list(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+                    var value: CFTypeRef?
+                    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                          let elements = value as? [AXUIElement] else { return [] }
+                    for element in elements { AXUIElementSetMessagingTimeout(element, promptProbeMessagingTimeout) }
+                    return elements
+                }
+                func frame(_ element: AXUIElement) -> CGRect? {
+                    var position: CFTypeRef?
+                    var size: CFTypeRef?
+                    guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+                          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+                          let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID()
+                    else { return nil }
+                    var point = CGPoint.zero
+                    var extent = CGSize.zero
+                    guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &extent)
+                    else { return nil }
+                    return CGRect(origin: point, size: extent)
+                }
+                apps: for pid in pids where mayMessage(pid) {
+                    guard ContinuousClock.now < deadline else { break apps }
+                    let application = AXUIElementCreateApplication(pid)
+                    AXUIElementSetMessagingTimeout(application, promptProbeMessagingTimeout)
+                    for window in list(application, kAXWindowsAttribute) {
+                        guard ContinuousClock.now < deadline else { break apps }
+                        for child in list(window, kAXChildrenAttribute) {
+                            guard ContinuousClock.now < deadline else { break apps }
+                            var role: CFTypeRef?
+                            guard AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &role) == .success,
+                                  role as? String == kAXSheetRole, let sheet = frame(child)
+                            else { continue }
+                            frames[pid, default: []].append(sheet)
+                        }
+                    }
+                }
+                continuation.resume(returning: frames)
+            }
+        }
+    }
+}
+
+// MARK: - Credential prompts
+
+extension ComputerUseAXReader {
+    /// How deep, how wide and how long the read of an app's sheets for a secure field looks.
+    static let promptProbeDepth = 8
+    static let promptProbeNodes = 400
+    static let promptProbeTime: Duration = .milliseconds(400)
+    /// Shorter than `messagingTimeout`: an app that doesn't answer reads as unknown, quickly.
+    static let promptProbeMessagingTimeout: Float = 0.25
+
+    /// Whether a sheet of one of the app's windows, or an untitled window, holds a secure text
+    /// field, as LocalAuthentication's password prompt does. Nil when the app's windows couldn't
+    /// be read, a read in them failed, elements were left below `promptProbeDepth`, or the read
+    /// ran out of `promptProbeNodes` or passed `deadline` (at most
+    /// `promptProbeTime` from its start) before it found one; the first pass over the windows
+    /// counts against both. Doesn't ask the app to build its tree (`application(_:)`), so a probe
+    /// changes nothing in it.
+    static func secureFieldInSheet(pid: pid_t, deadline: ContinuousClock.Instant? = nil) async -> Bool? {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let ownDeadline = ContinuousClock.now + promptProbeTime
+                let deadline = deadline.map { min($0, ownDeadline) } ?? ownDeadline
+                var budget = promptProbeNodes
+                /// Counts one AX element against the budget; false once the read must stop.
+                func spend() -> Bool {
+                    guard budget > 0, ContinuousClock.now < deadline else { return false }
+                    budget -= 1
+                    return true
+                }
+                // This process draws no system prompt, and must not be messaged here.
+                guard mayMessage(pid) else { return continuation.resume(returning: false) }
+                let application = AXUIElementCreateApplication(pid)
+                AXUIElementSetMessagingTimeout(application, promptProbeMessagingTimeout)
+                /// A read that failed, rather than finding nothing (or an element that's gone), leaves
+                /// what it would have shown unknown: the probe can't answer that no field is there.
+                var unreadable = false
+                func found(_ result: AXError) -> Bool {
+                    switch result {
+                    case .success, .noValue, .attributeUnsupported, .invalidUIElement: return true
+                    default:
+                        unreadable = true
+                        return false
+                    }
+                }
+                func elements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+                    var value: CFTypeRef?
+                    let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+                    guard found(result), result == .success, let list = value as? [AXUIElement] else { return [] }
+                    for item in list { AXUIElementSetMessagingTimeout(item, promptProbeMessagingTimeout) }
+                    return list
+                }
+                func string(_ element: AXUIElement, _ attribute: String) -> String? {
+                    var value: CFTypeRef?
+                    let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+                    guard found(result), result == .success else { return nil }
+                    return value as? String
+                }
+                guard spend() else { return continuation.resume(returning: nil) }
+                let windows = elements(application, kAXWindowsAttribute)
+                guard !unreadable else { return continuation.resume(returning: nil) }
+                var pending: [(element: AXUIElement, depth: Int)] = []
+                for window in windows {
+                    guard spend() else { return continuation.resume(returning: nil) }
+                    // A title that can't be read only means the window is read too.
+                    var title: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &title) != .success
+                        || (title as? String ?? "").isEmpty {
+                        pending.append((window, 0))
+                    }
+                    for child in elements(window, kAXChildrenAttribute) {
+                        guard spend() else { return continuation.resume(returning: nil) }
+                        if string(child, kAXRoleAttribute) == kAXSheetRole { pending.append((child, 0)) }
+                    }
+                }
+                while let (element, depth) = pending.popLast() {
+                    guard spend() else { return continuation.resume(returning: nil) }
+                    let identity = ComputerUseSecureFocus.Element(
+                        role: string(element, kAXRoleAttribute), subrole: string(element, kAXSubroleAttribute))
+                    if ComputerUseSecureFocus.isSecure(identity) { return continuation.resume(returning: true) }
+                    let children = elements(element, kAXChildrenAttribute)
+                    guard depth < promptProbeDepth else {
+                        // What the depth limit leaves unread may hold the field, as a budget cut may.
+                        if !children.isEmpty { unreadable = true }
+                        continue
+                    }
+                    pending += children.map { ($0, depth + 1) }
+                }
+                continuation.resume(returning: unreadable ? nil : false)
+            }
         }
     }
 }
