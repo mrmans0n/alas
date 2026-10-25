@@ -154,6 +154,8 @@ struct HostProtocolTests {
             return
         }
         #expect(caps == console + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
+        // An app host keeps git to the user at it; only a headless host adds it.
+        #expect(!caps.contains(HostProtocolCapability.worktreesGitV1))
     }
 
     /// `peers remove` takes an id or server id as is, and a name only when

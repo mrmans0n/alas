@@ -124,6 +124,20 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// Reads a listed worktree's code as a session in it would
     /// (`host.worktrees.read.v1`).
     case readWorktree(worktree: WorktreeRef, read: HostWorktreeRead)
+    /// Changes a listed worktree on `branch`, the one the client last saw,
+    /// as its Changes tab would (`host.worktrees.git.v1`).
+    case mutateWorktree(worktree: WorktreeRef, branch: String, change: HostWorktreeChange)
+    /// What a commit message is suggested from, for the client's own model
+    /// (`host.worktrees.git.v1`).
+    case commitMessageInput(worktree: WorktreeRef)
+}
+
+/// One git action on a worktree. Paths are relative to the worktree, as its
+/// changes list them.
+public enum HostWorktreeChange: Codable, Equatable, Sendable {
+    case stage(paths: [String]), unstage(paths: [String]), discard(paths: [String])
+    case commit(subject: String, body: String, amend: Bool)
+    case push(forceWithLease: Bool), pull, fetch
 }
 
 /// One read of a worktree's code, as the Remote session requests of the same name.
@@ -217,6 +231,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     indirect case worktreeRead(reply: RemoteServerMessage)
     /// The answer to `listRunScripts`.
     case runScripts(scripts: [HostRunScript])
+    /// The answer to `commitMessageInput`.
+    case commitMessageInput(input: CommitMessageSuggestionInput)
     case failure(error: HostError)
 }
 

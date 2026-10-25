@@ -312,7 +312,8 @@ if let listen = config.hostRemoteListen {
         identity: {
             RemoteServerIdentity(
                 serverId: settings.serverId, name: settings.resolvedDisplayName,
-                consoleCapabilities: shells.isAvailable ? PeerConsoleCapability.headlessHost : []
+                consoleCapabilities: shells.isAvailable ? PeerConsoleCapability.headlessHost : [],
+                hostCapabilities: host.servedCapabilities
             )
         },
         signer: identityKey

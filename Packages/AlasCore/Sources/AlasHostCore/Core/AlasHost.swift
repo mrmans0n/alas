@@ -32,6 +32,11 @@ public final class AlasHost {
 
     public var projects: ProjectsAPI { ProjectsAPI(core: core) }
 
+    /// The `HostProtocolCapability` values this host serves.
+    public var servedCapabilities: [String] {
+        HostProtocolCapability.served + (core.environment.servesWorktreeGit ? [HostProtocolCapability.worktreesGitV1] : [])
+    }
+
     /// Lists the projects' worktrees, from the cache and then from git. A
     /// serving host starts with this; see `AlasCoreContext.loadProjectWorktrees()`.
     public func loadProjectWorktrees() async {
@@ -362,6 +367,13 @@ public struct WorktreesAPI {
     public func renameBranch(_ worktree: Worktree, from: String, to branch: String, caller: HostCaller) async throws -> String {
         caller.log("worktrees.renameBranch", worktree.path.path)
         return try await core.renameListedWorktreeBranch(worktree, from: from, to: branch)
+    }
+
+    /// Applies `change` to `worktree`, refusing one no longer on `branch`,
+    /// busy, or waiting on a checkpoint restore.
+    public func mutate(_ worktree: Worktree, branch: String, change: HostWorktreeChange, caller: HostCaller) async throws {
+        caller.log("worktrees.mutate", worktree.path.path)
+        try await core.mutateListedWorktree(worktree, branch: branch, change: change)
     }
 }
 

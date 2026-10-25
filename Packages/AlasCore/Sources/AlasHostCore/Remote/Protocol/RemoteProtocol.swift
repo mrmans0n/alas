@@ -39,12 +39,18 @@ public struct RemoteServerIdentity: Equatable, Sendable {
     /// The `PeerConsoleCapability` values this server serves; empty for one
     /// with no terminal consoles.
     public let consoleCapabilities: [String]
+    /// The `HostProtocolCapability` values this server serves.
+    public let hostCapabilities: [String]
 
-    public init(serverId: String, name: String, peers: [RemoteHelloPeer] = [], consoleCapabilities: [String] = PeerConsoleCapability.appHost) {
+    public init(
+        serverId: String, name: String, peers: [RemoteHelloPeer] = [],
+        consoleCapabilities: [String] = PeerConsoleCapability.appHost, hostCapabilities: [String] = HostProtocolCapability.served
+    ) {
         self.serverId = serverId
         self.name = name
         self.peers = peers
         self.consoleCapabilities = consoleCapabilities
+        self.hostCapabilities = hostCapabilities
     }
 }
 
@@ -1433,7 +1439,7 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
+            capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1] + identity.hostCapabilities)
     }
 }
 
@@ -1463,7 +1469,10 @@ public enum HostProtocolCapability: Sendable {
     public static let runsScriptsV1 = "host.runs.scripts.v1"
     /// Hosts that serve `renameBranch`.
     public static let worktreesRenameBranchV1 = "host.worktrees.renameBranch.v1"
-    /// Everything this host serves of the host protocol.
+    /// Hosts that serve `mutateWorktree` and `commitMessageInput`: only a
+    /// headless host, whose Mac has no one at it to do them there.
+    public static let worktreesGitV1 = "host.worktrees.git.v1"
+    /// Everything every host serves of the host protocol.
     public static let served = [
         v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
         worktreesRenameBranchV1,
