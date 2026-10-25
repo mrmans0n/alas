@@ -122,11 +122,10 @@ extension AlasHost {
 
         let gate: RepoHookGate
         do {
-            let ref = branches.contains(request.branch) ? request.branch : request.base
+            let repoPath = URL(fileURLWithPath: project.path)
+            let ref = try await AlasCoreContext.qualifiedRef(branches.contains(request.branch) ? request.branch : request.base, repoPath: repoPath)
             gate = try await core.gateRepoHook(event: .worktreeCreate, project: project, consent: request.repoHook) {
-                await RepoHookLoader.loadCommitted(
-                    event: .worktreeCreate, ref: ref, repoPath: URL(fileURLWithPath: project.path), host: project.host
-                )
+                await RepoHookLoader.loadCommitted(event: .worktreeCreate, ref: ref, repoPath: repoPath, host: project.host)
             }
         } catch {
             return refused(error.localizedDescription)
@@ -190,6 +189,15 @@ extension AlasHost {
 
 extension AlasCoreContext {
     /// A project's branches.
+    /// `name` as the full ref of the local or remote-tracking branch it
+    /// names, so a same-named tag can't stand in for it.
+    fileprivate static func qualifiedRef(_ name: String, repoPath: URL) async throws -> String {
+        for ref in ["refs/heads/\(name)", "refs/remotes/\(name)"] {
+            if try await Process.git(["show-ref", "--verify", "--quiet", ref], cwd: repoPath).exitCode == 0 { return ref }
+        }
+        return name
+    }
+
     func branches(of project: ProjectConfig) async throws -> [String] {
         let repoPath = URL(fileURLWithPath: project.path)
         if let worktreeBranchLoader { return try await worktreeBranchLoader(repoPath) }
