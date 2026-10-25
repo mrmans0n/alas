@@ -18,6 +18,14 @@ final class NativePeerHosts {
     private(set) var shepherds: [String: [String: HostSessionShepherd]] = [:]
     /// Each peer's followed worktrees' review statuses by worktree id, keyed like `worktrees`.
     private(set) var reviewStatuses: [String: [String: ReviewLoopSnapshot]] = [:]
+    /// Each peer's count of `reviewsChanged` by worktree id, keyed like
+    /// `worktrees`, for a review view to read again on.
+    private(set) var reviewRevisions: [String: [String: Int]] = [:]
+    /// Each peer's count of subscriptions, by `serverId`: bumped when its
+    /// channel subscribes again, so a view reads again after a reconnect
+    /// whose missed events no revision records.
+    private(set) var subscriptions: [String: Int] = [:]
+    @ObservationIgnored private var subscribed: Set<String> = []
     /// Changes each time the git target's follow is sent: for a new target,
     /// and on a channel subscribed again, whose events do not repeat an
     /// unchanged status. Nil until sent.
@@ -91,6 +99,8 @@ final class NativePeerHosts {
         runs = [:]
         shepherds = [:]
         reviewStatuses = [:]
+        reviewRevisions = [:]
+        subscribed = []
         gitFollowSent = false
         for channel in stopped {
             channel.onChange = nil
@@ -229,6 +239,42 @@ final class NativePeerHosts {
         return snapshot
     }
 
+    /// Whether `serverId` lists, reads and changes its worktrees' draft reviews.
+    func servesReviews(serverId: String) -> Bool {
+        channels[serverId]?.isSubscribed == true && supports(serverId, HostProtocolCapability.reviewsV1)
+    }
+
+    /// `worktree`'s draft reviews, newest first. Nil for a refusal or no answer.
+    func reviews(in worktree: PeerHostWorktree, serverId: String) async -> [HostReviewSummary]? {
+        guard servesReviews(serverId: serverId), let channel = channels[serverId],
+              case .reviews(let reviews) = await channel.request(.listReviews(worktree: Self.ref(worktree)))
+        else { return nil }
+        return reviews
+    }
+
+    /// Review `sessionID` of `worktree` with every comment. Nil for a refusal or no answer.
+    func review(_ sessionID: String, in worktree: PeerHostWorktree, serverId: String) async -> HostReview? {
+        guard servesReviews(serverId: serverId), let channel = channels[serverId],
+              case .review(let review) = await channel.request(.readReview(worktree: Self.ref(worktree), sessionID: sessionID))
+        else { return nil }
+        return review
+    }
+
+    /// The error message for `mutation`; nil once done. The host's
+    /// `reviewsChanged` then bumps `reviewRevisions`.
+    func mutateReview(
+        _ mutation: HostReviewMutation, sessionID: String, in worktree: PeerHostWorktree, serverId: String
+    ) async -> String? {
+        guard servesReviews(serverId: serverId), let channel = channels[serverId] else {
+            return FederatedSessionsProvider.peerUnavailableMessage
+        }
+        switch await channel.request(.mutateReview(worktree: Self.ref(worktree), sessionID: sessionID, mutation: mutation)) {
+        case .done: return nil
+        case .failure(let error): return PeerWorktreeRemoval.message(for: error)
+        default: return "The host sent an unexpected reply."
+        }
+    }
+
     /// Follows `worktree`'s review status in place of the previous target's.
     func followGit(_ worktree: PeerHostWorktree?, serverId: String?) {
         let next = worktree.flatMap { worktree in
@@ -295,6 +341,12 @@ final class NativePeerHosts {
             runs[serverId] = newRuns
             shepherds[serverId] = channel.state?.shepherds
             reviewStatuses[serverId] = channel.state?.reviewStatuses
+            reviewRevisions[serverId] = channel.state?.reviewRevisions
+            if !channel.isSubscribed {
+                subscribed.remove(serverId)
+            } else if subscribed.insert(serverId).inserted {
+                subscriptions[serverId, default: 0] += 1
+            }
             if !channel.isSubscribed, gitFollow?.serverId == serverId { gitFollowSent = false }
             sendGitFollow()
             onChange?()

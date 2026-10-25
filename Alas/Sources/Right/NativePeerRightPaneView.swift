@@ -22,6 +22,9 @@ struct NativePeerRightPaneView: View {
     @State private var pendingDiscard: PendingDiscard?
     @State private var commitTarget: (serverId: String, worktree: PeerHostWorktree)?
     @State private var pullInFlight = false
+    /// The git target's draft reviews, as the host lists them.
+    @State private var reviews: [HostReviewSummary] = []
+    @State private var reviewsExpanded = true
 
     var body: some View {
         let tabs = self.tabs
@@ -75,14 +78,16 @@ struct NativePeerRightPaneView: View {
             client.reloadWorkspace()
         }
         .onChange(of: gitTargetKey, initial: true) { _, _ in
-            // The previous worktree's pill must not stand in until the new read.
+            // The previous worktree's pill and reviews must not stand in until the new read.
             reviewLoop.showHostSnapshot(nil)
+            reviews = []
             client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
         }
         .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
         // Once per follow sent: the host repeats no unchanged status to a new subscription.
         .task(id: client.hosts?.gitFollowKey) { await readReviewStatus() }
         .onChange(of: liveReviewStatus) { _, status in reviewLoop.showHostSnapshot(status) }
+        .task(id: reviewsKey) { await readReviews() }
         .alert(
             PendingDiscard.alertTitle(for: pendingDiscard ?? .placeholder),
             isPresented: Binding(
@@ -198,7 +203,10 @@ struct NativePeerRightPaneView: View {
                 )
                 .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
                 .frame(maxHeight: .infinity, alignment: .top)
-                // Outside the changes view, so it shows with no changes too.
+                // Outside the changes view, so they show with no changes too.
+                if let gitTarget, reviewsKey != nil {
+                    reviewsSection(gitTarget)
+                }
                 if gitTarget != nil, reviewLoop.snapshot != nil {
                     ReviewLoopDrawer(
                         state: reviewLoop,
@@ -265,6 +273,108 @@ struct NativePeerRightPaneView: View {
         default:
             break // `peerServed` offers no other action.
         }
+    }
+
+    /// The host's reviews, led by its local changes until they are listed,
+    /// so a review of them can be started from here as in the Changes tab.
+    @ViewBuilder
+    private func reviewsSection(_ target: (serverId: String, worktree: PeerHostWorktree)) -> some View {
+        let worktree = target.worktree.snapshot.worktree
+        let localChanges = ReviewDraftSessionID.localChanges(
+            worktreeID: worktree.id, worktreePath: worktree.path, scope: .all
+        ).rawValue
+        let listsLocalChanges = reviews.contains { $0.sessionID == localChanges }
+        SectionHeader(
+            role: .reviews,
+            title: "Reviews",
+            count: reviews.count,
+            expanded: reviewsExpanded,
+            onToggle: { reviewsExpanded.toggle() }
+        ) { EmptyView() }
+        if reviewsExpanded {
+            // Bounded, so a long review history scrolls instead of crowding
+            // out the changes.
+            ScrollView {
+                VStack(spacing: 0) { reviewRows(target, localChanges: localChanges, listsLocalChanges: listsLocalChanges) }
+            }
+            .frame(maxHeight: 180)
+        }
+    }
+
+    @ViewBuilder
+    private func reviewRows(
+        _ target: (serverId: String, worktree: PeerHostWorktree), localChanges: String, listsLocalChanges: Bool
+    ) -> some View {
+        if !listsLocalChanges {
+            reviewRow(title: "Review local changes", subtitle: nil, verdict: nil, openCount: 0) {
+                client.openReview(localChanges, serverId: target.serverId, worktree: target.worktree)
+            }
+        }
+        ForEach(reviews, id: \.sessionID) { review in
+            reviewRow(
+                title: review.record.target.title,
+                subtitle: review.record.target.sourceDescription,
+                verdict: review.record.verdict?.verdict,
+                openCount: review.openCommentCount
+            ) {
+                client.openReview(review.sessionID, serverId: target.serverId, worktree: target.worktree)
+            }
+        }
+    }
+
+    private func reviewRow(
+        title: String, subtitle: String?, verdict: ReviewVerdict?, openCount: Int, open: @escaping () -> Void
+    ) -> some View {
+        Button(action: open) {
+            HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title)
+                        .font(.system(size: 11.5))
+                        .foregroundColor(theme.color("fg"))
+                    if let subtitle {
+                        Text(subtitle).foregroundColor(theme.color("fg-faint"))
+                    }
+                }
+                .lineLimit(1)
+                .truncationMode(.middle)
+                Spacer(minLength: 4)
+                if let verdict {
+                    Text(verdict.peerLabel).foregroundColor(theme.color("fg-dim"))
+                }
+                if openCount > 0 {
+                    Text("\(openCount) open").foregroundColor(theme.color("accent"))
+                }
+            }
+            .font(.system(size: 10.5))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+    }
+
+    /// Changes when the git target's reviews should be listed again: a new
+    /// target, the host serving reviews, its `reviewsChanged`, or a reconnect.
+    private var reviewsKey: String? {
+        guard let gitTarget, let gitTargetKey, let hosts = client.hosts,
+              hosts.servesReviews(serverId: gitTarget.serverId)
+        else { return nil }
+        let revision = hosts.reviewRevisions[gitTarget.serverId]?[gitTarget.worktree.snapshot.worktree.id] ?? 0
+        let subscription = hosts.subscriptions[gitTarget.serverId] ?? 0
+        return "\(gitTargetKey)#\(revision)#\(subscription)"
+    }
+
+    /// The git target's reviews. A refusal or no answer keeps the last list.
+    private func readReviews() async {
+        guard reviewsKey != nil, let gitTarget, let hosts = client.hosts else {
+            reviews = []
+            return
+        }
+        let key = gitTargetKey
+        let listed = await hosts.reviews(in: gitTarget.worktree, serverId: gitTarget.serverId)
+        guard !Task.isCancelled, gitTargetKey == key else { return }
+        if let listed { reviews = listed }
     }
 
     /// The git target's review status, read again on the host. A refusal

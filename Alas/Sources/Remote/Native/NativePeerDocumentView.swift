@@ -127,3 +127,274 @@ struct NativePeerDocumentView: View {
         displayModel = model
     }
 }
+
+/// A host worktree's draft review, read and commented on over the host
+/// channel. It covers the peer center pane until closed.
+struct NativePeerReviewView: View {
+    let hosts: NativePeerHosts
+    let selection: NativePeerReviewSelection
+    var codeFontFamily: String = ""
+    var codeFontSize: CGFloat = 13
+    let onClose: () -> Void
+
+    private enum DiffLoad {
+        case loading
+        case loaded(ReviewSessionLoadedContext, truncated: Bool)
+        case failed(String)
+    }
+
+    private struct FailedMutation {
+        let mutation: HostReviewMutation
+        let message: String
+    }
+
+    private struct ReadKey: Equatable {
+        let revision: Int?
+        let subscription: Int?
+        let generation: Int
+    }
+
+    private struct DiffLoadKey: Equatable {
+        let target: ReviewSessionTarget?
+        let generation: Int
+    }
+
+    @Environment(\.theme) private var theme
+    @State private var review: HostReview?
+    @State private var readFailed = false
+    @State private var diff = DiffLoad.loading
+    /// Bumped by Reload: reads the review and its diff again.
+    @State private var reloadGeneration = 0
+    /// Why a reload failed; the diff loaded before stays shown.
+    @State private var reloadError: String?
+    /// The last change the host refused or never answered, kept so its text
+    /// isn't lost: the surface clears its composer when it saves.
+    @State private var failedMutation: FailedMutation?
+    @State private var selectedFileID: DiffReviewFileID?
+    @State private var railCollapsed = false
+    @State private var reviewSummaryCollapsed = false
+    @State private var layoutMode: DiffLayoutMode = .split
+    @State private var wrapLines = false
+    @State private var showWhitespace = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if let failedMutation { failedMutationNote(failedMutation) }
+            if readFailed { note(readFailedMessage, color: "del") }
+            if let reloadError { note(reloadError, color: "del") }
+            if case .loaded(_, truncated: true) = diff {
+                note("The host cut off part of this review; some files or lines are not shown.")
+            }
+            reviewBody
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(theme.color("bg-1"))
+        .task(id: ReadKey(
+            revision: hosts.reviewRevisions[selection.serverId]?[selection.worktree.snapshot.worktree.id],
+            subscription: hosts.subscriptions[selection.serverId],
+            generation: reloadGeneration
+        )) {
+            await readReview()
+        }
+        // ponytail: local changes don't live-refresh from the Mac; add a host
+        // diff event if that bites. Until then the refresh button reloads.
+        .task(id: DiffLoadKey(target: review?.summary.record.target, generation: reloadGeneration)) {
+            await loadDiff()
+        }
+    }
+
+    private var readFailedMessage: String { "The host could not read this review." }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Text(review?.summary.record.target.title ?? "Review")
+                .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize))
+                .foregroundColor(theme.color("fg"))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let verdict = review?.summary.record.verdict?.verdict {
+                Text(verdict.peerLabel)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1)
+                    .background(theme.color("accent").opacity(0.16))
+                    .foregroundColor(theme.color("accent"))
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+            }
+            Spacer()
+            ToolbarBtn(icon: "arrow.clockwise", tooltip: "Reload from host") { reloadGeneration += 1 }
+            ToolbarBtn(icon: "x", tooltip: "Back to session", action: onClose)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-2"))
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
+    }
+
+    @ViewBuilder
+    private var reviewBody: some View {
+        if review == nil {
+            if !readFailed {
+                Spinner()
+                    .frame(width: 16, height: 16)
+                    .padding()
+            }
+        } else {
+            switch diff {
+            case .loading:
+                Spinner()
+                    .frame(width: 16, height: 16)
+                    .padding()
+            case .failed(let message):
+                note(message, color: "del")
+            case .loaded(let loaded, _):
+                DiffReviewSurface(
+                    session: loaded.session,
+                    selectedFileID: $selectedFileID,
+                    railCollapsed: $railCollapsed,
+                    reviewSummaryCollapsed: $reviewSummaryCollapsed,
+                    layoutMode: $layoutMode,
+                    wrapLines: $wrapLines,
+                    showWhitespace: $showWhitespace,
+                    codeFontFamily: codeFontFamily,
+                    codeFontSize: codeFontSize,
+                    showsRailDisplayControls: true,
+                    reviewFeedbackTarget: loaded.feedbackTarget,
+                    draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(review?.comments ?? []),
+                    draftCommentActions: commentActions,
+                    // The host files file and line comments only. Image
+                    // comments can't start here: the peer client lists no
+                    // image files.
+                    onSaveDraftComment: { fileID, path, originalPath, anchor, body in
+                        mutate(.add(fileID: fileID, path: path, originalPath: originalPath, anchor: anchor, body: body))
+                    }
+                )
+            }
+        }
+    }
+
+    /// As `ReviewDraftWorkspaceActions`, less what only this Mac's agents and
+    /// providers could do.
+    private var commentActions: ReviewDraftCommentActions {
+        ReviewDraftCommentActions(
+            availability: { comment in
+                ReviewDraftCommentActionAvailability(
+                    canEdit: comment.isActive,
+                    canDelete: true,
+                    canResolve: comment.isActive,
+                    canDismiss: comment.isActive,
+                    canCopyPrompt: false,
+                    canShowSendToAgent: false,
+                    canSendToAgent: false
+                )
+            },
+            edit: { comment, body in mutate(.edit(commentID: comment.id, body: body)) },
+            delete: { mutate(.delete(commentID: $0.id)) },
+            resolve: { mutate(.resolve(commentID: $0.id)) },
+            dismiss: { mutate(.dismiss(commentID: $0.id)) }
+        )
+    }
+
+    /// The host's `reviewsChanged` then reads the comments again.
+    private func mutate(_ mutation: HostReviewMutation) {
+        failedMutation = nil
+        Task { @MainActor in
+            let error = await hosts.mutateReview(
+                mutation, sessionID: selection.sessionID, in: selection.worktree, serverId: selection.serverId
+            )
+            failedMutation = error.map { FailedMutation(mutation: mutation, message: $0) }
+        }
+    }
+
+    /// The refusal, with the comment text an add or edit carried, to send
+    /// again or copy. ponytail: the surface has no way to seed its composer;
+    /// restore the text there if one is added.
+    private func failedMutationNote(_ failed: FailedMutation) -> some View {
+        let text: String? = switch failed.mutation {
+        case .add(_, _, _, _, let body), .edit(_, let body): body
+        case .delete, .resolve, .dismiss: nil
+        }
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(failed.message).foregroundColor(theme.color("del"))
+            if let text {
+                Text(text)
+                    .foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: 10) {
+                Button("Retry") { mutate(failed.mutation) }
+                if let text {
+                    Button("Copy text") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    }
+                }
+                Button("Dismiss") { failedMutation = nil }
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+        }
+        .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.color("bg-2"))
+    }
+
+    private func readReview() async {
+        let read = await hosts.review(selection.sessionID, in: selection.worktree, serverId: selection.serverId)
+        guard !Task.isCancelled else { return }
+        // A failed re-read keeps the comments last read.
+        readFailed = read == nil
+        if let read { review = read }
+    }
+
+    private func loadDiff() async {
+        guard let target = review?.summary.record.target else { return }
+        // A reload keeps the loaded surface, with its unsaved comment and scroll.
+        if case .loaded = diff {} else { diff = .loading }
+        // One client per load: its notes are never reset.
+        let hosts = hosts
+        let selection = selection
+        let git = NativePeerReviewGitClient(read: { read in
+            await hosts.read(read, in: selection.worktree, serverId: selection.serverId)
+        })
+        let message: String
+        do {
+            let loaded = try await ReviewSessionLoader.peer(git: git).load(target: target)
+            guard !Task.isCancelled else { return }
+            diff = .loaded(loaded, truncated: git.notes.truncated)
+            reloadError = nil
+            return
+        } catch ReviewSessionLoaderError.unsupportedTarget {
+            message = "Not available from this Mac yet."
+        } catch {
+            message = error.localizedDescription
+        }
+        guard !Task.isCancelled else { return }
+        if case .loaded = diff { reloadError = message } else { diff = .failed(message) }
+    }
+
+    private func note(_ text: String, color: String = "fg-dim") -> some View {
+        Text(text)
+            .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
+            .foregroundColor(theme.color(color))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 6)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(theme.color("bg-2"))
+    }
+}
+
+extension ReviewVerdict {
+    /// How a peer review's header and the Reviews list show the verdict.
+    var peerLabel: String {
+        switch self {
+        case .approve: "Approved"
+        case .requestChanges: "Changes requested"
+        case .comment: "Commented"
+        }
+    }
+}

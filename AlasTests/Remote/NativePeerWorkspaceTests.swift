@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Alas
+@_spi(Testing) import AlasCore
 
 struct NativePeerWorkspaceTests {
     private func changed(_ path: String, add: Int = 1) -> RemoteChangedFile {
@@ -246,5 +247,136 @@ struct NativePeerWorkspaceTests {
 
         _ = workspace.apply(.fileTree(sessionId: "B:s", path: "src", nodes: [file("src/main.swift")], truncated: false))
         #expect(!workspace.fileTreeTruncated)
+    }
+
+    enum Kind: Sendable, CaseIterable { case localChanges, commit }
+
+    /// A comment the host files, an agent's or a Mac's, lands on the file and
+    /// changed line the Mac builds through the peer loader: the same stage
+    /// when one path is both staged and unstaged. `@MainActor`: the host's
+    /// `AlasCoreContext` is main-actor isolated.
+    @MainActor
+    @Test(arguments: Kind.allCases)
+    func hostFiledCommentsLandOnTheFileThePeerLoaderBuilds(_ kind: Kind) async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-peer-review-\(UUID().uuidString)")
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repo, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        func git(_ args: String...) async throws {
+            let result = try await Process.git(args, cwd: repo)
+            #expect(result.exitCode == 0, "git \(args.joined(separator: " ")): \(result.stderr)")
+        }
+        func write(_ text: String) throws {
+            try text.write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        }
+        try await git("init", "-q", "-b", "main")
+        try await git("config", "user.email", "test@example.com")
+        try await git("config", "user.name", "Test")
+        try write("one\ntwo\n")
+        try await git("add", "a.txt")
+        try await git("commit", "-q", "-m", "base")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: repo), projectId: "p", name: "main", branch: "main",
+            path: repo, status: .clean, lastActivity: .distantPast
+        )
+        let projects = ProjectsManager(persistedProjects: [
+            ProjectConfig(id: "p", name: "p", path: repo.path, color: "blue", addedAt: .distantPast),
+        ])
+        projects.insertOptimisticWorktree(worktree)
+        let core = AlasCoreContext(
+            projects: projects,
+            runHistoryStore: nil,
+            workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
+            environment: HeadlessHostEnvironment(),
+            reviewDrafts: ReviewDraftCommentStore(url: root.appendingPathComponent("review-drafts.json")),
+            reviewSessions: ReviewSessionStore(url: root.appendingPathComponent("review-sessions.json"))
+        )
+        let reviews = AlasHost(core: core).reviews
+
+        let sessionID: String
+        switch kind {
+        case .localChanges:
+            try write("ONE\ntwo\n")
+            try await git("add", "a.txt")
+            try write("ONE\nTWO\n")
+            // The review is not listed before its first comment, so the Mac
+            // files that on the full local-changes review.
+            sessionID = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: repo, scope: .all).rawValue
+            try await reviews.mutate(.add(
+                fileID: DiffReviewFileID(namespace: "staged", path: "a.txt"), path: "a.txt", originalPath: nil,
+                anchor: .line(side: .new, startLine: 1, endLine: nil, selectedText: nil), body: "Mac"
+            ), sessionID: sessionID, in: worktree, caller: .app)
+            // The agent's default stage for a path in both is unstaged.
+            _ = await reviews.addComment(
+                origin: worktree, path: "a.txt", startLine: 2, endLine: nil, side: nil,
+                body: "Agent", sessionID: nil, projectWorktrees: [worktree]
+            )
+        case .commit:
+            try write("ONE\ntwo\n")
+            try await git("commit", "-q", "-am", "edit")
+            guard case .success(let opened) = await reviews.open("HEAD", in: worktree, caller: .app) else {
+                Issue.record("expected the commit review opened")
+                return
+            }
+            sessionID = opened.record.target.draftSessionID.rawValue
+            _ = await reviews.addComment(
+                origin: worktree, path: "a.txt", startLine: 1, endLine: nil, side: nil,
+                body: "Agent", sessionID: sessionID, projectWorktrees: [worktree]
+            )
+        }
+        let review = try reviews.read(sessionID, in: worktree)
+        #expect(review.comments.count == (kind == .localChanges ? 2 : 1))
+
+        let client = NativePeerReviewGitClient(read: { await core.remoteRead($0, in: worktree, replyingAs: worktree.id) })
+        let session = try await ReviewSessionLoader.peer(git: client).load(target: review.summary.record.target).session
+
+        for comment in review.comments {
+            let file = try #require(session.files.first { $0.summary.id == comment.fileID })
+            let diff = try #require(file.parsedDiff)
+            #expect(diff.hunks.flatMap(\.lines).contains { $0.kind == .add && $0.newNumber == comment.startLine })
+        }
+    }
+
+    /// A file list or a diff the host cut off is noted, so the review does
+    /// not pass for whole.
+    @MainActor
+    @Test(arguments: [true, false])
+    func aTruncatedHostReplyIsReported(listTruncated: Bool) async throws {
+        let file = changed("a.txt")
+        let client = NativePeerReviewGitClient(read: { read -> RemoteServerMessage? in
+            if case .changes = read {
+                return .changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true, files: [],
+                                   staged: [], unstaged: [file], commits: [], truncated: listTruncated)
+            }
+            return .fileDiffResult(sessionId: "s", path: "a.txt", stage: "unstaged", hunks: [], truncated: !listTruncated)
+        })
+
+        let session = try await ReviewChangesLoader(git: client).load(worktreePath: URL(fileURLWithPath: "/repo"))
+
+        #expect(session.files.map(\.summary.path) == ["a.txt"])
+        #expect(client.notes.truncated)
+    }
+
+    /// A host that stops answering fails the review instead of passing it
+    /// off as empty; a diff it refuses stays one empty file.
+    @MainActor
+    @Test(arguments: [true, false])
+    func aDiffWithNoReplyFailsTheReview(refused: Bool) async throws {
+        let file = changed("a.txt")
+        let client = NativePeerReviewGitClient(read: { read -> RemoteServerMessage? in
+            if case .changes = read {
+                return .changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true, files: [],
+                                   staged: [], unstaged: [file], commits: [], truncated: false)
+            }
+            return refused ? .fileDiffFailed(sessionId: "s", path: "a.txt", reason: .binary, message: nil) : nil
+        })
+
+        let load = { try await ReviewChangesLoader(git: client).load(worktreePath: URL(fileURLWithPath: "/repo")) }
+
+        if refused {
+            #expect(try await load().files.map(\.summary.path) == ["a.txt"])
+        } else {
+            await #expect(throws: NativePeerReviewGitClientError.self) { try await load() }
+        }
     }
 }

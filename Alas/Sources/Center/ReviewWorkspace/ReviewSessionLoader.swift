@@ -312,6 +312,41 @@ struct ReviewSessionLoader: @unchecked Sendable {
         )
     }
 
+    /// A paired host's review, read over its host channel: local changes and
+    /// commits. Everything else is `unsupportedTarget`.
+    @MainActor
+    static func peer(git: NativePeerReviewGitClient) -> ReviewSessionLoader {
+        let changesLoader = ReviewChangesLoader(git: git)
+        let commitLoader = CommitReviewLoader(git: git)
+        return ReviewSessionLoader(
+            localChanges: { target, onFileList in
+                guard case .localChanges(let scope) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                let session = try await changesLoader.load(
+                    worktreePath: target.repositoryPath,
+                    onFileList: filteringFileList(onFileList, scope: scope)
+                )
+                return filterLocalChanges(session, scope: scope)
+            },
+            commit: { target, onFileList in
+                let sha: String
+                switch target.payload {
+                case .commit(let commitSHA): sha = commitSHA
+                case .trackedCommit(let revision): sha = revision.resolvedSHA
+                default: throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                return try await commitLoader.load(
+                    worktreePath: target.repositoryPath,
+                    sha: sha,
+                    files: try await git.commitFiles(sha: sha),
+                    openFileForPath: { _ in nil },
+                    onFileList: onFileList
+                )
+            }
+        )
+    }
+
     /// `onFileList` receives the target's files as pending sections once they
     /// are known and before their diffs finish loading. Hosted review requests
     /// list their files only with the diff, so they never report one.

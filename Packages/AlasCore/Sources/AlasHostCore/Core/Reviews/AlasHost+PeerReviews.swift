@@ -42,13 +42,20 @@ extension ReviewsAPI {
     }
 
     /// Review `sessionID` of the worktree with every comment, those on files
-    /// that no longer differ included.
+    /// that no longer differ included. The local-changes review reads before
+    /// it is listed, with no comments and nothing saved, so a Mac may start it.
     public func read(_ sessionID: String, in worktree: Worktree) throws -> HostReview {
-        guard let parsed = ReviewDraftSessionID(rawValue: sessionID), parsed.isFor(worktreeID: worktree.id),
-              let summary = try list(in: worktree).first(where: { $0.sessionID == sessionID }) else {
+        guard let parsed = ReviewDraftSessionID(rawValue: sessionID), parsed.isFor(worktreeID: worktree.id) else {
             throw HostError.notFound(what: "review \(sessionID)")
         }
-        return HostReview(summary: summary, comments: try core.reviewDrafts.load(sessionID: parsed))
+        if let summary = try list(in: worktree).first(where: { $0.sessionID == sessionID }) {
+            return HostReview(summary: summary, comments: try core.reviewDrafts.load(sessionID: parsed))
+        }
+        let localChanges = ReviewSessionTarget.localChanges(worktreeID: worktree.id, repositoryPath: worktree.path, scope: .all)
+        guard parsed == localChanges.draftSessionID else { throw HostError.notFound(what: "review \(sessionID)") }
+        let now = Date()
+        let record = ReviewSessionRecord(id: localChanges.id, target: localChanges, createdAt: now, updatedAt: now)
+        return HostReview(summary: HostReviewSummary(record: record, openCommentCount: 0), comments: [])
     }
 
     /// A paired Mac's change to review `sessionID` of the worktree, made as

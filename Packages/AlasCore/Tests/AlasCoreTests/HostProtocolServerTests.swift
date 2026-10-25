@@ -1014,6 +1014,25 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// A Mac may start the local-changes review before it is listed: it
+    /// reads with no comments, and reading saves nothing.
+    @Test func theUnlistedLocalChangesReviewReadsEmpty() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let sessionID = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue
+
+        guard case .review(let review) = try await fixture.request(.readReview(worktree: ref, sessionID: sessionID)) else {
+            Issue.record("expected the review")
+            return
+        }
+        #expect(review.summary.sessionID == sessionID)
+        #expect(review.comments.isEmpty)
+        #expect(try fixture.core.reviewSessions.list(worktreeID: worktree.id).isEmpty)
+        #expect(try fixture.host.reviews.list(in: worktree).isEmpty)
+    }
+
     /// With a path both staged and unstaged, an agent's comment goes to the
     /// unstaged side; a Mac's stays on the side it was filed on, and only on
     /// a side its review has: not a commit's, nor a stage the file lacks.
