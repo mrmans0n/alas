@@ -1,4 +1,5 @@
 import Foundation
+import os
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -152,6 +153,13 @@ public struct ACPSteeringParams: Encodable, Sendable {
 /// methods for the messages we send.
 public final class ACPConnection: @unchecked Sendable {
     public let client: ACPClient
+    public let protocolSelection: ACPProtocolSelection
+    private let protocolStateLock = NSLock()
+    private var selectedProtocolVersion: ACPProtocolVersion?
+    public var negotiatedProtocolVersion: ACPProtocolVersion? {
+        protocolStateLock.withLock { selectedProtocolVersion }
+    }
+    private static let protocolLogger = Logger(subsystem: "io.nlopez.alas", category: "acp-protocol")
     private let durableResponseLock = NSLock()
     private var pendingDurableSessionResponses: [ACPDurableConsumptionAcknowledgement] = []
 
@@ -276,9 +284,14 @@ public final class ACPConnection: @unchecked Sendable {
         }
     }
 
-    public init(client: ACPClient, sessionMeta: ACPSessionMeta? = nil) {
+    public init(
+        client: ACPClient,
+        sessionMeta: ACPSessionMeta? = nil,
+        protocolSelection: ACPProtocolSelection = .init()
+    ) {
         self.client = client
         self.sessionMeta = sessionMeta
+        self.protocolSelection = protocolSelection
     }
 
     /// `sessionMeta` plus the per-connection fields. `mcpServers` is nil for
@@ -319,7 +332,7 @@ public final class ACPConnection: @unchecked Sendable {
         )
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
-                                protocolVersion: ACPProtocolVersion.current,
+                                protocolVersion: protocolSelection.requestedVersion.rawValue,
                                 clientCapabilities: .init(
                                     fs: .init(readTextFile: true, writeTextFile: true),
                                     terminal: client.advertisesTerminalCapability,
@@ -327,7 +340,16 @@ public final class ACPConnection: @unchecked Sendable {
                              brokerOperationKey: brokerOperationKey)
         let resp = try await client.send(req)
         defer { resp.acknowledgeDurableConsumption() }
-        let result = try JSONDecoder().decode(ACPInitializeResult.self, from: resp.body)
+        let decoded = try ACPInitializationResult.decode(
+            from: resp.body,
+            requestedVersion: protocolSelection.requestedVersion,
+            supportedVersions: protocolSelection.supportedVersions)
+        guard case .v1(let result) = decoded else {
+            throw ACPProtocolNegotiationError.sessionSupportUnavailable(version: 2)
+        }
+        protocolStateLock.withLock { selectedProtocolVersion = .v1 }
+        Self.protocolLogger.info(
+            "initialized ACP \(result.protocolVersion) agent=\(result.agentInfo?.name ?? "unknown", privacy: .public) version=\(result.agentInfo?.version ?? "unknown", privacy: .public) experimentalV2=\(self.protocolSelection.experimentalV2Enabled)")
         let capabilities = result.agentCapabilities
         negotiatedCodexHooks = codexHooksReviewEnabled
             && ACPCodexHooksCapability.supports(agentInfo: result.agentInfo)

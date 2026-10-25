@@ -11,9 +11,18 @@ struct AdvancedPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Advanced").font(.system(size: 18, weight: .semibold))
-                Text("Destructive maintenance actions.")
+                Text("Experimental options and maintenance actions.")
                     .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
                     .padding(.bottom, 12)
+
+                SettingsGroup(title: "Experiments") {
+                    SettingsRow(
+                        name: "Experimental ACP 2",
+                        desc: "Applies to new agent connections. No agents are enabled yet; sessions continue to use ACP 1."
+                    ) {
+                        AlasToggle(on: state.bind(\.experimentalACP2Enabled))
+                    }
+                }
 
                 if let recovery = state.workspaceRecoveryError {
                     SettingsGroup(title: "Workspaces") {

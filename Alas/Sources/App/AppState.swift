@@ -12367,6 +12367,9 @@ final class AppState {
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
             },
+            experimentalACP2Enabled: { [weak self] in
+                self?.config.experimentalACP2Enabled ?? false
+            },
             autoResumeAfterUsageLimit: { [weak self] in
                 self?.config.harness.acpAutoResumeAfterUsageLimit ?? true
             },
@@ -12875,6 +12878,9 @@ final class AppState {
             },
             localTitlesEnabled: { [weak self] in
                 self?.config.harness.acpLocalTitlesEnabled ?? false
+            },
+            experimentalACP2Enabled: { [weak self] in
+                self?.config.experimentalACP2Enabled ?? false
             },
             autoResumeAfterUsageLimit: { [weak self] in
                 self?.config.harness.acpAutoResumeAfterUsageLimit ?? true

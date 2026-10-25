@@ -433,6 +433,7 @@ public final class AlasCoreContext {
                 worktreePath: worktree.path.path,
                 owner: owner,
                 persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
+                experimentalACP2Enabled: { config().experimentalACP2Enabled },
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
                 continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions },
                 onTurnCompleted: onTurnCompleted,
