@@ -212,16 +212,34 @@ public final class HostConsoles {
         let gate: RepoHookGate
         do {
             gate = try await core.gateRepoHook(event: .sessionOpen, project: project, consent: repoHook) {
-                await core.environment.repoHookLoader.load(event: .sessionOpen, worktreeRoot: worktree.path, host: nil)
+                await core.environment.repoHookLoader.load(event: .sessionOpen, worktreeRoot: worktree.path, host: project.host)
             }
         } catch {
             throw PeerConsoleOpenError(error.localizedDescription)
         }
         if case .needsApproval(let hook) = gate { throw RepoHookApprovalRequired(hook: hook) }
         // Read again: only the hook as it is now runs, and only if approved.
-        let repoScript = try await core.preparedRepoHook(
-            event: .sessionOpen, project: project, worktree: worktree, context: .sessionOpen, prompter: .skipping
-        )
+        // One that changed since is asked about again, or skipped for a
+        // peer that can't ask.
+        var repoScript: String?
+        if case .ready(.some) = gate {
+            var changed: RepoHook?
+            let reread = RepoHookPrompter(
+                decide: { hook, _, _ in
+                    changed = hook
+                    return repoHook == nil ? .skip : .cancel
+                },
+                decideFailure: { _, _ in .skip }
+            )
+            do {
+                repoScript = try await core.preparedRepoHook(
+                    event: .sessionOpen, project: project, worktree: worktree, context: .sessionOpen, prompter: reread
+                )
+            } catch {
+                if let changed { throw RepoHookApprovalRequired(hook: PeerRepoHook(changed)) }
+                throw error
+            }
+        }
         let script = StartupScriptResolver.sessionOpenScript(
             global: core.environment.globalTerminalConfig(), repoScript: repoScript, project: project
         )

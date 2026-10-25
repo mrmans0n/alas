@@ -135,6 +135,21 @@ struct HostConsolesTests {
         #expect(!fixture.core.projects.isRepoHookApproved(projectId: "p", hash: hash))
     }
 
+    /// A hook that changed after its approval is asked about again, not run.
+    @Test func aShellOpenAsksAgainWhenItsHookChangedAfterApproval() async throws {
+        let fixture = try Fixture(environment: ChangingHookEnvironment())
+        defer { fixture.tearDown() }
+        let consoles = fixture.consoles()
+        let approved = RepoHookTrust.hash(event: .sessionOpen, bytes: Data("echo hook\n".utf8))
+        let evil = RepoHookTrust.hash(event: .sessionOpen, bytes: Data("echo evil\n".utf8))
+
+        await #expect(throws: RepoHookApprovalRequired(hook: PeerRepoHook(event: .sessionOpen, text: "echo evil\n", hash: evil))) {
+            try await consoles.open(worktreeId: fixture.worktree.id, repoHook: .approve(hash: approved))
+        }
+        #expect(fixture.launches.isEmpty)
+        #expect(!fixture.core.projects.isRepoHookApproved(projectId: "p", hash: evil))
+    }
+
     /// Global, then the approved repo hook, then the project's own script, as
     /// the app's terminals run them; without approval the hook is left out.
     @Test(arguments: [true, false])
@@ -144,7 +159,7 @@ struct HostConsolesTests {
         var scripts = ProjectStartupScripts.defaults
         scripts.sessionOpenMode = .appendToGlobal
         scripts.sessionOpenScript = "echo project"
-        let fixture = try Fixture(configuration: config, startupScripts: scripts)
+        let fixture = try Fixture(environment: HeadlessHostEnvironment(configuration: config), startupScripts: scripts)
         defer { fixture.tearDown() }
         let hash = try fixture.writeHook("echo hook\n")
 
@@ -708,7 +723,7 @@ struct HostConsolesTests {
 
         init(
             host: String? = nil, zmxAvailable: Bool = true,
-            configuration: AppConfig = .defaults, startupScripts: ProjectStartupScripts = .defaults
+            environment: any AlasHostEnvironment = HeadlessHostEnvironment(), startupScripts: ProjectStartupScripts = .defaults
         ) throws {
             let fm = FileManager.default
             root = fm.temporaryDirectory.appendingPathComponent("alas-hostconsoles-\(UUID().uuidString)")
@@ -732,7 +747,7 @@ struct HostConsolesTests {
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
                 attentionStore: .scratch(),
-                environment: HeadlessHostEnvironment(configuration: configuration),
+                environment: environment,
                 // Short enough for `eventually`, not zero: an already-written
                 // `.done` wins over the idle check.
                 runHostGrace: RunHostGrace(local: .milliseconds(200), any: .milliseconds(200)),
@@ -865,4 +880,16 @@ struct HostConsolesTests {
             try? FileManager.default.removeItem(at: zmxDir)
         }
     }
+}
+
+/// Reads the session-open hook as approved first, then as changed.
+@MainActor private final class ChangingHookEnvironment: AlasHostEnvironment {
+    private var loads = 0
+    var repoHookLoader: RepoHookLoader {
+        loads += 1
+        let text = loads == 1 ? "echo hook\n" : "echo evil\n"
+        return RepoHookLoader { _, _, _ in .data(Data(text.utf8)) }
+    }
+
+    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool { true }
 }
