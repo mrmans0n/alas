@@ -59,3 +59,31 @@ extension ReviewsAPI {
         return (record, remote, provider)
     }
 }
+
+extension AlasCoreContext {
+    /// The path renamed file `path` had before in pull or merge request
+    /// review `session`, from its provider diff (loaded once per review);
+    /// nil on any failure, which files the comment without it.
+    public func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? {
+        if let files = providerReviewFiles[session] { return files.first { $0.path == path }?.originalPath }
+        // Hidden worktrees too: an agent can comment from one.
+        let worktrees = projects.projects.flatMap { projects.worktrees(projectId: $0.id) }
+        guard let worktree = worktrees.first(where: { session.isFor(worktreeID: $0.id) }),
+              let record = try? reviewSessions.list(worktreeID: worktree.id)
+              .first(where: { $0.target.draftSessionID == session }),
+              case .reviewRequest(_, _, _, let number, _) = record.target.payload,
+              // The session's own remote, so no other repository's PR of the
+              // same number can stamp a path.
+              let remote = record.target.providerRemote,
+              let provider = codeHostProviders.provider(for: remote.kind) else { return nil }
+        do {
+            let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
+            let files = try await ReviewRequestDiffLoader(provider: provider)
+                .load(remote: remote, request: request, cwd: worktree.path).summary.files
+            providerReviewFiles[session] = files
+            return files.first { $0.path == path }?.originalPath
+        } catch {
+            return nil
+        }
+    }
+}

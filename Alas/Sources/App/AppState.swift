@@ -7198,13 +7198,6 @@ final class AppState {
         }
     }
 
-    /// Caches the loaded file summaries of a provider review, keyed by its
-    /// draft session id, so repeated `review_comment_add` calls in the same
-    /// review share one `gh`/`glab diff` fetch. Best-effort and never
-    /// invalidated: rename mappings rarely change mid-review, and a miss
-    /// simply falls back to nil (today's behavior).
-    private var providerReviewFileSummaryCache: [ReviewDraftSessionID: [DiffReviewFileSummary]] = [:]
-
     /// Shared orchestration coordinator: the CLI/MCP router, the manager
     /// turn-completion hooks, and startup reconciliation all talk to one
     /// instance so outcome delivery has a single producer per instance.
@@ -11512,59 +11505,6 @@ final class AppState {
         }
     }
 
-    /// Resolves the pre-rename `originalPath` for `relativePath` in the
-    /// provider review identified by `sessionID`, by loading the review's
-    /// diff (cached per session). Returns nil on any failure — a nil
-    /// `originalPath` is exactly the prior behavior, so this never blocks or
-    /// alters filing a comment.
-    func reviewRequestOriginalPath(
-        forDraftSessionID sessionID: ReviewDraftSessionID,
-        relativePath: String
-    ) async -> String? {
-        if let cached = providerReviewFileSummaryCache[sessionID] {
-            return ProviderReviewOriginalPathResolver.originalPath(forRelativePath: relativePath, in: cached)
-        }
-        do {
-            // Find the persisted review session record for this draft session.
-            // Scan all worktrees, not just visible ones: the CLI resolves its
-            // origin worktree via `worktree(withId:)`, which includes hidden
-            // worktrees, so a comment filed from a hidden worktree must still
-            // find its session record here.
-            let sessionStore = core.reviewSessions
-            let allWorktrees = projects.flatMap { projectsManager.worktrees(projectId: $0.id) }
-            var record: ReviewSessionRecord?
-            for worktree in allWorktrees where sessionID.isFor(worktreeID: worktree.id) {
-                record = try sessionStore.list(worktreeID: worktree.id)
-                    .first(where: { $0.target.draftSessionID == sessionID })
-                if record != nil { break }
-            }
-            guard let record,
-                  case .reviewRequest(_, let host, let repositorySlug, let number, _) = record.target.payload,
-                  let worktree = worktree(withId: record.target.worktreeID) else {
-                return nil
-            }
-
-            let registry = CodeHostProviderRegistry.live()
-            let supportedRemotes = try await core.supportedReviewRemotes(for: worktree, registry: registry)
-            // Require the exact remote the session was opened against. Falling
-            // back to a different remote would load that repository's PR/MR of
-            // the same number and could stamp an `originalPath` from an
-            // unrelated review; nil is the correct best-effort result instead.
-            guard let remote = supportedRemotes.first(where: {
-                $0.host == host && $0.repositorySlug.lowercased() == repositorySlug.lowercased()
-            }), let provider = registry.provider(for: remote.kind) else { return nil }
-
-            let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
-            let loaded = try await ReviewRequestDiffLoader(provider: provider)
-                .load(remote: remote, request: request, cwd: worktree.path)
-            let files = loaded.summary.files
-            providerReviewFileSummaryCache[sessionID] = files
-            return ProviderReviewOriginalPathResolver.originalPath(forRelativePath: relativePath, in: files)
-        } catch {
-            return nil
-        }
-    }
-
     /// Deletes a worktree claimed by `host.worktrees.beginDelete` through the host,
     /// then settles what only the app has: the force prompt (or, when
     /// `promptsForForce` is false, as in batches that must never pop a modal
@@ -14736,10 +14676,6 @@ class AppHostEnvironment: AlasHostEnvironment {
     }
 
     func workspaceDeletionRefusal(for worktree: Worktree) -> String? { app?.workspaceOwnershipDeletionRefusal(for: worktree) }
-
-    func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? {
-        await app?.reviewRequestOriginalPath(forDraftSessionID: session, relativePath: path) ?? nil
-    }
 
     func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree) {
         app?.observeReviewReplyAttention(worktree: worktree, comment: comment, reply: reply)

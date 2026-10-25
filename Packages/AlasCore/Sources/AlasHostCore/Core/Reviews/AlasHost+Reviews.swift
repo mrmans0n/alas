@@ -211,7 +211,7 @@ public struct ReviewsAPI {
         let originalPath: String?
         if targetSessionID.sourceKind == .reviewRequest,
            targetSessionID.reviewRequestProvider == .gitlab {
-            originalPath = await core.environment.providerReviewOriginalPath(targetSessionID, path: relativePath)
+            originalPath = await core.environment.providerReviewOriginalPath(targetSessionID, path: relativePath, in: core)
         } else {
             originalPath = nil
         }

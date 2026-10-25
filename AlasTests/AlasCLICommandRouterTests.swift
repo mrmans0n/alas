@@ -1489,7 +1489,7 @@ private final class RouterTerminals: AlasHostEnvironment {
     }
     func terminalSessionOwner(_ sessionID: String) -> SessionOwnerID? { owner(sessionID) }
     func workspaceCheckout(id: UUID) -> WorkspaceCheckout? { checkouts.first { $0.id == id } }
-    func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? {
+    func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String, in core: AlasCoreContext) async -> String? {
         await reviews.originalPath(session, path)
     }
 }

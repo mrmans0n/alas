@@ -996,6 +996,43 @@ struct HostProtocolServerTests {
             == .failure(error: .failed(message: "Authentication is required for github.com.")))
     }
 
+    /// Comments on a renamed file of a pull or merge request keep the path it
+    /// had before where the provider publishes against it, and a Mac files
+    /// them on the review's own files.
+    @Test(arguments: [CodeHostKind.github, .gitlab])
+    func commentsOnAPullRequestReviewKeepTheirOriginalPath(_ kind: CodeHostKind) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "b\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let provider = FakeReviewProvider(kind: kind)
+        provider.diff = "diff --git a/old.txt b/a.txt\nsimilarity index 50%\nrename from old.txt\nrename to a.txt\n"
+            + "--- a/old.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+        let rawSession = try await fixture.openPullRequestReview(provider)
+        let session = try #require(ReviewDraftSessionID(rawValue: rawSession))
+
+        _ = await fixture.host.reviews.addComment(
+            origin: worktree, path: "a.txt", startLine: 1, endLine: nil, side: nil, body: "Why?",
+            sessionID: rawSession, projectWorktrees: [worktree]
+        )
+        #expect(try fixture.core.reviewDrafts.load(sessionID: session).map(\.originalPath)
+            == [kind == .gitlab ? "old.txt" : nil])
+
+        let namespace = kind == .github ? "github-pr" : "gitlab-mr"
+        func add(_ namespace: String) async throws -> HostResponse {
+            try await fixture.request(.mutateReview(worktree: ref, sessionID: rawSession, mutation: .add(
+                fileID: DiffReviewFileID(namespace: namespace, path: "a.txt"), path: "a.txt", originalPath: "old.txt",
+                anchor: .line(side: .new, startLine: 1, endLine: nil, selectedText: nil), body: "From the Mac"
+            )))
+        }
+        #expect(try await add(namespace) == .done)
+        #expect(try await add("commit") == .failure(error: .invalidRequest(reason: "this review has no commit files")))
+        let mac = try fixture.core.reviewDrafts.load(sessionID: session).filter { $0.bodyMarkdown == "From the Mac" }
+        #expect(mac.map(\.fileID.namespace) == [namespace])
+        #expect(mac.map(\.effectiveAuthor) == [.user])
+    }
+
     /// Local changes are listed, never saved, once an agent comments on them;
     /// finishing them saves the one record the list then shows instead.
     @Test func theListSynthesizesLocalChangesOnceItHasComments() async throws {

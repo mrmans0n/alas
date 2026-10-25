@@ -98,7 +98,7 @@ public protocol AlasHostEnvironment: AnyObject {
     func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool
     /// The path a renamed file had before, in a provider review, for the
     /// providers that publish comments against it.
-    func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String?
+    func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String, in core: AlasCoreContext) async -> String?
     /// An agent replied to a review comment on `worktree`, which raises
     /// attention for the user.
     func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree)
@@ -114,6 +114,10 @@ public protocol AlasHostEnvironment: AnyObject {
 }
 
 extension AlasHostEnvironment {
+    public func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String, in core: AlasCoreContext) async -> String? {
+        await core.providerReviewOriginalPath(session, path: path)
+    }
+
     /// A host with no editors has no unsaved changes to refuse.
     public func quiesceWorktree(_ worktree: Worktree, refusingUnsavedEdits: Bool, in core: AlasCoreContext) async throws {
         try await quiesceWorktree(worktree, in: core)
@@ -199,8 +203,6 @@ extension AlasHostEnvironment {
     public func workspaceDeletionRefusal(for worktree: Worktree) -> String? { nil }
 
     public func hasUnsavedEditorChanges(in worktree: Worktree) -> Bool { false }
-
-    public func providerReviewOriginalPath(_ session: ReviewDraftSessionID, path: String) async -> String? { nil }
 
     public func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree) {}
 

@@ -136,7 +136,7 @@ extension ReviewsAPI {
         case .image:
             throw HostError.invalidRequest(reason: "Only file and line comments can be added from a paired Mac.")
         }
-        guard [.localChanges, .commit, .trackedCommit, .commitRange, .branch].contains(session.sourceKind) else {
+        guard [.localChanges, .commit, .trackedCommit, .commitRange, .branch, .reviewRequest].contains(session.sourceKind) else {
             throw HostError.invalidRequest(reason: "Not available from this Mac yet.")
         }
         for text in [body, path, fileID.namespace, originalPath ?? ""] { try Self.checkSize(text) }
