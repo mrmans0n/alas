@@ -143,6 +143,11 @@ struct NativePeerReviewView: View {
         case failed(String)
     }
 
+    private struct FailedMutation {
+        let mutation: HostReviewMutation
+        let message: String
+    }
+
     private struct ReadKey: Equatable {
         let revision: Int?
         let generation: Int
@@ -161,7 +166,9 @@ struct NativePeerReviewView: View {
     @State private var reloadGeneration = 0
     /// Why a reload failed; the diff loaded before stays shown.
     @State private var reloadError: String?
-    @State private var mutationError: String?
+    /// The last change the host refused or never answered, kept so its text
+    /// isn't lost: the surface clears its composer when it saves.
+    @State private var failedMutation: FailedMutation?
     @State private var selectedFileID: DiffReviewFileID?
     @State private var railCollapsed = false
     @State private var reviewSummaryCollapsed = false
@@ -172,7 +179,7 @@ struct NativePeerReviewView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let mutationError { note(mutationError, color: "del") }
+            if let failedMutation { failedMutationNote(failedMutation) }
             if readFailed { note(readFailedMessage, color: "del") }
             if let reloadError { note(reloadError, color: "del") }
             if case .loaded(_, truncated: true) = diff {
@@ -289,12 +296,49 @@ struct NativePeerReviewView: View {
 
     /// The host's `reviewsChanged` then reads the comments again.
     private func mutate(_ mutation: HostReviewMutation) {
-        mutationError = nil
+        failedMutation = nil
         Task { @MainActor in
-            mutationError = await hosts.mutateReview(
+            let error = await hosts.mutateReview(
                 mutation, sessionID: selection.sessionID, in: selection.worktree, serverId: selection.serverId
             )
+            failedMutation = error.map { FailedMutation(mutation: mutation, message: $0) }
         }
+    }
+
+    /// The refusal, with the comment text an add or edit carried, to send
+    /// again or copy. ponytail: the surface has no way to seed its composer;
+    /// restore the text there if one is added.
+    private func failedMutationNote(_ failed: FailedMutation) -> some View {
+        let text: String? = switch failed.mutation {
+        case .add(_, _, _, _, let body), .edit(_, let body): body
+        case .delete, .resolve, .dismiss: nil
+        }
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(failed.message).foregroundColor(theme.color("del"))
+            if let text {
+                Text(text)
+                    .foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(4)
+                    .textSelection(.enabled)
+            }
+            HStack(spacing: 10) {
+                Button("Retry") { mutate(failed.mutation) }
+                if let text {
+                    Button("Copy text") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(text, forType: .string)
+                    }
+                }
+                Button("Dismiss") { failedMutation = nil }
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+        }
+        .font(CenterTypography.codeFont(family: codeFontFamily, size: codeFontSize - 2))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.color("bg-2"))
     }
 
     private func readReview() async {
