@@ -256,7 +256,7 @@ extension AlasCoreContext {
         projects.setOperationState(for: worktree, state: nil)
     }
 
-    private func fetchBase(_ base: String, in repoPath: URL) async {
+    func fetchBase(_ base: String, in repoPath: URL) async {
         guard let fetch = try? await GitService().remoteForFetch(worktreePath: repoPath, ref: base) else { return }
         do {
             _ = try await GitService().fetchRef(worktreePath: repoPath, remote: fetch.remote, branch: fetch.branch)
