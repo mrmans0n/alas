@@ -25,7 +25,7 @@ PASS means it worked on the final build. "via AX" means the tool reports `delive
 | Xcode | PASS (Source Editor found by query, `truncated: false`) | PASS (Open panel press returns a "didn't answer in time" warning) | NOT CHECKED | NOT CHECKED | NOT CHECKED | NOT CHECKED | N/A | PASS (first call returns `computer_approval_pending`) | cursor overlay cannot draw above layer-8 panels | PASS |
 | Terminal | NOT CHECKED | NOT CHECKED | NOT CHECKED | NOT CHECKED | NOT CHECKED | NOT CHECKED | N/A | NOT CHECKED | NOT CHECKED | PASS (also with Secure Keyboard Entry on) |
 | System Settings | PASS (sheets appear in the parent's tree) | PASS | PASS (via AX, on screen and parked) | NOT CHECKED | PASS (via AX: escape/return press Cancelar/Aceptar on a pane sheet, even parked) | PASS (via AX, on screen and parked) | N/A | NOT CHECKED | NOT CHECKED | PASS |
-| 1Password, Keychain Access, credential prompts | blocked: `computer_blocked`, no windows listed | blocked | blocked | blocked | blocked | blocked | blocked | blocked (`computer_blocked`) | N/A | PASS (stop works while a prompt shows) |
+| 1Password, Keychain Access, credential prompts | blocked: `computer_blocked`, no windows listed | blocked | blocked | blocked | blocked | blocked | blocked | blocked (`computer_blocked`) | N/A | N/A (the agent can't act on these apps) |
 
 Notes on the last row:
 
