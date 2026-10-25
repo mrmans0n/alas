@@ -157,7 +157,7 @@ extension ReviewsAPI {
     }
 
     /// Bounds what a Mac stores in the host's review drafts.
-    private static func checkSize(_ text: String) throws {
+    static func checkSize(_ text: String) throws {
         guard text.utf8.count <= 64 * 1024 else {
             throw HostError.invalidRequest(reason: "This review comment is too long.")
         }

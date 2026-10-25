@@ -145,6 +145,12 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// Opens the review of the worktree's pull or merge request `number`,
     /// reusing the open one, as an agent would (`host.reviews.provider.v1`).
     case openProviderReview(worktree: WorktreeRef, number: Int)
+    /// Replies to, resolves or unresolves thread `threadID` of pull or merge
+    /// request review `sessionID` on its provider, as the host's user
+    /// (`host.reviews.provider.v1`).
+    case mutateReviewThread(
+        worktree: WorktreeRef, sessionID: String, threadID: String, kind: ProviderThreadMutationKind, body: String?
+    )
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -366,6 +372,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case review(review: HostReview)
     /// The answer to `readProviderReview`.
     case providerReview(review: HostProviderReview)
+    /// The answer to `mutateReviewThread`.
+    case reviewThreadMutated(result: ProviderThreadMutationResult)
     case failure(error: HostError)
 }
 

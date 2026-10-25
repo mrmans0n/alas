@@ -996,6 +996,48 @@ struct HostProtocolServerTests {
             == .failure(error: .failed(message: "Authentication is required for github.com.")))
     }
 
+    /// A Mac acts only on the threads of the review's own pull request, and
+    /// the host tells subscribers the reviews changed.
+    @Test func threadActionsActOnlyOnTheirPullRequestsThreads() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        provider.threads = [ReviewThread(
+            id: "t1", path: "a.txt", line: 1, startLine: nil, originalLine: nil, diffHunk: nil, isResolved: false,
+            isOutdated: false, isFileLevel: false, comments: [], viewerCanResolve: true, viewerCanReply: true, url: nil
+        )]
+        let sessionID = try await fixture.openPullRequestReview(provider)
+        let subscription = fixture.host.subscribe()
+
+        guard case .reviewThreadMutated = try await fixture.request(
+            .mutateReviewThread(worktree: ref, sessionID: sessionID, threadID: "t1", kind: .resolve, body: nil)
+        ) else {
+            Issue.record("expected the mutated thread")
+            return
+        }
+        #expect(provider.threadMutations.map { [$0.thread.providerThreadID, $0.kind.rawValue, $0.cwd.path] }
+            == [["t1", "resolve", worktree.path.path]])
+        #expect(await fixture.events(of: subscription).contains(.reviewsChanged(worktreeID: worktree.id)))
+
+        #expect(try await fixture.request(.mutateReviewThread(
+            worktree: ref, sessionID: sessionID, threadID: "t9", kind: .reply, body: "Hi"
+        )) == .failure(error: .notFound(what: "review thread t9")))
+        guard case .success(let commit) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+            Issue.record("expected the commit review")
+            return
+        }
+        #expect(try await fixture.request(.mutateReviewThread(
+            worktree: ref, sessionID: commit.record.target.draftSessionID.rawValue, threadID: "t1", kind: .resolve, body: nil
+        )) == .failure(error: .invalidRequest(reason: "This review has no pull or merge request.")))
+        let foreign = ReviewDraftSessionID.localChanges(worktreeID: "other", worktreePath: repo, scope: .all).rawValue
+        #expect(try await fixture.request(.mutateReviewThread(
+            worktree: ref, sessionID: foreign, threadID: "t1", kind: .resolve, body: nil
+        )) == .failure(error: .notFound(what: "review \(foreign)")))
+        #expect(provider.threadMutations.count == 1)
+    }
+
     /// Comments on a renamed file of a pull or merge request keep the path it
     /// had before where the provider publishes against it, and a Mac files
     /// them on the review's own files.
@@ -1395,16 +1437,21 @@ struct HostProtocolServerTests {
                 caller: .remotePeer(deviceID: "d"))
         }
 
+        /// The events `subscription` has received so far.
+        func events(of subscription: HostSubscription) async -> [HostEvent] {
+            let marker = HostEvent.worktreeNotice(HostWorktreeNotice(id: UUID(), worktreeID: "", title: nil, body: ""))
+            host.noteAttention([marker])
+            var events: [HostEvent] = []
+            while let batch = await subscription.next() {
+                events += batch
+                if events.contains(marker) { break }
+            }
+            return events.filter { $0 != marker }
+        }
+
         /// The worktree notices `subscription` has received so far.
         func worktreeNotices(of subscription: HostSubscription) async -> [HostWorktreeNotice] {
-            let marker = HostWorktreeNotice(id: UUID(), worktreeID: "", title: nil, body: "")
-            host.noteAttention([.worktreeNotice(marker)])
-            var notices: [HostWorktreeNotice] = []
-            while let batch = await subscription.next() {
-                notices += batch.compactMap { if case .worktreeNotice(let notice) = $0 { notice } else { nil } }
-                if notices.contains(marker) { break }
-            }
-            return notices.filter { $0 != marker }
+            await events(of: subscription).compactMap { if case .worktreeNotice(let notice) = $0 { notice } else { nil } }
         }
 
         /// Adds an `origin` of `provider`'s kind, installs `provider` for it,
@@ -1528,6 +1575,7 @@ struct HostProtocolServerTests {
         var login: String? = "octocat"
         /// Thrown by `reviewRequest`.
         var readError: (any Error)?
+        var threadMutations: [ProviderThreadMutation] = []
 
         init(kind: CodeHostKind) { self.kind = kind }
 
@@ -1541,6 +1589,10 @@ struct HostProtocolServerTests {
             )
         }
         func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+        func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
+            threadMutations.append(mutation)
+            return ProviderThreadMutationResult(refreshedRequest: mutation.reviewRequest, providerURL: nil)
+        }
         func viewerLogin(remote: CodeHostRemote, cwd: URL) async -> String? { login }
         func isAvailable(cwd: URL) async -> Bool { true }
         func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }

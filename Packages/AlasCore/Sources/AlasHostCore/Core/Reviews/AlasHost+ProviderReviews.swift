@@ -43,6 +43,44 @@ extension ReviewsAPI {
         }
     }
 
+    /// Replies to, resolves or unresolves thread `threadID` of pull or merge
+    /// request review `sessionID` on its provider, as the host's user.
+    public func mutateThread(
+        _ threadID: String, kind: ProviderThreadMutationKind, body: String?,
+        sessionID: String, in worktree: Worktree, caller: HostCaller
+    ) async throws -> ProviderThreadMutationResult {
+        caller.log("reviews.thread", "\(sessionID) \(threadID) \(kind.rawValue)")
+        let (record, remote, provider) = try providerSession(sessionID, in: worktree)
+        try Self.checkSize(body ?? "")
+        guard case .reviewRequest(_, _, _, let number, _) = record.target.payload else {
+            throw HostError.invalidRequest(reason: "This review has no pull or merge request.")
+        }
+        let request: ReviewRequest
+        do {
+            request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
+        } catch {
+            throw HostError.failed(message: error.localizedDescription)
+        }
+        // Only a thread of this pull request: a Mac must not reach another's.
+        guard let thread = request.threads.first(where: { $0.id == threadID }) else {
+            throw HostError.notFound(what: "review thread \(threadID)")
+        }
+        // Both providers read only `providerThreadID`.
+        let summary = ReviewThreadSummary(
+            id: thread.id, author: thread.author, body: thread.body, url: thread.url,
+            isResolved: thread.isResolved, isActionable: thread.isActionable, providerThreadID: thread.id
+        )
+        do {
+            let result = try await provider.mutateReviewThread(ProviderThreadMutation(
+                remote: remote, reviewRequest: request, thread: summary, kind: kind, bodyMarkdown: body, cwd: worktree.path
+            ))
+            didChange(worktreeID: worktree.id)
+            return result
+        } catch {
+            throw HostError.failed(message: error.localizedDescription)
+        }
+    }
+
     /// The saved PR session `sessionID` of `worktree`, its remote and provider.
     private func providerSession(
         _ sessionID: String, in worktree: Worktree

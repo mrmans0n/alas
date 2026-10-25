@@ -370,6 +370,10 @@ public final class HostProtocolConnection {
             return .review(review: try await host.reviews.openProviderReview(
                 number: number, in: try providerReviewWorktree(ref), caller: caller
             ))
+        case .mutateReviewThread(let ref, let sessionID, let threadID, let kind, let body):
+            return .reviewThreadMutated(result: try await host.reviews.mutateThread(
+                threadID, kind: kind, body: body, sessionID: sessionID, in: try providerReviewWorktree(ref), caller: caller
+            ))
         }
         return .done
     }

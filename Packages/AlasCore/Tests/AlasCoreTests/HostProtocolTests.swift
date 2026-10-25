@@ -66,6 +66,9 @@ struct HostProtocolTests {
             base: "abc1234", head: "def5678", threeDot: true, path: "b.txt", originalPath: "a.txt"))),
         HostClientMessage(id: 26, request: .readProviderReview(worktree: ref, sessionID: "s", withDiff: true)),
         HostClientMessage(id: 27, request: .openProviderReview(worktree: ref, number: 7)),
+        HostClientMessage(id: 28, request: .mutateReviewThread(
+            worktree: ref, sessionID: "s", threadID: "t1", kind: .reply, body: "Done."
+        )),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -97,6 +100,10 @@ struct HostProtocolTests {
         .response(id: 17, result: .providerReview(review: HostProviderReview(
             remote: ShepherdFixtures.request().remote, request: ShepherdFixtures.request(), capabilities: .githubCLI,
             account: "octocat", diff: "diff --git a/a.txt b/a.txt\n", diffTruncated: true
+        ))),
+        .response(id: 18, result: .reviewThreadMutated(result: ProviderThreadMutationResult(
+            refreshedRequest: ShepherdFixtures.request(), providerURL: URL(string: "https://github.com/acme/app/pull/7"),
+            warnings: ["w"]
         ))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
