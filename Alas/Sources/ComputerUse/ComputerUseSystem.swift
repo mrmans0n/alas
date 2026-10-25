@@ -1108,8 +1108,15 @@ extension LiveComputerUseSystem {
             var start = CGPoint.zero
             var end = CGPoint.zero
             /// Looks until the drag may go, raising windows as `dragStep` says.
+            /// Bounded by the clock as well as by its sleeps: each look also reads both windows and,
+            /// for elements, the app, which a slow app answers late.
             func settle() async throws {
-                var waited: TimeInterval = 0
+                let began = ContinuousClock.now
+                var slept: TimeInterval = 0
+                func elapsed() -> TimeInterval {
+                    let parts = (ContinuousClock.now - began).components
+                    return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
+                }
                 var raisedDrop = false
                 while true {
                     try checkCancelled()
@@ -1122,7 +1129,7 @@ extension LiveComputerUseSystem {
                         idleSeconds: secondsSinceUserInput(), activated: true,
                         start: state(startPoint, own: startWindow.windowID, other: dropWindow.windowID, displays: displays),
                         drop: state(endPoint, own: dropWindow.windowID, other: startWindow.windowID, displays: displays),
-                        raisedDrop: raisedDrop, waited: waited)
+                        raisedDrop: raisedDrop, waited: max(slept, elapsed()))
                     switch step {
                     case .drag, .activate:
                         if let startPoint, let endPoint { (start, end) = (startPoint, endPoint) }
@@ -1147,7 +1154,7 @@ extension LiveComputerUseSystem {
                         throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
                     }
                     try? await Task.sleep(for: dragRaisePoll)
-                    waited += 0.05
+                    slept += 0.05
                 }
             }
             await raiseSource()
