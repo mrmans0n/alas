@@ -783,6 +783,46 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// A requested branch that only exists as a remote-tracking name is not
+    /// what the worktree checks out: it is created from base, so the peer
+    /// is shown base's hook.
+    @Test func aRemoteTrackingBranchNameIsShownTheBasesHook() async throws {
+        let fixture = try await RepoFixture(environment: AskingEnvironment())
+        defer { fixture.tearDown() }
+        let hash = try await fixture.commitHook(.worktreeCreate, "touch main-ran\n")
+        let (repo, _) = try await fixture.mainWorktree()
+        _ = try await fixture.commitHook(.worktreeCreate, "touch topic-ran\n")
+        _ = try await Process.git(["update-ref", "refs/remotes/origin/topic", "HEAD"], cwd: repo)
+        _ = try await Process.git(["reset", "-q", "--hard", "HEAD~1"], cwd: repo)
+
+        #expect(await fixture.createForPeer(.ask, branch: "origin/topic")
+            == .needsRepoHookApproval(PeerRepoHook(event: .worktreeCreate, text: "touch main-ran\n", hash: hash)))
+    }
+
+    /// With fetch-before-create, the hook is read after the base is fetched:
+    /// the peer approves the script the checkout will get.
+    @Test func aFetchedBaseIsShownItsFetchedHook() async throws {
+        let environment = AskingEnvironment()
+        environment.config.worktrees.fetchRemoteBeforeCreate = true
+        let fixture = try await RepoFixture(environment: environment)
+        defer { fixture.tearDown() }
+        let (repo, _) = try await fixture.mainWorktree()
+        let origin = fixture.root.appendingPathComponent("origin")
+        try GitTemplate.repository(at: origin)
+        _ = try await Process.git(["remote", "add", "origin", origin.path], cwd: repo)
+        _ = try await Process.git(["fetch", "-q", "origin", "main"], cwd: repo)
+        let hook = origin.appendingPathComponent(RepoHookEvent.worktreeCreate.relativePath)
+        try FileManager.default.createDirectory(at: hook.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("touch fetched-ran\n".utf8).write(to: hook)
+        _ = try await Process.git(["add", "-A"], cwd: origin)
+        _ = try await Process.git(["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-m", "Add hook"], cwd: origin)
+
+        #expect(await fixture.createForPeer(.ask, base: "origin/main") == .needsRepoHookApproval(PeerRepoHook(
+            event: .worktreeCreate, text: "touch fetched-ran\n",
+            hash: RepoHookTrust.hash(event: .worktreeCreate, bytes: Data("touch fetched-ran\n".utf8))
+        )))
+    }
+
     /// An approval covers the script the peer was shown: if the worktree's
     /// script differs by the time it would run, it does not run.
     @Test func anApprovedHookThatChangedBeforeItRunsIsNotRun() async throws {
@@ -873,13 +913,15 @@ struct HostProtocolServerTests {
 
         /// Creates `feature` from `main` for a paired Mac, inside the fixture
         /// rather than under the real home, with a stub session.
-        func createForPeer(_ consent: RepoHookConsent?) async -> RemoteCreateWorktreeSessionResult {
+        func createForPeer(
+            _ consent: RepoHookConsent?, base: String = "main", branch: String = "feature"
+        ) async -> RemoteCreateWorktreeSessionResult {
             core.worktreeDestinationPreparer = { [root] _, destination in
                 root.appendingPathComponent(destination.lastPathComponent)
             }
             host.remoteSessionCreator = { _ in .success(RemoteSessionSummary(id: "s", title: "", agentId: "a", status: "idle", canDrive: true)) }
             return await host.remoteCreateWorktreeSession(
-                RemoteWorktreeSessionCreation(projectID: projectID, base: "main", branch: "feature", agentID: "a", repoHook: consent),
+                RemoteWorktreeSessionCreation(projectID: projectID, base: base, branch: branch, agentID: "a", repoHook: consent),
                 caller: .remotePeer(deviceID: "d"))
         }
 
@@ -1058,6 +1100,8 @@ struct HostProtocolServerTests {
     var asks = 0
     /// What a new worktree's hook reads as, when not its committed script.
     var scriptOnDisk: String?
+    var config = AppConfig.defaults
+    func configuration() -> AppConfig { config }
     var repoHookLoader: RepoHookLoader {
         guard let scriptOnDisk else { return RepoHookLoader() }
         return RepoHookLoader { _, _, _ in .data(Data(scriptOnDisk.utf8)) }

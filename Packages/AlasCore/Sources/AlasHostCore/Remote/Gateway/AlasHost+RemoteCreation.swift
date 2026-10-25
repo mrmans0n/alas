@@ -120,10 +120,19 @@ extension AlasHost {
             return refused()
         }
 
+        // Fetched before the hook is read, so the script approved is the one
+        // the checkout gets; the creation below then doesn't fetch again.
+        let fetchesBase = core.environment.configuration().worktrees.fetchRemoteBeforeCreate
+        let repoPath = URL(fileURLWithPath: project.path)
+        if fetchesBase { await core.fetchBase(request.base, in: repoPath) }
+
         let gate: RepoHookGate
         do {
-            let repoPath = URL(fileURLWithPath: project.path)
-            let ref = try await AlasCoreContext.qualifiedRef(branches.contains(request.branch) ? request.branch : request.base, repoPath: repoPath)
+            // The worktree checks out the local branch when it exists
+            // (`WorktreeService.add`), and is otherwise created from base.
+            let ref = try await AlasCoreContext.firstExistingRef(
+                ["refs/heads/\(request.branch)", "refs/heads/\(request.base)", "refs/remotes/\(request.base)"], repoPath: repoPath
+            ) ?? request.base
             gate = try await core.gateRepoHook(event: .worktreeCreate, project: project, consent: request.repoHook) {
                 await RepoHookLoader.loadCommitted(event: .worktreeCreate, ref: ref, repoPath: repoPath, host: project.host)
             }
@@ -134,7 +143,6 @@ extension AlasHost {
 
         var creation = WorktreeCreateRequest(projectID: project.id, base: request.base, branch: request.branch, destination: destination)
         creation.destinationAlreadyPrepared = true
-        creation.fetchesBaseFirst = core.environment.configuration().worktrees.fetchRemoteBeforeCreate
         creation.launchSurface = .delegated
         creation.asksAboutRepoHooks = false
         let worktree: Worktree
@@ -188,15 +196,16 @@ extension AlasHost {
 }
 
 extension AlasCoreContext {
-    /// A project's branches.
-    /// `name` as the full ref of the local or remote-tracking branch it
-    /// names, so a same-named tag can't stand in for it.
-    fileprivate static func qualifiedRef(_ name: String, repoPath: URL) async throws -> String {
-        for ref in ["refs/heads/\(name)", "refs/remotes/\(name)"] {
+    /// The first of `refs` that exists, as full refs so a same-named tag
+    /// can't stand in for a branch.
+    fileprivate static func firstExistingRef(_ refs: [String], repoPath: URL) async throws -> String? {
+        for ref in refs {
             if try await Process.git(["show-ref", "--verify", "--quiet", ref], cwd: repoPath).exitCode == 0 { return ref }
         }
-        return name
+        return nil
     }
+
+    /// A project's branches.
 
     func branches(of project: ProjectConfig) async throws -> [String] {
         let repoPath = URL(fileURLWithPath: project.path)
