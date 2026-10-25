@@ -61,14 +61,24 @@ public struct RepoHookLoader: Sendable {
     /// Resolves `path` component by component in `ref`'s tree, following
     /// symlinks relative to their directory, and reads the blob it lands on.
     private static func readCommitted(path: String, ref: String, repoPath: URL) async throws -> ReadResult {
-        /// The tree entry at `components`, or nil when there is none (or `ref` is unknown).
-        func entry(_ components: [String]) async throws -> TreeEntry? {
+        var lookups = 0
+        /// The tree entry at `components`: `.some(nil)` when the tree has
+        /// none, nil when the lookup itself failed (unknown ref, git error,
+        /// too many lookups). Paths are literal: a link target can't smuggle in pathspec magic.
+        func entry(_ components: [String]) async throws -> TreeEntry?? {
+            lookups += 1
+            guard lookups <= 256 else { return nil }
+            let requested = components.joined(separator: "/")
             let output = try await Process.gitData(
-                ["ls-tree", "-l", "-z", "--full-tree", ref, "--", components.joined(separator: "/")], cwd: repoPath)
-            guard output.exitCode == 0, let line = output.stdout.split(separator: 0).first,
-                  let fields = String(data: line, encoding: .utf8)?.split(separator: "\t").first?.split(separator: " ", omittingEmptySubsequences: true),
-                  fields.count == 4
-            else { return nil }
+                ["--literal-pathspecs", "ls-tree", "-l", "-z", "--full-tree", ref, "--", requested], cwd: repoPath)
+            guard output.exitCode == 0 else { return nil }
+            guard let line = output.stdout.split(separator: 0).first,
+                  let text = String(data: line, encoding: .utf8),
+                  let tab = text.firstIndex(of: "\t"),
+                  text[text.index(after: tab)...] == requested
+            else { return .some(nil) }
+            let fields = text[..<tab].split(separator: " ")
+            guard fields.count == 4 else { return nil }
             return TreeEntry(mode: String(fields[0]), object: String(fields[2]), size: Int(fields[3]))
         }
 
@@ -85,15 +95,20 @@ public struct RepoHookLoader: Sendable {
                 final = nil
                 continue
             }
-            guard let found = try await entry(resolved + [component]) else {
+            guard case let .some(lookup) = try await entry(resolved + [component]) else {
+                return .failed("Could not read hook")
+            }
+            guard let found = lookup else {
                 return followedSymlinks > 0 ? .failed("Hook symlink could not be resolved safely") : .missing
             }
             if found.mode == "120000" {
                 followedSymlinks += 1
-                // The kernel's MAXSYMLINKS.
-                guard followedSymlinks <= 32 else { return .failed("Hook symlink could not be resolved safely") }
-                let target = try await Process.gitDataPrefix(["cat-file", "blob", found.object], cwd: repoPath, maxBytes: 4097)
-                guard let target = String(data: target, encoding: .utf8), !target.isEmpty, target.count <= 4096 else {
+                // The kernel's MAXSYMLINKS and PATH_MAX - 1.
+                guard followedSymlinks <= 32, let size = found.size, size > 0, size <= 1023 else {
+                    return .failed("Hook symlink could not be resolved safely")
+                }
+                let data = try await Process.gitDataPrefix(["cat-file", "blob", found.object], cwd: repoPath, maxBytes: size + 1)
+                guard data.count == size, let target = String(data: data, encoding: .utf8) else {
                     return .failed("Hook symlink could not be resolved safely")
                 }
                 // An absolute target names a path on the host, not in the new worktree.

@@ -24,6 +24,21 @@ struct RepoHookLoaderCommittedTests {
         if case let .loaded(hook) = committed { #expect(hook.text == "echo linked\n") }
     }
 
+    /// A link target is a path, not a pathspec: `../../:/scripts/hook.sh` names
+    /// a directory called `:` at the root, not the root's `scripts/hook.sh`.
+    @Test func aSymlinkTargetIsNotReadAsAPathspec() async throws {
+        let repo = try await commitHook { hook in
+            let script = hook.deletingLastPathComponent().appendingPathComponent("../../scripts/hook.sh").standardizedFileURL
+            try FileManager.default.createDirectory(at: script.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try "echo linked\n".write(to: script, atomically: true, encoding: .utf8)
+            try FileManager.default.createSymbolicLink(atPath: hook.path, withDestinationPath: "../../:/scripts/hook.sh")
+        }
+        defer { try? FileManager.default.removeItem(at: repo.deletingLastPathComponent()) }
+
+        #expect(await RepoHookLoader.loadCommitted(event: .worktreeCreate, ref: "main", repoPath: repo, host: nil)
+            == .failed(source: .local, message: "Hook symlink could not be resolved safely"))
+    }
+
     @Test func anOversizedCommittedHookIsRejected() async throws {
         let repo = try await commitHook { hook in
             try Data(repeating: UInt8(ascii: "x"), count: RepoHookLoader.maximumBytes + 1).write(to: hook)
