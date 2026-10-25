@@ -60,6 +60,17 @@ public enum ComputerUseInputGeometry {
         return frame.map { holds($0, point) } ?? true
     }
 
+    /// Whether a CG window is the one backing a sheet: untitled, with the frame of an AXSheet in
+    /// one of its app's windows (`frameTolerance`). The sheet is reached through its parent window,
+    /// so the backing window isn't listed on its own: no AX window answers for it.
+    public static func isSheetBacking(title: String?, frame: CGRect, sheetFrames: [CGRect]) -> Bool {
+        guard title == nil else { return false }
+        return sheetFrames.contains { sheet in
+            abs(sheet.minX - frame.minX) <= frameTolerance && abs(sheet.minY - frame.minY) <= frameTolerance
+                && abs(sheet.width - frame.width) <= frameTolerance && abs(sheet.height - frame.height) <= frameTolerance
+        }
+    }
+
     /// Whether `point` is on one of `displays` (CG global, top-left frames). A window AeroSpace
     /// parks on a hidden workspace sits off every display but a 1-point sliver: input posted at
     /// a point off screen reaches nothing.

@@ -103,6 +103,8 @@ struct ComputerUseDelivered: Sendable, Equatable {
 
 enum ComputerUseSystemError: Error, LocalizedError {
     case windowNotFound(UInt32)
+    /// On screen, but no AX window of its app answers for it (a sheet's backing window).
+    case windowUnreadable(UInt32)
     case captureFailed(String)
     /// The app didn't answer an Accessibility read in time (kAXErrorCannotComplete, a stalled read).
     case appNotResponding(String)
@@ -136,6 +138,7 @@ enum ComputerUseSystemError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .windowNotFound(let id): "Window \(id) is no longer on screen"
+        case .windowUnreadable(let id): "Window \(id) can't be read"
         case .captureFailed(let reason): "Capture failed: \(reason)"
         case .appNotResponding(let app): "Capture failed: \(app) is not responding"
         case .staleElement, .staleDropElement: "The element is no longer valid"
@@ -204,6 +207,9 @@ struct ComputerUseSystem: Sendable {
     var restoreWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Void = { _, _ in }
     /// The active displays' frames, CG global, top-left.
     var displays: @Sendable () -> [CGRect] = { [.infinite] }
+    /// The frames of the AXSheets in each app's windows, read for the apps among `pids`, so the
+    /// windows backing them stay out of listings (`ComputerUseInputGeometry.isSheetBacking`).
+    var sheetFrames: @Sendable (_ pids: [Int32]) async -> [Int32: [CGRect]] = { _ in [:] }
 
     /// Whether a system password prompt is showing in the app, or may be: one app alone is probed
     /// first, so an unchecked one is the probe not getting to it, and counts as showing.
@@ -241,7 +247,8 @@ struct ComputerUseSystem: Sendable {
             accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
             wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0, attribute: $1) },
             restoreWebContent: { await ComputerUseAXReader.restoreWebContent($0, attribute: $1) },
-            displays: { LiveComputerUseSystem.displayFrames() }
+            displays: { LiveComputerUseSystem.displayFrames() },
+            sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) }
         )
     }
 }

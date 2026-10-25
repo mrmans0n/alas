@@ -512,6 +512,22 @@ struct ComputerUseCoordinatorTests {
         #expect((blocked["windows"] as? [Any])?.isEmpty == true)
     }
 
+    /// The untitled window backing a sheet isn't listed: the sheet is in its parent's tree, and no
+    /// AX window answers for the backing one.
+    @Test func appsLeaveOutSheetBackingWindows() async throws {
+        var system = Self.system()
+        let note = Self.windows[1]!
+        let sheetFrame = CGRect(x: 100, y: 20, width: 200, height: 150)
+        let backing = ComputerUseWindow(windowID: 9, title: nil, frame: sheetFrame, app: Self.notes)
+        system.runningApps = { [(app: note.app, windows: [note, backing])] }
+        system.sheetFrames = { pids in pids.contains(101) ? [101: [sheetFrame]] : [:] }
+        let f = Self.fixture(system: system)
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .apps), sessionID: "s")))
+        let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
+        let windows = try #require(apps.first?["windows"] as? [[String: Any]])
+        #expect(windows.map { $0["window_id"] as? Int } == [1])
+    }
+
     /// A window none of which is on a display (an AeroSpace workspace, another Space) says so.
     @Test func appsMarkWindowsOffEveryDisplay() async throws {
         var system = Self.system()

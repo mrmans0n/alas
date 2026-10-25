@@ -300,6 +300,18 @@ struct ComputerUseInputTests {
 
     typealias Button = ComputerUseDialogButton
 
+    /// The untitled CG window backing a sheet isn't listed; a titled one or another frame is.
+    @Test(arguments: [
+        (String?.none, CGRect(x: 1887, y: 1117, width: 556, height: 533), true),
+        (nil, CGRect(x: 1888, y: 1116, width: 557, height: 533), true),
+        ("Zoom", CGRect(x: 1887, y: 1117, width: 556, height: 533), false),
+        (nil, CGRect(x: 1727, y: 1065, width: 876, height: 625), false),
+    ])
+    func sheetBackingWindowsAreNotListed(title: String?, frame: CGRect, backing: Bool) {
+        let sheets = [CGRect(x: 1887, y: 1117, width: 556, height: 533)]
+        #expect(ComputerUseInputGeometry.isSheetBacking(title: title, frame: frame, sheetFrames: sheets) == backing)
+    }
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)

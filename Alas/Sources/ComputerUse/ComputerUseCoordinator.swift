@@ -230,6 +230,10 @@ final class ComputerUseCoordinator {
         static func busy(_ label: String) -> String {
             "computer_busy: Another session is using the computer (\(label)). Try again when it finishes."
         }
+        static func windowUnreadable(_ id: UInt32) -> String {
+            "computer_window_not_found: Window \(id) isn't a window agents can use; it may be a sheet. Inspect its parent "
+                + "window, which holds the sheet's elements."
+        }
         static func windowNotFound(_ id: UInt32) -> String {
             "computer_window_not_found: No on-screen window \(id). Call computer_apps again."
         }
@@ -459,6 +463,10 @@ final class ComputerUseCoordinator {
             // agent's first read would come back empty.
             if let front = windows.first, try await awaitWebContent(afterOpening: front, context: context) {
                 windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? windows
+            }
+            if windows.contains(where: { $0.title == nil }) {
+                let sheets = await system.sheetFrames([running.pid])[running.pid] ?? []
+                windows = windows.filter { !ComputerUseInputGeometry.isSheetBacking(title: $0.title, frame: $0.frame, sheetFrames: sheets) }
             }
             var payload: [String: Any] = ["version": 1, "app": Self.app(running)]
             // It may have been showing one before it was unhidden.
@@ -777,6 +785,9 @@ final class ComputerUseCoordinator {
         // One read for the whole listing; a blocked app's windows aren't listed either way.
         let withWindows = zip(apps, accesses).filter { $1 != .blocked && !$0.windows.isEmpty }.map(\.0.app.pid)
         let prompts = withWindows.isEmpty ? [:] : await system.credentialPrompts(withWindows)
+        // A sheet's backing window is untitled; its sheet shows in its parent's tree.
+        let untitled = zip(apps, accesses).filter { $1 != .blocked && $0.windows.contains { $0.title == nil } }.map(\.0.app.pid)
+        let sheets = untitled.isEmpty ? [:] : await system.sheetFrames(untitled)
         let displays = system.displays()
         var entries: [[String: Any]] = []
         for (entry, appAccess) in zip(apps, accesses) {
@@ -785,7 +796,9 @@ final class ComputerUseCoordinator {
             // A blocked app's window titles and frames stay private, and so do an app's while a
             // system password prompt shows in it, or may: one the probe budget didn't reach is
             // "unchecked", not claimed to show one.
-            var windows = appAccess == .blocked ? [] : entry.windows
+            var windows = appAccess == .blocked ? [] : entry.windows.filter {
+                !ComputerUseInputGeometry.isSheetBacking(title: $0.title, frame: $0.frame, sheetFrames: sheets[entry.app.pid] ?? [])
+            }
             switch prompts[entry.app.pid] {
             case .showing?:
                 object["credential_prompt"] = true
@@ -1646,6 +1659,7 @@ final class ComputerUseCoordinator {
     private static func message(for error: any Error) -> String {
         switch error {
         case ComputerUseSystemError.windowNotFound(let id): Message.windowNotFound(id)
+        case ComputerUseSystemError.windowUnreadable(let id): Message.windowUnreadable(id)
         case ComputerUseSystemError.captureFailed(let reason): Message.captureFailed(reason)
         case ComputerUseSystemError.appNotResponding(let app): Message.captureFailed("\(app) is not responding")
         case ComputerUseSystemError.actionFailed(let reason), ComputerUseSystemError.notActiveWindow(let reason):

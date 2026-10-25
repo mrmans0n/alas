@@ -275,7 +275,8 @@ enum ComputerUseAXReader {
                 frame: { frame(of: $0) }, title: { string(of: $0, kAXTitleAttribute) }, shouldStop: { isHalted })
             if isCancelled() { throw CancellationError() }
             if appStalled || (target == nil && ContinuousClock.now >= deadline) { throw notResponding(window) }
-            guard let target else { throw ComputerUseSystemError.windowNotFound(window.windowID) }
+            // On screen, but no AX window answers for it: a sheet's backing window, say.
+            guard let target else { throw ComputerUseSystemError.windowUnreadable(window.windowID) }
 
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
@@ -491,6 +492,59 @@ enum ComputerUseAXReader {
                   AXValueGetValue(size as! AXValue, .cgSize, &extent)
             else { return nil }
             return CGRect(origin: point, size: extent)
+        }
+    }
+}
+
+// MARK: - Sheets
+
+extension ComputerUseAXReader {
+    /// How long one listing may spend reading its apps' sheets.
+    static let sheetFramesBudget: Duration = .milliseconds(400)
+
+    /// The frames of the AXSheets in each app's AX windows, for the apps among `pids`, within
+    /// `sheetFramesBudget` overall; apps past it, or never Alas, are left out.
+    static func sheetFrames(pids: [pid_t]) async -> [pid_t: [CGRect]] {
+        await withCheckedContinuation { continuation in
+            queue.async {
+                let deadline = ContinuousClock.now + sheetFramesBudget
+                var frames: [pid_t: [CGRect]] = [:]
+                func list(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+                    var value: CFTypeRef?
+                    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+                          let elements = value as? [AXUIElement] else { return [] }
+                    for element in elements { AXUIElementSetMessagingTimeout(element, promptProbeMessagingTimeout) }
+                    return elements
+                }
+                func frame(_ element: AXUIElement) -> CGRect? {
+                    var position: CFTypeRef?
+                    var size: CFTypeRef?
+                    guard AXUIElementCopyAttributeValue(element, kAXPositionAttribute as CFString, &position) == .success,
+                          AXUIElementCopyAttributeValue(element, kAXSizeAttribute as CFString, &size) == .success,
+                          let position, let size, CFGetTypeID(position) == AXValueGetTypeID(), CFGetTypeID(size) == AXValueGetTypeID()
+                    else { return nil }
+                    var point = CGPoint.zero
+                    var extent = CGSize.zero
+                    guard AXValueGetValue(position as! AXValue, .cgPoint, &point), AXValueGetValue(size as! AXValue, .cgSize, &extent)
+                    else { return nil }
+                    return CGRect(origin: point, size: extent)
+                }
+                apps: for pid in pids where mayMessage(pid) {
+                    let application = AXUIElementCreateApplication(pid)
+                    AXUIElementSetMessagingTimeout(application, promptProbeMessagingTimeout)
+                    for window in list(application, kAXWindowsAttribute) {
+                        for child in list(window, kAXChildrenAttribute) {
+                            guard ContinuousClock.now < deadline else { break apps }
+                            var role: CFTypeRef?
+                            guard AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &role) == .success,
+                                  role as? String == kAXSheetRole, let sheet = frame(child)
+                            else { continue }
+                            frames[pid, default: []].append(sheet)
+                        }
+                    }
+                }
+                continuation.resume(returning: frames)
+            }
         }
     }
 }
