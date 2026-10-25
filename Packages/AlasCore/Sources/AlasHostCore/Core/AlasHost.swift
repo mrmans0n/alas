@@ -450,6 +450,9 @@ public struct HostSessionSummary: Codable, Equatable, Sendable {
     public var isWriter: Bool
     /// The session that delegated this one, for a delegated session.
     public var parentID: String?
+    /// The session's shepherd pill; nil without a shepherd or from a host
+    /// that predates them.
+    public var shepherd: HostSessionShepherd? = nil
 }
 
 @MainActor
@@ -478,7 +481,8 @@ public struct SessionsAPI {
             lastOpenedAt: row.lastOpenedAt,
             streamingState: core.reportedStreamingState(of: row.id, live: manager.runners[row.id]?.session.transcript.streamingState),
             isWriter: manager.isWriter(for: row.id),
-            parentID: core.delegatedSessionParents[row.id]
+            parentID: core.delegatedSessionParents[row.id],
+            shepherd: HostSessionShepherd.make(sessionID: row.id, review: core.reviewShepherd, stack: core.stackShepherd)
         )
     }
 }

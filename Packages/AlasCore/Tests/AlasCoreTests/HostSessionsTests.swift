@@ -752,6 +752,26 @@ struct HostSessionsTests {
         #expect(fixture.host.sessions.list().isEmpty)
     }
 
+    /// Binding a shepherd changes no session row, yet subscribers see the pill.
+    @Test func bindingAShepherdRepublishesTheSessionWithItsPill() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        let received = Collected(fixture.host.subscribe())
+
+        await fixture.core.reviewShepherd.bind(
+            sessionID: id, worktreeID: fixture.worktree.id, request: ShepherdFixtures.request(), baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+
+        // Promptly: an unrelated session change about 5 s later would republish it anyway.
+        try await eventually(within: .seconds(2)) {
+            await received.events.contains { if case .sessionChanged(let s) = $0 { s.id == id && s.shepherd?.number == "#7" } else { false } }
+        }
+    }
+
     /// A headless host shows no banner of its own: it relays the notice to
     /// its subscribers, and reports the session waiting until the user's next
     /// prompt, not when the turn that sent it ends.

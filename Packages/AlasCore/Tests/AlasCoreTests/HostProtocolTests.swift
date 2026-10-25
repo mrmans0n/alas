@@ -135,6 +135,17 @@ struct HostProtocolTests {
         ))
     }
 
+    /// A host without shepherds sends no `shepherd`, and a newer one may send a badge this Mac doesn't know.
+    @Test func aSummaryFromAHostWithoutShepherdsDecodesWithNone() throws {
+        var summary = Self.session
+        summary.shepherd = HostSessionShepherd(badge: "fixing", number: "#7", tooltip: "t")
+        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(summary)) as? [String: Any])
+        json["shepherd"] = nil
+        let old = try JSONDecoder().decode(HostSessionSummary.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(old.shepherd == nil)
+        #expect(ShepherdBadgeState(rawValue: "a-badge-from-a-newer-host") == nil)
+    }
+
     @Test(arguments: [[], PeerConsoleCapability.appHost, PeerConsoleCapability.headlessHost])
     func helloAdvertisesExactlyTheConsoleCapabilitiesItServes(_ console: [String]) {
         guard case .hello(_, _, _, _, _, let caps) = RemoteServerMessage.hello(
