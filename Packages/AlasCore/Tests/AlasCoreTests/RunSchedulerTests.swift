@@ -722,4 +722,35 @@ struct RunSchedulerTests {
             agentName: "Claude", agentSpeaksACP: speaksACP
         ) == reason)
     }
+
+    /// A schedule the host cannot run is refused, reported, and leaves no
+    /// worktree behind; an SSH project says so even with no agent resolving there.
+    @Test(arguments: [
+        (String?.none, String?.some("no-such-acp-agent"), "no-such-acp-agent runs in a terminal; terminal agents run only in the app."),
+        ("mini.local", nil, "app is on mini.local; schedules there run only in the app."),
+    ])
+    func aRefusedScheduleCreatesNoWorktree(host: String?, agentID: String?, reason: String) async {
+        var project = ProjectConfig(id: "p", name: "app", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        project.host = host
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/repo")
+        let main = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "repo", branch: "main",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(main)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch())
+        var reported: [String] = []
+        core.harness.notifications.notificationAdder = { reported.append($0.content.body) }
+        let schedule = RunSchedule(
+            name: "nightly", target: .project(id: "p"), scriptKey: nil, trigger: .interval(seconds: 3_600),
+            composition: RunScheduleComposition(agentId: agentID, prompt: "Go")
+        )
+
+        let report = await core.runHeadlessScheduleTarget(schedule, project: project, worktree: main)
+
+        #expect(report.outcome == .launchFailed(reason))
+        #expect(reported == [reason])
+        #expect(projects.worktrees(projectId: "p").map(\.id) == [main.id])
+    }
 }

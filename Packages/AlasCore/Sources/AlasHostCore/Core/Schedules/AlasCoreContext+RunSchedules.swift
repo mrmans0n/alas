@@ -136,25 +136,36 @@ extension AlasCoreContext {
         project: ProjectConfig,
         worktree originWorktree: Worktree
     ) async -> RunScheduleRunReport {
+        func refuse(_ reason: String, in worktree: Worktree) -> RunScheduleRunReport {
+            reportScheduleFailure(schedule, reason: reason, project: project, worktree: worktree)
+            return RunScheduleRunReport(outcome: .launchFailed(reason))
+        }
+        /// Why the agent (resolved at `root` when it is the project default)
+        /// cannot launch here; nil when it can.
+        func agentRefusal(_ composition: RunScheduleComposition, at root: URL) -> (agentID: String?, refusal: String?) {
+            guard let agentID = composition.agentId
+                ?? SessionsAPI(core: self).defaultAgent(projectID: project.id, worktreeRoot: root)
+            else { return (nil, "No agent is configured to launch for \(project.name).") }
+            return (agentID, RunSchedulePresentation.headlessRefusal(
+                composition: composition,
+                projectName: project.name,
+                projectHost: project.host,
+                agentName: environment.agent(id: agentID)?.displayName ?? agentID,
+                agentSpeaksACP: ACPLaunchCatalog.spec(for: agentID) != nil
+            ))
+        }
+        // The project's host first: an SSH project's default agent may not
+        // resolve at all, which would otherwise read as no agent configured.
+        if let refusal = RunSchedulePresentation.headlessRefusal(
+            composition: nil, projectName: project.name, projectHost: project.host, agentName: nil, agentSpeaksACP: false
+        ) {
+            return refuse(refusal, in: originWorktree)
+        }
         var agentID: String?
         if let composition = schedule.composition {
-            agentID = composition.agentId
-                ?? SessionsAPI(core: self).defaultAgent(projectID: project.id, worktreeRoot: originWorktree.path)
-            guard agentID != nil else {
-                let message = "No agent is configured to launch for \(project.name)."
-                reportScheduleFailure(schedule, reason: message, project: project, worktree: originWorktree)
-                return RunScheduleRunReport(outcome: .launchFailed(message))
-            }
-        }
-        if let refusal = RunSchedulePresentation.headlessRefusal(
-            composition: schedule.composition,
-            projectName: project.name,
-            projectHost: project.host,
-            agentName: agentID.map { environment.agent(id: $0)?.displayName ?? $0 },
-            agentSpeaksACP: agentID.map { ACPLaunchCatalog.spec(for: $0) != nil } ?? false
-        ) {
-            reportScheduleFailure(schedule, reason: refusal, project: project, worktree: originWorktree)
-            return RunScheduleRunReport(outcome: .launchFailed(refusal))
+            let resolved = agentRefusal(composition, at: originWorktree.path)
+            if let refusal = resolved.refusal { return refuse(refusal, in: originWorktree) }
+            agentID = resolved.agentID
         }
 
         var worktree = originWorktree
@@ -168,8 +179,15 @@ extension AlasCoreContext {
                         outcome: .skipped(reason: "The schedule was removed while its worktree was being created.")
                     )
                 }
-                reportScheduleFailure(schedule, reason: failure.message, project: project, worktree: originWorktree)
-                return RunScheduleRunReport(outcome: .launchFailed(failure.message))
+                return refuse(failure.message, in: originWorktree)
+            }
+            // The app resolves the project default in the new worktree, whose
+            // repository config can name another agent: checked again there,
+            // before its script runs.
+            if composition.agentId == nil {
+                let resolved = agentRefusal(composition, at: worktree.path)
+                if let refusal = resolved.refusal { return refuse(refusal, in: worktree) }
+                agentID = resolved.agentID
             }
         }
 
