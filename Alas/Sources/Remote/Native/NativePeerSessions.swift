@@ -1120,6 +1120,14 @@ final class NativePeerSessions {
         openedReview = NativePeerReviewSelection(serverId: serverId, worktree: worktree, sessionID: sessionID)
     }
 
+    /// Selects the host worktree, then opens its review `sessionID`, as a
+    /// review notice's click does. Nothing opens once the host no longer lists the worktree.
+    func openHostReview(serverId: String, worktreeID: String, sessionID: String) {
+        selectHostWorktree(serverId: serverId, worktreeID: worktreeID)
+        guard let host = worktrees(on: serverId).first(where: { $0.peerWorktreeId == worktreeID })?.host else { return }
+        openReview(sessionID, serverId: serverId, worktree: host)
+    }
+
     func closeReview() {
         openedReview = nil
     }
