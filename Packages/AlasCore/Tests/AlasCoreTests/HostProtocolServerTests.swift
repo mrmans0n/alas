@@ -200,6 +200,49 @@ struct HostProtocolServerTests {
         #expect(client.messages.contains(.response(id: 3, result: .done)))
     }
 
+    /// Only a client that accepts `reviewStatus` hears it, intact over the
+    /// wire, and once: reading the same status again publishes nothing.
+    @Test func aReviewStatusReachesOnlyClientsThatAcceptIt() async throws {
+        let fixture = try Fixture()
+        let core = fixture.host.core
+        let status = ShepherdFixtures.snapshot(ShepherdFixtures.request())
+        let worktree = fixture.worktree
+        core.reviewStatusRefresh = { _ in core.reviewLoop(for: worktree, baseBranch: "main").setSnapshotForTests(status) }
+        let plain = Client()
+        let accepting = Client()
+        let plainConnection = fixture.server.connect(caller: .localUser(uid: 501), send: plain.receive)
+        let acceptingConnection = fixture.server.connect(caller: .localUser(uid: 501), send: accepting.receive)
+        defer {
+            plainConnection.close()
+            acceptingConnection.close()
+        }
+        let cursor = try await fixture.host.snapshot().cursor
+        await plainConnection.receive(HostClientMessage(id: 1, request: .subscribe(after: cursor)))
+        await acceptingConnection.receive(HostClientMessage(id: 1, request: .subscribeAccepting(after: cursor, events: ["reviewStatus"])))
+        let ref = WorktreeRef(projectID: "p", path: worktree.path.path)
+
+        await acceptingConnection.receive(HostClientMessage(id: 2, request: .reviewStatus(worktree: ref)))
+        #expect(accepting.messages.contains(.response(id: 2, result: .reviewStatus(snapshot: status))))
+        func events(_ messages: [HostServerMessage]) -> [HostEvent] {
+            messages.flatMap { message -> [HostEvent] in
+                guard case .events(let batch, _) = message else { return [] }
+                return batch
+            }
+        }
+        try await accepting.waitFor { !events($0).isEmpty }
+        let batch = try #require(accepting.messages.first { !events([$0]).isEmpty })
+        #expect(events([batch]) == [.reviewStatus(worktreeID: worktree.id, snapshot: status)])
+        #expect(try JSONDecoder().decode(HostServerMessage.self, from: JSONEncoder().encode(batch)) == batch)
+
+        await acceptingConnection.receive(HostClientMessage(id: 3, request: .reviewStatus(worktree: ref)))
+        fixture.projects.setOperationState(for: worktree, state: .archiving(projectId: "p"))
+        let archiving = HostEvent.worktreeChanged(WorktreeSnapshot(worktree: worktree, operation: .archiving, isArchived: false))
+        try await accepting.waitFor { events($0).contains(archiving) }
+        try await plain.waitFor { events($0).contains(archiving) }
+        #expect(events(accepting.messages).filter { $0 != archiving }.count == 1)
+        #expect(events(plain.messages) == [archiving])
+    }
+
     /// A caller may keep only the connection, as the Remote gateway does:
     /// it still serves after the server value is gone.
     @Test func aConnectionServesAfterItsServerIsReleased() async throws {

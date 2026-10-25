@@ -146,6 +146,25 @@ struct HostProtocolTests {
         #expect(decoded == Self.session)
     }
 
+    /// A newer host's review status keeps its branch state when this Mac
+    /// can't read its pull request, code host or provider capabilities.
+    @Test func aReviewStatusDecodesWithoutThePartsThisMacCannotRead() throws {
+        let status = ShepherdFixtures.snapshot(ShepherdFixtures.request())
+        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(status)) as? [String: Any])
+        var remote = try #require(json["remote"] as? [String: Any])
+        remote["kind"] = "bitbucket"
+        json["remote"] = remote
+        var request = try #require(json["reviewRequest"] as? [String: Any])
+        request["mergeState"] = "queued"
+        json["reviewRequest"] = request
+        json["providerCapabilities"] = ["canMerge": "yes"]
+        let decoded = try JSONDecoder().decode(ReviewLoopSnapshot.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded == ReviewLoopSnapshot(
+            local: status.local, remote: nil, reviewRequest: nil, providerAvailable: true, providerAuthenticated: true,
+            providerCapabilities: .readOnly, errorMessage: nil
+        ))
+    }
+
     @Test(arguments: [[], PeerConsoleCapability.appHost, PeerConsoleCapability.headlessHost])
     func helloAdvertisesExactlyTheConsoleCapabilitiesItServes(_ console: [String]) {
         guard case .hello(_, _, _, _, _, let caps) = RemoteServerMessage.hello(

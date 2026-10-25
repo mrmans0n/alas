@@ -126,6 +126,8 @@ public final class AlasCoreContext {
     @ObservationIgnored var reviewLoopConfiguredBases: [String: String] = [:]
     /// Reads a followed worktree's review status; `refreshReviewStatus` unless a test replaces it.
     @_spi(Testing) @ObservationIgnored public var reviewStatusRefresh: (@MainActor (String) async -> Void)?
+    /// Called with a worktree's id after its followed review status was read.
+    @ObservationIgnored var reviewStatusDidRefresh: (@MainActor (String) -> Void)?
     /// Waits between two reads of a followed worktree's review status.
     @_spi(Testing) @ObservationIgnored public var reviewStatusPause: @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// Test hook that replaces reading a worktree's Git status for reviews.

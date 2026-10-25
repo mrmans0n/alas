@@ -34,6 +34,7 @@ extension AlasCoreContext {
         } else {
             await refreshReviewStatus(worktreeID)
         }
+        reviewStatusDidRefresh?(worktreeID)
         return reviewStatusPause
     }
 

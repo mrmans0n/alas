@@ -59,7 +59,7 @@ struct PeerHostChannelTests {
         channel.receive(.response(id: 1, result: .snapshot(snapshot: snapshot([feature]))))
         try await eventually { @MainActor in sent.messages.count == 2 }
         #expect(channel.state?.worktrees == [feature])
-        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice"]))
+        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice", "reviewStatus"]))
         #expect(!channel.isSubscribed)
         #expect(changes == 1)
 
@@ -124,6 +124,15 @@ struct PeerHostChannelTests {
         channel.receive(.response(id: 4, result: .subscribed))
         try await eventually { @MainActor in channel.isSubscribed }
         #expect(channel.state?.worktrees == [])
+    }
+
+    @Test func aReviewStatusIsKeptPerWorktreeUntilTheWorktreeIsRemoved() async {
+        let (channel, _) = await connected([feature])
+        let status = ShepherdFixtures.snapshot(ShepherdFixtures.request())
+        channel.receive(.events(events: [.reviewStatus(worktreeID: feature.worktree.id, snapshot: status)], cursor: cursor))
+        #expect(channel.state?.reviewStatuses[feature.worktree.id] == status)
+        channel.receive(.events(events: [.worktreeRemoved(projectID: "p", worktreeID: feature.worktree.id)], cursor: cursor))
+        #expect(channel.state?.reviewStatuses[feature.worktree.id] == nil)
     }
 
     @Test func answersAreMatchedToTheirRequestsById() async throws {

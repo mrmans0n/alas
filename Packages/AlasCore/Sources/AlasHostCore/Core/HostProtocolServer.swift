@@ -351,6 +351,10 @@ public final class HostProtocolConnection {
             return .commitMessageInput(input: try await CommitMessageSuggestionInput.load(
                 worktreePath: listed.path, ticketTitle: ticketTitle
             ))
+        case .reviewStatus(let ref):
+            let listed = try gitWorktree(ref)
+            await host.core.refreshFollowedReviewStatus(listed.id)
+            return .reviewStatus(snapshot: host.reviews.status(of: listed.id))
         }
         return .done
     }

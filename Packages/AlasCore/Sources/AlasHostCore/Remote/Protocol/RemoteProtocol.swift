@@ -1469,8 +1469,9 @@ public enum HostProtocolCapability: Sendable {
     public static let runsScriptsV1 = "host.runs.scripts.v1"
     /// Hosts that serve `renameBranch`.
     public static let worktreesRenameBranchV1 = "host.worktrees.renameBranch.v1"
-    /// Hosts that serve `mutateWorktree` and `commitMessageInput`: only a
-    /// headless host, whose Mac has no one at it to do them there.
+    /// Hosts that serve `mutateWorktree`, `commitMessageInput` and
+    /// `reviewStatus`: only a headless host, whose Mac has no one at it to
+    /// do them there.
     public static let worktreesGitV1 = "host.worktrees.git.v1"
     /// Everything every host serves of the host protocol.
     public static let served = [
