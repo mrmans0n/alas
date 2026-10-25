@@ -306,15 +306,15 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
 
     /// Hybrid rule: a child that already messaged its parent during the turn
     /// costs the parent nothing more than a notice; a child that ended
-    /// silently, or failed, wakes the parent. A cancelled turn means the human
-    /// intervened, so it never wakes.
+    /// silently, failed, or stopped without success wakes the parent.
+    /// Cancellation remains a notice, without an automatic follow-up turn.
     public static func outcomeDisposition(
         result: ACPTurnCompletion.Result,
         lastParentReportAt: Int64?,
         turnStartedAt: Int64
     ) -> ACPChildOutcomeDisposition {
         switch result {
-        case .failed:
+        case .failed, .stopped:
             return .wake
         case .cancelled:
             return .notice

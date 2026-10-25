@@ -8,6 +8,39 @@ import Testing
 @MainActor
 @Suite("ACPSessionRunner")
 struct ACPSessionRunnerTests {
+    @Test(arguments: [
+        (#"{"stopReason":"end_turn"}"#, ACPTurnCompletion.Result.completed),
+        (#"{"stopReason":"cancelled"}"#, .cancelled),
+        (#"{"stopReason":"max_tokens"}"#, .stopped(.init(rawValue: .string("max_tokens")))),
+        (#"{"stopReason":"max_turn_requests"}"#, .stopped(.init(rawValue: .string("max_turn_requests")))),
+        (#"{"stopReason":"refusal"}"#, .stopped(.init(rawValue: .string("refusal")))),
+        (#"{"stopReason":"_future"}"#, .stopped(.init(rawValue: .string("_future")))),
+        (#"{"stopReason":null}"#, .stopped(.init(rawValue: .null))),
+        (#"{"stopReason":true}"#, .stopped(.init(rawValue: .bool(true)))),
+        ("{}", .stopped(.init())),
+    ])
+    func promptStopOutcomeControlsCompletionAndSuggestions(json: String, expected: ACPTurnCompletion.Result) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var turns: [NextPromptCompletedTurn] = []
+        let (runner, mock) = try makeRunner(
+            onSuccessfulTurn: { turns.append($0) }, onTurnCompleted: { completions.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        let session = runner.session
+        session.agentState = .ready
+        mock.scriptAsync(method: "session/prompt") { _ in
+            await MainActor.run { session.apply(.agentMessageChunk(.text("Answer"))) }
+            return Data(json.utf8)
+        }
+        let delivered = await withCheckedContinuation { continuation in
+            runner.send(text: "hello", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        #expect(delivered)
+        #expect(completions.map(\.result) == [expected])
+        #expect(turns.count == (expected == .completed ? 1 : 0))
+        #expect(session.transcript.streamingState == .idle)
+    }
+
     @Test("send reports failed completion, emits a failed turn, and clears retry status when session prompt fails")
     func sendReportsFailedCompletionWhenPromptFails() async throws {
         var completions: [ACPTurnCompletion] = []
@@ -78,7 +111,7 @@ struct ACPSessionRunnerTests {
         let session = runner.session
         mock.scriptAsync(method: "session/prompt") { _ in
             if errorRaisedDuringTurn { await MainActor.run { session.lastError = "Checkpoint restore failed." } }
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         let retry = AnyCodable(["codex": AnyCodable(["error": AnyCodable([
             "willRetry": AnyCodable(true), "message": AnyCodable("Retrying")
@@ -157,7 +190,7 @@ struct ACPSessionRunnerTests {
                     await awaitCondition { runner.pendingIncomingUpdateCountForTesting == sent.count }
                 }.value
             }
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         // Delivered with the prompt result, before the send's own completion, even while an update is held.
         var completedFirst: Bool?
@@ -196,7 +229,7 @@ struct ACPSessionRunnerTests {
             }
             await (call == 1 ? first : second).wait()
             let quota = #"{"stopReason":"cancelled","_meta":{"quota":{"token_count":{"totalTokens":120,"outputTokens":40}}}}"#
-            return Data((call == 1 ? quota : "{}").utf8)
+            return Data((call == 1 ? quota : #"{"stopReason":"end_turn"}"#).utf8)
         }
         runner.send(text: "first", attachments: []) { _ in }
         #expect(await awaitCondition { entered == 1 })
@@ -230,7 +263,7 @@ struct ACPSessionRunnerTests {
             incomingUpdateCoalesceNanos: 30_000_000_000)
         runner.start()
         defer { runner.stop() }
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         runner.send(text: "hello", attachments: []) { _ in }
         #expect(await awaitCondition { contextEnteredAt != nil })
         mock.emit(.init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: 0.5, currency: "USD")))))
@@ -267,7 +300,7 @@ struct ACPSessionRunnerTests {
             })
         mock.script(method: "session/prompt") { _ in
             sent = true
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         runner.send(text: "hello", attachments: []) { _ in }
         #expect(await awaitCondition { !completions.isEmpty })
@@ -288,7 +321,7 @@ struct ACPSessionRunnerTests {
         })
         mock.script(method: "session/prompt") { _ in
             sent = true
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         let link = ACPSymbolReference.uri(for: .init(path: "A.swift", name: "run", kind: .function,
                                                      container: nil, lineRange: 0...0, includeCode: true))
@@ -306,7 +339,7 @@ struct ACPSessionRunnerTests {
     /// a new prompt, not an echo.
     @Test func symbolExpansionEchoesAreNotExpectedAfterTheTurnEnds() async throws {
         let (runner, mock) = try makeRunner()
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let link = ACPContentBlock.resourceLink(
             uri: ACPSymbolReference.uri(for: .init(path: "Missing\(UUID()).swift", name: "run", kind: .function,
                                                    container: nil, lineRange: 0...0, includeCode: true)),
@@ -376,7 +409,7 @@ struct ACPSessionRunnerTests {
         mock.scriptAsync(method: "session/prompt") { _ in
             await MainActor.run { entered = true }
             await never.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         #expect(runner.sendRecoveryContext("Here is the transcript."))
         #expect(await awaitCondition { entered })
@@ -454,7 +487,7 @@ struct ACPSessionRunnerTests {
         mock.scriptAsync(method: "session/prompt") { _ in
             await MainActor.run { entered = true }
             await result.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         runner.send(text: "first", attachments: []) { _ in }
         #expect(await awaitCondition { entered })
@@ -490,7 +523,7 @@ struct ACPSessionRunnerTests {
             }
             if call == 2, nextFails { throw ACPClientError.notRunning }
             await (call == 1 ? first : never).wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         runner.send(text: "A", attachments: []) { _ in }
         #expect(await awaitCondition { entered == 1 })
@@ -530,7 +563,7 @@ struct ACPSessionRunnerTests {
                 return entered
             }
             await (call == 1 ? first : second).wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         func cost(_ amount: Double) -> ACPSessionUpdateParams {
             .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: amount, currency: "USD"))))
@@ -573,7 +606,7 @@ struct ACPSessionRunnerTests {
                 return entered
             }
             await (call == 1 ? first : never).wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         func cost(_ amount: Double?) -> ACPSessionUpdateParams {
             .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: amount.map { .init(amount: $0, currency: "USD") })))
@@ -604,7 +637,7 @@ struct ACPSessionRunnerTests {
         mock.scriptAsync(method: "session/prompt") { _ in
             await MainActor.run { entered += 1 }
             await never.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         for sent in 1...9 {
             runner.send(text: "hello \(sent)", attachments: []) { _ in }
@@ -648,7 +681,7 @@ struct ACPSessionRunnerTests {
                   attachments.map(\.checkpointID) == [checkpointID] else {
                 throw JSONRPCError(code: -32000, message: "checkpoint missing", data: nil)
             }
-            return nativeSteering ? Data(#"{"outcome":"injected"}"#.utf8) : Data("{}".utf8)
+            return nativeSteering ? Data(#"{"outcome":"injected"}"#.utf8) : Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
 
         let succeeded = await withCheckedContinuation { continuation in
@@ -811,7 +844,7 @@ struct ACPSessionRunnerTests {
         try await waitUntil { runner.session.lastError != nil }
         #expect(turns.isEmpty)
 
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         var recoveryDelivered: Bool?
         let accepted = runner.sendRecoveryContext("restore", onCompleted: { recoveryDelivered = $0 })
         #expect(accepted)
@@ -831,7 +864,7 @@ struct ACPSessionRunnerTests {
         let (runner, mock) = try makeRunner(onSuccessfulTurn: { turns.append($0) })
         runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let promptProcessed = AsyncGate()
         runner.onPromptResponseProcessedForTesting = { promptID in
             if promptID == 0 { Task { await promptProcessed.open() } }
@@ -869,7 +902,7 @@ struct ACPSessionRunnerTests {
         session.agentState = .ready
         var turns: [NextPromptCompletedTurn] = []
         let firstClient = ACPMockClient()
-        firstClient.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        firstClient.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let first = ACPSessionRunner(session: session, connection: ACPConnection(client: firstClient),
             store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path,
             onSuccessfulTurn: { turns.append($0) })
@@ -878,7 +911,7 @@ struct ACPSessionRunnerTests {
         first.stop()
 
         let secondClient = ACPMockClient()
-        secondClient.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        secondClient.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let second = ACPSessionRunner(session: session, connection: ACPConnection(client: secondClient),
             store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path,
             onSuccessfulTurn: { turns.append($0) })
@@ -1181,7 +1214,7 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.lastError == nil)
         #expect(runner.session.transcript.streamingState == .idle)
         #expect(turns.isEmpty)
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         runner.send(text: "after cancel", attachments: [])
         try await waitUntil { turns.count == 1 }
         #expect(turns.map(\.promptID) == [1])
@@ -1216,7 +1249,7 @@ struct ACPSessionRunnerTests {
             }
             await secondStarted.open()
             await finishSecond.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
 
         var firstCompletion: Bool?
@@ -1270,11 +1303,11 @@ struct ACPSessionRunnerTests {
             if promptNumber == 1 {
                 await firstStarted.open()
                 await finishFirst.wait()
-                return Data("{}".utf8)
+                return Data(#"{"stopReason":"end_turn"}"#.utf8)
             }
             await secondStarted.open()
             await finishSecond.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
 
         var firstCompletion: Bool?
@@ -2007,7 +2040,7 @@ struct ACPSessionRunnerTests {
         mock.scriptAsync(method: "session/prompt") { _ in
             await promptStarted.open()
             await finishPrompt.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
 
         let completed = Task {
@@ -3027,7 +3060,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         let mock = ACPMockClient()
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         session.agentState = .ready
         let runner = ACPSessionRunner(
@@ -3084,11 +3117,11 @@ struct ACPSessionRunnerTests {
                 mock.emit(.init(sessionId: "s", update: .agentMessageChunk(.text("final"))))
                 await firstChunksEmitted.open()
                 await finishFirstPrompt.wait()
-                return Data("{}".utf8)
+                return Data(#"{"stopReason":"end_turn"}"#.utf8)
             }
             await secondStarted.open()
             await finishSecondPrompt.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
 
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
@@ -3364,7 +3397,7 @@ struct ACPSessionRunnerTests {
             mock.emit(.init(sessionId: sid, update: .agentMessageChunk(.text("tail"))))
             await chunkEmitted.open()
             await finishPrompt.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
 
         let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "t")
@@ -4366,7 +4399,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         let mock = ACPMockClient()
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
         session.followsTranscriptTail = false
         var didResumeTail = false
@@ -4625,7 +4658,7 @@ struct ACPSessionRunnerTests {
         // to this prompt while `userCancel()` races it below.
         mock.scriptAsync(method: "session/prompt") { _ in
             await promptCanFinish.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         // `session/cancel` is a fire-and-forget notification. Gating it lets
         // the test hold `userCancel()` right after it has recorded the
@@ -4671,7 +4704,7 @@ struct ACPSessionRunnerTests {
         // completion may quote.
         mock.scriptAsync(method: "session/prompt") { _ in
             await MainActor.run { session.apply(.agentMessageChunk(.text("  Parser fixed. \n"))) }
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
 
         _ = await withCheckedContinuation { continuation in
@@ -4692,7 +4725,7 @@ struct ACPSessionRunnerTests {
     func completionDoesNotQuotePriorTurnText() async throws {
         var completions: [ACPTurnCompletion] = []
         let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         // Text from a PREVIOUS turn, already in the transcript. A turn whose
         // own output hasn't drained yet must report no text rather than
         // attributing this to itself.
@@ -5705,7 +5738,7 @@ struct ACPSessionRunnerTests {
             createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
 
         let mock = ACPMockClient()
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let session = ACPSession(id: sid, agentId: "claude", worktreeId: "wt", title: "New session")
         let runner = ACPSessionRunner(
             session: session,
@@ -5734,7 +5767,7 @@ struct ACPSessionRunnerTests {
     func firstPromptPrependsPreamble() async throws {
         let (runner, mock) = try makeRunner()
         runner.session.pendingMCPPreamble = "<alas-workspace-context>ctx</alas-workspace-context>"
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
 
         let ok = await withCheckedContinuation { c in
             runner.send(text: "hello", attachments: []) { c.resume(returning: $0) }
@@ -5952,7 +5985,7 @@ private final class BoundaryRaceClient: ACPClient, @unchecked Sendable {
         if currentPromptCount == 2 {
             await secondPromptGate?.wait()
         }
-        return ACPResponse(body: Data("{}".utf8))
+        return ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8))
     }
 
     func notify(_ request: ACPRequest) async throws {
@@ -6027,7 +6060,7 @@ private final class StreamingBatchACPClient: ACPClient {
         ))
         await chunksEmitted.open()
         await promptCanFinish.wait()
-        return ACPResponse(body: Data("{}".utf8))
+        return ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8))
     }
 
     func waitForChunks() async {

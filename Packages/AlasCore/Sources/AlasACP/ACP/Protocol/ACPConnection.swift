@@ -116,10 +116,12 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
 public struct ACPPromptOutcome: Sendable {
     public let acknowledgement: ACPDurableConsumptionAcknowledgement?
     public let quota: ACPPromptQuota?
+    public let stopReason: ACPStopReason
 
-    public init(acknowledgement: ACPDurableConsumptionAcknowledgement?, quota: ACPPromptQuota?) {
+    public init(acknowledgement: ACPDurableConsumptionAcknowledgement?, quota: ACPPromptQuota?, stopReason: ACPStopReason = .init()) {
         self.acknowledgement = acknowledgement
         self.quota = quota
+        self.stopReason = stopReason
     }
 }
 
@@ -713,12 +715,13 @@ public final class ACPConnection: @unchecked Sendable {
                 handoff?.fire()
                 throw error
             }
-            let quota = (try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body))?.quota
+            let result = try? JSONDecoder().decode(ACPSessionPromptResult.self, from: resp.body)
             if acknowledgeDurableConsumption {
                 resp.acknowledgeDurableConsumption()
-                return ACPPromptOutcome(acknowledgement: nil, quota: quota)
+                return ACPPromptOutcome(acknowledgement: nil, quota: result?.quota, stopReason: result?.stopReason ?? .init())
             }
-            return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement, quota: quota)
+            return ACPPromptOutcome(acknowledgement: resp.durableConsumptionAcknowledgement,
+                quota: result?.quota, stopReason: result?.stopReason ?? .init())
         }
     }
 

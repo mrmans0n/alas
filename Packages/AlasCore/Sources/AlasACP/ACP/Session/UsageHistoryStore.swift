@@ -341,6 +341,7 @@ extension UsageTurnInput {
         case .failed: "failed"
         case .cancelled: "cancelled"
         case .limited: "limited"
+        case .stopped(let reason): reason.usageResult
         }
         let models = completion.quota?.modelUsage ?? []
         let started = completion.sentAt ?? completion.startedAt

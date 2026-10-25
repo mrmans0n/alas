@@ -13,6 +13,8 @@ public struct ACPTurnCompletion: Equatable, Sendable {
         case completed
         case failed(String)
         case cancelled
+        /// Foreground work ended without a successful end_turn result.
+        case stopped(ACPStopReason)
         /// Stopped by a provider usage limit; Alas may resume it later.
         case limited
     }

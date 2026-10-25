@@ -172,6 +172,7 @@ public struct ACPDelegatedPromptSource: Codable, Equatable, Sendable {
         case .needsDecision: return "\(subject) needs a human decision"
         case .noResult: return "\(subject) finished without a result"
         case .failed: return "\(subject) failed"
+        case .stopped: return "\(subject) stopped"
         case nil: return subject
         }
     }

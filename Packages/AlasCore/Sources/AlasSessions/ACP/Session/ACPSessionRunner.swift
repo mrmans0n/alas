@@ -173,6 +173,9 @@ public final class ACPSessionRunner {
     /// invalidations (steer, userCancel) so a slow `session/cancel`
     /// can't let a stale completion clobber the successor task.
     private var activePromptID: Int? { willSet { session.nextPromptActivity.send() } }
+    // The current runner consumes v1. V2 ingress will use the same decision
+    // model with its own acceptance and foreground-state inputs.
+    private var promptLifecycle = ACPSessionLifecycle(protocolVersion: .v1)
     /// Goal controls in flight. Like an active prompt, each one keeps the
     /// streaming boundary open when load-replay suppression finishes.
     private var activeGoalControls = 0
@@ -1937,6 +1940,7 @@ public final class ACPSessionRunner {
         turnPublicationGeneration += 1
         discardPendingSuccessfulTurn("invalidateActivePrompt")
         if let promptID = activePromptID {
+            promptLifecycle.forget(promptID)
             cancelledPromptIDs.insert(promptID)
             activePromptID = nil
             activePromptStartedAt = nil
@@ -1953,6 +1957,8 @@ public final class ACPSessionRunner {
     private func emitTurnCompleted(
         _ result: ACPTurnCompletion.Result, promptID: Int, quota: ACPPromptQuota? = nil, usageAwaitsResult: Bool = false
     ) {
+        let terminalResult = promptLifecycle.finishV1(promptID, result: result)
+        let result = terminalResult ?? result
         // Whatever ended, no directly sent turn is left running.
         setDirectTurnInFlight(false)
         if case .failed(let message) = result {
@@ -1965,6 +1971,7 @@ public final class ACPSessionRunner {
             if usageAwaitsResult { reportUsageWithoutResult(promptID) }
             return
         }
+        guard terminalResult != nil else { return }
         // Only consider agent messages this turn actually produced: scanning
         // the whole transcript would quote an EARLIER turn's text whenever
         // this turn's final `agentMessageChunk` is still sitting in the
@@ -2576,6 +2583,7 @@ public final class ACPSessionRunner {
             )
             if let promptID = snapshot.promptID {
                 cancelledPromptIDs.insert(promptID)
+                promptLifecycle.requestCancellation(promptID)
             }
             return snapshot
         }
@@ -4233,6 +4241,8 @@ extension ACPSessionRunner {
         // the Task would then run normally, fail on `connection.shutdown`,
         // and persist `lastError` on the queue head — defeating the
         // detach-clears-cleanly fix from the previous commit.
+        if let previous = activePromptID { promptLifecycle.forget(previous) }
+        promptLifecycle.submit(promptID)
         activePromptID = promptID
         // The error showing when this prompt was sent; its success makes it
         // stale, but not one raised while the turn ran.
@@ -4257,6 +4267,7 @@ extension ACPSessionRunner {
                 }
             }
             let abandonUnrecordedPrompt = { @MainActor in
+                self.promptLifecycle.forget(promptID)
                 // Losing the lease stands this runner down inside the
                 // check itself, so `stopped` is already true by the time
                 // we get here. That teardown belongs to THIS prompt, not a
@@ -4562,6 +4573,8 @@ extension ACPSessionRunner {
                     // and needs the id still present when it runs. The actual removal happens once,
                     // after the `isActivePrompt` block, mirroring the pre-existing cleanup point.
                     let wasCancelled = self.cancelledPromptIDs.contains(promptID)
+                    let completionResult: ACPTurnCompletion.Result = wasCancelled
+                        ? .cancelled : promptOutcome.stopReason.v1Result
                     // A cancelled/superseded prompt's response can still
                     // arrive after a successor has started or finished.
                     // Its tokens are real spend, so always fold them into
@@ -4570,7 +4583,9 @@ extension ACPSessionRunner {
                     // prompt — otherwise it would show stale usage as
                     // current, or clear a newer prompt's just-recorded one.
                     self.session.recordPromptQuota(promptOutcome.quota, updatesLastTurn: isActivePrompt)
-                    if !isActivePrompt { self.reportSupersededTurnUsage(promptID, quota: promptOutcome.quota) }
+                    if !isActivePrompt {
+                        self.reportSupersededTurnUsage(promptID, quota: promptOutcome.quota, result: completionResult)
+                    }
                     let deliveredForkContext = pendingForkContext != nil
                     // The agent received the preamble whenever the RPC above
                     // succeeded, regardless of whether this prompt is still
@@ -4626,10 +4641,11 @@ extension ACPSessionRunner {
                         }
                         self.activePromptID = nil
                         if !wasCancelled, self.session.lastError == lastErrorAtSend { self.session.lastError = nil }
-                        self.emitTurnCompleted(wasCancelled ? .cancelled : .completed, promptID: promptID, quota: promptOutcome.quota)
+                        self.emitTurnCompleted(completionResult, promptID: promptID, quota: promptOutcome.quota)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in
-                                guard normalUserTurn,
+                                guard completionResult == .completed,
+                                      normalUserTurn,
                                       delegatedSource == nil,
                                       pendingForkContext == nil,
                                       !self.cancelledPromptIDs.contains(promptID)
@@ -4654,6 +4670,7 @@ extension ACPSessionRunner {
                         nextPromptLogger.notice("prompt \(promptID) not a suggestion candidate: no longer the active prompt (newerActive=\(hasNewerActivePrompt), cancelled=\(wasCancelled))")
                     }
                     self.cancelledPromptIDs.remove(promptID)
+                    self.promptLifecycle.forget(promptID)
                     if !hasNewerActivePrompt {
                         onPromptFinished?(true)
                     }
@@ -4670,7 +4687,10 @@ extension ACPSessionRunner {
                     let wasCancelled = self.cancelledPromptIDs.remove(promptID) != nil
                     let isActivePrompt = self.activePromptID == promptID
                     let hasNewerActivePrompt = self.activePromptID != nil && !isActivePrompt
-                    if !isActivePrompt { self.reportSupersededTurnUsage(promptID, quota: nil) }
+                    if !isActivePrompt {
+                        self.reportSupersededTurnUsage(promptID, quota: nil,
+                            result: wasCancelled ? .cancelled : .failed(error.localizedDescription))
+                    }
                     // A prompt stopped by a usage limit reached the agent and a
                     // continue is scheduled, so the composer must not restore it.
                     var deliveredBeforeUsageLimit = false
@@ -4748,6 +4768,7 @@ extension ACPSessionRunner {
                     if !hasNewerActivePrompt {
                         onPromptFinished?(wasCancelled || deliveredBeforeUsageLimit)
                     }
+                    self.promptLifecycle.forget(promptID)
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)
 #endif
@@ -4767,6 +4788,7 @@ extension ACPSessionRunner {
         discardPendingSuccessfulTurn("sendRecoveryContext")
         flushPendingIncomingUpdates()
         let promptID = session.allocatePromptID()
+        if let previous = activePromptID { promptLifecycle.forget(previous) }
         activePromptID = promptID
         let connectionIsCurrent = isConnectionCurrent
         latestPromptTask = Task { [weak self, onCompleted, connectionIsCurrent] in
@@ -4832,7 +4854,8 @@ extension ACPSessionRunner {
                     // ONLY thing that clears the "Restoring…" spinner — skipping
                     // it on supersession strands the spinner forever.
                     self.reportSupersededTurnUsage(
-                        promptID, quota: promptOutcome.quota, result: wasCancelled ? .cancelled : .completed)
+                        promptID, quota: promptOutcome.quota,
+                        result: wasCancelled ? .cancelled : promptOutcome.stopReason.v1Result)
                     onCompleted?(isActivePrompt && !wasCancelled)
 #if DEBUG
                     self.onPromptResponseProcessedForTesting?(promptID)

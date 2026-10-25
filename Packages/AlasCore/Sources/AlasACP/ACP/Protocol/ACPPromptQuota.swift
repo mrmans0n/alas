@@ -151,17 +151,19 @@ extension ACPTokenCount: Decodable {
     }
 }
 
-/// Result of `session/prompt`. Only `_meta.quota` is modeled today — turn
-/// completion is driven by session/update notifications rather than
-/// `stopReason`, so that field stays unparsed.
+/// V1 session/prompt completes foreground work. Keep unknown stop reasons
+/// separate from success while decoding quota independently.
 public struct ACPSessionPromptResult: Decodable, Sendable {
     public let quota: ACPPromptQuota?
+    public let stopReason: ACPStopReason
 
-    private enum CodingKeys: String, CodingKey { case meta = "_meta" }
+    private enum CodingKeys: String, CodingKey { case stopReason, meta = "_meta" }
     private enum MetaKeys: String, CodingKey { case quota }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        stopReason = ACPStopReason(rawValue: c.contains(.stopReason)
+            ? try c.decode(LSPJSONValue.self, forKey: .stopReason) : nil)
         guard let metaContainer = try? c.nestedContainer(keyedBy: MetaKeys.self, forKey: .meta) else {
             quota = nil
             return

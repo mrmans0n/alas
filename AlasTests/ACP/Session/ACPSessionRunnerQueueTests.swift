@@ -52,6 +52,7 @@ struct ACPSessionRunnerQueueTests {
         isConnectionCurrent: (() -> Bool)? = nil,
         incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
         onUserPromptRecorded: ((String) -> Void)? = nil,
         autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
         pluginContext: (@MainActor (String) async -> [String])? = nil,
@@ -76,6 +77,7 @@ struct ACPSessionRunnerQueueTests {
             onPersist: onPersist,
             onPromptWorkChanged: onPromptWorkChanged,
             onSuccessfulTurn: onSuccessfulTurn,
+            onTurnCompleted: onTurnCompleted,
             onUserPromptRecorded: onUserPromptRecorded,
             autoResumeAfterUsageLimit: autoResumeAfterUsageLimit,
             onCheckpointCapture: onCheckpointCapture,
@@ -84,6 +86,40 @@ struct ACPSessionRunnerQueueTests {
             incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos,
             validateLease: validateLease)
         return (runner, mock, session, store)
+    }
+
+    @Test(arguments: [
+        (#"{"stopReason":"cancelled"}"#, ACPTurnCompletion.Result.cancelled),
+        ("{}", .stopped(.init())),
+    ])
+    func stoppedQueueHeadSettlesOnceAndKeepsItsSuccessor(json: String, expected: ACPTurnCompletion.Result) async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock, session, store) = try mkRunner(onTurnCompleted: { completions.append($0) })
+        let releaseSuccessor = QueueTestGate()
+        defer { Task { await releaseSuccessor.open() } }
+        mock.scriptAsync(method: "session/prompt") { request in
+            let params = try #require(request.params as? ACPSessionPromptParams)
+            if ACPSessionRunner.textPreview(of: params.prompt) == "first" { return Data(json.utf8) }
+            await releaseSuccessor.wait()
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        session.enqueue(blocks: [.text("first")])
+        session.enqueue(blocks: [.text("second")])
+        let successor = try #require(session.queue.last?.id)
+        runner.flushQueueIfIdle()
+        try await waitUntil { Self.sentPromptTexts(mock).count == 2 }
+        await runner.flushPersistence()
+        #expect(completions.map(\.result) == [expected])
+        #expect(session.queue.map(\.id) == [successor])
+        #expect(session.queue.first?.status == .sending)
+        #expect(session.transcript.streamingState != .idle)
+        #expect(try store.loadQueue(sessionId: "s").map(\.id) == [successor])
+        await releaseSuccessor.open()
+        try await waitUntil { session.queue.isEmpty }
+        await runner.flushPersistence()
+        #expect(completions.map(\.result) == [expected, .completed])
+        #expect(Self.sentPromptTexts(mock) == ["first", "second"])
+        #expect(try store.loadQueue(sessionId: "s").isEmpty)
     }
 
     private func rejectWakeDeliveryWrites(in store: ACPSessionStore) throws {
@@ -159,7 +195,7 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.queue[0].lastError == nil)
         #expect(session.queue[1].blocks == [.text("second")])
         if backgroundWake {
-            mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+            mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
             session.queue[0].scheduledAt = Date()
             runner.flushQueueIfIdle()
             try await waitUntil { session.queue.isEmpty }
@@ -387,7 +423,7 @@ struct ACPSessionRunnerQueueTests {
         }
         mock.script(method: "session/prompt") { request in
             #expect((request.params as? ACPSessionPromptParams)?.prompt == [.text("context 2"), .text("redirect")])
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         defer { runner.stop() }
         let accepted = await withCheckedContinuation { continuation in
@@ -439,7 +475,7 @@ struct ACPSessionRunnerQueueTests {
                 await started.open()
                 await finish.wait()
             }
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
         defer { runner.stop()
@@ -509,7 +545,7 @@ struct ACPSessionRunnerQueueTests {
         session.supportsSteering = true
         session.transcript.streamingState = .streaming
         mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         var accepted: Bool?
         runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
         try await waitUntil { accepted != nil }
@@ -542,7 +578,7 @@ struct ACPSessionRunnerQueueTests {
                 await finishContinuation.wait()
             default: break
             }
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         mock.scriptAsync(method: "_session/steering") { _ in
             await finishSteering.wait()
@@ -618,7 +654,7 @@ struct ACPSessionRunnerQueueTests {
             }
             return Data(#"{"outcome":"injected"}"#.utf8)
         }
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         var accepted: Bool?
         runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
         await entered.wait()
@@ -673,7 +709,7 @@ struct ACPSessionRunnerQueueTests {
                 await started.open()
                 await finishOriginal.wait()
             }
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         mock.scriptAsync(method: "_session/steering") { request in
             if (request.params as? ACPSteeringParams)?.prompt == [.text("first")] {
@@ -858,7 +894,7 @@ struct ACPSessionRunnerQueueTests {
             return ACPResponse(body: Data(#"{"outcome":"injected"}"#.utf8),
                                durableConsumptionAcknowledgement: { acknowledgement.record() })
         }
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         var accepted: Bool?
         runner.send(blocks: [.text("redirect")], intent: .steer) { accepted = $0 }
         try await waitUntil { accepted != nil }
@@ -914,7 +950,7 @@ struct ACPSessionRunnerQueueTests {
         mock.scriptAsync(method: "session/prompt") { _ in
             await started.open()
             await finish.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         mock.script(method: "_session/steering") { _ in Data("{\"outcome\":\"\(outcome)\"}".utf8) }
         defer { runner.stop()
@@ -969,7 +1005,7 @@ struct ACPSessionRunnerQueueTests {
         mock.scriptAsync(method: "session/prompt") { _ in
             await started.open()
             await finish.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         defer { runner.stop()
         Task { await finish.open() } }
@@ -1012,7 +1048,7 @@ struct ACPSessionRunnerQueueTests {
             }
             await started.open()
             await finish.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         mock.script(method: "_session/steering") { _ in Data("{\"outcome\":\"\(outcome)\"}".utf8) }
         defer { runner.stop()
@@ -1082,7 +1118,7 @@ struct ACPSessionRunnerQueueTests {
         session.restoreQueue([recovered])
         session.transcript.streamingState = .idle
         let replacementMock = ACPMockClient()
-        replacementMock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        replacementMock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let replacement = ACPSessionRunner(session: session, connection: ACPConnection(client: replacementMock),
                                           store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
         defer { replacement.stop() }
@@ -1132,7 +1168,7 @@ struct ACPSessionRunnerQueueTests {
         session.restoreQueue([recovered])
         session.transcript.streamingState = .idle
         let replacementMock = ACPMockClient()
-        replacementMock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        replacementMock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let replacement = ACPSessionRunner(session: session, connection: ACPConnection(client: replacementMock),
                                           store: store, sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
         defer { replacement.stop() }
@@ -1230,7 +1266,7 @@ struct ACPSessionRunnerQueueTests {
         }
         try store.db.exec("DROP TRIGGER fail_steering_user")
         mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         runner.forceSendQueuedItem(id: retry.id)
         try await waitUntil { session.queue.isEmpty }
         await runner.flushPersistence()
@@ -1336,7 +1372,7 @@ struct ACPSessionRunnerQueueTests {
         mock.scriptAsync(method: "session/prompt") { _ in
             await prompted.open()
             await finishPrompt.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         let registration = DispatchRegistrationFlag()
         runner.sendRegistered(text: "redirect", attachments: [], intent: .steer,
@@ -1379,7 +1415,7 @@ struct ACPSessionRunnerQueueTests {
         }
         mock.scriptAsync(method: "session/prompt") { _ in
             await releasePrompt.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         defer { runner.stop()
         Task { await releaseLease.open()
@@ -1407,7 +1443,7 @@ struct ACPSessionRunnerQueueTests {
         mock.scriptAsync(method: "session/prompt") { _ in
             await started.open()
             await finishOriginal.wait()
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         mock.scriptAsync(method: "_session/steering") { _ in
             await finishSteering.wait()
@@ -1443,7 +1479,7 @@ struct ACPSessionRunnerQueueTests {
                 await started.open()
                 await finishOriginal.wait()
             }
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         mock.scriptNotifyAsync(method: "session/cancel") { _ in await finishOriginal.open() }
         mock.script(method: "_session/steering") { _ in
@@ -1481,7 +1517,7 @@ struct ACPSessionRunnerQueueTests {
                 await started.open()
                 await finishOriginal.wait()
             }
-            return Data("{}".utf8)
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
         }
         mock.scriptAsync(method: "_session/steering") { request in
             if (request.params as? ACPSteeringParams)?.prompt == [.text("redirect")] {
@@ -1545,7 +1581,7 @@ struct ACPSessionRunnerQueueTests {
             blocks: [.text("Scheduled")], scheduledAt: Date().addingTimeInterval(3600))
         let ordinaryID = UUID()
         if ordinaryPrompt { session.enqueue(id: ordinaryID, blocks: [.text("Ordinary")]) }
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         for taskID in ["build", "tests"] {
             runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .asyncTask(.init(
                 sessionUpdate: "async_task_state_update", asyncTaskId: taskID, state: "completed"))))
@@ -1580,7 +1616,7 @@ struct ACPSessionRunnerQueueTests {
     func backgroundCompletionQueue(finalState: String, correction: String) async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")
         session.transcript.streamingState = .awaitingPermission
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         runner.start()
         defer { runner.stop() }
         let spawn = ACPAsyncTaskUpdate(sessionUpdate: "async_task_spawned", asyncTaskId: "job", name: "Tests", canStop: true)
@@ -1730,7 +1766,7 @@ struct ACPSessionRunnerQueueTests {
                                durableConsumptionAcknowledgement: { acknowledgement.record() })
         }
         mock.scriptResponse(method: "session/prompt") { _ in
-            ACPResponse(body: Data("{}".utf8), durableConsumptionAcknowledgement: { acknowledgement.record() })
+            ACPResponse(body: Data(#"{"stopReason":"end_turn"}"#.utf8), durableConsumptionAcknowledgement: { acknowledgement.record() })
         }
         if !committed { try rejectWakeDeliveryWrites(in: store) }
         runner.forceSendQueuedItem(id: wakeID)
@@ -1819,7 +1855,7 @@ struct ACPSessionRunnerQueueTests {
     func failedBackgroundWakeBatchRetriesTogether() async throws {
         let (runner, mock, session, store) = try mkRunner(agentID: "codex")
         session.transcript.streamingState = .awaitingPermission
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         for taskID in ["build", "tests"] {
             session.applyBackgroundTask(.init(
                 sessionUpdate: "async_task_state_update",
@@ -1934,7 +1970,7 @@ struct ACPSessionRunnerQueueTests {
         session.transcript.streamingState = .awaitingPermission
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_state_update", asyncTaskId: "job",
             state: "completed"), ownerSessionId: "s")
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         let confirmationStarted = QueueTestGate()
         let releaseConfirmation = QueueTestGate()
         var heldConfirmation = false
@@ -2207,7 +2243,7 @@ struct ACPSessionRunnerQueueTests {
             Task { await observed.open() }
         })
         observedSession = session
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         session.transcript.streamingState = .streaming
         runner.send(blocks: [.text("queued")], intent: .auto)
         await runner.flushPersistence()
@@ -3390,15 +3426,16 @@ struct ACPSessionRunnerQueueTests {
         #expect(turns.isEmpty)
 
         // Simulate Retry: wire success script + clear lastError + flush.
-        mock.script(method: "session/prompt") { _ in Data("null".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         session.queue[0].lastError = nil
         runner.flushQueueIfIdle()
         try await waitUntil { turns.count == 1 }
         #expect(session.queue.isEmpty)
         users = session.transcript.messages.filter { if case .user = $0 { return true } else { return false } }
         #expect(users.count == 1)
-        #expect(turns[0].userMessageID == originalUserID)
-        #expect(turns[0].promptID == 1)
+        let turn = try #require(turns.first)
+        #expect(turn.userMessageID == originalUserID)
+        #expect(turn.promptID == 1)
     }
 
     @Test("force-sent queued retry keeps the original user row")
@@ -3417,7 +3454,7 @@ struct ACPSessionRunnerQueueTests {
             return
         }
 
-        mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         session.queue[0].lastError = nil
         session.transcript.streamingState = .streaming
         runner.forceSendQueuedItem(id: queueID)

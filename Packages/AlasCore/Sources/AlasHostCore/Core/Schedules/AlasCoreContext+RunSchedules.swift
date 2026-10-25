@@ -354,6 +354,10 @@ extension AlasCoreContext {
             reportScheduleFailure(
                 schedule, reason: "\(agentName) hit its usage limit in \(worktree.title).", project: project, worktree: worktree
             )
+        case .stopped(let reason):
+            reportScheduleFailure(
+                schedule, reason: "\(agentName) stopped in \(worktree.title): \(reason.summary).", project: project, worktree: worktree
+            )
         case .cancelled:
             break
         case nil:

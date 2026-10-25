@@ -1237,6 +1237,21 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(pending.first?.prompt.contains("worktree feature-x") == true)
     }
 
+    @Test(arguments: [ACPStopReason(), ACPStopReason(rawValue: .string("refusal"))])
+    func stoppedChildWakesParentWithAnExplicitOutcome(reason: ACPStopReason) async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        try await fixture.persistence.markParentReport(childSessionId: "child", at: 600)
+        let stopped = completion(result: .stopped(reason))
+        await fixture.coordinator.childTurnCompleted(stopped)
+        await fixture.coordinator.childTurnCompleted(stopped)
+        let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        #expect(pending.count == 1)
+        #expect(pending.first?.kind == .prompt)
+        #expect(pending.first?.prompt == "[alas system] Delegated session child (codex, worktree feature-x) stopped: \(reason.summary).")
+        #expect(try await fixture.persistence.delegation(childSessionId: "child")?.phase == .ready)
+    }
+
     @Test("reported child completion only notices the parent")
     func reportedCompletionNotices() async throws {
         let fixture = try makeOutcomeFixture()
@@ -1275,7 +1290,7 @@ struct ACPSessionOrchestrationCoordinatorTests {
         let pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
         #expect(pending.map(\.kind) == [.prompt, .notice])
         #expect(pending.first?.prompt == "[alas system] Delegated session child (codex, worktree feature-x) failed: prompt failed: boom.")
-        #expect(pending.last?.prompt == "Delegated session child (codex, worktree feature-x) had its turn cancelled by the user.")
+        #expect(pending.last?.prompt == "Delegated session child (codex, worktree feature-x) had its turn cancelled.")
     }
 
     @Test("duplicate completion events enqueue nothing new")

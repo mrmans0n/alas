@@ -37,6 +37,11 @@ public enum ACPDelegatedOutcomeText: Sendable {
         "[alas system] Delegated session \(label(context)) failed: \(message)."
     }
 
+    public static func stopped(_ context: Context, reason: String) -> String {
+        "[alas system] Delegated session \(label(context)) stopped: "
+            + "\(sanitizedBlockerSummary(reason, fallback: "Outcome unknown"))."
+    }
+
     /// Agent-authored text (a tool title, an elicitation message, a plan
     /// name) reaching a parent's prompt verbatim is a hazard this function
     /// closes: collapse embedded newlines so a multi-line summary can't
@@ -88,10 +93,10 @@ public enum ACPDelegatedOutcomeText: Sendable {
         "Delegated session \(label(context)) finished its turn."
     }
 
-    /// A child turn the user cancelled. A notice only: the human intervened,
-    /// so it never wakes the parent.
+    /// Cancellation does not identify who initiated it. A notice only,
+    /// preserving the policy that cancelled work never wakes its parent.
     public static func cancelled(_ context: Context) -> String {
-        "Delegated session \(label(context)) had its turn cancelled by the user."
+        "Delegated session \(label(context)) had its turn cancelled."
     }
 
     public static func limited(_ context: Context) -> String {
@@ -105,6 +110,7 @@ public enum ACPDelegatedOutcomeText: Sendable {
         case needsDecision = "needs_decision"
         case noResult = "no_result"
         case failed
+        case stopped
     }
 
     /// Recognizes a delivered prompt as one of Alas's own notices about a
@@ -122,6 +128,7 @@ public enum ACPDelegatedOutcomeText: Sendable {
             (") finished its turn without sending a result.", .noResult),
             (") has been waiting ", .needsDecision),
             (") failed: ", .failed),
+            (") stopped: ", .stopped),
         ]
         return verbs
             .compactMap { verb, kind in firstLine.range(of: verb).map { ($0.lowerBound, kind) } }
