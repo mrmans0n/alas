@@ -245,9 +245,8 @@ struct ComputerUseCoordinatorTests {
         system.wakeWebContent = { _, attribute in
             guard attribute == "AXEnhancedUserInterface" else { return false }
             recorder.recordEvent("wake:\(attribute)")
-            // Held until the session has ended.
-            while gate.events.isEmpty { await Task.yield() }
-            return true
+            // Held until the session has ended; given up at the deadline if the test goes wrong first.
+            return (try? await eventually("the session end", { !gate.events.isEmpty })) != nil
         }
         system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
         system.axTree = { _, _, _, _ in
