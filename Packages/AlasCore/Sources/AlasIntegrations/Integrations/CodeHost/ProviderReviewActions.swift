@@ -134,3 +134,136 @@ public struct ProviderThreadMutationResult: Equatable, Sendable {
         self.warnings = warnings
     }
 }
+
+extension ProviderReviewPublishResult: Codable {}
+extension ProviderThreadMutationResult: Codable {}
+
+/// What became of one draft after a publish: the provider's identity for it,
+/// or why the provider refused it.
+public enum ProviderReviewDraftOutcome: Equatable, Sendable {
+    case published(ReviewDraftProviderPublish)
+    case failed(ReviewDraftProviderError)
+}
+
+public enum ProviderReviewPublishError: LocalizedError, Equatable, Sendable {
+    case noPublishableSelectedDrafts
+    case noPublishableDraftsForCommentReview
+
+    public var errorDescription: String? {
+        switch self {
+        case .noPublishableSelectedDrafts:
+            return "The selected draft is no longer publishable."
+        case .noPublishableDraftsForCommentReview:
+            return "There are no publishable draft comments for a comment review."
+        }
+    }
+}
+
+@MainActor
+public enum ProviderReviewPublisher {
+    /// Publishes the publishable `drafts` (only `localDraftIDs` when set), then
+    /// hands `record` each draft's outcome, stamped with `now()` taken after the provider answers.
+    public static func publish(
+        _ drafts: [ReviewDraftComment],
+        selecting localDraftIDs: Set<String>?,
+        to reviewRequest: ReviewRequest,
+        remote: CodeHostRemote,
+        decision: ProviderReviewDecision,
+        summaryBody: String,
+        cwd: URL,
+        provider: any CodeHostProvider,
+        now: () -> Date,
+        record: (_ draftID: String, _ outcome: ProviderReviewDraftOutcome) throws -> Void
+    ) async throws -> ProviderReviewPublishResult {
+        let sourceComments = drafts.filter { comment in
+            localDraftIDs?.contains(comment.id) ?? true
+        }
+        let comments = ProviderReviewPublishPlanner.publishableDrafts(sourceComments)
+            .compactMap(ProviderReviewDraftComment.init(localDraft:))
+        if localDraftIDs != nil, comments.isEmpty {
+            throw ProviderReviewPublishError.noPublishableSelectedDrafts
+        }
+        if localDraftIDs == nil, decision == .comment, comments.isEmpty {
+            throw ProviderReviewPublishError.noPublishableDraftsForCommentReview
+        }
+        let request = ProviderReviewPublishRequest(
+            remote: remote,
+            reviewRequest: reviewRequest,
+            comments: comments,
+            decision: decision,
+            summaryBody: summaryBody,
+            cwd: cwd
+        )
+
+        let result = try await provider.publishReview(request)
+        let timestamp = now()
+
+        for published in result.published {
+            try record(published.localDraftID, .published(ReviewDraftProviderPublish(
+                provider: remote.kind,
+                host: remote.host,
+                repositorySlug: remote.repositorySlug,
+                reviewNumber: reviewRequest.number,
+                threadID: published.providerThreadID,
+                commentID: published.providerCommentID,
+                url: published.providerURL,
+                publishedAt: timestamp
+            )))
+        }
+
+        for failed in result.failed {
+            try record(failed.localDraftID, .failed(ReviewDraftProviderError(
+                provider: remote.kind,
+                message: failed.message,
+                occurredAt: timestamp
+            )))
+        }
+
+        return result
+    }
+}
+
+public enum ProviderReviewPublishPlanner {
+    public static func publishableDrafts(_ drafts: [ReviewDraftComment]) -> [ReviewDraftComment] {
+        drafts.filter { unpublishableReason(for: $0) == nil }
+    }
+
+    public static func unpublishableMessages(_ drafts: [ReviewDraftComment]) -> [String] {
+        drafts.compactMap { draft in
+            guard let reason = unpublishableReason(for: draft) else { return nil }
+            return "\(draft.path): \(reason)"
+        }
+    }
+
+    private static func unpublishableReason(for draft: ReviewDraftComment) -> String? {
+        if let publish = draft.providerPublish {
+            return "already published to \(publish.provider.displayName)."
+        }
+        if draft.state != .active {
+            return "draft is \(draft.state.providerPublishDescription)."
+        }
+        guard let lineRange = draft.normalizedLineRange else {
+            return "missing line anchor."
+        }
+        if draft.side == .unknown || lineRange.lowerBound <= 0 {
+            return "missing line anchor."
+        }
+        if draft.bodyMarkdown.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "empty comment."
+        }
+        return nil
+    }
+}
+
+private extension ReviewDraftCommentState {
+    var providerPublishDescription: String {
+        switch self {
+        case .active:
+            "active"
+        case .resolved:
+            "resolved"
+        case .dismissed:
+            "dismissed"
+        }
+    }
+}
