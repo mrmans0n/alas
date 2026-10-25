@@ -129,6 +129,30 @@ struct ReviewShepherdTests {
         #expect(shepherd.records[unserved.id] == unserved)
     }
 
+    @Test func onlyTheBoundSessionCarriesAShepherdPill() async {
+        let request = F.request(threads: [])
+        let shepherd = makeShepherd(request: request, deliverPrompt: { _, _ in .delivered })
+        let stack = StackShepherd(store: MemoryStore(), fileURL: URL(fileURLWithPath: "/memory/stack-shepherds.json"))
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+
+        let pill = HostSessionShepherd.make(sessionID: "session-1", review: shepherd, stack: stack)
+        let expected = ShepherdPresentation.make(record: record, request: nil, mergeGatePasses: false)
+        #expect(pill?.number == expected.number)
+        #expect(pill?.badge == expected.badge.rawValue)
+        #expect(HostSessionShepherd.make(sessionID: "session-2", review: shepherd, stack: stack) == nil)
+    }
+
+    @Test(arguments: [
+        (HostSessionShepherd(badge: "fixing", number: "#7", tooltip: "t"), ShepherdBadgeState.fixing),
+        (HostSessionShepherd(badge: "fromANewerHost", number: "#7", tooltip: "t"), nil),
+    ] as [(HostSessionShepherd, ShepherdBadgeState?)])
+    func peerShowsAPillOnlyForAKnownBadge(shepherd: HostSessionShepherd, badge: ShepherdBadgeState?) {
+        #expect(shepherd.badgeState == badge)
+    }
+
     @Test func turnEndingWhileTheFixPromptIsDeliveredKeepsTheFix() async throws {
         let request = F.request(threads: [F.trustedThread])
         let gate = DeliveryGate()

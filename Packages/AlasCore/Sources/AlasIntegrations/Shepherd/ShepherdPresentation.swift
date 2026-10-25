@@ -4,8 +4,9 @@ import AlasModel
 import AlasPlatform
 
 /// The toolbar pill's state, shared with the Changes drawer and the popover.
-/// The app maps each case to an SF Symbol and a theme color.
-public enum ShepherdBadgeState: Equatable, Sendable {
+/// The app maps each case to an SF Symbol and a theme color. Raw values go
+/// over the wire in host session summaries, so keep them stable.
+public enum ShepherdBadgeState: String, Equatable, Sendable {
     /// No record and no request: the pill offers Ship with agent.
     case noRequest
     /// A request exists but this session does not shepherd it.

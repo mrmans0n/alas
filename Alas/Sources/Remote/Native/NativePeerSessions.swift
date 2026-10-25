@@ -265,6 +265,16 @@ final class NativePeerSessions {
         }
     }
 
+    /// Selects the worktree the host knows as `worktreeID`, as a worktree
+    /// notice's click does. Nothing happens once the host no longer lists it,
+    /// or while it is already selected: re-selecting its tab would toggle it.
+    func selectHostWorktree(serverId: String, worktreeID: String) {
+        guard let group = worktrees(on: serverId).first(where: { $0.peerWorktreeId == worktreeID }) else { return }
+        let selection = NativePeerWorktreeSelection(serverId: serverId, worktreeId: group.id)
+        guard selectedWorktree != selection else { return }
+        selectWorktree(selection)
+    }
+
     func selectTab(_ tab: NativePeerTab, in selection: NativePeerWorktreeSelection) {
         switch tab {
         case .session(let id): select(id)
@@ -385,6 +395,14 @@ final class NativePeerSessions {
     }
 
     var isPromptPending: Bool { pendingPrompt != nil }
+
+    /// The selected session's shepherd pill on its host.
+    var selectedShepherd: HostSessionShepherd? {
+        guard let selectedSessionId,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return nil }
+        return hosts?.shepherds[id.serverId]?[id.sessionId]
+    }
 
     var selectedPeer: NativePeerGroup? {
         guard let selectedSessionId else { return nil }

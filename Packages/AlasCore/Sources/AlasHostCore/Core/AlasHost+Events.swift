@@ -480,6 +480,13 @@ final class HostEventSource {
             _ = core.runRecords
             _ = core.sessionManagers
             _ = core.delegatedSessionParents
+            // Session summaries carry the shepherd pill.
+            _ = core.reviewShepherd.records
+            _ = core.reviewShepherd.snapshots
+            _ = core.reviewShepherd.gatePasses
+            _ = core.stackShepherd.records
+            _ = core.stackShepherd.requests
+            _ = core.stackShepherd.gatePasses
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in
                 self?.observeInMemoryState()

@@ -450,6 +450,28 @@ public struct HostSessionSummary: Codable, Equatable, Sendable {
     public var isWriter: Bool
     /// The session that delegated this one, for a delegated session.
     public var parentID: String?
+    /// The session's shepherd pill; nil without a shepherd or from a host
+    /// that predates them.
+    public var shepherd: HostSessionShepherd? = nil
+}
+
+extension HostSessionSummary {
+    /// A `shepherd` this Mac can't read shows no pill rather than losing the session.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        owner = try c.decode(SessionOwnerID.self, forKey: .owner)
+        id = try c.decode(String.self, forKey: .id)
+        agentId = try c.decode(String.self, forKey: .agentId)
+        title = try c.decode(String.self, forKey: .title)
+        remoteSessionId = try c.decodeIfPresent(String.self, forKey: .remoteSessionId)
+        createdAt = try c.decode(Int64.self, forKey: .createdAt)
+        updatedAt = try c.decode(Int64.self, forKey: .updatedAt)
+        lastOpenedAt = try c.decode(Int64.self, forKey: .lastOpenedAt)
+        streamingState = try c.decodeIfPresent(ACPSession.StreamingState.self, forKey: .streamingState)
+        isWriter = try c.decode(Bool.self, forKey: .isWriter)
+        parentID = try c.decodeIfPresent(String.self, forKey: .parentID)
+        shepherd = (try? c.decodeIfPresent(HostSessionShepherd.self, forKey: .shepherd)) ?? nil
+    }
 }
 
 @MainActor
@@ -478,7 +500,8 @@ public struct SessionsAPI {
             lastOpenedAt: row.lastOpenedAt,
             streamingState: core.reportedStreamingState(of: row.id, live: manager.runners[row.id]?.session.transcript.streamingState),
             isWriter: manager.isWriter(for: row.id),
-            parentID: core.delegatedSessionParents[row.id]
+            parentID: core.delegatedSessionParents[row.id],
+            shepherd: HostSessionShepherd.make(sessionID: row.id, review: core.reviewShepherd, stack: core.stackShepherd)
         )
     }
 }

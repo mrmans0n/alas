@@ -58,10 +58,13 @@ public struct NotificationClickContext: Equatable, Sendable {
     public var owner: SessionOwnerID?
     /// The paired host whose session `sessionId` is, for a relayed notice.
     public var peerServerId: String?
+    /// The host worktree a relayed worktree notice is about.
+    public var peerWorktreeId: String?
 
     public init?(userInfo: [AnyHashable: Any]) {
         guard let sessionId = userInfo["sessionId"] as? String else { return nil }
         self.peerServerId = userInfo["peerServerId"] as? String
+        self.peerWorktreeId = userInfo["peerWorktreeId"] as? String
         self.projectId = userInfo["projectId"] as? String
         self.worktreeId = userInfo["worktreeId"] as? String
         self.sessionId = sessionId

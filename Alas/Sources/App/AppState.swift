@@ -6915,6 +6915,10 @@ final class AppState {
             )
         }
         harness.onContextClickThrough = { [weak self] context in
+            if let serverId = context.peerServerId, let worktreeID = context.peerWorktreeId {
+                self?.nativePeerSessions?.selectHostWorktree(serverId: serverId, worktreeID: worktreeID)
+                return
+            }
             if let serverId = context.peerServerId {
                 self?.nativePeerSessions?.select(
                     RemoteFederatedSessionID.compose(serverId: serverId, sessionId: context.sessionId)
