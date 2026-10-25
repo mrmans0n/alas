@@ -391,12 +391,14 @@ if let listen = config.hostRemoteListen {
 
 // Projects added before the host started, by the app or `project add`, have
 // worktrees only once they are listed; the app lists them at launch too.
+// The shepherds start after, since they leave records of unlisted worktrees.
 // Remote follows: restoring the open sessions keeps those of listed
 // worktrees only. Stored sessions load last, so they do not hold up Remote.
 Task {
     // Before Remote lists them.
     await shells.restore()
     await host.loadProjectWorktrees()
+    await host.startAutomation()
     await startRemote?()
     await host.coreContext.loadStoredSessionManagers()
 }

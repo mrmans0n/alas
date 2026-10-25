@@ -403,11 +403,13 @@ public final class AlasCoreContext {
     /// `defaultSessionManager`, resuming after a usage limit, continuing
     /// interrupted sessions, and capturing Claude session hooks as `config`
     /// says when each is decided. With `alasTools`, agents also get the
-    /// built-in `alas` MCP server and CLI env.
+    /// built-in `alas` MCP server and CLI env. `onTurnCompleted` hears every
+    /// turn that ends.
     public static func sessionManagerFactory(
         config: @escaping @MainActor () -> AppConfig,
         onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil,
-        alasTools: HeadlessAlasTools? = nil
+        alasTools: HeadlessAlasTools? = nil,
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
     ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
         { owner, worktree in
             var projectContext: ACPSessionManager.MCPProjectContextProvider?
@@ -423,6 +425,7 @@ public final class AlasCoreContext {
                 persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
                 continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions },
+                onTurnCompleted: onTurnCompleted,
                 mcpProjectContextProvider: projectContext,
                 builtInMCPProvider: builtInMCP,
                 onChipsObserved: onChipsObserved

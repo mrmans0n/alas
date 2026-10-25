@@ -1,4 +1,5 @@
 import Foundation
+import os
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -8,6 +9,8 @@ import AlasAgents
 import AlasIntegrations
 import AlasACP
 import AlasAgentKit
+
+private let bootLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasHost")
 
 /// The host is stopping and starts nothing new.
 public struct HostStopping: Error, Equatable, LocalizedError {
@@ -79,6 +82,10 @@ extension AlasHost {
         // Every other store keeps its `Paths` default, which is this directory.
         let ordering = environment.config.worktrees.defaultOrdering
         let harness = HarnessService()
+        // A process without an app bundle has no notification center.
+        harness.notifications.notificationAdder = { request in
+            bootLogger.notice("Dropped notification \(request.content.title, privacy: .private)")
+        }
         weak var builtCore: AlasCoreContext?
         let alasTools = cliBinDir.map {
             HeadlessAlasTools(binDir: $0, socketServer: harness.socketServer, config: { environment.config }, core: { builtCore })
@@ -96,23 +103,41 @@ extension AlasHost {
                     )
                     environment.modelCatalog?.recordEffort(agentID: agentID, thinking: chips.thinking)
                 },
-                alasTools: alasTools
+                alasTools: alasTools,
+                onTurnCompleted: { completion in
+                    Task { @MainActor in await builtCore?.turnCompleted(completion) }
+                }
             ),
             environment: environment,
             harness: harness,
             usageHistory: try? UsageHistoryStore()
         )
         builtCore = core
+        core.installDefaultShepherdEffects()
         return AlasHost(core: core)
     }
 }
 
 extension AlasHost {
+    /// Starts the PR and stack shepherds and the run schedules. Call once the
+    /// projects' worktrees are listed: a record whose worktree the host does
+    /// not list is left for the app until the next start.
+    public func startAutomation() async {
+        await GGAvailability.shared.probe()
+        guard !core.isStopping else { return }
+        core.reviewShepherd.start()
+        core.stackShepherd.start()
+        core.runScheduler.start()
+    }
+
     /// Ends every run and agent session, for a host about to exit: runs,
     /// launches still starting included, are stopped as a worktree's removal
     /// stops them; each session's agent is detached and its process ended,
     /// and every queued session write is flushed.
     public func shutdown() async {
+        core.reviewShepherd.stop()
+        core.stackShepherd.stop()
+        core.runScheduler.stop()
         // First: a request still underway cannot start what this stops.
         core.isStopping = true
         let worktreeIDs = Set(core.processRuns.values.map(\.worktreeID))
