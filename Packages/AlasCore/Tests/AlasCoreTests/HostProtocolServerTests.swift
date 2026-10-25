@@ -1079,10 +1079,10 @@ struct HostProtocolServerTests {
 
         #expect(try await fixture.request(.publishReview(
             worktree: ref, sessionID: rawSession,
-            publish: HostReviewPublish(decision: .comment, body: "", draftIDs: nil, headSHA: "aaa")
+            publish: HostReviewPublish(decision: .comment, body: "", draftIDs: nil, headSHA: "aaaaaaa")
         )) == .reviewPublished(result: result))
         #expect(provider.publishes.count == 1)
-        #expect(provider.publishes.first?.reviewRequest.headSHA == "aaa")
+        #expect(provider.publishes.first?.reviewRequest.headSHA == "aaaaaaa")
         #expect(provider.publishes.first?.comments.map(\.localDraftID) == ["a", "b"])
         let stored = try fixture.core.reviewDrafts.load(sessionID: session)
         #expect(stored.first { $0.id == "a" }?.providerPublish?.threadID == "t1")
@@ -1095,10 +1095,11 @@ struct HostProtocolServerTests {
 
     /// A publish with nothing of its own review to post never reaches the provider.
     @Test(arguments: [
-        (["theirs"], "The selected draft is no longer publishable."),
-        (nil, "There are no publishable draft comments for a comment review."),
-    ] as [([String]?, String)])
-    func publishRefusalsReachNoProvider(draftIDs: [String]?, reason: String) async throws {
+        (["theirs"], "aaaaaaa", "The selected draft is no longer publishable."),
+        (nil, "aaaaaaa", "There are no publishable draft comments for a comment review."),
+        (nil, "HEAD; rm", "The head commit must be a commit SHA."),
+    ] as [([String]?, String, String)])
+    func publishRefusalsReachNoProvider(draftIDs: [String]?, headSHA: String, reason: String) async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
         let (_, ref) = try await fixture.mainWorktree()
@@ -1109,7 +1110,7 @@ struct HostProtocolServerTests {
 
         #expect(try await fixture.request(.publishReview(
             worktree: ref, sessionID: rawSession,
-            publish: HostReviewPublish(decision: .comment, body: "", draftIDs: draftIDs, headSHA: "aaa")
+            publish: HostReviewPublish(decision: .comment, body: "", draftIDs: draftIDs, headSHA: headSHA)
         )) == .failure(error: .invalidRequest(reason: reason)))
         #expect(provider.publishes.isEmpty)
     }
@@ -1127,7 +1128,7 @@ struct HostProtocolServerTests {
         try Self.saveDraft("a", line: 1, in: try #require(ReviewDraftSessionID(rawValue: rawSession)), to: fixture)
         func publish(_ draftIDs: [String]?) async throws -> ProviderReviewPublishResult {
             try await fixture.host.reviews.publish(
-                HostReviewPublish(decision: .comment, body: "", draftIDs: draftIDs, headSHA: "aaa"),
+                HostReviewPublish(decision: .comment, body: "", draftIDs: draftIDs, headSHA: "aaaaaaa"),
                 sessionID: rawSession, in: worktree, caller: .app
             )
         }

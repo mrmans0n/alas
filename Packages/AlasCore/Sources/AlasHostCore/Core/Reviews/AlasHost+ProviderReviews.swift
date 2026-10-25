@@ -3,6 +3,7 @@ import AlasFoundation
 import AlasModel
 import AlasFeatures
 import AlasIntegrations
+import AlasPlatform
 
 extension ReviewsAPI {
     /// Pull or merge request review `sessionID` of the worktree as its
@@ -90,6 +91,9 @@ extension ReviewsAPI {
         caller.log("reviews.publish", "\(sessionID) \(publish.decision.rawValue)")
         let (record, remote, provider) = try providerSession(sessionID, in: worktree)
         try Self.checkSize(publish.body)
+        if let head = publish.headSHA, !RemoteWorktreeFileAccess.isCommitSHA(head) {
+            throw HostError.invalidRequest(reason: "The head commit must be a commit SHA.")
+        }
         guard case .reviewRequest(_, _, _, let number, _) = record.target.payload else {
             throw HostError.invalidRequest(reason: "This review has no pull or merge request.")
         }
@@ -99,9 +103,13 @@ extension ReviewsAPI {
         defer { core.publishingReviews.remove(sessionID) }
         let session = record.target.draftSessionID
         let drafts = core.reviewDrafts
+        var providerCalled = false
+        // A failure after the provider posted (e.g. a draft save) still changed the review.
+        defer { if providerCalled { didChange(worktreeID: worktree.id) } }
         do {
             let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
                 .pinned(headSHA: publish.headSHA)
+            providerCalled = true
             // Only this session's drafts, so a Mac can't select another's.
             let result = try await ProviderReviewPublisher.publish(
                 try drafts.load(sessionID: session), selecting: publish.draftIDs.map(Set.init), to: request,
@@ -120,7 +128,6 @@ extension ReviewsAPI {
                 }
                 try drafts.save(draft)
             }
-            didChange(worktreeID: worktree.id)
             return result
         } catch let error as ProviderReviewPublishError {
             throw HostError.invalidRequest(reason: error.localizedDescription)
