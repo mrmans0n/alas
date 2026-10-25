@@ -134,7 +134,7 @@ public final class AlasCoreContext {
     /// which a paired Mac lists before it has comments. Never saved to the
     /// review stores.
     // ponytail: in memory, lost on restart; a review with comments is still listed.
-    @ObservationIgnored public var openedLocalChangesReviews: [String: Date] = [:]
+    @ObservationIgnored var openedLocalChangesReviews: [String: Date] = [:]
     /// Test hook that replaces reading a worktree's Git status for reviews.
     @_spi(Testing) @ObservationIgnored public var reviewGitStatus: (@MainActor (URL) async throws -> [ChangedFile])?
     /// Each delegated session's parent, by child id. Observed: the app draws

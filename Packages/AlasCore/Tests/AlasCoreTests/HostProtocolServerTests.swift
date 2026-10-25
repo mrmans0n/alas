@@ -960,6 +960,7 @@ struct HostProtocolServerTests {
         ]))
     }
 
+    /// Only opening a review that wasn't open notices the Mac.
     @Test func anAgentOpeningAReviewNoticesTheMac() async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
@@ -967,14 +968,23 @@ struct HostProtocolServerTests {
         let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
         let subscription = fixture.host.subscribe()
 
-        guard case .success(let opened) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
-            Issue.record("expected the commit review opened")
-            return
+        var opened: OpenedReview?
+        for _ in 0..<2 {
+            guard case .success(let review) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+                Issue.record("expected the commit review opened")
+                return
+            }
+            opened = review
+            fixture.host.reviews.openLocalChanges(in: worktree)
         }
 
+        let commit = try #require(opened)
+        let localChanges = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
         let notices = await fixture.worktreeNotices(of: subscription)
-        #expect(notices.map { [$0.worktreeID, $0.title, $0.body, $0.reviewSessionID] }
-            == [[worktree.id, "Agent opened a review", opened.label, opened.record.target.draftSessionID.rawValue]])
+        #expect(notices.map { [$0.worktreeID, $0.title, $0.body, $0.reviewSessionID] } == [
+            [worktree.id, "Agent opened a review", commit.label, commit.record.target.draftSessionID.rawValue],
+            [worktree.id, "Agent opened a review", "local changes", localChanges.rawValue],
+        ])
     }
 
     /// A comment whose file no longer differs still belongs to its review.
@@ -1320,7 +1330,9 @@ struct HostProtocolServerTests {
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json")),
                 attentionStore: .scratch(),
-                environment: environment ?? HeadlessHostEnvironment()
+                environment: environment ?? HeadlessHostEnvironment(),
+                reviewDrafts: ReviewDraftCommentStore(url: directory.appendingPathComponent("review-drafts.json")),
+                reviewSessions: ReviewSessionStore(url: directory.appendingPathComponent("review-sessions.json"))
             ))
             server = HostProtocolServer(host: host)
         }

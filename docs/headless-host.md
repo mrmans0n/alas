@@ -206,9 +206,8 @@ Tools that need a screen are hidden: `open`, `preview_*`, `computer_*`,
 `worktree_switch` and `workspace_*`. Calling one anyway, or its CLI command,
 fails with "Not available on a headless host."
 
-Paired Macs show the host's draft reviews. When an agent opens a review or
-replies to a review comment, each paired Mac gets a notice that opens that
-review.
+When an agent opens a review or replies to a review comment, each paired Mac
+shows a notification banner.
 
 The CLI ships in the cask's zip at `alas-cli/alas`, and the host installs it
 into the data directory's `bin/` at start. Otherwise the host uses the one in

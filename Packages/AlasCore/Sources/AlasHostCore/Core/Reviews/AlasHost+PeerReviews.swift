@@ -32,9 +32,10 @@ extension ReviewsAPI {
     }
 
     /// Lists the worktree's local-changes review, as an agent opening it in
-    /// the app shows it, and notices the paired Macs.
+    /// the app shows it, and notices the paired Macs the first time.
     public func openLocalChanges(in worktree: Worktree) {
-        if core.openedLocalChangesReviews[worktree.id] == nil { core.openedLocalChangesReviews[worktree.id] = Date() }
+        guard core.openedLocalChangesReviews[worktree.id] == nil else { return }
+        core.openedLocalChangesReviews[worktree.id] = Date()
         didChange(worktreeID: worktree.id)
         let session = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
         noticeOpened(in: worktree, label: "local changes", sessionID: session.rawValue)
