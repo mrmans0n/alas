@@ -814,11 +814,22 @@ struct HostSessionsTests {
             projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: "console-1", runID: "r"
         )
 
-        try await eventually { await received.events.count { if case .notice(let n) = $0 { n.sessionID == id && n.body == "Merged" } else { false } } == 1 }
         try await eventually { await received.events.contains {
             if case .worktreeNotice(let n) = $0 { n.worktreeID == fixture.worktree.id && n.title == "test finished" } else { false }
         } }
+        #expect(received.notices(of: id).map(\.body) == ["Merged"])
         #expect(HostEvent.worktreeNotice(.init(id: UUID(), worktreeID: "w", title: nil, body: "")).optInKind == "worktreeNotice")
+
+        // A session the host has stored but not loaded is still one a client can open.
+        await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        await manager.refreshRecentNow()
+        #expect(manager.liveSession(for: id) == nil && manager.cachedPersistedSessionRow(id: id) != nil)
+        notifications.notifyAlas(
+            body: "Ready", title: nil, agent: .gemini,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: id
+        )
+        try await eventually { await received.notices(of: id).map(\.body) == ["Merged", "Ready"] }
     }
 
     /// A session dropped while a notice holds it waiting comes back no longer waiting.
@@ -930,6 +941,10 @@ private final class Collected {
 
     func deltas(of id: String) -> [HostTranscriptDelta] {
         events.compactMap { if case .transcript(_, id, let delta) = $0 { delta } else { nil } }
+    }
+
+    func notices(of id: String) -> [HostNotice] {
+        events.compactMap { if case .notice(let notice) = $0, notice.sessionID == id { notice } else { nil } }
     }
 }
 

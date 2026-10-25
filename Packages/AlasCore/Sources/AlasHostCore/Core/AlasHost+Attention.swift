@@ -29,8 +29,10 @@ extension AlasHost {
             let worktreeID = content.userInfo["worktreeId"] as? String
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                // A run console's or a worktree's id is no session a client can open.
-                if let sessionID, let owner = core.acpSessionOwner(sessionID) {
+                // A run console's or a worktree's id is no session a client
+                // can open; a stored session, like a live one, is.
+                if let sessionID, let owner = core.acpSessionOwner(sessionID)
+                    ?? core.sessionManagers.first(where: { $0.value.cachedPersistedSessionRow(id: sessionID) != nil })?.key {
                     let agent = attention.agent(of: sessionID).rawValue
                     noteAttention([.notice(HostNotice(id: UUID(), owner: owner, sessionID: sessionID, agent: agent, title: title, body: body))])
                 } else if let worktreeID {
@@ -115,15 +117,17 @@ public struct AttentionAPI {
         changed([.notice(HostNotice(id: UUID(), owner: noticeOwner, sessionID: sessionID, agent: agent(of: sessionID).rawValue, title: title, body: body))])
     }
 
-    /// The agent behind session `sessionID`, as its hooks or its ACP session
-    /// report it; Codex when nothing does.
+    /// The agent behind session `sessionID`, as its hooks or its ACP session,
+    /// live or stored, report it; Codex when nothing does.
     func agent(of sessionID: String?) -> AgentKind {
         guard let sessionID else { return .codex }
         let harness = core.harness
         if let activity = harness.activityBySession[sessionID] { return activity.agent }
         if let kind = harness.activeHarnessBySession[sessionID] ?? harness.harnessBySession[sessionID] { return kind.asAgentKind }
         for manager in core.sessionManagers.values {
-            if let session = manager.liveSession(for: sessionID) { return AgentKind(acpAgentID: session.agentId) }
+            if let agentID = manager.liveSession(for: sessionID)?.agentId ?? manager.cachedPersistedSessionRow(id: sessionID)?.agentId {
+                return AgentKind(acpAgentID: agentID)
+            }
         }
         return .codex
     }
