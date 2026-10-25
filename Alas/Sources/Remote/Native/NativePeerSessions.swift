@@ -906,7 +906,7 @@ final class NativePeerSessions {
     ) {
         guard let serverId = newSession?.serverId, newSession?.id == token else { return }
         Task { [weak self] in
-            guard let decision = await self?.decideRepoHook(serverId, hook, .worktreeCreate),
+            guard let decision = await self?.decideRepoHook(serverId, hook, .peerWorktreeCreate),
                   let self, newSession?.id == token, newSession?.phase == .creating else { return }
             switch decision {
             case .approve: requestWorktreeSession(consent: .approve(hash: hook.hash), token: token, create)

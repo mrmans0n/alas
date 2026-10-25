@@ -7,6 +7,9 @@ public struct RepoHookApprovalContext: Equatable, Sendable {
     public enum Kind: Equatable, Sendable {
         case sessionOpen
         case worktreeCreate
+        /// A paired Mac asks before creating a worktree here. Nothing exists
+        /// yet, so unlike `worktreeCreate` the user can abandon the request.
+        case peerWorktreeCreate
         case workspaceMember
         case projectSettings
 
@@ -19,7 +22,7 @@ public struct RepoHookApprovalContext: Equatable, Sendable {
                 case .sessionOpen: .sessionOpen
                 case .worktreeCreate: .worktreeCreate
                 }
-            case .sessionOpen, .worktreeCreate:
+            case .sessionOpen, .worktreeCreate, .peerWorktreeCreate:
                 self
             }
         }
@@ -29,17 +32,18 @@ public struct RepoHookApprovalContext: Equatable, Sendable {
 
     public static let sessionOpen = Self(kind: .sessionOpen)
     public static let worktreeCreate = Self(kind: .worktreeCreate)
+    public static let peerWorktreeCreate = Self(kind: .peerWorktreeCreate)
     public static let workspaceMember = Self(kind: .workspaceMember)
     public static let projectSettings = Self(kind: .projectSettings)
 
     public var allowsCancel: Bool {
-        kind == .sessionOpen || kind == .projectSettings
+        kind == .sessionOpen || kind == .peerWorktreeCreate || kind == .projectSettings
     }
 
     public var skipTitle: String {
         switch kind {
         case .sessionOpen: "Continue without hook"
-        case .worktreeCreate: "Finish without hook"
+        case .worktreeCreate, .peerWorktreeCreate: "Finish without hook"
         case .workspaceMember: "Finish member without hook"
         case .projectSettings: "Not now"
         }

@@ -2227,7 +2227,7 @@ struct NativePeerSessionsTests {
         }
         #expect(asked.map(\.0) == ["B"])
         #expect(asked.map(\.1) == [hook])
-        #expect(asked.map(\.2) == [.worktreeCreate])
+        #expect(asked.map(\.2) == [.peerWorktreeCreate])
     }
 
     @Test func aWorktreeCreatedWithoutItsSessionIsOfferedForRetry() {
