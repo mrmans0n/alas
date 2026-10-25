@@ -794,6 +794,63 @@ struct HostSessionsTests {
         #expect(received.events.filter { if case .notice = $0 { true } else { false } }.count == 1)
     }
 
+    /// A headless host relays what would be a system banner: a notification
+    /// naming a session it holds as that session's notice, and one naming a
+    /// run console or no session as its worktree's, which only a client that
+    /// accepts `worktreeNotice` receives.
+    @Test func aHeadlessHostRelaysEveryNotificationToTheSessionOrWorktreeItNames() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.host.relayNotifications()
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let received = Collected(fixture.host.subscribe())
+        let notifications = fixture.core.harness.notifications
+        notifications.notifyAlas(
+            body: "Merged", title: "Merged", agent: .gemini,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: id
+        )
+        notifications.notifyRunScriptFinished(
+            scriptName: "test", exitCode: 1,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: "console-1", runID: "r"
+        )
+
+        try await eventually { await received.events.contains {
+            if case .worktreeNotice(let n) = $0 { n.worktreeID == fixture.worktree.id && n.title == "test finished" } else { false }
+        } }
+        #expect(received.notices(of: id).map(\.body) == ["Merged"])
+
+        // A session the host has stored but not loaded is still one a client can open.
+        await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        await manager.refreshRecentNow()
+        #expect(manager.liveSession(for: id) == nil && manager.cachedPersistedSessionRow(id: id) != nil)
+        notifications.notifyAlas(
+            body: "Ready", title: nil, agent: .gemini,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: id
+        )
+        try await eventually { await received.notices(of: id).map(\.body) == ["Merged", "Ready"] }
+    }
+
+    enum HostSessionClose: CaseIterable { case archive, disposeOwner }
+
+    /// A stopped runner reports no turn, so a scheduled firing waiting on a
+    /// session the host closes ends as stopped rather than waiting hours.
+    @Test(arguments: HostSessionClose.allCases)
+    func closingAScheduledSessionEndsItsTurnWaitAsStopped(_ close: HostSessionClose) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        fixture.core.scheduledAgentTurns.expect(id)
+        switch close {
+        case .archive: try await sessions.archive(id, caller: .app)
+        case .disposeOwner: await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
+        }
+        let completion = await fixture.core.scheduledAgentTurns.wait(for: id, timeout: .seconds(10))
+        #expect(completion?.result == .cancelled)
+    }
+
     /// A session dropped while a notice holds it waiting comes back no longer waiting.
     @Test func aSessionReplacedWhileANoticeHoldsItWaitingIsNotReportedWaiting() async throws {
         let fixture = try Fixture()
@@ -903,6 +960,10 @@ private final class Collected {
 
     func deltas(of id: String) -> [HostTranscriptDelta] {
         events.compactMap { if case .transcript(_, id, let delta) = $0 { delta } else { nil } }
+    }
+
+    func notices(of id: String) -> [HostNotice] {
+        events.compactMap { if case .notice(let notice) = $0, notice.sessionID == id { notice } else { nil } }
     }
 }
 

@@ -100,23 +100,50 @@ extension AlasHost {
                     )
                     environment.modelCatalog?.recordEffort(agentID: agentID, thinking: chips.thinking)
                 },
-                alasTools: alasTools
+                alasTools: alasTools,
+                onTurnCompleted: { completion in
+                    Task { @MainActor in await builtCore?.turnCompleted(completion) }
+                }
             ),
             environment: environment,
             harness: harness,
             usageHistory: try? UsageHistoryStore()
         )
         builtCore = core
-        return AlasHost(core: core)
+        core.installDefaultShepherdEffects()
+        core.installDefaultRunScheduleRunner()
+        let host = AlasHost(core: core)
+        // A process without an app bundle has no notification center: what
+        // would be a banner goes to the paired Macs instead.
+        host.relayNotifications()
+        return host
     }
 }
 
 extension AlasHost {
+    /// Starts the PR and stack shepherds and the run schedules. Call once the
+    /// projects' worktrees are listed: a record whose worktree the host does
+    /// not list is left for the app until the next start.
+    public func startAutomation() async {
+        // gg is often only on the login shell's PATH, and a probe that misses
+        // it is not repeated.
+        await ShellEnvResolver.shared.waitUntilResolved()
+        await GGAvailability.shared.probe()
+        guard !core.isStopping else { return }
+        core.reviewShepherd.start()
+        core.stackShepherd.start()
+        core.runScheduler.start()
+    }
+
     /// Ends every run and agent session, for a host about to exit: runs,
     /// launches still starting included, are stopped as a worktree's removal
     /// stops them; each session's agent is detached and its process ended,
     /// and every queued session write is flushed.
     public func shutdown() async {
+        // ponytail: stop() only ends the timers; an evaluation underway (a prompt delivery, a gg mutation) runs on, harmless since the process exits next
+        core.reviewShepherd.stop()
+        core.stackShepherd.stop()
+        core.runScheduler.stop()
         // First: a request still underway cannot start what this stops.
         core.isStopping = true
         let worktreeIDs = Set(core.processRuns.values.map(\.worktreeID))

@@ -354,6 +354,7 @@ extension SessionsAPI {
         caller.log("sessions.archive", sessionID)
         guard let manager = rowManager(for: sessionID) else { throw SessionRefusal.notFound }
         guard try await manager.archiveUnlessDrivenElsewhere(id: sessionID) else { throw SessionRefusal.notWriter }
+        core.scheduledAgentTurns.sessionClosed(sessionID)
     }
 
     public func setModel(_ sessionID: String, modelID: String, caller: HostCaller) async throws {

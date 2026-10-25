@@ -59,7 +59,8 @@ struct ReviewShepherdTests {
     private func makeShepherd(
         request: ReviewRequest,
         deliverPrompt: @escaping @MainActor (String, @escaping @MainActor () -> Bool) async -> ReviewShepherd.Delivery,
-        rules: @escaping @MainActor () throws -> ShepherdRules = { .none }
+        rules: @escaping @MainActor () throws -> ShepherdRules = { .none },
+        servesWorktree: @escaping @MainActor (String) -> Bool = { _ in true }
     ) -> ReviewShepherd {
         let local = ReviewLoopLocalState(
             branchName: "fix-login", headSHA: F.head, baseBranch: "main",
@@ -88,9 +89,44 @@ struct ReviewShepherdTests {
             rules: { _ in try rules() },
             notify: { _ in },
             refreshPaneIfCached: { _ in },
-            archiveWorktreeIfAllowed: { _, _, _ in .declined }
+            archiveWorktreeIfAllowed: { _, _, _ in .declined },
+            servesWorktree: servesWorktree
         )
         return shepherd
+    }
+
+    @Test func aRecordInAWorktreeNotServedHereIsLeftAlone() async {
+        let request = F.request(threads: [F.trustedThread])
+        var delivered: [String] = []
+        let shepherd = makeShepherd(request: request, deliverPrompt: { text, _ in
+            delivered.append(text)
+            return .delivered
+        }, servesWorktree: { _ in false })
+        let record = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: true, contextRules: nil
+        )
+
+        await shepherd.evaluateNow(record.id)
+
+        #expect(shepherd.records[record.id] == record)
+        #expect(delivered.isEmpty)
+    }
+
+    @Test func bindingTheSessionElsewhereKeepsItsRecordInAWorktreeNotServedHere() async {
+        let request = F.request(threads: [])
+        let shepherd = makeShepherd(request: request, deliverPrompt: { _, _ in .delivered }, servesWorktree: { $0 != "wt-app" })
+        let unserved = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-app", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+
+        await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+
+        #expect(shepherd.records[unserved.id] == unserved)
     }
 
     @Test func turnEndingWhileTheFixPromptIsDeliveredKeepsTheFix() async throws {

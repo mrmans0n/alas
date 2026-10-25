@@ -47,6 +47,10 @@ public enum HostEvent: Codable, Equatable, Sendable {
     /// that relays notices. Sent over the host protocol only to clients that
     /// accept `notice`.
     case notice(HostNotice)
+    /// A notification about a worktree rather than a session it holds, such
+    /// as a run's outcome or a shepherd's, on a host that relays notices.
+    /// Sent over the host protocol only to clients that accept `worktreeNotice`.
+    case worktreeNotice(HostWorktreeNotice)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -57,6 +61,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
     private enum RunChangedCodingKeys: String, CodingKey { case _0 = "run" }
     private enum SessionChangedCodingKeys: String, CodingKey { case _0 = "session" }
     private enum NoticeCodingKeys: String, CodingKey { case _0 = "notice" }
+    private enum WorktreeNoticeCodingKeys: String, CodingKey { case _0 = "notice" }
 
     var key: HostEventKey {
         switch self {
@@ -75,6 +80,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .pendingRequestResolved(let owner, let id, let requestID): .pendingRequest(owner: owner, id: id, requestID)
         case .sessionState(let owner, let id, _): .sessionState(owner: owner, id: id)
         case .notice(let notice): .notice(notice.id)
+        case .worktreeNotice(let notice): .notice(notice.id)
         case .resync: .resync
         }
     }
@@ -95,6 +101,21 @@ public struct HostNotice: Codable, Equatable, Sendable {
         self.owner = owner
         self.sessionID = sessionID
         self.agent = agent
+        self.title = title
+        self.body = body
+    }
+}
+
+/// A notification about a worktree, for a client to show.
+public struct HostWorktreeNotice: Codable, Equatable, Sendable {
+    public var id: UUID
+    public var worktreeID: String
+    public var title: String?
+    public var body: String
+
+    public init(id: UUID, worktreeID: String, title: String?, body: String) {
+        self.id = id
+        self.worktreeID = worktreeID
         self.title = title
         self.body = body
     }
@@ -535,6 +556,7 @@ extension HostEvent {
         switch self {
         case .sessionState: "sessionState"
         case .notice: "notice"
+        case .worktreeNotice: "worktreeNotice"
         default: nil
         }
     }

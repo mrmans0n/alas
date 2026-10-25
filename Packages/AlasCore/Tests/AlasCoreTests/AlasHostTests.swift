@@ -32,6 +32,31 @@ struct AlasHostTests {
         #expect(host.worktrees.list(includingArchived: true).first { $0.worktree.id == archived.id }?.isArchived == true)
     }
 
+    enum ShepherdedWorktree: CaseIterable {
+        case local, sshProject, unlisted
+    }
+
+    /// A host's shepherds serve the local worktrees it lists; records of an
+    /// SSH project's worktree, or of one it doesn't list, are the app's.
+    @Test(arguments: ShepherdedWorktree.allCases)
+    func headlessShepherdsServeOnlyListedLocalWorktrees(_ kind: ShepherdedWorktree) {
+        var project = ProjectConfig(id: "p", name: "p", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        if kind == .sshProject { project.host = "alas-test.invalid" }
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/feature")
+        let worktree = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "feature", branch: "feature",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        if kind != .unlisted { projects.insertOptimisticWorktree(worktree) }
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch())
+        core.installDefaultShepherdEffects()
+
+        let served = kind == .local
+        #expect(core.reviewShepherd.effects?.servesWorktree(worktree.id) == served)
+        #expect(core.stackShepherd.effects?.servesWorktree(worktree.id) == served)
+    }
+
     enum VerbCheck: CaseIterable {
         case createWithInvalidBranch
         /// The remote path it is created at is taken, though the one asked

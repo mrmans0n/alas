@@ -36,6 +36,8 @@ public final class AlasCoreContext {
     public let reviewShepherd: ReviewShepherd
     /// Watches every request of a bound gg stack; AppState installs its effects.
     public let stackShepherd: StackShepherd
+    /// Hands each scheduled chat session's first finished turn to its firing.
+    @ObservationIgnored public let scheduledAgentTurns = ScheduledAgentTurns()
     /// Waits for a run's completion file. Injectable so tests can settle runs.
     @ObservationIgnored public let runCompletionWaiter: RunCompletionWaiter
     /// Runs whose completion is being waited for, keyed by run ID.
@@ -199,6 +201,11 @@ public final class AlasCoreContext {
         self.runHistory = RunHistory(store: runHistoryStore)
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
         self.harness = harness
+        if environment.relaysNotices {
+            // A process without an app bundle has no notification center;
+            // `AlasHost.relayNotifications()` hands them to subscribers instead.
+            harness.notifications.notificationAdder = { _ in }
+        }
         self.orchestrationPersistence = orchestrationPersistence
         self.reviewDrafts = reviewDrafts
         self.reviewSessions = reviewSessions
@@ -371,8 +378,11 @@ public final class AlasCoreContext {
     public func disposeSessionManager(owner: SessionOwnerID) async {
         guard let manager = sessionManagers.removeValue(forKey: owner) else { return }
         manager.flushPendingDraftWrites()
-        for runner in manager.runners.values {
+        // A stopped runner reports no turn, so a scheduled firing waiting on
+        // one is told here.
+        for (sessionID, runner) in manager.runners {
             runner.stop()
+            scheduledAgentTurns.sessionClosed(sessionID)
         }
         manager.prepareForDisposal()
         await Self.finishDisposing(manager)
@@ -401,11 +411,13 @@ public final class AlasCoreContext {
     /// `defaultSessionManager`, resuming after a usage limit, continuing
     /// interrupted sessions, and capturing Claude session hooks as `config`
     /// says when each is decided. With `alasTools`, agents also get the
-    /// built-in `alas` MCP server and CLI env.
+    /// built-in `alas` MCP server and CLI env. `onTurnCompleted` hears every
+    /// turn that ends.
     public static func sessionManagerFactory(
         config: @escaping @MainActor () -> AppConfig,
         onChipsObserved: (@MainActor (_ agentId: String, _ host: String?, _ chips: ACPChipState) -> Void)? = nil,
-        alasTools: HeadlessAlasTools? = nil
+        alasTools: HeadlessAlasTools? = nil,
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil
     ) -> @MainActor (SessionOwnerID, Worktree) -> ACPSessionManager {
         { owner, worktree in
             var projectContext: ACPSessionManager.MCPProjectContextProvider?
@@ -421,6 +433,7 @@ public final class AlasCoreContext {
                 persistence: ACPSessionPersistence(path: Paths.acpSessionsDB(for: owner).path),
                 autoResumeAfterUsageLimit: { config().harness.acpAutoResumeAfterUsageLimit },
                 continueInterruptedSessions: { config().harness.acpContinueInterruptedSessions },
+                onTurnCompleted: onTurnCompleted,
                 mcpProjectContextProvider: projectContext,
                 builtInMCPProvider: builtInMCP,
                 onChipsObserved: onChipsObserved

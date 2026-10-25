@@ -202,7 +202,7 @@ extension AppState {
     // MARK: - Notifications
 
     private func notifyStackShepherdEvent(_ event: StackShepherd.Event) {
-        let message = Self.stackShepherdNotification(for: event) { record in
+        let message = ShepherdNotification.stack(for: event) { record in
             projectAndWorktree(withWorktreeId: record.id.worktreeID)?.project.host
         }
         let record = message.record
@@ -241,49 +241,5 @@ extension AppState {
                 requiresUserInput: true
             )
         }
-    }
-
-    /// `host` is the SSH host of the record's project, where `gh`/`glab` run.
-    static func stackShepherdNotification(
-        for event: StackShepherd.Event,
-        host: (StackShepherdRecord) -> String?
-    ) -> (record: StackShepherdRecord, escalation: ShepherdEscalation?, title: String, body: String) {
-        func stack(_ record: StackShepherdRecord) -> String { "gg stack \"\(record.id.stackName)\"" }
-        func requests(_ record: StackShepherdRecord, _ count: Int) -> String {
-            let label = record.remote.kind == .gitlab ? "merge request" : "pull request"
-            return "\(count) \(label)\(count == 1 ? "" : "s")"
-        }
-        switch event {
-        case .ready(let record):
-            return (record, nil, "Stack ready to land",
-                    "All \(requests(record, record.openEntries.count)) in \(stack(record)) pass their checks with no open review threads. Land it from the stack drawer once it's approved.")
-        case .finished(let record, .merged):
-            return (record, nil, "Stack landed", "Every request in \(stack(record)) was merged.")
-        case .finished(let record, .closed):
-            return (record, nil, "Stack closed", "\(stack(record)) finished with requests closed without merging.")
-        case .entryClosed(let record, let entry, let title):
-            return (record, nil, "Closed", "\(reference(record, entry)) \"\(title)\" in \(stack(record)) was closed without merging.")
-        case .escalated(let record, let entries, let reason):
-            let subject = "\(entries.map { reference(record, $0) }.joined(separator: ", ")) in \(stack(record))"
-            let cli = record.remote.kind == .github ? "gh" : "glab"
-            let detail: String = switch reason {
-            case .attemptsExhausted: "still \(entries.count == 1 ? "has" : "have") problems after \(record.fixAttemptBudget) fix attempts."
-            case .noProgress: "\(entries.count == 1 ? "has" : "have") not moved since the last fix prompt."
-            case .deliveryFailed: "could not reach the stack's chat session."
-            case .ownerGone: "lost the stack's chat session. Use Ship in another session to take the stack over."
-            case .authFailed:
-                if let host = host(record) {
-                    "can't be checked: \(cli) is missing or signed out on \(host). Run \(cli) auth login there."
-                } else {
-                    "can't be checked: \(cli) is missing or signed out. Run \(cli) auth login."
-                }
-            }
-            return (record, reason, "Stack shepherd needs you", "\(subject) \(detail)")
-        }
-    }
-
-    private static func reference(_ record: StackShepherdRecord, _ entry: StackShepherdEntry) -> String {
-        let kind = record.remote.kind
-        return "\(kind.displayName) \(kind.reviewRequestNumberPrefix)\(entry.requestNumber)"
     }
 }

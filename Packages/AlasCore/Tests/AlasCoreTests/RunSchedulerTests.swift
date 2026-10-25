@@ -638,4 +638,119 @@ struct RunSchedulerTests {
         #expect(second.state(for: "a").nextFireAt == expectedNextFire)
         #expect(second.firings(for: "a").map(\.outcome) == [.succeeded])
     }
+
+    private func turn(_ sessionID: String, _ result: ACPTurnCompletion.Result = .completed) -> ACPTurnCompletion {
+        ACPTurnCompletion(
+            sessionId: sessionID, startedAt: 0, result: result, delegatedSource: nil, lastAgentText: "Done."
+        )
+    }
+
+    /// A turn can end before the firing starts waiting, and only the first
+    /// turn of an expected session counts.
+    @Test func scheduledTurnsAreHandedOverWhicheverSideArrivesFirst() async {
+        let turns = ScheduledAgentTurns()
+        turns.expect("early")
+        turns.deliver(turn("early"))
+        turns.deliver(turn("early", .cancelled))
+        #expect(await turns.wait(for: "early", timeout: .seconds(60))?.result == .completed)
+
+        turns.expect("late")
+        turns.deliver(turn("stranger"))
+        async let waited = turns.wait(for: "late", timeout: .seconds(60))
+        await Task.yield()
+        turns.deliver(turn("late", .failed("boom")))
+        #expect(await waited?.result == .failed("boom"))
+
+        #expect(await turns.wait(for: "stranger", timeout: .seconds(60)) == nil)
+    }
+
+    /// A stopped runner reports no turn of its own, so each of these has to
+    /// end the wait or the schedule stays running until the timeout.
+    @Test func aScheduledTurnWaitEndsOnTimeoutCancellationAndSessionClose() async {
+        let turns = ScheduledAgentTurns()
+        turns.expect("slow")
+        #expect(await turns.wait(for: "slow", timeout: .milliseconds(10)) == nil)
+
+        turns.expect("closed")
+        async let closing = turns.wait(for: "closed", timeout: .seconds(60))
+        await Task.yield()
+        turns.sessionClosed("closed")
+        #expect(await closing?.result == .cancelled)
+
+        turns.expect("removed")
+        let waiter = Task { await turns.wait(for: "removed", timeout: .seconds(60)) }
+        waiter.cancel()
+        #expect(await waiter.value == nil)
+    }
+
+    /// The report is the scheduled prompt's own reply, even when the user
+    /// queued another prompt that has already started answering.
+    @Test func theReportIsTheScheduledTurnsFinalAgentReply() {
+        func user(_ text: String) -> ACPMessage {
+            .user(id: UUID(), messageId: nil, text: text, attachments: [])
+        }
+        func agent(_ text: String) -> ACPMessage {
+            .agent(id: UUID(), messageId: nil, StreamingText(text))
+        }
+        func reply(_ messages: [ACPMessage]) -> String? {
+            ScheduledAgentTurns.finalAgentReply(in: ScheduledAgentTurns.scheduledTurn(in: messages).messages)
+        }
+        #expect(reply([user("Go"), agent("Working"), agent("  Done.\n"), agent("  ")]) == "Done.")
+        #expect(!ScheduledAgentTurns.scheduledTurn(in: [user("Go"), agent("Done.")]).successorStarted)
+
+        let queued = [user("Go"), agent("Done."), user("Also this"), agent("Follow-up")]
+        #expect(reply(queued) == "Done.")
+        #expect(ScheduledAgentTurns.scheduledTurn(in: queued).successorStarted)
+        #expect(reply([user("Go"), user("Also this"), agent("Follow-up")]) == nil)
+    }
+
+    @Test(arguments: [
+        (RunScheduleComposition?.none, String?.none, true, String?.none), // local script only
+        (.none, "mini.local", true, "app is on mini.local; schedules there run only in the app."),
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), nil, false,
+         "Claude runs in a terminal; terminal agents run only in the app."),
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: false)), nil, true,
+         "The schedule leaves its prompt for review; it runs only in the app."),
+        (.some(.init(prompt: "  ", sendsPromptAutomatically: false)), nil, true, nil), // opens the agent only
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), nil, true, nil),
+    ])
+    func aHostRefusesOnlyTheSchedulesItCannotRunUnattended(
+        composition: RunScheduleComposition?, host: String?, speaksACP: Bool, reason: String?
+    ) {
+        #expect(RunSchedulePresentation.headlessRefusal(
+            composition: composition, projectName: "app", projectHost: host,
+            agentName: "Claude", agentSpeaksACP: speaksACP
+        ) == reason)
+    }
+
+    /// A schedule the host cannot run is refused, reported, and leaves no
+    /// worktree behind; an SSH project says so even with no agent resolving there.
+    @Test(arguments: [
+        (String?.none, String?.some("no-such-acp-agent"), "no-such-acp-agent runs in a terminal; terminal agents run only in the app."),
+        ("mini.local", nil, "app is on mini.local; schedules there run only in the app."),
+    ])
+    func aRefusedScheduleCreatesNoWorktree(host: String?, agentID: String?, reason: String) async {
+        var project = ProjectConfig(id: "p", name: "app", path: "/srv/repo", color: "blue", addedAt: .distantPast)
+        project.host = host
+        let projects = ProjectsManager(persistedProjects: [project])
+        let path = URL(fileURLWithPath: "/srv/repo")
+        let main = Worktree(
+            id: Worktree.makeId(path: path), projectId: "p", name: "repo", branch: "main",
+            path: path, status: .clean, lastActivity: .distantPast
+        )
+        projects.insertOptimisticWorktree(main)
+        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch())
+        var reported: [String] = []
+        core.harness.notifications.notificationAdder = { reported.append($0.content.body) }
+        let schedule = RunSchedule(
+            name: "nightly", target: .project(id: "p"), scriptKey: nil, trigger: .interval(seconds: 3_600),
+            composition: RunScheduleComposition(agentId: agentID, prompt: "Go")
+        )
+
+        let report = await core.runHeadlessScheduleTarget(schedule, project: project, worktree: main)
+
+        #expect(report.outcome == .launchFailed(reason))
+        #expect(reported == [reason])
+        #expect(projects.worktrees(projectId: "p").map(\.id) == [main.id])
+    }
 }

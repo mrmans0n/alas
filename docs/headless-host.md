@@ -197,6 +197,11 @@ answer reviews of a branch or pull request, start and drive delegated
 sessions, create pull requests and send notifications. The settings toggle
 that exposes the tools in the app turns them off here too.
 
+Pull requests are created and watched on the host: fix prompts, auto-merge and
+archive after merge follow the project's shepherd rules. This needs `gh` (or
+`glab` for GitLab) installed and signed in for the host's user; `alas-host
+setup` reports when it isn't.
+
 Tools that need a screen are hidden: `open`, `preview_*`, `computer_*`,
 `worktree_switch`, `workspace_*` and a review of local changes (`review`
 needs a target). Calling one anyway, or its CLI command, fails with "Not
@@ -217,6 +222,16 @@ it reaches nobody.
 Agents reach the host through the socket in their environment. A host shell
 has none, so `alas` there finds the host by scanning for its socket, which
 works only on the standard profile, not on an `ALAS_APP_SUPPORT_DIR` one.
+
+## Shepherds and schedules
+
+The host runs PR and stack shepherds and the scheduler. A schedule saved in the
+profile fires on the host, and a script run gets a run console. A schedule for
+a terminal agent, for an SSH project, or one that leaves its prompt for review
+fails each time with the reason; those run only in the app. Shepherd records of
+SSH-project worktrees are left untouched for the app. Shepherd and schedule
+settings are read when the host starts: run `alas-host restart` after changing
+them. Their alerts go to paired Macs, which show them as banners.
 
 ## Start at login
 
@@ -242,3 +257,5 @@ so the agent runs at standard priority.
 ## What it does not do yet
 
 - **Linux.** The host is macOS only.
+- **Terminal-agent and SSH-project schedules.** They run only in the app.
+- **Starting or stopping a shepherd from a paired Mac.**
