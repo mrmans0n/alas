@@ -493,7 +493,9 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["rev-list", "--count", "HEAD"], cwd: repo).stdout == "2\n")
     }
 
-    enum Refusal: CaseIterable { case branchChanged, staleDiscard, nothingStaged, pendingCheckpoint, appHost, hidden }
+    enum Refusal: CaseIterable {
+        case branchChanged, checkedOutSinceListed, staleDiscard, nothingStaged, tooManyPaths, pendingCheckpoint, appHost, hidden
+    }
 
     @Test(arguments: Refusal.allCases)
     func gitActionsAreRefused(_ refusal: Refusal) async throws {
@@ -512,6 +514,13 @@ struct HostProtocolServerTests {
         case .branchChanged:
             branch = "other"
             expected = .failed(message: "The worktree changed since it was listed.")
+        case .checkedOutSinceListed:
+            // Nothing relists the worktree here: git alone knows it moved.
+            #expect(try await Process.git(["checkout", "-q", "-b", "other"], cwd: repo).exitCode == 0)
+            expected = .failed(message: "The worktree changed since it was listed.")
+        case .tooManyPaths:
+            change = .stage(paths: (0...10_000).map { "file\($0)" })
+            expected = .invalidRequest(reason: "One request can name at most 10000 paths.")
         case .staleDiscard:
             change = .discard(paths: ["missing.txt"])
             expected = .failed(message: "These changes are no longer in the worktree.")
@@ -567,7 +576,8 @@ struct HostProtocolServerTests {
         let (repo, ref) = try await fixture.mainWorktree()
         try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
 
-        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .stage(paths: [path]))) != .done)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .stage(paths: [path])))
+            == .failure(error: .failed(message: "fatal: pathspec '\(path)' did not match any files")))
         #expect(try await Process.git(["diff", "--cached", "--name-only"], cwd: repo).stdout == "")
     }
 

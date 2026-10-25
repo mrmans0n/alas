@@ -71,7 +71,7 @@ extension Process {
         let inputPipe = stdinWriter.map { _ in Pipe() }
         let outPipe = Pipe()
         let errPipe = Pipe()
-        if let inputPipe { process.standardInput = inputPipe }
+        if let inputPipe { process.standardInput = inputPipe } else { process.neverPromptsOnStandardInput() }
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -185,6 +185,12 @@ extension Process {
     /// Set by alas-host at startup: its git children must never prompt.
     nonisolated(unsafe) public static var neverPromptsForGit = false
 
+    /// Under `neverPromptsForGit`, a child given no input reads an empty
+    /// one, never the host's terminal, so nothing it asks can wait there.
+    fileprivate func neverPromptsOnStandardInput() {
+        if Process.neverPromptsForGit { standardInput = FileHandle.nullDevice }
+    }
+
     /// Set while alas-host acts on a paired client's paths: each names one
     /// path, never a glob or pathspec magic.
     @TaskLocal public static var gitLiteralPathspecs = false
@@ -222,6 +228,7 @@ extension Process {
         env["LC_ALL"] = "C"
         if neverPrompts {
             env["GIT_TERMINAL_PROMPT"] = "0"
+            env["GCM_INTERACTIVE"] = "never"
             // ponytail: overrides a repo's core.sshCommand on the host; append BatchMode to it if a host relies on one.
             if env["GIT_SSH_COMMAND"] == nil, env["GIT_SSH"] == nil {
                 env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
@@ -458,6 +465,7 @@ extension Process {
         process.arguments = args
         if let cwd { process.currentDirectoryURL = cwd }
         if let env { process.environment = env }
+        process.neverPromptsOnStandardInput()
 
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -593,6 +601,7 @@ extension Process {
         process.arguments = args
         if let cwd { process.currentDirectoryURL = cwd }
         if let env { process.environment = env }
+        process.neverPromptsOnStandardInput()
 
         let outPipe = Pipe()
         let errPipe = Pipe()
