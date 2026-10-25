@@ -1486,9 +1486,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            if let status = session.preparingAppActionStatus {
+            // The card's loading state, under the row id its prompt lands
+            // with. A queued prompt's card shows in the queue instead.
+            if let preparing = session.preparingAppAction,
+               !session.queue.contains(where: { preparing.isDelivered(by: $0.delegatedSource) }) {
+                let status = preparing.status
                 specs.append(ACPTranscriptRowSpec(
-                    id: "__preparing_app_action__",
+                    id: preparing.stableId,
                     equalityToken: token(status, host: host),
                     build: {
                         wrapRow(host: host) {
@@ -2373,8 +2377,8 @@ private struct ContextRecoveryRow: View {
     }
 }
 
-/// An Alas action still resolving before its prompt card lands, such as Ship
-/// reading the branch or stack.
+/// The loading state of an Alas action's prompt card, such as Ship reading
+/// the branch or stack before its prompt is sent.
 private struct PreparingAppActionRow: View {
     let status: String
     @Environment(\.theme) private var theme

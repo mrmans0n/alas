@@ -26,6 +26,23 @@ struct ACPSessionTests {
         #expect(ACPSessionReference.attachedSessionIds(in: session.transcript.messages).isEmpty)
     }
 
+    @Test("an app action's card lands under its loading row's id, and only its own prompt replaces it", arguments: [true, false])
+    func appActionCardReplacesItsLoadingRow(delivered: Bool) {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        let preparing = ACPSession.PreparingAppAction(id: UUID(), status: "Preparing to ship…")
+        session.preparingAppAction = preparing
+
+        let messageID = session.recordUserPrompt(
+            text: "Ship it",
+            attachments: [],
+            delegatedSource: .shipCreate(kind: .github, branch: "b", messageID: delivered ? preparing.id : UUID())
+        )
+
+        #expect((messageID == preparing.id) == delivered)
+        #expect((session.preparingAppAction == nil) == delivered)
+        #expect((session.transcript.messages.last.map(session.transcript.stableId(for:)) == preparing.stableId) == delivered)
+    }
+
     @Test("task Stop remains subject to each task's authority", arguments: [false, true])
     func backgroundTaskStopAuthority(canStop: Bool) {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

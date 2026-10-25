@@ -188,10 +188,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public private(set) var retryStatus: ACPRetryStatus? { willSet { nextPromptActivity.send() } }
     @Tracked public var contextRestoreWarning: ContextRestoreWarning? { willSet { nextPromptActivity.send() } }
     @Tracked public var contextRecoveryStatus: ContextRecoveryStatus? { willSet { nextPromptActivity.send() } }
-    /// Runtime-only status line for an Alas action (Ship) that is still
-    /// resolving before its prompt reaches this session. The transcript shows
-    /// it with a spinner until the prompt lands or the action gives up.
-    @Tracked public var preparingAppActionStatus: String?
+    /// Runtime-only loading state of an Alas action's prompt card (Ship) that
+    /// is still resolving before its prompt reaches this session. The
+    /// transcript shows it with a spinner in the card's own row: the recorded
+    /// prompt takes over its id, so the card replaces it in place.
+    @Tracked public var preparingAppAction: PreparingAppAction?
     /// Runtime-only ACP `notice` update — a fire-and-forget out-of-band
     /// event (MCP server dropped, rate limit, model fallback…). Live state
     /// only: never written into the persisted transcript, never restored
@@ -568,6 +569,32 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case failed(String)
     }
 
+    public struct PreparingAppAction: Hashable, Sendable {
+        /// The prompt card's transcript message id, and the `messageId` of
+        /// the delegated source its prompt is sent with.
+        public let id: UUID
+        public let status: String
+
+        public init(id: UUID, status: String) {
+            self.id = id
+            self.status = status
+        }
+
+        /// The transcript row id the card lands under.
+        public var stableId: String { ACPMessage.stableId(for: .userUUID(id)) }
+
+        public func isDelivered(by source: ACPDelegatedPromptSource?) -> Bool {
+            source?.messageId == id.uuidString
+        }
+    }
+
+    /// Ends an app action's loading state when the prompt delivering its
+    /// card was dropped before it was recorded.
+    public func endPreparingAppAction(deliveredBy source: ACPDelegatedPromptSource?) {
+        guard let preparing = preparingAppAction, preparing.isDelivered(by: source) else { return }
+        preparingAppAction = nil
+    }
+
     public var hasConversationTranscript: Bool {
         transcript.messages.contains { message in
             switch message {
@@ -703,7 +730,15 @@ public final class ACPSession: ChangeTracking, Identifiable {
         _ = flushPendingReplayCandidates()
         // Echoes from here on belong to this prompt, not a restart continuation.
         expectedContinuationEcho = nil
-        let id = UUID()
+        // An app action's card takes over its loading row's id, in the same
+        // update that removes that row, so the row turns into the card.
+        let id: UUID
+        if let preparing = preparingAppAction, preparing.isDelivered(by: delegatedSource) {
+            id = preparing.id
+            preparingAppAction = nil
+        } else {
+            id = UUID()
+        }
         transcript.appendMessage(.user(
             id: id,
             messageId: nil,

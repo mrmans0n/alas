@@ -281,6 +281,8 @@ final class AppState {
     @ObservationIgnored let usageRecording = KeyedSerialQueue()
     /// Worktrees whose branch is being named from their first chat prompt.
     var autoNamingWorktreeIds: Set<String> = []
+    /// Sessions whose Ship is resolving its prompt, so a repeat click is absorbed.
+    @ObservationIgnored var preparingShipSessionIDs: Set<ACPSession.ID> = []
     /// Follow-up composers outlive the conditional Agent pane and worktree navigation.
     var agentSidebarFollowUps: [String: [ACPSession.ID: AgentSidebarFollowUpDraft]] = [:]
     var attentionStore: AttentionStore { core.attention.store }
