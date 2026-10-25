@@ -139,6 +139,8 @@ public final class AlasCoreContext {
     @_spi(Testing) @ObservationIgnored public var reviewGitStatus: (@MainActor (URL) async throws -> [ChangedFile])?
     /// The code hosts reviews open and read pull requests on; a test installs fakes.
     @_spi(Testing) @ObservationIgnored public var codeHostProviders = CodeHostProviderRegistry.live()
+    /// Session ids of the pull or merge request reviews being published.
+    @ObservationIgnored var publishingReviews: Set<String> = []
     /// Each pull or merge request review's files, loaded once so repeated
     /// comments share one provider diff fetch.
     @ObservationIgnored var providerReviewFiles: [ReviewDraftSessionID: [DiffReviewFileSummary]] = [:] // ponytail: kept until the host stops, as the app's cache was

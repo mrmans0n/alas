@@ -69,6 +69,10 @@ struct HostProtocolTests {
         HostClientMessage(id: 28, request: .mutateReviewThread(
             worktree: ref, sessionID: "s", threadID: "t1", kind: .reply, body: "Done."
         )),
+        HostClientMessage(id: 29, request: .publishReview(
+            worktree: ref, sessionID: "s",
+            publish: HostReviewPublish(decision: .requestChanges, body: "Fix it.", draftIDs: ["c"], headSHA: "abc1234")
+        )),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -104,6 +108,11 @@ struct HostProtocolTests {
         .response(id: 18, result: .reviewThreadMutated(result: ProviderThreadMutationResult(
             refreshedRequest: ShepherdFixtures.request(), providerURL: URL(string: "https://github.com/acme/app/pull/7"),
             warnings: ["w"]
+        ))),
+        .response(id: 19, result: .reviewPublished(result: ProviderReviewPublishResult(
+            published: [ProviderReviewPublishedComment(localDraftID: "c", providerThreadID: "t", providerCommentID: "1", providerURL: nil)],
+            failed: [ProviderReviewFailedComment(localDraftID: "d", message: "outdated")],
+            refreshedRequest: ShepherdFixtures.request(), warnings: ["w"]
         ))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")

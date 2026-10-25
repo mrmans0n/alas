@@ -1038,6 +1038,113 @@ struct HostProtocolServerTests {
         #expect(provider.threadMutations.count == 1)
     }
 
+    /// Saves draft `id` on line `line` of a.txt in review `session`.
+    private static func saveDraft(_ id: String, line: Int, in session: ReviewDraftSessionID, to fixture: RepoFixture) throws {
+        try fixture.core.reviewDrafts.save(ReviewDraftComment(
+            id: id, sessionID: session, fileID: DiffReviewFileID(namespace: "github-pr", path: "a.txt"), path: "a.txt",
+            side: .new, startLine: line, bodyMarkdown: "Why \(id)?", state: .active, createdAt: .distantPast, updatedAt: .distantPast
+        ))
+    }
+
+    /// A worktree's commit review, with draft "theirs" on it.
+    private static func commitReviewWithADraft(_ fixture: RepoFixture, worktree: Worktree) async throws -> ReviewDraftSessionID {
+        guard case .success(let commit) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+            throw HostError.failed(message: "expected the commit review")
+        }
+        try saveDraft("theirs", line: 1, in: commit.record.target.draftSessionID, to: fixture)
+        return commit.record.target.draftSessionID
+    }
+
+    /// A Mac publishes only its review's own drafts, at the head it showed,
+    /// and each draft keeps what became of it.
+    @Test func publishPostsTheSessionsDraftsAtTheHeadTheMacShowed() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        let rawSession = try await fixture.openPullRequestReview(provider)
+        let session = try #require(ReviewDraftSessionID(rawValue: rawSession))
+        try Self.saveDraft("a", line: 1, in: session, to: fixture)
+        try Self.saveDraft("b", line: 2, in: session, to: fixture)
+        let commit = try await Self.commitReviewWithADraft(fixture, worktree: worktree)
+        let theirs = try fixture.core.reviewDrafts.load(sessionID: commit)
+        let result = ProviderReviewPublishResult(
+            published: [ProviderReviewPublishedComment(localDraftID: "a", providerThreadID: "t1", providerCommentID: "c1", providerURL: nil)],
+            failed: [ProviderReviewFailedComment(localDraftID: "b", message: "outdated")],
+            refreshedRequest: ShepherdFixtures.request(), warnings: ["GitHub dropped the approval."]
+        )
+        provider.publishResult = result
+        let subscription = fixture.host.subscribe()
+
+        #expect(try await fixture.request(.publishReview(
+            worktree: ref, sessionID: rawSession,
+            publish: HostReviewPublish(decision: .comment, body: "", draftIDs: nil, headSHA: "aaa")
+        )) == .reviewPublished(result: result))
+        #expect(provider.publishes.count == 1)
+        #expect(provider.publishes.first?.reviewRequest.headSHA == "aaa")
+        #expect(provider.publishes.first?.comments.map(\.localDraftID) == ["a", "b"])
+        let stored = try fixture.core.reviewDrafts.load(sessionID: session)
+        #expect(stored.first { $0.id == "a" }?.providerPublish?.threadID == "t1")
+        let b = try #require(stored.first { $0.id == "b" })
+        #expect(b.providerError?.message == "outdated")
+        #expect(b.state == .active)
+        #expect(try fixture.core.reviewDrafts.load(sessionID: commit) == theirs)
+        #expect(await fixture.events(of: subscription).contains(.reviewsChanged(worktreeID: worktree.id)))
+    }
+
+    /// A publish with nothing of its own review to post never reaches the provider.
+    @Test(arguments: [
+        (["theirs"], "The selected draft is no longer publishable."),
+        (nil, "There are no publishable draft comments for a comment review."),
+    ] as [([String]?, String)])
+    func publishRefusalsReachNoProvider(draftIDs: [String]?, reason: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        let rawSession = try await fixture.openPullRequestReview(provider)
+        _ = try await Self.commitReviewWithADraft(fixture, worktree: worktree)
+
+        #expect(try await fixture.request(.publishReview(
+            worktree: ref, sessionID: rawSession,
+            publish: HostReviewPublish(decision: .comment, body: "", draftIDs: draftIDs, headSHA: "aaa")
+        )) == .failure(error: .invalidRequest(reason: reason)))
+        #expect(provider.publishes.isEmpty)
+    }
+
+    /// A second publish of a review is refused while the first runs, so no
+    /// draft posts twice.
+    @Test func aReviewPublishesOnceWhileAPublishIsInFlight() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        _ = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        provider.holdsPublish = true
+        let rawSession = try await fixture.openPullRequestReview(provider)
+        try Self.saveDraft("a", line: 1, in: try #require(ReviewDraftSessionID(rawValue: rawSession)), to: fixture)
+        func publish(_ draftIDs: [String]?) async throws -> ProviderReviewPublishResult {
+            try await fixture.host.reviews.publish(
+                HostReviewPublish(decision: .comment, body: "", draftIDs: draftIDs, headSHA: "aaa"),
+                sessionID: rawSession, in: worktree, caller: .app
+            )
+        }
+
+        let first = Task { try await publish(nil) }
+        try await eventually { await MainActor.run { provider.releasePublish != nil } }
+        await #expect(throws: HostError.invalidRequest(reason: "This review is already being published.")) {
+            try await publish(["a"])
+        }
+        provider.releasePublish?.resume()
+        #expect(try await first.value.published.map(\.localDraftID) == ["a"])
+        await #expect(throws: HostError.invalidRequest(reason: "The selected draft is no longer publishable.")) {
+            try await publish(["a"])
+        }
+        #expect(provider.publishes.count == 1)
+    }
+
     /// Comments on a renamed file of a pull or merge request keep the path it
     /// had before where the provider publishes against it, and a Mac files
     /// them on the review's own files.
@@ -1576,6 +1683,12 @@ struct HostProtocolServerTests {
         /// Thrown by `reviewRequest`.
         var readError: (any Error)?
         var threadMutations: [ProviderThreadMutation] = []
+        /// What `publishReview` answers; nil publishes every comment.
+        var publishResult: ProviderReviewPublishResult?
+        /// The next `publishReview` waits for `releasePublish` to be resumed.
+        var holdsPublish = false
+        var releasePublish: CheckedContinuation<Void, Never>?
+        var publishes: [ProviderReviewPublishRequest] = []
 
         init(kind: CodeHostKind) { self.kind = kind }
 
@@ -1592,6 +1705,19 @@ struct HostProtocolServerTests {
         func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
             threadMutations.append(mutation)
             return ProviderThreadMutationResult(refreshedRequest: mutation.reviewRequest, providerURL: nil)
+        }
+        func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+            publishes.append(request)
+            if holdsPublish {
+                holdsPublish = false
+                await withCheckedContinuation { releasePublish = $0 }
+            }
+            return publishResult ?? ProviderReviewPublishResult(
+                published: request.comments.map {
+                    ProviderReviewPublishedComment(localDraftID: $0.localDraftID, providerThreadID: nil, providerCommentID: nil, providerURL: nil)
+                },
+                failed: [], refreshedRequest: request.reviewRequest, warnings: []
+            )
         }
         func viewerLogin(remote: CodeHostRemote, cwd: URL) async -> String? { login }
         func isAvailable(cwd: URL) async -> Bool { true }

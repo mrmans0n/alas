@@ -151,6 +151,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case mutateReviewThread(
         worktree: WorktreeRef, sessionID: String, threadID: String, kind: ProviderThreadMutationKind, body: String?
     )
+    /// Publishes pull or merge request review `sessionID` on its provider, as
+    /// the host's user (`host.reviews.provider.v1`).
+    case publishReview(worktree: WorktreeRef, sessionID: String, publish: HostReviewPublish)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -222,6 +225,23 @@ public enum HostReviewMutation: Codable, Equatable, Sendable {
     case delete(commentID: String)
     case resolve(commentID: String)
     case dismiss(commentID: String)
+}
+
+/// What a Mac publishes of a pull or merge request review.
+public struct HostReviewPublish: Codable, Equatable, Sendable {
+    public var decision: ProviderReviewDecision
+    public var body: String
+    /// Only these drafts; nil for every publishable one.
+    public var draftIDs: [String]?
+    /// The head the Mac showed, so comments anchor where it saw them.
+    public var headSHA: String?
+
+    public init(decision: ProviderReviewDecision, body: String, draftIDs: [String]?, headSHA: String?) {
+        self.decision = decision
+        self.body = body
+        self.draftIDs = draftIDs
+        self.headSHA = headSHA
+    }
 }
 
 /// A pull or merge request as its provider shows it to the host's user.
@@ -374,6 +394,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case providerReview(review: HostProviderReview)
     /// The answer to `mutateReviewThread`.
     case reviewThreadMutated(result: ProviderThreadMutationResult)
+    /// The answer to `publishReview`, warnings included.
+    case reviewPublished(result: ProviderReviewPublishResult)
     case failure(error: HostError)
 }
 

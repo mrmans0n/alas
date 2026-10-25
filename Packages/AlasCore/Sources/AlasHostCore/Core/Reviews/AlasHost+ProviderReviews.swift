@@ -81,6 +81,54 @@ extension ReviewsAPI {
         }
     }
 
+    /// Publishes pull or merge request review `sessionID` on its provider, as
+    /// the host's user: its unpublished drafts, or only `publish.draftIDs`,
+    /// pinned to the head the Mac showed. One publish per review at a time.
+    public func publish(
+        _ publish: HostReviewPublish, sessionID: String, in worktree: Worktree, caller: HostCaller
+    ) async throws -> ProviderReviewPublishResult {
+        caller.log("reviews.publish", "\(sessionID) \(publish.decision.rawValue)")
+        let (record, remote, provider) = try providerSession(sessionID, in: worktree)
+        try Self.checkSize(publish.body)
+        guard case .reviewRequest(_, _, _, let number, _) = record.target.payload else {
+            throw HostError.invalidRequest(reason: "This review has no pull or merge request.")
+        }
+        guard core.publishingReviews.insert(sessionID).inserted else {
+            throw HostError.invalidRequest(reason: "This review is already being published.")
+        }
+        defer { core.publishingReviews.remove(sessionID) }
+        let session = record.target.draftSessionID
+        let drafts = core.reviewDrafts
+        do {
+            let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
+                .pinned(headSHA: publish.headSHA)
+            // Only this session's drafts, so a Mac can't select another's.
+            let result = try await ProviderReviewPublisher.publish(
+                try drafts.load(sessionID: session), selecting: publish.draftIDs.map(Set.init), to: request,
+                remote: remote, decision: publish.decision, summaryBody: publish.body, cwd: worktree.path,
+                provider: provider, now: Date.init
+            ) { draftID, outcome in
+                guard var draft = try drafts.load(sessionID: session).first(where: { $0.id == draftID }) else { return }
+                switch outcome {
+                case .published(let published):
+                    draft.providerPublish = published
+                    draft.providerError = nil
+                    draft.updatedAt = published.publishedAt
+                case .failed(let error):
+                    draft.providerError = error
+                    draft.updatedAt = error.occurredAt
+                }
+                try drafts.save(draft)
+            }
+            didChange(worktreeID: worktree.id)
+            return result
+        } catch let error as ProviderReviewPublishError {
+            throw HostError.invalidRequest(reason: error.localizedDescription)
+        } catch {
+            throw HostError.failed(message: error.localizedDescription)
+        }
+    }
+
     /// The saved PR session `sessionID` of `worktree`, its remote and provider.
     private func providerSession(
         _ sessionID: String, in worktree: Worktree

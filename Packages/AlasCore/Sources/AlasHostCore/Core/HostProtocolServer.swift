@@ -374,6 +374,10 @@ public final class HostProtocolConnection {
             return .reviewThreadMutated(result: try await host.reviews.mutateThread(
                 threadID, kind: kind, body: body, sessionID: sessionID, in: try providerReviewWorktree(ref), caller: caller
             ))
+        case .publishReview(let ref, let sessionID, let publish):
+            return .reviewPublished(result: try await host.reviews.publish(
+                publish, sessionID: sessionID, in: try providerReviewWorktree(ref), caller: caller
+            ))
         }
         return .done
     }
