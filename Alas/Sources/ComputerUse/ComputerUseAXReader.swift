@@ -44,12 +44,15 @@ enum ComputerUseAXReader {
         pid > 0 && pid != getpid()
     }
 
-    /// The frames of the active displays, CG global, top-left.
+    /// The frames of the online displays, CG global, top-left, each once. Online rather than
+    /// active: a display asleep isn't active, and with the only one asleep (an agent working
+    /// while the user is away) the list would be empty. A mirror counts as the display it mirrors.
     static func displayFrames() -> [CGRect] {
         var ids = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
-        guard CGGetActiveDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
-        return ids.prefix(Int(count)).map(CGDisplayBounds)
+        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success else { return [] }
+        let shown = ids.prefix(Int(count)).filter { CGDisplayMirrorsDisplay($0) == kCGNullDirectDisplay }
+        return ComputerUseInputGeometry.distinctDisplays(shown.map(CGDisplayBounds))
     }
 
     static let hostRefusal = ComputerUseSystemError.actionFailed("Agents can't use Alas itself.")

@@ -205,7 +205,7 @@ struct ComputerUseSystem: Sendable {
     /// an attribute on; true when Alas turned it on, so `restoreWebContent` turns it off again.
     var wakeWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Bool = { _, _ in false }
     var restoreWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Void = { _, _ in }
-    /// The active displays' frames, CG global, top-left.
+    /// The online displays' frames, CG global, top-left (`ComputerUseAXReader.displayFrames`).
     var displays: @Sendable () -> [CGRect] = { [.infinite] }
     /// The frames of the AXSheets in each app's windows, read for the apps among `pids`, so the
     /// windows backing them stay out of listings (`ComputerUseInputGeometry.isSheetBacking`).
@@ -672,7 +672,7 @@ extension LiveComputerUseSystem {
         default: return nil
         }
         let displays = displayFrames()
-        guard !displays.isEmpty, !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays) else { return nil }
+        guard !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays) else { return nil }
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
         let app = window.app
         // As the background path does: nothing moves key status in the app meanwhile.
@@ -757,7 +757,7 @@ extension LiveComputerUseSystem {
         // all, and System Settings' panes none from posted events: the element is found down the
         // window and driven through AX.
         let displays = displayFrames()
-        let offScreen = !displays.isEmpty && !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays)
+        let offScreen = !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays)
         if offScreen || ComputerUseRemoteContent.hostsContentRemotely(bundleID: window.app.bundleID) {
             if let handles = try await ComputerUseAXActions.remoteContentElement(
                 at: point, in: window, for: kind, isCancelled: isCancelled),
@@ -984,7 +984,7 @@ extension LiveComputerUseSystem {
         /// Events at a point off every display reach nothing: the AX ways were tried before them.
         func onScreen(_ point: CGPoint) throws -> CGPoint {
             let displays = displayFrames()
-            guard displays.isEmpty || ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) else {
+            guard ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) else {
                 throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
             }
             return point
@@ -1097,7 +1097,7 @@ extension LiveComputerUseSystem {
             }
             func state(_ point: CGPoint?, own: UInt32, other: UInt32, displays: [CGRect]) -> ComputerUseTakeover.DragPointState {
                 guard let point else { return .hidden }
-                if !displays.isEmpty, !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) { return .offScreen }
+                if !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) { return .offScreen }
                 let top = ComputerUseInputGeometry.topmostWindow(at: point, in: screenWindows(), ignoring: ignoring())
                 if top == own { return .clear }
                 return top == other && own != other ? .byOtherDragWindow : .byOther

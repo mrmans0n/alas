@@ -267,17 +267,22 @@ struct ComputerUseInputTests {
     }
 
     /// A window is on screen when its centre or a quarter of it is: AeroSpace's 1-point sliver of a
-    /// parked window isn't.
+    /// parked window isn't. A mirrored display counts once, and with no display read every window
+    /// is on screen.
     @Test(arguments: [
-        (CGRect(x: 100, y: 100, width: 800, height: 600), true),
-        (CGRect(x: 1727, y: 1065, width: 876, height: 625), false),
-        (CGRect(x: 1400, y: 100, width: 800, height: 600), true),
-        (CGRect(x: 1500, y: 900, width: 800, height: 600), false),
-        (CGRect(x: 3000, y: 3000, width: 100, height: 100), false),
+        (CGRect(x: 100, y: 100, width: 800, height: 600), [laptop], true),
+        (CGRect(x: 1727, y: 1065, width: 876, height: 625), [laptop], false),
+        (CGRect(x: 1400, y: 100, width: 800, height: 600), [laptop], true),
+        (CGRect(x: 1500, y: 900, width: 800, height: 600), [laptop], false),
+        (CGRect(x: 3000, y: 3000, width: 100, height: 100), [laptop], false),
+        (CGRect(x: 1400, y: 850, width: 800, height: 600), [laptop, laptop], false),
+        (CGRect(x: 3000, y: 3000, width: 100, height: 100), [], true),
     ])
-    func windowsAreOnScreenWhenTheirCentreOrAQuarterIs(frame: CGRect, onScreen: Bool) {
-        #expect(ComputerUseInputGeometry.frameIsOnScreen(frame, displays: [CGRect(x: 0, y: 0, width: 1728, height: 1117)]) == onScreen)
+    func windowsAreOnScreenWhenTheirCentreOrAQuarterIs(frame: CGRect, displays: [CGRect], onScreen: Bool) {
+        #expect(ComputerUseInputGeometry.frameIsOnScreen(frame, displays: displays) == onScreen)
     }
+
+    private static let laptop = CGRect(x: 0, y: 0, width: 1728, height: 1117)
 
     /// A key or text for an off-screen window goes only through AX, and only while that window is
     /// its app's focused one; never as events reported delivered.

@@ -73,9 +73,17 @@ public enum ComputerUseInputGeometry {
 
     /// Whether `point` is on one of `displays` (CG global, top-left frames). A window AeroSpace
     /// parks on a hidden workspace sits off every display but a 1-point sliver: input posted at
-    /// a point off screen reaches nothing.
+    /// a point off screen reaches nothing. With no display listed (none could be read) every
+    /// point counts as on screen, so the listing and delivery agree and input goes as for any window.
     public static func pointIsOnScreen(_ point: CGPoint, displays: [CGRect]) -> Bool {
-        displays.contains { $0.contains(point) }
+        displays.isEmpty || displays.contains { $0.contains(point) }
+    }
+
+    /// `displays` with each frame once: mirrored displays share their bounds.
+    public static func distinctDisplays(_ displays: [CGRect]) -> [CGRect] {
+        displays.reduce(into: []) { distinct, display in
+            if !distinct.contains(display) { distinct.append(display) }
+        }
     }
 
     public enum OffScreenInput: Sendable, Equatable {
@@ -99,12 +107,13 @@ public enum ComputerUseInputGeometry {
     }
 
     /// Whether a window's frame is on screen: its centre is on a display, or at least
-    /// `onScreenShare` of its area is. The 1-point sliver AeroSpace leaves of a parked window isn't.
+    /// `onScreenShare` of its area is (a mirrored display counted once). The 1-point sliver
+    /// AeroSpace leaves of a parked window isn't. With no display listed, on screen.
     public static func frameIsOnScreen(_ frame: CGRect, displays: [CGRect]) -> Bool {
         if pointIsOnScreen(center(of: frame), displays: displays) { return true }
         let area = frame.width * frame.height
         guard area > 0 else { return false }
-        let shown = displays.reduce(CGFloat(0)) { sum, display in
+        let shown = distinctDisplays(displays).reduce(CGFloat(0)) { sum, display in
             let overlap = display.intersection(frame)
             return overlap.isNull ? sum : sum + overlap.width * overlap.height
         }

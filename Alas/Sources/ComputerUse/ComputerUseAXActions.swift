@@ -700,7 +700,7 @@ extension ComputerUseAXActions {
             // off screen, whose sheet can't take posted keys either.
             let displays = ComputerUseAXReader.displayFrames()
             let searchesTree = ComputerUseRemoteContent.hostsContentRemotely(bundleID: app.bundleID)
-                || (!displays.isEmpty && !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays))
+                || !ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays)
             let remote = candidates.isEmpty && searchesTree ? nestedSheets(in: target) : []
             candidates += remote
             func pressChecked(_ button: AXUIElement, title: String) throws {
