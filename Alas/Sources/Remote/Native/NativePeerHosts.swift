@@ -14,6 +14,8 @@ final class NativePeerHosts {
     private(set) var archivedWorktrees: [String: [PeerHostWorktree]] = [:]
     /// Each peer's latest run per (worktree, script), keyed like `worktrees`.
     private(set) var runs: [String: [RunRecord]] = [:]
+    /// Each peer's shepherd pills by session id, keyed like `worktrees`.
+    private(set) var shepherds: [String: [String: HostSessionShepherd]] = [:]
     @ObservationIgnored var onChange: (@MainActor () -> Void)?
     /// Fired with the peer's `serverId` when its runs changed, so a run's
     /// console can be listed without waiting for the next poll.
@@ -25,6 +27,8 @@ final class NativePeerHosts {
     let showError: @MainActor (_ title: String, _ message: String) -> Void
     /// Shows a notice a peer's agent sent, with the peer's server id.
     private let notice: @MainActor (_ serverId: String, HostNotice) -> Void
+    /// Shows a notice about one of a peer's worktrees, with the peer's server id.
+    private let worktreeNotice: @MainActor (_ serverId: String, HostWorktreeNotice) -> Void
     private let timeout: Duration
     @ObservationIgnored private var channels: [String: PeerHostChannel] = [:]
 
@@ -34,6 +38,7 @@ final class NativePeerHosts {
         confirm: @escaping @MainActor (PeerWorktreeRemoval.Confirmation, _ peerName: String) async -> Bool = { _, _ in false },
         showError: @escaping @MainActor (_ title: String, _ message: String) -> Void = { _, _ in },
         notice: @escaping @MainActor (_ serverId: String, HostNotice) -> Void = { _, _ in },
+        worktreeNotice: @escaping @MainActor (_ serverId: String, HostWorktreeNotice) -> Void = { _, _ in },
         timeout: Duration = PeerHostChannel.defaultTimeout
     ) {
         self.send = send
@@ -41,6 +46,7 @@ final class NativePeerHosts {
         self.confirm = confirm
         self.showError = showError
         self.notice = notice
+        self.worktreeNotice = worktreeNotice
         self.timeout = timeout
     }
 
@@ -72,6 +78,7 @@ final class NativePeerHosts {
         worktrees = [:]
         archivedWorktrees = [:]
         runs = [:]
+        shepherds = [:]
         for channel in stopped {
             channel.onChange = nil
             channel.disconnect()
@@ -200,10 +207,12 @@ final class NativePeerHosts {
             let newRuns = channel.state?.runs
             let runsChanged = runs[serverId] != newRuns
             runs[serverId] = newRuns
+            shepherds[serverId] = channel.state?.shepherds
             onChange?()
             if runsChanged { onRunsChanged?(serverId) }
         }
         channel.onNotice = { [notice] in notice(serverId, $0) }
+        channel.onWorktreeNotice = { [worktreeNotice] in worktreeNotice(serverId, $0) }
         channels[serverId] = channel
         return channel
     }

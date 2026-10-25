@@ -18,6 +18,12 @@ extension AppState {
                     body: notice.body, title: notice.title, agent: AgentKind(rawValue: notice.agent) ?? .codex,
                     serverId: serverId, sessionId: notice.sessionID
                 )
+            },
+            worktreeNotice: { [weak self] serverId, notice in
+                self?.harness.notifications.notifyPeerNotice(
+                    body: notice.body, title: notice.title, agent: .codex,
+                    serverId: serverId, sessionId: notice.worktreeID, peerWorktreeId: notice.worktreeID
+                )
             }
         )
         remotePeers.onHostMessage = { [weak hosts] serverId, message in

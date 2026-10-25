@@ -145,6 +145,15 @@ struct ReviewShepherdTests {
         #expect(HostSessionShepherd.make(sessionID: "session-2", review: shepherd, stack: stack) == nil)
     }
 
+    @Test(arguments: [
+        (HostSessionShepherd(badge: "fixing", number: "#7", tooltip: "t"), ShepherdBadgeState.fixing),
+        (HostSessionShepherd(badge: "fromANewerHost", number: "#7", tooltip: "t"), nil),
+        (nil, nil),
+    ] as [(HostSessionShepherd?, ShepherdBadgeState?)])
+    func peerShowsAPillOnlyForAKnownBadge(shepherd: HostSessionShepherd?, badge: ShepherdBadgeState?) {
+        #expect(shepherd?.badgeState == badge)
+    }
+
     @Test func turnEndingWhileTheFixPromptIsDeliveredKeepsTheFix() async throws {
         let request = F.request(threads: [F.trustedThread])
         let gate = DeliveryGate()

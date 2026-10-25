@@ -14,6 +14,9 @@ public struct HostSessionShepherd: Codable, Equatable, Sendable {
         self.tooltip = tooltip
     }
 
+    /// The pill's badge; nil for one this Mac doesn't know, which shows no pill.
+    public var badgeState: ShepherdBadgeState? { ShepherdBadgeState(rawValue: badge) }
+
     public init(_ presentation: ShepherdPresentation) {
         self.init(badge: presentation.badge.rawValue, number: presentation.number, tooltip: presentation.tooltip)
     }
