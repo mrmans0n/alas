@@ -10,13 +10,11 @@ extension AlasCLICommandRouter {
     public static let headlessRefusal = AlasCLIResponse.error("Not available on a headless host.")
 
     /// Commands that act on a screen, which a headless host does not have.
-    /// Review comments and verdicts need a session to name a review by.
+    /// The local-changes review is not one: a paired Mac shows it.
     public static func isScreenBound(_ command: AlasCLIRequest.Command) -> Bool {
         switch command {
-        case .open, .openAt, .preview, .computer, .workspace, .worktree(.switch), .review(.localChanges):
+        case .open, .openAt, .preview, .computer, .workspace, .worktree(.switch):
             true
-        case .review(.commentAdd(_, _, _, _, _, let sessionID)), .review(.finish(let sessionID, _, _)):
-            sessionID == nil
         default:
             false
         }
@@ -57,6 +55,7 @@ extension AlasCLICommandRouter {
                     return .error(error.localizedDescription)
                 }
             },
+            openReviewChanges: { host.reviews.openLocalChanges(in: $0) },
             openReview: { worktree, target, caller in
                 switch await host.reviews.open(target, in: worktree, caller: caller) {
                 case .failure(let failure):

@@ -34,7 +34,9 @@ public final class AlasHost {
 
     /// The `HostProtocolCapability` values this host serves.
     public var servedCapabilities: [String] {
-        HostProtocolCapability.served + (core.environment.servesWorktreeGit ? [HostProtocolCapability.worktreesGitV1] : [])
+        HostProtocolCapability.served + (
+            core.environment.servesWorktreeGit ? [HostProtocolCapability.worktreesGitV1, HostProtocolCapability.reviewsV1] : []
+        )
     }
 
     /// Lists the projects' worktrees, from the cache and then from git. A

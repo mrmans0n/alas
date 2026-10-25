@@ -43,13 +43,20 @@ extension ReviewsAPI {
         return resolved.flatMap { reviewTarget, label in
             let store = core.reviewSessions
             var saved: ReviewSessionRecord?
+            var isNew = false
             ReviewSessionLauncher.openOrFocus(
                 target: reviewTarget,
-                findActive: { try store.findActive(targetID: $0) },
+                findActive: {
+                    let active = try store.findActive(targetID: $0)
+                    isNew = active == nil
+                    return active
+                },
                 save: { try store.save($0) },
                 open: { saved = $0 }
             )
             guard let saved else { return .failure(.init(message: "could not open review session")) }
+            didChange(worktreeID: worktree.id)
+            if isNew { noticeOpened(in: worktree, label: label, sessionID: saved.target.draftSessionID.rawValue) }
             return .success(OpenedReview(record: saved, label: label))
         }
     }

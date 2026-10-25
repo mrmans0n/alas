@@ -243,6 +243,38 @@ struct HostProtocolServerTests {
         #expect(events(plain.messages) == [archiving])
     }
 
+    /// Only a client that accepts `reviewsChanged` hears that a worktree's
+    /// reviews changed.
+    @Test func aReviewChangeReachesOnlyClientsThatAcceptIt() async throws {
+        let fixture = try Fixture()
+        let worktree = fixture.worktree
+        let plain = Client()
+        let accepting = Client()
+        let plainConnection = fixture.server.connect(caller: .localUser(uid: 501), send: plain.receive)
+        let acceptingConnection = fixture.server.connect(caller: .localUser(uid: 501), send: accepting.receive)
+        defer {
+            plainConnection.close()
+            acceptingConnection.close()
+        }
+        let cursor = try await fixture.host.snapshot().cursor
+        await plainConnection.receive(HostClientMessage(id: 1, request: .subscribe(after: cursor)))
+        await acceptingConnection.receive(HostClientMessage(id: 1, request: .subscribeAccepting(after: cursor, events: ["reviewsChanged"])))
+        func events(_ messages: [HostServerMessage]) -> [HostEvent] {
+            messages.flatMap { message -> [HostEvent] in
+                guard case .events(let batch, _) = message else { return [] }
+                return batch
+            }
+        }
+
+        _ = fixture.host.reviews.finish(origin: worktree, sessionID: nil, verdict: .approve, summary: "ok", projectWorktrees: [worktree])
+        let changed = HostEvent.reviewsChanged(worktreeID: worktree.id)
+        try await accepting.waitFor { events($0).contains(changed) }
+        // A later event both clients get proves the plain one had its chance.
+        fixture.projects.setOperationState(for: worktree, state: .archiving(projectId: "p"))
+        try await plain.waitFor { events($0).contains { if case .worktreeChanged = $0 { true } else { false } } }
+        #expect(!events(plain.messages).contains(changed))
+    }
+
     /// A caller may keep only the connection, as the Remote gateway does:
     /// it still serves after the server value is gone.
     @Test func aConnectionServesAfterItsServerIsReleased() async throws {
@@ -845,6 +877,276 @@ struct HostProtocolServerTests {
         }
     }
 
+    @Test func reviewRequestsAreServedOnlyByAHeadlessHost() async throws {
+        let fixture = try await RepoFixture(environment: RecordingRunEnvironment())
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+
+        #expect(try await fixture.request(.listReviews(worktree: ref))
+            == .failure(error: .invalidRequest(reason: "This host does not serve reviews.")))
+    }
+
+    /// Local changes are listed, never saved, once an agent comments on them;
+    /// finishing them saves the one record the list then shows instead.
+    @Test func theListSynthesizesLocalChangesOnceItHasComments() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "changed\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+        func reviews() async throws -> [HostReviewSummary] {
+            guard case .reviews(let reviews) = try await fixture.request(.listReviews(worktree: ref)) else {
+                Issue.record("expected reviews")
+                return []
+            }
+            return reviews
+        }
+
+        #expect(try await reviews() == [])
+        _ = await fixture.host.reviews.addComment(
+            origin: worktree, path: ".alas/scripts/hello.sh", startLine: 1, endLine: nil, side: nil, body: "Why?",
+            sessionID: nil, projectWorktrees: [worktree]
+        )
+        let listed = try await reviews()
+        #expect(listed.map(\.record.target.kind) == [.localChanges])
+        #expect(listed.first?.openCommentCount == 1)
+        #expect(listed.first?.sessionID
+            == ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue)
+        #expect(try fixture.core.reviewSessions.list(worktreeID: worktree.id) == [])
+
+        _ = fixture.host.reviews.finish(origin: worktree, sessionID: nil, verdict: .approve, summary: "ok", projectWorktrees: [worktree])
+        #expect(try await reviews().map(\.record.verdict?.verdict) == [.approve])
+        guard case .success = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+            Issue.record("expected the commit review opened")
+            return
+        }
+        #expect(try await reviews().map(\.record.target.kind) == [.commit, .localChanges])
+    }
+
+    enum ReplyPath: CaseIterable {
+        case reply, resolveWithReply, bareResolve
+    }
+
+    /// An agent's answer to a review comment notices the Mac with its
+    /// review; resolving without a word does not.
+    @Test(arguments: ReplyPath.allCases)
+    func agentRepliesNoticeTheMacWithTheirReview(_ path: ReplyPath) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, _) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "changed\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+        _ = await fixture.host.reviews.addComment(
+            origin: worktree, path: ".alas/scripts/hello.sh", startLine: 1, endLine: nil, side: nil, body: "Why?",
+            sessionID: nil, projectWorktrees: [worktree]
+        )
+        let comment = try #require(try fixture.core.reviewDrafts.loadAll().first)
+        let subscription = fixture.host.subscribe()
+
+        switch path {
+        case .reply:
+            _ = fixture.host.reviews.reply(origin: worktree, commentID: comment.id, body: "Because.", projectWorktrees: [worktree])
+        case .resolveWithReply:
+            _ = fixture.host.reviews.resolve(
+                origin: worktree, commentID: comment.id, reply: "Because.", reopen: false, projectWorktrees: [worktree]
+            )
+        case .bareResolve:
+            _ = fixture.host.reviews.resolve(origin: worktree, commentID: comment.id, reply: nil, reopen: false, projectWorktrees: [worktree])
+        }
+
+        let notices = await fixture.worktreeNotices(of: subscription)
+        #expect(notices.map { [$0.worktreeID, $0.title, $0.body, $0.reviewSessionID] } == (path == .bareResolve ? [] : [
+            [worktree.id, "Agent replied to review feedback", "Because.", comment.sessionID.rawValue],
+        ]))
+    }
+
+    /// Only opening a review that wasn't open notices the Mac.
+    @Test func anAgentOpeningAReviewNoticesTheMac() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        _ = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let subscription = fixture.host.subscribe()
+
+        var opened: OpenedReview?
+        for _ in 0..<2 {
+            guard case .success(let review) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+                Issue.record("expected the commit review opened")
+                return
+            }
+            opened = review
+            fixture.host.reviews.openLocalChanges(in: worktree)
+        }
+
+        let commit = try #require(opened)
+        let localChanges = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        let notices = await fixture.worktreeNotices(of: subscription)
+        #expect(notices.map { [$0.worktreeID, $0.title, $0.body, $0.reviewSessionID] } == [
+            [worktree.id, "Agent opened a review", commit.label, commit.record.target.draftSessionID.rawValue],
+            [worktree.id, "Agent opened a review", "local changes", localChanges.rawValue],
+        ])
+    }
+
+    /// A comment whose file no longer differs still belongs to its review.
+    @Test func aReviewReadsEveryCommentOfItsSession() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "changed\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+        _ = await fixture.host.reviews.addComment(
+            origin: worktree, path: ".alas/scripts/hello.sh", startLine: 1, endLine: nil, side: nil, body: "Why?",
+            sessionID: nil, projectWorktrees: [worktree]
+        )
+        #expect(try await Process.git(["checkout", "--", ".alas/scripts/hello.sh"], cwd: repo).exitCode == 0)
+        let sessionID = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all).rawValue
+
+        guard case .review(let review) = try await fixture.request(.readReview(worktree: ref, sessionID: sessionID)) else {
+            Issue.record("expected the review")
+            return
+        }
+        #expect(review.comments.map(\.bodyMarkdown) == ["Why?"])
+        #expect(review.summary.openCommentCount == 1)
+        let foreign = ReviewDraftSessionID.localChanges(worktreeID: "other", worktreePath: repo, scope: .all).rawValue
+        for unknown in ["nope", foreign] {
+            #expect(try await fixture.request(.readReview(worktree: ref, sessionID: unknown))
+                == .failure(error: .notFound(what: "review \(unknown)")))
+        }
+    }
+
+    /// With a path both staged and unstaged, an agent's comment goes to the
+    /// unstaged side; a Mac's stays on the side it was filed on, and only on
+    /// a side its review has: not a commit's, nor a stage the file lacks.
+    @Test(arguments: [
+        (false, "staged", true, true), (false, "unstaged", true, true), (false, "commit", true, false),
+        (true, "unstaged", true, false), (false, "staged", false, false),
+    ])
+    func aMacCommentKeepsTheStageItWasFiledOn(commitReview: Bool, namespace: String, alsoStaged: Bool, accepted: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let file = repo.appendingPathComponent("a.txt")
+        if alsoStaged {
+            try "one\n".write(to: file, atomically: true, encoding: .utf8)
+            _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        }
+        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+        var session = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        if commitReview {
+            guard case .success(let opened) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+                Issue.record("expected the commit review opened")
+                return
+            }
+            session = opened.record.target.draftSessionID
+        }
+
+        let response = try await fixture.request(.mutateReview(worktree: ref, sessionID: session.rawValue, mutation: .add(
+            fileID: DiffReviewFileID(namespace: namespace, path: "a.txt"), path: "a.txt", originalPath: nil,
+            anchor: .line(side: .new, startLine: 1, endLine: nil, selectedText: nil), body: "Why?"
+        )))
+
+        let stored = try fixture.core.reviewDrafts.load(sessionID: session)
+        if accepted {
+            #expect(response == .done)
+            #expect(stored.map(\.fileID) == [DiffReviewFileID(namespace: namespace, path: "a.txt")])
+            #expect(stored.map(\.effectiveAuthor) == [.user])
+        } else {
+            guard case .failure(.invalidRequest) = response else {
+                Issue.record("expected a refusal, got \(response)")
+                return
+            }
+            #expect(stored.isEmpty)
+        }
+    }
+
+    /// A Mac names the review it acts in; a comment of another review, or of
+    /// another worktree's, is not found, and only line and file comments of
+    /// bounded size are filed.
+    @Test func macMutationsStayInsideTheirReview() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "changed\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+        let local = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        func add(_ anchor: ReviewDraftCommentAnchor, body: String = "Why?") async throws -> HostResponse {
+            try await fixture.request(.mutateReview(worktree: ref, sessionID: local.rawValue, mutation: .add(
+                fileID: DiffReviewFileID(namespace: "unstaged", path: ".alas/scripts/hello.sh"),
+                path: ".alas/scripts/hello.sh", originalPath: nil, anchor: anchor, body: body
+            )))
+        }
+        #expect(try await add(.file) == .done)
+        let comment = try #require(try fixture.core.reviewDrafts.load(sessionID: local).first)
+        guard case .success(let opened) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+            Issue.record("expected the commit review opened")
+            return
+        }
+        let foreign = ReviewDraftSessionID.localChanges(worktreeID: "other", worktreePath: repo, scope: .all)
+        var theirs = comment
+        theirs.id = "theirs"
+        theirs.sessionID = foreign
+        try fixture.core.reviewDrafts.save(theirs)
+
+        for (sessionID, commentID, missing) in [
+            (opened.record.target.draftSessionID.rawValue, comment.id, "review comment \(comment.id)"),
+            (local.rawValue, "nope", "review comment nope"),
+            (local.rawValue, "theirs", "review comment theirs"),
+            (foreign.rawValue, "theirs", "review \(foreign.rawValue)"),
+        ] {
+            #expect(try await fixture.request(.mutateReview(
+                worktree: ref, sessionID: sessionID, mutation: .edit(commentID: commentID, body: "Edited")
+            )) == .failure(error: .notFound(what: missing)))
+        }
+        #expect(try await add(.image(side: .new, normalizedX: 0, normalizedY: 0))
+            == .failure(error: .invalidRequest(reason: "Only file and line comments can be added from a paired Mac.")))
+        guard case .failure(.invalidRequest) = try await add(.file, body: String(repeating: "x", count: 1 << 20)) else {
+            Issue.record("expected an oversized comment refused")
+            return
+        }
+        #expect(try fixture.core.reviewDrafts.load(sessionID: local).map(\.bodyMarkdown) == ["Why?"])
+        #expect(try fixture.core.reviewDrafts.find(commentID: "theirs")?.bodyMarkdown == "Why?")
+    }
+
+    @Test func macMutationsActAsTheUser() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "changed\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        func mutate(_ mutation: HostReviewMutation) async throws -> HostResponse {
+            try await fixture.request(.mutateReview(worktree: ref, sessionID: session.rawValue, mutation: mutation))
+        }
+        for line in [1, 2] {
+            #expect(try await mutate(.add(
+                fileID: DiffReviewFileID(namespace: "unstaged", path: ".alas/scripts/hello.sh"),
+                path: ".alas/scripts/hello.sh", originalPath: nil,
+                anchor: .line(side: .new, startLine: line, endLine: nil, selectedText: nil), body: "Line \(line)"
+            )) == .done)
+        }
+        let ids = try fixture.core.reviewDrafts.load(sessionID: session).sorted { $0.startLine < $1.startLine }.map(\.id)
+        func comment(_ id: String) throws -> ReviewDraftComment? { try fixture.core.reviewDrafts.find(commentID: id) }
+
+        #expect(try await mutate(.edit(commentID: ids[0], body: "Edited")) == .done)
+        #expect(try comment(ids[0])?.bodyMarkdown == "Edited")
+        #expect(try await mutate(.resolve(commentID: ids[0])) == .done)
+        #expect(try comment(ids[0])?.state == .resolved)
+        #expect(try comment(ids[0])?.resolvedBy == .user)
+        guard case .failure(.invalidRequest) = try await mutate(.edit(commentID: ids[0], body: "Again")) else {
+            Issue.record("expected editing a resolved comment refused")
+            return
+        }
+        #expect(try await mutate(.dismiss(commentID: ids[1])) == .done)
+        #expect(try comment(ids[1])?.state == .dismissed)
+        #expect(try await mutate(.delete(commentID: ids[1])) == .done)
+        guard case .review(let review) = try await fixture.request(.readReview(worktree: ref, sessionID: session.rawValue)) else {
+            Issue.record("expected the review")
+            return
+        }
+        #expect(review.comments.map(\.id) == [ids[0]])
+    }
+
     /// A host over a real repository, persisting to a scratch directory,
     /// whose sessions talk to a scripted agent.
     @MainActor
@@ -884,7 +1186,9 @@ struct HostProtocolServerTests {
                     )
                 },
                 environment: environment ?? HeadlessHostEnvironment(),
-                orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
+                orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path),
+                reviewDrafts: ReviewDraftCommentStore(url: root.appendingPathComponent("review-drafts.json")),
+                reviewSessions: ReviewSessionStore(url: root.appendingPathComponent("review-sessions.json"))
             )
             host = AlasHost(core: core)
             connection = HostProtocolServer(host: host).connect(caller: .localUser(uid: 501), send: client.receive)
@@ -1026,7 +1330,9 @@ struct HostProtocolServerTests {
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: directory.appendingPathComponent("workspaces.json")),
                 attentionStore: .scratch(),
-                environment: environment ?? HeadlessHostEnvironment()
+                environment: environment ?? HeadlessHostEnvironment(),
+                reviewDrafts: ReviewDraftCommentStore(url: directory.appendingPathComponent("review-drafts.json")),
+                reviewSessions: ReviewSessionStore(url: directory.appendingPathComponent("review-sessions.json"))
             ))
             server = HostProtocolServer(host: host)
         }

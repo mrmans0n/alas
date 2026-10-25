@@ -492,7 +492,7 @@ struct HostSessionsTests {
         let client = try SocketClient(path: path)
         defer { client.close() }
 
-        #expect(try await client.request(.capabilities) == .capabilities(capabilities: HostProtocolCapability.served + [HostProtocolCapability.worktreesGitV1]))
+        #expect(try await client.request(.capabilities) == .capabilities(capabilities: HostProtocolCapability.served + [HostProtocolCapability.worktreesGitV1, HostProtocolCapability.reviewsV1]))
         guard case .snapshot(let snapshot) = try await client.request(.snapshot) else {
             Issue.record("expected a snapshot")
             return

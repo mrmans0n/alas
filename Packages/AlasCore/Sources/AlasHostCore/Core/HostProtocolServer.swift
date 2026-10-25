@@ -356,6 +356,12 @@ public final class HostProtocolConnection {
             let listed = try gitWorktree(ref)
             await host.core.refreshFollowedReviewStatus(listed.id)
             return .reviewStatus(snapshot: host.reviews.status(of: listed.id))
+        case .listReviews(let ref):
+            return .reviews(reviews: try host.reviews.list(in: try reviewWorktree(ref)))
+        case .readReview(let ref, let sessionID):
+            return .review(review: try host.reviews.read(sessionID, in: try reviewWorktree(ref)))
+        case .mutateReview(let ref, let sessionID, let mutation):
+            try await host.reviews.mutate(mutation, sessionID: sessionID, in: try reviewWorktree(ref), caller: caller)
         }
         return .done
     }
@@ -449,6 +455,14 @@ public final class HostProtocolConnection {
     private func gitWorktree(_ ref: WorktreeRef) throws -> Worktree {
         guard host.servedCapabilities.contains(HostProtocolCapability.worktreesGitV1) else {
             throw HostError.invalidRequest(reason: "This host does not serve git actions.")
+        }
+        return try visibleWorktree(ref)
+    }
+
+    /// A visible worktree, on a host that serves reviews.
+    private func reviewWorktree(_ ref: WorktreeRef) throws -> Worktree {
+        guard host.servedCapabilities.contains(HostProtocolCapability.reviewsV1) else {
+            throw HostError.invalidRequest(reason: "This host does not serve reviews.")
         }
         return try visibleWorktree(ref)
     }

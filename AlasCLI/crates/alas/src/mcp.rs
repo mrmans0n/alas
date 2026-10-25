@@ -259,36 +259,14 @@ pub fn tool_definitions() -> Vec<Value> {
 }
 
 fn tool_definitions_for_mode(scope: ToolScope) -> Vec<Value> {
-    let mut tools: Vec<Value> = all_tool_definitions()
+    all_tool_definitions()
         .into_iter()
         .filter(|tool| {
             tool.get("name")
                 .and_then(Value::as_str)
                 .is_some_and(|name| scope.allows(name))
         })
-        .collect();
-    if scope == ToolScope::Headless {
-        // No UI to default to: the host must be told which review to act on.
-        for tool in &mut tools {
-            let (required, session_desc) = match tool["name"].as_str() {
-                Some("review") => (json!(["target"]), None),
-                Some("review_finish") => (json!(["session_id"]), Some("Review session to finish, returned by the review tool.")),
-                Some("review_comment_add") => (
-                    json!(["path", "start_line", "body", "session_id"]),
-                    Some("Review session to file into, returned by the review tool."),
-                ),
-                _ => continue,
-            };
-            tool["inputSchema"]["required"] = required;
-            if let Some(desc) = session_desc {
-                tool["inputSchema"]["properties"]["session_id"]["description"] = json!(desc);
-            } else {
-                tool["description"] = json!("Start a review of the given target — a provider pull/merge request (number or URL), a commit SHA or revision, a commit range (base..head, or base...head for a merge-base diff), or a local branch (reviewed against the repository's base branch). Returns the review session id for use with review_comment_add.");
-                tool["inputSchema"]["properties"]["target"]["description"] = json!("PR/MR number or URL, commit SHA/revision, commit range (base..head or base...head), or branch name.");
-            }
-        }
-    }
-    tools
+        .collect()
 }
 
 /// Tools that only act on a session's own children.
@@ -3163,7 +3141,7 @@ mod tests {
     }
 
     #[test]
-    fn headless_scope_hides_screen_bound_tools_and_requires_review_targets() {
+    fn headless_scope_hides_screen_bound_tools() {
         let env = env_from(env(&[
             ("ALAS_SOCKET_PATH", "/s"),
             ("ALAS_WORKTREE_DIR", "/wt"),
@@ -3205,14 +3183,18 @@ mod tests {
         ] {
             assert!(names.contains(&kept), "{kept}");
         }
-        let schema = |n: &str| {
-            listed.iter().find(|t| t["name"] == n).unwrap()["inputSchema"]["required"].clone()
+        // A paired Mac shows the local-changes review, so review tools keep
+        // the app's schemas: no target or session is required.
+        let review_tools = |tools: Vec<Value>| -> Vec<Value> {
+            tools
+                .into_iter()
+                .filter(|t| t["name"].as_str().is_some_and(|n| n.starts_with("review")))
+                .collect()
         };
-        assert_eq!(schema("review"), json!(["target"]));
-        assert!(schema("review_comment_add").as_array().unwrap().contains(&json!("session_id")));
-        assert!(schema("review_finish").as_array().unwrap().contains(&json!("session_id")));
-        let review = listed.iter().find(|t| t["name"] == "review").unwrap().to_string();
-        assert!(!review.contains("omitted") && !review.contains("Omit") && !review.contains("review pane"));
+        assert_eq!(
+            review_tools(listed.clone()),
+            review_tools(tool_definitions_for_session(ToolScope::All, false))
+        );
         for parent in [None, Some("p")] {
             let text = initialize_result(parent, scope)["instructions"].as_str().unwrap().to_string();
             for banned in ["open files", "preview", "workspace_", "workspace UI"] {

@@ -23,6 +23,8 @@ public final class PeerHostChannel {
         public var shepherds: [String: HostSessionShepherd]
         /// Review statuses by worktree id, as the followed ones change.
         public var reviewStatuses: [String: ReviewLoopSnapshot] = [:]
+        /// Counts each `reviewsChanged` per worktree, for a view to refetch on; dropped with the worktree.
+        public var reviewRevisions: [String: Int] = [:]
 
         public init(_ snapshot: HostSnapshot) {
             projects = snapshot.projects
@@ -41,6 +43,7 @@ public final class PeerHostChannel {
                 projects.removeAll { $0.id == id }
                 for snapshot in worktrees where snapshot.worktree.projectId == id {
                     reviewStatuses[snapshot.worktree.id] = nil
+                    reviewRevisions[snapshot.worktree.id] = nil
                 }
                 worktrees.removeAll { $0.worktree.projectId == id }
             case .worktreeChanged(let snapshot):
@@ -53,6 +56,7 @@ public final class PeerHostChannel {
             case .worktreeRemoved(let projectID, let worktreeID):
                 worktrees.removeAll { $0.worktree.projectId == projectID && $0.worktree.id == worktreeID }
                 reviewStatuses[worktreeID] = nil
+                reviewRevisions[worktreeID] = nil
             case .workspaceCheckoutChanged(let checkout):
                 Self.upsert(checkout, in: &workspaceCheckouts)
             case .workspaceCheckoutRemoved(let id):
@@ -67,6 +71,8 @@ public final class PeerHostChannel {
                 shepherds[id] = nil
             case .reviewStatus(let worktreeID, let snapshot):
                 reviewStatuses[worktreeID] = snapshot
+            case .reviewsChanged(let worktreeID):
+                reviewRevisions[worktreeID, default: 0] += 1
             case .transcript, .pendingRequest, .pendingRequestResolved,
                  .sessionState, .notice, .worktreeNotice, .resync:
                 break
@@ -124,8 +130,8 @@ public final class PeerHostChannel {
         onChange?()
         subscribeID = nextID
         // Channels exist only for `host.events.v1` peers, which serve it; a host
-        // that predates `worktreeNotice` or `reviewStatus` just never matches that kind.
-        _ = await request(.subscribeAccepting(after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus"])) // `finish` sets isSubscribed on .subscribed
+        // that predates `worktreeNotice`, `reviewStatus` or `reviewsChanged` just never matches that kind.
+        _ = await request(.subscribeAccepting(after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged"])) // `finish` sets isSubscribed on .subscribed
     }
 
     /// Sends `request` and waits for its answer, or fails with

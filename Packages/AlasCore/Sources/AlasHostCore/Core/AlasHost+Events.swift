@@ -56,6 +56,9 @@ public enum HostEvent: Codable, Equatable, Sendable {
     /// nil once it was forgotten. Sent over the host protocol only to
     /// clients that accept `reviewStatus`.
     case reviewStatus(worktreeID: String, snapshot: ReviewLoopSnapshot?)
+    /// A worktree's review comments or review sessions changed. Sent over the
+    /// host protocol only to clients that accept `reviewsChanged`.
+    case reviewsChanged(worktreeID: String)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -87,6 +90,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .notice(let notice): .notice(notice.id)
         case .worktreeNotice(let notice): .notice(notice.id)
         case .reviewStatus(let worktreeID, _): .reviewStatus(worktreeID)
+        case .reviewsChanged(let worktreeID): .reviews(worktreeID)
         case .resync: .resync
         }
     }
@@ -118,12 +122,16 @@ public struct HostWorktreeNotice: Codable, Equatable, Sendable {
     public var worktreeID: String
     public var title: String?
     public var body: String
+    /// The draft review the notice is about, which clicking it opens; an
+    /// older Mac ignores it.
+    public var reviewSessionID: String?
 
-    public init(id: UUID, worktreeID: String, title: String?, body: String) {
+    public init(id: UUID, worktreeID: String, title: String?, body: String, reviewSessionID: String? = nil) {
         self.id = id
         self.worktreeID = worktreeID
         self.title = title
         self.body = body
+        self.reviewSessionID = reviewSessionID
     }
 }
 
@@ -139,6 +147,7 @@ enum HostEventKey: Hashable {
     case sessionState(owner: SessionOwnerID, id: String)
     case notice(UUID)
     case reviewStatus(String)
+    case reviews(String)
     case resync
 }
 
@@ -585,6 +594,7 @@ extension HostEvent {
         case .notice: "notice"
         case .worktreeNotice: "worktreeNotice"
         case .reviewStatus: "reviewStatus"
+        case .reviewsChanged: "reviewsChanged"
         default: nil
         }
     }
