@@ -312,6 +312,22 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.isSheetBacking(title: title, frame: frame, sheetFrames: sheets) == backing)
     }
 
+    /// A drop shows in a window only when its elements change, read completely both times; focus
+    /// or selection moving doesn't count.
+    @Test(arguments: [
+        (Optional(1), Optional(2), false, true),
+        (1, 1, true, false),
+        (nil, 2, false, false),
+        (1, nil, false, false),
+    ] as [(Int?, Int?, Bool, Bool)])
+    func aWindowShowsADropOnlyWhenItsElementsChange(before: Int?, after: Int?, focusMoved: Bool, changed: Bool) {
+        let focus = ComputerUseWindowFingerprint.Focus(role: "AXTextField")
+        let moved = ComputerUseWindowFingerprint.Focus(role: "AXRow")
+        #expect(ComputerUseChangeCheck.elementsChanged(
+            before: .init(focus: focus, windowTitle: "Docs", elementsHash: before, targetHash: nil),
+            after: .init(focus: focusMoved ? moved : focus, windowTitle: "Docs", elementsHash: after, targetHash: nil)) == changed)
+    }
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)

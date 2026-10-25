@@ -1064,7 +1064,7 @@ final class ComputerUseCoordinator {
     private struct Settled {
         var warning: String?
         var after: ComputerUseWindowFingerprint?
-        /// The start window itself read as changed (or can't tell); false while only a drop window did.
+        /// The start window's own elements changed (`ComputerUseChangeCheck.elementsChanged`).
         var startChanged = true
     }
 
@@ -1156,7 +1156,7 @@ final class ComputerUseCoordinator {
                 // lists, is read until it shows the drop too (a moved file leaves it).
                 // Once a read showed the drop, a later one that shows nothing new doesn't undo it.
                 var dropped = verdict.warning == nil
-                while !dropped || !verdict.startChanged, slept < Self.dragConfirmDeadline,
+                while !dropped || (end != nil && !verdict.startChanged), slept < Self.dragConfirmDeadline,
                       clock.now - start < Self.dragConfirmDeadline {
                     await sleep(Self.dragConfirmPoll)
                     slept += Self.dragConfirmPoll
@@ -1217,7 +1217,9 @@ final class ComputerUseCoordinator {
         let kind = Self.changeKind(command.action)
         let asEvents = [.event, .background].contains(delivered.delivery)
         var warning = ComputerUseChangeCheck.warning(before: before, after: after, kind: kind, deliveredAsEvents: asEvents)
-        let startChanged = warning == nil
+        // The start window shows the drop only when its elements change: activation, the raise and
+        // the mouse-down move focus and selection first.
+        let startChanged = ComputerUseChangeCheck.elementsChanged(before: before, after: after)
         if let end {
             // The drop window read back too: the drop may have changed only that one.
             // An unreadable drop window says nothing either way, so the start window's verdict stands.

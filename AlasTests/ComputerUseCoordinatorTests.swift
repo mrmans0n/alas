@@ -884,6 +884,11 @@ struct ComputerUseCoordinatorTests {
             recorder.record(input)
             return .activation
         }
+        // The activation and the mouse-down move focus and selection at once, before the start
+        // window shows the drop.
+        if drop == .sourceLate {
+            system.focusState = { _ in recorder.inputs.isEmpty ? nil : .init(role: "AXRow", title: "alas-drag-test.txt") }
+        }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
