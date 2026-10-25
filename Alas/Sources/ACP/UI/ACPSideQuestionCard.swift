@@ -159,11 +159,11 @@ struct ACPSideQuestionCard: View {
                 && transcript.urlElicitationWaits.isEmpty
         }
 
-        private var hasPendingInput: Bool {
+        private func hasPendingInput(hooksReviewShowing: Bool) -> Bool {
             transcript.pendingPermission != nil || transcript.pendingPlan != nil
                 || !transcript.pendingUserInputs.isEmpty || !transcript.urlElicitationWaits.isEmpty
                 || showsAwaitingInputNotice
-                || side.codexHooksReview != nil
+                || hooksReviewShowing
         }
 
         private var awaitingInputNotice: some View {
@@ -191,6 +191,15 @@ struct ACPSideQuestionCard: View {
         }
 
         var body: some View {
+            // The review counts only while its card shows; its first check runs hidden.
+            if let review = side.codexHooksReview {
+                CodexHooksReviewPresence(coordinator: review) { card(hooksReviewShowing: $0) }
+            } else {
+                card(hooksReviewShowing: false)
+            }
+        }
+
+        private func card(hooksReviewShowing: Bool) -> some View {
             let phase = ACPSideQuestionPhase.resolve(
                 question: entry.question,
                 creationError: entry.error,
@@ -200,16 +209,16 @@ struct ACPSideQuestionCard: View {
                 hasPrompt: latestTurn.first.map { if case .user = $0 { true } else { false } } ?? false,
                 hasOutput: latestHasOutput
             )
-            ACPSideQuestionCardChrome(
+            return ACPSideQuestionCardChrome(
                 question: entry.question,
                 phase: phase,
                 modelName: side.currentModelDisplayName,
                 enforcesReadOnly: enforcesReadOnly,
                 needsAttention: transcript.pendingPermission != nil || transcript.pendingPlan != nil
-                    || !transcript.pendingUserInputs.isEmpty || side.codexHooksReview != nil,
-                hasPendingInput: hasPendingInput,
+                    || !transcript.pendingUserInputs.isEmpty || hooksReviewShowing,
+                hasPendingInput: hasPendingInput(hooksReviewShowing: hooksReviewShowing),
                 answer: latestAnswer.isEmpty ? nil : latestAnswer,
-                hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty || !side.queue.isEmpty || side.codexHooksReview != nil,
+                hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty || !side.queue.isEmpty || hooksReviewShowing,
                 // A follow-up before the first question is sent would run first.
                 canAsk: entry.isSubmitted,
                 blocked: ACPSideQuestionBlockedSummary(latestBlocked),
@@ -383,6 +392,16 @@ struct ACPSideQuestionCard: View {
 
 /// Header, scrolling answer, pinned prompt, and follow-up footer shared by
 /// every card state.
+/// Hands its content whether the review's card shows, re-rendering as it changes.
+private struct CodexHooksReviewPresence<Content: View>: View {
+    @ObservedObject var coordinator: ACPCodexHooksReviewCoordinator
+    @ViewBuilder let content: (Bool) -> Content
+
+    var body: some View {
+        content(coordinator.presentation != nil)
+    }
+}
+
 private struct ACPSideQuestionCardChrome<Content: View, Prompt: View>: View {
     let question: String
     let phase: ACPSideQuestionPhase

@@ -542,6 +542,24 @@ struct ACPCodexHooksTests {
         #expect(late.reviewToken == nil)
     }
 
+    @Test @MainActor func slowFirstCheckShowsBusyCardAfterRevealDelay() async throws {
+        let trusted = try snapshot(status: "trusted", diagnostics: false)
+        var release: CheckedContinuation<ACPCodexHooksList, Never>?
+        let coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), revealDelay: .zero, list: {
+            await withCheckedContinuation { release = $0 }
+        }, trust: { _, _ in true })
+        let updates = AsyncStream<Void>.makeStream()
+        let subscription = coordinator.willChange.observe { updates.continuation.yield(()) }
+        let waiting = Task { await coordinator.review() }
+        var iterator = updates.stream.makeAsyncIterator()
+        while coordinator.presentation?.isBusy != true { _ = await iterator.next() }
+        #expect(coordinator.presentation?.snapshot == nil)
+        release?.resume(returning: trusted)
+        #expect(await waiting.value == "token")
+        #expect(coordinator.presentation == nil)
+        _ = subscription
+    }
+
     @Test @MainActor func lateTrustCannotRestoreInvalidatedPresentation() async throws {
         let initial = try snapshot()
         let entered = AsyncStream<Void>.makeStream()
@@ -574,9 +592,16 @@ struct ACPCodexHooksTests {
 
     @Test @MainActor func emptyAndTrustedSnapshotsContinueAutomatically() async throws {
         for initial in [try snapshot(status: "trusted", diagnostics: false), try JSONDecoder().decode(ACPCodexHooksList.self, from: Data(#"{"cwd":"/p","hooks":[],"warnings":[],"errors":[],"reviewToken":"token"}"#.utf8))] {
-            let coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: { initial }, trust: { _, _ in false })
-            #expect(await coordinator.review() == "token")
-            #expect(coordinator.presentation == nil)
+            var coordinator: ACPCodexHooksReviewCoordinator?
+            var shownWhileListing = false
+            coordinator = ACPCodexHooksReviewCoordinator(context: .init(host: "local", cwd: "/p"), list: {
+                shownWhileListing = coordinator?.presentation != nil
+                return initial
+            }, trust: { _, _ in false })
+            #expect(await coordinator?.review() == "token")
+            // A review nobody has to answer never surfaces, not even as a busy card.
+            #expect(shownWhileListing == false)
+            #expect(coordinator?.presentation == nil)
         }
     }
 
