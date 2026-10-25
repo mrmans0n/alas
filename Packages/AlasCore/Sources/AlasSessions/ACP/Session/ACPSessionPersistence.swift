@@ -12,8 +12,14 @@ import AlasACP
 /// The initializer only records a path. Opening SQLite and running migrations
 /// happen on this actor's executor when the first operation is awaited, so
 /// constructing a manager on `MainActor` never performs database I/O.
+///
+/// The actor runs on a dispatch queue of its own, not the cooperative pool:
+/// SQLite blocks its thread for every statement, and a few stores migrating
+/// at once would otherwise hold every pool thread and starve unrelated tasks.
 public actor ACPSessionPersistence: SessionSummaryStoring {
     public nonisolated let path: String
+    private nonisolated let queue = DispatchSerialQueue(label: "io.nlopez.alas.acp-session-persistence")
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private let busyTimeoutMilliseconds: Int32
     private var store: ACPSessionStore?

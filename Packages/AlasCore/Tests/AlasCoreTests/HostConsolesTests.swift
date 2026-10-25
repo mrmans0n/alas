@@ -329,8 +329,8 @@ struct HostConsolesTests {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let repo = fixture.root.appendingPathComponent("repo")
-        try GitTemplate.repository(at: repo)
-        try Self.git(["worktree", "add", "-q", "-b", "feature", fixture.worktree.path.path], in: repo)
+        try await GitTemplate.repository(at: repo)
+        try await Self.git(["worktree", "add", "-q", "-b", "feature", fixture.worktree.path.path], in: repo)
         let id = try await fixture.consoles().open(worktreeId: fixture.worktree.id)
         let zmxName = try #require(fixture.launches.first?.arguments[1])
         let zmx = zmxFound ? fixture.zmx : ZmxClient(env: ZmxEnv(binaryURL: nil, zmxDir: fixture.zmxDir))
@@ -616,14 +616,17 @@ struct HostConsolesTests {
         #expect(fixture.core.runRecords.record(worktreeID: fixture.worktree.id, scriptKey: script.key)?.sessionID == nil)
     }
 
-    private static func git(_ arguments: [String], in directory: URL) throws {
-        let git = Process()
-        git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        git.arguments = arguments
-        git.currentDirectoryURL = directory
-        try git.run()
-        git.waitUntilExit()
-        #expect(git.terminationStatus == 0)
+    private static func git(_ arguments: [String], in directory: URL) async throws {
+        let status = try await BlockingWork.run {
+            let git = Process()
+            git.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            git.arguments = arguments
+            git.currentDirectoryURL = directory
+            try git.run()
+            git.waitUntilExit()
+            return git.terminationStatus
+        }
+        #expect(status == 0)
     }
 
     struct Fakes {

@@ -33,22 +33,22 @@ struct GitServiceBatchedDiffTests {
     }
 
     @Test func treeDiffsByFileMatchesPerFileRangeDiffs() async throws {
-        let repo = try makeRepository()
+        let repo = try await makeRepository()
         defer { try? FileManager.default.removeItem(at: repo.deletingLastPathComponent()) }
         try write("one\ntwo\nthree\n", "a.txt", in: repo)
         try write(String(repeating: "renamed line\n", count: 20), "old name.txt", in: repo)
         try write("gone\n", "d.txt", in: repo)
-        try git(["add", "-A"], in: repo)
-        try git(["commit", "-q", "-m", "base"], in: repo)
-        let base = try git(["rev-parse", "HEAD"], in: repo)
+        try await git(["add", "-A"], in: repo)
+        try await git(["commit", "-q", "-m", "base"], in: repo)
+        let base = try await git(["rev-parse", "HEAD"], in: repo)
 
         try write("one\n2\nthree\nfour\n", "a.txt", in: repo)
         try FileManager.default.removeItem(at: repo.appendingPathComponent("old name.txt"))
         try write(String(repeating: "renamed line\n", count: 20) + "tail\n", "dir b/new name.txt", in: repo)
-        try git(["rm", "-q", "d.txt"], in: repo)
+        try await git(["rm", "-q", "d.txt"], in: repo)
         try write("fresh\n", "added.txt", in: repo)
-        try git(["add", "-A"], in: repo)
-        try git(["commit", "-q", "-m", "head"], in: repo)
+        try await git(["add", "-A"], in: repo)
+        try await git(["commit", "-q", "-m", "head"], in: repo)
 
         let service = GitService()
         let files = try await service.rangeChangedFiles(at: repo, base: base, head: "HEAD", threeDot: false)
@@ -66,19 +66,19 @@ struct GitServiceBatchedDiffTests {
     /// batched as singly, whether or not status detects renames.
     @Test(arguments: [true, false])
     func workingCopyDiffsByFileMatchesPerFileDiffs(statusDetectsRenames: Bool) async throws {
-        let repo = try makeRepository()
+        let repo = try await makeRepository()
         defer { try? FileManager.default.removeItem(at: repo.deletingLastPathComponent()) }
-        try git(["config", "status.renames", statusDetectsRenames ? "true" : "false"], in: repo)
+        try await git(["config", "status.renames", statusDetectsRenames ? "true" : "false"], in: repo)
         try write("one\ntwo\n", "staged.txt", in: repo)
         try write("alpha\nbeta\n", "both.txt", in: repo)
         try write(String(repeating: "moved line\n", count: 20), "moved.txt", in: repo)
-        try git(["add", "-A"], in: repo)
-        try git(["commit", "-q", "-m", "base"], in: repo)
+        try await git(["add", "-A"], in: repo)
+        try await git(["commit", "-q", "-m", "base"], in: repo)
 
         try write("one\n2\n", "staged.txt", in: repo)
         try write("alpha\nBETA\n", "both.txt", in: repo)
-        try git(["add", "staged.txt", "both.txt"], in: repo)
-        try git(["mv", "moved.txt", "moved again.txt"], in: repo)
+        try await git(["add", "staged.txt", "both.txt"], in: repo)
+        try await git(["mv", "moved.txt", "moved again.txt"], in: repo)
         try write("alpha\nBETA\ngamma\n", "both.txt", in: repo)
         try write("new\n", "untracked.txt", in: repo)
 
@@ -105,11 +105,11 @@ struct GitServiceBatchedDiffTests {
         }
     }
 
-    private func makeRepository() throws -> URL {
+    private func makeRepository() async throws -> URL {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-batched-diff-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let repo = root.appendingPathComponent("repo")
-        try GitTemplate.repository(at: repo)
+        try await GitTemplate.repository(at: repo)
         return repo
     }
 
@@ -120,17 +120,20 @@ struct GitServiceBatchedDiffTests {
     }
 
     @discardableResult
-    private func git(_ arguments: [String], in repo: URL) throws -> String {
-        let process = Process()
-        let output = Pipe()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
-        process.arguments = ["-c", "user.name=Test", "-c", "user.email=test@example.com"] + arguments
-        process.currentDirectoryURL = repo
-        process.standardOutput = output
-        try process.run()
-        let data = output.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        #expect(process.terminationStatus == 0, "git \(arguments.joined(separator: " "))")
+    private func git(_ arguments: [String], in repo: URL) async throws -> String {
+        let (status, data) = try await BlockingWork.run {
+            let process = Process()
+            let output = Pipe()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["-c", "user.name=Test", "-c", "user.email=test@example.com"] + arguments
+            process.currentDirectoryURL = repo
+            process.standardOutput = output
+            try process.run()
+            let data = output.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, data)
+        }
+        #expect(status == 0, "git \(arguments.joined(separator: " "))")
         return String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

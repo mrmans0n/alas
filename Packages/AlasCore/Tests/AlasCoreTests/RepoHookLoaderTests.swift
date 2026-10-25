@@ -204,7 +204,7 @@ struct RepoHookLoaderTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-committed-hook-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let repo = root.appendingPathComponent("repo")
-        try GitTemplate.repository(at: repo)
+        try await GitTemplate.repository(at: repo)
         let hook = repo.appendingPathComponent(RepoHookEvent.worktreeCreate.relativePath)
         try FileManager.default.createDirectory(at: hook.deletingLastPathComponent(), withIntermediateDirectories: true)
         try write(hook)

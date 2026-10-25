@@ -1,3 +1,4 @@
+import AlasCore
 import Foundation
 
 /// A repository on `main` with one commit and a run script, made once per
@@ -28,8 +29,12 @@ enum GitTemplate {
     }()
 
     /// A copy of the template at `destination`, whose parent must exist.
-    static func repository(at destination: URL) throws {
-        try FileManager.default.copyItem(at: template, to: destination)
+    ///
+    /// Copied, and the template made, on a thread of its own: most callers
+    /// are main-actor tests, and blocking the main actor starves every other
+    /// main-actor suite running in parallel past its `eventually` deadline.
+    static func repository(at destination: URL) async throws {
+        try await BlockingWork.run { try FileManager.default.copyItem(at: template, to: destination) }
     }
 
     /// The template with three more commits on `main` that `origin/main`
@@ -41,8 +46,8 @@ enum GitTemplate {
         try! FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let origin = root.appendingPathComponent("origin")
         let repo = root.appendingPathComponent("repo")
-        try! repository(at: origin)
-        try! repository(at: repo)
+        try! FileManager.default.copyItem(at: template, to: origin)
+        try! FileManager.default.copyItem(at: template, to: repo)
         run(["remote", "add", "origin", origin.path], in: repo)
         run(["fetch", "-q", "origin", "main"], in: repo)
         for index in 1...3 {
@@ -54,9 +59,11 @@ enum GitTemplate {
 
     /// A copy of the ahead-of-origin repository at `destination`, whose
     /// parent must exist; returns its three unlanded commits, bottom-up.
-    static func repositoryAheadOfOrigin(at destination: URL) throws -> [String] {
-        try FileManager.default.copyItem(at: aheadOfOrigin.repo, to: destination)
-        return aheadOfOrigin.shas
+    static func repositoryAheadOfOrigin(at destination: URL) async throws -> [String] {
+        try await BlockingWork.run {
+            try FileManager.default.copyItem(at: aheadOfOrigin.repo, to: destination)
+            return aheadOfOrigin.shas
+        }
     }
 
     @discardableResult

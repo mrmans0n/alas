@@ -1052,11 +1052,11 @@ struct StackShepherdTests {
     /// check before the sync finds nothing landed; every sync is logged. The
     /// entries' SHAs are the worktree's commits: read expectations through
     /// `entryID(_:shas:)`.
-    private func stackShipCore(published: [Bool], shaOnly: Set<Int> = []) throws -> (core: AlasCoreContext, log: SyncLog, stack: GGStack, shas: [String]) {
+    private func stackShipCore(published: [Bool], shaOnly: Set<Int> = []) async throws -> (core: AlasCoreContext, log: SyncLog, stack: GGStack, shas: [String]) {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-stack-ship-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let repo = root.appendingPathComponent("repo")
-        let shas = try GitTemplate.repositoryAheadOfOrigin(at: repo)
+        let shas = try await GitTemplate.repositoryAheadOfOrigin(at: repo)
         let stack = Self.stack(published: published, shaOnly: shaOnly, shas: shas)
         let core = makeCore()
         let log = SyncLog()
@@ -1089,7 +1089,7 @@ struct StackShepherdTests {
     /// choice for the retry.
     @Test(arguments: [("g1", true), ("gone", false)])
     func stackShipSyncsThePopoversChoiceAndKeepsItUntilAPublishSucceeds(boundary: String, syncs: Bool) async throws {
-        let (core, log, _, _) = try stackShipCore(published: [false, false, false])
+        let (core, log, _, _) = try await stackShipCore(published: [false, false, false])
         let id = StackShepherdRecordID(worktreeID: "wt-1", stackName: "auth")
         let chosen = StackShipPlan(shipThroughEntryID: boundary, opensDrafts: true)
         core.stackShepherd.setPendingShipPlan(chosen, sessionID: "session-1", id: id)
@@ -1142,7 +1142,7 @@ struct StackShepherdTests {
     /// one is kept as is, not moved up onto the held-back entry above it.
     @Test(arguments: [([], "g1"), ([2], "sha1")] as [(Set<Int>, String)])
     func stackShipNeverHoldsBackAnEntryThatHasARequest(shaOnly: Set<Int>, boundary: String) async throws {
-        let (core, log, _, shas) = try stackShipCore(published: [true, true, false], shaOnly: shaOnly)
+        let (core, log, _, shas) = try await stackShipCore(published: [true, true, false], shaOnly: shaOnly)
         core.stackShepherd.setPendingShipPlan(
             StackShipPlan(shipThroughEntryID: "g0"), sessionID: "session-1",
             id: StackShepherdRecordID(worktreeID: "wt-1", stackName: "auth")
@@ -1161,7 +1161,7 @@ struct StackShepherdTests {
         ([true, true], [], nil), ([true, false], [], "g0"), ([true, true, false], [2], "sha1"),
     ] as [([Bool], Set<Int>, String?)])
     func stackShipRecoversARecordBoundaryCleanRemoved(published: [Bool], shaOnly: Set<Int>, boundary: String?) async throws {
-        let (core, log, stack, shas) = try stackShipCore(published: published, shaOnly: shaOnly)
+        let (core, log, stack, shas) = try await stackShipCore(published: published, shaOnly: shaOnly)
         await core.stackShepherd.bind(
             sessionID: "session-1", worktreeID: "wt-1", stack: stack, requests: [:], remote: F.remote(),
             autoFix: true, maxFixAttempts: 3, shipPlan: StackShipPlan(shipThroughEntryID: "cleaned"), contextRules: nil

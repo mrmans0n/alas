@@ -296,7 +296,7 @@ struct AlasHostTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let repo = root.appendingPathComponent("repo")
-        try GitTemplate.repository(at: repo)
+        try await GitTemplate.repository(at: repo)
         var config = AppConfig.defaults
         config.worktrees.rootPath = root.appendingPathComponent("worktrees").path
         let core = AlasCoreContext(
