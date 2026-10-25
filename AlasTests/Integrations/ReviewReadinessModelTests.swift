@@ -269,6 +269,20 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
+    /// A peer's pill offers the host-served actions exactly when local would, and never PR creation or merge.
+    @Test(arguments: [
+        (Self.makeSnapshot(local: Self.makeLocal(needsPush: true), reviewRequest: nil), [ReviewReadinessActionKind.pushBranch]),
+        (Self.makeSnapshot(local: Self.makeLocal(needsPush: false, aheadCommitCount: 1), reviewRequest: nil), [.refresh]),
+        (Self.makeSnapshot(reviewRequest: Self.makeReviewRequest(reviewDecision: .approved, mergeState: .clean)), [.openReviewRequest]),
+    ])
+    func aPeerPillOffersOnlyWhatTheHostServes(snapshot: ReviewLoopSnapshot, kinds: [ReviewReadinessActionKind]) {
+        let model = ReviewReadinessModel(
+            snapshot: snapshot, lastError: nil, canOpenAgentHandoff: false,
+            servedActions: ReviewReadinessActionKind.peerServed
+        )
+        #expect(model.actions.map(\.kind) == kinds)
+    }
+
     @Test func approvedCleanRequestExposesMergeAction() {
         let request = Self.makeReviewRequest(reviewDecision: .approved, mergeState: .clean)
         let model = ReviewReadinessModel(
