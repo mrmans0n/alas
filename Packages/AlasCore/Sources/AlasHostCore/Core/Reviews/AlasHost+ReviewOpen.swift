@@ -67,7 +67,7 @@ extension ReviewsAPI {
         in worktree: Worktree
     ) async -> Result<(ReviewSessionTarget, String), ReviewOpenFailure> {
         do {
-            let registry = CodeHostProviderRegistry.live()
+            let registry = core.codeHostProviders
             let supportedRemotes = try await core.supportedReviewRemotes(for: worktree, registry: registry)
             guard !supportedRemotes.isEmpty else {
                 return .failure(.init(message: "no code host remote found for this worktree"))

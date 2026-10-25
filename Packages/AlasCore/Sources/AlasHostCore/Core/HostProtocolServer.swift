@@ -362,6 +362,14 @@ public final class HostProtocolConnection {
             return .review(review: try host.reviews.read(sessionID, in: try reviewWorktree(ref)))
         case .mutateReview(let ref, let sessionID, let mutation):
             try await host.reviews.mutate(mutation, sessionID: sessionID, in: try reviewWorktree(ref), caller: caller)
+        case .readProviderReview(let ref, let sessionID, let withDiff):
+            return .providerReview(review: try await host.reviews.providerReview(
+                sessionID, in: try providerReviewWorktree(ref), withDiff: withDiff
+            ))
+        case .openProviderReview(let ref, let number):
+            return .review(review: try await host.reviews.openProviderReview(
+                number: number, in: try providerReviewWorktree(ref), caller: caller
+            ))
         }
         return .done
     }
@@ -463,6 +471,14 @@ public final class HostProtocolConnection {
     private func reviewWorktree(_ ref: WorktreeRef) throws -> Worktree {
         guard host.servedCapabilities.contains(HostProtocolCapability.reviewsV1) else {
             throw HostError.invalidRequest(reason: "This host does not serve reviews.")
+        }
+        return try visibleWorktree(ref)
+    }
+
+    /// A visible worktree, on a host that serves pull request reviews.
+    private func providerReviewWorktree(_ ref: WorktreeRef) throws -> Worktree {
+        guard host.servedCapabilities.contains(HostProtocolCapability.reviewsProviderV1) else {
+            throw HostError.invalidRequest(reason: "This host does not serve pull request reviews.")
         }
         return try visibleWorktree(ref)
     }

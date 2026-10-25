@@ -64,6 +64,8 @@ struct HostProtocolTests {
         ))),
         HostClientMessage(id: 25, request: .readWorktree(worktree: ref, read: .rangeDiff(
             base: "abc1234", head: "def5678", threeDot: true, path: "b.txt", originalPath: "a.txt"))),
+        HostClientMessage(id: 26, request: .readProviderReview(worktree: ref, sessionID: "s", withDiff: true)),
+        HostClientMessage(id: 27, request: .openProviderReview(worktree: ref, number: 7)),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -92,6 +94,10 @@ struct HostProtocolTests {
         .response(id: 13, result: .worktreeRead(reply: .fileContents(sessionId: "/srv/feature", path: "a.txt", text: "hi", truncated: false))),
         .response(id: 15, result: .reviews(reviews: [review.summary])),
         .response(id: 16, result: .review(review: review)),
+        .response(id: 17, result: .providerReview(review: HostProviderReview(
+            remote: ShepherdFixtures.request().remote, request: ShepherdFixtures.request(), capabilities: .githubCLI,
+            account: "octocat", diff: "diff --git a/a.txt b/a.txt\n", diffTruncated: true
+        ))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
         )])),
@@ -209,6 +215,19 @@ struct HostProtocolTests {
         // An app host keeps git to the user at it; only a headless host adds it.
         #expect(!caps.contains(HostProtocolCapability.worktreesGitV1))
         #expect(!caps.contains(HostProtocolCapability.reviewsV1))
+        #expect(!caps.contains(HostProtocolCapability.reviewsProviderV1))
+    }
+
+    /// A provider diff over its cap keeps only whole files.
+    @Test func aProviderDiffOverItsCapEndsAtTheLastWholeFile() {
+        func section(_ name: String, bytes: Int) -> String {
+            let header = "diff --git a/\(name) b/\(name)\n"
+            return header + String(repeating: "x", count: bytes - header.utf8.count - 1) + "\n"
+        }
+        let a = section("a", bytes: 100), b = section("b", bytes: 100)
+        #expect(HostProviderReview.capped(a + b, maxBytes: 150) == (a, true))
+        #expect(HostProviderReview.capped(a + b, maxBytes: 400) == (a + b, false))
+        #expect(HostProviderReview.capped(section("c", bytes: 300), maxBytes: 150) == ("", true))
     }
 
     /// `peers remove` takes an id or server id as is, and a name only when

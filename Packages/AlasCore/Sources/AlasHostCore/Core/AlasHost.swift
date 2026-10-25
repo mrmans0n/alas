@@ -35,7 +35,9 @@ public final class AlasHost {
     /// The `HostProtocolCapability` values this host serves.
     public var servedCapabilities: [String] {
         HostProtocolCapability.served + (
-            core.environment.servesWorktreeGit ? [HostProtocolCapability.worktreesGitV1, HostProtocolCapability.reviewsV1] : []
+            core.environment.servesWorktreeGit
+                ? [HostProtocolCapability.worktreesGitV1, HostProtocolCapability.reviewsV1, HostProtocolCapability.reviewsProviderV1]
+                : []
         )
     }
 

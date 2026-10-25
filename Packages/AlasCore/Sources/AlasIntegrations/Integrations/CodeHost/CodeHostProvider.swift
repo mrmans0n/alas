@@ -266,6 +266,9 @@ public protocol CodeHostProvider: Sendable {
 
     func checkAnnotations(remote: CodeHostRemote, check: ReviewCheck, cwd: URL) async throws -> [CheckAnnotation]
 
+    /// The login the CLI acts as on `remote`'s host; nil when it can't tell.
+    func viewerLogin(remote: CodeHostRemote, cwd: URL) async -> String?
+
     func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult
     func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult
 
@@ -488,6 +491,10 @@ extension CodeHostProvider {
 
     public func checkAnnotations(remote: CodeHostRemote, check: ReviewCheck, cwd: URL) async throws -> [CheckAnnotation] {
         throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    public func viewerLogin(remote: CodeHostRemote, cwd: URL) async -> String? {
+        nil
     }
 
     public func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {

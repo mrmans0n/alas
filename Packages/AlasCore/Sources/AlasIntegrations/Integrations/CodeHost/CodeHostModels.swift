@@ -834,3 +834,32 @@ extension ReviewLoopSnapshot: Codable {
         )
     }
 }
+
+extension ReviewSessionTarget {
+    /// The remote a pull or merge request review loads from; nil for other kinds.
+    public var providerRemote: CodeHostRemote? {
+        guard case .reviewRequest(let kind, let host, let repositorySlug, _, _) = payload,
+              let separator = repositorySlug.lastIndex(of: "/")
+        else { return nil }
+        let owner = String(repositorySlug[..<separator])
+        let repository = String(repositorySlug[repositorySlug.index(after: separator)...])
+        guard !owner.isEmpty, !repository.isEmpty,
+              let webURL = providerURL ?? URL(string: "https://\(host)/\(repositorySlug)")
+        else { return nil }
+        return CodeHostRemote(kind: kind, host: host, owner: owner, repository: repository, remoteName: "origin", webURL: webURL)
+    }
+}
+
+extension ReviewRequest {
+    /// This request at `headSHA`; itself when nil.
+    public func pinned(headSHA: String?) -> ReviewRequest {
+        guard let headSHA else { return self }
+        return ReviewRequest(
+            remote: remote, number: number, title: title, url: url, state: state, isDraft: isDraft,
+            headRefName: headRefName, baseRefName: baseRefName, baseSHA: baseSHA, headSHA: headSHA,
+            headRepositoryOwner: headRepositoryOwner, headRepositoryName: headRepositoryName,
+            reviewDecision: reviewDecision, mergeState: mergeState, checks: checks, threads: threads,
+            areThreadsComplete: areThreadsComplete, isMergeQueueEnabled: isMergeQueueEnabled, isInMergeQueue: isInMergeQueue
+        )
+    }
+}

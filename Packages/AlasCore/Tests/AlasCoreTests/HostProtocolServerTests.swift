@@ -944,6 +944,56 @@ struct HostProtocolServerTests {
 
         #expect(try await fixture.request(.listReviews(worktree: ref))
             == .failure(error: .invalidRequest(reason: "This host does not serve reviews.")))
+        #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: "x", withDiff: false))
+            == .failure(error: .invalidRequest(reason: "This host does not serve pull request reviews.")))
+    }
+
+    /// A Mac opens a worktree's pull request review, reusing the open one,
+    /// and reads it from the provider as the host's user.
+    @Test func aMacOpensAndReadsAPullRequestReview() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        provider.threads = [ReviewThread(
+            id: "t1", path: "a.txt", line: 1, startLine: nil, originalLine: nil, diffHunk: nil, isResolved: false,
+            isOutdated: false, isFileLevel: false, comments: [], viewerCanResolve: true, viewerCanReply: true, url: nil
+        )]
+        provider.diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+        let sessionID = try await fixture.openPullRequestReview(provider)
+
+        for _ in 0..<2 {
+            guard case .review(let review) = try await fixture.request(.openProviderReview(worktree: ref, number: 7)) else {
+                Issue.record("expected the review")
+                return
+            }
+            #expect(review.summary.sessionID == sessionID)
+            #expect(review.summary.record.target.kind == .reviewRequest)
+        }
+        #expect(try fixture.core.reviewSessions.list(worktreeID: worktree.id).count == 1)
+
+        for withDiff in [true, false] {
+            guard case .providerReview(let review) = try await fixture.request(
+                .readProviderReview(worktree: ref, sessionID: sessionID, withDiff: withDiff)
+            ) else {
+                Issue.record("expected the provider review")
+                return
+            }
+            #expect(review.request.number == 7)
+            #expect(review.request.threads.map(\.id) == ["t1"])
+            #expect(review.account == "octocat")
+            #expect(review.diff == (withDiff ? provider.diff : nil))
+            #expect(!review.diffTruncated)
+        }
+
+        fixture.host.reviews.openLocalChanges(in: worktree)
+        let localChanges = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: localChanges.rawValue, withDiff: false))
+            == .failure(error: .invalidRequest(reason: "This review has no pull or merge request.")))
+        provider.readError = CodeHostProviderError.unauthenticated("github.com")
+        #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: sessionID, withDiff: false))
+            == .failure(error: .failed(message: "Authentication is required for github.com.")))
     }
 
     /// Local changes are listed, never saved, once an agent comments on them;
@@ -1320,6 +1370,20 @@ struct HostProtocolServerTests {
             return notices.filter { $0 != marker }
         }
 
+        /// Adds an `origin` of `provider`'s kind, installs `provider` for it,
+        /// and opens PR/MR 7 as an agent would; returns the session id.
+        func openPullRequestReview(_ provider: FakeReviewProvider) async throws -> String {
+            let (repo, _) = try await mainWorktree()
+            let host = provider.kind == .github ? "github.com" : "gitlab.com"
+            _ = try await Process.git(["remote", "add", "origin", "https://\(host)/acme/app.git"], cwd: repo)
+            core.codeHostProviders = CodeHostProviderRegistry(providers: [provider.kind: provider])
+            let worktree = try #require(core.projects.worktrees(projectId: projectID).first)
+            switch await self.host.reviews.open("7", in: worktree, caller: .app) {
+            case .success(let opened): return opened.record.target.draftSessionID.rawValue
+            case .failure(let failure): throw HostError.failed(message: failure.message)
+            }
+        }
+
         func request(_ request: HostRequest) async throws -> HostResponse {
             let id = client.messages.count + 1
             await connection.receive(HostClientMessage(id: id, request: request))
@@ -1415,6 +1479,49 @@ struct HostProtocolServerTests {
             ))
             server = HostProtocolServer(host: host)
         }
+    }
+
+    /// A code host serving PR/MR `number` with `threads` and `diff`, as
+    /// `login`. Used from the main actor only.
+    final class FakeReviewProvider: CodeHostProvider, @unchecked Sendable {
+        let kind: CodeHostKind
+        var headSHA = "bbb"
+        var threads: [ReviewThread] = []
+        var diff = ""
+        var login: String? = "octocat"
+        /// Thrown by `reviewRequest`.
+        var readError: (any Error)?
+
+        init(kind: CodeHostKind) { self.kind = kind }
+
+        var capabilities: CodeHostProviderCapabilities { .githubCLI }
+        func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
+            if let readError { throw readError }
+            return ReviewRequest(
+                remote: remote, number: number, title: "Fix", url: remote.reviewRequestURL(number: number), state: .open,
+                isDraft: false, headRefName: "feature", baseRefName: "main", headSHA: headSHA, reviewDecision: .unknown,
+                mergeState: .unknown, checks: [], threads: threads
+            )
+        }
+        func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+        func viewerLogin(remote: CodeHostRemote, cwd: URL) async -> String? { login }
+        func isAvailable(cwd: URL) async -> Bool { true }
+        func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+        func currentReviewRequest(
+            remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL
+        ) async throws -> ReviewRequest? {
+            nil
+        }
+        func createReviewRequest(
+            remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String,
+            title: String, body: String, isDraft: Bool, cwd: URL
+        ) async throws -> URL {
+            throw CodeHostProviderError.unsupportedProvider(kind)
+        }
+        func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
+        func rerunFailedChecks(
+            remote: CodeHostRemote, branch: String, headSHA: String, request: ReviewRequest?, cwd: URL
+        ) async throws {}
     }
 
     /// What a transport would write, in order. Can hold the first event batch

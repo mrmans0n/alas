@@ -545,6 +545,14 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         }
     }
 
+    public func viewerLogin(remote: CodeHostRemote, cwd: URL) async -> String? {
+        guard let result = try? await runner.run(
+            "gh", args: ["api", "user", "--hostname", remote.host, "--jq", ".login"], cwd: cwd
+        ), result.exitCode == 0 else { return nil }
+        let login = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return login.isEmpty ? nil : login
+    }
+
     public func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool {
         do {
             let result = try await runner.run(

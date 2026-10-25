@@ -139,6 +139,12 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case readReview(worktree: WorktreeRef, sessionID: String)
     /// Changes a comment of review `sessionID` (`host.reviews.v1`).
     case mutateReview(worktree: WorktreeRef, sessionID: String, mutation: HostReviewMutation)
+    /// Pull or merge request review `sessionID` as its provider shows it to
+    /// the host's user, with its raw diff when `withDiff` (`host.reviews.provider.v1`).
+    case readProviderReview(worktree: WorktreeRef, sessionID: String, withDiff: Bool)
+    /// Opens the review of the worktree's pull or merge request `number`,
+    /// reusing the open one, as an agent would (`host.reviews.provider.v1`).
+    case openProviderReview(worktree: WorktreeRef, number: Int)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -210,6 +216,45 @@ public enum HostReviewMutation: Codable, Equatable, Sendable {
     case delete(commentID: String)
     case resolve(commentID: String)
     case dismiss(commentID: String)
+}
+
+/// A pull or merge request as its provider shows it to the host's user.
+public struct HostProviderReview: Codable, Equatable, Sendable {
+    public var remote: CodeHostRemote
+    /// With its threads.
+    public var request: ReviewRequest
+    public var capabilities: CodeHostProviderCapabilities
+    /// The host's login; nil when it can't tell.
+    public var account: String?
+    /// The provider's raw unified diff; nil unless asked.
+    public var diff: String?
+    public var diffTruncated: Bool
+
+    /// `RemoteTranscriptSync.maxMessageBytes`; well under `WebSocketFrame.maxPayloadLength`.
+    public static let maxDiffBytes = 4 * 1024 * 1024
+
+    public init(
+        remote: CodeHostRemote, request: ReviewRequest, capabilities: CodeHostProviderCapabilities,
+        account: String?, diff: String?, diffTruncated: Bool
+    ) {
+        self.remote = remote
+        self.request = request
+        self.capabilities = capabilities
+        self.account = account
+        self.diff = diff
+        self.diffTruncated = diffTruncated
+    }
+
+    /// Within `maxBytes`, or cut just before the last "diff --git " header that starts within it.
+    public static func capped(_ diff: String, maxBytes: Int = maxDiffBytes) -> (diff: String, truncated: Bool) {
+        let bytes = Array(diff.utf8)
+        guard bytes.count > maxBytes else { return (diff, false) }
+        let header = Array("diff --git ".utf8)
+        let cut = stride(from: min(maxBytes, bytes.count - header.count + 1) - 1, through: 0, by: -1).first { start in
+            (start == 0 || bytes[start - 1] == UInt8(ascii: "\n")) && bytes[start..<start + header.count].elementsEqual(header)
+        } ?? 0
+        return (String(decoding: bytes[..<cut], as: UTF8.self), true)
+    }
 }
 
 /// An element that decodes as nil when it is in a shape this side can't read.
@@ -319,6 +364,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case reviews(reviews: [HostReviewSummary])
     /// The answer to `readReview`.
     case review(review: HostReview)
+    /// The answer to `readProviderReview`.
+    case providerReview(review: HostProviderReview)
     case failure(error: HostError)
 }
 

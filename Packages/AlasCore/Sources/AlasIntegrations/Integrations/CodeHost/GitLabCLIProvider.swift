@@ -1078,7 +1078,7 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         submitSucceeded = true
     }
 
-    private func currentUserUsername(
+    public func viewerLogin(
         remote: CodeHostRemote,
         cwd: URL
     ) async -> String? {
@@ -1436,7 +1436,7 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
             throw CodeHostProviderError.commandFailed(command: "glab mr note list", stderr: result.stderr)
         }
 
-        let currentUserUsername = await currentUserUsername(remote: remote, cwd: cwd)
+        let currentUserUsername = await viewerLogin(remote: remote, cwd: cwd)
         let discussions = try Self.decodeDiscussions(result.stdout)
         let standings = await authorStandings(
             for: Self.standingLookupAuthorIDs(in: discussions, currentUserUsername: currentUserUsername),
