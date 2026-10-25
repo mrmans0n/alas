@@ -272,6 +272,8 @@ struct NativePeerReviewView: View {
                     codeFontFamily: codeFontFamily,
                     codeFontSize: codeFontSize,
                     showsRailDisplayControls: true,
+                    // Lets a review with no drafts still approve or request changes.
+                    showsDraftSummaryRail: review?.summary.record.target.kind == .reviewRequest && providerReview != nil,
                     inlineFeedbackByFileID: providerReview.map { pr in
                         ReviewSessionTabView.inlineFeedbackByFileID(
                             threads: pr.request.threads,
@@ -427,7 +429,8 @@ struct NativePeerReviewView: View {
     /// Per-draft results arrive with the comments the host's
     /// `reviewsChanged` reads again.
     private func confirmProviderPublish() async {
-        guard !isProviderPublishing, let confirmation = providerConfirmation, let pr = providerReview else { return }
+        guard !isProviderPublishing, let confirmation = providerConfirmation, providerReview != nil,
+              case .loaded(let loaded, _) = diff else { return }
         if let refusal = ReviewSessionTabView.publishRefusal(
             decision: providerDecision, allowed: confirmation.allowedDecisions, summaryBody: providerSummaryBody
         ) {
@@ -441,7 +444,9 @@ struct NativePeerReviewView: View {
             decision: providerDecision,
             body: providerSummaryBody.trimmingCharacters(in: .whitespacesAndNewlines),
             draftIDs: confirmation.commentID.map { [$0] },
-            headSHA: pr.request.headSHA
+            // The head the diff showed: thread re-reads replace
+            // `providerReview`, only a reload replaces the diff.
+            headSHA: loaded.providerContext?.reviewRequest.headSHA
         )
         switch await hosts.publishReview(
             publish, sessionID: selection.sessionID, in: selection.worktree, serverId: selection.serverId
@@ -543,6 +548,7 @@ struct NativePeerReviewView: View {
             pr?.diff = nil
             providerReview = pr
             reloadError = nil
+            providerError = nil
             return
         } catch ReviewSessionLoaderError.unsupportedTarget {
             message = "Not available from this Mac yet."

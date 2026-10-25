@@ -317,7 +317,7 @@ struct NativePeerWorkspaceTests {
             try await git("commit", "-q", "-am", "edit")
             try await git("remote", "add", "origin", "https://github.com/acme/app.git")
             let diff = try await Process.git(["diff", "HEAD~1", "HEAD"], cwd: repo).stdout
-            core.codeHostProviders = CodeHostProviderRegistry(providers: [.github: FakePullRequestProvider(diff: diff)])
+            core.codeHostProviders = CodeHostProviderRegistry(providers: [.github: ReviewSessionLoaderTests.FakeReviewRequestProvider(diff: diff)])
             sessionID = try await reviews.openProviderReview(number: 7, in: worktree, caller: .app).summary.sessionID
             _ = await reviews.addComment(
                 origin: worktree, path: "a.txt", startLine: 1, endLine: nil, side: nil,
@@ -360,38 +360,6 @@ struct NativePeerWorkspaceTests {
             let diff = try #require(file.parsedDiff)
             #expect(diff.hunks.flatMap(\.lines).contains { $0.kind == .add && $0.newNumber == comment.startLine })
         }
-    }
-
-    /// The host's provider: `diff` for pull request 7, and nothing else.
-    private struct FakePullRequestProvider: CodeHostProvider {
-        let kind: CodeHostKind = .github
-        let diff: String
-
-        func reviewRequest(remote: CodeHostRemote, number: Int, cwd _: URL) async throws -> ReviewRequest {
-            ReviewRequest(
-                remote: remote, number: number, title: "Edit", url: remote.reviewRequestURL(number: number), state: .open,
-                isDraft: false, headRefName: "main", baseRefName: "main", reviewDecision: .unknown,
-                mergeState: .unknown, checks: [], threads: []
-            )
-        }
-        func reviewDiff(remote _: CodeHostRemote, request _: ReviewRequest, cwd _: URL) async throws -> String { diff }
-        func isAvailable(cwd _: URL) async -> Bool { true }
-        func isAuthenticated(remote _: CodeHostRemote, cwd _: URL) async -> Bool { true }
-        func currentReviewRequest(
-            remote _: CodeHostRemote, branch _: String, headOwner _: String?, baseBranch _: String, cwd _: URL
-        ) async throws -> ReviewRequest? {
-            nil
-        }
-        func createReviewRequest(
-            remote _: CodeHostRemote, branch _: String, headOwner _: String?, baseBranch _: String,
-            title _: String, body _: String, isDraft _: Bool, cwd _: URL
-        ) async throws -> URL {
-            throw CodeHostProviderError.unsupportedProvider(kind)
-        }
-        func checks(remote _: CodeHostRemote, request _: ReviewRequest, cwd _: URL) async throws -> [ReviewCheck] { [] }
-        func rerunFailedChecks(
-            remote _: CodeHostRemote, branch _: String, headSHA _: String, request _: ReviewRequest?, cwd _: URL
-        ) async throws {}
     }
 
     /// A file list or a diff the host cut off is noted, so the review does
