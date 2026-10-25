@@ -703,6 +703,17 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["rev-parse", "--abbrev-ref", "@{u}"], cwd: repo).stdout == "origin/main\n")
     }
 
+    /// Paired Macs of other versions decode this, so its shape must not drift.
+    @Test func repoHookConsentKeepsItsWireShape() throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        func json(_ consent: RepoHookConsent) throws -> String {
+            try String(decoding: encoder.encode(consent), as: UTF8.self)
+        }
+        #expect(try json(.approve(hash: "h")) == #"{"approve":{"hash":"h"}}"#)
+        #expect(try json(.ask) == #"{"ask":{}}"#)
+    }
+
     /// A peer is never the person at this Mac: its creation must not reach the
     /// app's approval sheet, even when the host has one. A peer that can't
     /// ask its own user hears the hook was skipped, unless the project

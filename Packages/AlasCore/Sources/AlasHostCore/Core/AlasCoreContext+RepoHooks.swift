@@ -50,21 +50,12 @@ public enum RepoHookPreflightError: LocalizedError {
 
 /// What to do about a repository hook before work a paired Mac starts.
 public enum RepoHookGate: Equatable, Sendable {
-    /// Go ahead, running this approved script, or none.
+    /// Go ahead, running this approved script, or none. The text is informational only: the run re-reads the hook from disk, so never execute it.
     case ready(String?)
     /// Go ahead without the unapproved hook, and say it was not run.
     case skippedUnapproved
     /// Start nothing: the paired Mac asks its user about this hook first.
     case needsApproval(PeerRepoHook)
-}
-
-/// Work a paired Mac started stopped for its user to approve `hook`.
-public struct RepoHookApprovalRequired: Error, Equatable, Sendable {
-    public let hook: PeerRepoHook
-
-    public init(hook: PeerRepoHook) {
-        self.hook = hook
-    }
 }
 
 extension AlasCoreContext {

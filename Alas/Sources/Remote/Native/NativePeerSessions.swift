@@ -885,7 +885,11 @@ final class NativePeerSessions {
         consent: RepoHookConsent?, token: UUID,
         _ create: @escaping @Sendable (RepoHookConsent?) -> RemoteClientMessage
     ) {
-        guard let request = newSession, request.id == token, let downstream else { return }
+        guard let request = newSession, request.id == token else { return }
+        guard let downstream else {
+            newSession?.phase = .failed(Self.peerUnavailableMessage)
+            return
+        }
         let sent = federation.request(create(consent), toPeer: request.serverId, from: downstream) { [weak self] reply in
             guard case .worktreeSessionNeedsRepoHookApproval(let hook) = reply else {
                 self?.applyNewSessionReply(reply, token: token)
