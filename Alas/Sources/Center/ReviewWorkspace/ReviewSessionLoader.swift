@@ -312,8 +312,9 @@ struct ReviewSessionLoader: @unchecked Sendable {
         )
     }
 
-    /// A paired host's review, read over its host channel: local changes and
-    /// commits. Everything else is `unsupportedTarget`.
+    /// A paired host's review, read over its host channel: local changes,
+    /// commits, commit ranges and branches. Everything else is
+    /// `unsupportedTarget`.
     @MainActor
     static func peer(git: NativePeerReviewGitClient) -> ReviewSessionLoader {
         let changesLoader = ReviewChangesLoader(git: git)
@@ -343,7 +344,35 @@ struct ReviewSessionLoader: @unchecked Sendable {
                     openFileForPath: { _ in nil },
                     onFileList: onFileList
                 )
+            },
+            commitRange: { target, onFileList in
+                guard case .commitRange(let base, let head) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                return try await peerRange(git: git, target: target, base: base, head: head, threeDot: false, onFileList: onFileList)
+            },
+            branch: { target, onFileList in
+                guard case .branch(let base, let head) = target.payload else {
+                    throw ReviewSessionLoaderError.unsupportedTarget
+                }
+                return try await peerRange(git: git, target: target, base: base, head: head, threeDot: true, onFileList: onFileList)
             }
+        )
+    }
+
+    @MainActor
+    private static func peerRange(
+        git: NativePeerReviewGitClient, target: ReviewSessionTarget, base: String, head: String, threeDot: Bool,
+        onFileList: ReviewSessionFileListHandler?
+    ) async throws -> DiffReviewLoadedSession {
+        var git = git
+        git.threeDot = threeDot
+        return try await RangeReviewLoader(git: git).load(
+            worktreePath: target.repositoryPath,
+            base: base, head: head, threeDot: threeDot,
+            files: try await git.rangeFiles(base: base, head: head, threeDot: threeDot),
+            openFileForPath: { _ in nil },
+            onFileList: onFileList
         )
     }
 

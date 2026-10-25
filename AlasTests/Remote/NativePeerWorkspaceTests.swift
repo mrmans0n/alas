@@ -249,7 +249,7 @@ struct NativePeerWorkspaceTests {
         #expect(!workspace.fileTreeTruncated)
     }
 
-    enum Kind: Sendable, CaseIterable { case localChanges, commit }
+    enum Kind: Sendable, CaseIterable { case localChanges, commit, commitRange, branch }
 
     /// A comment the host files, an agent's or a Mac's, lands on the file and
     /// changed line the Mac builds through the peer loader: the same stage
@@ -311,11 +311,18 @@ struct NativePeerWorkspaceTests {
                 origin: worktree, path: "a.txt", startLine: 2, endLine: nil, side: nil,
                 body: "Agent", sessionID: nil, projectWorktrees: [worktree]
             )
-        case .commit:
+        case .commit, .commitRange, .branch:
+            let base = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
+                .trimmingCharacters(in: .whitespacesAndNewlines)
             try write("ONE\ntwo\n")
             try await git("commit", "-q", "-am", "edit")
-            guard case .success(let opened) = await reviews.open("HEAD", in: worktree, caller: .app) else {
-                Issue.record("expected the commit review opened")
+            let spec = switch kind {
+            case .commitRange: "\(base)..HEAD"
+            case .branch: "\(base)...HEAD"
+            default: "HEAD"
+            }
+            guard case .success(let opened) = await reviews.open(spec, in: worktree, caller: .app) else {
+                Issue.record("expected the \(kind) review opened")
                 return
             }
             sessionID = opened.record.target.draftSessionID.rawValue
