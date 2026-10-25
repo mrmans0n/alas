@@ -2099,13 +2099,20 @@ struct NativePeerSessionsTests {
               addedLines: 0, deletedLines: 0, conflictCount: 0, projectId: projectId)
     }
 
-    private func startedClientWithPeerRepo() -> (FakeLinks, NativePeerSessions, NativePeerGroup, NativePeerRepoGroup) {
+    private func startedClientWithPeerRepo(
+        supportsRepoHookApproval: @escaping @MainActor (String) -> Bool = { _ in false },
+        decideRepoHook: @escaping @MainActor (String, PeerRepoHook, RepoHookApprovalContext) async
+            -> RepoHookApprovalDecision = { _, _, _ in .skip }
+    ) -> (FakeLinks, NativePeerSessions, NativePeerGroup, NativePeerRepoGroup) {
         let links = FakeLinks()
         links.online("B", name: "Mac B")
         let federation = FederatedSessionsProvider(links: links)
-        let client = NativePeerSessions(federation: federation, peers: {
-            [.init(serverId: "B", name: "Mac B", state: "online")]
-        })
+        let client = NativePeerSessions(
+            federation: federation,
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] },
+            supportsRepoHookApproval: supportsRepoHookApproval,
+            decideRepoHook: decideRepoHook
+        )
         client.start()
         links.receive(.sessionList(sessions: [projectRow("s")]), from: "B")
         let peer = client.snapshot.groups[0]
@@ -2182,6 +2189,45 @@ struct NativePeerSessionsTests {
         #expect(client.newSession == nil)
         links.receive(.sessionList(sessions: [projectRow("new", worktreeId: "w2"), projectRow("s")]), from: "B")
         #expect(client.selectedSessionId == "B:new")
+    }
+
+    @Test(arguments: [
+        (.approve, .approve(hash: "h")),
+        (.skip, .skip),
+        (.cancel, nil),   // nothing is created; the sheet can be edited again
+    ] as [(RepoHookApprovalDecision, RepoHookConsent?)])
+    func aCreateWaitingOnHookApprovalIsSentAgainWithTheAnswer(
+        decision: RepoHookApprovalDecision, resent: RepoHookConsent?
+    ) async throws {
+        var asked: [(String, PeerRepoHook, RepoHookApprovalContext)] = []
+        let (links, client, peer, repo) = startedClientWithPeerRepo(
+            supportsRepoHookApproval: { $0 == "B" },
+            decideRepoHook: {
+                asked.append(($0, $1, $2))
+                return decision
+            }
+        )
+        client.beginNewSession(peer: peer, repo: repo)
+        client.createNewWorktreeSession(base: "main", branch: "feature/x", agentId: "claude", modelId: nil, effortId: nil)
+        #expect(links.sent(to: "B").last == .createWorktreeSession(
+            projectId: "p", base: "main", branch: "feature/x", agentId: "claude", repoHook: .ask))
+        links.sent.removeAll()
+
+        let hook = PeerRepoHook(event: .worktreeCreate, text: "echo hi\n", hash: "h")
+        links.receive(.worktreeSessionNeedsRepoHookApproval(hook: hook), from: "B")
+
+        if let resent {
+            try await eventually("re-sent create") { !links.sent(to: "B").isEmpty }
+            #expect(links.sent(to: "B") == [.createWorktreeSession(
+                projectId: "p", base: "main", branch: "feature/x", agentId: "claude", repoHook: resent)])
+            #expect(client.newSession?.phase == .creating)
+        } else {
+            try await eventually("sheet editable again") { client.newSession?.phase == .editing }
+            #expect(links.sent(to: "B").isEmpty)
+        }
+        #expect(asked.map(\.0) == ["B"])
+        #expect(asked.map(\.1) == [hook])
+        #expect(asked.map(\.2) == [.worktreeCreate])
     }
 
     @Test func aWorktreeCreatedWithoutItsSessionIsOfferedForRetry() {
