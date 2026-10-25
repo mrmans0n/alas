@@ -62,6 +62,8 @@ struct HostProtocolTests {
             fileID: DiffReviewFileID(namespace: "unstaged", path: "a.txt"), path: "a.txt", originalPath: nil,
             anchor: .line(side: .new, startLine: 1, endLine: 2, selectedText: nil), body: "Why?"
         ))),
+        HostClientMessage(id: 25, request: .readWorktree(worktree: ref, read: .rangeDiff(
+            base: "abc1234", head: "def5678", threeDot: true, path: "b.txt", originalPath: "a.txt"))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)

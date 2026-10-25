@@ -1120,6 +1120,14 @@ final class NativePeerSessions {
         openedReview = NativePeerReviewSelection(serverId: serverId, worktree: worktree, sessionID: sessionID)
     }
 
+    /// Selects the host worktree, then opens its review `sessionID`, as a
+    /// review notice's click does. Nothing opens once the host no longer lists the worktree.
+    func openHostReview(serverId: String, worktreeID: String, sessionID: String) {
+        selectHostWorktree(serverId: serverId, worktreeID: worktreeID)
+        guard let host = worktrees(on: serverId).first(where: { $0.peerWorktreeId == worktreeID })?.host else { return }
+        openReview(sessionID, serverId: serverId, worktree: host)
+    }
+
     func closeReview() {
         openedReview = nil
     }
@@ -1263,6 +1271,14 @@ final class NativePeerSessions {
         case .commitFiles(let sha): .commitFilesFailed(sessionId: id, sha: sha, reason: .unknown, message: nil)
         case .commitDiff(let sha, let path):
             .commitDiffFailed(sessionId: id, sha: sha, path: path, reason: .unknown, message: nil)
+        case .rangeFiles(let base, let head, let threeDot):
+            .commitFilesFailed(
+                sessionId: id, sha: HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot),
+                reason: .unknown, message: nil)
+        case .rangeDiff(let base, let head, let threeDot, let path, _):
+            .commitDiffFailed(
+                sessionId: id, sha: HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot), path: path,
+                reason: .unknown, message: nil)
         case .file(let path): .fileUnavailable(sessionId: id, path: path, reason: .unknown, byteSize: nil, message: nil)
         }
     }

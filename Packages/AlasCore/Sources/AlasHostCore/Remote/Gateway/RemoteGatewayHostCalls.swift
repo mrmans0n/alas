@@ -118,6 +118,22 @@ public protocol RemoteWorktreeInspecting: AnyObject {
     func remoteCommitFiles(sessionId: String, sha: String) async -> RemoteCommitFilesResult
     func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
+    func remoteRangeFiles(sessionId: String, base: String, head: String, threeDot: Bool) async -> RemoteCommitFilesResult
+    func remoteRangeDiff(
+        sessionId: String, base: String, head: String, threeDot: Bool, path: String, originalPath: String?
+    ) async -> RemoteFileDiffResult
+}
+
+/// A reader without range reads answers them as it would an unknown session.
+extension RemoteWorktreeInspecting {
+    public func remoteRangeFiles(sessionId: String, base: String, head: String, threeDot: Bool) async -> RemoteCommitFilesResult {
+        .failure(reason: .sessionUnknown, message: nil)
+    }
+    public func remoteRangeDiff(
+        sessionId: String, base: String, head: String, threeDot: Bool, path: String, originalPath: String?
+    ) async -> RemoteFileDiffResult {
+        .failure(reason: .sessionUnknown, message: nil)
+    }
 }
 
 @_spi(Testing) extension AlasCoreContext: RemoteWorktreeInspecting {}
@@ -129,11 +145,14 @@ extension RemoteWorktreeInspecting {
         switch read {
         case .changes(let comparisonMode):
             switch await remoteChangeList(sessionId: id, comparisonMode: comparisonMode) {
-            case .success(let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated):
+            case .success(
+                let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated,
+                let workingTreeTruncated
+            ):
                 return .changeList(
                     sessionId: id, comparisonRef: ref, metricsAvailable: available,
                     files: files, staged: staged, unstaged: unstaged, commits: commits,
-                    truncated: truncated, commitsTruncated: commitsTruncated)
+                    truncated: truncated, commitsTruncated: commitsTruncated, workingTreeTruncated: workingTreeTruncated)
             case .failure(let reason, let message):
                 return .changeListFailed(sessionId: id, reason: reason, message: message)
             }
@@ -160,6 +179,25 @@ extension RemoteWorktreeInspecting {
                                          truncated: truncated, metadataNote: metadataNote)
             case .failure(let reason, let message):
                 return .commitDiffFailed(sessionId: id, sha: sha, path: path, reason: reason, message: message)
+            }
+        case .rangeFiles(let base, let head, let threeDot):
+            let spec = HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot)
+            switch await remoteRangeFiles(sessionId: id, base: base, head: head, threeDot: threeDot) {
+            case .success(let files, let truncated):
+                return .commitFiles(sessionId: id, sha: spec, files: files, truncated: truncated)
+            case .failure(let reason, let message):
+                return .commitFilesFailed(sessionId: id, sha: spec, reason: reason, message: message)
+            }
+        case .rangeDiff(let base, let head, let threeDot, let path, let originalPath):
+            let spec = HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot)
+            switch await remoteRangeDiff(
+                sessionId: id, base: base, head: head, threeDot: threeDot, path: path, originalPath: originalPath
+            ) {
+            case .success(let hunks, let truncated, let metadataNote):
+                return .commitDiffResult(sessionId: id, sha: spec, path: path, hunks: hunks,
+                                         truncated: truncated, metadataNote: metadataNote)
+            case .failure(let reason, let message):
+                return .commitDiffFailed(sessionId: id, sha: spec, path: path, reason: reason, message: message)
             }
         case .files(let path, let comparisonMode):
             switch await remoteFileTree(sessionId: id, path: path, comparisonMode: comparisonMode) {

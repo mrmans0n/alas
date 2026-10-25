@@ -171,7 +171,7 @@ struct NativePeerWorkspace: Equatable {
     mutating func apply(_ message: RemoteServerMessage) -> Bool {
         switch message {
         case .changeList(_, let ref, _, let files, let staged, let unstaged, let commits,
-                         let truncated, let commitsTruncated):
+                         let truncated, let commitsTruncated, _):
             changes = .loaded(Changes(
                 comparisonRef: ref,
                 // The branch list has no stage; `.unstaged` only satisfies
@@ -360,7 +360,7 @@ struct NativePeerWorkspace: Equatable {
 /// read becomes an empty diff, which the loaders show as their "No text diff"
 /// placeholder; a failed file list, or no reply at all, throws. No context
 /// expansion or images from a peer.
-struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient {
+struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient, RangeReviewGitClient {
     /// `@unchecked` is sound: its only state is main-actor isolated.
     final class Notes: @unchecked Sendable {
         /// Set when any reply was cut off by the host's caps.
@@ -369,13 +369,17 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient 
 
     let read: @Sendable (HostWorktreeRead) async -> RemoteServerMessage?
     let notes = Notes()
+    /// Which range `rangeDiff` reads: `base...head` from the merge base, or
+    /// `base..head`. Set per review by `ReviewSessionLoader.peer(git:)`.
+    var threeDot = false
 
     func status(worktreePath _: URL) async throws -> [ChangedFile] {
         switch await read(.changes(comparisonMode: nil)) {
-        case .changeList(_, _, _, _, let staged, let unstaged, _, let truncated, _)?:
-            // ponytail: `truncated` also covers the branch file list, so a
-            // capped branch diff notes a cut-off review that may be whole.
-            await note(truncated)
+        case .changeList(_, _, _, _, let staged, let unstaged, _, let truncated, _, let workingTreeTruncated)?:
+            // An older host sends no `workingTreeTruncated`; its `truncated`
+            // also covers the branch file list, so a capped branch diff
+            // notes a cut-off review that may be whole.
+            await note(workingTreeTruncated ?? truncated)
             return staged.map { NativePeerWorkspace.changedFile($0, stage: .staged) }
                 + unstaged.map { NativePeerWorkspace.changedFile($0, stage: .unstaged) }
         case .changeListFailed(_, let reason, let message)?:
@@ -399,7 +403,34 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient 
     }
 
     func diff(worktreePath _: URL, sha: String, file: String, originalPath _: String?) async throws -> ParsedDiff {
-        switch await read(.commitDiff(sha: sha, path: file)) {
+        try await commitDiff(await read(.commitDiff(sha: sha, path: file)))
+    }
+
+    func commitFiles(sha: String) async throws -> [CommitChangedFile] {
+        try await commitFiles(await read(.commitFiles(sha: sha)))
+    }
+
+    func rangeFiles(base: String, head: String, threeDot: Bool) async throws -> [CommitChangedFile] {
+        try await commitFiles(await read(.rangeFiles(base: base, head: head, threeDot: threeDot)))
+    }
+
+    /// The host resolves the range itself, so its ends pass through as given.
+    func resolvedRangeTrees(
+        worktreePath _: URL, base: String, head: String, threeDot _: Bool
+    ) async throws -> (before: String, after: String) {
+        (base, head)
+    }
+
+    func rangeDiff(
+        worktreePath _: URL, revisions: (before: String, after: String), file: String, originalPath: String?
+    ) async throws -> ParsedDiff {
+        try await commitDiff(await read(.rangeDiff(
+            base: revisions.before, head: revisions.after, threeDot: threeDot, path: file, originalPath: originalPath
+        )))
+    }
+
+    private func commitDiff(_ reply: RemoteServerMessage?) async throws -> ParsedDiff {
+        switch reply {
         case .commitDiffResult(_, _, _, let hunks, let truncated, let metadataNote)?:
             await note(truncated)
             return ParsedDiff(hunks: hunks.map(NativePeerWorkspace.hunk), metadataSummary: metadataNote)
@@ -408,8 +439,8 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient 
         }
     }
 
-    func commitFiles(sha: String) async throws -> [CommitChangedFile] {
-        switch await read(.commitFiles(sha: sha)) {
+    private func commitFiles(_ reply: RemoteServerMessage?) async throws -> [CommitChangedFile] {
+        switch reply {
         case .commitFiles(_, _, let files, let truncated)?:
             await note(truncated)
             return files.map {
@@ -434,13 +465,25 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient 
         throw NativePeerReviewGitClientError.unavailable
     }
 
+    func rangeContextSnapshot(
+        worktreePath _: URL, base _: String, head _: String, threeDot _: Bool, file _: String, originalPath _: String?
+    ) async throws -> DiffReviewFileContextSnapshot {
+        throw NativePeerReviewGitClientError.unavailable
+    }
+
     func workingCopyImageProvider(worktreePath: URL, change: ChangedFile) async -> DiffReviewImageProvider {
-        Self.unavailableImage(.workingCopy, worktreePath: worktreePath, revision: change.stage.rawValue,
+        Self.unavailableImage(.workingCopy, worktreePath: worktreePath, revisions: (change.stage.rawValue, change.stage.rawValue),
                               beforePath: change.renameFrom, path: change.path)
     }
 
     func commitImageProvider(worktreePath: URL, sha: String, file: CommitChangedFile) -> DiffReviewImageProvider {
-        Self.unavailableImage(.commit, worktreePath: worktreePath, revision: sha, beforePath: file.originalPath, path: file.path)
+        Self.unavailableImage(.commit, worktreePath: worktreePath, revisions: (sha, sha), beforePath: file.originalPath, path: file.path)
+    }
+
+    func rangeImageProvider(
+        worktreePath: URL, revisions: (before: String, after: String), file: CommitChangedFile
+    ) -> DiffReviewImageProvider {
+        Self.unavailableImage(.range, worktreePath: worktreePath, revisions: revisions, beforePath: file.originalPath, path: file.path)
     }
 
     private func note(_ truncated: Bool) async {
@@ -450,11 +493,12 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient 
     }
 
     private static func unavailableImage(
-        _ source: DiffReviewImageProviderID.Source, worktreePath: URL, revision: String, beforePath: String?, path: String
+        _ source: DiffReviewImageProviderID.Source, worktreePath: URL, revisions: (before: String, after: String),
+        beforePath: String?, path: String
     ) -> DiffReviewImageProvider {
         DiffReviewImageProvider(
-            id: DiffReviewImageProviderID(source: source, repository: worktreePath.path, beforeRevision: revision,
-                                          afterRevision: revision, beforePath: beforePath, afterPath: path),
+            id: DiffReviewImageProviderID(source: source, repository: worktreePath.path, beforeRevision: revisions.before,
+                                          afterRevision: revisions.after, beforePath: beforePath, afterPath: path),
             load: { .failedLoading() }
         )
     }

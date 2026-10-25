@@ -773,20 +773,42 @@ extension GitService {
         file: String,
         originalPath: String? = nil
     ) async throws -> ParsedDiff {
+        try await rangeDiff(worktreePath: worktreePath, revisions: revisions, file: file,
+                            originalPath: originalPath, maxOutputBytes: .max)
+    }
+
+    /// A bounded read, as `diff(worktreePath:sha:file:originalPath:maxOutputBytes:)`.
+    public func rangeDiff(
+        worktreePath: URL,
+        revisions: (before: String, after: String),
+        file: String,
+        originalPath: String?,
+        maxOutputBytes: Int
+    ) async throws -> ParsedDiff {
         var args: [String] = ["-c", "core.quotePath=false",
                               "diff", "--no-color", "-M", "-C", revisions.before, revisions.after, "--", file]
+        if maxOutputBytes != .max {
+            // Bounded peer reads take paths literally and only inspect blobs, without invoking drivers.
+            args.insert("--literal-pathspecs", at: 0)
+            args.insert(contentsOf: ["--no-ext-diff", "--no-textconv"], at: 4)
+        }
         if let originalPath { args.append(originalPath) }
-        let result = try await Process.git(args, cwd: worktreePath)
-        guard result.exitCode == 0 else {
+        let result = try await Process.gitCapped(args, cwd: worktreePath, maxOutputBytes: maxOutputBytes)
+        guard result.stdoutTruncated || result.exitCode == 0 else {
             throw NSError(
                 domain: "GitService.rangeDiff",
                 code: Int(result.exitCode),
                 userInfo: [NSLocalizedDescriptionKey: result.stderr]
             )
         }
-        let stdout = result.stdout
+        let stdout = Self.sliceDiffForFile(result.stdout, file: file)
+        guard !(result.stdoutTruncated && stdout.isEmpty) else {
+            throw ProcessError.nonZeroExit(
+                result.exitCode,
+                "diff for \(file) exceeded the size cap before its section was captured")
+        }
         return await Task.detached(priority: .userInitiated) {
-            DiffParser.parse(Self.sliceDiffForFile(stdout, file: file))
+            DiffParser.parse(stdout)
         }.value
     }
 

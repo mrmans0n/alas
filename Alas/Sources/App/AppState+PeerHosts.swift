@@ -22,7 +22,8 @@ extension AppState {
             worktreeNotice: { [weak self] serverId, notice in
                 self?.harness.notifications.notifyPeerNotice(
                     body: notice.body, title: notice.title, agent: .codex,
-                    serverId: serverId, sessionId: notice.worktreeID, peerWorktreeId: notice.worktreeID
+                    serverId: serverId, sessionId: notice.worktreeID, peerWorktreeId: notice.worktreeID,
+                    peerReviewSessionId: notice.reviewSessionID
                 )
             }
         )

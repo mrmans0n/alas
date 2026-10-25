@@ -6927,6 +6927,10 @@ final class AppState {
         }
         harness.onContextClickThrough = { [weak self] context in
             if let serverId = context.peerServerId, let worktreeID = context.peerWorktreeId {
+                if let sessionID = context.peerReviewSessionId {
+                    self?.nativePeerSessions?.openHostReview(serverId: serverId, worktreeID: worktreeID, sessionID: sessionID)
+                    return
+                }
                 self?.nativePeerSessions?.selectHostWorktree(serverId: serverId, worktreeID: worktreeID)
                 return
             }
