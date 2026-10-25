@@ -6,9 +6,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-25
+
+### ✨ Features
+
+- Let agents operate Mac apps in the background with clicking, typing, scrolling and dragging, while a visible traveling cursor and hardened safety controls keep their actions understandable and contained (#2188, #2189, #2192, #2207).
+- Pair a Mac with a headless `alas-host` without requiring a connection back, then browse and manage its worktrees and sessions with peer-menu parity (#2184, #2186, #2200).
+- Open host shells and run scripts from the paired Mac in consoles that remain visible and interactive from the peer view (#2187, #2193, #2195).
+- Use the Alas CLI and MCP tools with agents and shells running directly on a headless host (#2199).
+- Run PR and stack shepherds plus scheduled runs on a headless host, with their pills and worktree notices relayed to the paired Mac (#2203, #2204).
+- Stage, discard, commit, fetch, pull and push a host worktree from the paired Mac (#2208, #2209).
+- Approve a host's worktree setup hook from the Mac that creates it and run approved session-open setup inside remote shells (#2211, #2212).
+
 ### 🐛 Fixes
 
-- Let Ship's "ship below" line move on gg stacks that were never synced. Entries without a GG-ID can now hold the line, matched by their title after the agent amends them, and the line follows the pointer and settles where the rows part.
+- Keep SQLite-backed stores off the shared cooperative concurrency pool so blocking database work cannot stall unrelated tasks (#2216).
+- Stop the Codex hooks check from briefly flashing an approval card during startup (#2214).
+- Turn Ship's preparing row into the final card in place instead of replacing it after preparation (#2210).
+- Align sidebar workspace counts with their repository headers (#2206).
+- Restart stdio and HTTP agents that remain connected to an older Alas MCP after an app update (#2201, #2205).
+- Keep a host shell listed when a failed launch cannot be cleaned up immediately (#2197).
+- Show a remote run's Terminal action as soon as its console becomes available (#2196).
+- Let Ship's “ship below” line move on gg stacks that have never been synced, preserve its boundary through amended titles and settle it where the rows part (#2185).
+
+### 🏗️ Internal
+
+- Update `notify` to 8.2.1, `rusqlite` to 0.41 and `tree-sitter-md` to 0.5.4 (#2190, #2191, #2202).
+- Move the CLI command router into `AlasHostCore` for reuse by the app and headless host (#2198).
 
 ## [0.21.12] - 2026-10-23
 
