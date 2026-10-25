@@ -118,6 +118,45 @@ struct HostConsolesTests {
         #expect(consoles.target(id)?.socketPath == fixture.socketPath(of: id))
     }
 
+    /// Approving another script, one the hook has since changed from, asks
+    /// again rather than running this one.
+    @Test(arguments: [.ask, .approve(hash: "stale")] as [RepoHookConsent])
+    func aShellOpenWaitsForApprovalOfItsSessionOpenHook(consent: RepoHookConsent) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let hash = try fixture.writeHook("echo hook\n")
+        let consoles = fixture.consoles()
+
+        await #expect(throws: RepoHookApprovalRequired(hook: PeerRepoHook(event: .sessionOpen, text: "echo hook\n", hash: hash))) {
+            try await consoles.open(worktreeId: fixture.worktree.id, repoHook: consent)
+        }
+        #expect(fixture.launches.isEmpty)
+        #expect(consoles.summaries().isEmpty)
+        #expect(!fixture.core.projects.isRepoHookApproved(projectId: "p", hash: hash))
+    }
+
+    /// Global, then the approved repo hook, then the project's own script, as
+    /// the app's terminals run them; without approval the hook is left out.
+    @Test(arguments: [true, false])
+    func aShellRunsTheSessionOpenScript(approves: Bool) async throws {
+        var config = AppConfig.defaults
+        config.terminal.startupScript = "echo global"
+        var scripts = ProjectStartupScripts.defaults
+        scripts.sessionOpenMode = .appendToGlobal
+        scripts.sessionOpenScript = "echo project"
+        let fixture = try Fixture(configuration: config, startupScripts: scripts)
+        defer { fixture.tearDown() }
+        let hash = try fixture.writeHook("echo hook\n")
+
+        let id = try await fixture.consoles().open(worktreeId: fixture.worktree.id, repoHook: approves ? .approve(hash: hash) : nil)
+        defer { StartupScriptInstaller.removeArtifacts(sessionId: id) }
+
+        let launch = try #require(fixture.launches.first)
+        let rc = try String(contentsOfFile: #require(launch.environment["ZDOTDIR"]) + "/.zshrc", encoding: .utf8)
+        #expect(rc.contains(approves ? "echo global\necho hook\necho project" : "echo global\necho project"))
+        #expect(fixture.core.projects.isRepoHookApproved(projectId: "p", hash: hash) == approves)
+    }
+
     enum Unopenable: CaseIterable { case unknownWorktree, busyWorktree, sshProject, noZmx, launchFails }
 
     @Test(arguments: Unopenable.allCases)
@@ -667,7 +706,10 @@ struct HostConsolesTests {
         var launches: [HostShellLaunch] { fakes.withLock { $0.launches } }
         var killed: [String] { fakes.withLock { $0.killed } }
 
-        init(host: String? = nil, zmxAvailable: Bool = true) throws {
+        init(
+            host: String? = nil, zmxAvailable: Bool = true,
+            configuration: AppConfig = .defaults, startupScripts: ProjectStartupScripts = .defaults
+        ) throws {
             let fm = FileManager.default
             root = fm.temporaryDirectory.appendingPathComponent("alas-hostconsoles-\(UUID().uuidString)")
             // Short: zmx socket paths must fit sun_path.
@@ -675,7 +717,7 @@ struct HostConsolesTests {
             try fm.createDirectory(at: root, withIntermediateDirectories: true)
             try fm.createDirectory(at: zmxDir, withIntermediateDirectories: true)
             projects = ProjectsManager(persistedProjects: [
-                ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: .distantPast, host: host),
+                ProjectConfig(id: "p", name: "p", path: root.path, color: "blue", addedAt: .distantPast, startupScripts: startupScripts, host: host),
             ])
             let path = root.appendingPathComponent("feature")
             worktree = Worktree(
@@ -685,9 +727,12 @@ struct HostConsolesTests {
             projects.insertOptimisticWorktree(worktree)
             core = AlasCoreContext(
                 projects: projects,
+                // An approval would otherwise write the real projects file.
+                projectsFile: root.appendingPathComponent("projects.json"),
                 runHistoryStore: nil,
                 workspaceStore: WorkspaceStore(url: root.appendingPathComponent("workspaces.json")),
                 attentionStore: .scratch(),
+                environment: HeadlessHostEnvironment(configuration: configuration),
                 // Short enough for `eventually`, not zero: an already-written
                 // `.done` wins over the idle check.
                 runHostGrace: RunHostGrace(local: .milliseconds(200), any: .milliseconds(200)),
@@ -793,6 +838,14 @@ struct HostConsolesTests {
             let worktreeID = worktree.id
             try await eventually { await core.runRecords.record(worktreeID: worktreeID, scriptKey: script.key)?.status == .finished(.succeeded) }
             return try #require(consoles.summaries().first?.consoleId)
+        }
+
+        /// Writes the worktree's session-open hook; returns its hash.
+        func writeHook(_ text: String) throws -> String {
+            let url = worktree.path.appendingPathComponent(RepoHookEvent.sessionOpen.relativePath)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            return RepoHookTrust.hash(event: .sessionOpen, bytes: Data(text.utf8))
         }
 
         func rcFilesExist(of launch: HostShellLaunch) -> Bool {

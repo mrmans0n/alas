@@ -59,8 +59,10 @@ public final class PeerConsoleHost {
         /// Closes a console `resolve` accepted, as a local tab close does.
         public var terminate: @MainActor (String) -> Void
         /// Opens a console in a host worktree and returns its id. Throws
-        /// `PeerConsoleOpenError`. Nil when this host can't open consoles.
-        public var open: (@MainActor (_ worktreeId: String) async throws -> String)?
+        /// `PeerConsoleOpenError`, or `RepoHookApprovalRequired` when it
+        /// opened nothing for the peer to approve the hook first. Nil when
+        /// this host can't open consoles.
+        public var open: (@MainActor (_ worktreeId: String, _ repoHook: RepoHookConsent?) async throws -> String)?
         /// Resizes a console and returns the size it ended on (a newer request
         /// may win), or nil when none applied. A nil closure means the host
         /// sizes its consoles itself and ignores peer resizes.
@@ -79,7 +81,7 @@ public final class PeerConsoleHost {
             resolve: @escaping @MainActor (String) -> PeerConsoleTarget?,
             setLocalInputSuppressed: @escaping @MainActor (_ consoleId: String, _ suppressed: Bool) -> Void,
             terminate: @escaping @MainActor (String) -> Void,
-            open: (@MainActor (_ worktreeId: String) async throws -> String)? = nil,
+            open: (@MainActor (_ worktreeId: String, _ repoHook: RepoHookConsent?) async throws -> String)? = nil,
             resize: (@MainActor (_ consoleId: String, _ rows: Int, _ columns: Int) async -> (rows: Int, columns: Int)?)? = nil,
             openReadyTimeout: Duration = .seconds(5),
             connect: @escaping @Sendable (String) throws -> ZmxIPCSocket = { try ZmxIPCSocket.connect(path: $0) },
@@ -155,8 +157,8 @@ public final class PeerConsoleHost {
             remove(attachment, reason: .detached)
         case .terminate(let consoleId):
             terminate(consoleId: consoleId, link: link)
-        case .open(let requestId, let worktreeId):
-            open(requestId: requestId, worktreeId: worktreeId, link: link)
+        case .open(let requestId, let worktreeId, let repoHook):
+            open(requestId: requestId, worktreeId: worktreeId, repoHook: repoHook, link: link)
         case .resize(let attachmentId, let rows, let columns):
             resize(attachmentId: attachmentId, rows: rows, columns: columns, link: link)
         }
@@ -256,7 +258,7 @@ public final class PeerConsoleHost {
     /// Replies only once the new console is reachable, so the peer's attach
     /// can't race its startup. One that never comes up is closed rather than
     /// left behind.
-    private func open(requestId: String, worktreeId: String, link: PeerConsoleLink) {
+    private func open(requestId: String, worktreeId: String, repoHook: RepoHookConsent?, link: PeerConsoleLink) {
         guard let open = environment.open else {
             link.send(.openFailed(requestId: requestId, message: PeerConsoleOpenError.unsupported.message))
             return
@@ -264,7 +266,7 @@ public final class PeerConsoleHost {
         Task {
             let message: String
             do {
-                let consoleId = try await open(worktreeId)
+                let consoleId = try await open(worktreeId, repoHook)
                 if await waitUntilReachable(consoleId) {
                     logger.info("peer opened console \(consoleId, privacy: .public)")
                     link.send(.list(consoles: environment.consoles()))
@@ -273,6 +275,9 @@ public final class PeerConsoleHost {
                 }
                 environment.terminate(consoleId)
                 message = PeerConsoleOpenError.notStarted.message
+            } catch let required as RepoHookApprovalRequired {
+                link.send(.openNeedsRepoHookApproval(requestId: requestId, hook: required.hook))
+                return
             } catch let error as PeerConsoleOpenError {
                 message = error.message
             } catch {

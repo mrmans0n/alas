@@ -58,6 +58,15 @@ public enum RepoHookGate: Equatable, Sendable {
     case needsApproval(PeerRepoHook)
 }
 
+/// Work a paired Mac started stopped for its user to approve `hook`.
+public struct RepoHookApprovalRequired: Error, Equatable, Sendable {
+    public let hook: PeerRepoHook
+
+    public init(hook: PeerRepoHook) {
+        self.hook = hook
+    }
+}
+
 extension AlasCoreContext {
     /// Decides the repository hook for `event` of work a paired Mac starts,
     /// as `consent` says: an unapproved hook is approved only when the

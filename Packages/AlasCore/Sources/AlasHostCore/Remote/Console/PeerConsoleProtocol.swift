@@ -22,11 +22,14 @@ public enum PeerConsoleCapability: Sendable {
     /// Advertised by hosts that apply `PeerConsoleRequest.resize`. A Mac
     /// running the app sizes its consoles from its own grid and omits it.
     public static let resizeV1 = "peerConsoleResize.v1"
+    /// Advertised by hosts that honor `open`'s `repoHook` and may answer
+    /// `openNeedsRepoHookApproval`. Clients send `.ask` only to these.
+    public static let repoHookApprovalV1 = "peerConsoleRepoHookApproval.v1"
 
     /// What a Mac running the app serves.
-    public static let appHost = [v1, terminateV1, openV1]
+    public static let appHost = [v1, terminateV1, openV1, repoHookApprovalV1]
     /// What a headless host with zmx serves.
-    public static let headlessHost = [v1, terminateV1, openV1, resizeV1]
+    public static let headlessHost = [v1, terminateV1, openV1, resizeV1, repoHookApprovalV1]
 }
 
 /// Why a host could not open a console for a peer. The message is shown to
@@ -155,8 +158,10 @@ public enum PeerConsoleRequest: Codable, Equatable, Sendable {
     case terminate(consoleId: String)
     /// Opens a new console in the host worktree `worktreeId` (`Worktree.id`).
     /// The host replies with a fresh `list`, then `opened`, or with
-    /// `openFailed`. Gated on `PeerConsoleCapability.openV1`.
-    case open(requestId: String, worktreeId: String)
+    /// `openFailed`. Gated on `PeerConsoleCapability.openV1`. `repoHook`
+    /// answers for the session-open hook; nil (older peers) skips an
+    /// unapproved one silently.
+    case open(requestId: String, worktreeId: String, repoHook: RepoHookConsent? = nil)
     /// Asks the host to resize the console to the holder's grid. Accepted
     /// only from the current lease holder; viewers learn the result through
     /// `geometry`. Gated on `PeerConsoleCapability.resizeV1`.
@@ -182,14 +187,17 @@ public enum PeerConsoleEvent: Codable, Equatable, Sendable {
     case opened(requestId: String, consoleId: String)
     /// Answers `open` with the host's reason, shown to the user as is.
     case openFailed(requestId: String, message: String)
+    /// Answers an `open` that asked about its unapproved session-open hook:
+    /// nothing was opened. The peer sends `open` again with its user's answer.
+    case openNeedsRepoHookApproval(requestId: String, hook: PeerRepoHook)
 }
 
 extension PeerConsoleEvent {
-    /// Nil for `list`, `opened` and `openFailed`, which are not attachment
-    /// scoped.
+    /// Nil for `list`, `opened`, `openFailed` and
+    /// `openNeedsRepoHookApproval`, which are not attachment scoped.
     public var attachmentId: String? {
         switch self {
-        case .list, .opened, .openFailed: nil
+        case .list, .opened, .openFailed, .openNeedsRepoHookApproval: nil
         case .attached(let id, _, _, _), .snapshot(let id, _, _, _), .output(let id, _, _), .control(let id, _),
              .inputAck(let id, _, _), .geometry(let id, _, _), .detached(let id, _):
             id

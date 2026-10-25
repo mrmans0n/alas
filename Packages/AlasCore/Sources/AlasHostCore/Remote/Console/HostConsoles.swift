@@ -202,16 +202,42 @@ public final class HostConsoles {
     }
 
     // ponytail: no per-peer open limit; pairing is the trust boundary (spec). Cap here if a peer misbehaves.
-    public func open(worktreeId: String) async throws -> String {
+    /// The shell runs the session-open script as the app's terminals do. An
+    /// unapproved repository hook is approved as `repoHook` says, or throws
+    /// `RepoHookApprovalRequired` and opens nothing; nil skips it.
+    public func open(worktreeId: String, repoHook: RepoHookConsent? = nil) async throws -> String {
         guard isAvailable else { throw PeerConsoleOpenError.zmxMissing }
         let worktree = try admittedWorktree(worktreeId)
+        guard let (project, _) = core.projectAndWorktree(withWorktreeId: worktreeId) else { throw PeerConsoleOpenError.worktreeUnavailable }
+        let gate: RepoHookGate
+        do {
+            gate = try await core.gateRepoHook(event: .sessionOpen, project: project, consent: repoHook) {
+                await core.environment.repoHookLoader.load(event: .sessionOpen, worktreeRoot: worktree.path, host: nil)
+            }
+        } catch {
+            throw PeerConsoleOpenError(error.localizedDescription)
+        }
+        if case .needsApproval(let hook) = gate { throw RepoHookApprovalRequired(hook: hook) }
+        // Read again: only the hook as it is now runs, and only if approved.
+        let repoScript = try await core.preparedRepoHook(
+            event: .sessionOpen, project: project, worktree: worktree, context: .sessionOpen, prompter: .skipping
+        )
+        let script = StartupScriptResolver.sessionOpenScript(
+            global: core.environment.globalTerminalConfig(), repoScript: repoScript, project: project
+        )
         await ShellEnvResolver.shared.waitUntilResolved()
         let id = UUID().uuidString
         let name = ZmxSessionName.hostShell(worktreeId: worktreeId, consoleId: id)
+        var registered = false
+        // Unregistered, nothing else would remove the rc files.
+        defer { if !registered { StartupScriptInstaller.removeArtifacts(sessionId: id) } }
+        let plan = try StartupScriptInstaller.plan(shell: shell, startupScript: script, sessionId: id)
         let base = baseEnvironment()
         guard let shellLaunch = HostShellLaunch.make(
             zmx: zmx, sessionName: name, directory: worktree.path, shell: shell,
-            environmentOverrides: shellContext(for: worktree, base: base), baseEnvironment: base
+            shellArguments: plan.args,
+            environmentOverrides: shellContext(for: worktree, base: base).merging(plan.envOverrides) { _, plan in plan },
+            baseEnvironment: base
         ) else { throw PeerConsoleOpenError.zmxMissing }
         var failure: Error?
         do {
@@ -232,6 +258,8 @@ public final class HostConsoles {
             id: id, worktreeId: worktreeId, title: "Terminal \(number)", zmxName: name,
             rows: Self.launchRows, columns: Self.launchColumns
         )
+        // From here the entry owns the rc files: forgetting it removes them.
+        registered = true
         if let failure {
             await recordThenStop(entry)
             throw (failure as? PeerConsoleOpenError) ?? .notStarted
@@ -355,7 +383,7 @@ public final class HostConsoles {
             resolve: { self.target($0) },
             setLocalInputSuppressed: { _, _ in },
             terminate: { id in Task { await self.terminate(id) } },
-            open: { try await self.open(worktreeId: $0) },
+            open: { try await self.open(worktreeId: $0, repoHook: $1) },
             resize: { await self.resize($0, rows: $1, columns: $2) }
         ))
     }

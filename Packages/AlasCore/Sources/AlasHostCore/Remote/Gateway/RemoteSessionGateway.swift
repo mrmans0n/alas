@@ -604,7 +604,7 @@ public final class RemoteSessionGateway {
         switch request {
         case .attach(_, let attachmentId, _):
             send(.console(.detached(attachmentId: attachmentId, reason: .unauthorized)))
-        case .open(let requestId, _):
+        case .open(let requestId, _, _):
             send(.console(.openFailed(requestId: requestId, message: PeerConsoleOpenError.unsupported.message)))
         default:
             break
