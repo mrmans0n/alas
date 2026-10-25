@@ -140,8 +140,12 @@ public actor UsageHistoryStore {
     public static let retention: TimeInterval = 400 * 86_400
 
     private let database: SQLiteDatabase
+    /// Off the cooperative pool: SQLite blocks its thread for every statement.
+    private nonisolated let queue: DispatchSerialQueue
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     public init(path: String = Paths.usageHistoryDB.path, now: Date = Date()) throws {
+        queue = DispatchSerialQueue(label: "io.nlopez.alas.usage-history \(path)")
         try FileManager.default.createDirectory(
             at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
         database = try SQLiteDatabase(path: path)

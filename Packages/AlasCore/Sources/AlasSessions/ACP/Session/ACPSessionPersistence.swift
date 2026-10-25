@@ -18,7 +18,7 @@ import AlasACP
 /// at once would otherwise hold every pool thread and starve unrelated tasks.
 public actor ACPSessionPersistence: SessionSummaryStoring {
     public nonisolated let path: String
-    private nonisolated let queue = DispatchSerialQueue(label: "io.nlopez.alas.acp-session-persistence")
+    private nonisolated let queue: DispatchSerialQueue
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private let busyTimeoutMilliseconds: Int32
@@ -28,6 +28,7 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
     public init(path: String, busyTimeoutMilliseconds: Int32 = 5_000) {
         self.path = path
         self.busyTimeoutMilliseconds = busyTimeoutMilliseconds
+        queue = DispatchSerialQueue(label: "io.nlopez.alas.acp-session-persistence \(path)")
     }
 
     private func openedStore() throws -> ACPSessionStore {

@@ -110,12 +110,16 @@ public actor RunHistoryStore {
 
     private let database: SQLiteDatabase
     private let maximumEntriesPerWorktree: Int
+    /// Off the cooperative pool: SQLite blocks its thread for every statement.
+    private nonisolated let queue: DispatchSerialQueue
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     public init(
         path: String = Paths.runHistoryDB.path,
         maximumEntriesPerWorktree: Int = 100
     ) throws {
         precondition(maximumEntriesPerWorktree > 0)
+        queue = DispatchSerialQueue(label: "io.nlopez.alas.run-history \(path)")
         try FileManager.default.createDirectory(
             at: URL(fileURLWithPath: path).deletingLastPathComponent(),
             withIntermediateDirectories: true

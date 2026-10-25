@@ -22,8 +22,12 @@ public actor ACPSessionHydrator {
 
     private let store: ACPSessionStore
     private let decoder = JSONDecoder()
+    /// Off the cooperative pool: SQLite blocks its thread for every read.
+    private nonisolated let queue: DispatchSerialQueue
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     public init(path: String) throws {
+        queue = DispatchSerialQueue(label: "io.nlopez.alas.acp-session-hydrator \(path)")
         self.store = try ACPSessionStore(path: path)
     }
 
