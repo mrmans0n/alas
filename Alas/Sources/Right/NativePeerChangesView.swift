@@ -46,7 +46,8 @@ struct NativePeerChangesView: View {
                             onSelectStage: { file, stage in
                                 onOpen(.diff(path: file.path, stage: stage))
                             },
-                            git: git
+                            git: git,
+                            truncated: changes.truncated
                         )
                         commitSection(changes.commits, truncated: changes.commitsTruncated)
                         if changes.truncated {
@@ -68,7 +69,8 @@ struct NativePeerChangesView: View {
         onSelectStage: ((ChangedFile, ChangeStage) -> Void)? = nil,
         showsStageState: Bool = true,
         showsHeader: Bool = true,
-        git: Git? = nil
+        git: Git? = nil,
+        truncated: Bool = false
     ) -> some View {
         if !files.isEmpty {
             let expanded = !collapsedSections.contains(title)
@@ -97,12 +99,26 @@ struct NativePeerChangesView: View {
                     header.contextMenu {
                         let staged = files.filter { $0.stage == .staged }
                         let unstaged = files.filter { $0.stage == .unstaged }
-                        if !unstaged.isEmpty { Button("Stage All Changes") { git.onStage(unstaged) } }
-                        if !staged.isEmpty { Button("Unstage All Changes") { git.onUnstage(staged) } }
+                        // A shortened list would act on part of the changes only.
+                        if truncated {
+                            Button(
+                                "The host lists only the first \(RemoteWorktreeFileAccess.maxChangedFiles) changes; "
+                                    + "stage them individually or on the host."
+                            ) {}
+                            .disabled(true)
+                            Divider()
+                        }
+                        if !unstaged.isEmpty {
+                            Button("Stage All Changes") { git.onStage(unstaged) }.disabled(truncated)
+                        }
+                        if !staged.isEmpty {
+                            Button("Unstage All Changes") { git.onUnstage(staged) }.disabled(truncated)
+                        }
                         Divider()
                         Button("Discard all working tree changes…", role: .destructive) {
                             git.onDiscard(PendingDiscard(target: .all(fileCount: files.count), paths: files.map(\.path)))
                         }
+                        .disabled(truncated)
                     }
                 } else {
                     header
@@ -272,6 +288,8 @@ struct NativePeerRailMessage: View {
 /// the fields still blank.
 struct NativePeerCommitSheet: View {
     let subtitle: String
+    /// Without staged changes only an amend, of the message alone, can run.
+    let hasStaged: Bool
     /// Nil when this Mac cannot suggest a message.
     let suggest: (@MainActor () async -> CommitMessageSuggestion?)?
     /// The error message to show, nil once committed.
@@ -312,6 +330,8 @@ struct NativePeerCommitSheet: View {
                     .toggleStyle(.checkbox)
                 if let errorMessage {
                     Text(errorMessage).font(.system(size: 11)).foregroundColor(.red)
+                } else if !hasStaged && !amend {
+                    Text("Stage changes before committing.").font(.system(size: 11)).foregroundColor(theme.color("fg-dim"))
                 }
             },
             cancelTitle: "Cancel",
@@ -333,7 +353,7 @@ struct NativePeerCommitSheet: View {
     }
 
     private var canCommit: Bool {
-        !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isCommitting
+        !subject.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !isCommitting && (hasStaged || amend)
     }
 
     private func commitChanges() {

@@ -132,6 +132,10 @@ struct NativePeerRightPaneView: View {
             }
             if let gitTarget {
                 Menu {
+                    // Here as well as in the Working tree header, so a message-only amend
+                    // is reachable with nothing staged or changed.
+                    Button("Commit…") { commitTarget = gitTarget }
+                    Divider()
                     Button("Fetch now") { runGit(.fetch, on: gitTarget) }
                 } label: {
                     Image(systemName: "arrow.triangle.merge")
@@ -295,6 +299,7 @@ struct NativePeerRightPaneView: View {
         }
         return NativePeerCommitSheet(
             subtitle: "\(worktree.branch) on \(client.selectedWorktreePeer?.name ?? "the host")",
+            hasStaged: hasStagedChanges,
             suggest: suggest,
             commit: { subject, body, amend in
                 let error = await hosts.mutate(
@@ -393,6 +398,11 @@ struct NativePeerRightPaneView: View {
 
     private var gitTargetKey: String? {
         gitTarget.map { "\($0.serverId)/\($0.worktree.snapshot.worktree.id)" }
+    }
+
+    private var hasStagedChanges: Bool {
+        if case .loaded(let changes) = client.workspace.changes { return !changes.staged.isEmpty }
+        return false
     }
 
     /// The git target's status as the host's events last sent it.
