@@ -37,7 +37,7 @@ struct AlasHostExecutableTests {
         let repo = root.appendingPathComponent("repo")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
-        try GitTemplate.repository(at: repo)
+        try await GitTemplate.repository(at: repo)
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/acp_fixture_agent.py")
         var config = AppConfig.defaults
@@ -194,7 +194,7 @@ struct AlasHostExecutableTests {
         let repo = root.appendingPathComponent("repo")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
-        try GitTemplate.repository(at: repo)
+        try await GitTemplate.repository(at: repo)
         func run(_ arguments: String...) async throws -> (status: Int32, output: String, error: String) {
             let process = try AlasHostProcess(dataDirectory: dataDirectory, arguments: arguments)
             return (try await process.exitStatus(), process.output, process.errorOutput)
@@ -224,7 +224,7 @@ struct AlasHostExecutableTests {
         let repo = root.appendingPathComponent("repo")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
-        try GitTemplate.repository(at: repo)
+        try await GitTemplate.repository(at: repo)
         let add = try AlasHostProcess(dataDirectory: dataDirectory, arguments: ["project", "add", repo.path])
         #expect(try await add.exitStatus() == 0, "\(add.errorOutput)")
 
@@ -285,6 +285,12 @@ struct AlasHostExecutableTests {
         #expect(try await pairAsMac() == key)
     }
 
+    /// Copies the built host, ~100 MB, off the main actor so the copy does
+    /// not stall the other main-actor suites running in parallel.
+    private func copyHost(to destination: URL) async throws {
+        try await BlockingWork.run { try FileManager.default.copyItem(at: AlasHostProcess.binary, to: destination) }
+    }
+
     /// A port nothing listens on now, for a host to bind.
     private func freePort() throws -> UInt16 {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
@@ -310,7 +316,7 @@ struct AlasHostExecutableTests {
         let resources = root.appendingPathComponent("Alas.app/Contents/Resources")
         let bundled = resources.appendingPathComponent("alas-host/alas-host")
         try FileManager.default.createDirectory(at: bundled.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: AlasHostProcess.binary, to: bundled)
+        try await copyHost(to: bundled)
         let marker = "bundled web client \(UUID().uuidString)"
         try FileManager.default.createDirectory(at: resources.appendingPathComponent("RemoteWeb"), withIntermediateDirectories: true)
         try Data(marker.utf8).write(to: resources.appendingPathComponent("RemoteWeb/index.html"))
@@ -342,12 +348,12 @@ struct AlasHostExecutableTests {
         let installed = root.appendingPathComponent("alas-host")
         let dataDirectory = root.appendingPathComponent("data")
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: AlasHostProcess.binary, to: installed)
+        try await copyHost(to: installed)
         let host = try AlasHostProcess(dataDirectory: dataDirectory, arguments: ["--wait-for-lock"], binary: installed)
         _ = try await host.socketPath()
 
         let upgrade = root.appendingPathComponent("alas-host.new")
-        try FileManager.default.copyItem(at: AlasHostProcess.binary, to: upgrade)
+        try await copyHost(to: upgrade)
         #expect(rename(upgrade.path, installed.path) == 0)
         #expect(try await host.exitStatus() == 0)
     }
@@ -360,13 +366,13 @@ struct AlasHostExecutableTests {
         let installed = root.appendingPathComponent("alas-host")
         let dataDirectory = root.appendingPathComponent("data")
         try FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: AlasHostProcess.binary, to: installed)
+        try await copyHost(to: installed)
         var app: DataDirectoryLock? = try DataDirectoryLock.acquire(in: dataDirectory)
         let host = try AlasHostProcess(dataDirectory: dataDirectory, arguments: ["--wait-for-lock"], binary: installed)
         try await eventually { [host] in host.errorOutput.contains("waiting for process \(getpid())") }
 
         let upgrade = root.appendingPathComponent("alas-host.new")
-        try FileManager.default.copyItem(at: AlasHostProcess.binary, to: upgrade)
+        try await copyHost(to: upgrade)
         #expect(rename(upgrade.path, installed.path) == 0)
         app = nil
         _ = app
@@ -383,7 +389,7 @@ struct AlasHostExecutableTests {
         let repo = root.appendingPathComponent("repo")
         defer { try? FileManager.default.removeItem(at: root) }
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        try GitTemplate.repository(at: repo)
+        try await GitTemplate.repository(at: repo)
         let fixture = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .appendingPathComponent("Fixtures/acp_fixture_agent.py")
         var config = AppConfig.defaults

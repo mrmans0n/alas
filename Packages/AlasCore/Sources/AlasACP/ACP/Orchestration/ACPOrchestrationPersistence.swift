@@ -10,10 +10,14 @@ public actor ACPOrchestrationPersistence {
 
     private let busyTimeoutMilliseconds: Int32
     private var store: ACPOrchestrationStore?
+    /// Off the cooperative pool: SQLite blocks its thread for every statement.
+    private nonisolated let queue: DispatchSerialQueue
+    public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     public init(path: String = Paths.acpOrchestrationDB.path, busyTimeoutMilliseconds: Int32 = 5_000) {
         self.path = path
         self.busyTimeoutMilliseconds = busyTimeoutMilliseconds
+        queue = DispatchSerialQueue(label: "io.nlopez.alas.acp-orchestration \(path)")
     }
 
     private func openedStore() throws -> ACPOrchestrationStore {

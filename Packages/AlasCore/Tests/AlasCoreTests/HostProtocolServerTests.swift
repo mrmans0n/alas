@@ -644,7 +644,7 @@ struct HostProtocolServerTests {
         defer { fixture.tearDown() }
         let real = fixture.root.appendingPathComponent("real")
         let alias = fixture.root.appendingPathComponent("alias")
-        try GitTemplate.repository(at: real)
+        try await GitTemplate.repository(at: real)
         try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
         let projectID = try await fixture.host.projects.add(path: alias, displayName: "alias", icon: .default(), caller: .app).id
         let worktree = try #require(fixture.core.projects.worktrees(projectId: projectID).first)
@@ -663,7 +663,7 @@ struct HostProtocolServerTests {
         defer { fixture.tearDown() }
         let (repo, ref) = try await fixture.mainWorktree()
         let origin = fixture.root.appendingPathComponent("origin")
-        try GitTemplate.repository(at: origin)
+        try await GitTemplate.repository(at: origin)
         for (directory, contents) in [(origin, "theirs\n"), (repo, "ours\n")] {
             try contents.write(to: directory.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
             let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
@@ -808,7 +808,7 @@ struct HostProtocolServerTests {
         defer { fixture.tearDown() }
         let (repo, _) = try await fixture.mainWorktree()
         let origin = fixture.root.appendingPathComponent("origin")
-        try GitTemplate.repository(at: origin)
+        try await GitTemplate.repository(at: origin)
         _ = try await Process.git(["remote", "add", "origin", origin.path], cwd: repo)
         _ = try await Process.git(["fetch", "-q", "origin", "main"], cwd: repo)
         let hook = origin.appendingPathComponent(RepoHookEvent.worktreeCreate.relativePath)
@@ -861,7 +861,7 @@ struct HostProtocolServerTests {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remove-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let repo = root.appendingPathComponent("repo")
-            try GitTemplate.repository(at: repo)
+            try await GitTemplate.repository(at: repo)
             projectsFile = root.appendingPathComponent("projects.json")
             let agent = ACPMockClient()
             agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
