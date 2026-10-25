@@ -53,10 +53,14 @@ extension AlasHost {
     /// agents, and staged worktree trash and stale run files are swept.
     ///
     /// With `cliBinDir`, the directory holding the installed `alas` CLI, its
-    /// agents get the built-in `alas` MCP server and CLI env.
+    /// agents get the built-in `alas` MCP server and CLI env. `cliBuild` is
+    /// that CLI's `TerminalCLIInjection.buildIdentity`, so agents a restart
+    /// adopts are restarted once idle when the host now ships another CLI.
     ///
     /// Throws when the project list cannot be read.
-    public static func boot(in directory: URL = Paths.appSupportRoot, cliBinDir: URL? = nil) throws -> AlasHost {
+    public static func boot(
+        in directory: URL = Paths.appSupportRoot, cliBinDir: URL? = nil, cliBuild: String? = nil
+    ) throws -> AlasHost {
         guard directory.standardizedFileURL.path == Paths.appSupportRoot.standardizedFileURL.path else {
             throw HostBootRefusal.notThisProcesssDirectory(directory)
         }
@@ -81,7 +85,7 @@ extension AlasHost {
         let harness = HarnessService()
         weak var builtCore: AlasCoreContext?
         let alasTools = cliBinDir.map {
-            HeadlessAlasTools(binDir: $0, socketServer: harness.socketServer, config: { environment.config }, core: { builtCore })
+            HeadlessAlasTools(binDir: $0, cliBuild: cliBuild, socketServer: harness.socketServer, config: { environment.config }, core: { builtCore })
         }
         let core = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: projects.projects, defaultOrdering: { ordering }),
