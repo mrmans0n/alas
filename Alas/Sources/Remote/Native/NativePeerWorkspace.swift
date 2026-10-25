@@ -356,9 +356,10 @@ struct NativePeerWorkspace: Equatable {
     }
 }
 
-/// The host's reads behind the review loaders. Per-file read failures become
-/// an empty diff, which the loaders show as their "No text diff" placeholder;
-/// a failed file list throws. No context expansion or images from a peer.
+/// The host's reads behind the review loaders. A file diff the host fails to
+/// read becomes an empty diff, which the loaders show as their "No text diff"
+/// placeholder; a failed file list, or no reply at all, throws. No context
+/// expansion or images from a peer.
 struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient {
     /// `@unchecked` is sound: its only state is main-actor isolated.
     final class Notes: @unchecked Sendable {
@@ -388,19 +389,23 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient 
 
     func diff(worktreePath _: URL, file: String, staged: Bool, originalPath _: String?) async throws -> ParsedDiff {
         let stage = staged ? ChangeStage.staged : .unstaged
-        guard case .fileDiffResult(_, _, _, let hunks, let truncated, let metadataNote)? = await read(
-            .fileDiff(path: file, stage: stage.rawValue, comparisonMode: nil)
-        ) else { return ParsedDiff(hunks: []) }
-        await note(truncated)
-        return ParsedDiff(hunks: hunks.map(NativePeerWorkspace.hunk), metadataSummary: metadataNote)
+        switch await read(.fileDiff(path: file, stage: stage.rawValue, comparisonMode: nil)) {
+        case .fileDiffResult(_, _, _, let hunks, let truncated, let metadataNote)?:
+            await note(truncated)
+            return ParsedDiff(hunks: hunks.map(NativePeerWorkspace.hunk), metadataSummary: metadataNote)
+        case nil: throw NativePeerReviewGitClientError(message: NativePeerWorkspace.offlineMessage)
+        default: return ParsedDiff(hunks: [])
+        }
     }
 
     func diff(worktreePath _: URL, sha: String, file: String, originalPath _: String?) async throws -> ParsedDiff {
-        guard case .commitDiffResult(_, _, _, let hunks, let truncated, let metadataNote)? = await read(
-            .commitDiff(sha: sha, path: file)
-        ) else { return ParsedDiff(hunks: []) }
-        await note(truncated)
-        return ParsedDiff(hunks: hunks.map(NativePeerWorkspace.hunk), metadataSummary: metadataNote)
+        switch await read(.commitDiff(sha: sha, path: file)) {
+        case .commitDiffResult(_, _, _, let hunks, let truncated, let metadataNote)?:
+            await note(truncated)
+            return ParsedDiff(hunks: hunks.map(NativePeerWorkspace.hunk), metadataSummary: metadataNote)
+        case nil: throw NativePeerReviewGitClientError(message: NativePeerWorkspace.offlineMessage)
+        default: return ParsedDiff(hunks: [])
+        }
     }
 
     func commitFiles(sha: String) async throws -> [CommitChangedFile] {

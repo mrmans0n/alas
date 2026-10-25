@@ -206,6 +206,13 @@ struct NativePeerWorktreeSelection: Hashable {
     let worktreeId: String
 }
 
+/// A host worktree's draft review, opened over the peer center pane.
+struct NativePeerReviewSelection: Equatable {
+    let serverId: String
+    let worktree: PeerHostWorktree
+    let sessionID: String
+}
+
 struct NativePeerWorktreeGroup: Identifiable, Equatable {
     let id: String
     /// Most recently updated first, history included.

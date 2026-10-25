@@ -154,6 +154,8 @@ final class NativePeerSessions {
     /// in request order, so only the last one answers the current attempt.
     @ObservationIgnored private var tabOpensInFlight: [String: Int] = [:]
     private(set) var workspace = NativePeerWorkspace()
+    /// A host review opened over the center pane, as a document is.
+    private(set) var openedReview: NativePeerReviewSelection?
     /// The selected row's worktree summary when changes were last requested.
     /// Peers re-send it with every session list, so a change here is the
     /// cue that the agent touched the worktree.
@@ -266,6 +268,7 @@ final class NativePeerSessions {
     /// nothing: the center pane shows the worktree's empty state.
     func selectWorktree(_ selection: NativePeerWorktreeSelection) {
         guard let worktree = worktree(selection) else { return }
+        openedReview = nil
         let tabs = worktree.tabs
         if let tab = lastTabs[selection].flatMap({ tabs.contains($0) ? $0 : nil }) ?? tabs.first {
             selectTab(tab, in: selection)
@@ -445,6 +448,7 @@ final class NativePeerSessions {
         hosts?.stop()
         selectedWorktree = nil
         selectedWorktreeTabs = []
+        openedReview = nil
         selectedSessionId = nil
         transcript = nil
         snapshot = .init(groups: [], attentionRows: [])
@@ -553,6 +557,7 @@ final class NativePeerSessions {
               }) else { return }
         if selectedSessionId == sessionId {
             workspace.closeDocument()
+            openedReview = nil
             refresh()
             return
         }
@@ -585,6 +590,7 @@ final class NativePeerSessions {
 
     func clearSelection() {
         selectedWorktree = nil
+        openedReview = nil
         selectedWorktreeTabs = []
         consoles?.clearSelection()
         if let selectedSessionId, let pendingPrompt {
@@ -1069,6 +1075,7 @@ final class NativePeerSessions {
     @discardableResult
     func open(_ document: NativePeerWorkspace.Document) -> Bool {
         guard canReadWorkspace else { return false }
+        openedReview = nil
         if document != workspace.document { documentRequestOutdated = false }
         workspace.beginDocument(document)
         guard !documentRequestsInFlight.contains(document) else {
@@ -1106,6 +1113,15 @@ final class NativePeerSessions {
 
     func closeDocument() {
         workspace.closeDocument()
+    }
+
+    func openReview(_ sessionID: String, serverId: String, worktree: PeerHostWorktree) {
+        workspace.closeDocument()
+        openedReview = NativePeerReviewSelection(serverId: serverId, worktree: worktree, sessionID: sessionID)
+    }
+
+    func closeReview() {
+        openedReview = nil
     }
 
     @discardableResult

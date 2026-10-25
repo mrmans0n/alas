@@ -11,6 +11,7 @@ enum SectionHeaderRole: Equatable {
     case commits
     case stack
     case stashes
+    case reviews
 
     var iconKind: IconKind {
         switch self {
@@ -19,6 +20,7 @@ enum SectionHeaderRole: Equatable {
         case .commits: return .standard("commit")
         case .stack: return .stack
         case .stashes: return .standard("archivebox")
+        case .reviews: return .standard("text.bubble")
         }
     }
 

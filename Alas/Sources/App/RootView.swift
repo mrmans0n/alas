@@ -400,12 +400,23 @@ struct RootView: View {
         }
     }
 
-    /// The selected peer tab's content. A peer document opens over it.
+    /// The selected peer tab's content. A peer review or document opens over it.
     @ViewBuilder
     private func peerCenterContent(_ client: NativePeerSessions) -> some View {
-        // A session's document, or one of a selected idle worktree read
-        // over its host's channel.
-        if client.canReadWorkspace, let document = client.workspace.document {
+        if let review = client.openedReview, let hosts = client.hosts {
+            NativePeerReviewView(
+                hosts: hosts,
+                selection: review,
+                codeFontFamily: state.config.code.fontFamily,
+                codeFontSize: CGFloat(state.config.code.fontSize),
+                onClose: { client.closeReview() }
+            )
+            // A new review starts from fresh state, so a reply to the
+            // previous one lands nowhere.
+            .id("\(review.serverId)/\(review.worktree.snapshot.worktree.id)/\(review.sessionID)")
+        } else if client.canReadWorkspace, let document = client.workspace.document {
+            // A session's document, or one of a selected idle worktree read
+            // over its host's channel.
             NativePeerDocumentView(
                 document: document,
                 content: client.workspace.documentContent,

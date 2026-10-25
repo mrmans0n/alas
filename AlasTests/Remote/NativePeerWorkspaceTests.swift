@@ -355,4 +355,27 @@ struct NativePeerWorkspaceTests {
         #expect(session.files.map(\.summary.path) == ["a.txt"])
         #expect(client.notes.truncated)
     }
+
+    /// A host that stops answering fails the review instead of passing it
+    /// off as empty; a diff it refuses stays one empty file.
+    @MainActor
+    @Test(arguments: [true, false])
+    func aDiffWithNoReplyFailsTheReview(refused: Bool) async throws {
+        let file = changed("a.txt")
+        let client = NativePeerReviewGitClient(read: { read -> RemoteServerMessage? in
+            if case .changes = read {
+                return .changeList(sessionId: "s", comparisonRef: nil, metricsAvailable: true, files: [],
+                                   staged: [], unstaged: [file], commits: [], truncated: false)
+            }
+            return refused ? .fileDiffFailed(sessionId: "s", path: "a.txt", reason: .binary, message: nil) : nil
+        })
+
+        let load = { try await ReviewChangesLoader(git: client).load(worktreePath: URL(fileURLWithPath: "/repo")) }
+
+        if refused {
+            #expect(try await load().files.map(\.summary.path) == ["a.txt"])
+        } else {
+            await #expect(throws: NativePeerReviewGitClientError.self) { try await load() }
+        }
+    }
 }
