@@ -7,6 +7,12 @@ final class NativePeerSessions {
     private let federation: FederatedSessionsProvider
     private let peers: @MainActor () -> [RemoteHelloPeer]
     private let comparisonMode: @MainActor () -> AppConfig.Changes.ChangesComparisonMode?
+    /// Whether a peer holds a worktree create for its repo hook instead of
+    /// deciding it there.
+    private let supportsRepoHookApproval: @MainActor (_ serverId: String) -> Bool
+    /// Asks this Mac's user about a hook a peer holds a create for.
+    private let decideRepoHook: @MainActor (_ serverId: String, PeerRepoHook, RepoHookApprovalContext) async
+        -> RepoHookApprovalDecision
     /// Peer consoles. Selecting one clears the selected session and vice
     /// versa, so the center pane shows exactly one peer surface.
     let consoles: NativePeerConsoles?
@@ -197,11 +203,16 @@ final class NativePeerSessions {
         peers: @escaping @MainActor () -> [RemoteHelloPeer],
         comparisonMode: @escaping @MainActor () -> AppConfig.Changes.ChangesComparisonMode? = { nil },
         consoles: NativePeerConsoles? = nil,
-        hosts: NativePeerHosts? = nil
+        hosts: NativePeerHosts? = nil,
+        supportsRepoHookApproval: @escaping @MainActor (_ serverId: String) -> Bool = { _ in false },
+        decideRepoHook: @escaping @MainActor (_ serverId: String, PeerRepoHook, RepoHookApprovalContext) async
+            -> RepoHookApprovalDecision = { _, _, _ in .skip }
     ) {
         self.federation = federation
         self.peers = peers
         self.comparisonMode = comparisonMode
+        self.supportsRepoHookApproval = supportsRepoHookApproval
+        self.decideRepoHook = decideRepoHook
         self.consoles = consoles
         self.hosts = hosts
         consoles?.onListChanged = { [weak self] in self?.rebuildSnapshot() }
@@ -857,16 +868,52 @@ final class NativePeerSessions {
     /// in it, as one request.
     func createNewWorktreeSession(base: String, branch: String, agentId: String, modelId: String?, effortId: String?) {
         guard let request = newSession, request.phase != .creating, let projectId = request.projectId,
-              let downstream else { return }
+              downstream != nil else { return }
         newSession?.phase = .creating
-        let token = request.id
-        let sent = federation.request(
+        requestWorktreeSession(
+            consent: supportsRepoHookApproval(request.serverId) ? .ask : nil, token: request.id
+        ) { consent in
             .createWorktreeSession(
                 projectId: projectId, base: base, branch: branch, agentId: agentId,
-                modelId: modelId, effortId: effortId),
-            toPeer: request.serverId, from: downstream
-        ) { [weak self] reply in self?.applyNewSessionReply(reply, token: token) }
+                modelId: modelId, effortId: effortId, repoHook: consent)
+        }
+    }
+
+    /// Sends `create` with `consent`. A hook the peer holds it for is put to
+    /// this Mac's user, and the same create sent again with the answer.
+    private func requestWorktreeSession(
+        consent: RepoHookConsent?, token: UUID,
+        _ create: @escaping @Sendable (RepoHookConsent?) -> RemoteClientMessage
+    ) {
+        guard let request = newSession, request.id == token else { return }
+        guard let downstream else {
+            newSession?.phase = .failed(Self.peerUnavailableMessage)
+            return
+        }
+        let sent = federation.request(create(consent), toPeer: request.serverId, from: downstream) { [weak self] reply in
+            guard case .worktreeSessionNeedsRepoHookApproval(let hook) = reply else {
+                self?.applyNewSessionReply(reply, token: token)
+                return
+            }
+            self?.answerRepoHook(hook, token: token, create)
+        }
         if !sent { newSession?.phase = .failed(Self.peerUnavailableMessage) }
+    }
+
+    private func answerRepoHook(
+        _ hook: PeerRepoHook, token: UUID,
+        _ create: @escaping @Sendable (RepoHookConsent?) -> RemoteClientMessage
+    ) {
+        guard let serverId = newSession?.serverId, newSession?.id == token else { return }
+        Task { [weak self] in
+            guard let decision = await self?.decideRepoHook(serverId, hook, .peerWorktreeCreate),
+                  let self, newSession?.id == token, newSession?.phase == .creating else { return }
+            switch decision {
+            case .approve: requestWorktreeSession(consent: .approve(hash: hook.hash), token: token, create)
+            case .skip: requestWorktreeSession(consent: .skip, token: token, create)
+            case .retry, .cancel: newSession?.phase = .editing
+            }
+        }
     }
 
     func cancelNewSession() {

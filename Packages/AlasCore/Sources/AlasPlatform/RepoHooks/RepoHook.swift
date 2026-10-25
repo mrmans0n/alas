@@ -57,3 +57,35 @@ public struct RepoHookFailure: Equatable, Sendable {
         self.message = message
     }
 }
+
+/// What a paired Mac says about the repository hook of work it starts here.
+public enum RepoHookConsent: Codable, Equatable, Sendable {
+    /// Send the hook back for approval instead of starting the work.
+    case ask
+    /// Start the work without the hook.
+    case skip
+    /// Approve the hook whose hash is `hash`, and only that one.
+    case approve(hash: String)
+}
+
+/// A repository hook as sent to a paired Mac to approve.
+public struct PeerRepoHook: Codable, Equatable, Sendable {
+    public let event: RepoHookEvent
+    public let text: String
+    public let hash: String
+
+    public init(event: RepoHookEvent, text: String, hash: String) {
+        self.event = event
+        self.text = text
+        self.hash = hash
+    }
+
+    public init(_ hook: RepoHook) {
+        self.init(event: hook.event, text: hook.text, hash: hook.hash)
+    }
+
+    /// The hook as one read from `host`, for the approval sheet.
+    public func repoHook(fromHost host: String) -> RepoHook {
+        RepoHook(event: event, source: .remote(host: host), bytes: Data(text.utf8), text: text, hash: hash)
+    }
+}

@@ -130,7 +130,7 @@ struct RepoHookApprovalSheet: View {
     private var approveTitle: String {
         switch request.context.kind {
         case .sessionOpen: "Approve and open"
-        case .worktreeCreate: "Approve and finish"
+        case .worktreeCreate, .peerWorktreeCreate: "Approve and finish"
         case .workspaceMember: "Approve and finish member"
         case .projectSettings: "Approve hook"
         }

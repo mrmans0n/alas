@@ -301,7 +301,7 @@ public enum RemoteClientMessage: Equatable, Sendable {
     case listBranches(projectId: String)
     case createWorktreeSession(
         projectId: String, base: String, branch: String, agentId: String,
-        modelId: String? = nil, effortId: String? = nil)
+        modelId: String? = nil, effortId: String? = nil, repoHook: RepoHookConsent? = nil)
     case createSession(worktreeId: String, agentId: String, modelId: String? = nil, effortId: String? = nil)
     case subscribe(sessionId: String)
     case unsubscribe(sessionId: String)
@@ -372,7 +372,7 @@ public enum RemoteClientMessage: Equatable, Sendable {
 }
 
 extension RemoteClientMessage: Codable {
-    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console, host }
+    private enum CodingKeys: String, CodingKey { case type, sessionId, requestId, optionId, persistScope, answers, action, reason, content, text, attachments, modelId, effortId, modeId, enabled, configId, value, title, worktreeId, agentId, beforeIndex, limit, itemId, targetItemId, intent, mentions, query, projectId, base, branch, path, stage, comparisonMode, protocolVersion, challenge, sha, visualId, selectedOptionIds, note, console, host, repoHook }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -394,7 +394,8 @@ extension RemoteClientMessage: Codable {
                 branch: try c.decode(String.self, forKey: .branch),
                 agentId: try c.decode(String.self, forKey: .agentId),
                 modelId: try c.decodeIfPresent(String.self, forKey: .modelId),
-                effortId: try c.decodeIfPresent(String.self, forKey: .effortId))
+                effortId: try c.decodeIfPresent(String.self, forKey: .effortId),
+                repoHook: try c.decodeIfPresent(RepoHookConsent.self, forKey: .repoHook))
         case "createSession":
             self = .createSession(
                 worktreeId: try c.decode(String.self, forKey: .worktreeId),
@@ -568,7 +569,7 @@ extension RemoteClientMessage: Codable {
         case .listBranches(let projectId):
             try c.encode("listBranches", forKey: .type)
             try c.encode(projectId, forKey: .projectId)
-        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId):
+        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId, let repoHook):
             try c.encode("createWorktreeSession", forKey: .type)
             try c.encode(projectId, forKey: .projectId)
             try c.encode(base, forKey: .base)
@@ -576,6 +577,7 @@ extension RemoteClientMessage: Codable {
             try c.encode(agentId, forKey: .agentId)
             try c.encodeIfPresent(modelId, forKey: .modelId)
             try c.encodeIfPresent(effortId, forKey: .effortId)
+            try c.encodeIfPresent(repoHook, forKey: .repoHook)
         case .createSession(let worktreeId, let agentId, let modelId, let effortId):
             try c.encode("createSession", forKey: .type)
             try c.encode(worktreeId, forKey: .worktreeId)
@@ -829,6 +831,8 @@ public enum RemoteServerMessage: Equatable, Sendable {
     case branchListFailed(projectId: String, message: String)
     case worktreeSessionCreated(session: RemoteSessionSummary)
     case worktreeSessionCreationFailed(stage: RemoteWorktreeSessionCreationStage, message: String, worktreeId: String?)
+    /// Nothing was created: the client's user must approve `hook` first.
+    case worktreeSessionNeedsRepoHookApproval(hook: PeerRepoHook)
     case sessionCreated(session: RemoteSessionSummary)
     case createSessionFailed(message: String)
     case transcriptSnapshot(
@@ -918,6 +922,7 @@ extension RemoteServerMessage: Codable {
         case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console, host
         case challenge, publicKey, signature
         case visualId
+        case hook
     }
 
     public init(from decoder: Decoder) throws {
@@ -963,6 +968,8 @@ extension RemoteServerMessage: Codable {
                 stage: try c.decode(RemoteWorktreeSessionCreationStage.self, forKey: .stage),
                 message: try c.decode(String.self, forKey: .message),
                 worktreeId: try c.decodeIfPresent(String.self, forKey: .worktreeId))
+        case "worktreeSessionNeedsRepoHookApproval":
+            self = .worktreeSessionNeedsRepoHookApproval(hook: try c.decode(PeerRepoHook.self, forKey: .hook))
         case "sessionCreated":
             self = .sessionCreated(session: try c.decode(RemoteSessionSummary.self, forKey: .session))
         case "createSessionFailed":
@@ -1221,6 +1228,9 @@ extension RemoteServerMessage: Codable {
             try c.encode(stage, forKey: .stage)
             try c.encode(message, forKey: .message)
             try c.encodeIfPresent(worktreeId, forKey: .worktreeId)
+        case .worktreeSessionNeedsRepoHookApproval(let hook):
+            try c.encode("worktreeSessionNeedsRepoHookApproval", forKey: .type)
+            try c.encode(hook, forKey: .hook)
         case .sessionCreated(let session):
             try c.encode("sessionCreated", forKey: .type)
             try c.encode(session, forKey: .session)
@@ -1473,10 +1483,14 @@ public enum HostProtocolCapability: Sendable {
     /// `reviewStatus`: only a headless host, whose Mac has no one at it to
     /// do them there.
     public static let worktreesGitV1 = "host.worktrees.git.v1"
+    /// Hosts whose `createWorktreeSession` takes `repoHook`, answering
+    /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
+    /// must approve first.
+    public static let repoHooksApprovalV1 = "host.repoHooks.approval.v1"
     /// Everything every host serves of the host protocol.
     public static let served = [
         v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
-        worktreesRenameBranchV1,
+        worktreesRenameBranchV1, repoHooksApprovalV1,
     ]
 }
 

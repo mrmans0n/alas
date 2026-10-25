@@ -300,6 +300,21 @@ struct RemoteProtocolTests {
         }
     }
 
+    /// Older clients send no `repoHook`; newer ones send consent and hear
+    /// back the hook to approve.
+    @Test func worktreeCreationCarriesRepoHookConsent() throws {
+        let legacy = #"{"type":"createWorktreeSession","projectId":"p","base":"main","branch":"b","agentId":"a"}"#
+        #expect(try JSONDecoder().decode(RemoteClientMessage.self, from: Data(legacy.utf8))
+            == .createWorktreeSession(projectId: "p", base: "main", branch: "b", agentId: "a", repoHook: nil))
+
+        let approve = RemoteClientMessage.createWorktreeSession(
+            projectId: "p", base: "main", branch: "b", agentId: "a", repoHook: .approve(hash: "h"))
+        #expect(try roundTrip(approve) == approve)
+        let needsApproval = RemoteServerMessage.worktreeSessionNeedsRepoHookApproval(
+            hook: PeerRepoHook(event: .worktreeCreate, text: "make\n", hash: "h"))
+        #expect(try roundTrip(needsApproval) == needsApproval)
+    }
+
     @Test func worktreeCreationClientMessagesAreNotControlOrDriveOrdered() {
         let messages: [RemoteClientMessage] = [
             .listProjects,

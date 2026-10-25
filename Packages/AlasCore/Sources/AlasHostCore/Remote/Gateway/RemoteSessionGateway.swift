@@ -127,9 +127,10 @@ public final class RemoteSessionGateway {
             refreshProjectList()
         case .listBranches(let projectId):
             refreshBranchList(projectId: projectId)
-        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId):
+        case .createWorktreeSession(let projectId, let base, let branch, let agentId, let modelId, let effortId, let repoHook):
             let result = await hostCalls.createWorktreeSession(RemoteWorktreeSessionCreation(
-                projectID: projectId, base: base, branch: branch, agentID: agentId, modelID: modelId, effortID: effortId
+                projectID: projectId, base: base, branch: branch, agentID: agentId, modelID: modelId, effortID: effortId,
+                repoHook: repoHook
             ), hostCaller)
             switch result {
             case .success(let summary):
@@ -146,6 +147,8 @@ public final class RemoteSessionGateway {
                 if worktreeId != nil {
                     refreshWorktreeList()
                 }
+            case .needsRepoHookApproval(let hook):
+                send(.worktreeSessionNeedsRepoHookApproval(hook: hook))
             }
         case .createSession(let worktreeId, let agentId, let modelId, let effortId):
             let result = await hostCalls.createSession(RemoteSessionCreation(

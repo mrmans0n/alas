@@ -1050,7 +1050,14 @@ final class AppState {
                     peers: { [weak self] in self?.remotePeers.helloPeers ?? [] },
                     comparisonMode: { [weak self] in self?.config.changes.comparisonMode },
                     consoles: makeNativePeerConsoles(),
-                    hosts: makeNativePeerHosts()
+                    hosts: makeNativePeerHosts(),
+                    supportsRepoHookApproval: { [weak self] serverId in
+                        self?.remotePeers.capabilities[serverId]?
+                            .contains(HostProtocolCapability.repoHooksApprovalV1) == true
+                    },
+                    decideRepoHook: { [weak self] serverId, hook, context in
+                        await self?.decidePeerRepoHook(serverId: serverId, hook: hook, context: context) ?? .cancel
+                    }
                 )
                 nativePeerSessions = client
                 client.start()

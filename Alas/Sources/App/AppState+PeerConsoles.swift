@@ -20,6 +20,17 @@ extension AppState {
         return host
     }
 
+    /// Asks this Mac's user, on the usual approval sheet, about a hook a
+    /// paired Mac holds work for.
+    func decidePeerRepoHook(
+        serverId: String, hook: PeerRepoHook, context: RepoHookApprovalContext
+    ) async -> RepoHookApprovalDecision {
+        let host = remotePeers.helloPeers.first { $0.serverId == serverId }?.name ?? serverId
+        return await repoHookApprovalQueue.requestDecision(
+            hook: hook.repoHook(fromHost: host), projectID: "peer:\(serverId)", context: context
+        )
+    }
+
     /// Opens a terminal for a peer as a hidden, non-activating tab, so the
     /// host user's selection and focus never move. The hidden flag isn't
     /// persisted, so the tab shows once this Mac relaunches. No `resize`:

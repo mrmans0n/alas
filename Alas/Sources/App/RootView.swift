@@ -108,6 +108,8 @@ struct RootView: View {
             )) { _ in
                 if let client = state.nativePeerSessions {
                     NativePeerNewSessionSheet(client: client)
+                        // A peer's worktree hook is approved over this sheet.
+                        .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
                 }
             }
             .sheet(item: $editingWorkspace) { workspace in

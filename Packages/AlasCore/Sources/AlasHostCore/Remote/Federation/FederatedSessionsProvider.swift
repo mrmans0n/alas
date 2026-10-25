@@ -153,7 +153,8 @@ public final class FederatedSessionsProvider {
             case .worktreeList: self = .worktrees
             case .branchList, .branchListFailed: self = .branches
             case .sessionCreated, .createSessionFailed: self = .create
-            case .worktreeSessionCreated, .worktreeSessionCreationFailed: self = .createWorktree
+            case .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval:
+                self = .createWorktree
             default: return nil
             }
         }

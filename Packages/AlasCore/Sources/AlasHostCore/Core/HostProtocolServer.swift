@@ -188,9 +188,10 @@ public final class HostProtocolConnection {
             try await host.projects.remove(projectID: projectID, caller: caller)
             return .done
         case .createWorktree(let projectID, let base, let branch, let destination):
-            let request = WorktreeCreateRequest(
+            var request = WorktreeCreateRequest(
                 projectID: projectID, base: base, branch: branch, destination: URL(fileURLWithPath: destination)
             )
+            request.asksAboutRepoHooks = promptsForRepoHooks
             return .worktree(worktree: try await host.worktrees.create(request, caller: caller))
         case .deleteWorktree(let ref, let lineageID, let branch, let force, let deleteBranchIfMerged, let discardUnsavedEdits):
             let listed = try worktree(ref)
