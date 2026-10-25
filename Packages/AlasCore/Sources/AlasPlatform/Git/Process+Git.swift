@@ -21,6 +21,27 @@ public enum ProcessError: Error, Sendable {
     case nonZeroExit(Int32, String)
 }
 
+extension ProcessError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .launchFailed(let reason):
+            "A process could not start: \(reason)"
+        case .timedOut(let executable, let args, let seconds):
+            "\(Self.command(executable, args)) took longer than \(Int(seconds)) seconds and was stopped."
+        case .nonZeroExit(let code, let stderr):
+            stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "A process exited with status \(code)."
+                : stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// `git` for `/usr/bin/env git ...`, else the executable's name.
+    private static func command(_ executable: String, _ args: [String]) -> String {
+        let name = (executable as NSString).lastPathComponent
+        return name == "env" ? args.first ?? name : name
+    }
+}
+
 extension Process {
     /// Hard cap on how long a child process may run before we SIGTERM it.
     /// Macos-26 CI exposed several pathological hangs in `git` (credential

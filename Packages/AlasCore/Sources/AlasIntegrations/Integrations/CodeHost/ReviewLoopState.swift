@@ -238,16 +238,7 @@ public final class ReviewLoopState {
             return
         }
 
-        let supportedKinds = providerRegistry.supportedKinds
-        let preferredRemoteName = CodeHostRemoteDetector.preferredRemoteName(
-            forBaseBranch: baseLocal.baseBranch,
-            remotes: remotes
-        )
-        guard let remote = CodeHostRemoteDetector.detect(
-            from: remotes,
-            supportedKinds: supportedKinds.isEmpty ? nil : supportedKinds,
-            preferredRemoteName: preferredRemoteName
-        ) else {
+        guard let remote = detectRemote(baseBranch: baseLocal.baseBranch, remotes: remotes) else {
             guard isCurrentRefresh(generation) else { return }
             snapshot = ReviewLoopSnapshot(
                 local: baseLocal,
@@ -555,6 +546,32 @@ public final class ReviewLoopState {
             lastError = Self.describe(error)
             return nil
         }
+    }
+
+    /// What `refresh` knows before it asks the code host: the detected
+    /// remote and the branch's head remote, and no review request. Reads
+    /// nothing and keeps nothing, so it is the push target without a network
+    /// call or a refresh in flight.
+    public func snapshotWithoutCodeHost(local: ReviewLoopLocalState, remotes: [GitRemote]) -> ReviewLoopSnapshot {
+        let remote = detectRemote(baseBranch: local.baseBranch, remotes: remotes)
+        return ReviewLoopSnapshot(
+            local: remote.map { Self.withHeadRemote(local, remotes: remotes, baseRemote: $0) } ?? local,
+            remote: remote,
+            reviewRequest: nil,
+            providerAvailable: false,
+            providerAuthenticated: false,
+            providerCapabilities: .readOnly,
+            errorMessage: nil
+        )
+    }
+
+    private func detectRemote(baseBranch: String, remotes: [GitRemote]) -> CodeHostRemote? {
+        let supportedKinds = providerRegistry.supportedKinds
+        return CodeHostRemoteDetector.detect(
+            from: remotes,
+            supportedKinds: supportedKinds.isEmpty ? nil : supportedKinds,
+            preferredRemoteName: CodeHostRemoteDetector.preferredRemoteName(forBaseBranch: baseBranch, remotes: remotes)
+        )
     }
 
     private func isCurrentRefresh(_ generation: Int) -> Bool {

@@ -593,7 +593,9 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["status", "--porcelain"], cwd: real).stdout == porcelain)
     }
 
-    /// The Mac learns why a pull stopped, and the host is left mid-rebase to resolve there.
+    /// The Mac learns why a pull stopped, and the host is left mid-rebase to
+    /// resolve there: relisted, the worktree is detached, and a commit or push
+    /// on it is refused until the rebase is finished.
     @Test func pullStoppedOnConflictsSaysToResolveOnTheHost() async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
@@ -612,6 +614,15 @@ struct HostProtocolServerTests {
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .pull))
             == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them on the host.")))
         #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
+
+        try await fixture.host.worktrees.refresh(projectID: fixture.projectID, caller: .app)
+        let branch = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first).branch
+        #expect(branch == "(detached)")
+        for change in [HostWorktreeChange.commit(subject: "Mid-rebase", body: "", amend: true), .push(forceWithLease: true)] {
+            #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: .failed(
+                message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first."
+            )))
+        }
     }
 
     /// A branch with no upstream is pushed as the review pill pushes it,

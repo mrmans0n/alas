@@ -26,6 +26,14 @@ extension AlasCoreContext {
         let root = worktree.path
         let git = GitService()
         switch change {
+        case .commit, .push, .pull:
+            if try await git.mergeState(worktreePath: root) != nil {
+                throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first.")
+            }
+        case .stage, .unstage, .discard, .fetch:
+            break
+        }
+        switch change {
         case .stage(let paths):
             try Self.refuseOutside(paths, of: root)
             try await git.stageAll(worktreePath: root, files: paths)
@@ -50,10 +58,12 @@ extension AlasCoreContext {
             }
             _ = try await git.commit(worktreePath: root, subject: subject, body: body, amend: amend)
         case .push(let forceWithLease):
-            await refreshFollowedReviewStatus(worktree.id)
-            guard let snapshot = reviewLoops[worktree.id]?.snapshot else {
+            // Read from git alone: the code host is the refresh after the gate's.
+            let loop = reviewLoop(for: worktree, baseBranch: environment.configuration().worktrees.baseBranch)
+            guard let (local, remotes) = try? await Self.localReviewState(at: root, baseBranch: loop.currentBaseBranch) else {
                 throw HostError.failed(message: "The branch's push target could not be read.")
             }
+            let snapshot = loop.snapshotWithoutCodeHost(local: local, remotes: remotes)
             let result = try await Process.git(snapshot.pushArguments(forceWithLease: forceWithLease), cwd: root)
             guard result.exitCode == 0 else { throw HostError.failed(message: result.pushFailureMessage) }
         case .pull:
