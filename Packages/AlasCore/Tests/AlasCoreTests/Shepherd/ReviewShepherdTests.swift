@@ -113,6 +113,22 @@ struct ReviewShepherdTests {
         #expect(delivered.isEmpty)
     }
 
+    @Test func bindingTheSessionElsewhereKeepsItsRecordInAWorktreeNotServedHere() async {
+        let request = F.request(threads: [])
+        let shepherd = makeShepherd(request: request, deliverPrompt: { _, _ in .delivered }, servesWorktree: { $0 != "wt-app" })
+        let unserved = await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-app", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+
+        await shepherd.bind(
+            sessionID: "session-1", worktreeID: "wt-1", request: request, baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+
+        #expect(shepherd.records[unserved.id] == unserved)
+    }
+
     @Test func turnEndingWhileTheFixPromptIsDeliveredKeepsTheFix() async throws {
         let request = F.request(threads: [F.trustedThread])
         let gate = DeliveryGate()
