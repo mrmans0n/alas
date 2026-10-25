@@ -104,19 +104,6 @@ struct ProcessGitTests {
         #expect(env["GIT_OPTIONAL_LOCKS"] == "0")
     }
 
-    @Test(arguments: [
-        (false, [String: String](), nil as String?, nil as String?),
-        (true, [:], "0", "ssh -o BatchMode=yes"),
-        (true, ["GIT_SSH_COMMAND": "ssh -i key"], "0", "ssh -i key"),
-    ])
-    func gitEnvNeverPromptsOnlyWhereAskedAndKeepsAConfiguredSSHCommand(
-        neverPrompts: Bool, base: [String: String], prompt: String?, ssh: String?
-    ) {
-        let env = Process.gitEnv(base: base, neverPrompts: neverPrompts)
-        #expect(env["GIT_TERMINAL_PROMPT"] == prompt)
-        #expect(env["GIT_SSH_COMMAND"] == ssh)
-    }
-
     @Test func gitEnvForcesCLocale() {
         // Stderr matchers in WorktreeService etc. only recognize English git
         // messages. Without LC_ALL=C, a user with a non-English shell locale

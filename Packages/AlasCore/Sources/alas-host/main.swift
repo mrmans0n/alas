@@ -2,6 +2,10 @@ import AlasCore
 @_spi(AppHost) import AlasHostCore
 import Foundation
 
+// First, before anything can spawn git: the host has no terminal to answer
+// a prompt, and this static is read from any thread.
+Process.neverPromptsForGit = true
+
 // Serves the host protocol for one data directory, without the app: the
 // profile's directory (`ALAS_APP_SUPPORT_DIR`, else the everyday one), on
 // the profile's local socket.
@@ -204,7 +208,6 @@ do {
 }
 host.serveCLI()
 
-Process.neverPromptsForGit = true
 let protocolServer = HostProtocolServer(host: host)
 guard let socket = HostSocketServer(server: protocolServer) else {
     fail("cannot serve \(HostSocketServer.defaultPath()): another host serves it, or its directory is not this user's own")
