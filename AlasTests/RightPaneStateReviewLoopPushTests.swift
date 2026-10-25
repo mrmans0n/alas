@@ -256,7 +256,7 @@ struct RightPaneStateReviewLoopPushTests {
     @Test func normalPushArgumentsDoNotForce() {
         let snapshot = Self.makeSnapshot()
 
-        let args = RightPaneState.reviewLoopPushArguments(snapshot: snapshot, forceWithLease: false)
+        let args = snapshot.pushArguments(forceWithLease: false)
 
         #expect(args == ["push", "-u", "origin", "feature/review-loop"])
     }
@@ -264,7 +264,7 @@ struct RightPaneStateReviewLoopPushTests {
     @Test func pushArgumentsPreferUpstreamRemote() {
         let snapshot = Self.makeSnapshot(upstreamRemoteName: "fork")
 
-        let args = RightPaneState.reviewLoopPushArguments(snapshot: snapshot, forceWithLease: false)
+        let args = snapshot.pushArguments(forceWithLease: false)
 
         #expect(args == ["push", "-u", "fork", "feature/review-loop"])
     }
@@ -275,7 +275,7 @@ struct RightPaneStateReviewLoopPushTests {
             upstreamBranchName: "review/foo"
         )
 
-        let args = RightPaneState.reviewLoopPushArguments(snapshot: snapshot, forceWithLease: false)
+        let args = snapshot.pushArguments(forceWithLease: false)
 
         #expect(args == ["push", "-u", "fork", "HEAD:review/foo"])
     }
@@ -287,7 +287,7 @@ struct RightPaneStateReviewLoopPushTests {
             headRemoteName: "origin"
         )
 
-        let args = RightPaneState.reviewLoopPushArguments(snapshot: snapshot, forceWithLease: false)
+        let args = snapshot.pushArguments(forceWithLease: false)
 
         #expect(args == ["push", "-u", "origin", "feature/review-loop"])
     }
@@ -362,7 +362,7 @@ struct RightPaneStateReviewLoopPushTests {
     @Test func forcePushArgumentsUseForceWithLease() {
         let snapshot = Self.makeSnapshot()
 
-        let args = RightPaneState.reviewLoopPushArguments(snapshot: snapshot, forceWithLease: true)
+        let args = snapshot.pushArguments(forceWithLease: true)
 
         #expect(args == ["push", "--force-with-lease", "-u", "origin", "feature/review-loop"])
     }

@@ -106,6 +106,51 @@ public struct ChangedFile: Identifiable, Equatable, Codable, Sendable {
     }
 }
 
+extension ChangedFile {
+    /// The paths git must touch to act on this change. A staged rename names
+    /// its original path too, or restoring only the new side would leave the
+    /// deletion of the old one staged.
+    public var gitPaths: [String] {
+        if status == "R", let from = renameFrom, !from.isEmpty {
+            return [path, from]
+        }
+        return [path]
+    }
+
+    /// Paths to discard for the given file path. Expands staged renames into
+    /// both new and original paths so the deletion of the old side is also
+    /// restored. Returns `[]` if the path is not in `changes` (stale request).
+    public static func discardPaths(forFileAt path: String, in changes: [ChangedFile]) -> [String] {
+        guard let file = changes.first(where: { $0.path == path }) else { return [] }
+        return file.gitPaths
+    }
+
+    /// Paths to discard for every change under a folder (recursive). Folders
+    /// in the Changes tree are virtual — built from changed paths only — so
+    /// a prefix match against `"<folder>/"` is exhaustive. Staged renames
+    /// under the folder include their original path even if the origin lives
+    /// outside the folder (rare but possible after a refactor).
+    public static func discardPaths(forFolderAt folder: String, in changes: [ChangedFile]) -> [String] {
+        let prefix = folder.hasSuffix("/") ? folder : folder + "/"
+        let matching = changes.filter { $0.path.hasPrefix(prefix) }
+        return matching.flatMap(\.gitPaths)
+    }
+
+    /// Every changed path in the worktree (staged + unstaged + untracked),
+    /// with staged renames expanded.
+    public static func discardPaths(forAllIn changes: [ChangedFile]) -> [String] {
+        // Deduplicate while preserving first-seen order.
+        var seen = Set<String>()
+        var out: [String] = []
+        for file in changes {
+            for p in file.gitPaths where seen.insert(p).inserted {
+                out.append(p)
+            }
+        }
+        return out
+    }
+}
+
 public enum ChangeStage: String, Codable, Sendable {
     case staged
     case unstaged

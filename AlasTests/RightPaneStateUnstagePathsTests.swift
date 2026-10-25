@@ -11,7 +11,7 @@ struct RightPaneStateUnstagePathsTests {
             add: 1, del: 0,
             renameFrom: nil
         )
-        #expect(RightPaneState.unstagePaths(for: file) == ["a.txt"])
+        #expect(file.gitPaths == ["a.txt"])
     }
 
     @Test func renamedFileSendsBothPaths() {
@@ -24,7 +24,7 @@ struct RightPaneStateUnstagePathsTests {
             add: 0, del: 0,
             renameFrom: "a.txt"
         )
-        #expect(RightPaneState.unstagePaths(for: file) == ["b.txt", "a.txt"])
+        #expect(file.gitPaths == ["b.txt", "a.txt"])
     }
 
     @Test func renameWithoutRenameFromIsTreatedAsSinglePath() {
@@ -37,6 +37,6 @@ struct RightPaneStateUnstagePathsTests {
             add: 0, del: 0,
             renameFrom: nil
         )
-        #expect(RightPaneState.unstagePaths(for: file) == ["b.txt"])
+        #expect(file.gitPaths == ["b.txt"])
     }
 }
