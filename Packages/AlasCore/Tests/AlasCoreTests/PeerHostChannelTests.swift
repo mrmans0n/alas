@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import AlasCore
-import AlasHostCore
+@testable import AlasHostCore
 
 @MainActor
 struct PeerHostChannelTests {
@@ -59,7 +59,7 @@ struct PeerHostChannelTests {
         channel.receive(.response(id: 1, result: .snapshot(snapshot: snapshot([feature]))))
         try await eventually { @MainActor in sent.messages.count == 2 }
         #expect(channel.state?.worktrees == [feature])
-        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice"]))
+        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice"]))
         #expect(!channel.isSubscribed)
         #expect(changes == 1)
 
@@ -90,6 +90,23 @@ struct PeerHostChannelTests {
         channel.receive(.events(events: [.notice(notice)], cursor: cursor))
         #expect(got == [notice])
         #expect(channel.state == before)
+
+        var gotWorktree: [HostWorktreeNotice] = []
+        channel.onWorktreeNotice = { gotWorktree.append($0) }
+        let worktreeNotice = HostWorktreeNotice(id: UUID(), worktreeID: "w", title: nil, body: "Tests failed")
+        channel.receive(.events(events: [.worktreeNotice(worktreeNotice)], cursor: cursor))
+        #expect(gotWorktree == [worktreeNotice])
+        #expect(channel.state == before)
+
+        var summary = HostSessionSummary(
+            owner: .worktree("w"), id: "s", agentId: "codex", title: "T", remoteSessionId: "r",
+            createdAt: 1, updatedAt: 2, lastOpenedAt: 3, streamingState: .idle, isWriter: true
+        )
+        summary.shepherd = HostSessionShepherd(badge: "fixing", number: "#7", tooltip: "t")
+        channel.receive(.events(events: [.sessionChanged(summary)], cursor: cursor))
+        #expect(channel.state?.shepherds["s"] == summary.shepherd)
+        channel.receive(.events(events: [.sessionRemoved(owner: .worktree("w"), id: "s")], cursor: cursor))
+        #expect(channel.state?.shepherds["s"] == nil)
 
         // Batches of the replaced subscription keep coming until the new one starts.
         var deleting = feature
