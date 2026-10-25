@@ -167,7 +167,7 @@ public enum CommitMessageSuggestionPolicy {
 
     // MARK: Input shaping
 
-    public enum FilePriority: Int, Comparable, Hashable {
+    public enum FilePriority: Int, Comparable, Hashable, Sendable {
         case source
         case docsOrConfig
         case noisy
@@ -175,7 +175,7 @@ public enum CommitMessageSuggestionPolicy {
         public static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
     }
 
-    public struct FileDiff: Equatable {
+    public struct FileDiff: Equatable, Sendable {
         public let path: String
         public let header: String
         public let hunks: [String]
