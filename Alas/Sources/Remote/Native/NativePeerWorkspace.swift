@@ -510,3 +510,39 @@ struct NativePeerReviewGitClientError: LocalizedError {
 
     static let unavailable = NativePeerReviewGitClientError(message: "Not available from this Mac yet.")
 }
+
+/// The host's provider diff, for `ReviewRequestDiffLoader`. Runs no gh or
+/// glab: everything else is unsupported, so image sides fail, as for the
+/// peer's draft reviews.
+struct NativePeerProviderDiff: CodeHostProvider {
+    let kind: CodeHostKind
+    let diff: String
+
+    func reviewDiff(remote _: CodeHostRemote, request _: ReviewRequest, cwd _: URL) async throws -> String { diff }
+
+    func isAvailable(cwd _: URL) async -> Bool { false }
+    func isAuthenticated(remote _: CodeHostRemote, cwd _: URL) async -> Bool { false }
+
+    func currentReviewRequest(
+        remote _: CodeHostRemote, branch _: String, headOwner _: String?, baseBranch _: String, cwd _: URL
+    ) async throws -> ReviewRequest? {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func createReviewRequest(
+        remote _: CodeHostRemote, branch _: String, headOwner _: String?, baseBranch _: String,
+        title _: String, body _: String, isDraft _: Bool, cwd _: URL
+    ) async throws -> URL {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func checks(remote _: CodeHostRemote, request _: ReviewRequest, cwd _: URL) async throws -> [ReviewCheck] {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+
+    func rerunFailedChecks(
+        remote _: CodeHostRemote, branch _: String, headSHA _: String, request _: ReviewRequest?, cwd _: URL
+    ) async throws {
+        throw CodeHostProviderError.unsupportedProvider(kind)
+    }
+}
