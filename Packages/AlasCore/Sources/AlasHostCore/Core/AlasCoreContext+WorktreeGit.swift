@@ -19,6 +19,11 @@ extension AlasCoreContext {
             guard let listed = projects.worktrees(projectId: worktree.projectId).first(where: { $0.id == worktree.id }),
                   listed.branch == branch
             else { throw changed }
+            // Archived while the request waited on the gate: refused as the
+            // endpoint refuses one archived before it.
+            guard !projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
+                throw HostError.notFound(what: "worktree \(listed.path.path) in project \(listed.projectId)")
+            }
             // A headless host watches no HEAD, so the listing can lag a
             // checkout made on the host: git has the last word.
             let head = try await GitService().currentBranch(worktreePath: listed.path)

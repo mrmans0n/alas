@@ -494,7 +494,8 @@ struct HostProtocolServerTests {
     }
 
     enum Refusal: CaseIterable {
-        case branchChanged, checkedOutSinceListed, staleDiscard, nothingStaged, tooManyPaths, pendingCheckpoint, appHost, hidden
+        case branchChanged, checkedOutSinceListed, staleDiscard, nothingStaged, tooManyPaths, pendingCheckpoint, appHost, hidden,
+            archivedWhileQueued
     }
 
     @Test(arguments: Refusal.allCases)
@@ -539,6 +540,14 @@ struct HostProtocolServerTests {
         case .hidden:
             fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: repo, hidden: true)
             expected = .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")
+        case .archivedWhileQueued:
+            // Past the endpoint's check, then archived while waiting on the gate.
+            let listed = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+            fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: repo, hidden: true)
+            await #expect(throws: HostError.notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")) {
+                try await fixture.host.worktrees.mutate(listed, branch: branch, change: change, caller: .app)
+            }
+            return
         }
 
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: expected))
