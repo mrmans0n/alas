@@ -32,6 +32,10 @@ public struct WorktreeCreateRequest: Sendable {
     /// The app asks for hook approval, so a cancelled one fails the creation
     /// for a retry. Without anyone to ask, the scripts are skipped instead.
     public var cancelledHookApprovalFails = false
+    /// Whether the host's own approval sheet may be shown. Off for work a
+    /// peer starts: nobody at this Mac is waiting on it, so unapproved hooks
+    /// are skipped.
+    public var asksAboutRepoHooks = true
 
     public init(projectID: String, base: String, branch: String, destination: URL) {
         self.projectID = projectID
@@ -190,7 +194,8 @@ extension AlasCoreContext {
                 try await runWorktreeCreateScripts(
                     project: project,
                     worktree: created,
-                    includeUserStartupScript: request.runsStartupScripts
+                    includeUserStartupScript: request.runsStartupScripts,
+                    prompter: request.asksAboutRepoHooks ? nil : .skipping
                 )
             } catch RepoHookPreflightError.cancelled where !request.cancelledHookApprovalFails {}
             guard projects.projects.contains(where: { $0.id == request.projectID }) else { return .projectRemoved }

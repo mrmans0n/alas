@@ -128,14 +128,16 @@ extension AlasCoreContext {
     func runWorktreeCreateScripts(
         project: ProjectConfig,
         worktree: Worktree,
-        includeUserStartupScript: Bool = true
+        includeUserStartupScript: Bool = true,
+        prompter: RepoHookPrompter? = nil
     ) async throws {
         let repoScript = try await preparedRepoHook(
             event: .worktreeCreate,
             project: project,
             worktree: worktree,
             context: .worktreeCreate,
-            includeUserStartupScript: includeUserStartupScript
+            includeUserStartupScript: includeUserStartupScript,
+            prompter: prompter
         )
         let script = StartupScriptResolver.worktreeCreateScript(
             global: environment.globalTerminalConfig(),

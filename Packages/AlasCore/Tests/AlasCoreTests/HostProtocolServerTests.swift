@@ -703,6 +703,32 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["rev-parse", "--abbrev-ref", "@{u}"], cwd: repo).stdout == "origin/main\n")
     }
 
+    /// A peer is never the person at this Mac: its creation must not reach the
+    /// app's approval sheet, even when the host has one.
+    @Test func aPeersWorktreeCreationNeverAsksTheHost() async throws {
+        let environment = AskingEnvironment()
+        let fixture = try await RepoFixture(environment: environment)
+        defer { fixture.tearDown() }
+        _ = try await fixture.commitHook(.worktreeCreate, "touch hook-ran\n")
+        // Keeps the new worktree inside the fixture, not under the real home.
+        fixture.core.worktreeDestinationPreparer = { [root = fixture.root] _, destination in
+            root.appendingPathComponent(destination.lastPathComponent)
+        }
+        fixture.host.remoteSessionCreator = { _ in .success(RemoteSessionSummary(id: "s", title: "", agentId: "a", status: "idle", canDrive: true)) }
+
+        let result = await fixture.host.remoteCreateWorktreeSession(
+            RemoteWorktreeSessionCreation(projectID: fixture.projectID, base: "main", branch: "feature", agentID: "a"),
+            caller: .remotePeer(deviceID: "d"))
+
+        guard case .success = result else {
+            Issue.record("\(result)")
+            return
+        }
+        let created = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first { $0.branch == "feature" })
+        #expect(environment.asks == 0)
+        #expect(!FileManager.default.fileExists(atPath: created.path.appendingPathComponent("hook-ran").path))
+    }
+
     /// A host over a real repository, persisting to a scratch directory,
     /// whose sessions talk to a scripted agent.
     @MainActor
@@ -756,6 +782,17 @@ struct HostProtocolServerTests {
                 _ = try await Process.git(["config", key, value], cwd: worktree.path)
             }
             return (worktree.path, WorktreeRef(projectID: projectID, path: worktree.path.path))
+        }
+
+        /// Commits `.alas/hooks/<event>.sh` to the main checkout; returns its trust hash.
+        func commitHook(_ event: RepoHookEvent, _ script: String) async throws -> String {
+            let (repo, _) = try await mainWorktree()
+            let file = repo.appendingPathComponent(event.relativePath)
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(script.utf8).write(to: file)
+            _ = try await Process.git(["add", event.relativePath], cwd: repo)
+            _ = try await Process.git(["commit", "-q", "-m", "Add hook"], cwd: repo)
+            return RepoHookTrust.hash(event: event, bytes: Data(script.utf8))
         }
 
         func request(_ request: HostRequest) async throws -> HostResponse {
@@ -914,4 +951,22 @@ struct HostProtocolServerTests {
     }
     func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { openConsoleIsHidden }
     func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool { blocksForCheckpoint }
+}
+
+/// A host with an approval sheet that approves whatever it is asked.
+@MainActor private final class AskingEnvironment: AlasHostEnvironment {
+    var asks = 0
+    var repoHookPrompter: RepoHookPrompter {
+        RepoHookPrompter(
+            decide: { [self] _, _, _ in
+                asks += 1
+                return .approve
+            },
+            decideFailure: { [self] _, _ in
+                asks += 1
+                return .skip
+            }
+        )
+    }
+    func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool { true }
 }

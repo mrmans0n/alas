@@ -115,7 +115,7 @@ extension AlasHost {
         creation.destinationAlreadyPrepared = true
         creation.fetchesBaseFirst = core.environment.configuration().worktrees.fetchRemoteBeforeCreate
         creation.launchSurface = .delegated
-        creation.cancelledHookApprovalFails = true
+        creation.asksAboutRepoHooks = false
         let worktree: Worktree
         do {
             worktree = try await worktrees.create(creation, caller: caller)
