@@ -133,6 +133,12 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// A listed worktree's branch sync and pull request status, read again
     /// first (`host.worktrees.git.v1`).
     case reviewStatus(worktree: WorktreeRef)
+    /// A listed worktree's draft reviews, newest first (`host.reviews.v1`).
+    case listReviews(worktree: WorktreeRef)
+    /// One of them, `sessionID` as listed, with every comment (`host.reviews.v1`).
+    case readReview(worktree: WorktreeRef, sessionID: String)
+    /// Changes a comment of review `sessionID` (`host.reviews.v1`).
+    case mutateReview(worktree: WorktreeRef, sessionID: String, mutation: HostReviewMutation)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -151,6 +157,64 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
     case commitFiles(sha: String)
     case commitDiff(sha: String, path: String)
     case file(path: String)
+}
+
+/// A draft review as a worktree's Reviews list shows it.
+public struct HostReviewSummary: Codable, Equatable, Sendable {
+    /// Synthesized, never saved, for a local-changes review with no record.
+    public var record: ReviewSessionRecord
+    public var openCommentCount: Int
+    public var sessionID: String { record.target.draftSessionID.rawValue }
+
+    public init(record: ReviewSessionRecord, openCommentCount: Int) {
+        self.record = record
+        self.openCommentCount = openCommentCount
+    }
+}
+
+/// A draft review with its comments, those on files that no longer differ included.
+public struct HostReview: Codable, Equatable, Sendable {
+    public var summary: HostReviewSummary
+    public var comments: [ReviewDraftComment]
+
+    public init(summary: HostReviewSummary, comments: [ReviewDraftComment]) {
+        self.summary = summary
+        self.comments = comments
+    }
+
+    /// Leaves out a comment a newer host sends in a shape this Mac can't read.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        summary = try container.decode(HostReviewSummary.self, forKey: .summary)
+        comments = try container.decode([Lossy<ReviewDraftComment>].self, forKey: .comments).compactMap(\.value)
+    }
+}
+
+/// One change to a review's comments, as a paired Mac files it.
+public enum HostReviewMutation: Codable, Equatable, Sendable {
+    case add(fileID: DiffReviewFileID, path: String, originalPath: String?, anchor: ReviewDraftCommentAnchor, body: String)
+    case edit(commentID: String, body: String)
+    case delete(commentID: String)
+    case resolve(commentID: String)
+    case dismiss(commentID: String)
+}
+
+/// An element that decodes as nil when it is in a shape this side can't read.
+private struct Lossy<Value: Decodable>: Decodable {
+    let value: Value?
+
+    init(from decoder: Decoder) throws {
+        value = try? Value(from: decoder)
+    }
+}
+
+extension KeyedDecodingContainer {
+    /// Picked over the generic `decode` by `HostResponse.reviews`'s
+    /// synthesized decoding: a review of a kind a newer host added is left
+    /// out, not the whole list.
+    func decode(_ type: [HostReviewSummary].Type, forKey key: Key) throws -> [HostReviewSummary] {
+        try decode([Lossy<HostReviewSummary>].self, forKey: key).compactMap(\.value)
+    }
 }
 
 /// A run script as a worktree's Run tab lists it.
@@ -238,6 +302,10 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case commitMessageInput(input: CommitMessageSuggestionInput)
     /// The answer to `reviewStatus`; nil when the host could not read it.
     case reviewStatus(snapshot: ReviewLoopSnapshot?)
+    /// The answer to `listReviews`.
+    case reviews(reviews: [HostReviewSummary])
+    /// The answer to `readReview`.
+    case review(review: HostReview)
     case failure(error: HostError)
 }
 

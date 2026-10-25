@@ -15,6 +15,19 @@ struct HostProtocolTests {
         createdAt: 1, updatedAt: 2, lastOpenedAt: 3, streamingState: .awaitingPermission, isWriter: true
     )
     private static let ref = WorktreeRef(projectID: "p", path: "/srv/feature")
+    private static let review: HostReview = {
+        let target = ReviewSessionTarget.localChanges(worktreeID: worktree.id, repositoryPath: worktreePath, scope: .all)
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        return HostReview(
+            summary: HostReviewSummary(
+                record: ReviewSessionRecord(id: target.id, target: target, createdAt: date, updatedAt: date), openCommentCount: 1
+            ),
+            comments: [ReviewDraftComment(
+                id: "c", sessionID: target.draftSessionID, fileID: DiffReviewFileID(namespace: "unstaged", path: "a.txt"),
+                path: "a.txt", side: .new, startLine: 1, bodyMarkdown: "Why?", state: .active, createdAt: date, updatedAt: date
+            )]
+        )
+    }()
 
     /// Every kind of message survives the wire unchanged.
     @Test(arguments: [
@@ -44,6 +57,11 @@ struct HostProtocolTests {
         HostClientMessage(id: 20, request: .readWorktree(worktree: ref, read: .fileDiff(path: "a.swift", stage: "unstaged", comparisonMode: nil))),
         HostClientMessage(id: 21, request: .listRunScripts(worktree: ref)),
         HostClientMessage(id: 22, request: .restartRun(scriptKey: "repo:dev.sh", worktree: ref)),
+        HostClientMessage(id: 23, request: .listReviews(worktree: ref)),
+        HostClientMessage(id: 24, request: .mutateReview(worktree: ref, sessionID: "s", mutation: .add(
+            fileID: DiffReviewFileID(namespace: "unstaged", path: "a.txt"), path: "a.txt", originalPath: nil,
+            anchor: .line(side: .new, startLine: 1, endLine: 2, selectedText: nil), body: "Why?"
+        ))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -70,6 +88,8 @@ struct HostProtocolTests {
         .response(id: 11, result: .failure(error: .worktreeArchive(refusal: .unsavedEdits))),
         .response(id: 12, result: .failure(error: .worktreeDeletion(refusal: .ownedByWorkspaceCheckout("Owned.")))),
         .response(id: 13, result: .worktreeRead(reply: .fileContents(sessionId: "/srv/feature", path: "a.txt", text: "hi", truncated: false))),
+        .response(id: 15, result: .reviews(reviews: [review.summary])),
+        .response(id: 16, result: .review(review: review)),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
         )])),
@@ -98,6 +118,16 @@ struct HostProtocolTests {
     ])
     func serverMessagesRoundTrip(_ message: HostServerMessage) throws {
         #expect(try JSONDecoder().decode(HostServerMessage.self, from: JSONEncoder().encode(message)) == message)
+    }
+
+    /// A newer host's review of a kind this Mac can't read is left out, not the whole list.
+    @Test func aReviewListDecodesWithoutTheReviewsThisMacCannotRead() throws {
+        let message = HostServerMessage.response(id: 1, result: .reviews(reviews: [Self.review.summary, Self.review.summary]))
+        var json = try #require(String(data: JSONEncoder().encode(message), encoding: .utf8))
+        let kind = try #require(json.range(of: #""kind":"local-changes""#))
+        json.replaceSubrange(kind, with: #""kind":"stacked-diff""#)
+        #expect(try JSONDecoder().decode(HostServerMessage.self, from: Data(json.utf8))
+            == .response(id: 1, result: .reviews(reviews: [Self.review.summary])))
     }
 
     /// The encoding is the protocol: a change here breaks every client.
@@ -175,6 +205,7 @@ struct HostProtocolTests {
         #expect(caps == console + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
         // An app host keeps git to the user at it; only a headless host adds it.
         #expect(!caps.contains(HostProtocolCapability.worktreesGitV1))
+        #expect(!caps.contains(HostProtocolCapability.reviewsV1))
     }
 
     /// `peers remove` takes an id or server id as is, and a name only when
