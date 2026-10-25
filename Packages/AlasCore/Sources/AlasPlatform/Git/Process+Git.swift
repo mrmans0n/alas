@@ -164,6 +164,10 @@ extension Process {
     /// Set by alas-host at startup: its git children must never prompt.
     nonisolated(unsafe) public static var neverPromptsForGit = false
 
+    /// Set while alas-host acts on a paired client's paths: each names one
+    /// path, never a glob or pathspec magic.
+    @TaskLocal public static var gitLiteralPathspecs = false
+
     /// Builds the environment for every git invocation Alas spawns.
     ///
     /// Starts from the parent process env (so `PATH`, `HOME`, etc. work) and
@@ -223,7 +227,7 @@ extension Process {
             try validateWorkingDirectory(cwd)
         }
         let invocation = GitInvocation.build(
-            gitArgs: args,
+            gitArgs: gitLiteralPathspecs ? ["--literal-pathspecs"] + args : args,
             cwd: cwd,
             host: host
         )

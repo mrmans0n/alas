@@ -493,7 +493,7 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["rev-list", "--count", "HEAD"], cwd: repo).stdout == "2\n")
     }
 
-    enum Refusal: CaseIterable { case branchChanged, staleDiscard, pendingCheckpoint, appHost, hidden }
+    enum Refusal: CaseIterable { case branchChanged, staleDiscard, nothingStaged, pendingCheckpoint, appHost, hidden }
 
     @Test(arguments: Refusal.allCases)
     func gitActionsAreRefused(_ refusal: Refusal) async throws {
@@ -515,6 +515,9 @@ struct HostProtocolServerTests {
         case .staleDiscard:
             change = .discard(paths: ["missing.txt"])
             expected = .failed(message: "These changes are no longer in the worktree.")
+        case .nothingStaged:
+            change = .commit(subject: "Empty", body: "", amend: false)
+            expected = .failed(message: "Nothing is staged to commit.")
         case .pendingCheckpoint:
             expected = .failed(message: "A checkpoint restore is pending on the host; finish it there first.")
         case .appHost:
@@ -533,9 +536,16 @@ struct HostProtocolServerTests {
     }
 
     /// Paths come from the client: the host acts only inside the worktree,
-    /// never through `..`, an absolute path, or a symlink out of it.
-    @Test(arguments: ["../outside/inside.txt", "/etc/hosts", "link/inside.txt"])
-    func gitActionsRefusePathsOutsideTheWorktree(_ path: String) async throws {
+    /// never through `..`, an absolute path, or a symlink out of it, and
+    /// never on an empty path or one git would cut at a NUL.
+    @Test(arguments: [
+        ("../outside/inside.txt", "The path ../outside/inside.txt is outside the worktree."),
+        ("/etc/hosts", "The path /etc/hosts is outside the worktree."),
+        ("link/inside.txt", "The path link/inside.txt is outside the worktree."),
+        ("", "A path is empty or holds a NUL character."),
+        ("inside\0.txt", "A path is empty or holds a NUL character."),
+    ])
+    func gitActionsRefusePathsOutsideTheWorktree(_ path: String, reason: String) async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
         let (repo, ref) = try await fixture.mainWorktree()
@@ -545,8 +555,42 @@ struct HostProtocolServerTests {
         try FileManager.default.createSymbolicLink(at: repo.appendingPathComponent("link"), withDestinationURL: outside)
 
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .discard(paths: [path])))
-            == .failure(error: .invalidRequest(reason: "The path \(path) is outside the worktree.")))
+            == .failure(error: .invalidRequest(reason: reason)))
         #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("inside.txt").path))
+    }
+
+    /// A client path is one path: a glob or pathspec magic matches nothing else.
+    @Test(arguments: ["*.txt", ":(glob)*.txt"])
+    func gitActionsTakePathsLiterally(_ path: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .stage(paths: [path]))) != .done)
+        #expect(try await Process.git(["diff", "--cached", "--name-only"], cwd: repo).stdout == "")
+    }
+
+    /// A file in a folder that is gone is still inside a worktree reached
+    /// through a symlinked path.
+    @Test(arguments: [
+        (HostWorktreeChange.unstage(paths: [".alas/scripts/hello.sh"]), " D .alas/scripts/hello.sh\n"),
+        (HostWorktreeChange.discard(paths: [".alas/scripts/hello.sh"]), ""),
+    ])
+    func deletedFoldersOfASymlinkedWorktreeAreInside(change: HostWorktreeChange, porcelain: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let real = fixture.root.appendingPathComponent("real")
+        let alias = fixture.root.appendingPathComponent("alias")
+        try GitTemplate.repository(at: real)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+        let projectID = try await fixture.host.projects.add(path: alias, displayName: "alias", icon: .default(), caller: .app).id
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: projectID).first)
+        #expect(try await Process.git(["rm", "-r", "-q", ".alas"], cwd: real).exitCode == 0)
+        let ref = WorktreeRef(projectID: projectID, path: worktree.path.path)
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change)) == .done)
+        #expect(try await Process.git(["status", "--porcelain"], cwd: real).stdout == porcelain)
     }
 
     /// A host over a real repository, persisting to a scratch directory,
