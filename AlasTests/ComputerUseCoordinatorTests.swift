@@ -691,6 +691,18 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.inputs.isEmpty)
     }
 
+    /// A blocked app is told as blocked even while a password prompt shows in it.
+    @Test func aBlockedAppIsRefusedAsBlockedOverAPrompt() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.credentialPrompts = { pids in Self.showing(pids) }
+        let f = Self.fixture(system: system, recorder: recorder)
+        let response = await f.coordinator.perform(.init(action: .key, windowID: 4, keys: "return"), sessionID: "s")
+        #expect(response == .error("computer_blocked: Alas Dev can't be used by agents."))
+        #expect(recorder.inputs.isEmpty)
+        #expect(f.coordinator.pendingApprovals.isEmpty)
+    }
+
     /// While a system password prompt shows in an app, nothing of it is seen or driven, and no
     /// card asks for it; computer_apps lists the app without its windows.
     @Test(arguments: [

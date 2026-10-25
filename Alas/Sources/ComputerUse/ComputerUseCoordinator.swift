@@ -307,6 +307,11 @@ final class ComputerUseCoordinator {
         let epoch = context.epoch
         guard var window = await system.window(windowID) else { return .error(Message.windowNotFound(windowID)) }
         if let overtaken = overtaken(sessionID, since: epoch) { return overtaken }
+        let input = Self.isInput(command.action)
+        // A blocked app is refused as blocked, prompt or not, and costs no probe.
+        if access.access(for: window.app, session: sessionID, input: input) == .blocked {
+            return .error(Message.blocked(window.app))
+        }
         // Before any card: the prompt's text and field show in the app's own windows.
         if await system.credentialPrompt(window.app.pid) { return .error(Message.credentialPrompt(window.app)) }
         // A drop into another window of the same app; another app's window is refused before any card.
@@ -317,7 +322,6 @@ final class ComputerUseCoordinator {
             toWindow = end
         }
 
-        let input = Self.isInput(command.action)
         switch await approval(for: window.app, sessionID: sessionID, epoch: epoch, input: input) {
         case .refused(let response):
             return response
