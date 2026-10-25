@@ -918,6 +918,126 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// With a path both staged and unstaged, an agent's comment goes to the
+    /// unstaged side; a Mac's stays on the side it was filed on.
+    @Test(arguments: [("staged", true), ("unstaged", true), ("commit", false)])
+    func aMacCommentKeepsTheStageItWasFiledOn(namespace: String, accepted: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let file = repo.appendingPathComponent("a.txt")
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+
+        let response = try await fixture.request(.mutateReview(worktree: ref, sessionID: session.rawValue, mutation: .add(
+            fileID: DiffReviewFileID(namespace: namespace, path: "a.txt"), path: "a.txt", originalPath: nil,
+            anchor: .line(side: .new, startLine: 1, endLine: nil, selectedText: nil), body: "Why?"
+        )))
+
+        let stored = try fixture.core.reviewDrafts.load(sessionID: session)
+        if accepted {
+            #expect(response == .done)
+            #expect(stored.map(\.fileID) == [DiffReviewFileID(namespace: namespace, path: "a.txt")])
+            #expect(stored.map(\.effectiveAuthor) == [.user])
+        } else {
+            guard case .failure(.invalidRequest) = response else {
+                Issue.record("expected a refusal, got \(response)")
+                return
+            }
+            #expect(stored.isEmpty)
+        }
+    }
+
+    /// A Mac names the review it acts in; a comment of another review, or of
+    /// another worktree's, is not found, and only line and file comments of
+    /// bounded size are filed.
+    @Test func macMutationsStayInsideTheirReview() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "changed\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+        let local = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        func add(_ anchor: ReviewDraftCommentAnchor, body: String = "Why?") async throws -> HostResponse {
+            try await fixture.request(.mutateReview(worktree: ref, sessionID: local.rawValue, mutation: .add(
+                fileID: DiffReviewFileID(namespace: "unstaged", path: ".alas/scripts/hello.sh"),
+                path: ".alas/scripts/hello.sh", originalPath: nil, anchor: anchor, body: body
+            )))
+        }
+        #expect(try await add(.file) == .done)
+        let comment = try #require(try fixture.core.reviewDrafts.load(sessionID: local).first)
+        guard case .success(let opened) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+            Issue.record("expected the commit review opened")
+            return
+        }
+        let foreign = ReviewDraftSessionID.localChanges(worktreeID: "other", worktreePath: repo, scope: .all)
+        var theirs = comment
+        theirs.id = "theirs"
+        theirs.sessionID = foreign
+        try fixture.core.reviewDrafts.save(theirs)
+
+        for (sessionID, commentID, missing) in [
+            (opened.record.target.draftSessionID.rawValue, comment.id, "review comment \(comment.id)"),
+            (local.rawValue, "nope", "review comment nope"),
+            (local.rawValue, "theirs", "review comment theirs"),
+            (foreign.rawValue, "theirs", "review \(foreign.rawValue)"),
+        ] {
+            #expect(try await fixture.request(.mutateReview(
+                worktree: ref, sessionID: sessionID, mutation: .edit(commentID: commentID, body: "Edited")
+            )) == .failure(error: .notFound(what: missing)))
+        }
+        #expect(try await add(.image(side: .new, normalizedX: 0, normalizedY: 0))
+            == .failure(error: .invalidRequest(reason: "Only file and line comments can be added from a paired Mac.")))
+        guard case .failure(.invalidRequest) = try await add(.file, body: String(repeating: "x", count: 1 << 20)) else {
+            Issue.record("expected an oversized comment refused")
+            return
+        }
+        #expect(try fixture.core.reviewDrafts.load(sessionID: local).map(\.bodyMarkdown) == ["Why?"])
+        #expect(try fixture.core.reviewDrafts.find(commentID: "theirs")?.bodyMarkdown == "Why?")
+    }
+
+    @Test func macMutationsActAsTheUser() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "changed\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        func mutate(_ mutation: HostReviewMutation) async throws -> HostResponse {
+            try await fixture.request(.mutateReview(worktree: ref, sessionID: session.rawValue, mutation: mutation))
+        }
+        for line in [1, 2] {
+            #expect(try await mutate(.add(
+                fileID: DiffReviewFileID(namespace: "unstaged", path: ".alas/scripts/hello.sh"),
+                path: ".alas/scripts/hello.sh", originalPath: nil,
+                anchor: .line(side: .new, startLine: line, endLine: nil, selectedText: nil), body: "Line \(line)"
+            )) == .done)
+        }
+        let ids = try fixture.core.reviewDrafts.load(sessionID: session).sorted { $0.startLine < $1.startLine }.map(\.id)
+        func comment(_ id: String) throws -> ReviewDraftComment? { try fixture.core.reviewDrafts.find(commentID: id) }
+
+        #expect(try await mutate(.edit(commentID: ids[0], body: "Edited")) == .done)
+        #expect(try comment(ids[0])?.bodyMarkdown == "Edited")
+        #expect(try await mutate(.resolve(commentID: ids[0])) == .done)
+        #expect(try comment(ids[0])?.state == .resolved)
+        #expect(try comment(ids[0])?.resolvedBy == .user)
+        guard case .failure(.invalidRequest) = try await mutate(.edit(commentID: ids[0], body: "Again")) else {
+            Issue.record("expected editing a resolved comment refused")
+            return
+        }
+        #expect(try await mutate(.dismiss(commentID: ids[1])) == .done)
+        #expect(try comment(ids[1])?.state == .dismissed)
+        #expect(try await mutate(.delete(commentID: ids[1])) == .done)
+        guard case .review(let review) = try await fixture.request(.readReview(worktree: ref, sessionID: session.rawValue)) else {
+            Issue.record("expected the review")
+            return
+        }
+        #expect(review.comments.map(\.id) == [ids[0]])
+    }
+
     /// A host over a real repository, persisting to a scratch directory,
     /// whose sessions talk to a scripted agent.
     @MainActor

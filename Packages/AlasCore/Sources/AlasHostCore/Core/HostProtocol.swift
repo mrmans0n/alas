@@ -212,7 +212,7 @@ extension KeyedDecodingContainer {
     /// Picked over the generic `decode` by `HostResponse.reviews`'s
     /// synthesized decoding: a review of a kind a newer host added is left
     /// out, not the whole list.
-    func decode(_ type: [HostReviewSummary].Type, forKey key: Key) throws -> [HostReviewSummary] {
+    fileprivate func decode(_ type: [HostReviewSummary].Type, forKey key: Key) throws -> [HostReviewSummary] {
         try decode([Lossy<HostReviewSummary>].self, forKey: key).compactMap(\.value)
     }
 }

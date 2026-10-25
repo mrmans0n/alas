@@ -360,10 +360,8 @@ public final class HostProtocolConnection {
             return .reviews(reviews: try host.reviews.list(in: try reviewWorktree(ref)))
         case .readReview(let ref, let sessionID):
             return .review(review: try host.reviews.read(sessionID, in: try reviewWorktree(ref)))
-        case .mutateReview(let ref, _, _):
-            _ = try reviewWorktree(ref)
-            // ponytail: refused until comment changes are served.
-            throw HostError.invalidRequest(reason: "This host does not serve review changes yet.")
+        case .mutateReview(let ref, let sessionID, let mutation):
+            try await host.reviews.mutate(mutation, sessionID: sessionID, in: try reviewWorktree(ref), caller: caller)
         }
         return .done
     }

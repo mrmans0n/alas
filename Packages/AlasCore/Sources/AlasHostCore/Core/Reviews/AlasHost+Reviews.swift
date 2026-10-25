@@ -378,59 +378,62 @@ public struct ReviewsAPI {
     /// git-status lookup because the same path can be staged and unstaged
     /// at once (partial staging) — unstaged wins when both are present,
     /// since it reflects the more current working-tree state.
-    private enum FileIDNamespaceResolution {
+    /// `requested`, a paired Mac's, is checked instead of picked: a
+    /// local-changes stage the path has and the scope allows, else exactly
+    /// the namespace the session resolves to.
+    enum FileIDNamespaceResolution {
         case resolved(String)
         case failed(String)
     }
 
-    private func fileIDNamespace(
+    func fileIDNamespace(
         for sessionID: ReviewDraftSessionID,
         path: String,
-        worktreePath: URL
+        worktreePath: URL,
+        requested: String? = nil
     ) async -> FileIDNamespaceResolution {
+        let resolved: String
         switch sessionID.sourceKind {
         case .commit, .trackedCommit:
-            return .resolved("commit")
+            resolved = "commit"
         case .commitRange, .branch, .branchWithLocalChanges, .sinceSnapshot:
-            return .resolved("range")
+            resolved = "range"
         case .draftCommit:
-            return .resolved(ChangeStage.staged.rawValue)
+            resolved = ChangeStage.staged.rawValue
         case .draftReviewRequest:
-            return .resolved("draft-review-request")
+            resolved = "draft-review-request"
         case .reviewRequest:
             switch sessionID.reviewRequestProvider {
-            case .github: return .resolved("github-pr")
-            case .gitlab: return .resolved("gitlab-mr")
+            case .github: resolved = "github-pr"
+            case .gitlab: resolved = "gitlab-mr"
             case nil: return .failed("could not resolve the code host for that review session")
             }
         case .localChanges:
+            let stages: Set<ChangeStage>
             do {
-                let files = try await gitStatus(worktreePath)
-                let stages = Set(files.filter { $0.path == path }.map(\.stage))
-                switch sessionID.localChangesScope {
-                case .staged:
-                    guard stages.contains(.staged) else {
-                        return .failed("no staged changes found for \"\(path)\"")
-                    }
-                    return .resolved(ChangeStage.staged.rawValue)
-                case .unstaged:
-                    guard stages.contains(.unstaged) else {
-                        return .failed("no unstaged changes found for \"\(path)\"")
-                    }
-                    return .resolved(ChangeStage.unstaged.rawValue)
-                case .all, nil:
-                    if stages.contains(.unstaged) {
-                        return .resolved(ChangeStage.unstaged.rawValue)
-                    }
-                    if stages.contains(.staged) {
-                        return .resolved(ChangeStage.staged.rawValue)
-                    }
-                    return .failed("no local changes found for \"\(path)\"")
-                }
+                stages = Set(try await gitStatus(worktreePath).filter { $0.path == path }.map(\.stage))
             } catch {
                 return .failed("could not read git status: \(error.localizedDescription)")
             }
+            let allowed: [ChangeStage] = switch sessionID.localChangesScope {
+            case .staged: [.staged]
+            case .unstaged: [.unstaged]
+            case .all, nil: [.unstaged, .staged]
+            }
+            if let requested {
+                guard let stage = ChangeStage(rawValue: requested), allowed.contains(stage) else {
+                    return .failed("\(requested) changes are not part of this review")
+                }
+                return stages.contains(stage) ? .resolved(requested) : .failed("no \(requested) changes found for \"\(path)\"")
+            }
+            if let stage = allowed.first(where: stages.contains) { return .resolved(stage.rawValue) }
+            let what = allowed.count == 1 ? allowed[0].rawValue : "local"
+            return .failed("no \(what) changes found for \"\(path)\"")
         }
+        if let requested, requested != resolved {
+            return .failed("this review has no \(requested) files")
+        }
+        return .resolved(resolved)
     }
 
     public func reply(
