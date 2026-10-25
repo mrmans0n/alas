@@ -462,15 +462,16 @@ final class ComputerUseCoordinator {
             if access.access(for: running, session: sessionID, input: true) == .blocked {
                 throw Refusal(Message.blocked(running))
             }
-            var windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? []
+            var windows = await listedWindows(of: running.pid, otherwise: [])
             // A launched Chromium or Electron app shows its window before its web content: the
-            // agent's first read would come back empty.
-            if let front = windows.first, try await awaitWebContent(afterOpening: front, context: context) {
-                windows = await system.runningApps().first { $0.app.pid == running.pid }?.windows ?? windows
-            }
-            if windows.contains(where: { $0.title == nil }) {
-                let sheets = await system.sheetFrames([running.pid])[running.pid] ?? []
-                windows = windows.filter { !ComputerUseInputGeometry.isSheetBacking(title: $0.title, frame: $0.frame, sheetFrames: sheets) }
+            // agent's first read would come back empty. The wait is a courtesy: a window that
+            // can't be read doesn't fail an open that succeeded.
+            if let front = windows.first {
+                let waited: Bool
+                do { waited = try await awaitWebContent(afterOpening: front, context: context) } catch is ComputerUseSystemError {
+                    waited = false
+                }
+                if waited { windows = await listedWindows(of: running.pid, otherwise: windows) }
             }
             var payload: [String: Any] = ["version": 1, "app": Self.app(running)]
             // It may have been showing one before it was unhidden.
@@ -482,6 +483,15 @@ final class ComputerUseCoordinator {
             payload["windows"] = windows.map { Self.windowEntry($0, displays: displays) }
             return (payload, running)
         }
+    }
+
+    /// The app's windows front to back, less the untitled ones backing a sheet (its parent's
+    /// tree holds the sheet, and no AX window answers for them); `otherwise` if it's gone.
+    private func listedWindows(of pid: Int32, otherwise: [ComputerUseWindow]) async -> [ComputerUseWindow] {
+        let windows = await system.runningApps().first { $0.app.pid == pid }?.windows ?? otherwise
+        guard windows.contains(where: { $0.title == nil }) else { return windows }
+        let sheets = await system.sheetFrames([pid])[pid] ?? []
+        return windows.filter { !ComputerUseInputGeometry.isSheetBacking(title: $0.title, frame: $0.frame, sheetFrames: sheets) }
     }
 
     func answer(_ id: UUID, _ choice: ComputerUseApprovalChoice) {
@@ -1550,6 +1560,11 @@ final class ComputerUseCoordinator {
                     enhancedUserInterface[context.sessionID, default: [:]][window.app.pid] = window.app
                 }
                 try await awaitWebContent()
+            } else if ComputerUseWebContent.chromeBundleIDs.contains(window.app.bundleID ?? ""),
+                      !ComputerUseWebContent.hasWebContent(tree.root) {
+                // A read cut short can't tell whether the browser needs AXEnhancedUserInterface:
+                // the try isn't used up, so a complete read later still decides.
+                wokenWebContent.remove(window.app.pid)
             }
         }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)

@@ -73,7 +73,7 @@ public enum ComputerUseWebContent {
     }
 
     /// A web area with something in it.
-    static func hasWebContent(_ node: ComputerUseAXNode) -> Bool {
+    public static func hasWebContent(_ node: ComputerUseAXNode) -> Bool {
         (node.role == "AXWebArea" && !node.children.isEmpty) || node.children.contains(where: hasWebContent)
     }
 }

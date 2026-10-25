@@ -234,6 +234,31 @@ struct ComputerUseCoordinatorTests {
         try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
     }
 
+    /// A read cut short can't tell whether Chrome needs AXEnhancedUserInterface, so it doesn't use
+    /// up the try: the next complete read still sets it.
+    @Test func chromeReadCutShortLeavesEnhancedUserInterfaceToALaterCompleteRead() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window])
+        system.wakeWebContent = { _, attribute in
+            recorder.recordEvent("wake:\(attribute)")
+            return true
+        }
+        // The first inspect's read is cut short; later ones are complete, without a web area.
+        system.axTree = { _, _, _, _ in
+            let cut: ComputerUseReadCut? = reads.next() == 1 ? .nodeBudget : nil
+            return (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
+                    cut, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
+        #expect(recorder.events.isEmpty)
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
+        #expect(recorder.events == ["wake:AXEnhancedUserInterface"])
+    }
+
     /// A session end while AXEnhancedUserInterface is being set finds nothing to restore yet, so
     /// the call that set it turns it off again itself.
     @Test func enhancedUserInterfaceSetAsTheSessionEndsIsTurnedOffAgain() async throws {
@@ -525,6 +550,28 @@ struct ComputerUseCoordinatorTests {
         let apps = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["apps"] as? [[String: Any]])
         let windows = try #require(apps.first?["windows"] as? [[String: Any]])
         #expect(windows.map { $0["window_id"] as? Int } == [1])
+    }
+
+    /// computer_open_app waits on the app's real front window, not the untitled one backing a
+    /// sheet in front of it, which no AX window answers for.
+    @Test func openAppSkipsASheetBackingWindowInFront() async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        let note = Self.windows[1]!
+        let sheetFrame = CGRect(x: 100, y: 20, width: 200, height: 150)
+        let backing = ComputerUseWindow(windowID: 9, title: nil, frame: sheetFrame, app: Self.notes)
+        system.runningApps = { [(app: note.app, windows: [backing, note])] }
+        system.sheetFrames = { pids in pids.contains(101) ? [101: [sheetFrame]] : [:] }
+        system.axTree = { window, _, _, _ in
+            recorder.recordEvent("read:\(window.windowID)")
+            guard window.windowID == 1 else { throw ComputerUseSystemError.windowUnreadable(window.windowID) }
+            return (ComputerUseAXNode(role: "AXWindow"), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .openApp, name: "Notes"), sessionID: "s")))
+        let windows = try #require((try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])?["windows"] as? [[String: Any]])
+        #expect(windows.map { $0["window_id"] as? Int } == [1])
+        #expect(recorder.events.filter { $0.hasPrefix("read:") } == ["read:1"])
     }
 
     /// A window none of which is on a display (an AeroSpace workspace, another Space) says so.
