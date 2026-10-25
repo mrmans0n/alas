@@ -394,7 +394,14 @@ enum ComputerUseAXReader {
             case .success:
                 guard let values = list as? [AnyObject], values.count == Self.nodeAttributes.count else { return nil }
                 var byName: [String: AnyObject] = [:]
-                for (name, value) in zip(Self.nodeAttributes, values) where !Self.isError(value) { byName[name] = value }
+                for (name, value) in zip(Self.nodeAttributes, values) {
+                    guard Self.isError(value) else {
+                        byName[name] = value
+                        continue
+                    }
+                    // Children the app didn't answer for are missing, not none: the read is incomplete.
+                    if name == kAXChildrenAttribute, Self.axError(value) == .cannotComplete { skippedUnanswered = true }
+                }
                 return byName
             case .cannotComplete:
                 skippedUnanswered = true
@@ -404,7 +411,12 @@ enum ComputerUseAXReader {
             default:
                 var byName: [String: AnyObject] = [:]
                 for name in Self.nodeAttributes {
-                    if let value = attribute(element, name) { byName[name] = value }
+                    if let value = attribute(element, name) {
+                        byName[name] = value
+                    } else if name == kAXChildrenAttribute, unansweredInARow > 0 {
+                        // `attribute` just counted the read as unanswered: the children are missing, not none.
+                        skippedUnanswered = true
+                    }
                 }
                 return isHalted ? nil : byName
             }
@@ -423,6 +435,13 @@ enum ComputerUseAXReader {
         /// A batch read's entry for an attribute that failed.
         private static func isError(_ value: AnyObject) -> Bool {
             CFGetTypeID(value) == AXValueGetTypeID() && AXValueGetType(value as! AXValue) == .axError
+        }
+
+        /// The error a batch read's failed entry carries.
+        private static func axError(_ value: AnyObject) -> AXError? {
+            var raw: Int32 = 0
+            guard AXValueGetValue(value as! AXValue, .axError, &raw) else { return nil }
+            return AXError(rawValue: raw)
         }
 
         private static func string(_ value: AnyObject?) -> String? {
@@ -586,27 +605,43 @@ extension ComputerUseAXReader {
                 guard mayMessage(pid) else { return continuation.resume(returning: false) }
                 let application = AXUIElementCreateApplication(pid)
                 AXUIElementSetMessagingTimeout(application, promptProbeMessagingTimeout)
-                func elements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement]? {
+                /// A read that failed, rather than finding nothing (or an element that's gone), leaves
+                /// what it would have shown unknown: the probe can't answer that no field is there.
+                var unreadable = false
+                func found(_ result: AXError) -> Bool {
+                    switch result {
+                    case .success, .noValue, .attributeUnsupported, .invalidUIElement: return true
+                    default:
+                        unreadable = true
+                        return false
+                    }
+                }
+                func elements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
                     var value: CFTypeRef?
                     let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-                    if result == .noValue || result == .attributeUnsupported { return [] }
-                    guard result == .success, let list = value as? [AXUIElement] else { return nil }
+                    guard found(result), result == .success, let list = value as? [AXUIElement] else { return [] }
                     for item in list { AXUIElementSetMessagingTimeout(item, promptProbeMessagingTimeout) }
                     return list
                 }
                 func string(_ element: AXUIElement, _ attribute: String) -> String? {
                     var value: CFTypeRef?
-                    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return nil }
+                    let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+                    guard found(result), result == .success else { return nil }
                     return value as? String
                 }
-                guard spend(), let windows = elements(application, kAXWindowsAttribute) else {
-                    return continuation.resume(returning: nil)
-                }
+                guard spend() else { return continuation.resume(returning: nil) }
+                let windows = elements(application, kAXWindowsAttribute)
+                guard !unreadable else { return continuation.resume(returning: nil) }
                 var pending: [(element: AXUIElement, depth: Int)] = []
                 for window in windows {
                     guard spend() else { return continuation.resume(returning: nil) }
-                    if (string(window, kAXTitleAttribute) ?? "").isEmpty { pending.append((window, 0)) }
-                    for child in elements(window, kAXChildrenAttribute) ?? [] {
+                    // A title that can't be read only means the window is read too.
+                    var title: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &title) != .success
+                        || (title as? String ?? "").isEmpty {
+                        pending.append((window, 0))
+                    }
+                    for child in elements(window, kAXChildrenAttribute) {
                         guard spend() else { return continuation.resume(returning: nil) }
                         if string(child, kAXRoleAttribute) == kAXSheetRole { pending.append((child, 0)) }
                     }
@@ -617,9 +652,9 @@ extension ComputerUseAXReader {
                         role: string(element, kAXRoleAttribute), subrole: string(element, kAXSubroleAttribute))
                     if ComputerUseSecureFocus.isSecure(identity) { return continuation.resume(returning: true) }
                     guard depth < promptProbeDepth else { continue }
-                    pending += (elements(element, kAXChildrenAttribute) ?? []).map { ($0, depth + 1) }
+                    pending += elements(element, kAXChildrenAttribute).map { ($0, depth + 1) }
                 }
-                continuation.resume(returning: false)
+                continuation.resume(returning: unreadable ? nil : false)
             }
         }
     }
