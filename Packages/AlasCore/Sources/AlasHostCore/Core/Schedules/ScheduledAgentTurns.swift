@@ -17,6 +17,16 @@ public final class ScheduledAgentTurns {
 
     private var slots: [ACPSession.ID: Slot] = [:]
 
+    /// How long a firing waits for its chat agent's turn before it stops
+    /// waiting, so an agent stuck on a question cannot hold the schedule
+    /// forever. The agent itself is left running.
+    public static let turnTimeout: Duration = .seconds(4 * 60 * 60)
+
+    /// Only a prompt the schedule sends itself starts a turn worth awaiting.
+    public nonisolated static func awaits(_ prompt: String?, sendsAutomatically: Bool) -> Bool {
+        sendsAutomatically && !(prompt ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     public init() {}
 
     public func expect(_ sessionID: ACPSession.ID) {

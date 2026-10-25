@@ -334,7 +334,7 @@ extension AppState {
         let launchSurface = Self.scheduledLaunchSurface(agentId: agentId, composition: composition)
         // Expected before the launch, because a turn that ends while the
         // launch is still returning must not be missed.
-        if case .acp(_, let prepared?) = launchSurface, Self.awaitsScheduledTurn(prepared) {
+        if case .acp(_, let prepared?) = launchSurface, ScheduledAgentTurns.awaits(prepared.text, sendsAutomatically: prepared.sendsAutomatically) {
             scheduledAgentTurns.expect(prepared.sessionID)
         }
         defer {
@@ -449,11 +449,11 @@ extension AppState {
                 worktreeID: worktree.id
             )
         }
-        guard Self.awaitsScheduledTurn(prepared) else {
+        guard ScheduledAgentTurns.awaits(prepared.text, sendsAutomatically: prepared.sendsAutomatically) else {
             return RunScheduleRunReport(outcome: .succeeded)
         }
         let completion = await scheduledAgentTurns.wait(
-            for: prepared.sessionID, timeout: Self.scheduledAgentTurnTimeout
+            for: prepared.sessionID, timeout: ScheduledAgentTurns.turnTimeout
         )
         guard !Task.isCancelled else {
             return RunScheduleRunReport(
@@ -496,16 +496,6 @@ extension AppState {
             agentName: agentName,
             text: text
         )])
-    }
-
-    /// How long a firing waits for its chat agent's turn before it stops
-    /// waiting, so an agent stuck on a question cannot hold the schedule
-    /// forever. The agent itself is left running.
-    static let scheduledAgentTurnTimeout: Duration = .seconds(4 * 60 * 60)
-
-    /// Only a prompt the schedule sends itself starts a turn worth awaiting.
-    nonisolated static func awaitsScheduledTurn(_ prepared: PreparedWorktreeACPPrompt) -> Bool {
-        prepared.sendsAutomatically && !prepared.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Prompt delivery

@@ -703,4 +703,23 @@ struct RunSchedulerTests {
         #expect(ScheduledAgentTurns.scheduledTurn(in: queued).successorStarted)
         #expect(reply([user("Go"), user("Also this"), agent("Follow-up")]) == nil)
     }
+
+    @Test(arguments: [
+        (RunScheduleComposition?.none, String?.none, true, String?.none), // local script only
+        (.none, "mini.local", true, "app is on mini.local; schedules there run only in the app."),
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), nil, false,
+         "Claude runs in a terminal; terminal agents run only in the app."),
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: false)), nil, true,
+         "The schedule leaves its prompt for review; it runs only in the app."),
+        (.some(.init(prompt: "  ", sendsPromptAutomatically: false)), nil, true, nil), // opens the agent only
+        (.some(.init(prompt: "Go", sendsPromptAutomatically: true)), nil, true, nil),
+    ])
+    func aHostRefusesOnlyTheSchedulesItCannotRunUnattended(
+        composition: RunScheduleComposition?, host: String?, speaksACP: Bool, reason: String?
+    ) {
+        #expect(RunSchedulePresentation.headlessRefusal(
+            composition: composition, projectName: "app", projectHost: host,
+            agentName: "Claude", agentSpeaksACP: speaksACP
+        ) == reason)
+    }
 }

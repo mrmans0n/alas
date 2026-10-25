@@ -1,6 +1,13 @@
 import Foundation
+import os
 import AlasModel
+import AlasPlatform
+import AlasFeatures
+import AlasIntegrations
+import AlasACP
 import AlasAgentKit
+
+private let runScheduleLogger = Logger(subsystem: "io.nlopez.alas", category: "RunSchedules")
 
 extension AlasCoreContext {
     public enum ScheduleTargetResolution {
@@ -105,5 +112,244 @@ extension AlasCoreContext {
             runs: reports.flatMap(\.runs),
             agentReports: reports.flatMap(\.agentReports)
         )
+    }
+}
+
+// MARK: - Headless runner
+
+extension AlasCoreContext {
+    /// Fires schedules without the app: scripts run as core runs, agents as
+    /// chat sessions, and whatever needs someone at the screen is refused.
+    public func installDefaultRunScheduleRunner() {
+        runScheduler.runner = { [weak self] schedule, invocation in
+            guard let self else { return RunScheduleRunReport(outcome: .launchFailed("The host is stopping.")) }
+            return await self.runSchedule(schedule, invocation: invocation) {
+                await self.runHeadlessScheduleTarget($0, project: $1, worktree: $2)
+            }
+        }
+    }
+
+    /// Mirrors the app's `runSchedule(_:project:worktree:)`, with in-app
+    /// notices as log lines.
+    func runHeadlessScheduleTarget(
+        _ schedule: RunSchedule,
+        project: ProjectConfig,
+        worktree originWorktree: Worktree
+    ) async -> RunScheduleRunReport {
+        var agentID: String?
+        if let composition = schedule.composition {
+            agentID = composition.agentId
+                ?? SessionsAPI(core: self).defaultAgent(projectID: project.id, worktreeRoot: originWorktree.path)
+            guard agentID != nil else {
+                let message = "No agent is configured to launch for \(project.name)."
+                reportScheduleFailure(schedule, reason: message, project: project, worktree: originWorktree)
+                return RunScheduleRunReport(outcome: .launchFailed(message))
+            }
+        }
+        if let refusal = RunSchedulePresentation.headlessRefusal(
+            composition: schedule.composition,
+            projectName: project.name,
+            projectHost: project.host,
+            agentName: agentID.map { environment.agent(id: $0)?.displayName ?? $0 },
+            agentSpeaksACP: agentID.map { ACPLaunchCatalog.spec(for: $0) != nil } ?? false
+        ) {
+            reportScheduleFailure(schedule, reason: refusal, project: project, worktree: originWorktree)
+            return RunScheduleRunReport(outcome: .launchFailed(refusal))
+        }
+
+        var worktree = originWorktree
+        if let composition = schedule.composition {
+            switch await createScheduledWorktree(for: schedule, composition: composition, project: project) {
+            case .success(let created):
+                worktree = created
+            case .failure(let failure):
+                if Task.isCancelled {
+                    return RunScheduleRunReport(
+                        outcome: .skipped(reason: "The schedule was removed while its worktree was being created.")
+                    )
+                }
+                reportScheduleFailure(schedule, reason: failure.message, project: project, worktree: originWorktree)
+                return RunScheduleRunReport(outcome: .launchFailed(failure.message))
+            }
+        }
+
+        var references: [RunScheduleFiring.RunReference] = []
+        if let scriptKey = schedule.scriptKey {
+            let script = await runScheduledScript(key: scriptKey, in: worktree, project: project)
+            references = script.runs
+            guard case .succeeded = script.outcome else {
+                switch script.outcome {
+                case .skipped:
+                    break
+                case .launchFailed(let message):
+                    reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+                default:
+                    if schedule.composition != nil {
+                        runScheduleLogger.notice("\(schedule.name, privacy: .public): script did not succeed, agent not launched.")
+                    }
+                }
+                return RunScheduleRunReport(outcome: script.outcome, runs: references)
+            }
+        }
+
+        guard let composition = schedule.composition, let agentID else {
+            return RunScheduleRunReport(outcome: .succeeded, runs: references)
+        }
+        var agent = await runScheduledChatSession(
+            schedule, composition: composition, agentID: agentID, worktree: worktree, project: project
+        )
+        agent.runs = references
+        return agent
+    }
+
+    /// Announces a failure nothing else reports; nothing for a removed
+    /// schedule, whose interrupted steps all report themselves as failing.
+    private func reportScheduleFailure(_ schedule: RunSchedule, reason: String, project: ProjectConfig, worktree: Worktree) {
+        guard !Task.isCancelled else { return }
+        runScheduleLogger.error("\(schedule.name, privacy: .public): \(reason, privacy: .public)")
+        harness.notifications.notifyScheduleFailed(
+            scheduleName: schedule.name,
+            reason: reason,
+            projectId: project.id,
+            worktreeId: worktree.id,
+            scheduleID: schedule.id
+        )
+    }
+
+    private func createScheduledWorktree(
+        for schedule: RunSchedule,
+        composition: RunScheduleComposition,
+        project: ProjectConfig
+    ) async -> Result<Worktree, WorktreeCreationFailure> {
+        let rendered = RunSchedulePlanner.renderBranch(template: composition.branchTemplate, name: schedule.name, now: Date())
+        if case .invalid(let message) = GitNameValidator.validateBranchName(rendered) {
+            return .failure(.init(message: "Invalid branch name \"\(rendered)\": \(message)"))
+        }
+        let worktrees = WorktreesAPI(core: self)
+        return await worktrees.withFreeName(projectID: project.id, rendered: rendered, caller: .cli) { prepared in
+            do {
+                return .success(try await worktrees.create(prepared.request, caller: .cli))
+            } catch {
+                return .failure(.init(message: error.localizedDescription))
+            }
+        }
+    }
+
+    private func runScheduledScript(key: String, in worktree: Worktree, project: ProjectConfig) async -> RunScheduleRunReport {
+        let scripts: [RunScript]
+        switch await RunScriptStore.discoverScripts(worktreeRoot: worktree.path, remoteHost: project.host) {
+        case .scripts(let found):
+            scripts = found
+        case .failed(let message):
+            return RunScheduleRunReport(outcome: .launchFailed("Could not list scripts in \(worktree.title): \(message)"))
+        }
+        guard let script = scripts.first(where: { $0.key == key }) else {
+            return RunScheduleRunReport(outcome: .skipped(reason: "Script \(key) was not found in \(worktree.title)."))
+        }
+        if runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive == true {
+            return RunScheduleRunReport(
+                outcome: .skipped(reason: "\(script.displayName) is already running in \(worktree.title).")
+            )
+        }
+        var reference: RunScheduleFiring.RunReference?
+        let settlement: RunScriptSettlement = await withCheckedContinuation { continuation in
+            // Started as a peer starts a run: nobody is at this host to show
+            // a console to or ask about a repository hook.
+            switch startRun(
+                script, in: worktree, isHidden: script.console == .hidden, activatesConsole: false,
+                promptsForRepoHooks: false, onSettled: { continuation.resume(returning: $0) }
+            ) {
+            case .started(let runID):
+                reference = RunScheduleFiring.RunReference(
+                    worktreeID: worktree.id, branch: worktree.branch, runID: runID, scriptName: script.displayName
+                )
+            case .alreadyStarting:
+                continuation.resume(returning: .launchFailed("\(script.displayName) is already starting in \(worktree.title)."))
+            case .projectUnavailable:
+                continuation.resume(returning: .launchFailed("The project is no longer available."))
+            case let .refused(_, message):
+                continuation.resume(returning: .launchFailed(message))
+            }
+        }
+        switch settlement {
+        case .finished(let outcome):
+            return RunScheduleRunReport(outcome: RunScheduleOutcome(outcome), runs: reference.map { [$0] } ?? [])
+        case .launchFailed(let message):
+            return RunScheduleRunReport(outcome: .launchFailed(message))
+        }
+    }
+
+    /// Starts the schedule's chat session as the app's prepared launch does,
+    /// model included, then reports as the app's `scheduledChatSessionOutcome`.
+    private func runScheduledChatSession(
+        _ schedule: RunSchedule,
+        composition: RunScheduleComposition,
+        agentID: String,
+        worktree: Worktree,
+        project: ProjectConfig
+    ) async -> RunScheduleRunReport {
+        let prepared = PreparedWorktreeACPPrompt(
+            sessionID: UUID().uuidString,
+            promptID: UUID(),
+            text: composition.prompt ?? "",
+            sendsAutomatically: composition.sendsPromptAutomatically,
+            modelID: composition.modelId
+        )
+        let awaitsTurn = ScheduledAgentTurns.awaits(prepared.text, sendsAutomatically: prepared.sendsAutomatically)
+        // Expected before the launch, so a turn ending while it returns is kept.
+        if awaitsTurn { scheduledAgentTurns.expect(prepared.sessionID) }
+        defer { scheduledAgentTurns.abandon(prepared.sessionID) }
+        await SessionsAPI(core: self).startPrepared(prepared, agentID: agentID, in: worktree, caller: .cli)
+        let agentName = environment.agent(id: agentID)?.displayName ?? agentID
+        guard !Task.isCancelled else {
+            return RunScheduleRunReport(outcome: .skipped(reason: "The schedule was removed while its agent was launching."))
+        }
+        guard let session = orchestrationManager(for: worktree)?.liveSession(for: prepared.sessionID) else {
+            let message = "Could not open a chat session for \(agentName) in \(worktree.title)."
+            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            return RunScheduleRunReport(outcome: .launchFailed(message))
+        }
+        if let reason = session.lastError {
+            let message = "\(agentName) could not start in \(worktree.title): \(reason)"
+            reportScheduleFailure(schedule, reason: message, project: project, worktree: worktree)
+            return RunScheduleRunReport(outcome: .launchFailed(message))
+        }
+        runScheduleLogger.notice("\(schedule.name, privacy: .public): launched \(agentName, privacy: .public) in \(worktree.title, privacy: .public)")
+        if let modelID = prepared.modelID, session.currentModel != modelID {
+            runScheduleLogger.notice(
+                "\(schedule.name, privacy: .public): \(agentName, privacy: .public) did not accept the model \(modelID, privacy: .public), so it is using its default."
+            )
+        }
+        guard awaitsTurn else { return RunScheduleRunReport(outcome: .succeeded) }
+        let completion = await scheduledAgentTurns.wait(for: prepared.sessionID, timeout: ScheduledAgentTurns.turnTimeout)
+        guard !Task.isCancelled else {
+            return RunScheduleRunReport(outcome: .skipped(reason: "The schedule was removed while its agent was working."))
+        }
+        switch completion?.result {
+        case .completed:
+            runScheduleLogger.notice("\(schedule.name, privacy: .public): \(agentName, privacy: .public) finished in \(worktree.title, privacy: .public)")
+        case .failed(let message):
+            reportScheduleFailure(
+                schedule, reason: "\(agentName) failed in \(worktree.title): \(message)", project: project, worktree: worktree
+            )
+        case .limited:
+            reportScheduleFailure(
+                schedule, reason: "\(agentName) hit its usage limit in \(worktree.title).", project: project, worktree: worktree
+            )
+        case .cancelled:
+            break
+        case nil:
+            reportScheduleFailure(
+                schedule, reason: "\(agentName) was still working in \(worktree.title) after 4 hours; stopped waiting.",
+                project: project, worktree: worktree
+            )
+        }
+        let outcome = RunScheduleOutcome(completion?.result)
+        guard completion != nil, let text = await ScheduledAgentTurns.reply(in: session) else {
+            return RunScheduleRunReport(outcome: outcome)
+        }
+        return RunScheduleRunReport(outcome: outcome, agentReports: [RunScheduleFiring.AgentReport(
+            worktreeID: worktree.id, branch: worktree.branch, agentName: agentName, text: text
+        )])
     }
 }

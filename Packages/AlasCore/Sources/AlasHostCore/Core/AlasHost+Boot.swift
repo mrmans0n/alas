@@ -114,6 +114,7 @@ extension AlasHost {
         )
         builtCore = core
         core.installDefaultShepherdEffects()
+        core.installDefaultRunScheduleRunner()
         return AlasHost(core: core)
     }
 }
