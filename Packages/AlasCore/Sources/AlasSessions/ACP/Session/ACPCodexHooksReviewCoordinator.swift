@@ -23,6 +23,8 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
     public typealias Trust = @MainActor @Sendable (String, [ACPCodexHookIdentity]) async throws -> Bool
     nonisolated(unsafe) public let willChange = ChangeSignal<Void>()
     public let context: Context
+    /// How long the first check runs hidden before its busy card shows.
+    public let revealDelay: Duration
     @Tracked public private(set) var presentation: Presentation?
     @Tracked public private(set) var selection: Set<ACPCodexHookIdentity> = []
     public private(set) var reviewToken: String?
@@ -33,8 +35,9 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
     private var waiter: CheckedContinuation<String?, Never>?
     private var waitID: UUID?
 
-    public init(context: Context, list: @escaping List, trust: @escaping Trust) {
+    public init(context: Context, revealDelay: Duration = .seconds(1), list: @escaping List, trust: @escaping Trust) {
         self.context = context
+        self.revealDelay = revealDelay
         self.list = list
         self.trust = trust
     }
@@ -72,7 +75,20 @@ public final class ACPCodexHooksReviewCoordinator: ChangeTracking {
         let current = generation
         reviewToken = nil
         let id = UUID()
-        presentation = .init(id: id, context: context, snapshot: nil, isBusy: true, error: nil)
+        // The first check stays hidden for `revealDelay`: most startups need
+        // no review, and a busy card would flash and vanish as the session
+        // finishes loading. A slow check still shows it, with its cancel button.
+        var reveal: Task<Void, Never>?
+        if presentation != nil {
+            presentation = .init(id: id, context: context, snapshot: nil, isBusy: true, error: nil)
+        } else {
+            reveal = Task { [weak self, revealDelay, context] in
+                try? await Task.sleep(for: revealDelay)
+                guard let self, !Task.isCancelled, valid, generation == current, presentation == nil else { return }
+                presentation = .init(id: id, context: context, snapshot: nil, isBusy: true, error: nil)
+            }
+        }
+        defer { reveal?.cancel() }
         do {
             let snapshot = try await list()
             guard valid, generation == current else { return }
