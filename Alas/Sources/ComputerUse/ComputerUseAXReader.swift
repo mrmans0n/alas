@@ -530,9 +530,11 @@ extension ComputerUseAXReader {
                     return CGRect(origin: point, size: extent)
                 }
                 apps: for pid in pids where mayMessage(pid) {
+                    guard ContinuousClock.now < deadline else { break apps }
                     let application = AXUIElementCreateApplication(pid)
                     AXUIElementSetMessagingTimeout(application, promptProbeMessagingTimeout)
                     for window in list(application, kAXWindowsAttribute) {
+                        guard ContinuousClock.now < deadline else { break apps }
                         for child in list(window, kAXChildrenAttribute) {
                             guard ContinuousClock.now < deadline else { break apps }
                             var role: CFTypeRef?

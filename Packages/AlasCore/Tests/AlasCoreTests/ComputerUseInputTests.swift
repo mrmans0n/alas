@@ -291,6 +291,9 @@ struct ComputerUseInputTests {
         (.cancel, nil, [Button.Candidate(description: "Cerrar", identifier: "AX_CANCEL")], .candidate(index: 0, label: "Cerrar")),
         (.cancel, Button.Candidate(title: "Cancel", isEnabled: false), [Button.Candidate(title: "Cancel", isEnabled: false)], .none),
         (.cancel, nil, [Button.Candidate(description: "Lenta"), Button.Candidate(description: "Aceptar")], .none),
+        // A title wins over another button's description, and a search field's clear button never counts.
+        (.cancel, nil, [Button.Candidate(description: "Cancel"), Button.Candidate(title: "Cancelar")], .candidate(index: 1, label: "Cancelar")),
+        (.cancel, nil, [Button.Candidate(description: "cancel", subrole: "AXSearchFieldCancelButton")], .none),
     ] as [(Button.Role, Button.Candidate?, [Button.Candidate], Button.Resolution)])
     func sheetKeysPressTheButtonThatNamesTheirRole(
         role: Button.Role, attribute: Button.Candidate?, candidates: [Button.Candidate], resolution: Button.Resolution

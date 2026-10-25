@@ -640,14 +640,16 @@ extension ComputerUseAXActions {
         }
     }
 
-    /// Escape and Return on a window with a sheet or dialog up: presses its cancel or default
-    /// button and returns the button's title; nil when the chord isn't a bare Escape or Return or
-    /// there is no such enabled button. Looks at the window's sheets, the app's focused window when
-    /// it is one of them, and the window itself when it is a dialog. Nil as well while the focused
-    /// element takes the key itself: a text area (Return is a new line) or an editable control with
-    /// a popup, menu or completion list open (the key picks or dismisses it). When the dialog's
-    /// button attribute has no value, Escape presses a button titled as a cancel button, and Return
-    /// throws `defaultButtonUnreadable`: posted keys don't reach such a panel either.
+    /// Escape and Return on a window with a sheet or dialog up: presses its cancel or default button
+    /// (`ComputerUseDialogButton.resolve`: the sheet's own attribute, else a button by identifier,
+    /// title or description) and returns the label it shows. Nil when the chord isn't a bare Escape
+    /// or Return, there is no sheet or dialog, or the focused element takes the key itself: a text
+    /// area (Return is a new line) or an editable control with a popup, menu or completion list open.
+    /// Looks at the window's sheets and child sheets, the app's focused sheet, the window itself as
+    /// a dialog, sheets and dialogs the app lists as windows over it, and, for an app hosting its
+    /// content remotely or a window off screen, sheets anywhere in its tree. For such a sheet, and
+    /// for Return on a panel whose default button can't be read, a key that finds no button fails
+    /// rather than going out as events that can't reach it.
     static func pressDialogButton(
         _ chord: ComputerUseKeyChord, in window: ComputerUseWindow,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -811,7 +813,8 @@ extension ComputerUseAXActions {
     /// A button as `ComputerUseDialogButton.resolve` weighs it.
     private static func buttonInfo(_ button: AXUIElement) -> ComputerUseDialogButton.Candidate {
         .init(title: string(of: button, kAXTitleAttribute), description: string(of: button, kAXDescriptionAttribute),
-              identifier: string(of: button, "AXIdentifier"), isEnabled: bool(of: button, kAXEnabledAttribute) != false)
+              identifier: string(of: button, "AXIdentifier"), subrole: string(of: button, kAXSubroleAttribute),
+              isEnabled: bool(of: button, kAXEnabledAttribute) != false)
     }
 
     /// No header constant exists for it.
