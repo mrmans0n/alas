@@ -146,6 +146,10 @@ public final class ReviewShepherd {
             _ sessionID: String,
             _ isStillWanted: @escaping @MainActor () -> Bool
         ) async -> ArchiveResult
+        /// False when the worktree is served by another instance (the app,
+        /// for a headless host): its records are that instance's, so this
+        /// one never changes, escalates, archives or removes them.
+        public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -163,7 +167,8 @@ public final class ReviewShepherd {
                 _ worktreeID: String,
                 _ sessionID: String,
                 _ isStillWanted: @escaping @MainActor () -> Bool
-            ) async -> ArchiveResult
+            ) async -> ArchiveResult,
+            servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true }
         ) {
             self.worktreeContext = worktreeContext
             self.sessionState = sessionState
@@ -172,6 +177,7 @@ public final class ReviewShepherd {
             self.notify = notify
             self.refreshPaneIfCached = refreshPaneIfCached
             self.archiveWorktreeIfAllowed = archiveWorktreeIfAllowed
+            self.servesWorktree = servesWorktree
         }
     }
 
@@ -306,7 +312,8 @@ public final class ReviewShepherd {
     ) async -> ShepherdRecord {
         let id = ShepherdRecordID(worktreeID: worktreeID, request: request)
         let now = self.now()
-        for other in records.values where other.id != id && other.sessionID == sessionID && !other.phase.isTerminal {
+        for other in records.values
+            where other.id != id && other.sessionID == sessionID && !other.phase.isTerminal && isServedHere(other.id.worktreeID) {
             remove(other.id)
         }
         var record = records[id].flatMap { $0.phase.isTerminal ? nil : $0 }
@@ -418,7 +425,7 @@ public final class ReviewShepherd {
     /// is not the one working on that fix.
     public func turnCompleted(sessionID: String) {
         let now = self.now()
-        for record in records.values where record.sessionID == sessionID {
+        for record in records.values where record.sessionID == sessionID && isServedHere(record.id.worktreeID) {
             guard case .fixing = record.phase, !isDeliveringFix(record.id) else { continue }
             var next = record
             next.phase = .awaitingPush(turnEndedAt: now, pollsWithoutProgress: 0)
@@ -590,6 +597,10 @@ public final class ReviewShepherd {
 
     private func evaluate(_ id: ShepherdRecordID) async {
         guard let effects, let record = records[id], !record.phase.isTerminal else { return }
+        guard effects.servesWorktree(id.worktreeID) else {
+            dueAt[id] = .distantFuture
+            return
+        }
         // A floor, so no early exit below can make the record due again at once.
         dueAt[id] = now().addingTimeInterval(ShepherdSchedule.tick)
         guard let context = effects.worktreeContext(id.worktreeID), context.isEligible else {
@@ -978,7 +989,7 @@ public final class ReviewShepherd {
     /// before archiving, since the owner's state is read asynchronously.
     private func archiveAfterMerge(_ id: ShepherdRecordID) async {
         guard let effects, let record = records[id], record.phase == .merged,
-              !archivesInFlight.contains(id)
+              !archivesInFlight.contains(id), effects.servesWorktree(id.worktreeID)
         else { return }
         archivesInFlight.insert(id)
         defer { archivesInFlight.remove(id) }
@@ -1083,6 +1094,12 @@ public final class ReviewShepherd {
         let loop = ReviewLoopState(worktreePath: path, baseBranch: record.baseBranch, providerRegistry: providerRegistry)
         loops[record.id] = loop
         return loop
+    }
+
+    /// Whether this instance may change the worktree's records. Without
+    /// effects nothing is decided, so everything counts as served.
+    private func isServedHere(_ worktreeID: String) -> Bool {
+        effects?.servesWorktree(worktreeID) ?? true
     }
 
     private func put(_ record: ShepherdRecord) {

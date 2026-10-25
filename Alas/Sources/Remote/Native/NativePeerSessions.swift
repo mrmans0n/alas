@@ -205,7 +205,9 @@ final class NativePeerSessions {
         self.consoles = consoles
         self.hosts = hosts
         consoles?.onListChanged = { [weak self] in self?.rebuildSnapshot() }
+        consoles?.onOpened = { [weak self] in self?.selectConsole(serverId: $0, consoleId: $1) }
         hosts?.onChange = { [weak self] in self?.rebuildSnapshot() }
+        hosts?.onRunsChanged = { [weak consoles] in consoles?.refresh(serverId: $0) }
     }
 
     /// Only the sidebar model: console lists change nothing a selected
@@ -261,6 +263,16 @@ final class NativePeerSessions {
             selectedWorktree = selection
             reloadWorkspace()
         }
+    }
+
+    /// Selects the worktree the host knows as `worktreeID`, as a worktree
+    /// notice's click does. Nothing happens once the host no longer lists it,
+    /// or while it is already selected: re-selecting its tab would toggle it.
+    func selectHostWorktree(serverId: String, worktreeID: String) {
+        guard let group = worktrees(on: serverId).first(where: { $0.peerWorktreeId == worktreeID }) else { return }
+        let selection = NativePeerWorktreeSelection(serverId: serverId, worktreeId: group.id)
+        guard selectedWorktree != selection else { return }
+        selectWorktree(selection)
     }
 
     func selectTab(_ tab: NativePeerTab, in selection: NativePeerWorktreeSelection) {
@@ -383,6 +395,14 @@ final class NativePeerSessions {
     }
 
     var isPromptPending: Bool { pendingPrompt != nil }
+
+    /// The selected session's shepherd pill on its host.
+    var selectedShepherd: HostSessionShepherd? {
+        guard let selectedSessionId,
+              let id = RemoteFederatedSessionID.parse(selectedSessionId, peers: Set(snapshot.groups.map(\.serverId)))
+        else { return nil }
+        return hosts?.shepherds[id.serverId]?[id.sessionId]
+    }
 
     var selectedPeer: NativePeerGroup? {
         guard let selectedSessionId else { return nil }
@@ -651,6 +671,44 @@ final class NativePeerSessions {
             closingSessionIds.remove(sessionId)
             tabCloseError = Self.peerUnavailableMessage
         }
+    }
+
+    /// Renames a session on the host; its next session list carries the
+    /// title. No lease is needed, as for a close.
+    func renameSession(_ sessionId: String, title: String) {
+        guard let downstream else { return }
+        // ponytail: a route failure (the peer went offline) is dropped and the
+        // tab keeps its title; surface an error if that ever confuses anyone.
+        _ = federation.route(.renameSession(sessionId: sessionId, title: title), from: downstream)
+    }
+
+    /// Whether `sessionId`'s whole conversation is here to export: only the
+    /// selected session's transcript is, once no older page is left to fetch.
+    func canExportTranscript(of sessionId: String) -> Bool {
+        guard let transcript, transcript.sessionId == sessionId else { return false }
+        return transcript.epoch != nil && transcript.olderPageBeforeIndex == nil
+    }
+
+    /// The conversation as the local Copy and Save Session as Markdown write it.
+    func transcriptMarkdown(of sessionId: String, title: String, agentName: String?) -> String? {
+        guard canExportTranscript(of: sessionId), let transcript else { return nil }
+        let userNotice = RemoteWireMessage.oversizedNotice(kind: "user")
+        let agentNotice = RemoteWireMessage.oversizedNotice(kind: "agent")
+        let messages = transcript.messages.compactMap { message -> ACPMessage? in
+            let text = message.text ?? ""
+            switch message.kind {
+            case "user": return ACPMessage.user(id: UUID(), messageId: nil, text: text, attachments: [])
+            case "agent": return ACPMessage.agent(id: UUID(), messageId: nil, StreamingText(text))
+            // A turn too large to forward keeps its place, with the notice
+            // that replaced it as its body.
+            case "systemNotice" where text == userNotice:
+                return ACPMessage.user(id: UUID(), messageId: nil, text: text, attachments: [])
+            case "systemNotice" where text == agentNotice:
+                return ACPMessage.agent(id: UUID(), messageId: nil, StreamingText(text))
+            default: return nil
+            }
+        }
+        return ACPTranscriptMarkdown.document(title: title, agentName: agentName, messages: messages)
     }
 
     func selectChip(_ spec: ChipSpec, itemId: String) {

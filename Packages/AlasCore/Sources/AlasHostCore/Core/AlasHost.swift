@@ -83,6 +83,12 @@ public final class AlasHost {
         return source.log.subscribe(after: source.log.cursor)
     }
 
+    /// Publishes `events`, then what they changed in the host's state.
+    func noteAttention(_ events: [HostEvent]) {
+        eventSource?.log.publish(events)
+        eventSource?.refreshInMemoryState()
+    }
+
     private var events: HostEventSource {
         if let eventSource { return eventSource }
         let source = HostEventSource(core: core)
@@ -225,7 +231,7 @@ public struct ProjectsAPI {
     }
 
     /// Forgets the project, refusing (`HostError.projectBusy`) while a
-    /// session or run is live in one of its worktrees.
+    /// session, run or terminal is live in one of its worktrees.
     public func remove(projectID: String, caller: HostCaller) async throws {
         caller.log("projects.remove", projectID)
         try await core.removeProject(id: projectID)
@@ -348,6 +354,15 @@ public struct WorktreesAPI {
         caller.log("worktrees.unarchive", path.path)
         try core.unarchiveWorktree(path: path, projectID: projectID)
     }
+
+    /// Renames `worktree`'s branch `from`, refusing one no longer on it, the
+    /// main checkout, a detached or branchless one, and one a Workspace
+    /// checkout manages. Returns the branch name actually used.
+    @discardableResult
+    public func renameBranch(_ worktree: Worktree, from: String, to branch: String, caller: HostCaller) async throws -> String {
+        caller.log("worktrees.renameBranch", worktree.path.path)
+        return try await core.renameListedWorktreeBranch(worktree, from: from, to: branch)
+    }
 }
 
 // MARK: - Workspaces
@@ -382,18 +397,24 @@ public struct RunsAPI {
 
     @discardableResult
     public func start(
-        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true, caller: HostCaller
+        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true,
+        promptsForRepoHooks: Bool = true, caller: HostCaller
     ) -> RunStart {
         caller.log("runs.start", script.key)
-        return core.startRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole)
+        return core.startRun(
+            script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole, promptsForRepoHooks: promptsForRepoHooks
+        )
     }
 
     @discardableResult
     public func restart(
-        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true, caller: HostCaller
+        _ script: RunScript, in worktree: Worktree, isHidden: Bool = false, activatesConsole: Bool = true,
+        promptsForRepoHooks: Bool = true, caller: HostCaller
     ) -> RunStart {
         caller.log("runs.restart", script.key)
-        return core.restartRun(script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole)
+        return core.restartRun(
+            script, in: worktree, isHidden: isHidden, activatesConsole: activatesConsole, promptsForRepoHooks: promptsForRepoHooks
+        )
     }
 
     public func stop(scriptKey: String, in worktree: Worktree, caller: HostCaller) {
@@ -429,6 +450,28 @@ public struct HostSessionSummary: Codable, Equatable, Sendable {
     public var isWriter: Bool
     /// The session that delegated this one, for a delegated session.
     public var parentID: String?
+    /// The session's shepherd pill; nil without a shepherd or from a host
+    /// that predates them.
+    public var shepherd: HostSessionShepherd? = nil
+}
+
+extension HostSessionSummary {
+    /// A `shepherd` this Mac can't read shows no pill rather than losing the session.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        owner = try c.decode(SessionOwnerID.self, forKey: .owner)
+        id = try c.decode(String.self, forKey: .id)
+        agentId = try c.decode(String.self, forKey: .agentId)
+        title = try c.decode(String.self, forKey: .title)
+        remoteSessionId = try c.decodeIfPresent(String.self, forKey: .remoteSessionId)
+        createdAt = try c.decode(Int64.self, forKey: .createdAt)
+        updatedAt = try c.decode(Int64.self, forKey: .updatedAt)
+        lastOpenedAt = try c.decode(Int64.self, forKey: .lastOpenedAt)
+        streamingState = try c.decodeIfPresent(ACPSession.StreamingState.self, forKey: .streamingState)
+        isWriter = try c.decode(Bool.self, forKey: .isWriter)
+        parentID = try c.decodeIfPresent(String.self, forKey: .parentID)
+        shepherd = (try? c.decodeIfPresent(HostSessionShepherd.self, forKey: .shepherd)) ?? nil
+    }
 }
 
 @MainActor
@@ -439,12 +482,12 @@ public struct SessionsAPI {
     public func list() -> [HostSessionSummary] {
         core.sessionManagers.values.flatMap { manager in
             manager.sessionRows.compactMap { row in
-                row.archived ? nil : Self.summary(of: row, in: manager, parent: core.delegatedSessionParents[row.id])
+                row.archived ? nil : Self.summary(of: row, in: manager, core: core)
             }
         }
     }
 
-    static func summary(of row: ACPSessionRow, in manager: ACPSessionManager, parent: String?) -> HostSessionSummary {
+    static func summary(of row: ACPSessionRow, in manager: ACPSessionManager, core: AlasCoreContext) -> HostSessionSummary {
         let liveRemoteID = manager.liveSession(for: row.id)?.remoteSessionId?.trimmingCharacters(in: .whitespacesAndNewlines)
         return HostSessionSummary(
             owner: manager.owner,
@@ -455,9 +498,10 @@ public struct SessionsAPI {
             createdAt: row.createdAt,
             updatedAt: row.updatedAt,
             lastOpenedAt: row.lastOpenedAt,
-            streamingState: manager.runners[row.id]?.session.transcript.streamingState,
+            streamingState: core.reportedStreamingState(of: row.id, live: manager.runners[row.id]?.session.transcript.streamingState),
             isWriter: manager.isWriter(for: row.id),
-            parentID: parent
+            parentID: core.delegatedSessionParents[row.id],
+            shepherd: HostSessionShepherd.make(sessionID: row.id, review: core.reviewShepherd, stack: core.stackShepherd)
         )
     }
 }

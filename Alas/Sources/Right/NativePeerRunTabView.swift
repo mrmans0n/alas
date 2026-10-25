@@ -9,6 +9,9 @@ struct NativePeerRunTabView: View {
     let worktree: PeerHostWorktree
     let hostName: String
     let refreshGeneration: Int
+    /// The host's listed consoles, so a run's console can be opened.
+    let consoleIds: Set<String>
+    let openConsole: (String) -> Void
 
     @Environment(\.theme) private var theme
     @State private var scripts: [HostRunScript]?
@@ -68,7 +71,9 @@ struct NativePeerRunTabView: View {
                         RunScopeHeader(title: scope.sectionTitle, count: scoped.count)
                         ForEach(scoped, id: \.script.key) { row in
                             RunRowView(
-                                presentation: RunTabPresentation.peerRow(row, hostName: hostName, now: now),
+                                presentation: RunTabPresentation.peerRow(
+                                    row, hostName: hostName, consoleIds: consoleIds, now: now
+                                ),
                                 onAction: { perform($0, on: row) }
                             )
                         }
@@ -101,7 +106,10 @@ struct NativePeerRunTabView: View {
         case .stop: command = .stop
         case .restart: command = .restart
         case .showReport(let runID): command = .output(runID: runID)
-        case .openTerminal, .openEndpoint, .edit: return
+        case .openTerminal:
+            if let sessionID = row.record?.sessionID { openConsole(sessionID) }
+            return
+        case .openEndpoint, .edit: return
         }
         let key = "\(worktreeKey)|\(row.script.key)"
         guard inFlight.insert(key).inserted else { return }

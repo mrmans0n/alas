@@ -171,6 +171,68 @@ Sessions opened from a Mac stay open for every client (laptop, phone, browser)
 and survive a host restart. The host keeps that list itself, separate from the
 app's tabs.
 
+## Terminals
+
+A Mac's peer view offers "New Terminal" on the host's worktrees. It opens a
+login shell in the worktree, with the same PATH the host gives agents. Shells
+run in zmx, so they survive host restarts. The app on the same profile doesn't
+list or kill them, and they reappear in the peer view once the host is back.
+Worktrees of SSH projects are refused.
+
+zmx ships in the cask's zip beside the host. Otherwise the host uses the one in
+`/Applications/Alas.app`; with neither, stderr says so and Macs offer no
+terminals here. Set `ALAS_ZMX_BINARY` to use another zmx; a path that isn't an
+executable turns terminals off.
+
+The launch agent can't show privacy prompts, so a shell in a protected folder
+(Desktop, Documents, Downloads, iCloud Drive, removable volumes) may fail to
+read it without asking. Keep worktrees outside those folders, or grant
+alas-host Full Disk Access in System Settings › Privacy & Security.
+
+## The alas CLI and MCP tools
+
+Agents the host starts get the built-in `alas` MCP server and the `alas` CLI
+on their PATH, as in the app, so they can list and create worktrees, open and
+answer reviews of a branch or pull request, start and drive delegated
+sessions, create pull requests and send notifications. The settings toggle
+that exposes the tools in the app turns them off here too.
+
+Pull requests are created and watched on the host: fix prompts, auto-merge and
+archive after merge follow the project's shepherd rules. This needs `gh` (or
+`glab` for GitLab) installed and signed in for the host's user; `alas-host
+setup` reports when it isn't.
+
+Tools that need a screen are hidden: `open`, `preview_*`, `computer_*`,
+`worktree_switch`, `workspace_*` and a review of local changes (`review`
+needs a target). Calling one anyway, or its CLI command, fails with "Not
+available on a headless host."
+
+The CLI ships in the cask's zip at `alas-cli/alas`, and the host installs it
+into the data directory's `bin/` at start. Otherwise the host uses the one in
+`/Applications/Alas.app`; with neither, stderr says so and agents get no
+`alas` tools. Set `ALAS_CLI_BINARY` to use another CLI; a path that isn't an
+executable turns the tools off.
+
+`notify` shows no banner on the host. An agent's notice goes to the paired
+Macs connected to it, which show it as their own notification, and with
+`--needs-input` every Remote client lists the session as waiting for input
+until its next prompt. A host shell's `alas notify` comes from no session, so
+it reaches nobody.
+
+Agents reach the host through the socket in their environment. A host shell
+has none, so `alas` there finds the host by scanning for its socket, which
+works only on the standard profile, not on an `ALAS_APP_SUPPORT_DIR` one.
+
+## Shepherds and schedules
+
+The host runs PR and stack shepherds and the scheduler. A schedule saved in the
+profile fires on the host, and a script run gets a run console. A schedule for
+a terminal agent, for an SSH project, or one that leaves its prompt for review
+fails each time with the reason; those run only in the app. Shepherd records of
+SSH-project worktrees are left untouched for the app. Shepherd and schedule
+settings are read when the host starts: run `alas-host restart` after changing
+them. Their alerts go to paired Macs, which show them as banners.
+
 ## Start at login
 
 ```bash
@@ -189,14 +251,11 @@ alas-host uninstall-agent
 stops it and removes it. Each profile has its own agent, so run these with the
 same `ALAS_APP_SUPPORT_DIR` you serve.
 
+Rerun `alas-host install-agent` after upgrading from a version before terminals,
+so the agent runs at standard priority.
+
 ## What it does not do yet
 
-- **Terminals.** Terminal tabs and peer consoles need the app; a Remote client
-  can't open them on a headless host. Support for a Mac's peer view comes later.
-- **Run scripts and worktree deletion from a Mac.** A Mac's peer view can't
-  control them yet.
-- **The `alas` CLI and its MCP tools.** They talk to the app, so agents
-  running under a headless host can't use them to open reviews, answer review
-  comments or start delegated sessions, and Remote clients can't reach those
-  either.
 - **Linux.** The host is macOS only.
+- **Terminal-agent and SSH-project schedules.** They run only in the app.
+- **Starting or stopping a shepherd from a paired Mac.**

@@ -161,6 +161,30 @@ public enum RunSchedulePresentation: Sendable {
         "\(scheduleName): the agent runs on \(host), where Alas cannot tell when it is ready, so the prompt was not sent."
     }
 
+    /// Why a host without the app cannot fire a schedule, or nil when it can.
+    /// Nobody is there to watch a terminal, review a prompt, or reach an SSH
+    /// project's terminals.
+    public static func headlessRefusal(
+        composition: RunScheduleComposition?,
+        projectName: String,
+        projectHost: String?,
+        agentName: String?,
+        agentSpeaksACP: Bool
+    ) -> String? {
+        if let projectHost {
+            return "\(projectName) is on \(projectHost); schedules there run only in the app."
+        }
+        guard let composition else { return nil }
+        if !agentSpeaksACP {
+            return "\(agentName ?? "The agent") runs in a terminal; terminal agents run only in the app."
+        }
+        let prompt = composition.prompt?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !prompt.isEmpty, !composition.sendsPromptAutomatically {
+            return "The schedule leaves its prompt for review; it runs only in the app."
+        }
+        return nil
+    }
+
     /// Where a schedule's agent will open, as far as the editor can tell.
     public enum AgentSurface: Equatable, Sendable {
         case chat

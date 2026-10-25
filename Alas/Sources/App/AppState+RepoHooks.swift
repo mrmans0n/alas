@@ -7,14 +7,16 @@ extension AppState {
         project: ProjectConfig,
         worktree: Worktree,
         context: RepoHookApprovalContext,
-        includeUserStartupScript: Bool = true
+        includeUserStartupScript: Bool = true,
+        prompter: RepoHookPrompter? = nil
     ) async throws -> String? {
         try await core.preparedRepoHook(
             event: event,
             project: project,
             worktree: worktree,
             context: context,
-            includeUserStartupScript: includeUserStartupScript
+            includeUserStartupScript: includeUserStartupScript,
+            prompter: prompter
         )
     }
 

@@ -127,7 +127,8 @@ public enum ZmxIPC: Sendable {
     }
 
     /// `ipc.Resize` is `packed struct { rows, cols, xpixel, ypixel: u16 }`;
-    /// used by `Init` and `Resize`. Alas never sends either from a viewer.
+    /// used by `Init` and `Resize`. Viewers never send either; a host sizes
+    /// its own shells with `ZmxIPCSocket.resize`.
     public static func sizePayload(rows: UInt16, cols: UInt16) -> Data {
         var payload = Data(count: 8)
         payload[0] = UInt8(truncatingIfNeeded: rows)
@@ -427,6 +428,26 @@ public final class ZmxIPCSocket: @unchecked Sendable {
             guard socket.waitReadable(until: deadline), let chunk = socket.read() else { return false }
             if chunk.isEmpty { return true }
         }
+    }
+
+    /// Sets a session's PTY size from a one-shot connection, in the wire the
+    /// daemon answers the probe with. zmx makes a `Resize` from a client while
+    /// no leader is set the leader and applies the size; closing the
+    /// connection keeps the size and clears leadership. False when the daemon
+    /// can't be probed, connected to, or written to.
+    // ponytail: a client leading after a direct `zmx attach` on the host makes
+    // zmx ignore this; detach that leader first if it ever matters.
+    public static func resize(path: String, rows: Int, columns: Int) -> Bool {
+        let wire: ZmxIPC.Wire
+        switch probe(path: path) {
+        case .v1: wire = .v1
+        case .preFreeze: wire = .preFreeze
+        case .unreachable: return false
+        }
+        guard let socket = try? connect(path: path) else { return false }
+        defer { socket.shutdown() }
+        let size = ZmxIPC.sizePayload(rows: UInt16(clamping: rows), cols: UInt16(clamping: columns))
+        return socket.write(ZmxIPC.encode(.resize, size, wire: wire))
     }
 
     /// `poll(2)` until the descriptor is readable (data or hangup) or the

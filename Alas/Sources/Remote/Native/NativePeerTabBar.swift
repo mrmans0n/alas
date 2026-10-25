@@ -11,6 +11,9 @@ struct NativePeerTabBar: View {
     let onCloseSession: (String) -> Void
     /// Closes a console tab, which ends the console on the peer.
     let onCloseConsole: (_ consoleId: String, _ peerName: String) -> Void
+    let onRenameSession: (RemoteSessionSummary) -> Void
+    let onCopySessionMarkdown: (RemoteSessionSummary) -> Void
+    let onSaveSessionMarkdown: (RemoteSessionSummary) -> Void
 
     private var peer: NativePeerGroup? {
         client.snapshot.groups.first { $0.serverId == selection.serverId }
@@ -58,6 +61,19 @@ struct NativePeerTabBar: View {
                         }
                     default:
                         EmptyView()
+                    }
+                }
+                .contextMenu {
+                    if case .session(let session) = row {
+                        Button("Rename…") { onRenameSession(session) }
+                            .disabled(peer?.state.carriesSessions != true)
+                        // Only the selected tab's transcript is here, and
+                        // only once every older page has loaded.
+                        let exportable = client.canExportTranscript(of: session.id)
+                        Button("Copy Session as Markdown") { onCopySessionMarkdown(session) }
+                            .disabled(!exportable)
+                        Button("Save Session as Markdown…") { onSaveSessionMarkdown(session) }
+                            .disabled(!exportable)
                     }
                 }
                 .id(row.id)

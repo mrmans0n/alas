@@ -1,4 +1,5 @@
 import AlasCore
+@_spi(AppHost) import AlasHostCore
 import Foundation
 import Synchronization
 
@@ -167,7 +168,7 @@ enum HostCommands {
 
     static func message(for error: any Error) -> String {
         switch error as? HostError {
-        case .projectBusy?: "A session or run is live in one of the project's worktrees; stop it and run this again."
+        case .projectBusy?: "A session, run or terminal is live in one of the project's worktrees; stop it and run this again."
         case .operationInProgress?: "Another operation is underway in one of the project's worktrees."
         case .notFound(let what)?: "Not found: \(what)."
         case .project(let error)?: error.localizedDescription
@@ -271,6 +272,9 @@ enum HostCommands {
         case .none(let lock):
             defer { withExtendedLifetime(lock) {} }
             let host = try AlasHost.boot()
+            // Booted only to mutate: its saved shells still guard removals.
+            let shells = HostConsoles.install(on: host.coreContext)
+            await shells.restore()
             do {
                 let result = try await inProcess(host)
                 await host.shutdown()

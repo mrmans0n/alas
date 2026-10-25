@@ -210,6 +210,28 @@ public final class NotificationService {
         notificationAdder(req)
     }
 
+    /// A notice a paired host's agent sent. The host's owner ids mean
+    /// nothing on this Mac, so the click routes by peer instead. With
+    /// `peerWorktreeId`, the click selects that host worktree.
+    public func notifyPeerNotice(body: String, title: String?, agent: AgentKind,
+                                 serverId: String, sessionId: String, peerWorktreeId: String? = nil) {
+        let content = buildContent(
+            agent: agent,
+            body: body,
+            title: title ?? "Alas",
+            projectId: nil,
+            worktreeId: nil,
+            sessionId: sessionId
+        )
+        content.userInfo["peerServerId"] = serverId
+        if let peerWorktreeId { content.userInfo["peerWorktreeId"] = peerWorktreeId }
+        notificationAdder(UNNotificationRequest(
+            identifier: "\(serverId)-\(sessionId)-notify-\(UUID().uuidString)",
+            content: content,
+            trigger: nil
+        ))
+    }
+
     // MARK: - Private helpers
 
     private func questionBody(_ body: String?) -> String {

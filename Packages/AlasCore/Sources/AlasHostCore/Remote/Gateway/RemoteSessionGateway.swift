@@ -450,7 +450,7 @@ public final class RemoteSessionGateway {
             case .projectChanged, .projectRemoved, .resync:
                 return (true, true, true)
             case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved,
-                 .transcript, .pendingRequest, .pendingRequestResolved, .sessionState:
+                 .transcript, .pendingRequest, .pendingRequestResolved, .sessionState, .notice, .worktreeNotice:
                 break
             }
         }
@@ -595,10 +595,15 @@ public final class RemoteSessionGateway {
             host.handle(request, from: consoleLink)
             return
         }
-        // Browsers and hosts without console support: refuse attaches
-        // explicitly so the client does not wait for a snapshot.
-        if case .attach(_, let attachmentId, _) = request {
+        // Browsers and hosts without console support: refuse attaches and
+        // opens explicitly so the client does not wait for an answer.
+        switch request {
+        case .attach(_, let attachmentId, _):
             send(.console(.detached(attachmentId: attachmentId, reason: .unauthorized)))
+        case .open(let requestId, _):
+            send(.console(.openFailed(requestId: requestId, message: PeerConsoleOpenError.unsupported.message)))
+        default:
+            break
         }
     }
 

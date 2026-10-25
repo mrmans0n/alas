@@ -17,6 +17,35 @@ public enum PeerConsoleCapability: Sendable {
     /// Advertised by hosts that serve `PeerConsoleRequest.terminate`. Older
     /// hosts drop unknown console requests, so clients gate the control on it.
     public static let terminateV1 = "peerConsoleTerminate.v1"
+    /// Advertised by hosts that serve `PeerConsoleRequest.open`.
+    public static let openV1 = "peerConsoleOpen.v1"
+    /// Advertised by hosts that apply `PeerConsoleRequest.resize`. A Mac
+    /// running the app sizes its consoles from its own grid and omits it.
+    public static let resizeV1 = "peerConsoleResize.v1"
+
+    /// What a Mac running the app serves.
+    public static let appHost = [v1, terminateV1, openV1]
+    /// What a headless host with zmx serves.
+    public static let headlessHost = [v1, terminateV1, openV1, resizeV1]
+}
+
+/// Why a host could not open a console for a peer. The message is shown to
+/// the peer as is.
+public struct PeerConsoleOpenError: Error, Equatable, Sendable {
+    public let message: String
+
+    public init(_ message: String) {
+        self.message = message
+    }
+
+    public static let unsupported = Self("This Mac can't open terminals for a peer.")
+    public static let worktreeUnavailable = Self("This worktree is no longer available on the host.")
+    public static let worktreeBusy = Self("Wait for the current worktree operation to finish before opening a terminal.")
+    public static let sshProject = Self("Terminals in SSH projects can't be opened from a peer.")
+    public static let zmxMissing = Self(
+        "zmx was not found next to alas-host or in /Applications/Alas.app, so this host can't open terminals."
+    )
+    public static let notStarted = Self("The terminal did not start.")
 }
 
 public struct PeerConsoleSummary: Codable, Equatable, Sendable {
@@ -124,6 +153,14 @@ public enum PeerConsoleRequest: Codable, Equatable, Sendable {
     /// Closes the console on the host as a local tab close would. Needs no
     /// attachment or lease. On success the host replies with a fresh `list`.
     case terminate(consoleId: String)
+    /// Opens a new console in the host worktree `worktreeId` (`Worktree.id`).
+    /// The host replies with a fresh `list`, then `opened`, or with
+    /// `openFailed`. Gated on `PeerConsoleCapability.openV1`.
+    case open(requestId: String, worktreeId: String)
+    /// Asks the host to resize the console to the holder's grid. Accepted
+    /// only from the current lease holder; viewers learn the result through
+    /// `geometry`. Gated on `PeerConsoleCapability.resizeV1`.
+    case resize(attachmentId: String, rows: Int, columns: Int)
 }
 
 /// Host → peer.
@@ -140,13 +177,19 @@ public enum PeerConsoleEvent: Codable, Equatable, Sendable {
     case inputAck(attachmentId: String, sequence: Int, accepted: Bool)
     case geometry(attachmentId: String, rows: Int, columns: Int)
     case detached(attachmentId: String, reason: PeerConsoleDetachReason)
+    /// Answers `open`, after a `list` that includes the new console. Sent
+    /// only to a peer that sent `open`, so older decoders never see it.
+    case opened(requestId: String, consoleId: String)
+    /// Answers `open` with the host's reason, shown to the user as is.
+    case openFailed(requestId: String, message: String)
 }
 
 extension PeerConsoleEvent {
-    /// Nil for `list`, which is not attachment scoped.
+    /// Nil for `list`, `opened` and `openFailed`, which are not attachment
+    /// scoped.
     public var attachmentId: String? {
         switch self {
-        case .list: nil
+        case .list, .opened, .openFailed: nil
         case .attached(let id, _, _, _), .snapshot(let id, _, _, _), .output(let id, _, _), .control(let id, _),
              .inputAck(let id, _, _), .geometry(let id, _, _), .detached(let id, _):
             id

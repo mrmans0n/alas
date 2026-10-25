@@ -35,6 +35,9 @@ public struct RunLaunchRequest: Sendable {
     /// asked for from elsewhere, which leave the host's screen alone unless
     /// the worktree has none active.
     public let activatesConsole: Bool
+    /// False for runs asked for from elsewhere: nobody at this Mac asked, so
+    /// an unapproved repository hook is skipped rather than asked about.
+    public let promptsForRepoHooks: Bool
 }
 
 /// How a `RunLauncher` started a run, and so how its completion arrives.
@@ -146,6 +149,7 @@ extension AlasCoreContext {
         in worktree: Worktree,
         isHidden: Bool = false,
         activatesConsole: Bool = true,
+        promptsForRepoHooks: Bool = true,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
         guard !isStopping else { return Self.stoppingRefusal }
@@ -228,7 +232,8 @@ extension AlasCoreContext {
                         executionIdentity: RunScriptExecutionIdentity(runID: runID, worktreeID: worktree.id, projectID: project.id)
                     ),
                     isHidden: isHidden,
-                    activatesConsole: activatesConsole
+                    activatesConsole: activatesConsole,
+                    promptsForRepoHooks: promptsForRepoHooks
                 )
                 let launch: RunLaunch
                 do {
@@ -276,6 +281,7 @@ extension AlasCoreContext {
         in worktree: Worktree,
         isHidden: Bool = false,
         activatesConsole: Bool = true,
+        promptsForRepoHooks: Bool = true,
         onSettled: ((RunScriptSettlement) -> Void)? = nil
     ) -> RunStart {
         guard !isStopping else { return Self.stoppingRefusal }
@@ -291,7 +297,8 @@ extension AlasCoreContext {
         }
         return startRun(
             script, in: worktree, isHidden: isHidden,
-            activatesConsole: activatesConsole || replacesActiveHost, onSettled: onSettled
+            activatesConsole: activatesConsole || replacesActiveHost,
+            promptsForRepoHooks: promptsForRepoHooks, onSettled: onSettled
         )
     }
 
@@ -542,8 +549,15 @@ extension AlasCoreContext {
         let runID = request.runID
         let script = request.script
         let worktree = request.worktree
-        let onFinished: @MainActor (RunRecord, RunScriptCompletion) -> Void = { record, completion in
+        let onFinished: @MainActor (RunRecord, RunScriptCompletion) -> Void = { [weak self] record, completion in
             launcher.runDidFinish(record, completion: completion, script: script, worktree: worktree, sessionID: record.sessionID)
+            // The app's launcher posts the outcome itself; a relaying host has no launcher that does.
+            guard let self, environment.relaysNotices else { return }
+            harness.notifications.notifyRunScriptFinished(
+                scriptName: script.displayName, exitCode: completion.exitCode,
+                projectId: worktree.projectId, worktreeId: worktree.id,
+                sessionId: record.sessionID ?? worktree.id, runID: record.id
+            )
         }
         switch launch {
         case .hosted(let sessionID):

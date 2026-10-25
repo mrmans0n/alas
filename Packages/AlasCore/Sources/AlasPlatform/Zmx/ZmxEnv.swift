@@ -36,7 +36,22 @@ public struct ZmxEnv: Sendable {
         processInfo: ProcessInfo = .processInfo,
         runtimeDirectory: URL? = AlasProfile.current.runtimeDirectory
     ) -> ZmxEnv {
-        let binaryURL = resolveBinaryURL(bundle: bundle, fileManager: fileManager)
+        resolve(
+            binaryURL: resolveBinaryURL(bundle: bundle, fileManager: fileManager),
+            fileManager: fileManager,
+            processInfo: processInfo,
+            runtimeDirectory: runtimeDirectory
+        )
+    }
+
+    /// `resolve(bundle:…)` with the binary already located, for a process
+    /// without the app bundle (the headless host).
+    public static func resolve(
+        binaryURL: URL?,
+        fileManager: FileManager = .default,
+        processInfo: ProcessInfo = .processInfo,
+        runtimeDirectory: URL? = AlasProfile.current.runtimeDirectory
+    ) -> ZmxEnv {
         let zmxDir: URL?
         if let runtimeDirectory {
             let scoped = runtimeDirectory.appendingPathComponent("zmx", isDirectory: true)

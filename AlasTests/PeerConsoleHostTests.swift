@@ -93,6 +93,11 @@ import Testing
         var suppressed: [Bool] = []
         var terminated: [String] = []
         var known = ["c"]
+        var openResult: Result<String, PeerConsoleOpenError> = .success("c")
+        /// Applied resizes, formatted `"c 40x100"`.
+        var resized: [String] = []
+        /// Read when `host` is first built, so set it before touching it.
+        var readyTimeout: Duration = .seconds(5)
         private let daemon: ZmxDaemonStatus
         lazy var host = PeerConsoleHost(environment: .init(
             consoles: { [] },
@@ -104,6 +109,12 @@ import Testing
                 terminated.append(id)
                 known.removeAll { $0 == id }
             },
+            open: { [unowned self] _ in try openResult.get() },
+            resize: { @MainActor [unowned self] id, rows, columns in
+                resized.append("\(id) \(rows)x\(columns)")
+                return (rows: rows, columns: columns)
+            },
+            openReadyTimeout: readyTimeout,
             // The host connects on the main actor.
             connect: { [unowned self] _ in try MainActor.assumeIsolated { try self.makeSocket() } },
             probe: { [daemon] _ in daemon }
@@ -261,5 +272,48 @@ import Testing
         try await eventually("detached client closes its socket") {
             (try? fixture.sockets[0].readFrames(&decoder, count: 1)) == nil
         }
+    }
+
+    @Test func openRelistsThenNamesTheNewConsole() async throws {
+        let fixture = Fixture()
+        let peer = FakePeer()
+        fixture.host.handle(.open(requestId: "r", worktreeId: "w"), from: peer.link)
+        try await eventually("opened") { peer.events.all.count == 2 }
+        #expect(peer.events.all == [.list(consoles: []), .opened(requestId: "r", consoleId: "c")])
+    }
+
+    @Test func openFailureCarriesTheHostsReason() async throws {
+        let fixture = Fixture()
+        fixture.openResult = .failure(.sshProject)
+        let peer = FakePeer()
+        fixture.host.handle(.open(requestId: "r", worktreeId: "w"), from: peer.link)
+        try await eventually("failed") { !peer.events.all.isEmpty }
+        #expect(peer.events.all == [.openFailed(requestId: "r", message: PeerConsoleOpenError.sshProject.message)])
+    }
+
+    @Test func openThatNeverBecomesReachableFailsAndClosesIt() async throws {
+        let fixture = Fixture(daemon: .unreachable)
+        fixture.readyTimeout = .zero
+        let peer = FakePeer()
+        fixture.host.handle(.open(requestId: "r", worktreeId: "w"), from: peer.link)
+        try await eventually("failed") { !peer.events.all.isEmpty }
+        #expect(peer.events.all == [.openFailed(requestId: "r", message: PeerConsoleOpenError.notStarted.message)])
+        #expect(fixture.terminated == ["c"])
+    }
+
+    @Test func resizeAppliesOnlyFromTheControlHolderWithinLimits() async throws {
+        let fixture = Fixture()
+        let holder = FakePeer()
+        let viewer = FakePeer()
+        fixture.host.handle(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0), from: holder.link)
+        fixture.host.handle(.attach(consoleId: "c", attachmentId: "b", scrollbackRows: 0), from: viewer.link)
+        fixture.host.handle(.resize(attachmentId: "a", rows: 40, columns: 100), from: holder.link) // no lease yet
+        fixture.host.handle(.takeControl(attachmentId: "a"), from: holder.link)
+        fixture.host.handle(.resize(attachmentId: "b", rows: 40, columns: 100), from: viewer.link) // not the holder
+        fixture.host.handle(.resize(attachmentId: "a", rows: 0, columns: 100_000), from: holder.link) // out of limits
+        fixture.host.handle(.resize(attachmentId: "a", rows: 40, columns: 100), from: holder.link)
+        try await eventually("geometry") { viewer.events.all.contains(.geometry(attachmentId: "b", rows: 40, columns: 100)) }
+        #expect(fixture.resized == ["c 40x100"])
+        #expect(holder.events.all.contains(.geometry(attachmentId: "a", rows: 40, columns: 100)))
     }
 }

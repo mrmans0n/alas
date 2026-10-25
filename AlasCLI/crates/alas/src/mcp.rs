@@ -22,6 +22,9 @@ pub struct McpEnv {
     pub session_id: String,
     pub parent_session_id: Option<String>,
     pub workspace_only: bool,
+    /// Set by `ALAS_MCP_HEADLESS`: the agent runs under a headless `alas-host`,
+    /// which has no UI, so screen-bound tools are hidden.
+    pub headless: bool,
     /// Set by `alas mcp --visual-only` or `--remote`: the backend of the
     /// remote-session relay, which lists and accepts only that relay's tools,
     /// whatever the other restrictions say.
@@ -47,6 +50,8 @@ impl McpEnv {
                 RelayScope::Visual => ToolScope::Visual,
                 RelayScope::Remote => ToolScope::Remote,
             }
+        } else if self.headless {
+            ToolScope::Headless
         } else if self.workspace_only {
             ToolScope::Workspace
         } else {
@@ -65,6 +70,8 @@ enum ToolScope {
     Visual,
     /// The remote-session bridge: `visual_show` and the PR shepherd tools.
     Remote,
+    /// A headless `alas-host`: everything except screen-bound tools.
+    Headless,
 }
 
 impl ToolScope {
@@ -74,6 +81,7 @@ impl ToolScope {
             ToolScope::Workspace => is_workspace_tool(name),
             ToolScope::Visual => name == "visual_show",
             ToolScope::Remote => matches!(name, "visual_show" | "pr_create" | "pr_status"),
+            ToolScope::Headless => !is_headless_hidden(name),
         }
     }
 
@@ -83,6 +91,10 @@ impl ToolScope {
             ToolScope::Workspace => (
                 -32602,
                 format!("tool unavailable in Workspace Checkout context: {name}"),
+            ),
+            ToolScope::Headless => (
+                -32602,
+                format!("Not available on a headless host: {name}"),
             ),
             ToolScope::All | ToolScope::Visual | ToolScope::Remote => (-32602, format!("unknown tool: {name}")),
         }
@@ -97,6 +109,7 @@ impl Clone for McpEnv {
             session_id: self.session_id.clone(),
             parent_session_id: self.parent_session_id.clone(),
             workspace_only: self.workspace_only,
+            headless: self.headless,
             relay: self.relay,
             transport: self.transport,
         }
@@ -144,6 +157,9 @@ pub fn env_from(get: impl Fn(&str) -> Option<String>) -> Result<McpEnv, String> 
         session_id,
         parent_session_id: get("ALAS_PARENT_SESSION_ID").filter(|s| !s.is_empty()),
         workspace_only: get("ALAS_MCP_WORKSPACE_ONLY")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false),
+        headless: get("ALAS_MCP_HEADLESS")
             .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
             .unwrap_or(false),
         relay: None,
@@ -208,8 +224,14 @@ fn initialize_result(parent_session_id: Option<&str>, scope: ToolScope) -> Value
         _ if scope == ToolScope::Visual => {
             "Shows visuals to the user in Alas with visual_show. Reach for it when an explanation has shape: how parts connect (architecture, data or control flow, state machines, sequences), options compared on several dimensions, before/after layouts or UI sketches, or numbers that read better as a chart. Keep it to one visual per reply, usually none: skip it for short answers, single facts, code edits, status updates, and anything a list or code block already shows clearly. A visual may ask one optional question; the user's answer arrives as their next prompt, so end your turn after showing it."
         }
+        Some(_) if scope == ToolScope::Headless => {
+            "Tools that drive the user's Alas host. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
+        }
         Some(_) => {
             "Tools that drive the user's Alas workspace UI. This session was delegated by a parent session: it cannot create descendants. Report results and questions to the parent only with this server's session_send tool; do not use SendMessage, ListAgents, or any other messaging or agent tool for that."
+        }
+        None if scope == ToolScope::Headless => {
+            "Tools that drive the user's Alas host: manage linked worktrees and reviews. Root ACP sessions may delegate direct child sessions: call agent_list first to pick an available agent id (and see its remembered models), then session_new. Use visual_show when an explanation has shape (architecture, flows, multi-dimension comparisons, layouts, charts); keep it to one visual per reply, usually none."
         }
         None => {
             "Tools that drive the user's Alas workspace UI: open files for the user to look at, manage linked worktrees, and open reviews. Root ACP sessions may delegate direct child sessions: call agent_list first to pick an available agent id (and see its remembered models), then session_new. Use visual_show when an explanation has shape (architecture, flows, multi-dimension comparisons, layouts, charts); keep it to one visual per reply, usually none."
@@ -237,14 +259,36 @@ pub fn tool_definitions() -> Vec<Value> {
 }
 
 fn tool_definitions_for_mode(scope: ToolScope) -> Vec<Value> {
-    all_tool_definitions()
+    let mut tools: Vec<Value> = all_tool_definitions()
         .into_iter()
         .filter(|tool| {
             tool.get("name")
                 .and_then(Value::as_str)
                 .is_some_and(|name| scope.allows(name))
         })
-        .collect()
+        .collect();
+    if scope == ToolScope::Headless {
+        // No UI to default to: the host must be told which review to act on.
+        for tool in &mut tools {
+            let (required, session_desc) = match tool["name"].as_str() {
+                Some("review") => (json!(["target"]), None),
+                Some("review_finish") => (json!(["session_id"]), Some("Review session to finish, returned by the review tool.")),
+                Some("review_comment_add") => (
+                    json!(["path", "start_line", "body", "session_id"]),
+                    Some("Review session to file into, returned by the review tool."),
+                ),
+                _ => continue,
+            };
+            tool["inputSchema"]["required"] = required;
+            if let Some(desc) = session_desc {
+                tool["inputSchema"]["properties"]["session_id"]["description"] = json!(desc);
+            } else {
+                tool["description"] = json!("Start a review of the given target — a provider pull/merge request (number or URL), a commit SHA or revision, a commit range (base..head, or base...head for a merge-base diff), or a local branch (reviewed against the repository's base branch). Returns the review session id for use with review_comment_add.");
+                tool["inputSchema"]["properties"]["target"]["description"] = json!("PR/MR number or URL, commit SHA/revision, commit range (base..head or base...head), or branch name.");
+            }
+        }
+    }
+    tools
 }
 
 /// Tools that only act on a session's own children.
@@ -1000,6 +1044,13 @@ fn simple_preview_tool(name: &str, description: &str) -> Value {
             "required": ["preview_id"]
         }
     })
+}
+
+fn is_headless_hidden(name: &str) -> bool {
+    name.starts_with("workspace_")
+        || name.starts_with("preview_")
+        || name.starts_with("computer_")
+        || matches!(name, "open" | "worktree_switch")
 }
 
 fn is_workspace_tool(name: &str) -> bool {
@@ -3013,7 +3064,7 @@ mod tests {
         build_http_response, cancellation_command_for_message, command_for_tool, dispatch,
         env_from, handle_line, handle_line_with_parent, http_response, initialize_result,
         parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out,
-        tool_definitions, tool_result, tools_call_command, transport_error_result,
+        tool_definitions, tool_definitions_for_session, tool_result, tools_call_command, transport_error_result,
     };
     use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
@@ -3109,6 +3160,71 @@ mod tests {
         ]))
         .unwrap();
         assert!(workspace.workspace_only);
+    }
+
+    #[test]
+    fn headless_scope_hides_screen_bound_tools_and_requires_review_targets() {
+        let env = env_from(env(&[
+            ("ALAS_SOCKET_PATH", "/s"),
+            ("ALAS_WORKTREE_DIR", "/wt"),
+            ("ALAS_SESSION_ID", "s1"),
+            ("ALAS_MCP_HEADLESS", "1"),
+        ]))
+        .unwrap();
+        let scope = env.tool_scope();
+        assert_eq!(scope, ToolScope::Headless);
+        let listed = tool_definitions_for_session(scope, false);
+        let names: Vec<&str> = listed.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        for hidden in [
+            "open",
+            "preview_list",
+            "computer_apps",
+            "worktree_switch",
+            "workspace_list",
+            "workspace_focus",
+        ] {
+            assert!(!names.contains(&hidden), "{hidden}");
+            let reply = handle_line_with_parent(&call(hidden, json!({})), "/wt", None, scope, |_| {
+                unreachable!()
+            })
+            .unwrap();
+            assert_eq!(
+                reply["error"]["message"],
+                json!(format!("Not available on a headless host: {hidden}"))
+            );
+        }
+        for kept in [
+            "session_new",
+            "review",
+            "review_comments",
+            "visual_show",
+            "worktree_new",
+            "worktree_delete",
+            "notify",
+            "pr_create",
+        ] {
+            assert!(names.contains(&kept), "{kept}");
+        }
+        let schema = |n: &str| {
+            listed.iter().find(|t| t["name"] == n).unwrap()["inputSchema"]["required"].clone()
+        };
+        assert_eq!(schema("review"), json!(["target"]));
+        assert!(schema("review_comment_add").as_array().unwrap().contains(&json!("session_id")));
+        assert!(schema("review_finish").as_array().unwrap().contains(&json!("session_id")));
+        let review = listed.iter().find(|t| t["name"] == "review").unwrap().to_string();
+        assert!(!review.contains("omitted") && !review.contains("Omit") && !review.contains("review pane"));
+        for parent in [None, Some("p")] {
+            let text = initialize_result(parent, scope)["instructions"].as_str().unwrap().to_string();
+            for banned in ["open files", "preview", "workspace_", "workspace UI"] {
+                assert!(!text.contains(banned), "{parent:?}: {banned}");
+            }
+        }
+        // A delegated child keeps both filters.
+        let child: Vec<String> = tool_definitions_for_session(scope, true)
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().into())
+            .collect();
+        assert!(!child.contains(&"session_new".into()) && !child.contains(&"open".into()));
     }
 
     #[test]
@@ -3606,6 +3722,7 @@ mod tests {
                 session_id: "s1".into(),
                 parent_session_id: Some("parent".into()),
                 workspace_only: true,
+                headless: false,
                 relay: Some(relay),
                 transport: "stdio",
             };
@@ -4010,6 +4127,7 @@ mod tests {
             session_id: "s1".into(),
             parent_session_id: None,
             workspace_only: false,
+            headless: false,
             relay: None,
             transport: "stdio",
         };
@@ -5236,6 +5354,7 @@ mod tests {
             session_id: "acp-1".into(),
             parent_session_id: None,
             workspace_only: false,
+            headless: false,
             relay: None,
             transport: "stdio",
         };

@@ -135,15 +135,25 @@ struct HostProtocolTests {
         ))
     }
 
-    @Test func helloOmitsConsoleCapabilitiesForAServerWithoutConsoles() {
+    /// A host without shepherds sends no `shepherd`; a newer one may send one this Mac can't read.
+    @Test(arguments: [nil, ##"{"badge":1,"number":"#7"}"##])
+    func aSummaryWithoutAReadableShepherdDecodesWithNone(_ shepherd: String?) throws {
+        var summary = Self.session
+        summary.shepherd = HostSessionShepherd(badge: "fixing", number: "#7", tooltip: "t")
+        var json = try #require(try JSONSerialization.jsonObject(with: JSONEncoder().encode(summary)) as? [String: Any])
+        json["shepherd"] = try shepherd.map { try JSONSerialization.jsonObject(with: Data($0.utf8)) }
+        let decoded = try JSONDecoder().decode(HostSessionSummary.self, from: JSONSerialization.data(withJSONObject: json))
+        #expect(decoded == Self.session)
+    }
+
+    @Test(arguments: [[], PeerConsoleCapability.appHost, PeerConsoleCapability.headlessHost])
+    func helloAdvertisesExactlyTheConsoleCapabilitiesItServes(_ console: [String]) {
         guard case .hello(_, _, _, _, _, let caps) = RemoteServerMessage.hello(
-            RemoteServerIdentity(serverId: "s", name: "n", servesPeerConsoles: false)) else {
+            RemoteServerIdentity(serverId: "s", name: "n", consoleCapabilities: console)) else {
             Issue.record("expected hello")
             return
         }
-        #expect(!caps.contains(PeerConsoleCapability.v1))
-        #expect(!caps.contains(PeerConsoleCapability.terminateV1))
-        #expect(caps.contains(PeerSessionTabsCapability.v1))
+        #expect(caps == console + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
     }
 
     /// `peers remove` takes an id or server id as is, and a name only when

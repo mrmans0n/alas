@@ -32,50 +32,7 @@ extension AppState {
         _ schedule: RunSchedule,
         invocation: RunScheduleInvocation = .scheduled
     ) async -> RunScheduleRunReport {
-        let targets: [(project: ProjectConfig, worktree: Worktree)]
-        switch resolveScheduleTargets(schedule.target, invocation: invocation) {
-        case .targets(let resolved):
-            // A worktree-creating schedule skips folders, which cannot have one.
-            targets = schedule.composition == nil ? resolved : resolved.filter { !$0.project.isFolder }
-            guard !targets.isEmpty else {
-                return RunScheduleRunReport(outcome: .skipped(reason: Self.folderWorktreeCreationMessage))
-            }
-        case .unavailable(let reason):
-            return RunScheduleRunReport(outcome: .skipped(reason: reason))
-        }
-        // Start every target before waiting on any of them. Run scripts are
-        // allowed to be long-running servers that never exit, so awaiting one
-        // target's settlement before launching the next would let the first
-        // project starve all the others indefinitely. Each child suspends on
-        // its own run's settlement, which lets the next one start.
-        let runs = targets.map { target in
-            Task { @MainActor in
-                await self.runSchedule(schedule, project: target.project, worktree: target.worktree)
-            }
-        }
-        // Cancellation is forwarded by hand because these children are
-        // unstructured and so do not inherit it. `RunScheduler` cancels the
-        // task it dispatched when a schedule is removed, and without this
-        // the targets would carry on regardless — including a prompt still
-        // waiting to be typed into, and submitted to, an agent belonging to
-        // a schedule that no longer exists.
-        let reports = await withTaskCancellationHandler {
-            var collected: [RunScheduleRunReport] = []
-            for run in runs {
-                collected.append(await run.value)
-            }
-            return collected
-        } onCancel: {
-            for run in runs { run.cancel() }
-        }
-        // Every target's run is linked, not just the one whose outcome won:
-        // a fan-out that failed in one project should still let the user open
-        // the reports of the projects that did run.
-        return RunScheduleRunReport(
-            outcome: .combined(reports.map(\.outcome)),
-            runs: reports.flatMap(\.runs),
-            agentReports: reports.flatMap(\.agentReports)
-        )
+        await core.runSchedule(schedule, invocation: invocation) { await self.runSchedule($0, project: $1, worktree: $2) }
     }
 
     /// Whether a firing's run can actually be opened.
@@ -140,57 +97,6 @@ extension AppState {
         for worktreeID in worktreeIDs
             where runHistory.durableReportIDsByWorktreeID[worktreeID]?.isEmpty != false {
             await runHistory.reloadDurableReportIDs(worktreeID: worktreeID)
-        }
-    }
-
-    enum ScheduleTargetResolution {
-        case targets([(project: ProjectConfig, worktree: Worktree)])
-        /// Nothing to run against; `reason` is shown on the schedule row.
-        case unavailable(String)
-    }
-
-    func resolveScheduleTargets(
-        _ target: RunScheduleTarget,
-        invocation: RunScheduleInvocation = .scheduled
-    ) -> ScheduleTargetResolution {
-        switch target {
-        case .allProjects:
-            let candidates = projects.compactMap { project -> (project: ProjectConfig, worktree: Worktree)? in
-                guard let main = projectsManager.visibleMainWorktree(projectId: project.id) else { return nil }
-                return (project, main)
-            }
-            guard !candidates.isEmpty else { return .unavailable("No project has a main worktree to run in.") }
-            // A schedule that names no single project still has to respect
-            // "Pause <project>": without this the pause control would look
-            // like it worked while the fan-out kept running there anyway.
-            guard invocation.honorsProjectPauses else { return .targets(candidates) }
-            let resolved = candidates.filter { !runScheduler.isProjectPaused($0.project.id) }
-            guard !resolved.isEmpty else {
-                return .unavailable("Every project with a main worktree is paused.")
-            }
-            return .targets(resolved)
-        case .project(let id):
-            guard let project = projects.first(where: { $0.id == id }) else {
-                return .unavailable("The project no longer exists.")
-            }
-            if invocation.honorsProjectPauses, runScheduler.isProjectPaused(id) {
-                return .unavailable("\(project.name) is paused.")
-            }
-            guard let main = projectsManager.visibleMainWorktree(projectId: id) else {
-                return .unavailable("\(project.name) has no main worktree.")
-            }
-            return .targets([(project, main)])
-        case let .worktree(projectId, worktreeId):
-            guard let project = projects.first(where: { $0.id == projectId }) else {
-                return .unavailable("The project no longer exists.")
-            }
-            if invocation.honorsProjectPauses, runScheduler.isProjectPaused(projectId) {
-                return .unavailable("\(project.name) is paused.")
-            }
-            guard let worktree = projectsManager.worktrees(projectId: projectId).first(where: { $0.id == worktreeId }) else {
-                return .unavailable("The worktree no longer exists in \(project.name).")
-            }
-            return .targets([(project, worktree)])
         }
     }
 
@@ -428,7 +334,7 @@ extension AppState {
         let launchSurface = Self.scheduledLaunchSurface(agentId: agentId, composition: composition)
         // Expected before the launch, because a turn that ends while the
         // launch is still returning must not be missed.
-        if case .acp(_, let prepared?) = launchSurface, Self.awaitsScheduledTurn(prepared) {
+        if case .acp(_, let prepared?) = launchSurface, ScheduledAgentTurns.awaits(prepared.text, sendsAutomatically: prepared.sendsAutomatically) {
             scheduledAgentTurns.expect(prepared.sessionID)
         }
         defer {
@@ -543,11 +449,11 @@ extension AppState {
                 worktreeID: worktree.id
             )
         }
-        guard Self.awaitsScheduledTurn(prepared) else {
+        guard ScheduledAgentTurns.awaits(prepared.text, sendsAutomatically: prepared.sendsAutomatically) else {
             return RunScheduleRunReport(outcome: .succeeded)
         }
         let completion = await scheduledAgentTurns.wait(
-            for: prepared.sessionID, timeout: Self.scheduledAgentTurnTimeout
+            for: prepared.sessionID, timeout: ScheduledAgentTurns.turnTimeout
         )
         guard !Task.isCancelled else {
             return RunScheduleRunReport(
@@ -581,7 +487,7 @@ extension AppState {
                 project: project, worktree: worktree
             )
         }
-        guard completion != nil, let text = await scheduledTurnReply(in: session) else {
+        guard completion != nil, let text = await ScheduledAgentTurns.reply(in: session) else {
             return RunScheduleRunReport(outcome: outcome)
         }
         return RunScheduleRunReport(outcome: outcome, agentReports: [RunScheduleFiring.AgentReport(
@@ -590,58 +496,6 @@ extension AppState {
             agentName: agentName,
             text: text
         )])
-    }
-
-    /// The agent's final reply to the scheduled prompt.
-    ///
-    /// Not `ACPTurnCompletion.lastAgentText`: that is read as the prompt
-    /// returns, while the reply's last chunk can still sit in the runner's
-    /// coalescing buffer. The runner marks the transcript idle only once that
-    /// output is applied, so the reply is read after that — or after a short
-    /// bound, rather than holding the firing on a session that never settles.
-    /// A prompt the user queued behind it starts only after that output is
-    /// applied, so its arrival ends the wait too: the session will not go
-    /// idle while it runs.
-    private func scheduledTurnReply(in session: ACPSession) async -> String? {
-        // The buffer flushes within ~16 ms, so a short poll settles quickly.
-        let deadline = ContinuousClock.now + .seconds(5)
-        while session.transcript.streamingState != .idle,
-              !Self.scheduledTurn(in: session.transcript.messages).successorStarted,
-              ContinuousClock.now < deadline {
-            guard (try? await Task.sleep(for: .milliseconds(20))) != nil else { break }
-        }
-        return Self.finalAgentReply(in: Self.scheduledTurn(in: session.transcript.messages).messages)
-    }
-
-    /// The messages answering a scheduled session's first prompt, which is
-    /// the one the schedule sent, and whether a later prompt has started.
-    static func scheduledTurn(
-        in messages: [ACPMessage]
-    ) -> (messages: ArraySlice<ACPMessage>, successorStarted: Bool) {
-        let isUser: (ACPMessage) -> Bool = { if case .user = $0 { true } else { false } }
-        guard let prompt = messages.firstIndex(where: isUser) else { return ([], false) }
-        let start = prompt + 1
-        let successor = messages[start...].firstIndex(where: isUser)
-        return (messages[start..<(successor ?? messages.endIndex)], successor != nil)
-    }
-
-    /// The last nonblank agent message, trimmed to the report's bound.
-    static func finalAgentReply(in messages: ArraySlice<ACPMessage>) -> String? {
-        messages.reversed().lazy.compactMap { message -> String? in
-            guard case .agent(_, _, let text) = message else { return nil }
-            let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
-            return tail.isEmpty ? nil : tail
-        }.first
-    }
-
-    /// How long a firing waits for its chat agent's turn before it stops
-    /// waiting, so an agent stuck on a question cannot hold the schedule
-    /// forever. The agent itself is left running.
-    static let scheduledAgentTurnTimeout: Duration = .seconds(4 * 60 * 60)
-
-    /// Only a prompt the schedule sends itself starts a turn worth awaiting.
-    nonisolated static func awaitsScheduledTurn(_ prepared: PreparedWorktreeACPPrompt) -> Bool {
-        prepared.sendsAutomatically && !prepared.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Prompt delivery
@@ -833,75 +687,5 @@ extension AppState {
         guard let session = terminal.registry.session(for: sessionID) else { return false }
         session.surface.sendText(text)
         return true
-    }
-}
-
-/// Hands each scheduled chat session's first finished turn to the firing
-/// waiting on it. A session is expected before its launch starts, so a turn
-/// that ends before anyone waits is kept until someone does; every other
-/// session's turns are ignored.
-@MainActor
-final class ScheduledAgentTurns {
-    private enum Slot {
-        case expected
-        case finished(ACPTurnCompletion)
-        case waiting(CheckedContinuation<ACPTurnCompletion?, Never>)
-    }
-
-    private var slots: [ACPSession.ID: Slot] = [:]
-
-    func expect(_ sessionID: ACPSession.ID) {
-        slots[sessionID] = .expected
-    }
-
-    func deliver(_ completion: ACPTurnCompletion) {
-        switch slots[completion.sessionId] {
-        case .expected:
-            slots[completion.sessionId] = .finished(completion)
-        case .waiting(let continuation):
-            slots[completion.sessionId] = nil
-            continuation.resume(returning: completion)
-        case .finished, nil:
-            break
-        }
-    }
-
-    /// The session's first finished turn, or nil when the session was never
-    /// expected, the timeout passed, or the waiting task was cancelled.
-    func wait(for sessionID: ACPSession.ID, timeout: Duration) async -> ACPTurnCompletion? {
-        switch slots[sessionID] {
-        case .finished(let completion):
-            slots[sessionID] = nil
-            return completion
-        case .expected:
-            break
-        case .waiting, nil:
-            return nil
-        }
-        let timer = Task { [weak self] in
-            guard (try? await Task.sleep(for: timeout)) != nil else { return }
-            self?.abandon(sessionID)
-        }
-        defer { timer.cancel() }
-        return await withTaskCancellationHandler {
-            await withCheckedContinuation { slots[sessionID] = .waiting($0) }
-        } onCancel: {
-            Task { @MainActor [weak self] in self?.abandon(sessionID) }
-        }
-    }
-
-    /// A stopped runner reports no turn, so closing a session mid-turn has to
-    /// end the wait here, as a stop.
-    func sessionClosed(_ sessionID: ACPSession.ID) {
-        deliver(ACPTurnCompletion(
-            sessionId: sessionID, startedAt: 0, result: .cancelled, delegatedSource: nil, lastAgentText: nil
-        ))
-    }
-
-    /// Forgets the session, releasing its waiter with nil.
-    func abandon(_ sessionID: ACPSession.ID) {
-        if case .waiting(let continuation) = slots.removeValue(forKey: sessionID) {
-            continuation.resume(returning: nil)
-        }
     }
 }

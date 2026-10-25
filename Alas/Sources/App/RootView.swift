@@ -381,7 +381,10 @@ struct RootView: View {
                             state.requestTerminatePeerConsole(
                                 serverId: selection.serverId, consoleId: consoleId, peerName: peerName
                             )
-                        }
+                        },
+                        onRenameSession: { state.renamePeerSessionTab($0) },
+                        onCopySessionMarkdown: { state.copyPeerSessionMarkdown($0) },
+                        onSaveSessionMarkdown: { state.exportPeerSessionMarkdown($0) }
                     )
                 }
                 peerCenterContent(client)

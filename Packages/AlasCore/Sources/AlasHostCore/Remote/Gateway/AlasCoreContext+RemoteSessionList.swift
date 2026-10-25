@@ -29,7 +29,7 @@ extension AlasCoreContext {
                    !liveRemoteId.isEmpty {
                     effectiveRow.remoteSessionId = liveRemoteId
                 }
-                let state = mgr.runners[row.id]?.session.transcript.streamingState
+                let state = reportedStreamingState(of: row.id, live: mgr.runners[row.id]?.session.transcript.streamingState)
                 let candidate = RemoteSessionSummaryCandidate(
                     row: effectiveRow,
                     status: state.map(RemoteSessionGateway.stateString) ?? "idle",

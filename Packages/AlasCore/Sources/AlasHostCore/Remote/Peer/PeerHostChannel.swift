@@ -18,15 +18,18 @@ public final class PeerHostChannel {
         public var worktrees: [WorktreeSnapshot]
         public var workspaceCheckouts: [WorkspaceCheckoutSnapshot]
         public var runs: [RunRecord]
+        /// Shepherd pills by session id; sessions without one are absent.
+        public var shepherds: [String: HostSessionShepherd]
 
         public init(_ snapshot: HostSnapshot) {
             projects = snapshot.projects
             worktrees = snapshot.worktrees
             workspaceCheckouts = snapshot.workspaceCheckouts
             runs = snapshot.runs
+            shepherds = Dictionary(snapshot.sessions.compactMap { s in s.shepherd.map { (s.id, $0) } }) { _, last in last }
         }
 
-        /// Upserts or removes by key; session, transcript and request events are ignored.
+        /// Upserts or removes by key; transcript and request events are ignored.
         public mutating func apply(_ event: HostEvent) {
             switch event {
             case .projectChanged(let project):
@@ -51,8 +54,12 @@ public final class PeerHostChannel {
                 Self.upsert(run, in: &runs)
             case .runRemoved(let id):
                 runs.removeAll { $0.id == id }
-            case .sessionChanged, .sessionRemoved, .transcript, .pendingRequest, .pendingRequestResolved,
-                 .sessionState, .resync:
+            case .sessionChanged(let summary):
+                shepherds[summary.id] = summary.shepherd
+            case .sessionRemoved(_, let id):
+                shepherds[id] = nil
+            case .transcript, .pendingRequest, .pendingRequestResolved,
+                 .sessionState, .notice, .worktreeNotice, .resync:
                 break
             }
         }
@@ -74,6 +81,10 @@ public final class PeerHostChannel {
     public private(set) var isConnecting = false
     /// Called when `state` or `isSubscribed` changes.
     public var onChange: (@MainActor () -> Void)?
+    /// Called with each notice the peer relays.
+    public var onNotice: (@MainActor (HostNotice) -> Void)?
+    /// Called with each worktree notice the peer relays.
+    public var onWorktreeNotice: (@MainActor (HostWorktreeNotice) -> Void)?
 
     private let timeout: Duration
     private let send: @MainActor (HostClientMessage) -> Void
@@ -103,7 +114,9 @@ public final class PeerHostChannel {
         state = State(snapshot)
         onChange?()
         subscribeID = nextID
-        _ = await request(.subscribe(after: snapshot.cursor)) // `finish` sets isSubscribed on .subscribed
+        // Channels exist only for `host.events.v1` peers, which serve it; a host
+        // that predates `worktreeNotice` just never matches that kind.
+        _ = await request(.subscribeAccepting(after: snapshot.cursor, events: ["notice", "worktreeNotice"])) // `finish` sets isSubscribed on .subscribed
     }
 
     /// Sends `request` and waits for its answer, or fails with
@@ -131,6 +144,8 @@ public final class PeerHostChannel {
             finish(id, with: result)
         case .events(let events, _):
             guard isSubscribed, var next = state else { return }
+            for case .notice(let notice) in events { onNotice?(notice) }
+            for case .worktreeNotice(let notice) in events { onWorktreeNotice?(notice) }
             if events.contains(.resync) {
                 isSubscribed = false
                 onChange?()

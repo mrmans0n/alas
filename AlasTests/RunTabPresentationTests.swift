@@ -28,7 +28,8 @@ struct RunTabPresentationTests {
         failureID: String? = nil,
         endpoint: URL? = nil,
         portConflict: RunPortConflict? = nil,
-        host: String? = nil
+        host: String? = nil,
+        sessionID: String? = nil
     ) -> RunRecord {
         RunRecord(
             id: "run-1",
@@ -41,6 +42,7 @@ struct RunTabPresentationTests {
             status: status,
             startedAt: startedAt ?? epoch,
             finishedAt: finishedAt,
+            sessionID: sessionID,
             failureID: failureID,
             portConflict: portConflict
         )
@@ -299,16 +301,19 @@ struct RunTabPresentationTests {
 
     /// A peer's row reads as the local one, without Edit or Terminal, and
     /// names the host instead of this Mac.
-    @Test func peerRowsOfferRunStopRerunAndOutputOnly() {
+    @Test func peerRowsOfferTheHostsActionsAndItsListedConsole() {
         let script = HostRunScript(scope: .repo, fileName: "dev.sh", name: "Dev Server", cwd: nil, target: RunExecutionTarget(host: nil, workingDirectory: "/wt"))
         let finished = RunTabPresentation.peerRow(
             PeerRuns.Row(script: script, record: record(status: .finished(.failed(exitCode: 42)), finishedAt: epoch.addingTimeInterval(75))),
-            hostName: "Studio", now: epoch.addingTimeInterval(75 + 3_600))
+            hostName: "Studio", consoleIds: [], now: epoch.addingTimeInterval(75 + 3_600))
         #expect(finished.detail == "exit 42 · 1m 15s · 1h ago")
         #expect(finished.actions == [.start(label: "Rerun"), .showReport(runID: "run-1")])
         #expect(finished.locationDetail == "Studio · /wt")
-        let running = RunTabPresentation.peerRow(PeerRuns.Row(script: script, record: record(status: .running)), hostName: "Studio", now: epoch)
+        let running = RunTabPresentation.peerRow(PeerRuns.Row(script: script, record: record(status: .running)), hostName: "Studio", consoleIds: [], now: epoch)
         #expect(running.actions == [.stop, .restart])
+        let hosted = PeerRuns.Row(script: script, record: record(status: .running, sessionID: "console-1"))
+        #expect(RunTabPresentation.peerRow(hosted, hostName: "Studio", consoleIds: ["console-1"], now: epoch).actions == [.stop, .restart, .openTerminal])
+        #expect(RunTabPresentation.peerRow(hosted, hostName: "Studio", consoleIds: ["other"], now: epoch).actions == [.stop, .restart])
     }
 
     // MARK: - Port conflicts

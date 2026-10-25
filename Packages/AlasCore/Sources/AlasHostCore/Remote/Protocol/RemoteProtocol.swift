@@ -36,15 +36,15 @@ public struct RemoteServerIdentity: Equatable, Sendable {
     public let serverId: String
     public let name: String
     public let peers: [RemoteHelloPeer]
-    /// False for a server with no terminal consoles to attach to (a headless
-    /// host), so its hello does not advertise the console capabilities.
-    public let servesPeerConsoles: Bool
+    /// The `PeerConsoleCapability` values this server serves; empty for one
+    /// with no terminal consoles.
+    public let consoleCapabilities: [String]
 
-    public init(serverId: String, name: String, peers: [RemoteHelloPeer] = [], servesPeerConsoles: Bool = true) {
+    public init(serverId: String, name: String, peers: [RemoteHelloPeer] = [], consoleCapabilities: [String] = PeerConsoleCapability.appHost) {
         self.serverId = serverId
         self.name = name
         self.peers = peers
-        self.servesPeerConsoles = servesPeerConsoles
+        self.consoleCapabilities = consoleCapabilities
     }
 }
 
@@ -1433,9 +1433,7 @@ extension RemoteServerMessage {
             // Older peers refuse to link to a Mac that doesn't advertise this.
             federationEnabled: true,
             peers: identity.peers,
-            capabilities: (identity.servesPeerConsoles
-                ? [PeerConsoleCapability.v1, PeerConsoleCapability.terminateV1] : [])
-                + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
+            capabilities: identity.consoleCapabilities + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
     }
 }
 
@@ -1463,9 +1461,12 @@ public enum HostProtocolCapability: Sendable {
     public static let worktreesReadV1 = "host.worktrees.read.v1"
     /// Hosts that serve `listRunScripts` and `restartRun`.
     public static let runsScriptsV1 = "host.runs.scripts.v1"
+    /// Hosts that serve `renameBranch`.
+    public static let worktreesRenameBranchV1 = "host.worktrees.renameBranch.v1"
     /// Everything this host serves of the host protocol.
     public static let served = [
         v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
+        worktreesRenameBranchV1,
     ]
 }
 

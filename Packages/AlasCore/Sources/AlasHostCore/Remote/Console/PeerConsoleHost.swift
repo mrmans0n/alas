@@ -58,6 +58,16 @@ public final class PeerConsoleHost {
         public var setLocalInputSuppressed: @MainActor (_ consoleId: String, _ suppressed: Bool) -> Void
         /// Closes a console `resolve` accepted, as a local tab close does.
         public var terminate: @MainActor (String) -> Void
+        /// Opens a console in a host worktree and returns its id. Throws
+        /// `PeerConsoleOpenError`. Nil when this host can't open consoles.
+        public var open: (@MainActor (_ worktreeId: String) async throws -> String)?
+        /// Resizes a console and returns the size it ended on (a newer request
+        /// may win), or nil when none applied. A nil closure means the host
+        /// sizes its consoles itself and ignores peer resizes.
+        public var resize: (@MainActor (_ consoleId: String, _ rows: Int, _ columns: Int) async -> (rows: Int, columns: Int)?)?
+        /// How long a newly opened console has to become reachable before it
+        /// is closed and the open fails.
+        public var openReadyTimeout: Duration
         public var connect: @Sendable (String) throws -> ZmxIPCSocket = { try ZmxIPCSocket.connect(path: $0) }
         /// Detects a socket's wire format. Blocking; runs off the main actor.
         public var probe: @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) }
@@ -69,6 +79,9 @@ public final class PeerConsoleHost {
             resolve: @escaping @MainActor (String) -> PeerConsoleTarget?,
             setLocalInputSuppressed: @escaping @MainActor (_ consoleId: String, _ suppressed: Bool) -> Void,
             terminate: @escaping @MainActor (String) -> Void,
+            open: (@MainActor (_ worktreeId: String) async throws -> String)? = nil,
+            resize: (@MainActor (_ consoleId: String, _ rows: Int, _ columns: Int) async -> (rows: Int, columns: Int)?)? = nil,
+            openReadyTimeout: Duration = .seconds(5),
             connect: @escaping @Sendable (String) throws -> ZmxIPCSocket = { try ZmxIPCSocket.connect(path: $0) },
             probe: @escaping @Sendable (String) -> ZmxDaemonStatus = { ZmxIPCSocket.probe(path: $0) },
             captureTimeout: DispatchTimeInterval = .seconds(3),
@@ -78,6 +91,9 @@ public final class PeerConsoleHost {
             self.resolve = resolve
             self.setLocalInputSuppressed = setLocalInputSuppressed
             self.terminate = terminate
+            self.open = open
+            self.resize = resize
+            self.openReadyTimeout = openReadyTimeout
             self.connect = connect
             self.probe = probe
             self.captureTimeout = captureTimeout
@@ -92,6 +108,8 @@ public final class PeerConsoleHost {
     public static let maxAttachments = 16
     /// Largest accepted input message (a big paste); larger input is rejected.
     public static let maxInputBytes = 1024 * 1024
+    /// Rows and columns a peer may resize a console to.
+    public nonisolated static let gridLimits: ClosedRange<Int> = 2...1000
 
     /// Console id → name of the peer controlling it, for host-side UI.
     public private(set) var controllers: [String: String] = [:]
@@ -137,6 +155,10 @@ public final class PeerConsoleHost {
             remove(attachment, reason: .detached)
         case .terminate(let consoleId):
             terminate(consoleId: consoleId, link: link)
+        case .open(let requestId, let worktreeId):
+            open(requestId: requestId, worktreeId: worktreeId, link: link)
+        case .resize(let attachmentId, let rows, let columns):
+            resize(attachmentId: attachmentId, rows: rows, columns: columns, link: link)
         }
     }
 
@@ -229,6 +251,66 @@ public final class PeerConsoleHost {
         environment.terminate(consoleId)
         logger.info("peer terminated console \(consoleId, privacy: .public)")
         link.send(.list(consoles: environment.consoles()))
+    }
+
+    /// Replies only once the new console is reachable, so the peer's attach
+    /// can't race its startup. One that never comes up is closed rather than
+    /// left behind.
+    private func open(requestId: String, worktreeId: String, link: PeerConsoleLink) {
+        guard let open = environment.open else {
+            link.send(.openFailed(requestId: requestId, message: PeerConsoleOpenError.unsupported.message))
+            return
+        }
+        Task {
+            let message: String
+            do {
+                let consoleId = try await open(worktreeId)
+                if await waitUntilReachable(consoleId) {
+                    logger.info("peer opened console \(consoleId, privacy: .public)")
+                    link.send(.list(consoles: environment.consoles()))
+                    link.send(.opened(requestId: requestId, consoleId: consoleId))
+                    return
+                }
+                environment.terminate(consoleId)
+                message = PeerConsoleOpenError.notStarted.message
+            } catch let error as PeerConsoleOpenError {
+                message = error.message
+            } catch {
+                message = PeerConsoleOpenError.notStarted.message
+            }
+            logger.info("peer console open failed: \(message, privacy: .public)")
+            link.send(.openFailed(requestId: requestId, message: message))
+        }
+    }
+
+    /// Polls until `resolve` knows the console and its daemon answers, at
+    /// least once and until `openReadyTimeout` has passed.
+    private func waitUntilReachable(_ consoleId: String) async -> Bool {
+        let clock = ContinuousClock()
+        let deadline = clock.now + environment.openReadyTimeout
+        let probe = environment.probe
+        while true {
+            if let path = environment.resolve(consoleId)?.socketPath,
+               await BlockingWork.run({ probe(path) }) != .unreachable {
+                return true
+            }
+            guard clock.now < deadline else { return false }
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return false }
+        }
+    }
+
+    /// Only the lease holder sizes the console; viewers follow `geometry`.
+    private func resize(attachmentId: String, rows: Int, columns: Int, link: PeerConsoleLink) {
+        guard let resize = environment.resize,
+              let attachment = attachment(attachmentId, of: link),
+              leases.holder(of: attachment.consoleId) == attachmentId,
+              Self.gridLimits.contains(rows), Self.gridLimits.contains(columns) else { return }
+        let consoleId = attachment.consoleId
+        Task {
+            if let size = await resize(consoleId, rows, columns) {
+                geometryChanged(consoleId: consoleId, rows: size.rows, columns: size.columns)
+            }
+        }
     }
 
     private func passiveClientClosed(_ attachmentId: String, reason: ZmxPassiveClient.CloseReason) {

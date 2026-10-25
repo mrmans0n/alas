@@ -752,6 +752,152 @@ struct HostSessionsTests {
         #expect(fixture.host.sessions.list().isEmpty)
     }
 
+    /// Binding a shepherd changes no session row, yet subscribers see the pill.
+    @Test func bindingAShepherdRepublishesTheSessionWithItsPill() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        // With its runtime closed and its lease (and so its heartbeat) given
+        // up, nothing of the session itself changes from here on.
+        let received = Collected(fixture.host.subscribe())
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        manager.closeSession(id: id)
+        await manager.releaseWriterLease(sessionId: id)
+        try await eventually {
+            await received.events.contains { if case .sessionChanged(let s) = $0 { s.id == id && !s.isWriter } else { false } }
+        }
+
+        await fixture.core.reviewShepherd.bind(
+            sessionID: id, worktreeID: fixture.worktree.id, request: ShepherdFixtures.request(), baseBranch: "main",
+            autoFix: true, autoMerge: false, contextRules: nil
+        )
+
+        try await eventually {
+            await received.events.contains { if case .sessionChanged(let s) = $0 { s.id == id && s.shepherd?.number == "#7" } else { false } }
+        }
+    }
+
+    /// A headless host shows no banner of its own: it relays the notice to
+    /// its subscribers, and reports the session waiting until the user's next
+    /// prompt, not when the turn that sent it ends.
+    @Test func aNoticeOnAHeadlessHostReachesSubscribersAndHoldsTheSessionWaitingUntilItsNextPrompt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.core.harness.notifications.notificationAdder = { _ in Issue.record("no system banner on a host") }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        // Its agent runs, as one that sends a notice does.
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        let subscription = fixture.host.subscribe()
+        let received = Collected(subscription)
+        try fixture.host.attention.notify(
+            "Pick one", title: "Q", needsInput: true,
+            from: .worktree(fixture.worktree, sessionID: id, owner: .worktree(fixture.worktree.id)), caller: .session(id: id)
+        )
+        try await eventually {
+            await received.events.contains { if case .notice(let n) = $0 { n.sessionID == id && n.body == "Pick one" } else { false } }
+        }
+        #expect(sessions.list().first { $0.id == id }?.streamingState == .awaitingInput)
+        #expect(await fixture.core.remoteSessionSummaries(tabIndex: { _, _ in nil }).first { $0.id == id }?.status
+            == RemoteSessionGateway.stateString(.awaitingInput))
+        // While the turn that sent it runs, the session shows it running;
+        // once that turn ends, the session still waits.
+        let transcript = try #require(fixture.core.sessionManagers.values.first?.liveSession(for: id)?.transcript)
+        transcript.streamingState = .streaming
+        #expect(sessions.list().first { $0.id == id }?.streamingState == .streaming)
+        transcript.streamingState = .idle
+        #expect(sessions.list().first { $0.id == id }?.streamingState == .awaitingInput)
+        // The next prompt ends the wait: its turn ends idle.
+        try await sessions.send(id, prompt: "a", caller: .app)
+        try await eventually { await fixture.agent.sent.count { $0.method == "session/prompt" } == 1 }
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        // A shell's notify, with no session, is not relayed: a change made
+        // after it arrives with no notice before it.
+        try fixture.host.attention.notify("hi", title: nil, needsInput: false, from: .worktree(fixture.worktree, sessionID: nil, owner: nil), caller: .cli)
+        try sessions.rename(id, title: "After", caller: .app)
+        try await eventually { await received.events.contains { if case .sessionChanged(let s) = $0 { s.title == "After" } else { false } } }
+        #expect(received.events.filter { if case .notice = $0 { true } else { false } }.count == 1)
+    }
+
+    /// A headless host relays what would be a system banner: a notification
+    /// naming a session it holds as that session's notice, and one naming a
+    /// run console or no session as its worktree's, which only a client that
+    /// accepts `worktreeNotice` receives.
+    @Test func aHeadlessHostRelaysEveryNotificationToTheSessionOrWorktreeItNames() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.host.relayNotifications()
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let received = Collected(fixture.host.subscribe())
+        let notifications = fixture.core.harness.notifications
+        notifications.notifyAlas(
+            body: "Merged", title: "Merged", agent: .gemini,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: id
+        )
+        notifications.notifyRunScriptFinished(
+            scriptName: "test", exitCode: 1,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: "console-1", runID: "r"
+        )
+
+        try await eventually { await received.events.contains {
+            if case .worktreeNotice(let n) = $0 { n.worktreeID == fixture.worktree.id && n.title == "test finished" } else { false }
+        } }
+        #expect(received.notices(of: id).map(\.body) == ["Merged"])
+
+        // A session the host has stored but not loaded is still one a client can open.
+        await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        await manager.refreshRecentNow()
+        #expect(manager.liveSession(for: id) == nil && manager.cachedPersistedSessionRow(id: id) != nil)
+        notifications.notifyAlas(
+            body: "Ready", title: nil, agent: .gemini,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: id
+        )
+        try await eventually { await received.notices(of: id).map(\.body) == ["Merged", "Ready"] }
+    }
+
+    enum HostSessionClose: CaseIterable { case archive, disposeOwner }
+
+    /// A stopped runner reports no turn, so a scheduled firing waiting on a
+    /// session the host closes ends as stopped rather than waiting hours.
+    @Test(arguments: HostSessionClose.allCases)
+    func closingAScheduledSessionEndsItsTurnWaitAsStopped(_ close: HostSessionClose) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        fixture.core.scheduledAgentTurns.expect(id)
+        switch close {
+        case .archive: try await sessions.archive(id, caller: .app)
+        case .disposeOwner: await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
+        }
+        let completion = await fixture.core.scheduledAgentTurns.wait(for: id, timeout: .seconds(10))
+        #expect(completion?.result == .cancelled)
+    }
+
+    /// A session dropped while a notice holds it waiting comes back no longer waiting.
+    @Test func aSessionReplacedWhileANoticeHoldsItWaitingIsNotReportedWaiting() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        try fixture.host.attention.notify(
+            "Pick one", title: nil, needsInput: true,
+            from: .worktree(fixture.worktree, sessionID: id, owner: .worktree(fixture.worktree.id)), caller: .session(id: id)
+        )
+        #expect(sessions.list().first { $0.id == id }?.streamingState == .awaitingInput)
+        await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
+        let manager = try fixture.core.sessionManager(for: fixture.worktree)
+        await manager.refreshRecentNow()
+        try await sessions.load(id)
+        await manager.attach(to: id, freshlyCreated: false)
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+    }
+
     @MainActor
     private struct Fixture {
         let root: URL
@@ -841,6 +987,10 @@ private final class Collected {
 
     func deltas(of id: String) -> [HostTranscriptDelta] {
         events.compactMap { if case .transcript(_, id, let delta) = $0 { delta } else { nil } }
+    }
+
+    func notices(of id: String) -> [HostNotice] {
+        events.compactMap { if case .notice(let notice) = $0, notice.sessionID == id { notice } else { nil } }
     }
 }
 

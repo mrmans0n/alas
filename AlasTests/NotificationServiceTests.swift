@@ -273,4 +273,18 @@ struct NotificationServiceTests {
         #expect(requests[0].identifier == "session-1-awaiting")
         #expect(requests[0].content.attachments.isEmpty == false)
     }
+
+    @Test func peerNoticeClickNamesThePeerAndNoLocalOwner() {
+        var requests: [UNNotificationRequest] = []
+        let service = NotificationService(notificationAdder: { requests.append($0) })
+
+        service.notifyPeerNotice(body: "Done", title: nil, agent: .codex, serverId: "peer-1", sessionId: "session-1")
+
+        let click = NotificationClickContext(userInfo: requests[0].content.userInfo)
+        #expect(click?.peerServerId == "peer-1")
+        #expect(click?.sessionId == "session-1")
+        // The host's ids must not route to a local worktree or checkout.
+        #expect(click?.owner == nil)
+        #expect(click?.projectId == nil)
+    }
 }

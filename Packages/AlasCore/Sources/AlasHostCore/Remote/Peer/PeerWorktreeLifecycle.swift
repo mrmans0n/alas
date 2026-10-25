@@ -28,17 +28,29 @@ public struct PeerHostWorktree: Equatable, Sendable {
         }
         return project.host == nil ? .available : .disabled(reason: PeerWorktreeControls.remoteProjectReason)
     }
+
+    /// The local menu's Rename Branch rule: not the main checkout, a
+    /// detached or branchless one, or one a Workspace checkout manages.
+    public var canRenameBranch: Bool {
+        let worktree = snapshot.worktree
+        return !isMain && !worktree.branch.isEmpty && !worktree.isDetached && workspaceCheckoutName == nil
+    }
 }
 
 extension PeerHostChannel.State {
     /// Non-archived worktrees of listed projects, in snapshot order.
-    public func visibleWorktrees() -> [PeerHostWorktree] {
+    public func visibleWorktrees() -> [PeerHostWorktree] { hostWorktrees(archived: false) }
+
+    /// Archived worktrees of listed projects, in snapshot order.
+    public func archivedWorktrees() -> [PeerHostWorktree] { hostWorktrees(archived: true) }
+
+    private func hostWorktrees(archived: Bool) -> [PeerHostWorktree] {
         func standardized(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
         let projectsByID = Dictionary(projects.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let activeCheckouts = workspaceCheckouts.filter { $0.workspaceID != nil && $0.archivedAt == nil }
         return worktrees.compactMap { snapshot in
             let worktree = snapshot.worktree
-            guard !snapshot.isArchived, let project = projectsByID[worktree.projectId] else { return nil }
+            guard snapshot.isArchived == archived, let project = projectsByID[worktree.projectId] else { return nil }
             let path = worktree.path.standardizedFileURL.path
             let owner = activeCheckouts.first { checkout in
                 checkout.members.contains { $0.projectID == worktree.projectId && standardized($0.worktreePath) == path }

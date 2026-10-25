@@ -129,6 +129,14 @@ extension AlasCoreContext {
             }
         }
 
+        // Delete only: an archived worktree keeps its checkout, and its shells.
+        // First, so shells that can't be stopped refuse with everything else
+        // still running.
+        do {
+            try await willRemoveWorktree?(worktree.id)
+        } catch {
+            return .failed("Close this worktree's terminals first; the host couldn't stop them.")
+        }
         // Nothing may keep using the checkout while its files go.
         await stopProcessRuns(worktreeID: worktree.id)
         do {
@@ -136,7 +144,6 @@ extension AlasCoreContext {
         } catch {
             return .failed("Could not stop everything using the worktree: \(error.localizedDescription)")
         }
-
         let outcome: WorktreeRemovalOutcome
         do {
             outcome = try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) {

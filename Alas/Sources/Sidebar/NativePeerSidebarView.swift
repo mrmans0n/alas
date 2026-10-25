@@ -26,6 +26,16 @@ final class NativePeerSidebarModel {
     var collapsedRepoIDs: Set<String> = []
     var headerHovering = false
     var plusHovering = false
+    /// The peer worktree whose rename sheet is open. Held here, not on a
+    /// lazy row, so the sheet survives its row scrolling away.
+    var renamingBranch: NativePeerBranchRename?
+}
+
+struct NativePeerBranchRename: Identifiable {
+    let worktree: PeerHostWorktree
+    let serverId: String
+    let peerName: String
+    var id: String { "\(serverId)\u{1F}\(worktree.snapshot.worktree.id)" }
 }
 
 /// App-scoped peer groups live beside the workspace tree, never inside a
@@ -160,20 +170,67 @@ struct NativePeerSidebarView: View {
                     onSelect: { client.selectWorktree(selection) },
                     onSelectTab: { client.selectTab($0, in: selection) }
                 )
-                .contextMenu { removalMenu(worktree, peer: peer) }
+                .contextMenu { worktreeMenu(worktree, peer: peer) }
                 .padding(.top, index == 0 ? 0 : 1)
                 .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
                 .padding(.trailing, 6)
             }
+            if let hosts = client.hosts, let projectId = repo.projectId {
+                let archived = (hosts.archivedWorktrees[peer.serverId] ?? []).filter { $0.project.id == projectId }
+                ForEach(archived, id: \.snapshot.worktree.id) { worktree in
+                    NativePeerArchivedWorktreeRow(worktree: worktree)
+                        .contextMenu { archivedWorktreeMenu(worktree, hosts: hosts, peer: peer) }
+                        .padding(.top, 1)
+                        .padding(.leading, Self.repoIndent + RepoGroupView.worktreeIndent)
+                        .padding(.trailing, 6)
+                }
+            }
         }
     }
 
-    /// The local row's Archive and Delete items, for a host that serves them.
     @ViewBuilder
-    private func removalMenu(_ worktree: NativePeerWorktreeGroup, peer: NativePeerGroup) -> some View {
+    private func archivedWorktreeMenu(_ worktree: PeerHostWorktree, hosts: NativePeerHosts, peer: NativePeerGroup) -> some View {
+        let checkout = worktree.snapshot.worktree
+        Button("Copy Path") { Clipboard.copyPath(checkout.path.path) }
+        if !checkout.branch.isEmpty {
+            Button("Copy Branch Name") { Clipboard.copy(checkout.branch) }
+        }
+        if hosts.canUnarchive(serverId: peer.serverId) {
+            Divider()
+            Button("Unarchive") { hosts.unarchive(worktree, serverId: peer.serverId) }
+        }
+    }
+
+    /// "New Terminal" for a host that opens shells, then the local row's
+    /// Archive and Delete items, for a host that serves them.
+    @ViewBuilder
+    private func worktreeMenu(_ worktree: NativePeerWorktreeGroup, peer: NativePeerGroup) -> some View {
+        let controls = worktree.host.flatMap { client.hosts?.controls(for: $0, serverId: peer.serverId) } ?? .hidden
+        if let consoles = client.consoles, consoles.canOpen(serverId: peer.serverId) {
+            let worktreeId = worktree.peerWorktreeId
+            Button("New Terminal") {
+                if let worktreeId { consoles.openTerminal(serverId: peer.serverId, worktreeId: worktreeId) }
+            }
+            .disabled(worktreeId == nil)
+            // Everything below needs the summary, which a host record implies.
+            if worktree.worktree != nil { Divider() }
+        }
+        // Paths on the host Mac, copied as their real paths.
+        if let summary = worktree.worktree {
+            Button("Copy Path") { Clipboard.copyPath(summary.path) }
+            // Folder-project rows have no branch.
+            if !summary.branch.isEmpty {
+                Button("Copy Branch Name") { Clipboard.copy(summary.branch) }
+            }
+        }
+        if let host = worktree.host, let hosts = client.hosts, hosts.canRenameBranch(host, serverId: peer.serverId) {
+            Button("Rename Branch…") {
+                model.renamingBranch = NativePeerBranchRename(worktree: host, serverId: peer.serverId, peerName: peer.name)
+            }
+        }
         if let host = worktree.host, let hosts = client.hosts {
-            let controls = hosts.controls(for: host, serverId: peer.serverId)
             if controls != .hidden {
+                Divider()
                 let disabled = controls != .available
                 let delete = { (keepBranch: Bool) in
                     hosts.delete(
@@ -626,6 +683,32 @@ private struct NativePeerWorktreeRow: View {
         formatter.unitsStyle = .abbreviated
         return formatter
     }()
+}
+
+/// An archived peer worktree, dimmed under an archive icon as an archived
+/// Workspace checkout is. Only its menu acts on it.
+private struct NativePeerArchivedWorktreeRow: View {
+    let worktree: PeerHostWorktree
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        let title = worktree.snapshot.worktree.title
+        HStack(spacing: 7) {
+            Icon(name: "archivebox", size: 12, color: theme.color("fg-faint"))
+            Text(title)
+                .font(.system(size: 12, weight: .medium, design: .monospaced))
+                .foregroundColor(theme.color("fg-dim"))
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(minHeight: 28)
+        .contentShape(Rectangle())
+        .help("\(title) is archived on the host")
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(title), archived")
+    }
 }
 
 /// E1's agent tile for one peer session. A working session gets the filled

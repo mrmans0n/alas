@@ -178,17 +178,42 @@ if executableWasReplaced() {
     exit(0)
 }
 
+// The `alas` CLI, for agents' MCP server and shells, installed beside `ao`.
+let cliBinDir: URL?
+let cliBuild: String?
+if let cli = HostShellLaunch.cliBinary(executable: Bundle.main.executableURL) {
+    do {
+        cliBinDir = try TerminalCLIInjection.installExecutables(sourceBinary: cli)
+        cliBuild = TerminalCLIInjection.buildIdentity(ofBinaryAt: cli)
+    } catch {
+        cliBinDir = nil
+        cliBuild = nil
+        FileHandle.standardError.write(Data("alas-host: cannot install the alas CLI from \(cli.path): \(error.localizedDescription); agents get no alas tools here\n".utf8))
+    }
+} else {
+    cliBinDir = nil
+    cliBuild = nil
+    FileHandle.standardError.write(Data("alas-host: alas CLI not found beside alas-host or in /Applications/Alas.app; agents get no alas tools here\n".utf8))
+}
+
 let host: AlasHost
 do {
-    host = try AlasHost.boot()
+    host = try AlasHost.boot(cliBinDir: cliBinDir, cliBuild: cliBuild)
 } catch {
     fail("cannot load \(Paths.appSupportRoot.path): \(error.localizedDescription)")
 }
+host.serveCLI()
 
 let protocolServer = HostProtocolServer(host: host)
 guard let socket = HostSocketServer(server: protocolServer) else {
     fail("cannot serve \(HostSocketServer.defaultPath()): another host serves it, or its directory is not this user's own")
 }
+
+// Shells opened for paired Macs, kept with Remote on or off: they guard
+// worktree and project removal before any request arrives. They run in
+// zmx, found as the web client is; peers are offered them only with Remote.
+let zmx = ZmxClient(env: .resolve(binaryURL: HostShellLaunch.zmxBinary(executable: Bundle.main.executableURL)))
+let shells = HostConsoles.install(on: host.coreContext, zmx: zmx, cliBinDir: cliBinDir)
 
 // One shutdown: a second signal must not exit while the first still flushes.
 var isStopping = false
@@ -256,6 +281,9 @@ if let listen = config.hostRemoteListen {
         },
         URL(fileURLWithPath: "/Applications/Alas.app/Contents/Resources/RemoteWeb"),
     ].compactMap { $0 }.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("index.html").path) }
+    if !zmx.isAvailable {
+        FileHandle.standardError.write(Data("alas-host: zmx not found beside alas-host or in /Applications/Alas.app; peers can't open terminals here\n".utf8))
+    }
     if webClient == nil {
         FileHandle.standardError.write(Data("alas-host: no web client found (set ALAS_REMOTE_WEB_DIR); serving pairing and the WebSocket only\n".utf8))
     }
@@ -276,8 +304,13 @@ if let listen = config.hostRemoteListen {
                 name: settings.resolvedDisplayName
             )
         },
-        // No terminals here, so a Mac does not offer them.
-        identity: { RemoteServerIdentity(serverId: settings.serverId, name: settings.resolvedDisplayName, servesPeerConsoles: false) },
+        // Terminals only with zmx, so a Mac offers none it can't open.
+        identity: {
+            RemoteServerIdentity(
+                serverId: settings.serverId, name: settings.resolvedDisplayName,
+                consoleCapabilities: shells.isAvailable ? PeerConsoleCapability.headlessHost : []
+            )
+        },
         signer: identityKey
     )
     localPeerIdentity = {
@@ -308,6 +341,7 @@ if let listen = config.hostRemoteListen {
         return RemotePairingLink.build(base: base, code: code, addresses: addresses)
     }
     let presenter = HeadlessSessionPresenter(core: host.coreContext)
+    presenter.peerConsoleHost = shells.makePeerConsoleHost()
     server.presenter = presenter
     openSessions = presenter
     // The port can change after the first: a listener that fails rebinds on
@@ -361,10 +395,15 @@ if let listen = config.hostRemoteListen {
 
 // Projects added before the host started, by the app or `project add`, have
 // worktrees only once they are listed; the app lists them at launch too.
+// The shepherds start after, since they leave records of unlisted worktrees.
 // Remote follows: restoring the open sessions keeps those of listed
 // worktrees only. Stored sessions load last, so they do not hold up Remote.
 Task {
+    // Before Remote lists them.
+    await shells.restore()
     await host.loadProjectWorktrees()
+    // Off Remote's path: probing gg can take a while, and Remote doesn't need it.
+    Task { await host.startAutomation() }
     await startRemote?()
     await host.coreContext.loadStoredSessionManagers()
 }
@@ -380,6 +419,7 @@ func stop() {
     protocolServer.close()
     socket.stop()
     tailscaleServe?.stop()
+    openSessions?.peerConsoleHost?.shutdown()
     remote?.stop()
     keepAwake.update(enabled: false, serverRunning: false)
     Task { @MainActor in

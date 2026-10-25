@@ -104,7 +104,7 @@ extension SessionsAPI {
             }
         }
         guard let row = manager.sessionRows.first(where: { $0.id == session.id }) else { throw SessionRefusal.notFound }
-        return Self.summary(of: row, in: manager, parent: core.delegatedSessionParents[row.id])
+        return Self.summary(of: row, in: manager, core: core)
     }
 
     /// Why a session for `agentID` cannot start in `worktree` now, as
@@ -354,6 +354,7 @@ extension SessionsAPI {
         caller.log("sessions.archive", sessionID)
         guard let manager = rowManager(for: sessionID) else { throw SessionRefusal.notFound }
         guard try await manager.archiveUnlessDrivenElsewhere(id: sessionID) else { throw SessionRefusal.notWriter }
+        core.scheduledAgentTurns.sessionClosed(sessionID)
     }
 
     public func setModel(_ sessionID: String, modelID: String, caller: HostCaller) async throws {

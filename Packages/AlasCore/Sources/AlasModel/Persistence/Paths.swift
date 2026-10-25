@@ -191,6 +191,8 @@ public enum Paths: Sendable {
     public static var attentionEventsFile: URL { appSupportRoot.appendingPathComponent("attention-events.json") }
     /// The sessions a headless host shows paired clients as open, in place of tabs.
     public static var hostOpenSessionsFile: URL { appSupportRoot.appendingPathComponent("host-open-sessions.json") }
+    /// The shells a headless host serves paired clients as consoles.
+    public static var hostConsolesFile: URL { appSupportRoot.appendingPathComponent("host-consoles.json") }
     public static var tabsDir: URL { appSupportRoot.appendingPathComponent("tabs", isDirectory: true) }
     public static var checkpointsRoot: URL { appSupportRoot.appendingPathComponent("checkpoints", isDirectory: true) }
 

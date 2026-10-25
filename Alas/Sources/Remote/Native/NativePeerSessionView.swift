@@ -333,6 +333,39 @@ private struct NativePeerUnsupportedElicitation: View {
     }
 }
 
+/// The host's shepherd pill for the session, read-only: the local pill's
+/// look without its popover. A badge this Mac doesn't know shows nothing.
+private struct NativePeerShepherdPill: View {
+    let shepherd: HostSessionShepherd
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        if let badge = shepherd.badgeState {
+            HStack(spacing: 5) {
+                Image(systemName: badge.symbolName)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(badge.color(theme: theme))
+                if let number = shepherd.number {
+                    Text(number)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                }
+            }
+            .foregroundStyle(theme.color("fg-dim"))
+            .lineLimit(1)
+            .padding(.horizontal, 7)
+            .frame(height: 22)
+            .background(theme.color("bg-3").opacity(0.5))
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(theme.color("line"), lineWidth: 0.5))
+            .aiBeam(isActive: badge.isActive, cornerRadius: 5)
+            .help(shepherd.tooltip)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Shepherd")
+            .accessibilityValue(shepherd.tooltip)
+        }
+    }
+}
+
 /// Its own view so draft edits re-render only the composer, not the
 /// transcript beside it.
 private struct NativePeerComposer: View {
@@ -740,6 +773,7 @@ private struct NativePeerComposer: View {
                 shortcutHint
             }
             Spacer(minLength: 0)
+            if let shepherd = client.selectedShepherd { NativePeerShepherdPill(shepherd: shepherd) }
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }
             if acceptsImages { attachButton }
@@ -753,6 +787,7 @@ private struct NativePeerComposer: View {
     private var compactToolbar: some View {
         HStack(spacing: 8) {
             if showsTakeOver { takeOverButton }
+            if let shepherd = client.selectedShepherd { NativePeerShepherdPill(shepherd: shepherd) }
             if let usage = config?.usage { contextUsageButton(usage) }
             if dictation.state != .unavailable { micButton }
             if acceptsImages { attachButton }

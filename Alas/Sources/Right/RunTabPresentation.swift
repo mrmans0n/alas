@@ -75,9 +75,11 @@ enum RunTabPresentation {
         )
     }
 
-    /// A peer's row follows the local rules, without a terminal to jump to
-    /// or a script to edit.
-    static func peerRow(_ row: PeerRuns.Row, hostName: String, now: Date) -> RunRowPresentation {
+    /// A peer's row follows the local rules, without a script to edit. Its
+    /// terminal is the run's console, when the host lists it in `consoleIds`.
+    static func peerRow(
+        _ row: PeerRuns.Row, hostName: String, consoleIds: Set<String>, now: Date
+    ) -> RunRowPresentation {
         let script = RunScript(
             scope: row.script.scope,
             fileName: row.script.fileName,
@@ -92,7 +94,7 @@ enum RunTabPresentation {
         let input = RunRowInput(
             script: script,
             record: row.record,
-            hasTerminal: false,
+            hasTerminal: row.record?.sessionID.map(consoleIds.contains) ?? false,
             hasReport: hasReport,
             target: row.record?.target ?? row.script.target,
             isEditable: false

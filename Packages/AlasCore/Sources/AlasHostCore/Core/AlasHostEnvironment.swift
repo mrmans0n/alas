@@ -105,6 +105,9 @@ public protocol AlasHostEnvironment: AnyObject {
     /// Whether script `scriptKey`'s run console is hidden in `worktreeID`;
     /// nil when no console of it is open.
     func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool?
+    /// Whether `alas notify` is relayed to the host's subscribers, such as
+    /// paired Macs, rather than shown as a banner here.
+    var relaysNotices: Bool { get }
 }
 
 extension AlasHostEnvironment {
@@ -168,7 +171,24 @@ extension AlasHostEnvironment {
         projectID: String, branch: String, base: String?,
         recordDestination: @MainActor (URL) async throws -> Void, in core: AlasCoreContext
     ) async -> Result<Worktree, ACPSessionOrchestrationCoordinator.WorktreeCreationError> {
-        .failure(.init(message: "This host does not create worktrees for delegated sessions."))
+        // A peer's creation path: startup scripts run without prompting.
+        let worktrees = WorktreesAPI(core: core)
+        let prepared: PreparedWorktreeCreation
+        do {
+            prepared = try await worktrees.prepareCreate(projectID: projectID, branch: branch, base: base, caller: .cli)
+        } catch {
+            return .failure(.init(message: error.localizedDescription))
+        }
+        do {
+            try await recordDestination(prepared.request.destination)
+        } catch {
+            return .failure(.init(message: "Could not record the worktree destination."))
+        }
+        do {
+            return .success(try await worktrees.create(prepared.request, caller: .cli))
+        } catch {
+            return .failure(.init(message: error.localizedDescription))
+        }
     }
 
     public func delegatedSessionParentsChanged() {}
@@ -182,6 +202,8 @@ extension AlasHostEnvironment {
     public func reviewReplyAdded(_ reply: ReviewCommentReply, to comment: ReviewDraftComment, in worktree: Worktree) {}
 
     public func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { nil }
+
+    public var relaysNotices: Bool { false }
 
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
@@ -236,6 +258,15 @@ public final class HeadlessHostEnvironment: AlasHostEnvironment {
         config = configuration
         modelCatalog = ACPAgentModelCatalog()
     }
+
+    /// The launcher a host installs to run scripts in its consoles. Weak, so
+    /// the environment doesn't own the launcher's lifetime.
+    @_spi(AppHost) public weak var runLauncherOverride: (any RunLauncher)?
+
+    public var runLauncher: any RunLauncher { runLauncherOverride ?? HeadlessRunLauncher.shared }
+
+    /// Nobody sees a banner on a host without a UI.
+    public var relaysNotices: Bool { true }
 
     public func configuration() -> AppConfig { config }
 

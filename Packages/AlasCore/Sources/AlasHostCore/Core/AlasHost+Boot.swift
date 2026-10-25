@@ -7,6 +7,7 @@ import AlasCode
 import AlasAgents
 import AlasIntegrations
 import AlasACP
+import AlasAgentKit
 
 /// The host is stopping and starts nothing new.
 public struct HostStopping: Error, Equatable, LocalizedError {
@@ -51,8 +52,15 @@ extension AlasHost {
     /// before anything loads, the login-shell PATH is resolved for git and
     /// agents, and staged worktree trash and stale run files are swept.
     ///
+    /// With `cliBinDir`, the directory holding the installed `alas` CLI, its
+    /// agents get the built-in `alas` MCP server and CLI env. `cliBuild` is
+    /// that CLI's `TerminalCLIInjection.buildIdentity`, so agents a restart
+    /// adopts are restarted once idle when the host now ships another CLI.
+    ///
     /// Throws when the project list cannot be read.
-    public static func boot(in directory: URL = Paths.appSupportRoot) throws -> AlasHost {
+    public static func boot(
+        in directory: URL = Paths.appSupportRoot, cliBinDir: URL? = nil, cliBuild: String? = nil
+    ) throws -> AlasHost {
         guard directory.standardizedFileURL.path == Paths.appSupportRoot.standardizedFileURL.path else {
             throw HostBootRefusal.notThisProcesssDirectory(directory)
         }
@@ -74,7 +82,12 @@ extension AlasHost {
         let environment = HeadlessHostEnvironment(configuration: config)
         // Every other store keeps its `Paths` default, which is this directory.
         let ordering = environment.config.worktrees.defaultOrdering
-        return AlasHost(core: AlasCoreContext(
+        let harness = HarnessService()
+        weak var builtCore: AlasCoreContext?
+        let alasTools = cliBinDir.map {
+            HeadlessAlasTools(binDir: $0, cliBuild: cliBuild, socketServer: harness.socketServer, config: { environment.config }, core: { builtCore })
+        }
+        let core = AlasCoreContext(
             projects: ProjectsManager(persistedProjects: projects.projects, defaultOrdering: { ordering }),
             store: store,
             makeSessionManager: AlasCoreContext.sessionManagerFactory(
@@ -86,20 +99,51 @@ extension AlasHost {
                         host: host
                     )
                     environment.modelCatalog?.recordEffort(agentID: agentID, thinking: chips.thinking)
+                },
+                alasTools: alasTools,
+                onTurnCompleted: { completion in
+                    Task { @MainActor in await builtCore?.turnCompleted(completion) }
                 }
             ),
             environment: environment,
+            harness: harness,
             usageHistory: try? UsageHistoryStore()
-        ))
+        )
+        builtCore = core
+        core.installDefaultShepherdEffects()
+        core.installDefaultRunScheduleRunner()
+        let host = AlasHost(core: core)
+        // A process without an app bundle has no notification center: what
+        // would be a banner goes to the paired Macs instead.
+        host.relayNotifications()
+        return host
     }
 }
 
 extension AlasHost {
+    /// Starts the PR and stack shepherds and the run schedules. Call once the
+    /// projects' worktrees are listed: a record whose worktree the host does
+    /// not list is left for the app until the next start.
+    public func startAutomation() async {
+        // gg is often only on the login shell's PATH, and a probe that misses
+        // it is not repeated.
+        await ShellEnvResolver.shared.waitUntilResolved()
+        await GGAvailability.shared.probe()
+        guard !core.isStopping else { return }
+        core.reviewShepherd.start()
+        core.stackShepherd.start()
+        core.runScheduler.start()
+    }
+
     /// Ends every run and agent session, for a host about to exit: runs,
     /// launches still starting included, are stopped as a worktree's removal
     /// stops them; each session's agent is detached and its process ended,
     /// and every queued session write is flushed.
     public func shutdown() async {
+        // ponytail: stop() only ends the timers; an evaluation underway (a prompt delivery, a gg mutation) runs on, harmless since the process exits next
+        core.reviewShepherd.stop()
+        core.stackShepherd.stop()
+        core.runScheduler.stop()
         // First: a request still underway cannot start what this stops.
         core.isStopping = true
         let worktreeIDs = Set(core.processRuns.values.map(\.worktreeID))
