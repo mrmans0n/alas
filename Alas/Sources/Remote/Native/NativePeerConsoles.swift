@@ -62,8 +62,11 @@ final class NativePeerConsoles {
     @ObservationIgnored private let supportsResize: @MainActor (_ serverId: String) -> Bool
     @ObservationIgnored private let makeSurface: PeerConsoleViewer.MakeSurface
     @ObservationIgnored private let showError: @MainActor (_ title: String, _ message: String) -> Void
-    /// `open` requests awaiting a reply, by request id, to the peer asked.
-    @ObservationIgnored private var pendingOpens: [String: String] = [:]
+    @ObservationIgnored private let supportsRepoHookApproval: @MainActor (_ serverId: String) -> Bool
+    @ObservationIgnored private let decideRepoHook: @MainActor (_ serverId: String, PeerRepoHook, RepoHookApprovalContext) async
+        -> RepoHookApprovalDecision
+    /// `open` requests awaiting a reply, by request id: the peer asked and the worktree.
+    @ObservationIgnored private var pendingOpens: [String: (serverId: String, worktreeId: String)] = [:]
     /// A console this Mac just opened, whose viewer takes control once live.
     @ObservationIgnored private var controlOnOpen: (serverId: String, consoleId: String)?
     @ObservationIgnored private var onlinePeers: Set<String> = []
@@ -77,7 +80,10 @@ final class NativePeerConsoles {
         supportsOpen: @escaping @MainActor (_ serverId: String) -> Bool = { _ in false },
         supportsResize: @escaping @MainActor (_ serverId: String) -> Bool = { _ in false },
         makeSurface: @escaping PeerConsoleViewer.MakeSurface,
-        showError: @escaping @MainActor (_ title: String, _ message: String) -> Void = { _, _ in }
+        showError: @escaping @MainActor (_ title: String, _ message: String) -> Void = { _, _ in },
+        supportsRepoHookApproval: @escaping @MainActor (_ serverId: String) -> Bool = { _ in false },
+        decideRepoHook: @escaping @MainActor (_ serverId: String, PeerRepoHook, RepoHookApprovalContext) async
+            -> RepoHookApprovalDecision = { _, _, _ in .skip }
     ) {
         self.send = send
         self.supportsConsoles = supportsConsoles
@@ -86,6 +92,8 @@ final class NativePeerConsoles {
         self.supportsResize = supportsResize
         self.makeSurface = makeSurface
         self.showError = showError
+        self.supportsRepoHookApproval = supportsRepoHookApproval
+        self.decideRepoHook = decideRepoHook
     }
 
     func start() {
@@ -116,7 +124,7 @@ final class NativePeerConsoles {
         for gone in onlinePeers.subtracting(online) { coalescer.reset(gone) }
         onlinePeers = online
         consoles = consoles.filter { online.contains($0.key) }
-        pendingOpens = pendingOpens.filter { online.contains($0.value) }
+        pendingOpens = pendingOpens.filter { online.contains($0.value.serverId) }
         if let viewer, !online.contains(viewer.serverId) { viewer.connectionLost() }
         requestLists(for: added)
     }
@@ -131,16 +139,30 @@ final class NativePeerConsoles {
         }
         // Only the peer asked answers an open, and only once.
         if case .opened(let requestId, let consoleId) = event {
-            guard pendingOpens[requestId] == serverId else { return }
+            guard pendingOpens[requestId]?.serverId == serverId else { return }
             pendingOpens[requestId] = nil
             controlOnOpen = (serverId, consoleId)
             onOpened?(serverId, consoleId)
             return
         }
         if case .openFailed(let requestId, let message) = event {
-            guard pendingOpens[requestId] == serverId else { return }
+            guard pendingOpens[requestId]?.serverId == serverId else { return }
             pendingOpens[requestId] = nil
             showError("New Terminal Failed", message)
+            return
+        }
+        // The host opened nothing: ask this Mac's user, then open again with the answer.
+        if case .openNeedsRepoHookApproval(let requestId, let hook) = event {
+            guard let pending = pendingOpens[requestId], pending.serverId == serverId else { return }
+            pendingOpens[requestId] = nil
+            Task { [weak self] in
+                guard let decision = await self?.decideRepoHook(serverId, hook, .sessionOpen), let self else { return }
+                switch decision {
+                case .approve: requestOpen(serverId: serverId, worktreeId: pending.worktreeId, repoHook: .approve(hash: hook.hash))
+                case .skip: requestOpen(serverId: serverId, worktreeId: pending.worktreeId, repoHook: .skip)
+                case .retry, .cancel: break
+                }
+            }
             return
         }
         guard let viewer, viewer.serverId == serverId, event.attachmentId == viewer.attachmentId else { return }
@@ -195,10 +217,14 @@ final class NativePeerConsoles {
     /// Asks the host for a new shell in `worktreeId`. Its `opened` reply
     /// selects the console and takes control of it.
     func openTerminal(serverId: String, worktreeId: String) {
+        requestOpen(serverId: serverId, worktreeId: worktreeId, repoHook: supportsRepoHookApproval(serverId) ? .ask : nil)
+    }
+
+    private func requestOpen(serverId: String, worktreeId: String, repoHook: RepoHookConsent?) {
         guard canOpen(serverId: serverId) else { return }
         let requestId = UUID().uuidString
-        pendingOpens[requestId] = serverId
-        send(serverId, .console(.open(requestId: requestId, worktreeId: worktreeId)))
+        pendingOpens[requestId] = (serverId, worktreeId)
+        send(serverId, .console(.open(requestId: requestId, worktreeId: worktreeId, repoHook: repoHook)))
     }
 
     private func open(serverId: String, consoleId: String) {

@@ -549,7 +549,7 @@ import Testing
         consoles.openTerminal(serverId: "old", worktreeId: "w")
         #expect(sent.isEmpty)
         consoles.openTerminal(serverId: "srv", worktreeId: "w")
-        guard case .console(.open(let first, "w")) = sent.last?.1 else {
+        guard case .console(.open(let first, "w", nil)) = sent.last?.1 else {
             Issue.record("no open")
             return
         }
@@ -559,12 +559,55 @@ import Testing
         #expect(opened == ["srv/c"])
 
         consoles.openTerminal(serverId: "srv", worktreeId: "w")
-        guard case .console(.open(let second, _)) = sent.last?.1 else {
+        guard case .console(.open(let second, _, _)) = sent.last?.1 else {
             Issue.record("no open")
             return
         }
         consoles.receive(serverId: "srv", .openFailed(requestId: second, message: "SSH"))
         #expect(errors == ["New Terminal Failed: SSH"])
+    }
+
+    @Test(arguments: [RepoHookApprovalDecision.approve, .skip, .cancel])
+    func anOpenWaitingOnHookApprovalIsSentAgainWithTheAnswer(_ decision: RepoHookApprovalDecision) async throws {
+        var sent: [RemoteClientMessage] = []
+        var errors: [String] = []
+        var asked: [PeerRepoHook] = []
+        let hook = PeerRepoHook(event: .sessionOpen, text: "x", hash: "h")
+        let consoles = NativePeerConsoles(
+            send: { sent.append($1) }, supportsConsoles: { _ in true }, supportsOpen: { _ in true },
+            makeSurface: { _, _, _ in throw CancellationError() },
+            showError: { errors.append($1) },
+            supportsRepoHookApproval: { _ in true },
+            decideRepoHook: { _, shown, _ in
+                asked.append(shown)
+                return decision
+            }
+        )
+        consoles.peersChanged(online: ["srv"])
+        consoles.openTerminal(serverId: "srv", worktreeId: "w")
+        guard case .console(.open(let first, "w", .ask))? = sent.last else {
+            Issue.record("\(sent)")
+            return
+        }
+        let sentBefore = sent.count
+
+        consoles.receive(serverId: "srv", .openNeedsRepoHookApproval(requestId: first, hook: hook))
+        // The resend runs in the same main-actor job that recorded the ask.
+        try await eventually("asked") { !asked.isEmpty }
+        #expect(asked == [hook])
+        switch decision {
+        case .approve, .skip:
+            guard case .console(.open(let again, "w", let consent))? = sent.last else {
+                Issue.record("\(sent)")
+                return
+            }
+            #expect(again != first)
+            let expected: RepoHookConsent = decision == .approve ? .approve(hash: "h") : .skip
+            #expect(consent == expected)
+        default:
+            #expect(sent.count == sentBefore)
+        }
+        #expect(errors.isEmpty)
     }
 }
 

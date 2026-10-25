@@ -109,7 +109,7 @@ import Testing
                 terminated.append(id)
                 known.removeAll { $0 == id }
             },
-            open: { [unowned self] _ in try openResult.get() },
+            open: { [unowned self] _, _ in try openResult.get() },
             resize: { @MainActor [unowned self] id, rows, columns in
                 resized.append("\(id) \(rows)x\(columns)")
                 return (rows: rows, columns: columns)
