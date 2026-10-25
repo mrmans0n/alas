@@ -33,12 +33,20 @@ struct HeadlessCLIRouterTests {
             path: path, status: .clean, lastActivity: .distantPast
         )
         projects.insertOptimisticWorktree(worktree)
-        let core = AlasCoreContext(projects: projects, runHistoryStore: nil, attentionStore: .scratch())
+        let core = AlasCoreContext(
+            projects: projects, runHistoryStore: nil, attentionStore: .scratch(),
+            reviewDrafts: ReviewDraftCommentStore(url: path.appendingPathComponent("review-drafts.json")),
+            reviewSessions: ReviewSessionStore(url: path.appendingPathComponent("review-sessions.json"))
+        )
         let router = AlasCLICommandRouter.headless(host: AlasHost(core: core))
 
         let response = await router.handle(.init(version: 1, sessionId: nil, cwd: path.path, command: .review(.localChanges(worktree: nil))))
 
-        #expect(response != AlasCLICommandRouter.headlessRefusal)
+        let sessionID = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: path, scope: .all)
+        #expect(response == .text([
+            "Opened review of local changes in Alas.",
+            ReviewsAPI.jsonLine(["session_id": sessionID.rawValue]),
+        ]))
         #expect(core.openedLocalChangesReviews[worktree.id] != nil)
     }
 }
