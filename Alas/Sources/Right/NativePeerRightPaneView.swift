@@ -292,20 +292,32 @@ struct NativePeerRightPaneView: View {
             onToggle: { reviewsExpanded.toggle() }
         ) { EmptyView() }
         if reviewsExpanded {
-            if !listsLocalChanges {
-                reviewRow(title: "Review local changes", subtitle: nil, verdict: nil, openCount: 0) {
-                    client.openReview(localChanges, serverId: target.serverId, worktree: target.worktree)
-                }
+            // Bounded, so a long review history scrolls instead of crowding
+            // out the changes.
+            ScrollView {
+                VStack(spacing: 0) { reviewRows(target, localChanges: localChanges, listsLocalChanges: listsLocalChanges) }
             }
-            ForEach(reviews, id: \.sessionID) { review in
-                reviewRow(
-                    title: review.record.target.title,
-                    subtitle: review.record.target.sourceDescription,
-                    verdict: review.record.verdict?.verdict,
-                    openCount: review.openCommentCount
-                ) {
-                    client.openReview(review.sessionID, serverId: target.serverId, worktree: target.worktree)
-                }
+            .frame(maxHeight: 180)
+        }
+    }
+
+    @ViewBuilder
+    private func reviewRows(
+        _ target: (serverId: String, worktree: PeerHostWorktree), localChanges: String, listsLocalChanges: Bool
+    ) -> some View {
+        if !listsLocalChanges {
+            reviewRow(title: "Review local changes", subtitle: nil, verdict: nil, openCount: 0) {
+                client.openReview(localChanges, serverId: target.serverId, worktree: target.worktree)
+            }
+        }
+        ForEach(reviews, id: \.sessionID) { review in
+            reviewRow(
+                title: review.record.target.title,
+                subtitle: review.record.target.sourceDescription,
+                verdict: review.record.verdict?.verdict,
+                openCount: review.openCommentCount
+            ) {
+                client.openReview(review.sessionID, serverId: target.serverId, worktree: target.worktree)
             }
         }
     }
@@ -343,13 +355,14 @@ struct NativePeerRightPaneView: View {
     }
 
     /// Changes when the git target's reviews should be listed again: a new
-    /// target, the host serving reviews, or its `reviewsChanged`.
+    /// target, the host serving reviews, its `reviewsChanged`, or a reconnect.
     private var reviewsKey: String? {
         guard let gitTarget, let gitTargetKey, let hosts = client.hosts,
               hosts.servesReviews(serverId: gitTarget.serverId)
         else { return nil }
         let revision = hosts.reviewRevisions[gitTarget.serverId]?[gitTarget.worktree.snapshot.worktree.id] ?? 0
-        return "\(gitTargetKey)#\(revision)"
+        let subscription = hosts.subscriptions[gitTarget.serverId] ?? 0
+        return "\(gitTargetKey)#\(revision)#\(subscription)"
     }
 
     /// The git target's reviews. A refusal or no answer keeps the last list.

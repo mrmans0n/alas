@@ -21,6 +21,11 @@ final class NativePeerHosts {
     /// Each peer's count of `reviewsChanged` by worktree id, keyed like
     /// `worktrees`, for a review view to read again on.
     private(set) var reviewRevisions: [String: [String: Int]] = [:]
+    /// Each peer's count of subscriptions, by `serverId`: bumped when its
+    /// channel subscribes again, so a view reads again after a reconnect
+    /// whose missed events no revision records.
+    private(set) var subscriptions: [String: Int] = [:]
+    @ObservationIgnored private var subscribed: Set<String> = []
     /// Changes each time the git target's follow is sent: for a new target,
     /// and on a channel subscribed again, whose events do not repeat an
     /// unchanged status. Nil until sent.
@@ -95,6 +100,7 @@ final class NativePeerHosts {
         shepherds = [:]
         reviewStatuses = [:]
         reviewRevisions = [:]
+        subscribed = []
         gitFollowSent = false
         for channel in stopped {
             channel.onChange = nil
@@ -336,6 +342,11 @@ final class NativePeerHosts {
             shepherds[serverId] = channel.state?.shepherds
             reviewStatuses[serverId] = channel.state?.reviewStatuses
             reviewRevisions[serverId] = channel.state?.reviewRevisions
+            if !channel.isSubscribed {
+                subscribed.remove(serverId)
+            } else if subscribed.insert(serverId).inserted {
+                subscriptions[serverId, default: 0] += 1
+            }
             if !channel.isSubscribed, gitFollow?.serverId == serverId { gitFollowSent = false }
             sendGitFollow()
             onChange?()
