@@ -149,15 +149,41 @@ extension AppState {
         return await core.shepherdSessionState(sessionID: sessionID, in: manager)
     }
 
-    /// Runs `work` behind the transcript's "Preparing to ship…" row: Ship
-    /// reads git, gg or the code host before its card lands, and without the
-    /// row the click looks ignored. A Ship already preparing for the session
-    /// absorbs a repeat instead of sending a second prompt.
-    func preparingShip(session: ACPSession?, _ work: () async -> Void) async {
-        guard session?.preparingAppActionStatus == nil else { return }
-        session?.preparingAppActionStatus = "Preparing to ship…"
-        defer { session?.preparingAppActionStatus = nil }
-        await work()
+    /// Runs `work` behind the loading state of Ship's prompt card: Ship
+    /// reads git, gg or the code host before its card lands, and without it
+    /// the click looks ignored. `work` sends its prompt with the card id it
+    /// is given and returns whether the session took it; the recorded card
+    /// then replaces the loading row in place. The row only appears once
+    /// preparing outlasts `preparingShipRevealDelay`, so a fast Ship shows
+    /// its card directly. A Ship already preparing for the session absorbs a
+    /// repeat instead of sending a second prompt.
+    func preparingShip(session: ACPSession?, _ work: (_ cardID: UUID) async -> Bool) async {
+        let cardID = UUID()
+        guard let session else {
+            _ = await work(cardID)
+            return
+        }
+        guard preparingShipSessionIDs.insert(session.id).inserted else { return }
+        let reveal = Task { @MainActor in
+            try? await Task.sleep(for: Self.preparingShipRevealDelay)
+            guard !Task.isCancelled else { return }
+            session.preparingAppAction = .init(id: cardID, status: "Preparing to ship…")
+        }
+        let handedOff = await work(cardID)
+        reveal.cancel()
+        preparingShipSessionIDs.remove(session.id)
+        if !handedOff {
+            Self.endPreparingShip(cardID, in: session)
+        }
+    }
+
+    private static let preparingShipRevealDelay: Duration = .milliseconds(300)
+
+    /// Drops the card's loading row when its prompt ended without being
+    /// recorded, such as when it was queued or failed to send.
+    static func endPreparingShip(_ cardID: UUID, in session: ACPSession?) {
+        guard let session, session.preparingAppAction?.id == cardID else { return }
+        session.preparingAppAction = nil
     }
 
     /// The popover's Ship with agent button records an Alas action while
@@ -166,15 +192,15 @@ extension AppState {
         let session = acpManager(for: worktree)?.liveSession(for: sessionID)
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await preparingShip(session: session) {
-                await sendShepherdCreatePrompt(sessionID: sessionID, worktree: worktree)
+            await preparingShip(session: session) { cardID in
+                await sendShepherdCreatePrompt(sessionID: sessionID, worktree: worktree, cardID: cardID)
             }
         }
     }
 
-    /// Returns once the session took the prompt or it was refused.
-    private func sendShepherdCreatePrompt(sessionID: String, worktree: Worktree) async {
-        guard let manager = acpManager(for: worktree) else { return }
+    /// Returns once the session took the prompt (true) or it was refused.
+    private func sendShepherdCreatePrompt(sessionID: String, worktree: Worktree, cardID: UUID) async -> Bool {
+        guard let manager = acpManager(for: worktree) else { return false }
         let remotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
         guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
             inAppNotifications.post(
@@ -182,15 +208,19 @@ extension AppState {
                 severity: .error,
                 worktreeID: worktree.id
             )
-            return
+            return false
         }
+        let session = manager.liveSession(for: sessionID)
+        var accepted = false
         await manager.sendPrompt(
             for: sessionID,
             text: ShepherdPromptBuilder.createPrompt(kind: kind),
             attachments: [],
-            delegatedSource: .shipCreate(kind: kind, branch: worktree.branch, messageID: UUID()),
-            normalUserTurn: false
-        ) { [weak self] sent in
+            delegatedSource: .shipCreate(kind: kind, branch: worktree.branch, messageID: cardID),
+            normalUserTurn: false,
+            onAccepted: { accepted = true }
+        ) { [weak self, weak session] sent in
+            Self.endPreparingShip(cardID, in: session)
             guard !sent else { return }
             self?.inAppNotifications.post(
                 "Could not send the Ship with agent prompt to this session.",
@@ -198,22 +228,23 @@ extension AppState {
                 worktreeID: worktree.id
             )
         }
+        return accepted
     }
 
     /// `/ship`: runs what the Ship popover would offer this session, fetching
     /// the branch's status first when nothing has it cached. In a gg stack
     /// worktree that is the stack's Ship.
     func shipFromCommand(session: ACPSession, worktree: Worktree) async {
-        await preparingShip(session: session) {
+        await preparingShip(session: session) { cardID in
             if shipsStack(sessionID: session.id, worktree: worktree) {
-                await shipStackFromCommand(session: session, worktree: worktree)
+                await shipStackFromCommand(session: session, worktree: worktree, cardID: cardID)
             } else {
-                await shipPRFromCommand(session: session, worktree: worktree)
+                await shipPRFromCommand(session: session, worktree: worktree, cardID: cardID)
             }
         }
     }
 
-    private func shipPRFromCommand(session: ACPSession, worktree: Worktree) async {
+    private func shipPRFromCommand(session: ACPSession, worktree: Worktree, cardID: UUID) async -> Bool {
         var context = ShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self)
         if context.request == nil, let bound = context.record ?? context.otherRecord {
             let fetched = await reviewShepherd.statusSnapshot(for: bound.id)
@@ -237,10 +268,11 @@ extension AppState {
         case .adopt(let request):
             await shepherdWithSession(session.id, worktree: worktree, request: request)
         case .create:
-            await sendShepherdCreatePrompt(sessionID: session.id, worktree: worktree)
+            return await sendShepherdCreatePrompt(sessionID: session.id, worktree: worktree, cardID: cardID)
         case .unavailable(let reason):
             session.lastError = reason
         }
+        return false
     }
 
     /// Binds `request` to an existing session and sends it the context

@@ -112,15 +112,17 @@ extension AppState {
         let session = acpManager(for: worktree)?.liveSession(for: sessionID)
         Task { @MainActor [weak self] in
             guard let self else { return }
-            await preparingShip(session: session) {
-                await sendShipStackPrompt(sessionID: sessionID, worktree: worktree, plan: plan)
+            await preparingShip(session: session) { cardID in
+                await sendShipStackPrompt(sessionID: sessionID, worktree: worktree, plan: plan, cardID: cardID)
             }
         }
     }
 
-    /// Returns once the session took the prompt or it was refused.
-    private func sendShipStackPrompt(sessionID: String, worktree: Worktree, plan: StackShipPlan) async {
-        guard let manager = acpManager(for: worktree) else { return }
+    /// Returns once the session took the prompt (true) or it was refused.
+    private func sendShipStackPrompt(
+        sessionID: String, worktree: Worktree, plan: StackShipPlan, cardID: UUID
+    ) async -> Bool {
+        guard let manager = acpManager(for: worktree) else { return false }
         let stackName = shepherdStackName(for: worktree) ?? worktree.branch
         let remotes = (try? await GitService().remotes(worktreePath: worktree.path)) ?? []
         guard let kind = CodeHostRemoteDetector.detect(from: remotes)?.kind else {
@@ -129,19 +131,23 @@ extension AppState {
                 severity: .error,
                 worktreeID: worktree.id
             )
-            return
+            return false
         }
         // Set even for the whole stack, so an earlier choice never carries over.
         stackShepherd.setPendingShipPlan(
             plan, sessionID: sessionID, id: StackShepherdRecordID(worktreeID: worktree.id, stackName: stackName)
         )
+        let session = manager.liveSession(for: sessionID)
+        var accepted = false
         await manager.sendPrompt(
             for: sessionID,
             text: StackShepherdPromptBuilder.shipPrompt(kind: kind, plan: plan),
             attachments: [],
-            delegatedSource: .shipStack(stackName: stackName, kind: kind, messageID: UUID()),
-            normalUserTurn: false
-        ) { [weak self] sent in
+            delegatedSource: .shipStack(stackName: stackName, kind: kind, messageID: cardID),
+            normalUserTurn: false,
+            onAccepted: { accepted = true }
+        ) { [weak self, weak session] sent in
+            Self.endPreparingShip(cardID, in: session)
             guard !sent else { return }
             self?.inAppNotifications.post(
                 "Could not send the Ship stack prompt to this session.",
@@ -149,6 +155,7 @@ extension AppState {
                 worktreeID: worktree.id
             )
         }
+        return accepted
     }
 
     /// The shepherding popover's Ship more: publishes `plan` straight away,
@@ -177,7 +184,7 @@ extension AppState {
     }
 
     /// `/ship` in a gg stack worktree: what the Ship stack popover offers.
-    func shipStackFromCommand(session: ACPSession, worktree: Worktree) async {
+    func shipStackFromCommand(session: ACPSession, worktree: Worktree, cardID: UUID) async -> Bool {
         let context = StackShepherdSessionContext(sessionID: session.id, worktree: worktree, state: self)
         // A finished record is not this session's stack: load what gg lists.
         let hasLiveRecord = context.record?.isFinished == false || context.otherRecord != nil
@@ -193,10 +200,11 @@ extension AppState {
         case .adopt:
             await shepherdStackWithSession(session.id, worktree: worktree)
         case .create:
-            await sendShipStackPrompt(sessionID: session.id, worktree: worktree, plan: .wholeStack)
+            return await sendShipStackPrompt(sessionID: session.id, worktree: worktree, plan: .wholeStack, cardID: cardID)
         case .unavailable(let reason):
             session.lastError = reason
         }
+        return false
     }
 
     // MARK: - Notifications
