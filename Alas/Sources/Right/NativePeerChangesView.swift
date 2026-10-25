@@ -75,7 +75,7 @@ struct NativePeerChangesView: View {
             let groups = WorkingTreeChangeGroup.group(files: files)
             let groupsByPath = Dictionary(uniqueKeysWithValues: groups.map { ($0.path, $0) })
             if showsHeader {
-                SectionHeader(
+                let header = SectionHeader(
                     role: .workingTree,
                     title: title,
                     count: groups.count,
@@ -93,8 +93,8 @@ struct NativePeerChangesView: View {
                             .foregroundColor(theme.color("accent"))
                     }
                 }
-                .contextMenu {
-                    if let git {
+                if let git {
+                    header.contextMenu {
                         let staged = files.filter { $0.stage == .staged }
                         let unstaged = files.filter { $0.stage == .unstaged }
                         if !unstaged.isEmpty { Button("Stage All Changes") { git.onStage(unstaged) } }
@@ -104,6 +104,8 @@ struct NativePeerChangesView: View {
                             git.onDiscard(PendingDiscard(target: .all(fileCount: files.count), paths: files.map(\.path)))
                         }
                     }
+                } else {
+                    header
                 }
             }
             if expanded || !showsHeader {

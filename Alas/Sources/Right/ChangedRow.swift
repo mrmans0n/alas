@@ -89,7 +89,7 @@ struct ChangedRow: View {
                 }
             } else {
                 FileContextMenuActions(
-                    configuration: .workingTreeFile(target: fileContextTarget),
+                    configuration: workingTreeMenu,
                     onOpenInAlas: onOpenFile,
                     openInAlasEnabled: openFileEnabled,
                     onViewAtHEAD: onViewAtHEAD,
@@ -135,6 +135,22 @@ struct ChangedRow: View {
             }
         }
         .dragOut { dragPayload?() }
+    }
+}
+
+extension ChangedRow {
+    /// The working-tree menu without the HEAD actions nothing handles, as on
+    /// a peer's worktree.
+    fileprivate var workingTreeMenu: FileContextMenuConfiguration {
+        let menu = FileContextMenuConfiguration.workingTreeFile(target: fileContextTarget)
+        return FileContextMenuConfiguration(target: menu.target, actions: menu.actions.filter { action in
+            switch action {
+            case .viewAtHEAD: onViewAtHEAD != nil
+            case .compareWithHEAD: onCompareWithHEAD != nil
+            case .fileHistory: onFileHistory != nil
+            default: true
+            }
+        })
     }
 }
 

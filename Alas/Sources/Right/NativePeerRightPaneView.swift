@@ -75,6 +75,8 @@ struct NativePeerRightPaneView: View {
             client.reloadWorkspace()
         }
         .onChange(of: gitTargetKey, initial: true) { _, _ in
+            // The previous worktree's pill must not stand in until the new read.
+            reviewLoop.showHostSnapshot(nil)
             client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
         }
         .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
@@ -270,8 +272,10 @@ struct NativePeerRightPaneView: View {
         }
         // Not followed yet: the follow's key change reads it once sent.
         guard hosts.gitFollowKey != nil else { return }
+        let key = gitTargetKey
         let status = await hosts.reviewStatus(in: gitTarget.worktree, serverId: gitTarget.serverId)
-        guard !Task.isCancelled else { return }
+        // A manual refresh is unstructured: a late reply must not land on another worktree.
+        guard !Task.isCancelled, gitTargetKey == key else { return }
         reviewLoop.showHostSnapshot(status)
     }
 
