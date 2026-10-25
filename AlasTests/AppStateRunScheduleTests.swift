@@ -1111,6 +1111,8 @@ struct AppStateRunScheduleTests {
         (ACPTurnCompletion.Result?.some(.completed), RunScheduleOutcome.succeeded),
         (.some(.failed("boom")), .agentFailed("boom")),
         (.some(.cancelled), .stopped),
+        (.some(.stopped(.init())), .unknown),
+        (.some(.stopped(.init(rawValue: .string("refusal")))), .agentFailed("Agent declined to continue")),
         (nil, .unknown),
     ])
     func aScheduledTurnsResultBecomesTheFiringOutcome(

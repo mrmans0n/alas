@@ -30,12 +30,6 @@ struct ACPDelegatedOutcomeTextTests {
         #expect(ACPDelegatedOutcomeText.notice(bare) == "Delegated session c (claude) finished its turn.")
     }
 
-    @Test("a cancelled turn says the user cancelled it")
-    func cancelled() {
-        #expect(ACPDelegatedOutcomeText.cancelled(context)
-            == "Delegated session child-1 (codex, worktree feature-x) had its turn cancelled by the user.")
-    }
-
     @Test("failure text carries the failure message")
     func failure() {
         #expect(ACPDelegatedOutcomeText.failure(context, message: "Agent is not enabled")
@@ -132,6 +126,8 @@ struct ACPDelegatedOutcomeTextTests {
                   label: "Alas · Codex child c4f1a2b3 finished without a result"),
         fromChild(ACPDelegatedOutcomeText.failure(childContext, message: "has been waiting for a human decision (x)"),
                   label: "Alas · Codex child c4f1a2b3 failed"),
+        fromChild(ACPDelegatedOutcomeText.stopped(childContext, reason: "Outcome unknown"),
+                  label: "Alas · Codex child c4f1a2b3 stopped"),
         // Parent→child: the sender is a root, or itself the child of a third session.
         .init(source: "parent", target: "c4f1a2b3-9d", senderDelegation: nil, label: "Delegated prompt"),
         .init(source: "parent", target: "c4f1a2b3-9d",

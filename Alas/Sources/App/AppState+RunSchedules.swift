@@ -478,8 +478,13 @@ extension AppState {
                 schedule, reason: "\(agentName) hit its usage limit in \(worktree.title).",
                 project: project, worktree: worktree
             )
+        case .stopped(let reason):
+            reportScheduleFailure(
+                schedule, reason: "\(agentName) stopped in \(worktree.title): \(reason.summary).",
+                project: project, worktree: worktree
+            )
         case .cancelled:
-            // Stopped by the user, who already knows.
+            // Cancellation is recorded by the schedule's stopped outcome.
             break
         case nil:
             reportScheduleFailure(

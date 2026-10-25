@@ -918,6 +918,8 @@ public final class ACPSessionOrchestrationCoordinator {
             prompt = ACPDelegatedOutcomeText.notice(context)
         case (.wake, .failed(let message)):
             prompt = ACPDelegatedOutcomeText.failure(context, message: message)
+        case (.wake, .stopped(let reason)):
+            prompt = ACPDelegatedOutcomeText.stopped(context, reason: reason.summary)
         case (.wake, _):
             prompt = ACPDelegatedOutcomeText.unreported(context, lastAgentText: completion.lastAgentText)
         }
