@@ -33,20 +33,92 @@ public struct RepoHookLoader: Sendable {
     }
 
     /// The hook for `event` as committed at `ref`, rather than as checked
-    /// out: what a worktree created from `ref` will have.
+    /// out: what a worktree created from `ref` will have. Symlinks are
+    /// followed inside the tree as the disk loader follows them on a
+    /// checkout, so the hash covers the bytes the hook will run.
     public static func loadCommitted(event: RepoHookEvent, ref: String, repoPath: URL, host: String?) async -> RepoHookLoadResult {
         let source = host.map(RepoHookSource.remote) ?? .local
-        let output: ProcessResultData
         do {
-            output = try await Process.gitData(["show", "\(ref):\(event.relativePath)"], cwd: repoPath)
+            switch try await readCommitted(path: event.relativePath, ref: ref, repoPath: repoPath) {
+            case .missing:
+                return .missing(source: source)
+            case let .failed(message):
+                return .failed(source: source, message: message)
+            case let .data(bytes):
+                return result(event: event, source: source, bytes: bytes)
+            }
         } catch {
             return .failed(source: source, message: "Could not read hook: \(error.localizedDescription)")
         }
-        guard output.exitCode == 0 else { return .missing(source: source) }
-        guard output.stdout.count <= maximumBytes else {
-            return .failed(source: source, message: "Hook exceeds the 256 KiB limit")
+    }
+
+    private struct TreeEntry {
+        let mode: String
+        let object: String
+        let size: Int?
+    }
+
+    /// Resolves `path` component by component in `ref`'s tree, following
+    /// symlinks relative to their directory, and reads the blob it lands on.
+    private static func readCommitted(path: String, ref: String, repoPath: URL) async throws -> ReadResult {
+        /// The tree entry at `components`, or nil when there is none (or `ref` is unknown).
+        func entry(_ components: [String]) async throws -> TreeEntry? {
+            let output = try await Process.gitData(
+                ["ls-tree", "-l", "-z", "--full-tree", ref, "--", components.joined(separator: "/")], cwd: repoPath)
+            guard output.exitCode == 0, let line = output.stdout.split(separator: 0).first,
+                  let fields = String(data: line, encoding: .utf8)?.split(separator: "\t").first?.split(separator: " ", omittingEmptySubsequences: true),
+                  fields.count == 4
+            else { return nil }
+            return TreeEntry(mode: String(fields[0]), object: String(fields[2]), size: Int(fields[3]))
         }
-        return result(event: event, source: source, bytes: output.stdout)
+
+        var resolved: [String] = []
+        var pending = path.split(separator: "/").map(String.init)
+        var followedSymlinks = 0
+        var final: TreeEntry?
+        while !pending.isEmpty {
+            let component = pending.removeFirst()
+            if component == "." || component.isEmpty { continue }
+            if component == ".." {
+                guard !resolved.isEmpty else { return .failed("Hook resolves outside the worktree") }
+                resolved.removeLast()
+                final = nil
+                continue
+            }
+            guard let found = try await entry(resolved + [component]) else {
+                return followedSymlinks > 0 ? .failed("Hook symlink could not be resolved safely") : .missing
+            }
+            if found.mode == "120000" {
+                followedSymlinks += 1
+                // The kernel's MAXSYMLINKS.
+                guard followedSymlinks <= 32 else { return .failed("Hook symlink could not be resolved safely") }
+                let target = try await Process.gitDataPrefix(["cat-file", "blob", found.object], cwd: repoPath, maxBytes: 4097)
+                guard let target = String(data: target, encoding: .utf8), !target.isEmpty, target.count <= 4096 else {
+                    return .failed("Hook symlink could not be resolved safely")
+                }
+                // An absolute target names a path on the host, not in the new worktree.
+                guard !target.hasPrefix("/") else { return .failed("Hook resolves outside the worktree") }
+                pending = target.split(separator: "/").map(String.init) + pending
+                final = nil
+                continue
+            }
+            if found.mode != "040000", !pending.isEmpty { return .missing }
+            resolved.append(component)
+            final = found
+        }
+
+        guard !resolved.contains(where: { $0.caseInsensitiveCompare(".git") == .orderedSame }) else {
+            return .failed("Hook resolves inside .git")
+        }
+        guard let final, final.mode == "100644" || final.mode == "100755" else {
+            return .failed("Hook is not a regular file")
+        }
+        guard let size = final.size, size <= maximumBytes else {
+            return .failed("Hook exceeds the 256 KiB limit")
+        }
+        let bytes = try await Process.gitDataPrefix(["cat-file", "blob", final.object], cwd: repoPath, maxBytes: maximumBytes + 1)
+        guard bytes.count == size else { return .failed("Could not read hook") }
+        return .data(bytes)
     }
 
     private static func result(event: RepoHookEvent, source: RepoHookSource, bytes: Data) -> RepoHookLoadResult {
