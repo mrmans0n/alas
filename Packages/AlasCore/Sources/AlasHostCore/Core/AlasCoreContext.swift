@@ -378,8 +378,11 @@ public final class AlasCoreContext {
     public func disposeSessionManager(owner: SessionOwnerID) async {
         guard let manager = sessionManagers.removeValue(forKey: owner) else { return }
         manager.flushPendingDraftWrites()
-        for runner in manager.runners.values {
+        // A stopped runner reports no turn, so a scheduled firing waiting on
+        // one is told here.
+        for (sessionID, runner) in manager.runners {
             runner.stop()
+            scheduledAgentTurns.sessionClosed(sessionID)
         }
         manager.prepareForDisposal()
         await Self.finishDisposing(manager)

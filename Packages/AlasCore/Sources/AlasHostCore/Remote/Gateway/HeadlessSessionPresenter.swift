@@ -141,6 +141,7 @@ public final class HeadlessSessionPresenter: RemoteSessionPresenter {
             } catch {
                 presenterLogger.error("Could not close session: \(String(describing: error), privacy: .public)")
             }
+            core.scheduledAgentTurns.sessionClosed(id)
         }
         return .success
     }

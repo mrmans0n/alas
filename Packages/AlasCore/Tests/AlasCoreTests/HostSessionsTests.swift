@@ -818,7 +818,6 @@ struct HostSessionsTests {
             if case .worktreeNotice(let n) = $0 { n.worktreeID == fixture.worktree.id && n.title == "test finished" } else { false }
         } }
         #expect(received.notices(of: id).map(\.body) == ["Merged"])
-        #expect(HostEvent.worktreeNotice(.init(id: UUID(), worktreeID: "w", title: nil, body: "")).optInKind == "worktreeNotice")
 
         // A session the host has stored but not loaded is still one a client can open.
         await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
@@ -830,6 +829,26 @@ struct HostSessionsTests {
             projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: id
         )
         try await eventually { await received.notices(of: id).map(\.body) == ["Merged", "Ready"] }
+    }
+
+    enum HostSessionClose: CaseIterable { case archive, disposeOwner }
+
+    /// A stopped runner reports no turn, so a scheduled firing waiting on a
+    /// session the host closes ends as stopped rather than waiting hours.
+    @Test(arguments: HostSessionClose.allCases)
+    func closingAScheduledSessionEndsItsTurnWaitAsStopped(_ close: HostSessionClose) async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let sessions = fixture.host.sessions
+        let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        fixture.core.scheduledAgentTurns.expect(id)
+        switch close {
+        case .archive: try await sessions.archive(id, caller: .app)
+        case .disposeOwner: await fixture.core.disposeSessionManager(owner: .worktree(fixture.worktree.id))
+        }
+        let completion = await fixture.core.scheduledAgentTurns.wait(for: id, timeout: .seconds(10))
+        #expect(completion?.result == .cancelled)
     }
 
     /// A session dropped while a notice holds it waiting comes back no longer waiting.

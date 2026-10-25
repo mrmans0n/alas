@@ -17,6 +17,8 @@ enum HostSetup {
             config: config, projects: try await HostCommands.listProjects(), missingCommands: await missingAdapterCommands(config)
         )
 
+        // Said first: the check runs gh and glab, which can stall offline.
+        print("Checking gh/glab sign-in…")
         model.notice = await codeHostSignInNotice(model.projects)
 
         Terminal.enter()
