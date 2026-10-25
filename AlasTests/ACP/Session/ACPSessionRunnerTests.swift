@@ -5468,6 +5468,41 @@ struct ACPSessionRunnerTests {
                 "userCancel must not send session/cancel when the lease is held by another instance")
     }
 
+    @Test("a prompt dropped when its connection is replaced ends its card's loading state")
+    func droppedPromptEndsItsCardLoadingState() async throws {
+        let validationStarted = AsyncGate()
+        let validationCanFinish = AsyncGate()
+        var connectionIsCurrent = true
+        let (runner, _) = try makeRunner(
+            isConnectionCurrent: { connectionIsCurrent },
+            canWrite: { true },
+            validateLease: {
+                await validationStarted.open()
+                await validationCanFinish.wait()
+                return true
+            }
+        )
+        runner.start()
+        defer { runner.stop() }
+        let cardID = UUID()
+        runner.session.preparingAppAction = .init(id: cardID, status: "Preparing to ship…")
+
+        var finished: Bool?
+        runner.sendNow(
+            blocks: [.text("Ship it")],
+            queuedItemId: nil,
+            delegatedSource: .shipCreate(kind: .github, branch: "b", messageID: cardID),
+            onPromptFinished: { finished = $0 }
+        )
+        await validationStarted.wait()
+        connectionIsCurrent = false
+        await validationCanFinish.open()
+
+        try await waitUntil { runner.session.preparingAppAction == nil }
+        #expect(finished == nil)
+        #expect(!runner.session.transcript.messages.contains { if case .user = $0 { true } else { false } })
+    }
+
     @Test("userCancel stops before sending cancellation when its runner is superseded during lease validation")
     func userCancelStopsAfterRunnerSupersededDuringLeaseValidation() async throws {
         let validationStarted = AsyncGate()

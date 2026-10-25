@@ -4274,6 +4274,9 @@ extension ACPSessionRunner {
                     self.activePromptID = nil
                 }
                 self.cancelledPromptIDs.remove(promptID)
+                // Even when a successor owns the outcome, this prompt's card
+                // will never land, so its loading row must not linger.
+                self.session.endPreparingAppAction(deliveredBy: delegatedSource)
                 onDispatchRegistered?()
                 if canFinishPrompt {
                     onPromptFinished?(false)
@@ -4308,6 +4311,7 @@ extension ACPSessionRunner {
                 // detached session.
                 if self.activePromptID != promptID {
                     self.cancelledPromptIDs.remove(promptID)
+                    self.session.endPreparingAppAction(deliveredBy: delegatedSource)
                     onDispatchRegistered?()
                     if self.isConnectionCurrent(), !self.stopped,
                        !self.steerInProgress, self.activePromptID == nil {

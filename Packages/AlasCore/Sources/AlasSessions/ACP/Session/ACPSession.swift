@@ -588,6 +588,13 @@ public final class ACPSession: ChangeTracking, Identifiable {
         }
     }
 
+    /// Ends an app action's loading state when the prompt delivering its
+    /// card was dropped before it was recorded.
+    public func endPreparingAppAction(deliveredBy source: ACPDelegatedPromptSource?) {
+        guard let preparing = preparingAppAction, preparing.isDelivered(by: source) else { return }
+        preparingAppAction = nil
+    }
+
     public var hasConversationTranscript: Bool {
         transcript.messages.contains { message in
             switch message {
