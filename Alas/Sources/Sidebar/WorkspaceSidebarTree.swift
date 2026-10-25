@@ -181,7 +181,7 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
         // both header kinds land at the same 13pt from the sidebar edge once
         // the outer scroll-content padding (SidebarView.swift) is added.
         .padding(.leading, 5)
-        .padding(.trailing, 8)
+        .padding(.trailing, 5)
         .padding(.vertical, 3)
         // Matches RepoGroupView's header: same radius, same hover fill, and
         // accent-soft for selection rather than the pre-E1 bg-4 plus an inset
@@ -197,10 +197,6 @@ struct WorkspaceSidebarTree<ProjectRow: View>: View {
                     .strokeBorder(theme.color("accent").opacity(0.5), lineWidth: 0.5)
             }
         }
-        // Outer margin: trailing only. The leading side is already accounted
-        // for by the outer scroll-content padding, so adding it here would
-        // double-count it against the header's own leading inset above.
-        .padding(.trailing, 6)
         .contentShape(Rectangle())
         .onHover { hoveringWorkspaceID = $0 ? workspace.id : nil }
         .contextMenu {
