@@ -269,7 +269,7 @@ struct ReviewReadinessModelTests {
         #expect(!model.actions.map(\.kind).contains(.openAgentHandoff))
     }
 
-    /// A peer's pill offers the host-served actions exactly when local would, and never PR creation or merge.
+    /// A peer's pill keeps the host-served actions local offers for a snapshot, and drops PR creation and merge.
     @Test(arguments: [
         (Self.makeSnapshot(local: Self.makeLocal(needsPush: true), reviewRequest: nil), [ReviewReadinessActionKind.pushBranch]),
         (Self.makeSnapshot(local: Self.makeLocal(needsPush: false, aheadCommitCount: 1), reviewRequest: nil), [.refresh]),

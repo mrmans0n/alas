@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The right pane for a selected peer worktree: its changes and files,
-/// read-only, and its sessions. Run is offered by hosts that serve their
-/// scripts; schedules only make sense on this Mac and are not offered.
+/// The right pane for a selected peer worktree: its changes and files, and
+/// its sessions. Changes are read-only unless the host serves git actions;
+/// Run is offered by hosts that serve their scripts; schedules only make
+/// sense on this Mac and are not offered.
 struct NativePeerRightPaneView: View {
     @Bindable var state: AppState
     @Bindable var client: NativePeerSessions
@@ -15,6 +16,12 @@ struct NativePeerRightPaneView: View {
     @State private var bookmarkOpenPaths: Set<String> = []
     @State private var railBodyWidth: Double = 0
     @State private var runRefreshGeneration = 0
+    /// The git target's review status, as the host reads it.
+    @State private var reviewLoop = ReviewLoopState(worktreePath: URL(fileURLWithPath: "/"), baseBranch: "")
+    @State private var gitError: String?
+    @State private var pendingDiscard: PendingDiscard?
+    @State private var commitTarget: (serverId: String, worktree: PeerHostWorktree)?
+    @State private var pullInFlight = false
 
     var body: some View {
         let tabs = self.tabs
@@ -59,9 +66,46 @@ struct NativePeerRightPaneView: View {
             else { return }
             handle(RightPaneRailAction.resolve(tapped: tab, active: shownTab(in: tabs), collapsed: collapsed), tabs: tabs)
         }
-        .onChange(of: client.selectedWorktree) { _, _ in openPaths = [] }
+        .onChange(of: client.selectedWorktree) { _, _ in
+            openPaths = []
+            gitError = nil
+            pendingDiscard = nil
+        }
         .onChange(of: state.config.changes.comparisonMode) { _, _ in
             client.reloadWorkspace()
+        }
+        .onChange(of: gitTargetKey, initial: true) { _, _ in
+            client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
+        }
+        .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
+        // Once per follow sent: the host repeats no unchanged status to a new subscription.
+        .task(id: client.hosts?.gitFollowKey) { await readReviewStatus() }
+        .onChange(of: liveReviewStatus) { _, status in reviewLoop.showHostSnapshot(status) }
+        .alert(
+            PendingDiscard.alertTitle(for: pendingDiscard ?? .placeholder),
+            isPresented: Binding(
+                get: { pendingDiscard != nil },
+                set: { if !$0 { pendingDiscard = nil } }
+            ),
+            presenting: pendingDiscard,
+            actions: { pending in
+                Button("Discard", role: .destructive) {
+                    pendingDiscard = nil
+                    if let gitTarget { runGit(.discard(paths: pending.paths), on: gitTarget) }
+                }
+                Button("Cancel", role: .cancel) { pendingDiscard = nil }
+            },
+            message: { pending in
+                Text(PendingDiscard.alertMessage(for: pending))
+            }
+        )
+        .sheet(isPresented: Binding(
+            get: { commitTarget != nil },
+            set: { if !$0 { commitTarget = nil } }
+        )) {
+            if let commitTarget, let hosts = client.hosts {
+                commitSheet(commitTarget, hosts: hosts)
+            }
         }
     }
 
@@ -75,11 +119,35 @@ struct NativePeerRightPaneView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(1)
+            if let gitTarget, let local = behindUpstream {
+                BehindChip(
+                    count: local.upstreamAheadCommitCount,
+                    role: .upstream,
+                    inFlight: pullInFlight,
+                    onTap: { pull(gitTarget) },
+                    ref: "\(local.upstreamRemoteName ?? "origin")/\(local.upstreamBranchName ?? local.branchName)"
+                )
+                .disabled(pullInFlight)
+            }
+            if let gitTarget {
+                Menu {
+                    Button("Fetch now") { runGit(.fetch, on: gitTarget) }
+                } label: {
+                    Image(systemName: "arrow.triangle.merge")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(theme.color("fg-muted"))
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Branch operations")
+            }
             WindowDragHandle()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             ToolbarBtn(icon: "arrow.clockwise", tooltip: "Refresh from peer") {
                 client.reloadWorkspace()
                 runRefreshGeneration += 1
+                Task { await readReviewStatus() }
             }
         }
         .padding(.leading, 10)
@@ -111,15 +179,122 @@ struct NativePeerRightPaneView: View {
         } else if shownTab == .files {
             filesTab
         } else {
-            NativePeerChangesView(
-                changes: client.workspace.changes,
-                worktreePath: URL(fileURLWithPath: client.workspaceWorktreePath ?? "/"),
-                commitFiles: client.workspace.commitFiles,
-                onLoadCommitFiles: { client.loadCommitFiles(sha: $0) },
-                onOpen: { client.open($0) }
-            )
-            .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
+            VStack(spacing: 0) {
+                if let gitError {
+                    NativePeerRailMessage(text: gitError)
+                }
+                NativePeerChangesView(
+                    changes: client.workspace.changes,
+                    worktreePath: URL(fileURLWithPath: client.workspaceWorktreePath ?? "/"),
+                    commitFiles: client.workspace.commitFiles,
+                    onLoadCommitFiles: { client.loadCommitFiles(sha: $0) },
+                    onOpen: { client.open($0) },
+                    git: gitActions
+                )
+                .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
+                .frame(maxHeight: .infinity, alignment: .top)
+                // Outside the changes view, so it shows with no changes too.
+                if gitTarget != nil, reviewLoop.snapshot != nil {
+                    ReviewLoopDrawer(
+                        state: reviewLoop,
+                        canOpenAgentHandoff: false,
+                        onAction: { handleReviewAction($0) },
+                        servedActions: ReviewReadinessActionKind.peerServed
+                    )
+                }
+            }
         }
+    }
+
+    private var gitActions: NativePeerChangesView.Git? {
+        guard let gitTarget else { return nil }
+        return NativePeerChangesView.Git(
+            onStage: { runGit(.stage(paths: $0.map(\.path)), on: gitTarget) },
+            onUnstage: { runGit(.unstage(paths: $0.map(\.path)), on: gitTarget) },
+            onDiscard: { pendingDiscard = $0 },
+            onCommit: { commitTarget = gitTarget }
+        )
+    }
+
+    /// Runs `change` on the host, shows its error in the rail, and reads the
+    /// changes again either way.
+    private func runGit(
+        _ change: HostWorktreeChange,
+        on target: (serverId: String, worktree: PeerHostWorktree),
+        then done: @escaping @MainActor () -> Void = {}
+    ) {
+        guard let hosts = client.hosts else { return }
+        gitError = nil
+        Task { @MainActor in
+            gitError = await hosts.mutate(change, in: target.worktree, serverId: target.serverId)
+            client.reloadWorkspace()
+            done()
+        }
+    }
+
+    private func pull(_ target: (serverId: String, worktree: PeerHostWorktree)) {
+        guard !pullInFlight else { return }
+        pullInFlight = true
+        runGit(.pull, on: target) { pullInFlight = false }
+    }
+
+    private func handleReviewAction(_ kind: ReviewReadinessActionKind) {
+        guard let gitTarget else { return }
+        switch kind {
+        case .refresh:
+            guard reviewLoop.beginAction(kind) else { return }
+            Task { @MainActor in
+                await readReviewStatus()
+                reviewLoop.endAction(kind)
+            }
+        case .pushBranch, .forcePushBranch:
+            guard reviewLoop.beginAction(kind) else { return }
+            runGit(.push(forceWithLease: kind == .forcePushBranch), on: gitTarget) { reviewLoop.endAction(kind) }
+        case .openReviewRequest:
+            if let url = reviewLoop.snapshot?.reviewRequest?.url { NSWorkspace.shared.open(url) }
+        default:
+            break // `peerServed` offers no other action.
+        }
+    }
+
+    /// The git target's review status, read again on the host. A refusal
+    /// reads as no status.
+    private func readReviewStatus() async {
+        guard let gitTarget, let hosts = client.hosts else {
+            reviewLoop.showHostSnapshot(nil)
+            return
+        }
+        let status = await hosts.reviewStatus(in: gitTarget.worktree, serverId: gitTarget.serverId)
+        guard !Task.isCancelled else { return }
+        reviewLoop.showHostSnapshot(status)
+    }
+
+    private func commitSheet(
+        _ target: (serverId: String, worktree: PeerHostWorktree), hosts: NativePeerHosts
+    ) -> some View {
+        let worktree = target.worktree.snapshot.worktree
+        // The host sends what the message is suggested from; this Mac's model writes it.
+        var suggest: (@MainActor () async -> CommitMessageSuggestion?)?
+        if state.commitMessageSuggestionAvailable {
+            suggest = {
+                guard let input = await hosts.commitMessageInput(in: target.worktree, serverId: target.serverId) else {
+                    return nil
+                }
+                return await state.makeCommitMessageSuggester().suggest(for: input)
+            }
+        }
+        return NativePeerCommitSheet(
+            subtitle: "\(worktree.branch) on \(client.selectedWorktreePeer?.name ?? "the host")",
+            suggest: suggest,
+            commit: { subject, body, amend in
+                let error = await hosts.mutate(
+                    .commit(subject: subject, body: body, amend: amend), in: target.worktree, serverId: target.serverId
+                )
+                client.reloadWorkspace()
+                return error
+            },
+            onDismiss: { commitTarget = nil }
+        )
     }
 
     private var agentTab: some View {
@@ -196,6 +371,31 @@ struct NativePeerRightPaneView: View {
               client.hosts?.servesRuns(serverId: selection.serverId) == true
         else { return nil }
         return (selection.serverId, host)
+    }
+
+    /// The selected worktree on a host that serves its git actions.
+    private var gitTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard !isFolder, let selection = client.selectedWorktree, let host = client.selectedWorktreeGroup?.host,
+              !host.snapshot.isArchived, client.hosts?.servesGit(serverId: selection.serverId) == true
+        else { return nil }
+        return (selection.serverId, host)
+    }
+
+    private var gitTargetKey: String? {
+        gitTarget.map { "\($0.serverId)/\($0.worktree.snapshot.worktree.id)" }
+    }
+
+    /// The git target's status as the host's events last sent it.
+    private var liveReviewStatus: ReviewLoopSnapshot? {
+        gitTarget.flatMap { client.hosts?.reviewStatuses[$0.serverId]?[$0.worktree.snapshot.worktree.id] }
+    }
+
+    /// The host's branch when it is behind its upstream, as `showBehindUpstreamChip`.
+    private var behindUpstream: ReviewLoopLocalState? {
+        guard gitTarget != nil, let local = reviewLoop.snapshot?.local, local.hasUpstream,
+              local.upstreamAheadCommitCount > 0, !local.branchName.isEmpty
+        else { return nil }
+        return local
     }
 
     private var tabs: [RightPaneTab] { RightPaneTab.peerAvailable(isFolder: isFolder, servesRuns: runTarget != nil) }

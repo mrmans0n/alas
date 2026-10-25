@@ -426,6 +426,7 @@ public enum ReviewReadinessActionKind: String, Codable, Equatable, Sendable {
 }
 
 public extension ReviewReadinessActionKind {
-    /// What a paired host serves: no PR creation or merge, and never force push (local does not offer it).
+    /// What a paired host serves: no PR creation or merge. The host serves
+    /// force push too, but this model never offers it, so keeping it is a no-op.
     static let peerServed: Set<Self> = [.refresh, .pushBranch, .forcePushBranch, .openReviewRequest]
 }

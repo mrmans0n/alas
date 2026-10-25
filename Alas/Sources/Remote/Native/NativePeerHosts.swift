@@ -16,6 +16,12 @@ final class NativePeerHosts {
     private(set) var runs: [String: [RunRecord]] = [:]
     /// Each peer's shepherd pills by session id, keyed like `worktrees`.
     private(set) var shepherds: [String: [String: HostSessionShepherd]] = [:]
+    /// Each peer's followed worktrees' review statuses by worktree id, keyed like `worktrees`.
+    private(set) var reviewStatuses: [String: [String: ReviewLoopSnapshot]] = [:]
+    /// Changes each time the git target's follow is sent: for a new target,
+    /// and on a channel subscribed again, whose events do not repeat an
+    /// unchanged status. Nil until sent.
+    private(set) var gitFollowKey: String?
     @ObservationIgnored var onChange: (@MainActor () -> Void)?
     /// Fired with the peer's `serverId` when its runs changed, so a run's
     /// console can be listed without waiting for the next poll.
@@ -31,6 +37,11 @@ final class NativePeerHosts {
     private let worktreeNotice: @MainActor (_ serverId: String, HostWorktreeNotice) -> Void
     private let timeout: Duration
     @ObservationIgnored private var channels: [String: PeerHostChannel] = [:]
+    /// The worktree whose review status is followed, and whether its channel's
+    /// current subscription was sent the follow.
+    @ObservationIgnored private var gitFollow: GitFollow?
+    @ObservationIgnored private var gitFollowSent = false
+    @ObservationIgnored private var gitFollowSends = 0
 
     init(
         send: @escaping @MainActor (_ serverId: String, HostClientMessage) -> Void,
@@ -79,6 +90,8 @@ final class NativePeerHosts {
         archivedWorktrees = [:]
         runs = [:]
         shepherds = [:]
+        reviewStatuses = [:]
+        gitFollowSent = false
         for channel in stopped {
             channel.onChange = nil
             channel.disconnect()
@@ -177,6 +190,76 @@ final class NativePeerHosts {
         }
     }
 
+    /// Whether `serverId` stages, commits, pushes and pulls its worktrees.
+    func servesGit(serverId: String) -> Bool {
+        worktrees[serverId] != nil && channels[serverId]?.isSubscribed == true
+            && supports(serverId, HostProtocolCapability.worktreesGitV1)
+    }
+
+    /// The error message for `change`; nil once done.
+    func mutate(_ change: HostWorktreeChange, in worktree: PeerHostWorktree, serverId: String) async -> String? {
+        guard servesGit(serverId: serverId), let channel = channels[serverId] else {
+            return FederatedSessionsProvider.peerUnavailableMessage
+        }
+        // A pull is a fetch then a rebase, each bounded at 30 s on the host.
+        let request = HostRequest.mutateWorktree(
+            worktree: Self.ref(worktree), branch: worktree.snapshot.worktree.branch, change: change
+        )
+        switch await channel.request(request, timeout: .seconds(120)) {
+        case .done: return nil
+        case .failure(let error): return PeerWorktreeRemoval.message(for: error)
+        default: return "The host sent an unexpected reply."
+        }
+    }
+
+    /// What the host suggests `worktree`'s commit message from; nil when it cannot say.
+    func commitMessageInput(in worktree: PeerHostWorktree, serverId: String) async -> CommitMessageSuggestionInput? {
+        guard servesGit(serverId: serverId), let channel = channels[serverId],
+              case .commitMessageInput(let input) = await channel.request(.commitMessageInput(worktree: Self.ref(worktree)))
+        else { return nil }
+        return input
+    }
+
+    /// `worktree`'s review status, read again on the host. Nil for none, and
+    /// for a refusal or no answer.
+    func reviewStatus(in worktree: PeerHostWorktree, serverId: String) async -> ReviewLoopSnapshot? {
+        guard servesGit(serverId: serverId), let channel = channels[serverId],
+              case .reviewStatus(let snapshot) = await channel.request(.reviewStatus(worktree: Self.ref(worktree)))
+        else { return nil }
+        return snapshot
+    }
+
+    /// Follows `worktree`'s review status in place of the previous target's.
+    func followGit(_ worktree: PeerHostWorktree?, serverId: String?) {
+        let next = worktree.flatMap { worktree in
+            serverId.map { GitFollow(serverId: $0, worktreeID: worktree.snapshot.worktree.id) }
+        }
+        guard next != gitFollow else { return }
+        if let old = gitFollow, gitFollowSent, let channel = channels[old.serverId] {
+            Task { _ = await channel.request(.unfollowWorktree(worktreeID: old.worktreeID)) }
+        }
+        gitFollow = next
+        gitFollowSent = false
+        gitFollowKey = nil
+        sendGitFollow()
+    }
+
+    private struct GitFollow: Equatable {
+        let serverId: String
+        let worktreeID: String
+    }
+
+    /// Host-side follows end with the subscription, so each one is sent the follow.
+    private func sendGitFollow() {
+        guard let follow = gitFollow, !gitFollowSent, servesGit(serverId: follow.serverId),
+              let channel = channels[follow.serverId]
+        else { return }
+        gitFollowSent = true
+        gitFollowSends += 1
+        gitFollowKey = "\(follow.serverId)/\(follow.worktreeID)#\(gitFollowSends)"
+        Task { _ = await channel.request(.followWorktree(worktreeID: follow.worktreeID)) }
+    }
+
     /// The host's events then update or drop the row; only a refusal is shown here.
     private func remove(
         _ worktree: PeerHostWorktree, _ action: PeerWorktreeRemoval.Action, failureTitle: String,
@@ -208,6 +291,9 @@ final class NativePeerHosts {
             let runsChanged = runs[serverId] != newRuns
             runs[serverId] = newRuns
             shepherds[serverId] = channel.state?.shepherds
+            reviewStatuses[serverId] = channel.state?.reviewStatuses
+            if !channel.isSubscribed, gitFollow?.serverId == serverId { gitFollowSent = false }
+            sendGitFollow()
             onChange?()
             if runsChanged { onRunsChanged?(serverId) }
         }
