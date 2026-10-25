@@ -17,6 +17,8 @@ enum HostSetup {
             config: config, projects: try await HostCommands.listProjects(), missingCommands: await missingAdapterCommands(config)
         )
 
+        model.notice = await codeHostSignInNotice(model.projects)
+
         Terminal.enter()
         defer { Terminal.restore() }
         while true {
@@ -79,6 +81,29 @@ enum HostSetup {
         await ShellEnvResolver.shared.waitUntilResolved()
         let path = ACPProcessEnvironment.baseEnvironment()["PATH"]
         return HostSetupModel.missingAdapterCommands(config) { AgentPath.resolveExecutable(named: $0, base: path) != nil }
+    }
+
+    /// What to do for each code host a local project's remote uses whose CLI is
+    /// missing or signed out; shepherds and `pr_create` need it. Nil when none.
+    private static func codeHostSignInNotice(_ projects: [ProjectSnapshot]) async -> String? {
+        var checked: [CodeHostKind: String?] = [:]
+        for project in projects where project.host == nil && project.kind != .folder {
+            let url = URL(fileURLWithPath: project.path)
+            guard let remotes = try? await GitService().remotes(worktreePath: url),
+                let remote = CodeHostRemoteDetector.detect(from: remotes),
+                checked[remote.kind] == nil,
+                let provider = CodeHostProviderRegistry.live().provider(for: remote.kind)
+            else { continue }
+            if !(await provider.isAvailable(cwd: url)) {
+                checked[remote.kind] = .some(AlasCoreContext.prProviderSetupMessage(kind: remote.kind, isInstalled: false))
+            } else if !(await provider.isAuthenticated(remote: remote, cwd: url)) {
+                checked[remote.kind] = .some(AlasCoreContext.prProviderSetupMessage(kind: remote.kind, isInstalled: true))
+            } else {
+                checked[remote.kind] = .some(nil)
+            }
+        }
+        let messages = checked.sorted { $0.key.rawValue < $1.key.rawValue }.compactMap { $0.value ?? nil }
+        return messages.isEmpty ? nil : messages.joined(separator: "\n")
     }
 
     /// Asks whether to restart the running host now; Escape means later.
