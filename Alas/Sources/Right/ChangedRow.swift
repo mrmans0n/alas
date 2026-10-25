@@ -99,9 +99,20 @@ struct ChangedRow: View {
                     onCopyRelativePath: onCopyRelative,
                     onCopyFullPath: onCopyFull
                 )
+                if onViewStagedChanges != nil || onViewUnstagedChanges != nil {
+                    Divider()
+                    if let onViewStagedChanges {
+                        Button("View Staged Changes") { onViewStagedChanges() }
+                    }
+                    if let onViewUnstagedChanges {
+                        Button("View Unstaged Changes") { onViewUnstagedChanges() }
+                    }
+                }
                 Divider()
-                Button("Copy Diff") { onCopyDiff?() }
-                Divider()
+                if let onCopyDiff {
+                    Button("Copy Diff") { onCopyDiff() }
+                    Divider()
+                }
                 if onStageEntries != nil || onUnstageEntries != nil {
                     if let onStageEntries {
                         Button("Stage") { onStageEntries() }

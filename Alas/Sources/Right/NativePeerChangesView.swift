@@ -127,7 +127,8 @@ struct NativePeerChangesView: View {
                             onUnstageAll: git?.onUnstage,
                             onDiscardFolder: git.map { git in { (folder: String) in
                                 // As `RightPaneState.requestDiscardFolder`, unexpanded: the host expands renames.
-                                let under = files.filter { $0.path.hasPrefix(folder + "/") }
+                                let prefix = folder.hasSuffix("/") ? folder : folder + "/"
+                                let under = files.filter { $0.path.hasPrefix(prefix) }
                                 guard !under.isEmpty else { return }
                                 git.onDiscard(PendingDiscard(
                                     target: .folder(path: folder, fileCount: under.count), paths: under.map(\.path)

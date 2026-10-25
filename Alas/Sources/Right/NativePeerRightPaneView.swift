@@ -125,9 +125,8 @@ struct NativePeerRightPaneView: View {
                     role: .upstream,
                     inFlight: pullInFlight,
                     onTap: { pull(gitTarget) },
-                    ref: "\(local.upstreamRemoteName ?? "origin")/\(local.upstreamBranchName ?? local.branchName)"
+                    ref: local.upstreamRemoteName.map { "\($0)/\(local.upstreamBranchName ?? local.branchName)" }
                 )
-                .disabled(pullInFlight)
             }
             if let gitTarget {
                 Menu {
@@ -225,9 +224,14 @@ struct NativePeerRightPaneView: View {
     ) {
         guard let hosts = client.hosts else { return }
         gitError = nil
+        let key = gitTargetKey
         Task { @MainActor in
-            gitError = await hosts.mutate(change, in: target.worktree, serverId: target.serverId)
-            client.reloadWorkspace()
+            let error = await hosts.mutate(change, in: target.worktree, serverId: target.serverId)
+            // The selection moved on: the answer belongs to another worktree.
+            if gitTargetKey == key {
+                gitError = error
+                client.reloadWorkspace()
+            }
             done()
         }
     }
@@ -264,6 +268,8 @@ struct NativePeerRightPaneView: View {
             reviewLoop.showHostSnapshot(nil)
             return
         }
+        // Not followed yet: the follow's key change reads it once sent.
+        guard hosts.gitFollowKey != nil else { return }
         let status = await hosts.reviewStatus(in: gitTarget.worktree, serverId: gitTarget.serverId)
         guard !Task.isCancelled else { return }
         reviewLoop.showHostSnapshot(status)

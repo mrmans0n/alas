@@ -235,12 +235,15 @@ final class NativePeerHosts {
             serverId.map { GitFollow(serverId: $0, worktreeID: worktree.snapshot.worktree.id) }
         }
         guard next != gitFollow else { return }
-        if let old = gitFollow, gitFollowSent, let channel = channels[old.serverId] {
-            Task { _ = await channel.request(.unfollowWorktree(worktreeID: old.worktreeID)) }
-        }
+        let old = gitFollow, oldSent = gitFollowSent
         gitFollow = next
         gitFollowSent = false
         gitFollowKey = nil
+        if let old, let channel = channels[old.serverId] {
+            if oldSent { Task { _ = await channel.request(.unfollowWorktree(worktreeID: old.worktreeID)) } }
+            // Its status goes stale unfollowed; its onChange may send the new follow.
+            channel.forgetReviewStatus(worktreeID: old.worktreeID)
+        }
         sendGitFollow()
     }
 

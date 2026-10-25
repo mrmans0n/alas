@@ -172,6 +172,13 @@ public final class PeerHostChannel {
         }
     }
 
+    /// Drops `worktreeID`'s cached review status, once the client no longer
+    /// follows it: the host repeats no unchanged status on a later follow.
+    public func forgetReviewStatus(worktreeID: String) {
+        guard state?.reviewStatuses.removeValue(forKey: worktreeID) != nil else { return }
+        onChange?()
+    }
+
     /// Fails every pending request with the peer-unavailable message and
     /// forgets the peer's state.
     public func disconnect() {
