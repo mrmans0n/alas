@@ -278,6 +278,25 @@ struct ACPBrokerClientTests {
         #expect(await service.sent.count == 1)
     }
 
+    @Test func unsupportedAdoptedProtocolDoesNotReinitializeTheAgent() async throws {
+        let service = MockBrokerService()
+        await service.setSnapshotResults(
+            initializeResult: .object(["protocolVersion": .number(2)]),
+            remoteSessionResult: nil)
+        await service.enqueueAttach(events: [])
+        let client = makeClient(service: service)
+        defer { Task { await client.shutdown() } }
+        try await client.start()
+        let connection = ACPConnection(client: client, protocolSelection: .init(experimentalV2Enabled: true))
+
+        await #expect(throws: ACPProtocolNegotiationError.unsupportedVersion(
+            requested: 1, selected: 2, supported: [1])) {
+            try await connection.initialize()
+        }
+        #expect(connection.negotiatedProtocolVersion == nil)
+        #expect(await service.sent.isEmpty)
+    }
+
     @Test func adoptedHandshakeAndRemoteSessionResultsAreReplayedFromSnapshot() async throws {
         let service = MockBrokerService()
         await service.setSnapshotResults(

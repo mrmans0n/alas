@@ -94,6 +94,7 @@ public final class ACPSessionManager: ChangeTracking {
     private let onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)?
     private let onUserPromptRecorded: ((ACPSession.ID, String) -> Void)?
     private let localTitlesEnabled: @MainActor () -> Bool
+    private let experimentalACP2Enabled: @MainActor () -> Bool
     private let autoResumeAfterUsageLimit: @MainActor () -> Bool
     private let continueInterruptedSessions: @MainActor () -> Bool
     private let qwenTitleFallback: ACPQwenTitleFallback?
@@ -1839,6 +1840,7 @@ public final class ACPSessionManager: ChangeTracking {
          onSessionTitleUpdated: ((ACPSession.ID, String) -> Void)? = nil,
          onUserPromptRecorded: ((ACPSession.ID, String) -> Void)? = nil,
          localTitlesEnabled: @escaping @MainActor () -> Bool = { false },
+         experimentalACP2Enabled: @escaping @MainActor () -> Bool = { false },
          autoResumeAfterUsageLimit: @escaping @MainActor () -> Bool = { true },
          continueInterruptedSessions: @escaping @MainActor () -> Bool = { false },
          qwenTitleFallback: ACPQwenTitleFallback? = nil,
@@ -1896,6 +1898,7 @@ public final class ACPSessionManager: ChangeTracking {
         self.onSessionTitleUpdated = onSessionTitleUpdated
         self.onUserPromptRecorded = onUserPromptRecorded
         self.localTitlesEnabled = localTitlesEnabled
+        self.experimentalACP2Enabled = experimentalACP2Enabled
         self.autoResumeAfterUsageLimit = autoResumeAfterUsageLimit
         self.continueInterruptedSessions = continueInterruptedSessions
         self.qwenTitleFallback = qwenTitleFallback
@@ -1940,7 +1943,11 @@ public final class ACPSessionManager: ChangeTracking {
             )
         }
         self.injectedConnectionFactory = connectionFactory
-        self.connectionFactory = connectionFactory ?? Self.makeStdioConnection
+        self.connectionFactory = connectionFactory ?? { spec, host, worktreePath in
+            try Self.makeStdioConnection(
+                spec: spec, host: host, worktreePath: worktreePath,
+                protocolSelection: .init(experimentalV2Enabled: experimentalACP2Enabled()))
+        }
         self.brokerServiceFactory = brokerServiceFactory
         self.isolatedBrokerServiceFactory = isolatedBrokerServiceFactory
         self.attachmentStartupTimeout = attachmentStartupTimeout
@@ -4221,7 +4228,8 @@ public final class ACPSessionManager: ChangeTracking {
             if let injectedConnectionFactory { deletionConnection = try injectedConnectionFactory(launch, host, worktreePath) }
             else {
                 deletionConnection = try Self.makeDefaultConnection(spec: launch, host: host, worktreePath: worktreePath,
-                    sessionId: sessionId, useHelperProc: true, remoteProcId: lease.procId, remoteLeaseFence: fence)
+                    sessionId: sessionId, useHelperProc: true, remoteProcId: lease.procId, remoteLeaseFence: fence,
+                    protocolSelection: makeProtocolSelection())
             }
             connection = deletionConnection
             let initialized = try await deletionConnection.initialize()
@@ -4307,15 +4315,21 @@ public final class ACPSessionManager: ChangeTracking {
     private static func makeStdioConnection(
         spec: ACPLaunchSpec,
         host: String?,
-        worktreePath: String
+        worktreePath: String,
+        protocolSelection: ACPProtocolSelection
     ) throws -> ACPConnection {
         try makeDefaultConnection(
             spec: spec,
             host: host,
             worktreePath: worktreePath,
             sessionId: nil,
-            useHelperProc: false
+            useHelperProc: false,
+            protocolSelection: protocolSelection
         )
+    }
+
+    private func makeProtocolSelection() -> ACPProtocolSelection {
+        ACPProtocolSelection(experimentalV2Enabled: experimentalACP2Enabled())
     }
 
     private func makeBrokerConnection(
@@ -4382,7 +4396,7 @@ public final class ACPSessionManager: ChangeTracking {
                 }
             }
         )
-        let connection = ACPConnection(client: client)
+        let connection = ACPConnection(client: client, protocolSelection: makeProtocolSelection())
         guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
               !Task.isCancelled,
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
@@ -5044,7 +5058,8 @@ public final class ACPSessionManager: ChangeTracking {
         initialHelperProcOffsets: RemoteHelperACPTransport.OutputOffsets? = nil,
         onFreshHelperProcSpawn: @escaping @MainActor @Sendable () async -> Void = {},
         onHelperProcOffsetsChanged: @escaping @MainActor @Sendable (RemoteHelperACPTransport.OutputOffsets) -> Void = { _ in },
-        onHelperProcReattached: @escaping @MainActor @Sendable () -> Void = {}
+        onHelperProcReattached: @escaping @MainActor @Sendable () -> Void = {},
+        protocolSelection: ACPProtocolSelection = .init()
     ) throws -> ACPConnection {
         let client: ACPStdioClient
         if let host, useHelperProc, let sessionId {
@@ -5097,7 +5112,7 @@ public final class ACPSessionManager: ChangeTracking {
                 environment: ACPProcessEnvironment.sanitizedForACP(extra: spec.extraEnv))
         }
         try client.start()
-        return ACPConnection(client: client)
+        return ACPConnection(client: client, protocolSelection: protocolSelection)
     }
 
     private static func helperACPProcId(sessionId: ACPSession.ID) -> String {
@@ -6775,7 +6790,8 @@ extension ACPSessionManager {
                     },
                     onHelperProcReattached: { [weak self] in
                         self?.invalidateHookReview(sessionId: sessionId, ownerID: attempt.id)
-                    }
+                    },
+                    protocolSelection: makeProtocolSelection()
                 )
             }
             connection.codexHooksReviewEnabled = launchSpec.agentID == "codex"

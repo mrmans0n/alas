@@ -4,6 +4,22 @@ import Testing
 @testable import AlasHostCore
 
 struct AppConfigDecodingTests {
+    @Test func experimentalACP2OptInSurvivesConfigurationRoundTrip() throws {
+        let config = try JSONDecoder().decode(
+            AppConfig.self, from: Data(#"{"experimentalACP2Enabled":true}"#.utf8))
+        let encoded = try JSONEncoder().encode(config)
+        let saved = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        #expect(saved["experimentalACP2Enabled"] as? Bool == true)
+    }
+
+    @Test(arguments: [#"{}"#, #"{"experimentalACP2Enabled":null}"#, #"{"experimentalACP2Enabled":"true"}"#])
+    func legacyOrMalformedConfigurationCannotOptIntoACP2(json: String) throws {
+        let config = try JSONDecoder().decode(AppConfig.self, from: Data(json.utf8))
+        let selection = ACPProtocolSelection(experimentalV2Enabled: config.experimentalACP2Enabled)
+        #expect(!selection.experimentalV2Enabled)
+        #expect(selection.requestedVersion == .v1)
+    }
+
     @Test func computerUseSectionDefaultsOffAndRoundTrips() throws {
         let absent = try JSONDecoder().decode(AppConfig.self, from: Data(#"{"remote":{"enabled":true}}"#.utf8))
         #expect(absent.computerUse.enabled == false)
