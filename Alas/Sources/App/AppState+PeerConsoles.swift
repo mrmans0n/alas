@@ -1,3 +1,4 @@
+@_spi(AppHost) import AlasCore
 import Foundation
 
 /// Serving this Mac's consoles to paired peers (#1558).
@@ -13,7 +14,7 @@ extension AppState {
             terminate: { [weak self] in self?.closeTerminalPaneWithoutConfirmation(leafId: $0) },
             open: { [weak self] in
                 guard let self else { throw PeerConsoleOpenError.unsupported }
-                return try await self.openPeerConsole(worktreeId: $0)
+                return try await self.openPeerConsole(worktreeId: $0, repoHook: $1)
             }
         ))
         _peerConsoleHost = host
@@ -34,8 +35,10 @@ extension AppState {
     /// Opens a terminal for a peer as a hidden, non-activating tab, so the
     /// host user's selection and focus never move. The hidden flag isn't
     /// persisted, so the tab shows once this Mac relaunches. No `resize`:
-    /// the app keeps sizing consoles from its own grid.
-    func openPeerConsole(worktreeId: String) async throws -> String {
+    /// the app keeps sizing consoles from its own grid. The session-open
+    /// hook is gated by `repoHook`, never on this Mac's sheet; throws
+    /// `RepoHookApprovalRequired` when the peer must approve it first.
+    func openPeerConsole(worktreeId: String, repoHook: RepoHookConsent?) async throws -> String {
         guard let (project, worktree) = projectAndWorktree(withWorktreeId: worktreeId),
               !projectsManager.isWorktreeHidden(projectId: project.id, path: worktree.path)
         else { throw PeerConsoleOpenError.worktreeUnavailable }
@@ -46,10 +49,18 @@ extension AppState {
             )
         }
         do {
+            let gate = try await core.gateRepoHook(event: .sessionOpen, project: project, consent: repoHook) {
+                await core.environment.repoHookLoader.load(event: .sessionOpen, worktreeRoot: worktree.path, host: project.host)
+            }
+            if case .needsApproval(let hook) = gate { throw RepoHookApprovalRequired(hook: hook) }
+            // Reads the hook again and runs it only if approved; one changed
+            // since the gate is skipped, not asked about here.
             let tab = try await openTerminalTabPreparingRemoteZmxIfNeeded(
                 for: worktree, isHidden: true, activates: false, promptsForRepoHooks: false
             )
             if case .terminal(let state) = tab, let id = state.root.leaves().first?.id { return id }
+        } catch let required as RepoHookApprovalRequired {
+            throw required
         } catch {
             throw PeerConsoleOpenError((error as? LocalizedError)?.errorDescription ?? PeerConsoleOpenError.notStarted.message)
         }
@@ -155,7 +166,13 @@ extension AppState {
                     onExit: onExit
                 )
             },
-            showError: { [weak self] title, message in self?.showFileActionError(title: title, message: message) }
+            showError: { [weak self] title, message in self?.showFileActionError(title: title, message: message) },
+            supportsRepoHookApproval: { [weak self] serverId in
+                self?.remotePeers.capabilities[serverId]?.contains(PeerConsoleCapability.repoHookApprovalV1) == true
+            },
+            decideRepoHook: { [weak self] serverId, hook, context in
+                await self?.decidePeerRepoHook(serverId: serverId, hook: hook, context: context) ?? .cancel
+            }
         )
         remotePeers.onConsoleEvent = { [weak consoles] serverId, event in
             consoles?.receive(serverId: serverId, event)

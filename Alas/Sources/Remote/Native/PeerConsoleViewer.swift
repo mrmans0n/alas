@@ -440,7 +440,7 @@ final class PeerConsoleViewer {
             gridChanged()
         case .detached(_, let reason):
             end(Self.message(for: reason), notifyHost: false)
-        case .inputAck, .list, .opened, .openFailed:
+        case .inputAck, .list, .opened, .openFailed, .openNeedsRepoHookApproval:
             break
         }
     }
