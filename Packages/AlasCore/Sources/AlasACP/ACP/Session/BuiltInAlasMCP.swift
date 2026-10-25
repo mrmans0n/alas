@@ -120,12 +120,17 @@ public enum BuiltInAlasMCP: Sendable {
         }
     }
 
+    /// The stdio env entries that identify the server an agent runs.
+    private static let agentIdentityEnv: Set<String> = ["ALAS_SOCKET_PATH", "ALAS_CLI_BUILD"]
+
     /// Identifies how an agent reaches the built-in server, so an attach that
     /// adopts a surviving agent can tell whether it still reaches the server
     /// this attach configures. HTTP: the URL and credentials the agent
     /// connects to. stdio: the agent runs the server itself, so only the
-    /// command and the app socket it reports to matter; the scoping env
-    /// (worktree, workspace members) cannot strand it.
+    /// command, the app socket it reports to and the CLI build it runs
+    /// matter; the scoping env (worktree, workspace members) cannot strand
+    /// it. The build makes an app update count as another server, so an
+    /// agent adopted across the update is restarted with the new tools.
     public static func agentFingerprint(of server: ACPMCPServer) -> String {
         let identity: [String]
         switch server {
@@ -134,7 +139,7 @@ public enum BuiltInAlasMCP: Sendable {
             identity = [kind, url] + headers.flatMap { [$0.name, $0.value] }
         case let .stdio(_, command, args, env):
             identity = ["stdio", command] + args
-                + env.filter { $0.name == "ALAS_SOCKET_PATH" }.map(\.value)
+                + env.filter { agentIdentityEnv.contains($0.name) }.map(\.value)
         }
         return SHA256.hash(data: Data(identity.joined(separator: "\u{0}").utf8))
             .map { String(format: "%02x", $0) }.joined()
@@ -240,7 +245,8 @@ public enum BuiltInAlasMCP: Sendable {
         parentSessionId: String? = nil,
         httpEndpoint: HTTPEndpoint? = nil,
         workspaceContext: WorkspaceContext? = nil,
-        headless: Bool = false
+        headless: Bool = false,
+        cliBuild: String? = nil
     ) -> Injection? {
         guard shouldInject(
             enabled: enabled,
@@ -278,7 +284,8 @@ public enum BuiltInAlasMCP: Sendable {
                     .init(name: "ALAS_SOCKET_PATH", value: socketPath),
                     .init(name: "ALAS_WORKTREE_DIR", value: worktreePath),
                     .init(name: "ALAS_SESSION_ID", value: sessionId),
-                ] + (parentSessionId.map { [.init(name: "ALAS_PARENT_SESSION_ID", value: $0)] } ?? [])
+                ] + (cliBuild.map { [.init(name: "ALAS_CLI_BUILD", value: $0)] } ?? [])
+                    + (parentSessionId.map { [.init(name: "ALAS_PARENT_SESSION_ID", value: $0)] } ?? [])
                     + workspaceEnvironment
                     + (headless ? [.init(name: "ALAS_MCP_HEADLESS", value: "1")] : [])
             )

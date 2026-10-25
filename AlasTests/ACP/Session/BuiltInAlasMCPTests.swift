@@ -10,7 +10,8 @@ struct BuiltInAlasMCPTests {
         binaryPath: String? = "/support/bin/alas",
         socketPath: String? = "/tmp/alas-501/pid-42",
         worktreePath: String = "/repos/proj/wt",
-        sessionId: String = "acp-1"
+        sessionId: String = "acp-1",
+        cliBuild: String? = nil
     ) -> BuiltInAlasMCP.Injection? {
         BuiltInAlasMCP.injection(
             enabled: enabled,
@@ -18,7 +19,8 @@ struct BuiltInAlasMCPTests {
             binaryPath: binaryPath,
             socketPath: socketPath,
             worktreePath: worktreePath,
-            sessionId: sessionId
+            sessionId: sessionId,
+            cliBuild: cliBuild
         )
     }
 
@@ -215,5 +217,27 @@ struct BuiltInAlasMCPTests {
         let otherSocket = try #require(make(socketPath: "/tmp/alas-501/pid-43")?.server)
         #expect(BuiltInAlasMCP.agentFingerprint(of: scoped) == BuiltInAlasMCP.agentFingerprint(of: plain))
         #expect(BuiltInAlasMCP.agentFingerprint(of: otherSocket) != BuiltInAlasMCP.agentFingerprint(of: plain))
+    }
+
+    @Test("a stdio entry carries the CLI build when it has one")
+    func stdioEntryCarriesCLIBuild() throws {
+        guard case let .stdio(_, _, _, env) = try #require(make(cliBuild: "abc123")?.server),
+              case let .stdio(_, _, _, plainEnv) = try #require(make()?.server)
+        else {
+            Issue.record("expected stdio entries")
+            return
+        }
+        #expect(env.contains(.init(name: "ALAS_CLI_BUILD", value: "abc123")))
+        #expect(!plainEnv.contains { $0.name == "ALAS_CLI_BUILD" })
+    }
+
+    @Test("a stdio agent fingerprint changes with the CLI build")
+    func stdioAgentFingerprintFollowsCLIBuild() throws {
+        func fingerprint(_ build: String?) throws -> String {
+            BuiltInAlasMCP.agentFingerprint(of: try #require(make(cliBuild: build)?.server))
+        }
+        #expect(try fingerprint("a") == fingerprint("a"))
+        #expect(try fingerprint("a") != fingerprint("b"))
+        #expect(try fingerprint(nil) != fingerprint("a"))
     }
 }
