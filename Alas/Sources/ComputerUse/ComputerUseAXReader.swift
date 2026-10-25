@@ -335,12 +335,14 @@ enum ComputerUseAXReader {
         private func node(_ element: AXUIElement, depth: Int) -> ComputerUseAXNode {
             count += 1
             AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
-            let values = attributes(of: element)
+            let batch = attributes(of: element)
+            let values = batch?.values
             let role = Self.string(values?[kAXRoleAttribute]) ?? "AXUnknown"
             let subrole = Self.string(values?[kAXSubroleAttribute])
             // Never read the contents of a password field. Some apps expose it
             // as the role rather than the subrole; both use the same string.
-            let isSecure = role == kAXSecureTextFieldSubrole || subrole == kAXSecureTextFieldSubrole
+            // One whose role or subrole couldn't be read may be one.
+            let isSecure = role == kAXSecureTextFieldSubrole || subrole == kAXSecureTextFieldSubrole || batch?.identityKnown != true
             let children = (values?[kAXChildrenAttribute] as? [AXUIElement]) ?? []
             var result = ComputerUseAXNode(
                 role: role,
@@ -384,42 +386,43 @@ enum ComputerUseAXReader {
         /// one per attribute, several times faster. Attributes the element lacks are absent. Read
         /// one at a time where the app doesn't take the batch. Nil when the walk has halted, the
         /// element is gone, or the app didn't answer, which counts toward a stalled app.
-        private func attributes(of element: AXUIElement) -> [String: AnyObject]? {
+        /// `identityKnown` is false when its role or subrole read failed (rather than being
+        /// absent), so whether it is a password field can't be told.
+        private func attributes(of element: AXUIElement) -> (values: [String: AnyObject], identityKnown: Bool)? {
             guard !isHalted else { return nil }
             var list: CFArray?
             let result = AXUIElementCopyMultipleAttributeValues(
                 element, Self.nodeAttributes as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &list)
             noteAnswer(result)
+            var byName: [String: AnyObject] = [:]
+            var failed: [String: AXError] = [:]
             switch result {
             case .success:
                 guard let values = list as? [AnyObject], values.count == Self.nodeAttributes.count else { return nil }
-                var byName: [String: AnyObject] = [:]
                 for (name, value) in zip(Self.nodeAttributes, values) {
-                    guard Self.isError(value) else {
-                        byName[name] = value
-                        continue
-                    }
-                    // Children the app didn't answer for are missing, not none: the read is incomplete.
-                    if name == kAXChildrenAttribute, Self.axError(value) == .cannotComplete { skippedUnanswered = true }
+                    if Self.isError(value) { failed[name] = Self.axError(value) ?? .failure } else { byName[name] = value }
                 }
-                return byName
             case .cannotComplete:
                 skippedUnanswered = true
                 return nil
             case .invalidUIElement:
                 return nil
             default:
-                var byName: [String: AnyObject] = [:]
                 for name in Self.nodeAttributes {
-                    if let value = attribute(element, name) {
-                        byName[name] = value
-                    } else if name == kAXChildrenAttribute, unansweredInARow > 0 {
-                        // `attribute` just counted the read as unanswered: the children are missing, not none.
-                        skippedUnanswered = true
-                    }
+                    let read = read(element, name)
+                    if let value = read.value { byName[name] = value } else { failed[name] = read.error }
                 }
-                return isHalted ? nil : byName
+                if isHalted { return nil }
             }
+            // Children the app didn't answer for are missing, not none: the read is incomplete.
+            if failed[kAXChildrenAttribute] == .cannotComplete { skippedUnanswered = true }
+            let identityKnown = [kAXRoleAttribute, kAXSubroleAttribute].allSatisfy { failed[$0].map(Self.isAbsent) ?? true }
+            return (byName, identityKnown)
+        }
+
+        /// A failed read that only means the element doesn't have the attribute.
+        private static func isAbsent(_ error: AXError) -> Bool {
+            error == .noValue || error == .attributeUnsupported
         }
 
         /// Counts the messages in a row the app didn't answer; the limit's worth halts the walk.
@@ -467,11 +470,16 @@ enum ComputerUseAXReader {
 
         /// Skips the IPC once the walk has halted, and counts an unanswered message.
         private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
-            guard !isHalted else { return nil }
+            read(element, name).value
+        }
+
+        /// `attribute`, with the error a failed read returned (`cannotComplete` once halted).
+        private func read(_ element: AXUIElement, _ name: String) -> (value: CFTypeRef?, error: AXError) {
+            guard !isHalted else { return (nil, .cannotComplete) }
             var value: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(element, name as CFString, &value)
             noteAnswer(result)
-            return result == .success ? value : nil
+            return (result == .success ? value : nil, result)
         }
 
         private func string(of element: AXUIElement, _ name: String) -> String? {
