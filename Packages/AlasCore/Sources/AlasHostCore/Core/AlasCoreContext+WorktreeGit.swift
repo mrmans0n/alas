@@ -17,23 +17,25 @@ extension AlasCoreContext {
             if await environment.checkpointRecoveryBlocksRemoval(listed) {
                 throw HostError.failed(message: "A checkpoint restore is pending on the host; finish it there first.")
             }
-            try await Process.$gitLiteralPathspecs.withValue(true) { try await Self.apply(change, at: listed.path) }
+            try await Process.$gitLiteralPathspecs.withValue(true) { try await apply(change, to: listed) }
         }
+        await refreshFollowedReviewStatus(worktree.id)
     }
 
-    private static func apply(_ change: HostWorktreeChange, at root: URL) async throws {
+    private func apply(_ change: HostWorktreeChange, to worktree: Worktree) async throws {
+        let root = worktree.path
         let git = GitService()
         switch change {
         case .stage(let paths):
-            try refuseOutside(paths, of: root)
+            try Self.refuseOutside(paths, of: root)
             try await git.stageAll(worktreePath: root, files: paths)
         case .unstage(let paths):
-            try refuseOutside(paths, of: root)
+            try Self.refuseOutside(paths, of: root)
             let changes = try await git.status(worktreePath: root)
             let files = paths.flatMap { path in changes.first { $0.path == path }?.gitPaths ?? [path] }
             try await git.unstageAll(worktreePath: root, files: files)
         case .discard(let paths):
-            try refuseOutside(paths, of: root)
+            try Self.refuseOutside(paths, of: root)
             let changes = try await git.status(worktreePath: root)
             var seen = Set<String>()
             let files = paths.flatMap { ChangedFile.discardPaths(forFileAt: $0, in: changes) }.filter { seen.insert($0).inserted }
@@ -47,8 +49,31 @@ extension AlasCoreContext {
                 throw HostError.failed(message: "Nothing is staged to commit.")
             }
             _ = try await git.commit(worktreePath: root, subject: subject, body: body, amend: amend)
-        case .push, .pull, .fetch:
-            throw HostError.invalidRequest(reason: "This host does not sync worktrees yet.")
+        case .push(let forceWithLease):
+            await refreshFollowedReviewStatus(worktree.id)
+            guard let snapshot = reviewLoops[worktree.id]?.snapshot else {
+                throw HostError.failed(message: "The branch's push target could not be read.")
+            }
+            let result = try await Process.git(snapshot.pushArguments(forceWithLease: forceWithLease), cwd: root)
+            guard result.exitCode == 0 else { throw HostError.failed(message: result.pushFailureMessage) }
+        case .pull:
+            // As locally, a conflict leaves the rebase in place to resolve.
+            switch try await git.pull(worktreePath: root) {
+            case .clean: break
+            case .conflict: throw HostError.failed(message: "Pull stopped on conflicts; resolve them on the host.")
+            case .error(let message): throw HostError.failed(message: message)
+            }
+        case .fetch:
+            // What the local "Fetch now" fetches: the upstream and the base.
+            if let upstream = try await git.resolveUpstreamRef(worktreePath: root) {
+                let branch = String(upstream.ref.dropFirst(upstream.remote.count + 1))
+                try await git.fetchRef(worktreePath: root, remote: upstream.remote, branch: branch)
+            }
+            let baseBranch = environment.configuration().worktrees.baseBranch
+            if let base = try await git.resolveBaseRef(worktreePath: root, baseBranch: baseBranch, preferLocal: false),
+               let remote = base.remote {
+                try await git.fetchRef(worktreePath: root, remote: remote, branch: base.fetchBranch ?? baseBranch)
+            }
         }
     }
 

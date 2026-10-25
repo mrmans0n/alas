@@ -27,7 +27,8 @@ extension AlasCoreContext {
 
     /// Reads worktree `worktreeID`'s review status once, and returns how to
     /// wait for the next read.
-    private func refreshFollowedReviewStatus(_ worktreeID: String) async -> @MainActor (Duration) async -> Void {
+    @discardableResult
+    func refreshFollowedReviewStatus(_ worktreeID: String) async -> @MainActor (Duration) async -> Void {
         if let reviewStatusRefresh {
             await reviewStatusRefresh(worktreeID)
         } else {

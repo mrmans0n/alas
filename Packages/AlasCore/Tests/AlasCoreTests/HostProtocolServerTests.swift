@@ -593,6 +593,43 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["status", "--porcelain"], cwd: real).stdout == porcelain)
     }
 
+    /// The Mac learns why a pull stopped, and the host is left mid-rebase to resolve there.
+    @Test func pullStoppedOnConflictsSaysToResolveOnTheHost() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let origin = fixture.root.appendingPathComponent("origin")
+        try GitTemplate.repository(at: origin)
+        for (directory, contents) in [(origin, "theirs\n"), (repo, "ours\n")] {
+            try contents.write(to: directory.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+            let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
+            #expect(try await Process.git(commit, cwd: directory).exitCode == 0)
+        }
+        for arguments in [["remote", "add", "origin", origin.path], ["fetch", "-q", "origin"], ["branch", "-q", "--set-upstream-to=origin/main"]] {
+            #expect(try await Process.git(arguments, cwd: repo).exitCode == 0)
+        }
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .pull))
+            == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them on the host.")))
+        #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
+    }
+
+    /// A branch with no upstream is pushed as the review pill pushes it,
+    /// setting the upstream it then tracks.
+    @Test func pushPublishesTheBranchAndTracksIt() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let origin = fixture.root.appendingPathComponent("origin.git")
+        #expect(try await Process.git(["init", "-q", "--bare", origin.path]).exitCode == 0)
+        #expect(try await Process.git(["remote", "add", "origin", origin.path], cwd: repo).exitCode == 0)
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .push(forceWithLease: false))) == .done)
+        #expect(try await Process.git(["rev-parse", "main"], cwd: origin).stdout
+            == Process.git(["rev-parse", "HEAD"], cwd: repo).stdout)
+        #expect(try await Process.git(["rev-parse", "--abbrev-ref", "@{u}"], cwd: repo).stdout == "origin/main\n")
+    }
+
     /// A host over a real repository, persisting to a scratch directory,
     /// whose sessions talk to a scripted agent.
     @MainActor
