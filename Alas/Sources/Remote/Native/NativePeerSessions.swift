@@ -1263,6 +1263,14 @@ final class NativePeerSessions {
         case .commitFiles(let sha): .commitFilesFailed(sessionId: id, sha: sha, reason: .unknown, message: nil)
         case .commitDiff(let sha, let path):
             .commitDiffFailed(sessionId: id, sha: sha, path: path, reason: .unknown, message: nil)
+        case .rangeFiles(let base, let head, let threeDot):
+            .commitFilesFailed(
+                sessionId: id, sha: HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot),
+                reason: .unknown, message: nil)
+        case .rangeDiff(let base, let head, let threeDot, let path, _):
+            .commitDiffFailed(
+                sessionId: id, sha: HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot), path: path,
+                reason: .unknown, message: nil)
         case .file(let path): .fileUnavailable(sessionId: id, path: path, reason: .unknown, byteSize: nil, message: nil)
         }
     }

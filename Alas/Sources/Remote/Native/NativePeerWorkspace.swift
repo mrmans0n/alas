@@ -171,7 +171,7 @@ struct NativePeerWorkspace: Equatable {
     mutating func apply(_ message: RemoteServerMessage) -> Bool {
         switch message {
         case .changeList(_, let ref, _, let files, let staged, let unstaged, let commits,
-                         let truncated, let commitsTruncated):
+                         let truncated, let commitsTruncated, _):
             changes = .loaded(Changes(
                 comparisonRef: ref,
                 // The branch list has no stage; `.unstaged` only satisfies
@@ -372,7 +372,7 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient 
 
     func status(worktreePath _: URL) async throws -> [ChangedFile] {
         switch await read(.changes(comparisonMode: nil)) {
-        case .changeList(_, _, _, _, let staged, let unstaged, _, let truncated, _)?:
+        case .changeList(_, _, _, _, let staged, let unstaged, _, let truncated, _, _)?:
             // ponytail: `truncated` also covers the branch file list, so a
             // capped branch diff notes a cut-off review that may be whole.
             await note(truncated)

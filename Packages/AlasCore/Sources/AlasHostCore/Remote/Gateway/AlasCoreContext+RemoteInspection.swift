@@ -330,7 +330,8 @@ extension AlasCoreContext {
                 unstaged: cappedWorkingTree.files.filter { $0.stage == .unstaged }.map(Self.remoteChangedFile),
                 commits: commits.commits.prefix(100).map(Self.remoteCommit),
                 truncated: capped.truncated || cappedWorkingTree.truncated,
-                commitsTruncated: commits.commits.count > 100)
+                commitsTruncated: commits.commits.count > 100,
+                workingTreeTruncated: cappedWorkingTree.truncated)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }
@@ -511,6 +512,95 @@ extension AlasCoreContext {
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }
+    }
+
+    @_spi(Testing) public func remoteRangeFiles(sessionId: String, base: String, head: String, threeDot: Bool) async -> RemoteCommitFilesResult {
+        await remoteRangeFiles(in: remoteWorktreeContext(sessionId: sessionId), base: base, head: head, threeDot: threeDot)
+    }
+
+    private func remoteRangeFiles(
+        in context: RemoteWorktreeContextResult, base: String, head: String, threeDot: Bool
+    ) async -> RemoteCommitFilesResult {
+        let worktree: Worktree
+        switch context {
+        case .sessionUnknown: return .failure(reason: .sessionUnknown, message: nil)
+        case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, message: nil)
+        case .found(let found): worktree = found
+        }
+        guard Self.isRangeEnd(base, allowingRootParent: true), Self.isRangeEnd(head, allowingRootParent: false) else {
+            return .failure(reason: .pathRejected, message: nil)
+        }
+        do {
+            let git = GitService()
+            let range = try await Self.verifiedRange(base: base, head: head, at: worktree.path, git: git)
+            let files = try await git.rangeChangedFiles(at: worktree.path, base: range.base, head: range.head, threeDot: threeDot)
+                .filter { RemoteWorktreeFileAccess.normalizedRelativePath($0.path) != nil }
+            return .success(files: files.prefix(RemoteWorktreeFileAccess.maxChangedFiles).map {
+                RemoteChangedFile(path: $0.path, status: $0.status, add: $0.add, del: $0.del,
+                                  conflict: nil, renameFrom: $0.originalPath)
+            }, truncated: files.count > RemoteWorktreeFileAccess.maxChangedFiles)
+        } catch {
+            return .failure(reason: .gitFailed, message: error.localizedDescription)
+        }
+    }
+
+    @_spi(Testing) public func remoteRangeDiff(
+        sessionId: String, base: String, head: String, threeDot: Bool, path: String, originalPath: String?
+    ) async -> RemoteFileDiffResult {
+        await remoteRangeDiff(
+            in: remoteWorktreeContext(sessionId: sessionId), base: base, head: head, threeDot: threeDot,
+            path: path, originalPath: originalPath)
+    }
+
+    private func remoteRangeDiff(
+        in context: RemoteWorktreeContextResult, base: String, head: String, threeDot: Bool,
+        path: String, originalPath: String?
+    ) async -> RemoteFileDiffResult {
+        let worktree: Worktree
+        switch context {
+        case .sessionUnknown: return .failure(reason: .sessionUnknown, message: nil)
+        case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, message: nil)
+        case .found(let found): worktree = found
+        }
+        let normalizedOriginal = originalPath.map(RemoteWorktreeFileAccess.normalizedRelativePath)
+        guard Self.isRangeEnd(base, allowingRootParent: true), Self.isRangeEnd(head, allowingRootParent: false),
+              let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path),
+              normalizedOriginal != .some(nil) else {
+            return .failure(reason: .pathRejected, message: nil)
+        }
+        do {
+            let git = GitService()
+            let range = try await Self.verifiedRange(base: base, head: head, at: worktree.path, git: git)
+            let revisions = try await git.resolvedRangeTrees(
+                worktreePath: worktree.path, base: range.base, head: range.head, threeDot: threeDot)
+            // Both sides are git blobs, as for a commit diff.
+            let parsed = try await git.rangeDiff(
+                worktreePath: worktree.path, revisions: revisions, file: normalizedPath,
+                originalPath: normalizedOriginal ?? nil,
+                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+            guard !parsed.isBinary else { return .failure(reason: .binary, message: nil) }
+            let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
+            return .success(hunks: capped.hunks.map(Self.remoteDiffHunk),
+                            truncated: capped.truncated, metadataNote: parsed.metadataSummary)
+        } catch {
+            return .failure(reason: .gitFailed, message: error.localizedDescription)
+        }
+    }
+
+    /// A client's range end: a commit SHA, or for a base `<sha>^`, which
+    /// `resolveTwoDotLeftTree` reads as the empty tree for a root commit.
+    private static func isRangeEnd(_ ref: String, allowingRootParent: Bool) -> Bool {
+        RemoteWorktreeFileAccess.isCommitSHA(allowingRootParent && ref.hasSuffix("^") ? String(ref.dropLast()) : ref)
+    }
+
+    /// The range with each end resolved to a commit of this repository, so
+    /// git is never handed an object the client named but the repo lacks.
+    private static func verifiedRange(
+        base: String, head: String, at worktree: URL, git: GitService
+    ) async throws -> (base: String, head: String) {
+        let parentOfBase = base.hasSuffix("^")
+        let baseCommit = try await git.resolveRevision(at: worktree, ref: parentOfBase ? String(base.dropLast()) : base)
+        return (parentOfBase ? baseCommit + "^" : baseCommit, try await git.resolveRevision(at: worktree, ref: head))
     }
 
     @_spi(Testing) public func remoteFileTree(
@@ -736,6 +826,15 @@ extension AlasCoreContext {
         }
         func remoteFileContents(sessionId _: String, path: String) async -> RemoteFileContentsResult {
             await core.remoteFileContents(in: .found(worktree), path: path)
+        }
+        func remoteRangeFiles(sessionId _: String, base: String, head: String, threeDot: Bool) async -> RemoteCommitFilesResult {
+            await core.remoteRangeFiles(in: .found(worktree), base: base, head: head, threeDot: threeDot)
+        }
+        func remoteRangeDiff(
+            sessionId _: String, base: String, head: String, threeDot: Bool, path: String, originalPath: String?
+        ) async -> RemoteFileDiffResult {
+            await core.remoteRangeDiff(
+                in: .found(worktree), base: base, head: head, threeDot: threeDot, path: path, originalPath: originalPath)
         }
     }
 

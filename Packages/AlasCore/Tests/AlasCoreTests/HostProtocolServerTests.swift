@@ -510,6 +510,55 @@ struct HostProtocolServerTests {
             == .failure(error: .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")))
     }
 
+    /// A range is read as a commit is, its replies named by the range. Refs
+    /// must be SHAs, as stored review targets pin them, or a root's parent.
+    @Test(arguments: [false, true])
+    func rangeReadsAnswerAsCommitRepliesNamedByTheirRange(threeDot: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        func headSHA() async throws -> String {
+            try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let base = try await headSHA()
+        try "a\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        #expect(try await Process.git(["add", "a.txt"], cwd: repo).exitCode == 0)
+        #expect(try await Process.git(["commit", "-q", "-m", "Add a"], cwd: repo).exitCode == 0)
+        let head = try await headSHA()
+        let id = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first).id
+        func read(_ read: HostWorktreeRead) async throws -> HostResponse {
+            try await fixture.request(.readWorktree(worktree: ref, read: read))
+        }
+
+        for base in [base, "\(head)^"] {
+            let spec = HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot)
+            guard case .worktreeRead(.commitFiles(id, spec, let files, false)) =
+                try await read(.rangeFiles(base: base, head: head, threeDot: threeDot))
+            else {
+                Issue.record("expected the range's files")
+                return
+            }
+            #expect(files.map(\.path) == ["a.txt"])
+            guard case .worktreeRead(.commitDiffResult(id, spec, "a.txt", let hunks, false, _)) =
+                try await read(.rangeDiff(base: base, head: head, threeDot: threeDot, path: "a.txt", originalPath: nil))
+            else {
+                Issue.record("expected the range's diff")
+                return
+            }
+            #expect(!hunks.isEmpty)
+        }
+        #expect(try await read(.rangeFiles(base: "main", head: head, threeDot: threeDot)) == .worktreeRead(reply: .commitFilesFailed(
+            sessionId: id, sha: HostWorktreeRead.rangeSpec(base: "main", head: head, threeDot: threeDot),
+            reason: .pathRejected, message: nil)))
+        let tree = try await Process.git(["rev-parse", "HEAD^{tree}"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard case .worktreeRead(.commitDiffFailed(id, _, "a.txt", .gitFailed, _)) =
+            try await read(.rangeDiff(base: base, head: tree, threeDot: threeDot, path: "a.txt", originalPath: nil))
+        else {
+            Issue.record("expected a tree refused as a range end")
+            return
+        }
+    }
+
     /// A linked worktree's branch is renamed and listed under its new name;
     /// the main checkout's is refused, as the local menu never offers it, and
     /// so is a rename of a branch the worktree is no longer listed on.
