@@ -266,10 +266,13 @@ final class NativePeerSessions {
     }
 
     /// Selects the worktree the host knows as `worktreeID`, as a worktree
-    /// notice's click does. Nothing happens once the host no longer lists it.
+    /// notice's click does. Nothing happens once the host no longer lists it,
+    /// or while it is already selected: re-selecting its tab would toggle it.
     func selectHostWorktree(serverId: String, worktreeID: String) {
-        guard let group = worktrees(on: serverId).first(where: { $0.host?.snapshot.worktree.id == worktreeID }) else { return }
-        selectWorktree(NativePeerWorktreeSelection(serverId: serverId, worktreeId: group.id))
+        guard let group = worktrees(on: serverId).first(where: { $0.peerWorktreeId == worktreeID }) else { return }
+        let selection = NativePeerWorktreeSelection(serverId: serverId, worktreeId: group.id)
+        guard selectedWorktree != selection else { return }
+        selectWorktree(selection)
     }
 
     func selectTab(_ tab: NativePeerTab, in selection: NativePeerWorktreeSelection) {
