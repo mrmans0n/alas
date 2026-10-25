@@ -145,8 +145,8 @@ enum ComputerUseAXActions {
     static func elementMatches(_ handles: ComputerUseAXHandles, _ handle: Int, role: String, title: String?) async -> Bool {
         await withCheckedContinuation { continuation in
             ComputerUseAXReader.queue.async {
-                guard let element = handles.element(handle) else { return continuation.resume(returning: false) }
-                AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+                // Gone, or this process's: never messaged (P5-R13).
+                guard let element = try? resolve(handles, handle) else { return continuation.resume(returning: false) }
                 var roleValue: CFTypeRef?
                 let result = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue)
                 // Gone, or the app isn't answering: either way the ref can't be trusted.
@@ -921,8 +921,8 @@ extension ComputerUseAXActions {
     /// Nil when the element is gone. A secure field's value is never read.
     static func stateHash(_ handles: ComputerUseAXHandles, _ handle: Int) async -> Int? {
         try? await onQueue({ false }) {
-            guard let element = handles.element(handle) else { return nil }
-            AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+            // Gone, or this process's: never messaged (P5-R13).
+            guard let element = try? resolve(handles, handle) else { return nil }
             var role: CFTypeRef?
             let result = AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role)
             guard result != .invalidUIElement, result != .cannotComplete else { return nil }
