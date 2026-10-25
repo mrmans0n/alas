@@ -683,14 +683,26 @@ extension ComputerUseAXActions {
             if let subrole = string(of: target, kAXSubroleAttribute), [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole) {
                 candidates.append(target)
             }
-            // A sheet some apps list as a window of their own, over the window it belongs to.
+            // A sheet some apps list as a window of their own, over the window it belongs to: one
+            // whose parent is the window, or, when its parent names no window, one over no other.
             if candidates.isEmpty, let targetFrame = frame(of: target) {
-                for other in axWindows where !CFEqual(other, target) && isMessageable(other) {
-                    let role = string(of: other, kAXRoleAttribute)
-                    let subrole = string(of: other, kAXSubroleAttribute)
-                    guard role == kAXSheetRole || [kAXDialogSubrole, kAXSystemDialogSubrole].contains(subrole ?? ""),
-                          let otherFrame = frame(of: other), otherFrame.intersects(targetFrame)
-                    else { continue }
+                func isDialog(_ element: AXUIElement) -> Bool {
+                    string(of: element, kAXRoleAttribute) == kAXSheetRole
+                        || [kAXDialogSubrole, kAXSystemDialogSubrole].contains(string(of: element, kAXSubroleAttribute) ?? "")
+                }
+                let others = axWindows.filter { !CFEqual($0, target) && isMessageable($0) }
+                for other in others where isDialog(other) {
+                    guard let otherFrame = frame(of: other), otherFrame.intersects(targetFrame) else { continue }
+                    let parent = elementAttribute(other, kAXParentAttribute)
+                    if parent.map({ !CFEqual($0, target) }) ?? true {
+                        // Another document's dialog.
+                        if let parent, string(of: parent, kAXRoleAttribute) == kAXWindowRole { continue }
+                        // Over another document too: whose it is can't be told.
+                        let overOther = others.contains { window in
+                            !CFEqual(window, other) && !isDialog(window) && frame(of: window)?.intersects(otherFrame) == true
+                        }
+                        if overOther { continue }
+                    }
                     candidates.append(other)
                 }
             }
