@@ -56,6 +56,9 @@ public enum HostEvent: Codable, Equatable, Sendable {
     /// nil once it was forgotten. Sent over the host protocol only to
     /// clients that accept `reviewStatus`.
     case reviewStatus(worktreeID: String, snapshot: ReviewLoopSnapshot?)
+    /// A worktree's review comments or review sessions changed. Sent over the
+    /// host protocol only to clients that accept `reviewsChanged`.
+    case reviewsChanged(worktreeID: String)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -87,6 +90,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .notice(let notice): .notice(notice.id)
         case .worktreeNotice(let notice): .notice(notice.id)
         case .reviewStatus(let worktreeID, _): .reviewStatus(worktreeID)
+        case .reviewsChanged(let worktreeID): .reviews(worktreeID)
         case .resync: .resync
         }
     }
@@ -139,6 +143,7 @@ enum HostEventKey: Hashable {
     case sessionState(owner: SessionOwnerID, id: String)
     case notice(UUID)
     case reviewStatus(String)
+    case reviews(String)
     case resync
 }
 
@@ -585,6 +590,7 @@ extension HostEvent {
         case .notice: "notice"
         case .worktreeNotice: "worktreeNotice"
         case .reviewStatus: "reviewStatus"
+        case .reviewsChanged: "reviewsChanged"
         default: nil
         }
     }

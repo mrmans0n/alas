@@ -454,7 +454,7 @@ public final class RemoteSessionGateway {
                 return (true, true, true)
             case .workspaceCheckoutChanged, .workspaceCheckoutRemoved, .runChanged, .runRemoved,
                  .transcript, .pendingRequest, .pendingRequestResolved, .sessionState, .notice, .worktreeNotice,
-                 .reviewStatus:
+                 .reviewStatus, .reviewsChanged:
                 break
             }
         }

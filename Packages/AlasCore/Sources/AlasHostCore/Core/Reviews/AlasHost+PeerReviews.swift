@@ -97,7 +97,7 @@ extension ReviewsAPI {
             comment.updatedAt = now
             try store.save(comment)
         }
-        core.reviewCommentsDidChange()
+        didChange(worktreeID: worktree.id)
     }
 
     /// The comment a Mac adds, on a file of the review in the namespace it

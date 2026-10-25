@@ -11,7 +11,7 @@ import AlasACP
 extension AlasHost {
     /// Review comments on a worktree's changes, as agents file and answer
     /// them from the CLI.
-    public var reviews: ReviewsAPI { ReviewsAPI(core: core) }
+    public var reviews: ReviewsAPI { ReviewsAPI(core: core, changed: { [weak self] in self?.noteAttention($0) }) }
 }
 
 extension AlasCoreContext {
@@ -44,11 +44,20 @@ extension AlasCoreContext {
 @MainActor
 public struct ReviewsAPI {
     let core: AlasCoreContext
+    /// Publishes the host events a change to a worktree's reviews raises.
+    var changed: @MainActor ([HostEvent]) -> Void = { _ in }
 
     /// The pull request and checks last seen for worktree `worktreeID`; nil
     /// until something has loaded them.
     public func status(of worktreeID: String) -> ReviewLoopSnapshot? {
         core.reviewLoops[worktreeID]?.snapshot
+    }
+
+    /// Tells the views showing `worktreeID`'s reviews, and the paired Macs
+    /// following it, that they changed.
+    func didChange(worktreeID: String) {
+        core.reviewCommentsDidChange()
+        changed([.reviewsChanged(worktreeID: worktreeID)])
     }
 
     private func gitStatus(_ worktreePath: URL) async throws -> [ChangedFile] {
@@ -213,7 +222,7 @@ public struct ReviewsAPI {
         } catch {
             return .error("could not save review comment: \(error.localizedDescription)")
         }
-        core.reviewCommentsDidChange()
+        didChange(worktreeID: worktreeForPath.id)
         return .text([
             "Filed review comment.",
             Self.jsonLine(["comment_id": comment.id]),
@@ -289,7 +298,7 @@ public struct ReviewsAPI {
         } catch {
             return .error("could not finish review: \(error.localizedDescription)")
         }
-        core.reviewCommentsDidChange()
+        didChange(worktreeID: sessionWorktree.id)
         return .ok
     }
 
@@ -461,10 +470,10 @@ public struct ReviewsAPI {
             comment.updatedAt = timestamp
             try store.save(comment)
             reviewReplyAdded(commentWorktree, comment, reply)
+            didChange(worktreeID: commentWorktree.id)
         } catch {
             return .error("could not update review comment: \(error.localizedDescription)")
         }
-        core.reviewCommentsDidChange()
         return .ok
     }
 
@@ -512,10 +521,10 @@ public struct ReviewsAPI {
                 isResolved: { id in (try? store.find(commentID: id))?.state == .resolved },
                 now: timestamp
             )
+            didChange(worktreeID: commentWorktree.id)
         } catch {
             return .error("could not update review comment: \(error.localizedDescription)")
         }
-        core.reviewCommentsDidChange()
         return .ok
     }
 }

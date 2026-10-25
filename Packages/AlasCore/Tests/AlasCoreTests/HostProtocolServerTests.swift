@@ -243,6 +243,38 @@ struct HostProtocolServerTests {
         #expect(events(plain.messages) == [archiving])
     }
 
+    /// Only a client that accepts `reviewsChanged` hears that a worktree's
+    /// reviews changed.
+    @Test func aReviewChangeReachesOnlyClientsThatAcceptIt() async throws {
+        let fixture = try Fixture()
+        let worktree = fixture.worktree
+        let plain = Client()
+        let accepting = Client()
+        let plainConnection = fixture.server.connect(caller: .localUser(uid: 501), send: plain.receive)
+        let acceptingConnection = fixture.server.connect(caller: .localUser(uid: 501), send: accepting.receive)
+        defer {
+            plainConnection.close()
+            acceptingConnection.close()
+        }
+        let cursor = try await fixture.host.snapshot().cursor
+        await plainConnection.receive(HostClientMessage(id: 1, request: .subscribe(after: cursor)))
+        await acceptingConnection.receive(HostClientMessage(id: 1, request: .subscribeAccepting(after: cursor, events: ["reviewsChanged"])))
+        func events(_ messages: [HostServerMessage]) -> [HostEvent] {
+            messages.flatMap { message -> [HostEvent] in
+                guard case .events(let batch, _) = message else { return [] }
+                return batch
+            }
+        }
+
+        _ = fixture.host.reviews.finish(origin: worktree, sessionID: nil, verdict: .approve, summary: "ok", projectWorktrees: [worktree])
+        let changed = HostEvent.reviewsChanged(worktreeID: worktree.id)
+        try await accepting.waitFor { events($0).contains(changed) }
+        // A later event both clients get proves the plain one had its chance.
+        fixture.projects.setOperationState(for: worktree, state: .archiving(projectId: "p"))
+        try await plain.waitFor { events($0).contains { if case .worktreeChanged = $0 { true } else { false } } }
+        #expect(!events(plain.messages).contains(changed))
+    }
+
     /// A caller may keep only the connection, as the Remote gateway does:
     /// it still serves after the server value is gone.
     @Test func aConnectionServesAfterItsServerIsReleased() async throws {
@@ -919,18 +951,31 @@ struct HostProtocolServerTests {
     }
 
     /// With a path both staged and unstaged, an agent's comment goes to the
-    /// unstaged side; a Mac's stays on the side it was filed on.
-    @Test(arguments: [("staged", true), ("unstaged", true), ("commit", false)])
-    func aMacCommentKeepsTheStageItWasFiledOn(namespace: String, accepted: Bool) async throws {
+    /// unstaged side; a Mac's stays on the side it was filed on, and only on
+    /// a side its review has: not a commit's, nor a stage the file lacks.
+    @Test(arguments: [
+        (false, "staged", true, true), (false, "unstaged", true, true), (false, "commit", true, false),
+        (true, "unstaged", true, false), (false, "staged", false, false),
+    ])
+    func aMacCommentKeepsTheStageItWasFiledOn(commitReview: Bool, namespace: String, alsoStaged: Bool, accepted: Bool) async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
         let (repo, ref) = try await fixture.mainWorktree()
         let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
         let file = repo.appendingPathComponent("a.txt")
-        try "one\n".write(to: file, atomically: true, encoding: .utf8)
-        _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        if alsoStaged {
+            try "one\n".write(to: file, atomically: true, encoding: .utf8)
+            _ = try await Process.git(["add", "a.txt"], cwd: repo)
+        }
         try "two\n".write(to: file, atomically: true, encoding: .utf8)
-        let session = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        var session = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        if commitReview {
+            guard case .success(let opened) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+                Issue.record("expected the commit review opened")
+                return
+            }
+            session = opened.record.target.draftSessionID
+        }
 
         let response = try await fixture.request(.mutateReview(worktree: ref, sessionID: session.rawValue, mutation: .add(
             fileID: DiffReviewFileID(namespace: namespace, path: "a.txt"), path: "a.txt", originalPath: nil,
