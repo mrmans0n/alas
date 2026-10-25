@@ -11,6 +11,7 @@ struct BuiltInAlasMCPTests {
         socketPath: String? = "/tmp/alas-501/pid-42",
         worktreePath: String = "/repos/proj/wt",
         sessionId: String = "acp-1",
+        httpEndpoint: BuiltInAlasMCP.HTTPEndpoint? = nil,
         cliBuild: String? = nil
     ) -> BuiltInAlasMCP.Injection? {
         BuiltInAlasMCP.injection(
@@ -20,6 +21,7 @@ struct BuiltInAlasMCPTests {
             socketPath: socketPath,
             worktreePath: worktreePath,
             sessionId: sessionId,
+            httpEndpoint: httpEndpoint,
             cliBuild: cliBuild
         )
     }
@@ -95,7 +97,7 @@ struct BuiltInAlasMCPTests {
         }
         #expect(name == "alas")
         #expect(url == "http://localhost:5599/mcp")
-        #expect(headers.contains(ACPMCPKeyValue(name: "Authorization", value: "Bearer TOK")))
+        #expect(headers == [ACPMCPKeyValue(name: "Authorization", value: "Bearer TOK")])
         #expect(injection?.status.transport == .http)
     }
 
@@ -231,10 +233,11 @@ struct BuiltInAlasMCPTests {
         #expect(!plainEnv.contains { $0.name == "ALAS_CLI_BUILD" })
     }
 
-    @Test("a stdio agent fingerprint changes with the CLI build")
-    func stdioAgentFingerprintFollowsCLIBuild() throws {
+    @Test("an agent fingerprint changes with the CLI build", arguments: [false, true])
+    func agentFingerprintFollowsCLIBuild(http: Bool) throws {
+        let endpoint = http ? BuiltInAlasMCP.HTTPEndpoint(url: "http://localhost:5599/mcp", token: "TOK") : nil
         func fingerprint(_ build: String?) throws -> String {
-            BuiltInAlasMCP.agentFingerprint(of: try #require(make(cliBuild: build)?.server))
+            BuiltInAlasMCP.agentFingerprint(of: try #require(make(httpEndpoint: endpoint, cliBuild: build)?.server))
         }
         #expect(try fingerprint("a") == fingerprint("a"))
         #expect(try fingerprint("a") != fingerprint("b"))

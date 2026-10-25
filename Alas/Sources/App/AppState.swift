@@ -12566,7 +12566,8 @@ final class AppState {
                             worktreePath: worktreePath,
                             sessionId: sessionId,
                             parentSessionId: parentSessionId,
-                            httpEndpoint: endpoint
+                            httpEndpoint: endpoint,
+                            cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL())
                         ))
                     }
                     // Supervisor couldn't get a port — fall through to stdio
@@ -12992,7 +12993,8 @@ final class AppState {
                         worktreePath: worktreePath,
                         sessionId: sessionId,
                         httpEndpoint: endpoint,
-                        workspaceContext: workspaceContext
+                        workspaceContext: workspaceContext,
+                        cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL())
                     ))
                 }
                 self.mcpHTTPSupervisor.end(sessionId: sessionId)

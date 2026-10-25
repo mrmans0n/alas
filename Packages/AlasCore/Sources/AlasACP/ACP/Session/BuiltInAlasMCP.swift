@@ -125,12 +125,13 @@ public enum BuiltInAlasMCP: Sendable {
 
     /// Identifies how an agent reaches the built-in server, so an attach that
     /// adopts a surviving agent can tell whether it still reaches the server
-    /// this attach configures. HTTP: the URL and credentials the agent
-    /// connects to. stdio: the agent runs the server itself, so only the
-    /// command, the app socket it reports to and the CLI build it runs
-    /// matter; the scoping env (worktree, workspace members) cannot strand
-    /// it. The build makes an app update count as another server, so an
-    /// agent adopted across the update is restarted with the new tools.
+    /// this attach configures. HTTP: the URL and headers the agent connects
+    /// with, which carry its credentials and the CLI build serving it.
+    /// stdio: the agent runs the server itself, so only the command, the app
+    /// socket it reports to and the CLI build it runs matter; the scoping env
+    /// (worktree, workspace members) cannot strand it. Either way the build
+    /// makes an app update count as another server, so an agent adopted
+    /// across the update is restarted with the new tools.
     public static func agentFingerprint(of server: ACPMCPServer) -> String {
         let identity: [String]
         switch server {
@@ -262,6 +263,8 @@ public enum BuiltInAlasMCP: Sendable {
                 name: serverName,
                 url: httpEndpoint.url,
                 headers: [.init(name: "Authorization", value: "Bearer \(httpEndpoint.token)")]
+                    // Unread by the server; it makes an update a new server in the agent fingerprint.
+                    + (cliBuild.map { [.init(name: "X-Alas-CLI-Build", value: $0)] } ?? [])
             )
             transport = .http
         } else {
