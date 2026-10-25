@@ -315,7 +315,7 @@ final class AppState {
     /// a scheduled run is a manual run with a different trigger.
     var runScheduler: RunScheduler { core.runScheduler }
     /// Scheduled chat sessions whose first turn a firing is waiting on.
-    let scheduledAgentTurns = ScheduledAgentTurns()
+    var scheduledAgentTurns: ScheduledAgentTurns { core.scheduledAgentTurns }
     /// Serves computer_* calls: approvals, the driver lock, stop/resume.
     let computerUse: ComputerUseCoordinator
     @ObservationIgnored var computerUseStatusItem: ComputerUseStatusItem?
