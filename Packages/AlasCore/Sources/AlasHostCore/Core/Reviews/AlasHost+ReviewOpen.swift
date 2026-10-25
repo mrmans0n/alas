@@ -51,6 +51,7 @@ extension ReviewsAPI {
             )
             guard let saved else { return .failure(.init(message: "could not open review session")) }
             didChange(worktreeID: worktree.id)
+            noticeOpened(in: worktree, label: label, sessionID: saved.target.draftSessionID.rawValue)
             return .success(OpenedReview(record: saved, label: label))
         }
     }

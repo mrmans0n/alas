@@ -99,6 +99,7 @@ struct HostProtocolTests {
             .sessionChanged(session),
             .sessionRemoved(owner: .worktree(worktree.id), id: "s"),
             .runRemoved(id: "r"),
+            .worktreeNotice(HostWorktreeNotice(id: UUID(), worktreeID: worktree.id, title: "t", body: "b", reviewSessionID: "s")),
             .transcript(owner: .worktree("w"), id: "s", delta: HostTranscriptDelta(
                 revision: TranscriptRevision(epoch: 1, version: 5), reset: true,
                 messages: [HostTranscriptMessage(index: 0, stableID: "m", kind: "user", payload: #"{"text":"hi"}"#)],

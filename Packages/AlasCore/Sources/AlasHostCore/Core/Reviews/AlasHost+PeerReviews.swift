@@ -13,12 +13,14 @@ extension ReviewsAPI {
         let localChanges = ReviewSessionTarget.localChanges(worktreeID: worktree.id, repositoryPath: worktree.path, scope: .all)
         if !records.contains(where: { $0.target.draftSessionID == localChanges.draftSessionID }) {
             let localComments = comments.filter { $0.sessionID == localChanges.draftSessionID }
-            if !localComments.isEmpty || core.openedLocalChangesReviews.contains(worktree.id) {
+            let opened = core.openedLocalChangesReviews[worktree.id]
+            if !localComments.isEmpty || opened != nil {
+                let createdAt = localComments.map(\.createdAt).min() ?? opened ?? Date()
                 records.append(ReviewSessionRecord(
                     id: localChanges.id,
                     target: localChanges,
-                    createdAt: localComments.map(\.createdAt).min() ?? Date(),
-                    updatedAt: localComments.map(\.updatedAt).max() ?? Date()
+                    createdAt: createdAt,
+                    updatedAt: localComments.map(\.updatedAt).max() ?? createdAt
                 ))
             }
         }
@@ -27,6 +29,15 @@ extension ReviewsAPI {
                 $0.sessionID == record.target.draftSessionID && $0.state == .active
             })
         }
+    }
+
+    /// Lists the worktree's local-changes review, as an agent opening it in
+    /// the app shows it, and notices the paired Macs.
+    public func openLocalChanges(in worktree: Worktree) {
+        if core.openedLocalChangesReviews[worktree.id] == nil { core.openedLocalChangesReviews[worktree.id] = Date() }
+        didChange(worktreeID: worktree.id)
+        let session = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        noticeOpened(in: worktree, label: "local changes", sessionID: session.rawValue)
     }
 
     /// Review `sessionID` of the worktree with every comment, those on files

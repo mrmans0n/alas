@@ -193,7 +193,7 @@ alas-host Full Disk Access in System Settings › Privacy & Security.
 
 Agents the host starts get the built-in `alas` MCP server and the `alas` CLI
 on their PATH, as in the app, so they can list and create worktrees, open and
-answer reviews of a branch or pull request, start and drive delegated
+answer reviews of local changes, a branch or a pull request, start and drive delegated
 sessions, create pull requests and send notifications. The settings toggle
 that exposes the tools in the app turns them off here too.
 
@@ -203,9 +203,12 @@ archive after merge follow the project's shepherd rules. This needs `gh` (or
 setup` reports when it isn't.
 
 Tools that need a screen are hidden: `open`, `preview_*`, `computer_*`,
-`worktree_switch`, `workspace_*` and a review of local changes (`review`
-needs a target). Calling one anyway, or its CLI command, fails with "Not
-available on a headless host."
+`worktree_switch` and `workspace_*`. Calling one anyway, or its CLI command,
+fails with "Not available on a headless host."
+
+Paired Macs show the host's draft reviews. When an agent opens a review or
+replies to a review comment, each paired Mac gets a notice that opens that
+review.
 
 The CLI ships in the cask's zip at `alas-cli/alas`, and the host installs it
 into the data directory's `bin/` at start. Otherwise the host uses the one in

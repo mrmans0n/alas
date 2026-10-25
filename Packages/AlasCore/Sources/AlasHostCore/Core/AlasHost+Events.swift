@@ -122,12 +122,16 @@ public struct HostWorktreeNotice: Codable, Equatable, Sendable {
     public var worktreeID: String
     public var title: String?
     public var body: String
+    /// The draft review the notice is about, which clicking it opens; an
+    /// older Mac ignores it.
+    public var reviewSessionID: String?
 
-    public init(id: UUID, worktreeID: String, title: String?, body: String) {
+    public init(id: UUID, worktreeID: String, title: String?, body: String, reviewSessionID: String? = nil) {
         self.id = id
         self.worktreeID = worktreeID
         self.title = title
         self.body = body
+        self.reviewSessionID = reviewSessionID
     }
 }
 

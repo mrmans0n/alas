@@ -923,6 +923,60 @@ struct HostProtocolServerTests {
         #expect(try await reviews().map(\.record.target.kind) == [.commit, .localChanges])
     }
 
+    enum ReplyPath: CaseIterable {
+        case reply, resolveWithReply, bareResolve
+    }
+
+    /// An agent's answer to a review comment notices the Mac with its
+    /// review; resolving without a word does not.
+    @Test(arguments: ReplyPath.allCases)
+    func agentRepliesNoticeTheMacWithTheirReview(_ path: ReplyPath) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, _) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "changed\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+        _ = await fixture.host.reviews.addComment(
+            origin: worktree, path: ".alas/scripts/hello.sh", startLine: 1, endLine: nil, side: nil, body: "Why?",
+            sessionID: nil, projectWorktrees: [worktree]
+        )
+        let comment = try #require(try fixture.core.reviewDrafts.loadAll().first)
+        let subscription = fixture.host.subscribe()
+
+        switch path {
+        case .reply:
+            _ = fixture.host.reviews.reply(origin: worktree, commentID: comment.id, body: "Because.", projectWorktrees: [worktree])
+        case .resolveWithReply:
+            _ = fixture.host.reviews.resolve(
+                origin: worktree, commentID: comment.id, reply: "Because.", reopen: false, projectWorktrees: [worktree]
+            )
+        case .bareResolve:
+            _ = fixture.host.reviews.resolve(origin: worktree, commentID: comment.id, reply: nil, reopen: false, projectWorktrees: [worktree])
+        }
+
+        let notices = await fixture.worktreeNotices(of: subscription)
+        #expect(notices.map { [$0.worktreeID, $0.title, $0.body, $0.reviewSessionID] } == (path == .bareResolve ? [] : [
+            [worktree.id, "Agent replied to review feedback", "Because.", comment.sessionID.rawValue],
+        ]))
+    }
+
+    @Test func anAgentOpeningAReviewNoticesTheMac() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        _ = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let subscription = fixture.host.subscribe()
+
+        guard case .success(let opened) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+            Issue.record("expected the commit review opened")
+            return
+        }
+
+        let notices = await fixture.worktreeNotices(of: subscription)
+        #expect(notices.map { [$0.worktreeID, $0.title, $0.body, $0.reviewSessionID] }
+            == [[worktree.id, "Agent opened a review", opened.label, opened.record.target.draftSessionID.rawValue]])
+    }
+
     /// A comment whose file no longer differs still belongs to its review.
     @Test func aReviewReadsEveryCommentOfItsSession() async throws {
         let fixture = try await RepoFixture()

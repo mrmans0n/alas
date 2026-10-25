@@ -67,6 +67,21 @@ public struct ReviewsAPI {
 
     private func reviewReplyAdded(_ worktree: Worktree, _ comment: ReviewDraftComment, _ reply: ReviewCommentReply) {
         core.environment.reviewReplyAdded(reply, to: comment, in: worktree)
+        notice(in: worktree, title: "\(reply.author.displayName) replied to review feedback", body: reply.bodyMarkdown, sessionID: comment.sessionID.rawValue)
+    }
+
+    /// Tells the paired Macs an agent opened review `sessionID`.
+    func noticeOpened(in worktree: Worktree, label: String, sessionID: String) {
+        notice(in: worktree, title: "Agent opened a review", body: label, sessionID: sessionID)
+    }
+
+    /// On a host that relays notices, hands the paired Macs a notice about
+    /// review `sessionID`; the app raises its own attention instead.
+    private func notice(in worktree: Worktree, title: String, body: String, sessionID: String) {
+        guard core.environment.relaysNotices else { return }
+        changed([.worktreeNotice(HostWorktreeNotice(
+            id: UUID(), worktreeID: worktree.id, title: title, body: body, reviewSessionID: sessionID
+        ))])
     }
 
     /// The worktree a review session id actually targets: `origin` itself
