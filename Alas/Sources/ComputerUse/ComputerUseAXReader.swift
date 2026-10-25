@@ -585,7 +585,8 @@ extension ComputerUseAXReader {
 
     /// Whether a sheet of one of the app's windows, or an untitled window, holds a secure text
     /// field, as LocalAuthentication's password prompt does. Nil when the app's windows couldn't
-    /// be read, or the read ran out of `promptProbeNodes` or passed `deadline` (at most
+    /// be read, a read in them failed, elements were left below `promptProbeDepth`, or the read
+    /// ran out of `promptProbeNodes` or passed `deadline` (at most
     /// `promptProbeTime` from its start) before it found one; the first pass over the windows
     /// counts against both. Doesn't ask the app to build its tree (`application(_:)`), so a probe
     /// changes nothing in it.
@@ -651,8 +652,13 @@ extension ComputerUseAXReader {
                     let identity = ComputerUseSecureFocus.Element(
                         role: string(element, kAXRoleAttribute), subrole: string(element, kAXSubroleAttribute))
                     if ComputerUseSecureFocus.isSecure(identity) { return continuation.resume(returning: true) }
-                    guard depth < promptProbeDepth else { continue }
-                    pending += elements(element, kAXChildrenAttribute).map { ($0, depth + 1) }
+                    let children = elements(element, kAXChildrenAttribute)
+                    guard depth < promptProbeDepth else {
+                        // What the depth limit leaves unread may hold the field, as a budget cut may.
+                        if !children.isEmpty { unreadable = true }
+                        continue
+                    }
+                    pending += children.map { ($0, depth + 1) }
                 }
                 continuation.resume(returning: unreadable ? nil : false)
             }
