@@ -332,7 +332,8 @@ struct NativePeerWorkspaceTests {
 
         for comment in review.comments {
             let file = try #require(session.files.first { $0.summary.id == comment.fileID })
-            #expect(file.parsedDiff.hunks.flatMap(\.lines).contains { $0.kind == .add && $0.newNumber == comment.startLine })
+            let diff = try #require(file.parsedDiff)
+            #expect(diff.hunks.flatMap(\.lines).contains { $0.kind == .add && $0.newNumber == comment.startLine })
         }
     }
 

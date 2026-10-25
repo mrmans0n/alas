@@ -143,6 +143,11 @@ struct NativePeerReviewView: View {
         case failed(String)
     }
 
+    private struct ReadKey: Equatable {
+        let revision: Int?
+        let generation: Int
+    }
+
     private struct DiffLoadKey: Equatable {
         let target: ReviewSessionTarget?
         let generation: Int
@@ -152,7 +157,10 @@ struct NativePeerReviewView: View {
     @State private var review: HostReview?
     @State private var readFailed = false
     @State private var diff = DiffLoad.loading
-    @State private var diffGeneration = 0
+    /// Bumped by Reload: reads the review and its diff again.
+    @State private var reloadGeneration = 0
+    /// Why a reload failed; the diff loaded before stays shown.
+    @State private var reloadError: String?
     @State private var mutationError: String?
     @State private var selectedFileID: DiffReviewFileID?
     @State private var railCollapsed = false
@@ -166,6 +174,7 @@ struct NativePeerReviewView: View {
             header
             if let mutationError { note(mutationError, color: "del") }
             if readFailed { note(readFailedMessage, color: "del") }
+            if let reloadError { note(reloadError, color: "del") }
             if case .loaded(_, truncated: true) = diff {
                 note("The host cut off part of this review; some files or lines are not shown.")
             }
@@ -173,12 +182,15 @@ struct NativePeerReviewView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
-        .task(id: hosts.reviewRevisions[selection.serverId]?[selection.worktree.snapshot.worktree.id]) {
+        .task(id: ReadKey(
+            revision: hosts.reviewRevisions[selection.serverId]?[selection.worktree.snapshot.worktree.id],
+            generation: reloadGeneration
+        )) {
             await readReview()
         }
         // ponytail: local changes don't live-refresh from the Mac; add a host
         // diff event if that bites. Until then the refresh button reloads.
-        .task(id: DiffLoadKey(target: review?.summary.record.target, generation: diffGeneration)) {
+        .task(id: DiffLoadKey(target: review?.summary.record.target, generation: reloadGeneration)) {
             await loadDiff()
         }
     }
@@ -202,7 +214,7 @@ struct NativePeerReviewView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 3))
             }
             Spacer()
-            ToolbarBtn(icon: "arrow.clockwise", tooltip: "Reload from host") { diffGeneration += 1 }
+            ToolbarBtn(icon: "arrow.clockwise", tooltip: "Reload from host") { reloadGeneration += 1 }
             ToolbarBtn(icon: "x", tooltip: "Back to session", action: onClose)
         }
         .padding(.horizontal, 14)
@@ -295,23 +307,28 @@ struct NativePeerReviewView: View {
 
     private func loadDiff() async {
         guard let target = review?.summary.record.target else { return }
-        diff = .loading
+        // A reload keeps the loaded surface, with its unsaved comment and scroll.
+        if case .loaded = diff {} else { diff = .loading }
         // One client per load: its notes are never reset.
         let hosts = hosts
         let selection = selection
         let git = NativePeerReviewGitClient(read: { read in
             await hosts.read(read, in: selection.worktree, serverId: selection.serverId)
         })
+        let message: String
         do {
             let loaded = try await ReviewSessionLoader.peer(git: git).load(target: target)
             guard !Task.isCancelled else { return }
             diff = .loaded(loaded, truncated: git.notes.truncated)
+            reloadError = nil
+            return
         } catch ReviewSessionLoaderError.unsupportedTarget {
-            diff = .failed("Not available from this Mac yet.")
+            message = "Not available from this Mac yet."
         } catch {
-            guard !Task.isCancelled else { return }
-            diff = .failed(error.localizedDescription)
+            message = error.localizedDescription
         }
+        guard !Task.isCancelled else { return }
+        if case .loaded = diff { reloadError = message } else { diff = .failed(message) }
     }
 
     private func note(_ text: String, color: String = "fg-dim") -> some View {
