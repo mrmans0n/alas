@@ -1064,6 +1064,8 @@ final class ComputerUseCoordinator {
     private struct Settled {
         var warning: String?
         var after: ComputerUseWindowFingerprint?
+        /// The start window itself read as changed (or can't tell); false while only a drop window did.
+        var startChanged = true
     }
 
     private static func joined(_ warnings: String?...) -> String? {
@@ -1150,7 +1152,12 @@ final class ComputerUseCoordinator {
                 let clock = ContinuousClock()
                 let start = clock.now
                 var slept = Duration.zero
-                while verdict.warning != nil, slept < Self.dragConfirmDeadline, clock.now - start < Self.dragConfirmDeadline {
+                // A drop into another window may show there first: the start window, which the result
+                // lists, is read until it shows the drop too (a moved file leaves it).
+                // Once a read showed the drop, a later one that shows nothing new doesn't undo it.
+                var dropped = verdict.warning == nil
+                while !dropped || !verdict.startChanged, slept < Self.dragConfirmDeadline,
+                      clock.now - start < Self.dragConfirmDeadline {
                     await sleep(Self.dragConfirmPoll)
                     slept += Self.dragConfirmPoll
                     try checkStillActive(context)
@@ -1170,6 +1177,7 @@ final class ComputerUseCoordinator {
                     verdict = try await check(
                         read, of: window, after: delivered, of: command, target: target, before: before, end: end,
                         context: context, payload: &payload)
+                    if verdict.warning == nil { dropped = true } else if dropped { verdict.warning = nil }
                 }
             }
             Self.report(
@@ -1209,6 +1217,7 @@ final class ComputerUseCoordinator {
         let kind = Self.changeKind(command.action)
         let asEvents = [.event, .background].contains(delivered.delivery)
         var warning = ComputerUseChangeCheck.warning(before: before, after: after, kind: kind, deliveredAsEvents: asEvents)
+        let startChanged = warning == nil
         if let end {
             // The drop window read back too: the drop may have changed only that one.
             // An unreadable drop window says nothing either way, so the start window's verdict stands.
@@ -1219,7 +1228,7 @@ final class ComputerUseCoordinator {
                 if endWarning == nil { warning = nil }
             }
         }
-        return Settled(warning: warning, after: after)
+        return Settled(warning: warning, after: after, startChanged: startChanged)
     }
 
     /// Reads the window a drag dropped into, as the start window is read, into `to_window`.

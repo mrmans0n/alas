@@ -852,7 +852,8 @@ struct ComputerUseCoordinatorTests {
     }
 
     /// `mappedLate`: the end window shows the drop only on a re-read, as Finder does.
-    enum CrossWindowDrop: CaseIterable { case mapped, mappedLate, outOfBounds, staleRef, otherApp }
+    /// `sourceLate`: the end window shows it at once, the start window (a moved file leaving it) a moment later.
+    enum CrossWindowDrop: CaseIterable { case mapped, mappedLate, sourceLate, outOfBounds, staleRef, otherApp }
 
     /// The drop end resolves in the end window: its screenshot, its frame and its refs. The end
     /// window is read back too, so a drop that changed only it isn't reported as no change, nor
@@ -861,6 +862,7 @@ struct ComputerUseCoordinatorTests {
     func dragIntoAnotherWindowUsesThatWindow(_ drop: CrossWindowDrop) async throws {
         let recorder = Recorder()
         let endReads = Counter()
+        let startReads = Counter()
         var windows = Self.windows
         windows[5] = ComputerUseWindow(windowID: 5, title: "Other", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: Self.notes)
         var system = Self.system(windows: windows, recorder: recorder)
@@ -872,6 +874,9 @@ struct ComputerUseCoordinatorTests {
             if window.windowID == 5 {
                 let read = endReads.next()
                 if drop == .mappedLate ? read >= 3 : read == 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
+            } else if drop == .sourceLate, startReads.next() >= 5 {
+                // From its fifth read, a few polls after the drop, the moved item is gone from it.
+                tree.children.removeAll()
             }
             return (tree, nil, ComputerUseAXHandles())
         }
@@ -883,7 +888,7 @@ struct ComputerUseCoordinatorTests {
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
         let drag: ComputerUseCommand = switch drop {
-        case .mapped, .mappedLate: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
+        case .mapped, .mappedLate, .sourceLate: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
         case .outOfBounds: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 2000, toY: 2000)
         // Window 5 was never inspected, so e1 there is unknown even though window 1 has none either.
         case .staleRef: .init(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toRef: "e1")
@@ -891,7 +896,7 @@ struct ComputerUseCoordinatorTests {
         }
         let response = await f.coordinator.perform(drag, sessionID: "s")
         switch drop {
-        case .mapped, .mappedLate:
+        case .mapped, .mappedLate, .sourceLate:
             let json = try #require(Self.text(response))
             let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
             guard case .drag(.point(let start), .point(let point), let toWindow) = try #require(recorder.inputs.first) else {
@@ -901,10 +906,12 @@ struct ComputerUseCoordinatorTests {
             // The end window sits at (10, 10); its screenshot has 2 pixels per point.
             #expect(start == CGPoint(x: 5, y: 5) && point == CGPoint(x: 60, y: 60) && toWindow?.windowID == 5)
             let end = try #require(payload["to_window"] as? [String: Any])
-            #expect(end["window_id"] as? Int == 5 && (end["elements"] as? [Any])?.count == 3)
-            // The start window looks the same, but the drop changed the end window.
+            #expect(end["window_id"] as? Int == 5)
+            // The drop changed the end window; a start window that looks the same is read again
+            // until the deadline, or until it shows the drop.
             #expect(payload["warning"] == nil)
-            #expect(recorder.sleeps.contains(ComputerUseCoordinator.dragConfirmPoll) == (drop == .mappedLate))
+            #expect(recorder.sleeps.contains(ComputerUseCoordinator.dragConfirmPoll))
+            #expect((payload["elements"] as? [Any])?.count == (drop == .sourceLate ? 1 : 2))
         case .outOfBounds:
             #expect(response == .error("computer_out_of_bounds: The point is outside window 5."))
             #expect(recorder.inputs.isEmpty)
