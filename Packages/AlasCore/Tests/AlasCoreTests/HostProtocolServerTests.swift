@@ -435,6 +435,28 @@ struct HostProtocolServerTests {
             == .failure(error: .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")))
     }
 
+    /// A linked worktree's branch is renamed and listed under its new name;
+    /// the main checkout's is refused, as the local menu never offers it, and
+    /// so is a rename of a branch the worktree is no longer listed on.
+    @Test func renameBranchRenamesALinkedWorktreeOnly() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let main = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let linked = fixture.root.appendingPathComponent("feature")
+        #expect(try await Process.git(["worktree", "add", "-q", "-b", "feature", linked.path], cwd: main.path).exitCode == 0)
+        try await fixture.host.worktrees.refresh(projectID: fixture.projectID, caller: .app)
+        let linkedRef = WorktreeRef(projectID: fixture.projectID, path: linked.path)
+
+        #expect(try await fixture.request(.renameBranch(worktree: linkedRef, from: "feature", to: "renamed")) == .done)
+        #expect(fixture.core.projects.worktrees(projectId: fixture.projectID)
+            .first { $0.path.standardizedFileURL.path == linked.standardizedFileURL.path }?.branch == "renamed")
+        #expect(try await fixture.request(.renameBranch(worktree: linkedRef, from: "feature", to: "again"))
+            == .failure(error: .failed(message: "The worktree changed since it was listed.")))
+        #expect(try await fixture.request(.renameBranch(
+            worktree: WorktreeRef(projectID: fixture.projectID, path: main.path.path), from: main.branch, to: "nope"
+        )) == .failure(error: .failed(message: "This worktree's branch cannot be renamed.")))
+    }
+
     /// A host over a real repository, persisting to a scratch directory,
     /// whose sessions talk to a scripted agent.
     @MainActor

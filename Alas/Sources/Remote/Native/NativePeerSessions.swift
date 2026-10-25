@@ -655,6 +655,44 @@ final class NativePeerSessions {
         }
     }
 
+    /// Renames a session on the host; its next session list carries the
+    /// title. No lease is needed, as for a close.
+    func renameSession(_ sessionId: String, title: String) {
+        guard let downstream else { return }
+        // ponytail: a route failure (the peer went offline) is dropped and the
+        // tab keeps its title; surface an error if that ever confuses anyone.
+        _ = federation.route(.renameSession(sessionId: sessionId, title: title), from: downstream)
+    }
+
+    /// Whether `sessionId`'s whole conversation is here to export: only the
+    /// selected session's transcript is, once no older page is left to fetch.
+    func canExportTranscript(of sessionId: String) -> Bool {
+        guard let transcript, transcript.sessionId == sessionId else { return false }
+        return transcript.epoch != nil && transcript.olderPageBeforeIndex == nil
+    }
+
+    /// The conversation as the local Copy and Save Session as Markdown write it.
+    func transcriptMarkdown(of sessionId: String, title: String, agentName: String?) -> String? {
+        guard canExportTranscript(of: sessionId), let transcript else { return nil }
+        let userNotice = RemoteWireMessage.oversizedNotice(kind: "user")
+        let agentNotice = RemoteWireMessage.oversizedNotice(kind: "agent")
+        let messages = transcript.messages.compactMap { message -> ACPMessage? in
+            let text = message.text ?? ""
+            switch message.kind {
+            case "user": return ACPMessage.user(id: UUID(), messageId: nil, text: text, attachments: [])
+            case "agent": return ACPMessage.agent(id: UUID(), messageId: nil, StreamingText(text))
+            // A turn too large to forward keeps its place, with the notice
+            // that replaced it as its body.
+            case "systemNotice" where text == userNotice:
+                return ACPMessage.user(id: UUID(), messageId: nil, text: text, attachments: [])
+            case "systemNotice" where text == agentNotice:
+                return ACPMessage.agent(id: UUID(), messageId: nil, StreamingText(text))
+            default: return nil
+            }
+        }
+        return ACPTranscriptMarkdown.document(title: title, agentName: agentName, messages: messages)
+    }
+
     func selectChip(_ spec: ChipSpec, itemId: String) {
         let sent = drive { id in
             switch spec.source {

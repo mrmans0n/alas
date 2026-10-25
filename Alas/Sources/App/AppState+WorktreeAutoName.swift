@@ -3,11 +3,6 @@ import os
 
 private let autoNameLogger = Logger(subsystem: "io.nlopez.alas", category: "WorktreeAutoName")
 
-/// The worktree has an operation in flight, such as a pending delete.
-private struct WorktreeBusyError: LocalizedError {
-    var errorDescription: String? { "The worktree is busy with another operation." }
-}
-
 extension AppState {
     /// True while `worktree` still sits on the temporary branch it was created
     /// on and waits for a chat prompt to name it.
@@ -43,7 +38,7 @@ extension AppState {
                   self.projectsManager.pendingAutoBranchName(projectId: project.id, worktreeId: worktreeId) == placeholder
             else { return }
             do {
-                let renamed = try await self.renameBranchWhileIdle(
+                let renamed = try await self.core.renameBranchWhileIdle(
                     worktree,
                     from: placeholder,
                     to: self.composedBranchName(name, project: project),
@@ -63,7 +58,7 @@ extension AppState {
     /// variant when taken). Returns an error message for the rename sheet.
     func renameWorktreeBranch(_ worktree: Worktree, to branch: String) async -> String? {
         do {
-            let renamed = try await renameBranchWhileIdle(
+            let renamed = try await core.renameBranchWhileIdle(
                 worktree,
                 from: worktree.branch,
                 to: branch,
@@ -133,32 +128,6 @@ extension AppState {
         } catch {
             autoNameLogger.warning("Naming a branch with \(agent.id, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
             return nil
-        }
-    }
-
-    /// Serialized with the project's creates and deletes. A worktree being
-    /// created or deleted keeps its branch: a delete has already captured it.
-    /// Failure states are settled and do not block a rename.
-    private func renameBranchWhileIdle(
-        _ worktree: Worktree,
-        from: String,
-        to: String,
-        requireUnpublished: Bool
-    ) async throws -> String {
-        try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { [self] in
-            let isIdle = await MainActor.run {
-                switch projectsManager.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) {
-                case .creating, .preparingDelete, .deleting, .archiving: false
-                case nil, .createFailed, .launchFailed, .deleteFailed: true
-                }
-            }
-            guard isIdle else { throw WorktreeBusyError() }
-            return try await WorktreeService().renameBranch(
-                worktreePath: worktree.path,
-                from: from,
-                to: to,
-                requireUnpublished: requireUnpublished
-            )
         }
     }
 
