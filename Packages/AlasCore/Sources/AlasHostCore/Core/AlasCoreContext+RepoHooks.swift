@@ -48,7 +48,57 @@ public enum RepoHookPreflightError: LocalizedError {
     }
 }
 
+/// What to do about a repository hook before work a paired Mac starts.
+public enum RepoHookGate: Equatable, Sendable {
+    /// Go ahead, running this approved script, or none.
+    case ready(String?)
+    /// Go ahead without the unapproved hook, and say it was not run.
+    case skippedUnapproved
+    /// Start nothing: the paired Mac asks its user about this hook first.
+    case needsApproval(PeerRepoHook)
+}
+
+/// Work a paired Mac started stopped for its user to approve `hook`.
+public struct RepoHookApprovalRequired: Error, Equatable, Sendable {
+    public let hook: PeerRepoHook
+
+    public init(hook: PeerRepoHook) {
+        self.hook = hook
+    }
+}
+
 extension AlasCoreContext {
+    /// Decides the repository hook for `event` of work a paired Mac starts,
+    /// as `consent` says: an unapproved hook is approved only when the
+    /// paired Mac approved this very script, and is otherwise sent back for
+    /// approval, skipped when it said so, or skipped with a notice when it
+    /// cannot ask (nil). Throws when an approval cannot be saved.
+    @_spi(AppHost) public func gateRepoHook(
+        event: RepoHookEvent,
+        project: ProjectConfig,
+        consent: RepoHookConsent?,
+        load: () async -> RepoHookLoadResult
+    ) async throws -> RepoHookGate {
+        guard Self.usesInheritedRepoHook(event: event, project: project),
+              case let .loaded(hook) = await load() else {
+            return .ready(nil)
+        }
+        if projects.isRepoHookApproved(projectId: project.id, hash: hook.hash) {
+            return .ready(hook.text)
+        }
+        switch consent {
+        case .approve(let hash) where hash == hook.hash:
+            try persistRepoHookApproval(projectId: project.id, hash: hook.hash)
+            return .ready(hook.text)
+        case .ask, .approve:
+            return .needsApproval(PeerRepoHook(hook))
+        case .skip:
+            return .ready(nil)
+        case nil:
+            return .skippedUnapproved
+        }
+    }
+
     /// The repository's hook for `event`, when the project inherits it and it
     /// is approved: approved earlier, or now through `prompter` (the
     /// environment's `repoHookPrompter` when nil). Nil when there is none or

@@ -353,6 +353,8 @@ public enum RemoteCreateWorktreeSessionResult: Equatable, Sendable {
         message: String,
         worktreeId: String?
     )
+    /// Nothing was created: the client's user must approve `hook` first.
+    case needsRepoHookApproval(PeerRepoHook)
 }
 
 public enum RemoteCreateSessionResult: Equatable, Sendable {

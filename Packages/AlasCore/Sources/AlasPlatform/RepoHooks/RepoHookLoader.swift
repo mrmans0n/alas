@@ -28,20 +28,41 @@ public struct RepoHookLoader: Sendable {
         case let .failed(message):
             return .failed(source: source, message: message)
         case let .data(bytes):
-            guard let text = String(data: bytes, encoding: .utf8) else {
-                return .failed(source: source, message: "Hook is not valid UTF-8")
-            }
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                return .empty(source: source)
-            }
-            return .loaded(.init(
-                event: event,
-                source: source,
-                bytes: bytes,
-                text: text,
-                hash: RepoHookTrust.hash(event: event, bytes: bytes)
-            ))
+            return Self.result(event: event, source: source, bytes: bytes)
         }
+    }
+
+    /// The hook for `event` as committed at `ref`, rather than as checked
+    /// out: what a worktree created from `ref` will have.
+    public static func loadCommitted(event: RepoHookEvent, ref: String, repoPath: URL, host: String?) async -> RepoHookLoadResult {
+        let source = host.map(RepoHookSource.remote) ?? .local
+        let output: ProcessResultData
+        do {
+            output = try await Process.gitData(["show", "\(ref):\(event.relativePath)"], cwd: repoPath)
+        } catch {
+            return .failed(source: source, message: "Could not read hook: \(error.localizedDescription)")
+        }
+        guard output.exitCode == 0 else { return .missing(source: source) }
+        guard output.stdout.count <= maximumBytes else {
+            return .failed(source: source, message: "Hook exceeds the 256 KiB limit")
+        }
+        return result(event: event, source: source, bytes: output.stdout)
+    }
+
+    private static func result(event: RepoHookEvent, source: RepoHookSource, bytes: Data) -> RepoHookLoadResult {
+        guard let text = String(data: bytes, encoding: .utf8) else {
+            return .failed(source: source, message: "Hook is not valid UTF-8")
+        }
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .empty(source: source)
+        }
+        return .loaded(.init(
+            event: event,
+            source: source,
+            bytes: bytes,
+            text: text,
+            hash: RepoHookTrust.hash(event: event, bytes: bytes)
+        ))
     }
 
     public static func liveRead(event: RepoHookEvent, worktreeRoot: URL, host: String?) async -> ReadResult {

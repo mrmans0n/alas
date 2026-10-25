@@ -95,8 +95,8 @@ extension RemoteServerMessage {
     public var sessionId: String? {
         switch self {
         case .hello, .identityProof, .console, .host, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
-             .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .sessionCreated,
-             .createSessionFailed:
+             .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
+             .sessionCreated, .createSessionFailed:
             return nil
         case .error(_, let sessionId):
             // Conditionally scoped: nil when the error isn't about any one
@@ -124,8 +124,8 @@ extension RemoteServerMessage {
     public func replacingSessionId(_ new: String) -> RemoteServerMessage {
         switch self {
         case .hello, .identityProof, .console, .host, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
-             .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .sessionCreated,
-             .createSessionFailed:
+             .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
+             .sessionCreated, .createSessionFailed:
             return self
         case .error(let message, let sessionId):
             // An error with no session id has nothing to rewrite; leaving it

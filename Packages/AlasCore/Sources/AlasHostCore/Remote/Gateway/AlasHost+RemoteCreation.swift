@@ -33,14 +33,21 @@ private let logger = Logger(subsystem: "io.nlopez.alas", category: "RemoteCreati
     public var agentID: String
     public var modelID: String?
     public var effortID: String?
+    /// What the client says about the worktree-create hook; nil from
+    /// clients that cannot ask their user.
+    public var repoHook: RepoHookConsent?
 
-    public init(projectID: String, base: String, branch: String, agentID: String, modelID: String? = nil, effortID: String? = nil) {
+    public init(
+        projectID: String, base: String, branch: String, agentID: String,
+        modelID: String? = nil, effortID: String? = nil, repoHook: RepoHookConsent? = nil
+    ) {
         self.projectID = projectID
         self.base = base
         self.branch = branch
         self.agentID = agentID
         self.modelID = modelID
         self.effortID = effortID
+        self.repoHook = repoHook
     }
 }
 
@@ -94,8 +101,10 @@ extension AlasHost {
         guard !project.isFolder else { return refused(AlasCoreContext.folderWorktreeCreationMessage) }
         guard core.environment.admitsAgent(request.agentID, remoteHost: project.host) else { return refused() }
         guard case .valid = GitNameValidator.validateBranchName(request.branch) else { return refused() }
+        let branches: [String]
         do {
-            guard try await core.branches(of: project).contains(request.base) else { return refused() }
+            branches = try await core.branches(of: project)
+            guard branches.contains(request.base) else { return refused() }
         } catch {
             logger.error("Could not load branches for remote worktree creation in project \(project.id, privacy: .private): \(String(describing: error), privacy: .private)")
             return refused("Could not load branches.")
@@ -111,6 +120,19 @@ extension AlasHost {
             return refused()
         }
 
+        let gate: RepoHookGate
+        do {
+            let ref = branches.contains(request.branch) ? request.branch : request.base
+            gate = try await core.gateRepoHook(event: .worktreeCreate, project: project, consent: request.repoHook) {
+                await RepoHookLoader.loadCommitted(
+                    event: .worktreeCreate, ref: ref, repoPath: URL(fileURLWithPath: project.path), host: project.host
+                )
+            }
+        } catch {
+            return refused(error.localizedDescription)
+        }
+        if case .needsApproval(let hook) = gate { return .needsRepoHookApproval(hook) }
+
         var creation = WorktreeCreateRequest(projectID: project.id, base: request.base, branch: request.branch, destination: destination)
         creation.destinationAlreadyPrepared = true
         creation.fetchesBaseFirst = core.environment.configuration().worktrees.fetchRemoteBeforeCreate
@@ -122,6 +144,12 @@ extension AlasHost {
         } catch {
             logger.error("Could not create remote worktree for project \(project.id, privacy: .private): \(error.localizedDescription, privacy: .private)")
             return refused()
+        }
+        if gate == .skippedUnapproved {
+            logger.notice("Skipped the unapproved worktree-create hook of project \(project.id, privacy: .private) for a client that cannot ask")
+            noteAttention([.worktreeNotice(HostWorktreeNotice(
+                id: UUID(), worktreeID: worktree.id, title: "Setup hook not run", body: "It needs approval in Alas."
+            ))])
         }
         let sessionRequest = RemoteSessionCreation(
             worktreeID: worktree.id, agentID: request.agentID, modelID: request.modelID, effortID: request.effortID
