@@ -1,4 +1,6 @@
 import Foundation
+import os
+import UserNotifications
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -7,9 +9,38 @@ import AlasCode
 import AlasAgents
 import AlasSessions
 
+private let attentionLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasHost")
+
 extension AlasHost {
     /// Notices that ask for the user, as an agent sends them with `alas notify`.
     public var attention: AttentionAPI { AttentionAPI(core: core, changed: { [weak self] in self?.noteAttention($0) }) }
+
+    /// On a host that relays notices, hands every notification its services
+    /// post (a shepherd's, a schedule's, a run's outcome) to its subscribers
+    /// instead of the system: as the notice of the session it names when the
+    /// host holds that session, else as its worktree's.
+    public func relayNotifications() {
+        guard core.environment.relaysNotices else { return }
+        core.harness.notifications.notificationAdder = { [weak self] request in
+            let content = request.content
+            let title = content.title
+            let body = content.body
+            let sessionID = content.userInfo["sessionId"] as? String
+            let worktreeID = content.userInfo["worktreeId"] as? String
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                // A run console's or a worktree's id is no session a client can open.
+                if let sessionID, let owner = core.acpSessionOwner(sessionID) {
+                    let agent = attention.agent(of: sessionID).rawValue
+                    noteAttention([.notice(HostNotice(id: UUID(), owner: owner, sessionID: sessionID, agent: agent, title: title, body: body))])
+                } else if let worktreeID {
+                    noteAttention([.worktreeNotice(HostWorktreeNotice(id: UUID(), worktreeID: worktreeID, title: title, body: body))])
+                } else {
+                    attentionLogger.notice("Dropped notification \(title, privacy: .private): it names no session or worktree")
+                }
+            }
+        }
+    }
 }
 
 /// Where a notice comes from, which is what clicking it opens.
@@ -86,7 +117,7 @@ public struct AttentionAPI {
 
     /// The agent behind session `sessionID`, as its hooks or its ACP session
     /// report it; Codex when nothing does.
-    private func agent(of sessionID: String?) -> AgentKind {
+    func agent(of sessionID: String?) -> AgentKind {
         guard let sessionID else { return .codex }
         let harness = core.harness
         if let activity = harness.activityBySession[sessionID] { return activity.agent }

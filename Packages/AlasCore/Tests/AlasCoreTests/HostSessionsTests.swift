@@ -794,6 +794,33 @@ struct HostSessionsTests {
         #expect(received.events.filter { if case .notice = $0 { true } else { false } }.count == 1)
     }
 
+    /// A headless host relays what would be a system banner: a notification
+    /// naming a session it holds as that session's notice, and one naming a
+    /// run console or no session as its worktree's, which only a client that
+    /// accepts `worktreeNotice` receives.
+    @Test func aHeadlessHostRelaysEveryNotificationToTheSessionOrWorktreeItNames() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        fixture.host.relayNotifications()
+        let id = try await fixture.host.sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        let received = Collected(fixture.host.subscribe())
+        let notifications = fixture.core.harness.notifications
+        notifications.notifyAlas(
+            body: "Merged", title: "Merged", agent: .gemini,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: id
+        )
+        notifications.notifyRunScriptFinished(
+            scriptName: "test", exitCode: 1,
+            projectId: fixture.worktree.projectId, worktreeId: fixture.worktree.id, sessionId: "console-1", runID: "r"
+        )
+
+        try await eventually { await received.events.count { if case .notice(let n) = $0 { n.sessionID == id && n.body == "Merged" } else { false } } == 1 }
+        try await eventually { await received.events.contains {
+            if case .worktreeNotice(let n) = $0 { n.worktreeID == fixture.worktree.id && n.title == "test finished" } else { false }
+        } }
+        #expect(HostEvent.worktreeNotice(.init(id: UUID(), worktreeID: "w", title: nil, body: "")).optInKind == "worktreeNotice")
+    }
+
     /// A session dropped while a notice holds it waiting comes back no longer waiting.
     @Test func aSessionReplacedWhileANoticeHoldsItWaitingIsNotReportedWaiting() async throws {
         let fixture = try Fixture()

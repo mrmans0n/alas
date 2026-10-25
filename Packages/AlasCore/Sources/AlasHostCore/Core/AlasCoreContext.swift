@@ -201,6 +201,11 @@ public final class AlasCoreContext {
         self.runHistory = RunHistory(store: runHistoryStore)
         self.attention = AttentionIntake(store: attentionStore ?? AttentionStore())
         self.harness = harness
+        if environment.relaysNotices {
+            // A process without an app bundle has no notification center;
+            // `AlasHost.relayNotifications()` hands them to subscribers instead.
+            harness.notifications.notificationAdder = { _ in }
+        }
         self.orchestrationPersistence = orchestrationPersistence
         self.reviewDrafts = reviewDrafts
         self.reviewSessions = reviewSessions

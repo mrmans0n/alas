@@ -52,7 +52,7 @@ public final class PeerHostChannel {
             case .runRemoved(let id):
                 runs.removeAll { $0.id == id }
             case .sessionChanged, .sessionRemoved, .transcript, .pendingRequest, .pendingRequestResolved,
-                 .sessionState, .notice, .resync:
+                 .sessionState, .notice, .worktreeNotice, .resync:
                 break
             }
         }

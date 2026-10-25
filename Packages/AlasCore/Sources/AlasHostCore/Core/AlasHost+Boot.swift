@@ -1,5 +1,4 @@
 import Foundation
-import os
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -9,8 +8,6 @@ import AlasAgents
 import AlasIntegrations
 import AlasACP
 import AlasAgentKit
-
-private let bootLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasHost")
 
 /// The host is stopping and starts nothing new.
 public struct HostStopping: Error, Equatable, LocalizedError {
@@ -82,10 +79,6 @@ extension AlasHost {
         // Every other store keeps its `Paths` default, which is this directory.
         let ordering = environment.config.worktrees.defaultOrdering
         let harness = HarnessService()
-        // A process without an app bundle has no notification center.
-        harness.notifications.notificationAdder = { request in
-            bootLogger.notice("Dropped notification \(request.content.title, privacy: .private)")
-        }
         weak var builtCore: AlasCoreContext?
         let alasTools = cliBinDir.map {
             HeadlessAlasTools(binDir: $0, socketServer: harness.socketServer, config: { environment.config }, core: { builtCore })
@@ -115,7 +108,11 @@ extension AlasHost {
         builtCore = core
         core.installDefaultShepherdEffects()
         core.installDefaultRunScheduleRunner()
-        return AlasHost(core: core)
+        let host = AlasHost(core: core)
+        // A process without an app bundle has no notification center: what
+        // would be a banner goes to the paired Macs instead.
+        host.relayNotifications()
+        return host
     }
 }
 
