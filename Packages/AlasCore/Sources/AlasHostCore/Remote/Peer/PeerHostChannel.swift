@@ -1,6 +1,7 @@
 import Foundation
 import AlasModel
 import AlasFeatures
+import AlasIntegrations
 
 /// The host protocol, spoken to one paired peer: requests matched to their
 /// answers by id, and the peer's state kept current from a snapshot and the
@@ -20,6 +21,8 @@ public final class PeerHostChannel {
         public var runs: [RunRecord]
         /// Shepherd pills by session id; sessions without one are absent.
         public var shepherds: [String: HostSessionShepherd]
+        /// Review statuses by worktree id, as the followed ones change.
+        public var reviewStatuses: [String: ReviewLoopSnapshot] = [:]
 
         public init(_ snapshot: HostSnapshot) {
             projects = snapshot.projects
@@ -36,6 +39,9 @@ public final class PeerHostChannel {
                 Self.upsert(project, in: &projects)
             case .projectRemoved(let id):
                 projects.removeAll { $0.id == id }
+                for snapshot in worktrees where snapshot.worktree.projectId == id {
+                    reviewStatuses[snapshot.worktree.id] = nil
+                }
                 worktrees.removeAll { $0.worktree.projectId == id }
             case .worktreeChanged(let snapshot):
                 let key = (snapshot.worktree.projectId, snapshot.worktree.id)
@@ -46,6 +52,7 @@ public final class PeerHostChannel {
                 }
             case .worktreeRemoved(let projectID, let worktreeID):
                 worktrees.removeAll { $0.worktree.projectId == projectID && $0.worktree.id == worktreeID }
+                reviewStatuses[worktreeID] = nil
             case .workspaceCheckoutChanged(let checkout):
                 Self.upsert(checkout, in: &workspaceCheckouts)
             case .workspaceCheckoutRemoved(let id):
@@ -58,6 +65,8 @@ public final class PeerHostChannel {
                 shepherds[summary.id] = summary.shepherd
             case .sessionRemoved(_, let id):
                 shepherds[id] = nil
+            case .reviewStatus(let worktreeID, let snapshot):
+                reviewStatuses[worktreeID] = snapshot
             case .transcript, .pendingRequest, .pendingRequestResolved,
                  .sessionState, .notice, .worktreeNotice, .resync:
                 break
@@ -115,8 +124,8 @@ public final class PeerHostChannel {
         onChange?()
         subscribeID = nextID
         // Channels exist only for `host.events.v1` peers, which serve it; a host
-        // that predates `worktreeNotice` just never matches that kind.
-        _ = await request(.subscribeAccepting(after: snapshot.cursor, events: ["notice", "worktreeNotice"])) // `finish` sets isSubscribed on .subscribed
+        // that predates `worktreeNotice` or `reviewStatus` just never matches that kind.
+        _ = await request(.subscribeAccepting(after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus"])) // `finish` sets isSubscribed on .subscribed
     }
 
     /// Sends `request` and waits for its answer, or fails with
@@ -161,6 +170,13 @@ public final class PeerHostChannel {
             state = next
             onChange?()
         }
+    }
+
+    /// Drops `worktreeID`'s cached review status, once the client no longer
+    /// follows it: the host repeats no unchanged status on a later follow.
+    public func forgetReviewStatus(worktreeID: String) {
+        guard state?.reviewStatuses.removeValue(forKey: worktreeID) != nil else { return }
+        onChange?()
     }
 
     /// Fails every pending request with the peer-unavailable message and

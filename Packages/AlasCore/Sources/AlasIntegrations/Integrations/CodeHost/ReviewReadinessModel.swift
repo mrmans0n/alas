@@ -103,7 +103,8 @@ public struct ReviewReadinessModel: Equatable, Sendable {
         snapshot: ReviewLoopSnapshot?,
         lastError: String?,
         canOpenAgentHandoff: Bool,
-        inFlightAction: ReviewReadinessActionKind? = nil
+        inFlightAction: ReviewReadinessActionKind? = nil,
+        servedActions: Set<ReviewReadinessActionKind>? = nil
     ) {
         guard let snapshot else {
             identity = "Review readiness"
@@ -115,7 +116,8 @@ public struct ReviewReadinessModel: Equatable, Sendable {
             facts = []
             actions = Self.actions(
                 [Action(kind: .refresh, title: "Refresh", isEnabled: true)],
-                applying: inFlightAction
+                applying: inFlightAction,
+                serving: servedActions
             )
             blockingText = lastError ?? "Review state is still loading."
             return
@@ -138,7 +140,8 @@ public struct ReviewReadinessModel: Equatable, Sendable {
             chips = [Chip(id: "error", title: "Needs attention", tone: .warning)]
             actions = Self.actions(
                 [Action(kind: .refresh, title: "Refresh", isEnabled: true)],
-                applying: inFlightAction
+                applying: inFlightAction,
+                serving: servedActions
             )
             return
         }
@@ -150,14 +153,21 @@ public struct ReviewReadinessModel: Equatable, Sendable {
                 requestLabel: requestLabel,
                 canOpenAgentHandoff: canOpenAgentHandoff
             ),
-            applying: inFlightAction
+            applying: inFlightAction,
+            serving: servedActions
         )
     }
 
     private static func actions(
         _ actions: [Action],
-        applying inFlightAction: ReviewReadinessActionKind?
+        applying inFlightAction: ReviewReadinessActionKind?,
+        serving servedActions: Set<ReviewReadinessActionKind>?
     ) -> [Action] {
+        var actions = actions
+        if let servedActions {
+            actions = actions.filter { servedActions.contains($0.kind) }
+            if actions.isEmpty { actions = [Action(kind: .refresh, title: "Refresh", isEnabled: true)] }
+        }
         guard let inFlightAction else { return actions }
         return actions.map { action in
             Action(
@@ -413,4 +423,10 @@ public enum ReviewReadinessActionKind: String, Codable, Equatable, Sendable {
     case inspectReviewEvidence
     case openAgentHandoff
     case merge
+}
+
+public extension ReviewReadinessActionKind {
+    /// What a paired host serves: no PR creation or merge. The host serves
+    /// force push too, but this model never offers it, so keeping it is a no-op.
+    static let peerServed: Set<Self> = [.refresh, .pushBranch, .forcePushBranch, .openReviewRequest]
 }

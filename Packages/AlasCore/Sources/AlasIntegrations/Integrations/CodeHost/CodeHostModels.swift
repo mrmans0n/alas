@@ -809,3 +809,28 @@ extension CodeHostKind {
         return mergeReviewRequestTitle
     }
 }
+
+// A review status crosses the host protocol to paired Macs.
+extension CodeHostProviderCapabilities: Codable {}
+extension ReviewCheck: Codable {}
+extension ReviewComment: Codable {}
+extension ReviewThread: Codable {}
+extension ReviewRequest: Codable {}
+extension ReviewLoopLocalState: Codable {}
+
+extension ReviewLoopSnapshot: Codable {
+    /// A newer host's code host, pull request or capabilities that this
+    /// side can't read decode as none, keeping the branch state.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        try self.init(
+            local: c.decode(ReviewLoopLocalState.self, forKey: .local),
+            remote: (try? c.decodeIfPresent(CodeHostRemote.self, forKey: .remote)) ?? nil,
+            reviewRequest: (try? c.decodeIfPresent(ReviewRequest.self, forKey: .reviewRequest)) ?? nil,
+            providerAvailable: c.decode(Bool.self, forKey: .providerAvailable),
+            providerAuthenticated: c.decode(Bool.self, forKey: .providerAuthenticated),
+            providerCapabilities: (try? c.decode(CodeHostProviderCapabilities.self, forKey: .providerCapabilities)) ?? .readOnly,
+            errorMessage: c.decodeIfPresent(String.self, forKey: .errorMessage)
+        )
+    }
+}

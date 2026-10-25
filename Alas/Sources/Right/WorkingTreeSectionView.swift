@@ -265,7 +265,7 @@ struct WorkingTreeFlatRowView: View {
                 Button("Discard Changes…", role: .destructive) {
                     actions.onDiscardFolder?(node.path)
                 }
-                if folderUntracked { ignoreMenu(path: node.path, isDirectory: true) }
+                if folderUntracked, actions.onIgnore != nil { ignoreMenu(path: node.path, isDirectory: true) }
             }
         }
     }
@@ -275,7 +275,7 @@ struct WorkingTreeFlatRowView: View {
         let canStage = !group.unstagedEntries.isEmpty
         let canUnstage = !group.stagedEntries.isEmpty
         let headPathEntry = group.entries.first { $0.renameFrom != nil } ?? file
-        let ignore = Self.isUntracked(file)
+        let ignore = Self.isUntracked(file) && actions.onIgnore != nil
             ? AnyView(ignoreMenu(path: file.path, isDirectory: false))
             : nil
         return ChangedRow(
@@ -325,7 +325,7 @@ struct WorkingTreeFlatRowView: View {
         stage: ChangeStage,
         in group: WorkingTreeChangeGroup
     ) -> (() -> Void)? {
-        guard actions.readOnly, group.stageState == .mixed, let onSelectStage = actions.onSelectStage else {
+        guard group.stageState == .mixed, let onSelectStage = actions.onSelectStage else {
             return nil
         }
         return { onSelectStage(file, stage) }

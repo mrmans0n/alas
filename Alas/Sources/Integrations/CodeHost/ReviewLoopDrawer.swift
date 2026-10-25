@@ -6,6 +6,7 @@ struct ReviewLoopDrawer: View {
     let onAction: (ReviewReadinessActionKind) -> Void
     var onRevealReviewRequest: (Int) -> Void = { _ in }
     var shepherd: ReviewShepherdDrawerModel? = nil
+    var servedActions: Set<ReviewReadinessActionKind>? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -15,7 +16,8 @@ struct ReviewLoopDrawer: View {
             snapshot: state.snapshot,
             lastError: state.lastError,
             canOpenAgentHandoff: canOpenAgentHandoff,
-            inFlightAction: state.inFlightAction
+            inFlightAction: state.inFlightAction,
+            servedActions: servedActions
         )
     }
 

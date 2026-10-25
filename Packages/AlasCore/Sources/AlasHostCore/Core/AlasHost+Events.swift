@@ -7,6 +7,7 @@ import AlasFeatures
 import AlasCode
 import AlasAgents
 import AlasSessions
+import AlasIntegrations
 
 /// A position in the host's change log. Events after a cursor describe every
 /// change since the snapshot that returned it. Each log has its own
@@ -51,6 +52,10 @@ public enum HostEvent: Codable, Equatable, Sendable {
     /// as a run's outcome or a shepherd's, on a host that relays notices.
     /// Sent over the host protocol only to clients that accept `worktreeNotice`.
     case worktreeNotice(HostWorktreeNotice)
+    /// A followed worktree's branch sync and pull request status changed;
+    /// nil once it was forgotten. Sent over the host protocol only to
+    /// clients that accept `reviewStatus`.
+    case reviewStatus(worktreeID: String, snapshot: ReviewLoopSnapshot?)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -81,6 +86,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .sessionState(let owner, let id, _): .sessionState(owner: owner, id: id)
         case .notice(let notice): .notice(notice.id)
         case .worktreeNotice(let notice): .notice(notice.id)
+        case .reviewStatus(let worktreeID, _): .reviewStatus(worktreeID)
         case .resync: .resync
         }
     }
@@ -132,6 +138,7 @@ enum HostEventKey: Hashable {
     case pendingRequest(owner: SessionOwnerID, id: String, HostPendingRequestID)
     case sessionState(owner: SessionOwnerID, id: String)
     case notice(UUID)
+    case reviewStatus(String)
     case resync
 }
 
@@ -374,6 +381,8 @@ final class HostEventSource {
     private var worktrees: [HostEventKey: WorktreeSnapshot] = [:]
     private var runs: [String: RunRecord] = [:]
     private var sessions: [HostEventKey: HostSessionSummary] = [:]
+    /// The review status last published for each worktree.
+    private var reviewStatuses: [String: ReviewLoopSnapshot] = [:]
     /// Session managers and live transcripts announce changes through
     /// signals rather than Observation; renewed on every refresh.
     private var sessionSignals: Set<ChangeSubscription> = []
@@ -405,6 +414,7 @@ final class HostEventSource {
             follow: { [weak core] in core?.followReviewStatus($0) },
             unfollow: { [weak core] in core?.unfollowReviewStatus($0) }
         )
+        core.reviewStatusDidRefresh = { [weak self] in self?.publishReviewStatus($0) }
         observeInMemoryState()
         renewSessionSignals()
         let store = core.workspaceStore
@@ -430,6 +440,7 @@ final class HostEventSource {
         // One restored or created again at the path starts from a fresh read, not this one's last status.
         for (key, old) in worktrees where currentWorktrees[key] == nil || (currentWorktrees[key]?.isArchived == true && !old.isArchived) {
             core.forgetReviewStatus(old.worktree.id)
+            reviewStatuses[old.worktree.id] = nil
         }
         events += Self.diff(old: worktrees, new: currentWorktrees, changed: HostEvent.worktreeChanged) { key in
             guard case let .worktree(projectID, worktreeID) = key else { return .resync }
@@ -449,6 +460,15 @@ final class HostEventSource {
         sessions = currentSessions
         renewSessionSignals()
         log.publish(events)
+    }
+
+    /// Publishes worktree `worktreeID`'s review status when it differs from
+    /// the one last published.
+    func publishReviewStatus(_ worktreeID: String) {
+        let snapshot = core.reviewLoops[worktreeID]?.snapshot
+        guard snapshot != reviewStatuses[worktreeID] else { return }
+        reviewStatuses[worktreeID] = snapshot
+        log.publish([.reviewStatus(worktreeID: worktreeID, snapshot: snapshot)])
     }
 
     /// Loads the Workspace checkouts and publishes what changed among them,
@@ -564,6 +584,7 @@ extension HostEvent {
         case .sessionState: "sessionState"
         case .notice: "notice"
         case .worktreeNotice: "worktreeNotice"
+        case .reviewStatus: "reviewStatus"
         default: nil
         }
     }

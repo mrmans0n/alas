@@ -130,6 +130,9 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// What a commit message is suggested from, for the client's own model
     /// (`host.worktrees.git.v1`).
     case commitMessageInput(worktree: WorktreeRef)
+    /// A listed worktree's branch sync and pull request status, read again
+    /// first (`host.worktrees.git.v1`).
+    case reviewStatus(worktree: WorktreeRef)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -233,6 +236,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case runScripts(scripts: [HostRunScript])
     /// The answer to `commitMessageInput`.
     case commitMessageInput(input: CommitMessageSuggestionInput)
+    /// The answer to `reviewStatus`; nil when the host could not read it.
+    case reviewStatus(snapshot: ReviewLoopSnapshot?)
     case failure(error: HostError)
 }
 

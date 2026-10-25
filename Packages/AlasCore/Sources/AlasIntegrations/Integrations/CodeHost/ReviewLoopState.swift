@@ -660,6 +660,14 @@ public final class ReviewLoopState {
     }
 }
 
+extension ReviewLoopState {
+    /// For a pane showing a host's snapshot that never refreshes the loop itself.
+    public func showHostSnapshot(_ snapshot: ReviewLoopSnapshot?) {
+        self.snapshot = snapshot
+        lastError = nil
+    }
+}
+
 #if DEBUG
 extension ReviewLoopState {
     public func setSnapshotForTests(_ snapshot: ReviewLoopSnapshot) {
