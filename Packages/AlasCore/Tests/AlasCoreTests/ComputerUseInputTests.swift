@@ -216,6 +216,21 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.isRealHit(role: role, frame: frame, point: CGPoint(x: 750, y: 100)) == real)
     }
 
+    /// A walk down to a point enters the front-most child holding it: a sheet over anything, else
+    /// the last of overlapping siblings (AX children come back to front).
+    @Test(arguments: [
+        ([("AXGroup", content), ("AXToolbar", toolbar), ("AXSheet", sheet), ("AXButton", closeButton)], Int?(2)),
+        ([("AXGroup", content), ("AXSheet", sheet), ("AXGroup", content)], 1),
+        ([("AXGroup", content), ("AXPopover", sheet)], 1),
+        ([("AXGroup", content), ("AXImage", sheet), ("AXButton", toolbar)], 1),
+        ([("AXGroup", content), ("AXSheet", nil)], 0),
+        ([("AXToolbar", toolbar), ("AXSheet", closeButton)], nil),
+    ] as [([(String?, CGRect?)], Int?)])
+    func aWalkDownEntersTheFrontmostChildHoldingThePoint(children: [(String?, CGRect?)], entered: Int?) {
+        #expect(ComputerUseInputGeometry.frontmostChild(
+            holding: CGPoint(x: 400, y: 300), in: children.map { (role: $0.0, frame: $0.1) }) == entered)
+    }
+
     /// In content another process draws, a click goes to the deepest pressable element at the
     /// point and a scroll to the deepest scroll area; neither to the window, and none means events.
     @Test(arguments: [
@@ -335,6 +350,10 @@ struct ComputerUseInputTests {
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)
     private static let halfOut = CGRect(x: 700, y: 50, width: 400, height: 300)
+    private static let content = CGRect(x: 0, y: 0, width: 800, height: 600)
+    private static let toolbar = CGRect(x: 0, y: 0, width: 800, height: 50)
+    private static let sheet = CGRect(x: 200, y: 100, width: 400, height: 300)
+    private static let closeButton = CGRect(x: 10, y: 10, width: 14, height: 14)
     private static let elsewhere = CGRect(x: 900, y: 400, width: 100, height: 100)
 
     /// A drag checks the user first, then activates; then, with its points read again, waits for

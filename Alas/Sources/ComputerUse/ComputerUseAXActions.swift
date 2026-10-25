@@ -267,27 +267,29 @@ enum ComputerUseAXActions {
     static let descentNodes = 200
     static let descentTime: Duration = .seconds(1)
 
-    /// `window`'s AX window, then at each level the first child whose frame holds `point`, down to
-    /// the deepest; empty when the window can't be found. Never an element of this process.
-    /// Call on the AX queue.
+    /// `window`'s AX window, then at each level the front-most child whose frame holds `point`
+    /// (`ComputerUseInputGeometry.frontmostChild`), down to the deepest; empty when the window
+    /// can't be found. Never an element of this process. Call on the AX queue.
     static func path(at point: CGPoint, in window: ComputerUseWindow, application: AXUIElement) -> [AXUIElement] {
         guard let root = axWindow(elements(of: application, kAXWindowsAttribute), for: window) else { return [] }
         let deadline = ContinuousClock.now + descentTime
         var path = [root]
         var visited = 0
         for _ in 0 ..< descentDepth {
-            var next: AXUIElement?
+            var candidates: [AXUIElement] = []
+            var layers: [(role: String?, frame: CGRect?)] = []
             for child in children(of: path[path.count - 1]) {
                 visited += 1
+                // Out of budget mid-level: the front-most child may be among those not read yet.
                 guard visited <= descentNodes, ContinuousClock.now < deadline else { return path }
-                guard isMessageable(child) else { continue }
-                if let childFrame = frame(of: child), ComputerUseInputGeometry.holds(childFrame, point) {
-                    next = child
-                    break
-                }
+                guard isMessageable(child), let childFrame = frame(of: child),
+                      ComputerUseInputGeometry.holds(childFrame, point)
+                else { continue }
+                candidates.append(child)
+                layers.append((string(of: child, kAXRoleAttribute), childFrame))
             }
-            guard let next else { break }
-            path.append(next)
+            guard let index = ComputerUseInputGeometry.frontmostChild(holding: point, in: layers) else { break }
+            path.append(candidates[index])
         }
         return path
     }

@@ -113,6 +113,17 @@ public enum ComputerUseInputGeometry {
 
     public static let onScreenShare: CGFloat = 0.25
 
+    /// Which of an element's children a walk down to `point` enters: a sheet, popover or dialog
+    /// holding the point, else the last child holding it. AX children come back to front, so the
+    /// full-size content group behind a sheet holds every point the sheet does. Nil when none holds
+    /// it; an unreadable frame holds nothing.
+    public static func frontmostChild(holding point: CGPoint, in children: [(role: String?, frame: CGRect?)]) -> Int? {
+        let holding = children.indices.filter { children[$0].frame.map { holds($0, point) } ?? false }
+        return holding.last { children[$0].role.map(frontLayerRoles.contains) ?? false } ?? holding.last
+    }
+
+    static let frontLayerRoles: Set<String> = ["AXSheet", "AXPopover", "AXDialog"]
+
     /// Whether `frame` holds `point`, within `frameTolerance`.
     public static func holds(_ frame: CGRect, _ point: CGPoint) -> Bool {
         frame.insetBy(dx: -frameTolerance, dy: -frameTolerance).contains(point)
