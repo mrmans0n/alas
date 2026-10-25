@@ -1259,7 +1259,8 @@ struct RemoteProtocolTests {
         #expect(object["type"] as? String == "changeList")
         #expect(object["comparisonRef"] as? String == "origin/main")
         #expect(object["metricsAvailable"] as? Bool == true)
-        #expect(object["truncated"] as? Bool == false)
+        #expect(object["truncated"] as? Bool == true)
+        #expect(object["workingTreeTruncated"] as? Bool == false)
     }
 
     @Test func unknownFileAccessReasonDecodesAsUnknown() throws {

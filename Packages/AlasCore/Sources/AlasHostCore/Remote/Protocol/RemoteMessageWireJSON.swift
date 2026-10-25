@@ -869,7 +869,7 @@ public enum RemoteChangeListResult: Equatable, Sendable {
     case success(
         comparisonRef: String?, metricsAvailable: Bool,
         files: [RemoteChangedFile], staged: [RemoteChangedFile], unstaged: [RemoteChangedFile],
-        commits: [RemoteCommit], truncated: Bool, commitsTruncated: Bool = false, workingTreeTruncated: Bool = false)
+        commits: [RemoteCommit], truncated: Bool, commitsTruncated: Bool = false, workingTreeTruncated: Bool? = nil)
     case failure(reason: RemoteFileAccessReason, message: String?)
 }
 
