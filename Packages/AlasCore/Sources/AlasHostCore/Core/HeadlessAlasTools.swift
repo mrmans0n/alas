@@ -11,17 +11,21 @@ import AlasACP
 @MainActor
 public struct HeadlessAlasTools {
     let binDir: URL
+    /// `TerminalCLIInjection.buildIdentity` of the CLI installed in `binDir`.
+    let cliBuild: String?
     let socketServer: AgentHookSocketServer
     let config: @MainActor () -> AppConfig
     let core: @MainActor () -> AlasCoreContext?
 
     public init(
         binDir: URL,
+        cliBuild: String?,
         socketServer: AgentHookSocketServer,
         config: @escaping @MainActor () -> AppConfig,
         core: @escaping @MainActor () -> AlasCoreContext?
     ) {
         self.binDir = binDir
+        self.cliBuild = cliBuild
         self.socketServer = socketServer
         self.config = config
         self.core = core
@@ -81,7 +85,8 @@ public struct HeadlessAlasTools {
             worktreePath: context.worktreePath,
             sessionId: sessionId,
             parentSessionId: parentSessionId,
-            headless: true
+            headless: true,
+            cliBuild: cliBuild
         ))
     }
 

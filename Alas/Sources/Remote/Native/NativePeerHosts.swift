@@ -10,6 +10,8 @@ final class NativePeerHosts {
     /// Visible worktrees by peer `serverId`. A key exists only for a peer
     /// whose channel holds a snapshot.
     private(set) var worktrees: [String: [PeerHostWorktree]] = [:]
+    /// Archived worktrees, keyed like `worktrees`.
+    private(set) var archivedWorktrees: [String: [PeerHostWorktree]] = [:]
     /// Each peer's latest run per (worktree, script), keyed like `worktrees`.
     private(set) var runs: [String: [RunRecord]] = [:]
     @ObservationIgnored var onChange: (@MainActor () -> Void)?
@@ -68,6 +70,7 @@ final class NativePeerHosts {
         let stopped = channels.values
         channels = [:]
         worktrees = [:]
+        archivedWorktrees = [:]
         runs = [:]
         for channel in stopped {
             channel.onChange = nil
@@ -132,6 +135,41 @@ final class NativePeerHosts {
         )
     }
 
+    /// Whether `serverId` unarchives its archived worktrees.
+    func canUnarchive(serverId: String) -> Bool {
+        channels[serverId] != nil && supports(serverId, HostProtocolCapability.worktreesLifecycleV1)
+    }
+
+    /// The host's events then move the row back; only a refusal is shown here.
+    func unarchive(_ worktree: PeerHostWorktree, serverId: String) {
+        guard canUnarchive(serverId: serverId), let channel = channels[serverId] else { return }
+        let showError = showError
+        Task {
+            if case .failure(let error) = await channel.request(.unarchiveWorktree(worktree: Self.ref(worktree))) {
+                showError("Unarchive Failed", PeerWorktreeRemoval.message(for: error))
+            }
+        }
+    }
+
+    /// Whether `worktree`'s branch can be renamed, on a host that serves it.
+    func canRenameBranch(_ worktree: PeerHostWorktree, serverId: String) -> Bool {
+        channels[serverId] != nil && supports(serverId, HostProtocolCapability.worktreesRenameBranchV1)
+            && worktree.canRenameBranch
+    }
+
+    /// The error message for the rename sheet; nil once renamed. The host's
+    /// events then relabel the row.
+    func renameBranch(_ worktree: PeerHostWorktree, to branch: String, serverId: String) async -> String? {
+        guard canRenameBranch(worktree, serverId: serverId), let channel = channels[serverId] else {
+            return FederatedSessionsProvider.peerUnavailableMessage
+        }
+        switch await channel.request(.renameBranch(worktree: Self.ref(worktree), from: worktree.snapshot.worktree.branch, to: branch)) {
+        case .done: return nil
+        case .failure(let error): return PeerWorktreeRemoval.message(for: error)
+        default: return "The host sent an unexpected reply."
+        }
+    }
+
     /// The host's events then update or drop the row; only a refusal is shown here.
     private func remove(
         _ worktree: PeerHostWorktree, _ action: PeerWorktreeRemoval.Action, failureTitle: String,
@@ -158,6 +196,7 @@ final class NativePeerHosts {
         channel.onChange = { [weak self, weak channel] in
             guard let self, let channel else { return }
             worktrees[serverId] = channel.state?.visibleWorktrees()
+            archivedWorktrees[serverId] = channel.state?.archivedWorktrees()
             let newRuns = channel.state?.runs
             let runsChanged = runs[serverId] != newRuns
             runs[serverId] = newRuns

@@ -236,6 +236,15 @@ public final class HostProtocolConnection {
         case .unarchiveWorktree(let ref):
             try host.worktrees.unarchive(path: try worktree(ref).path, projectID: ref.projectID, caller: caller)
             return .done
+        case .renameBranch(let ref, let from, let branch):
+            // Only a listed worktree: an archived one is refused as an unknown one is.
+            let listed = try worktree(ref)
+            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
+                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
+            }
+            // The branch the client saw is checked under the project's gate.
+            try await host.worktrees.renameBranch(listed, from: from, to: branch, caller: caller)
+            return .done
         case .listWorkspaceCheckouts:
             return .workspaceCheckouts(checkouts: try await host.workspaces.list())
         case .workspaceCheckout(let id):

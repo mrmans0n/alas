@@ -180,21 +180,25 @@ if executableWasReplaced() {
 
 // The `alas` CLI, for agents' MCP server and shells, installed beside `ao`.
 let cliBinDir: URL?
+let cliBuild: String?
 if let cli = HostShellLaunch.cliBinary(executable: Bundle.main.executableURL) {
     do {
         cliBinDir = try TerminalCLIInjection.installExecutables(sourceBinary: cli)
+        cliBuild = TerminalCLIInjection.buildIdentity(ofBinaryAt: cli)
     } catch {
         cliBinDir = nil
+        cliBuild = nil
         FileHandle.standardError.write(Data("alas-host: cannot install the alas CLI from \(cli.path): \(error.localizedDescription); agents get no alas tools here\n".utf8))
     }
 } else {
     cliBinDir = nil
+    cliBuild = nil
     FileHandle.standardError.write(Data("alas-host: alas CLI not found beside alas-host or in /Applications/Alas.app; agents get no alas tools here\n".utf8))
 }
 
 let host: AlasHost
 do {
-    host = try AlasHost.boot(cliBinDir: cliBinDir)
+    host = try AlasHost.boot(cliBinDir: cliBinDir, cliBuild: cliBuild)
 } catch {
     fail("cannot load \(Paths.appSupportRoot.path): \(error.localizedDescription)")
 }
