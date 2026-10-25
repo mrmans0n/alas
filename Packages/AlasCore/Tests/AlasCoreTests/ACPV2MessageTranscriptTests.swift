@@ -97,7 +97,8 @@ struct ACPV2MessageTranscriptTests {
         ]
         for (fields, expected) in trace {
             guard case .object(let patches) = try LSPJSONValue.decode(from: Data(fields.utf8)) else {
-                Issue.record("Invalid fixture"); return
+                Issue.record("Invalid fixture")
+                return
             }
             let update = patches.merging(["sessionUpdate": .string("user_message"), "messageId": .string("m")]) { _, new in new }
             _ = transcript.apply(try envelope(update), context: context)
