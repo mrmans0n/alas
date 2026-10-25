@@ -638,4 +638,69 @@ struct RunSchedulerTests {
         #expect(second.state(for: "a").nextFireAt == expectedNextFire)
         #expect(second.firings(for: "a").map(\.outcome) == [.succeeded])
     }
+
+    private func turn(_ sessionID: String, _ result: ACPTurnCompletion.Result = .completed) -> ACPTurnCompletion {
+        ACPTurnCompletion(
+            sessionId: sessionID, startedAt: 0, result: result, delegatedSource: nil, lastAgentText: "Done."
+        )
+    }
+
+    /// A turn can end before the firing starts waiting, and only the first
+    /// turn of an expected session counts.
+    @Test func scheduledTurnsAreHandedOverWhicheverSideArrivesFirst() async {
+        let turns = ScheduledAgentTurns()
+        turns.expect("early")
+        turns.deliver(turn("early"))
+        turns.deliver(turn("early", .cancelled))
+        #expect(await turns.wait(for: "early", timeout: .seconds(60))?.result == .completed)
+
+        turns.expect("late")
+        turns.deliver(turn("stranger"))
+        async let waited = turns.wait(for: "late", timeout: .seconds(60))
+        await Task.yield()
+        turns.deliver(turn("late", .failed("boom")))
+        #expect(await waited?.result == .failed("boom"))
+
+        #expect(await turns.wait(for: "stranger", timeout: .seconds(60)) == nil)
+    }
+
+    /// A stopped runner reports no turn of its own, so each of these has to
+    /// end the wait or the schedule stays running until the timeout.
+    @Test func aScheduledTurnWaitEndsOnTimeoutCancellationAndSessionClose() async {
+        let turns = ScheduledAgentTurns()
+        turns.expect("slow")
+        #expect(await turns.wait(for: "slow", timeout: .milliseconds(10)) == nil)
+
+        turns.expect("closed")
+        async let closing = turns.wait(for: "closed", timeout: .seconds(60))
+        await Task.yield()
+        turns.sessionClosed("closed")
+        #expect(await closing?.result == .cancelled)
+
+        turns.expect("removed")
+        let waiter = Task { await turns.wait(for: "removed", timeout: .seconds(60)) }
+        waiter.cancel()
+        #expect(await waiter.value == nil)
+    }
+
+    /// The report is the scheduled prompt's own reply, even when the user
+    /// queued another prompt that has already started answering.
+    @Test func theReportIsTheScheduledTurnsFinalAgentReply() {
+        func user(_ text: String) -> ACPMessage {
+            .user(id: UUID(), messageId: nil, text: text, attachments: [])
+        }
+        func agent(_ text: String) -> ACPMessage {
+            .agent(id: UUID(), messageId: nil, StreamingText(text))
+        }
+        func reply(_ messages: [ACPMessage]) -> String? {
+            ScheduledAgentTurns.finalAgentReply(in: ScheduledAgentTurns.scheduledTurn(in: messages).messages)
+        }
+        #expect(reply([user("Go"), agent("Working"), agent("  Done.\n"), agent("  ")]) == "Done.")
+        #expect(!ScheduledAgentTurns.scheduledTurn(in: [user("Go"), agent("Done.")]).successorStarted)
+
+        let queued = [user("Go"), agent("Done."), user("Also this"), agent("Follow-up")]
+        #expect(reply(queued) == "Done.")
+        #expect(ScheduledAgentTurns.scheduledTurn(in: queued).successorStarted)
+        #expect(reply([user("Go"), user("Also this"), agent("Follow-up")]) == nil)
+    }
 }

@@ -36,6 +36,8 @@ public final class AlasCoreContext {
     public let reviewShepherd: ReviewShepherd
     /// Watches every request of a bound gg stack; AppState installs its effects.
     public let stackShepherd: StackShepherd
+    /// Hands each scheduled chat session's first finished turn to its firing.
+    @ObservationIgnored public let scheduledAgentTurns = ScheduledAgentTurns()
     /// Waits for a run's completion file. Injectable so tests can settle runs.
     @ObservationIgnored public let runCompletionWaiter: RunCompletionWaiter
     /// Runs whose completion is being waited for, keyed by run ID.
