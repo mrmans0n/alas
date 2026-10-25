@@ -1138,6 +1138,12 @@ struct HostProtocolServerTests {
         await #expect(throws: HostError.invalidRequest(reason: "This review is already being published.")) {
             try await publish(["a"])
         }
+        // An edit would be marked published with the body the provider never got.
+        for mutation in [HostReviewMutation.edit(commentID: "a", body: "later"), .delete(commentID: "a")] {
+            await #expect(throws: HostError.invalidRequest(reason: "This review is being published. Try again when it finishes.")) {
+                try await fixture.host.reviews.mutate(mutation, sessionID: rawSession, in: worktree, caller: .app)
+            }
+        }
         provider.releasePublish?.resume()
         #expect(try await first.value.published.map(\.localDraftID) == ["a"])
         await #expect(throws: HostError.invalidRequest(reason: "The selected draft is no longer publishable.")) {
