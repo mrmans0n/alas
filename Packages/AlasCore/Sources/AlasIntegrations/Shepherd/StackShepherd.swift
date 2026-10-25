@@ -109,6 +109,10 @@ public final class StackShepherd {
             _ sessionID: String,
             _ isStillWanted: @escaping @MainActor () -> Bool
         ) async -> ReviewShepherd.ArchiveResult
+        /// False when the worktree is served by another instance (the app,
+        /// for a headless host): its records are that instance's, so this
+        /// one never changes, escalates, archives or removes them.
+        public var servesWorktree: @MainActor (_ worktreeID: String) -> Bool
 
         public init(
             worktreeContext: @escaping @MainActor (_ worktreeID: String) -> WorktreeContext?,
@@ -128,7 +132,8 @@ public final class StackShepherd {
                 _ worktreeID: String,
                 _ sessionID: String,
                 _ isStillWanted: @escaping @MainActor () -> Bool
-            ) async -> ReviewShepherd.ArchiveResult
+            ) async -> ReviewShepherd.ArchiveResult,
+            servesWorktree: @escaping @MainActor (_ worktreeID: String) -> Bool = { _ in true }
         ) {
             self.worktreeContext = worktreeContext
             self.loadStack = loadStack
@@ -139,6 +144,7 @@ public final class StackShepherd {
             self.rules = rules
             self.notify = notify
             self.archiveWorktreeIfAllowed = archiveWorktreeIfAllowed
+            self.servesWorktree = servesWorktree
         }
     }
 
@@ -315,7 +321,8 @@ public final class StackShepherd {
     ) async -> StackShepherdRecord {
         let id = StackShepherdRecordID(worktreeID: worktreeID, stackName: stack.name)
         let now = self.now()
-        for other in records.values where other.id != id && other.sessionID == sessionID && !other.isFinished {
+        for other in records.values
+            where other.id != id && other.sessionID == sessionID && !other.isFinished && isServedHere(other.id.worktreeID) {
             remove(other.id)
         }
         let existing = records[id].flatMap { $0.isFinished ? nil : $0 }
@@ -460,7 +467,8 @@ public final class StackShepherd {
     /// push, unless their fix prompt is still on its way.
     public func turnCompleted(sessionID: String) {
         let now = self.now()
-        for record in records.values where record.sessionID == sessionID && !isDeliveringFix(record.id) {
+        for record in records.values
+            where record.sessionID == sessionID && !isDeliveringFix(record.id) && isServedHere(record.id.worktreeID) {
             var next = record
             for index in next.entries.indices {
                 guard case .fixing = next.entries[index].shepherd.phase else { continue }
@@ -555,6 +563,10 @@ public final class StackShepherd {
 
     private func evaluate(_ id: StackShepherdRecordID) async {
         guard let effects, let record = records[id], !record.isFinished else { return }
+        guard effects.servesWorktree(id.worktreeID) else {
+            dueAt[id] = .distantFuture
+            return
+        }
         dueAt[id] = now().addingTimeInterval(ShepherdSchedule.tick)
         guard let context = effects.worktreeContext(id.worktreeID), context.isEligible else {
             stackShepherdLogger.notice("Dropping stack shepherd record \(id.storageKey, privacy: .private): its worktree is gone or not eligible")
@@ -754,7 +766,7 @@ public final class StackShepherd {
 
     private func archiveAfterMerge(_ id: StackShepherdRecordID) async {
         guard let effects, let record = records[id], record.phase == .merged,
-              !archivesInFlight.contains(id)
+              !archivesInFlight.contains(id), effects.servesWorktree(id.worktreeID)
         else { return }
         archivesInFlight.insert(id)
         defer { archivesInFlight.remove(id) }
@@ -866,6 +878,12 @@ public final class StackShepherd {
     }
 
     // MARK: - Storage
+
+    /// Whether this instance may change the worktree's records. Without
+    /// effects nothing is decided, so everything counts as served.
+    private func isServedHere(_ worktreeID: String) -> Bool {
+        effects?.servesWorktree(worktreeID) ?? true
+    }
 
     private func put(_ record: StackShepherdRecord) {
         records[record.id] = record
