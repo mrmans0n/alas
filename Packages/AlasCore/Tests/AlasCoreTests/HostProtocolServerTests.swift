@@ -1673,7 +1673,7 @@ struct HostProtocolServerTests {
     }
 
     /// A code host serving PR/MR `number` with `threads` and `diff`, as
-    /// `login`. Used from the main actor only.
+    /// `login`. Its mutating methods run on the main actor, where the tests read them.
     final class FakeReviewProvider: CodeHostProvider, @unchecked Sendable {
         let kind: CodeHostKind
         var headSHA = "bbb"
@@ -1702,11 +1702,11 @@ struct HostProtocolServerTests {
             )
         }
         func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
-        func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
+        @MainActor func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
             threadMutations.append(mutation)
             return ProviderThreadMutationResult(refreshedRequest: mutation.reviewRequest, providerURL: nil)
         }
-        func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+        @MainActor func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
             publishes.append(request)
             if holdsPublish {
                 holdsPublish = false
