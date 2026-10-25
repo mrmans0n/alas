@@ -150,6 +150,7 @@ struct NativePeerReviewView: View {
 
     private struct ReadKey: Equatable {
         let revision: Int?
+        let subscription: Int?
         let generation: Int
     }
 
@@ -191,6 +192,7 @@ struct NativePeerReviewView: View {
         .background(theme.color("bg-1"))
         .task(id: ReadKey(
             revision: hosts.reviewRevisions[selection.serverId]?[selection.worktree.snapshot.worktree.id],
+            subscription: hosts.subscriptions[selection.serverId],
             generation: reloadGeneration
         )) {
             await readReview()
