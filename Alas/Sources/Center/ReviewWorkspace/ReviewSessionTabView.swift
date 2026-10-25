@@ -943,7 +943,7 @@ struct ReviewSessionTabView: View {
         )
     }
 
-    private static func allowedProviderDecisions(
+    static func allowedProviderDecisions(
         commentCount: Int,
         capabilities: CodeHostProviderCapabilities
     ) -> [ProviderReviewDecision] {
@@ -960,7 +960,7 @@ struct ReviewSessionTabView: View {
         return decisions
     }
 
-    private static func defaultProviderDecision(
+    static func defaultProviderDecision(
         allowedDecisions: [ProviderReviewDecision]
     ) -> ProviderReviewDecision {
         if allowedDecisions.contains(.comment) {
@@ -1024,15 +1024,15 @@ struct ReviewSessionTabView: View {
         defer { isProviderPublishing = false }
 
         do {
-            guard confirmation.allowedDecisions.contains(selectedProviderDecision) else {
-                providerPublishError = "\(selectedProviderDecision.displayName) is not supported by this provider."
+            if let refusal = Self.publishRefusal(
+                decision: selectedProviderDecision,
+                allowed: confirmation.allowedDecisions,
+                summaryBody: providerReviewSummaryBody
+            ) {
+                providerPublishError = refusal
                 return
             }
             let summaryBody = providerReviewSummaryBody.trimmingCharacters(in: .whitespacesAndNewlines)
-            if selectedProviderDecision.requiresSummaryBody, summaryBody.isEmpty {
-                providerPublishError = "\(selectedProviderDecision.displayName) requires a review summary."
-                return
-            }
             let selectedDraftIDs = confirmation.commentID.map { Set([$0]) }
             let result = try await controller.publishReview(
                 remote: providerContext.remote,
@@ -1050,6 +1050,21 @@ struct ReviewSessionTabView: View {
         } catch {
             providerPublishError = error.localizedDescription
         }
+    }
+
+    /// The confirmation's refusal before publishing, nil when it may go.
+    static func publishRefusal(
+        decision: ProviderReviewDecision,
+        allowed: [ProviderReviewDecision],
+        summaryBody: String
+    ) -> String? {
+        guard allowed.contains(decision) else {
+            return "\(decision.displayName) is not supported by this provider."
+        }
+        if decision.requiresSummaryBody, summaryBody.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return "\(decision.displayName) requires a review summary."
+        }
+        return nil
     }
 
     private func inlineFeedbackByFileID(for loaded: ReviewSessionLoadedContext) -> [DiffReviewFileID: [DiffReviewInlineFeedback]] {
