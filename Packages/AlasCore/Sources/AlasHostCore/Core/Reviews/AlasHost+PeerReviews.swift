@@ -71,6 +71,16 @@ extension ReviewsAPI {
         if session != localChanges, try !list(in: worktree).contains(where: { $0.sessionID == sessionID }) {
             throw HostError.notFound(what: "review \(sessionID)")
         }
+        // A publish marks its drafts with what the provider got, so their
+        // text can't change under it.
+        switch mutation {
+        case .edit, .delete:
+            guard !core.publishingReviews.contains(sessionID) else {
+                throw HostError.invalidRequest(reason: "This review is being published. Try again when it finishes.")
+            }
+        case .add, .resolve, .dismiss:
+            break
+        }
         let store = core.reviewDrafts
         func existing(_ commentID: String, whenActive: Bool = true) throws -> ReviewDraftComment {
             guard let comment = try store.find(commentID: commentID), comment.sessionID.rawValue == sessionID else {
