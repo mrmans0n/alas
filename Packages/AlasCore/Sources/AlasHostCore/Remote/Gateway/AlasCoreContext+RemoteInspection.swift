@@ -532,7 +532,7 @@ extension AlasCoreContext {
         }
         do {
             let git = GitService()
-            let range = try await Self.verifiedRange(base: base, head: head, at: worktree.path, git: git)
+            let range = try await Self.verifiedRange(base: base, head: head, threeDot: threeDot, at: worktree.path, git: git)
             let files = try await git.rangeChangedFiles(at: worktree.path, base: range.base, head: range.head, threeDot: threeDot)
                 .filter { RemoteWorktreeFileAccess.normalizedRelativePath($0.path) != nil }
             return .success(files: files.prefix(RemoteWorktreeFileAccess.maxChangedFiles).map {
@@ -570,7 +570,7 @@ extension AlasCoreContext {
         }
         do {
             let git = GitService()
-            let range = try await Self.verifiedRange(base: base, head: head, at: worktree.path, git: git)
+            let range = try await Self.verifiedRange(base: base, head: head, threeDot: threeDot, at: worktree.path, git: git)
             let revisions = try await git.resolvedRangeTrees(
                 worktreePath: worktree.path, base: range.base, head: range.head, threeDot: threeDot)
             // Both sides are git blobs, as for a commit diff.
@@ -595,9 +595,14 @@ extension AlasCoreContext {
 
     /// The range with each end resolved to a commit of this repository, so
     /// git is never handed an object the client named but the repo lacks.
+    /// A two-dot base may also be the empty tree, which a review from a root
+    /// commit stores as its base.
     private static func verifiedRange(
-        base: String, head: String, at worktree: URL, git: GitService
+        base: String, head: String, threeDot: Bool, at worktree: URL, git: GitService
     ) async throws -> (base: String, head: String) {
+        if !threeDot, base == "4b825dc642cb6eb9a060e54bf8d69288fbee4904" {
+            return (base, try await git.resolveRevision(at: worktree, ref: head))
+        }
         let parentOfBase = base.hasSuffix("^")
         let baseCommit = try await git.resolveRevision(at: worktree, ref: parentOfBase ? String(base.dropLast()) : base)
         return (parentOfBase ? baseCommit + "^" : baseCommit, try await git.resolveRevision(at: worktree, ref: head))

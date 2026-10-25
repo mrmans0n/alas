@@ -547,6 +547,17 @@ struct HostProtocolServerTests {
             }
             #expect(!hunks.isEmpty)
         }
+        if !threeDot {
+            // A review from a root commit stores the empty tree as its base.
+            let emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+            guard case .worktreeRead(.commitFiles(id, _, let files, _)) =
+                try await read(.rangeFiles(base: emptyTree, head: head, threeDot: false))
+            else {
+                Issue.record("expected the files from the empty tree")
+                return
+            }
+            #expect(files.map(\.path).contains("a.txt"))
+        }
         #expect(try await read(.rangeFiles(base: "main", head: head, threeDot: threeDot)) == .worktreeRead(reply: .commitFilesFailed(
             sessionId: id, sha: HostWorktreeRead.rangeSpec(base: "main", head: head, threeDot: threeDot),
             reason: .pathRejected, message: nil)))
