@@ -161,6 +161,9 @@ extension Process {
         )
     }
 
+    /// Set by alas-host at startup: its git children must never prompt.
+    nonisolated(unsafe) public static var neverPromptsForGit = false
+
     /// Builds the environment for every git invocation Alas spawns.
     ///
     /// Starts from the parent process env (so `PATH`, `HOME`, etc. work) and
@@ -176,8 +179,15 @@ extension Process {
     /// builds its env from `ProcessInfo.processInfo.environment` via
     /// `EnvBuilder`) is unaffected and user-typed `git` commands behave
     /// exactly as they would in any other terminal.
-    public static func gitEnv() -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+    ///
+    /// With `neverPrompts` (set only by alas-host, which has no terminal
+    /// to answer) git fails with its own message instead of waiting for
+    /// credentials or an ssh passphrase.
+    public static func gitEnv(
+        base: [String: String] = ProcessInfo.processInfo.environment,
+        neverPrompts: Bool = Process.neverPromptsForGit
+    ) -> [String: String] {
+        var env = base
         env["GIT_OPTIONAL_LOCKS"] = "0"
         // Force git to emit messages in English. We parse stderr in several
         // places (e.g. WorktreeService submodule/dirty/LFS matchers) and those
@@ -185,6 +195,13 @@ extension Process {
         // otherwise hit translated errors that no matcher recognizes. POSIX:
         // LC_ALL overrides LC_MESSAGES and LANG, so this is sufficient.
         env["LC_ALL"] = "C"
+        if neverPrompts {
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            // ponytail: overrides a repo's core.sshCommand on the host; append BatchMode to it if a host relies on one.
+            if env["GIT_SSH_COMMAND"] == nil, env["GIT_SSH"] == nil {
+                env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+            }
+        }
         if let shellPath = ShellEnvResolver.shared.resolvedPath {
             env["PATH"] = shellPath
         }

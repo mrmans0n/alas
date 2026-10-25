@@ -204,6 +204,7 @@ do {
 }
 host.serveCLI()
 
+Process.neverPromptsForGit = true
 let protocolServer = HostProtocolServer(host: host)
 guard let socket = HostSocketServer(server: protocolServer) else {
     fail("cannot serve \(HostSocketServer.defaultPath()): another host serves it, or its directory is not this user's own")
