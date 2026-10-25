@@ -12581,7 +12581,8 @@ final class AppState {
                     socketPath: self.acpSessionSocketPath(sessionId: sessionId),
                     worktreePath: worktreePath,
                     sessionId: sessionId,
-                    parentSessionId: parentSessionId
+                    parentSessionId: parentSessionId,
+                    cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL())
                 ))
             },
             builtInMCPHello: { [weak self] sessionId in
@@ -12998,7 +12999,8 @@ final class AppState {
                     socketPath: self.acpSessionSocketPath(sessionId: sessionId),
                     worktreePath: worktreePath,
                     sessionId: sessionId,
-                    workspaceContext: workspaceContext
+                    workspaceContext: workspaceContext,
+                    cliBuild: TerminalCLIInjection.buildIdentity(ofBinaryAt: TerminalCLIInjection.bundledBinaryURL())
                 ))
             },
             frozenMCPAttachmentProvider: { [weak self] in
