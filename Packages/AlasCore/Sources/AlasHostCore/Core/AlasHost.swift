@@ -455,6 +455,25 @@ public struct HostSessionSummary: Codable, Equatable, Sendable {
     public var shepherd: HostSessionShepherd? = nil
 }
 
+extension HostSessionSummary {
+    /// A `shepherd` this Mac can't read shows no pill rather than losing the session.
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        owner = try c.decode(SessionOwnerID.self, forKey: .owner)
+        id = try c.decode(String.self, forKey: .id)
+        agentId = try c.decode(String.self, forKey: .agentId)
+        title = try c.decode(String.self, forKey: .title)
+        remoteSessionId = try c.decodeIfPresent(String.self, forKey: .remoteSessionId)
+        createdAt = try c.decode(Int64.self, forKey: .createdAt)
+        updatedAt = try c.decode(Int64.self, forKey: .updatedAt)
+        lastOpenedAt = try c.decode(Int64.self, forKey: .lastOpenedAt)
+        streamingState = try c.decodeIfPresent(ACPSession.StreamingState.self, forKey: .streamingState)
+        isWriter = try c.decode(Bool.self, forKey: .isWriter)
+        parentID = try c.decodeIfPresent(String.self, forKey: .parentID)
+        shepherd = (try? c.decodeIfPresent(HostSessionShepherd.self, forKey: .shepherd)) ?? nil
+    }
+}
+
 @MainActor
 public struct SessionsAPI {
     let core: AlasCoreContext

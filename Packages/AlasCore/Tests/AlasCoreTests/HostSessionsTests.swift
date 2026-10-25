@@ -759,15 +759,22 @@ struct HostSessionsTests {
         let sessions = fixture.host.sessions
         let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
         try await eventually { await sessions.list().first { $0.id == id }?.streamingState == .idle }
+        // With its runtime closed and its lease (and so its heartbeat) given
+        // up, nothing of the session itself changes from here on.
         let received = Collected(fixture.host.subscribe())
+        let manager = try #require(fixture.core.sessionManagers.values.first)
+        manager.closeSession(id: id)
+        await manager.releaseWriterLease(sessionId: id)
+        try await eventually {
+            await received.events.contains { if case .sessionChanged(let s) = $0 { s.id == id && !s.isWriter } else { false } }
+        }
 
         await fixture.core.reviewShepherd.bind(
             sessionID: id, worktreeID: fixture.worktree.id, request: ShepherdFixtures.request(), baseBranch: "main",
             autoFix: true, autoMerge: false, contextRules: nil
         )
 
-        // Promptly: an unrelated session change about 5 s later would republish it anyway.
-        try await eventually(within: .seconds(2)) {
+        try await eventually {
             await received.events.contains { if case .sessionChanged(let s) = $0 { s.id == id && s.shepherd?.number == "#7" } else { false } }
         }
     }
