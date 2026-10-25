@@ -123,6 +123,9 @@ extension AlasHost {
     /// projects' worktrees are listed: a record whose worktree the host does
     /// not list is left for the app until the next start.
     public func startAutomation() async {
+        // gg is often only on the login shell's PATH, and a probe that misses
+        // it is not repeated.
+        await ShellEnvResolver.shared.waitUntilResolved()
         await GGAvailability.shared.probe()
         guard !core.isStopping else { return }
         core.reviewShepherd.start()
@@ -135,6 +138,7 @@ extension AlasHost {
     /// stops them; each session's agent is detached and its process ended,
     /// and every queued session write is flushed.
     public func shutdown() async {
+        // ponytail: stop() only ends the timers; an evaluation underway (a prompt delivery, a gg mutation) runs on, harmless since the process exits next
         core.reviewShepherd.stop()
         core.stackShepherd.stop()
         core.runScheduler.stop()

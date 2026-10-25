@@ -398,7 +398,8 @@ Task {
     // Before Remote lists them.
     await shells.restore()
     await host.loadProjectWorktrees()
-    await host.startAutomation()
+    // Off Remote's path: probing gg can take a while, and Remote doesn't need it.
+    Task { await host.startAutomation() }
     await startRemote?()
     await host.coreContext.loadStoredSessionManagers()
 }
