@@ -2,6 +2,10 @@ import AlasCore
 @_spi(AppHost) import AlasHostCore
 import Foundation
 
+// First, before anything can spawn git: the host has no terminal to answer
+// a prompt, and this static is read from any thread.
+Process.neverPromptsForGit = true
+
 // Serves the host protocol for one data directory, without the app: the
 // profile's directory (`ALAS_APP_SUPPORT_DIR`, else the everyday one), on
 // the profile's local socket.
@@ -308,7 +312,8 @@ if let listen = config.hostRemoteListen {
         identity: {
             RemoteServerIdentity(
                 serverId: settings.serverId, name: settings.resolvedDisplayName,
-                consoleCapabilities: shells.isAvailable ? PeerConsoleCapability.headlessHost : []
+                consoleCapabilities: shells.isAvailable ? PeerConsoleCapability.headlessHost : [],
+                hostCapabilities: host.servedCapabilities
             )
         },
         signer: identityKey

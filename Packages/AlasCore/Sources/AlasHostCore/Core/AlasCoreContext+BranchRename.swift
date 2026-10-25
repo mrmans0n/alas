@@ -27,19 +27,21 @@ extension AlasCoreContext {
     ) async throws -> String {
         try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { [self] in
             try await revalidate?()
-            let isIdle = await MainActor.run {
-                switch projects.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) {
-                case .creating, .preparingDelete, .deleting, .archiving: false
-                case nil, .createFailed, .launchFailed, .deleteFailed: true
-                }
-            }
-            guard isIdle else { throw WorktreeBusyError() }
+            guard await MainActor.run(body: { isWorktreeIdle(worktree) }) else { throw WorktreeBusyError() }
             return try await WorktreeService().renameBranch(
                 worktreePath: worktree.path,
                 from: from,
                 to: to,
                 requireUnpublished: requireUnpublished
             )
+        }
+    }
+
+    /// No create, delete or archive is in flight; a failed one has settled.
+    func isWorktreeIdle(_ worktree: Worktree) -> Bool {
+        switch projects.operationState(forWorktreeId: worktree.id, projectId: worktree.projectId) {
+        case .creating, .preparingDelete, .deleting, .archiving: false
+        case nil, .createFailed, .launchFailed, .deleteFailed: true
         }
     }
 

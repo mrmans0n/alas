@@ -770,6 +770,22 @@ public struct ReviewLoopSnapshot: Equatable, Sendable {
     }
 }
 
+extension ReviewLoopSnapshot {
+    public func pushArguments(forceWithLease: Bool) -> [String] {
+        var args = ["push"]
+        if forceWithLease {
+            args.append("--force-with-lease")
+        }
+        let remoteName = local.upstreamRemoteName
+            ?? local.headRemoteName
+            ?? remote?.remoteName
+            ?? "origin"
+        let pushRef = local.upstreamBranchName.map { "HEAD:\($0)" } ?? local.branchName
+        args.append(contentsOf: ["-u", remoteName, pushRef])
+        return args
+    }
+}
+
 public enum ReviewLoopActionKind: String, Codable, Equatable, Sendable {
     case prepareCheckFailureHandoff
     case prepareReviewHandoff

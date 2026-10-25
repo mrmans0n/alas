@@ -238,10 +238,7 @@ public final class HostProtocolConnection {
             return .done
         case .renameBranch(let ref, let from, let branch):
             // Only a listed worktree: an archived one is refused as an unknown one is.
-            let listed = try worktree(ref)
-            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
-                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
-            }
+            let listed = try visibleWorktree(ref)
             // The branch the client saw is checked under the project's gate.
             try await host.worktrees.renameBranch(listed, from: from, to: branch, caller: caller)
             return .done
@@ -273,10 +270,7 @@ public final class HostProtocolConnection {
         case .listRunScripts(let ref):
             // Only a listed worktree, as for `readWorktree`: an archived one
             // is refused as an unknown one is.
-            let listed = try worktree(ref)
-            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
-                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
-            }
+            let listed = try visibleWorktree(ref)
             let projectHost = host.core.projects.projects.first { $0.id == ref.projectID }?.host
             return .runScripts(scripts: await discoverScripts(listed.path, projectHost).map {
                 HostRunScript($0, target: host.core.runExecutionTarget(for: $0, in: listed))
@@ -322,7 +316,7 @@ public final class HostProtocolConnection {
         case .unfollowWorktree(let id):
             try subscribed().unfollowWorktree(id)
         case .capabilities:
-            return .capabilities(capabilities: HostProtocolCapability.served)
+            return .capabilities(capabilities: host.servedCapabilities)
         case .runOutput(let runID, let projectID):
             return .runOutput(output: await host.runs.output(of: runID, projectID: projectID))
         case .remotePairingCode:
@@ -346,11 +340,17 @@ public final class HostProtocolConnection {
             // Needs no lease, as for a session: seeing a worktree is enough
             // to read its code. Only a listed worktree is read: an archived
             // one is refused as an unknown one is.
-            let listed = try worktree(ref)
-            guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
-                throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
-            }
+            let listed = try visibleWorktree(ref)
             return .worktreeRead(reply: await host.core.remoteRead(read, in: listed, replyingAs: listed.id))
+        case .mutateWorktree(let ref, let branch, let change):
+            // The branch the client saw is checked under the project's gate.
+            try await host.worktrees.mutate(try gitWorktree(ref), branch: branch, change: change, caller: caller)
+        case .commitMessageInput(let ref):
+            let listed = try gitWorktree(ref)
+            let ticketTitle = host.core.projects.issueAttachment(projectId: listed.projectId, worktreeId: listed.id)?.title
+            return .commitMessageInput(input: try await CommitMessageSuggestionInput.load(
+                worktreePath: listed.path, ticketTitle: ticketTitle
+            ))
         }
         return .done
     }
@@ -428,6 +428,24 @@ public final class HostProtocolConnection {
             .first(where: { $0.path.standardizedFileURL.path == path })
         else { throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)") }
         return worktree
+    }
+
+    /// A listed worktree that is not archived: an archived one is refused as
+    /// an unknown one is.
+    private func visibleWorktree(_ ref: WorktreeRef) throws -> Worktree {
+        let listed = try worktree(ref)
+        guard !host.core.projects.isWorktreeHidden(projectId: listed.projectId, path: listed.path) else {
+            throw HostError.notFound(what: "worktree \(ref.path) in project \(ref.projectID)")
+        }
+        return listed
+    }
+
+    /// A visible worktree, on a host that serves git actions.
+    private func gitWorktree(_ ref: WorktreeRef) throws -> Worktree {
+        guard host.servedCapabilities.contains(HostProtocolCapability.worktreesGitV1) else {
+            throw HostError.invalidRequest(reason: "This host does not serve git actions.")
+        }
+        return try visibleWorktree(ref)
     }
 
     /// The refusals `host.worktrees.lifecycle.v1` added, as a message for a

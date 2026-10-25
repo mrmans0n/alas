@@ -1258,10 +1258,7 @@ final class RightPaneState: GGSplitCommitServicing {
                     appState: appState,
                     push: {
                         try await Process.git(
-                            Self.reviewLoopPushArguments(
-                                snapshot: snapshot,
-                                forceWithLease: action == .forcePushBranch
-                            ),
+                            snapshot.pushArguments(forceWithLease: action == .forcePushBranch),
                             cwd: worktree.path
                         )
                     },
@@ -1360,23 +1357,6 @@ final class RightPaneState: GGSplitCommitServicing {
     func openReviewLoopProviderPage() {
         guard let url = reviewLoop.snapshot?.reviewRequest?.url else { return }
         NSWorkspace.shared.open(url)
-    }
-
-    nonisolated static func reviewLoopPushArguments(
-        snapshot: ReviewLoopSnapshot,
-        forceWithLease: Bool
-    ) -> [String] {
-        var args = ["push"]
-        if forceWithLease {
-            args.append("--force-with-lease")
-        }
-        let remoteName = snapshot.local.upstreamRemoteName
-            ?? snapshot.local.headRemoteName
-            ?? snapshot.remote?.remoteName
-            ?? "origin"
-        let pushRef = snapshot.local.upstreamBranchName.map { "HEAD:\($0)" } ?? snapshot.local.branchName
-        args.append(contentsOf: ["-u", remoteName, pushRef])
-        return args
     }
 
     nonisolated static func reviewLoopAheadCommitCount(
@@ -3230,13 +3210,6 @@ final class RightPaneState: GGSplitCommitServicing {
         }
     }
 
-    static func unstagePaths(for file: ChangedFile) -> [String] {
-        if file.status == "R", let from = file.renameFrom, !from.isEmpty {
-            return [file.path, from]
-        }
-        return [file.path]
-    }
-
     nonisolated static func mergingChildren(
         in nodes: [FileTreeNode],
         for path: String,
@@ -3693,39 +3666,6 @@ final class RightPaneState: GGSplitCommitServicing {
         revealPath = nil
     }
 
-    /// Paths to discard for the given file path. Expands staged renames into
-    /// both new and original paths so the deletion of the old side is also
-    /// restored. Returns `[]` if the path is not in `changes` (stale request).
-    static func discardPaths(forFileAt path: String, in changes: [ChangedFile]) -> [String] {
-        guard let file = changes.first(where: { $0.path == path }) else { return [] }
-        return unstagePaths(for: file)
-    }
-
-    /// Paths to discard for every change under a folder (recursive). Folders
-    /// in the Changes tree are virtual — built from changed paths only — so
-    /// a prefix match against `"<folder>/"` is exhaustive. Staged renames
-    /// under the folder include their original path even if the origin lives
-    /// outside the folder (rare but possible after a refactor).
-    static func discardPaths(forFolderAt folder: String, in changes: [ChangedFile]) -> [String] {
-        let prefix = folder.hasSuffix("/") ? folder : folder + "/"
-        let matching = changes.filter { $0.path.hasPrefix(prefix) }
-        return matching.flatMap(unstagePaths(for:))
-    }
-
-    /// Every changed path in the worktree (staged + unstaged + untracked),
-    /// with staged renames expanded.
-    static func discardPaths(forAllIn changes: [ChangedFile]) -> [String] {
-        // Deduplicate while preserving first-seen order.
-        var seen = Set<String>()
-        var out: [String] = []
-        for file in changes {
-            for p in unstagePaths(for: file) where seen.insert(p).inserted {
-                out.append(p)
-            }
-        }
-        return out
-    }
-
     func stageAll(_ files: [ChangedFile]) {
         enqueueStageMutation(files: files, target: .staged, gitPaths: files.map(\.path))
     }
@@ -3734,7 +3674,7 @@ final class RightPaneState: GGSplitCommitServicing {
         enqueueStageMutation(
             files: files,
             target: .unstaged,
-            gitPaths: files.flatMap(Self.unstagePaths(for:))
+            gitPaths: files.flatMap(\.gitPaths)
         )
     }
 
@@ -3795,14 +3735,14 @@ final class RightPaneState: GGSplitCommitServicing {
 
     func requestDiscardFile(path: String) {
         guard !checkpointMutationsDisabled else { return }
-        let paths = Self.discardPaths(forFileAt: path, in: changes)
+        let paths = ChangedFile.discardPaths(forFileAt: path, in: changes)
         guard !paths.isEmpty else { return }
         pendingDiscard = PendingDiscard(target: .file(path: path), paths: paths)
     }
 
     func requestDiscardFolder(path: String) {
         guard !checkpointMutationsDisabled else { return }
-        let paths = Self.discardPaths(forFolderAt: path, in: changes)
+        let paths = ChangedFile.discardPaths(forFolderAt: path, in: changes)
         // Folder count = distinct ChangedFile entries under the prefix, not
         // path count (a staged rename contributes two paths but one file).
         let prefix = path.hasSuffix("/") ? path : path + "/"
@@ -3816,7 +3756,7 @@ final class RightPaneState: GGSplitCommitServicing {
 
     func requestDiscardAll() {
         guard !checkpointMutationsDisabled else { return }
-        let paths = Self.discardPaths(forAllIn: changes)
+        let paths = ChangedFile.discardPaths(forAllIn: changes)
         guard !changes.isEmpty else { return }
         pendingDiscard = PendingDiscard(
             target: .all(fileCount: changes.count),
@@ -3976,7 +3916,7 @@ final class RightPaneState: GGSplitCommitServicing {
             return
         }
         await refresh()
-        let remainingChangedPaths = Set(changes.flatMap(Self.unstagePaths(for:)))
+        let remainingChangedPaths = Set(changes.flatMap(\.gitPaths))
         let cleanPaths = paths.filter { !remainingChangedPaths.contains($0) }
         if !cleanPaths.isEmpty {
             closeDiffTabs?(cleanPaths)

@@ -108,6 +108,9 @@ public protocol AlasHostEnvironment: AnyObject {
     /// Whether `alas notify` is relayed to the host's subscribers, such as
     /// paired Macs, rather than shown as a banner here.
     var relaysNotices: Bool { get }
+    /// Whether paired Macs may stage, commit and sync this host's worktrees;
+    /// an app host keeps those to the user at it.
+    var servesWorktreeGit: Bool { get }
 }
 
 extension AlasHostEnvironment {
@@ -205,6 +208,8 @@ extension AlasHostEnvironment {
 
     public var relaysNotices: Bool { false }
 
+    public var servesWorktreeGit: Bool { false }
+
     /// Ends the checkout's agent sessions, as a removal ends a worktree's.
     public func stopWorkspaceCheckoutSessions(_ checkout: WorkspaceCheckout, in core: AlasCoreContext) async throws {
         await core.disposeSessionManager(owner: .workspaceCheckout(checkout.id, checkout.executionLocation))
@@ -267,6 +272,9 @@ public final class HeadlessHostEnvironment: AlasHostEnvironment {
 
     /// Nobody sees a banner on a host without a UI.
     public var relaysNotices: Bool { true }
+
+    /// Nobody is at a headless host's Mac to commit there.
+    public var servesWorktreeGit: Bool { true }
 
     public func configuration() -> AppConfig { config }
 

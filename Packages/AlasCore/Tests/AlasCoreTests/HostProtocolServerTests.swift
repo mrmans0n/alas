@@ -457,6 +457,209 @@ struct HostProtocolServerTests {
         )) == .failure(error: .failed(message: "This worktree's branch cannot be renamed.")))
     }
 
+    /// A staged rename is unstaged and discarded as both paths, as locally.
+    @Test(arguments: [
+        (HostWorktreeChange.unstage(paths: ["renamed.sh"]), " D .alas/scripts/hello.sh\n?? renamed.sh\n"),
+        (HostWorktreeChange.discard(paths: ["renamed.sh"]), ""),
+    ])
+    func renamesAreUnstagedAndDiscardedAsBothPaths(change: HostWorktreeChange, porcelain: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        #expect(try await Process.git(["mv", ".alas/scripts/hello.sh", "renamed.sh"], cwd: repo).exitCode == 0)
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change)) == .done)
+        #expect(try await Process.git(["status", "--porcelain"], cwd: repo).stdout == porcelain)
+    }
+
+    @Test func commitThenAmendRewordsTheNewCommit() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        func mutate(_ change: HostWorktreeChange) async throws -> HostResponse {
+            try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change))
+        }
+        func head(_ format: String) async throws -> String {
+            try await Process.git(["log", "-1", "--format=\(format)"], cwd: repo).stdout
+        }
+
+        #expect(try await mutate(.stage(paths: ["new.txt"])) == .done)
+        #expect(try await mutate(.commit(subject: "Add new", body: "", amend: false)) == .done)
+        #expect(try await head("%s") == "Add new\n")
+        #expect(try await mutate(.commit(subject: "Reword", body: "Why", amend: true)) == .done)
+        #expect(try await head("%s") == "Reword\n")
+        #expect(try await head("%b") == "Why\n\n")
+        #expect(try await Process.git(["rev-list", "--count", "HEAD"], cwd: repo).stdout == "2\n")
+    }
+
+    enum Refusal: CaseIterable {
+        case branchChanged, checkedOutSinceListed, staleDiscard, nothingStaged, tooManyPaths, pendingCheckpoint, appHost, hidden,
+            archivedWhileQueued
+    }
+
+    @Test(arguments: Refusal.allCases)
+    func gitActionsAreRefused(_ refusal: Refusal) async throws {
+        let environment: RecordingRunEnvironment? = switch refusal {
+        case .pendingCheckpoint: RecordingRunEnvironment(servesWorktreeGit: true, blocksForCheckpoint: true)
+        case .appHost: RecordingRunEnvironment()
+        default: nil
+        }
+        let fixture = try await RepoFixture(environment: environment)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        var branch = "main"
+        var change = HostWorktreeChange.stage(paths: ["x"])
+        let expected: HostError
+        switch refusal {
+        case .branchChanged:
+            branch = "other"
+            expected = .failed(message: "The worktree changed since it was listed.")
+        case .checkedOutSinceListed:
+            // Nothing relists the worktree here: git alone knows it moved.
+            #expect(try await Process.git(["checkout", "-q", "-b", "other"], cwd: repo).exitCode == 0)
+            expected = .failed(message: "The worktree changed since it was listed.")
+        case .tooManyPaths:
+            change = .stage(paths: (0...10_000).map { "file\($0)" })
+            expected = .invalidRequest(reason: "One request can name at most 10000 paths.")
+        case .staleDiscard:
+            change = .discard(paths: ["missing.txt"])
+            expected = .failed(message: "These changes are no longer in the worktree.")
+        case .nothingStaged:
+            change = .commit(subject: "Empty", body: "", amend: false)
+            expected = .failed(message: "Nothing is staged to commit.")
+        case .pendingCheckpoint:
+            expected = .failed(message: "A checkpoint restore is pending on the host; finish it there first.")
+        case .appHost:
+            expected = .invalidRequest(reason: "This host does not serve git actions.")
+            guard case .capabilities(let capabilities) = try await fixture.request(.capabilities) else {
+                Issue.record("expected capabilities")
+                return
+            }
+            #expect(!capabilities.contains(HostProtocolCapability.worktreesGitV1))
+        case .hidden:
+            fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: repo, hidden: true)
+            expected = .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")
+        case .archivedWhileQueued:
+            // Past the endpoint's check, then archived while waiting on the gate.
+            let listed = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+            fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: repo, hidden: true)
+            await #expect(throws: HostError.notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")) {
+                try await fixture.host.worktrees.mutate(listed, branch: branch, change: change, caller: .app)
+            }
+            return
+        }
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: expected))
+    }
+
+    /// Paths come from the client: the host acts only inside the worktree,
+    /// never through `..`, an absolute path, or a symlink out of it, and
+    /// never on an empty path or one git would cut at a NUL.
+    @Test(arguments: [
+        ("../outside/inside.txt", "The path ../outside/inside.txt is outside the worktree."),
+        ("/etc/hosts", "The path /etc/hosts is outside the worktree."),
+        ("link/inside.txt", "The path link/inside.txt is outside the worktree."),
+        ("", "A path is empty or holds a NUL character."),
+        ("inside\0.txt", "A path is empty or holds a NUL character."),
+    ])
+    func gitActionsRefusePathsOutsideTheWorktree(_ path: String, reason: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let outside = fixture.root.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        try "keep\n".write(to: outside.appendingPathComponent("inside.txt"), atomically: true, encoding: .utf8)
+        try FileManager.default.createSymbolicLink(at: repo.appendingPathComponent("link"), withDestinationURL: outside)
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .discard(paths: [path])))
+            == .failure(error: .invalidRequest(reason: reason)))
+        #expect(FileManager.default.fileExists(atPath: outside.appendingPathComponent("inside.txt").path))
+    }
+
+    /// A client path is one path: a glob or pathspec magic matches nothing else.
+    @Test(arguments: ["*.txt", ":(glob)*.txt"])
+    func gitActionsTakePathsLiterally(_ path: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .stage(paths: [path])))
+            == .failure(error: .failed(message: "fatal: pathspec '\(path)' did not match any files")))
+        #expect(try await Process.git(["diff", "--cached", "--name-only"], cwd: repo).stdout == "")
+    }
+
+    /// A file in a folder that is gone is still inside a worktree reached
+    /// through a symlinked path.
+    @Test(arguments: [
+        (HostWorktreeChange.unstage(paths: [".alas/scripts/hello.sh"]), " D .alas/scripts/hello.sh\n"),
+        (HostWorktreeChange.discard(paths: [".alas/scripts/hello.sh"]), ""),
+    ])
+    func deletedFoldersOfASymlinkedWorktreeAreInside(change: HostWorktreeChange, porcelain: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let real = fixture.root.appendingPathComponent("real")
+        let alias = fixture.root.appendingPathComponent("alias")
+        try GitTemplate.repository(at: real)
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+        let projectID = try await fixture.host.projects.add(path: alias, displayName: "alias", icon: .default(), caller: .app).id
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: projectID).first)
+        #expect(try await Process.git(["rm", "-r", "-q", ".alas"], cwd: real).exitCode == 0)
+        let ref = WorktreeRef(projectID: projectID, path: worktree.path.path)
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change)) == .done)
+        #expect(try await Process.git(["status", "--porcelain"], cwd: real).stdout == porcelain)
+    }
+
+    /// The Mac learns why a pull stopped, and the host is left mid-rebase to
+    /// resolve there: relisted, the worktree is detached, and a commit or push
+    /// on it is refused until the rebase is finished.
+    @Test func pullStoppedOnConflictsSaysToResolveOnTheHost() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let origin = fixture.root.appendingPathComponent("origin")
+        try GitTemplate.repository(at: origin)
+        for (directory, contents) in [(origin, "theirs\n"), (repo, "ours\n")] {
+            try contents.write(to: directory.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+            let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
+            #expect(try await Process.git(commit, cwd: directory).exitCode == 0)
+        }
+        for arguments in [["remote", "add", "origin", origin.path], ["fetch", "-q", "origin"], ["branch", "-q", "--set-upstream-to=origin/main"]] {
+            #expect(try await Process.git(arguments, cwd: repo).exitCode == 0)
+        }
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .pull))
+            == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them on the host.")))
+        #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
+
+        try await fixture.host.worktrees.refresh(projectID: fixture.projectID, caller: .app)
+        let branch = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first).branch
+        #expect(branch == "(detached)")
+        for change in [HostWorktreeChange.commit(subject: "Mid-rebase", body: "", amend: true), .push(forceWithLease: true)] {
+            #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: .failed(
+                message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first."
+            )))
+        }
+    }
+
+    /// A branch with no upstream is pushed as the review pill pushes it,
+    /// setting the upstream it then tracks.
+    @Test func pushPublishesTheBranchAndTracksIt() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let origin = fixture.root.appendingPathComponent("origin.git")
+        #expect(try await Process.git(["init", "-q", "--bare", origin.path]).exitCode == 0)
+        #expect(try await Process.git(["remote", "add", "origin", origin.path], cwd: repo).exitCode == 0)
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .push(forceWithLease: false))) == .done)
+        #expect(try await Process.git(["rev-parse", "main"], cwd: origin).stdout
+            == Process.git(["rev-parse", "HEAD"], cwd: repo).stdout)
+        #expect(try await Process.git(["rev-parse", "--abbrev-ref", "@{u}"], cwd: repo).stdout == "origin/main\n")
+    }
+
     /// A host over a real repository, persisting to a scratch directory,
     /// whose sessions talk to a scripted agent.
     @MainActor
@@ -469,7 +672,7 @@ struct HostProtocolServerTests {
         let client = Client()
         let projectID: String
 
-        init() async throws {
+        init(environment: (any AlasHostEnvironment)? = nil) async throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remove-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let repo = root.appendingPathComponent("repo")
@@ -495,11 +698,21 @@ struct HostProtocolServerTests {
                         connectionFactory: { _, _, _ in ACPConnection(client: agent) }
                     )
                 },
+                environment: environment ?? HeadlessHostEnvironment(),
                 orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path)
             )
             host = AlasHost(core: core)
             connection = HostProtocolServer(host: host).connect(caller: .localUser(uid: 501), send: client.receive)
             projectID = try await host.projects.add(path: repo, displayName: "repo", icon: .default(), caller: .app).id
+        }
+
+        /// The project's main checkout, on `main`, with a committer set.
+        func mainWorktree() async throws -> (URL, WorktreeRef) {
+            let worktree = try #require(core.projects.worktrees(projectId: projectID).first)
+            for (key, value) in [("user.name", "Test"), ("user.email", "test@example.com")] {
+                _ = try await Process.git(["config", key, value], cwd: worktree.path)
+            }
+            return (worktree.path, WorktreeRef(projectID: projectID, path: worktree.path.path))
         }
 
         func request(_ request: HostRequest) async throws -> HostResponse {
@@ -649,6 +862,13 @@ struct HostProtocolServerTests {
 
     let launcher = Launcher()
     var openConsoleIsHidden: Bool?
+    var servesWorktreeGit = false
+    var blocksForCheckpoint = false
     var runLauncher: any RunLauncher { launcher }
+    init(servesWorktreeGit: Bool = false, blocksForCheckpoint: Bool = false) {
+        self.servesWorktreeGit = servesWorktreeGit
+        self.blocksForCheckpoint = blocksForCheckpoint
+    }
     func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { openConsoleIsHidden }
+    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool { blocksForCheckpoint }
 }

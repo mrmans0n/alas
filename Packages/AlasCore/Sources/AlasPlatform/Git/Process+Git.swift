@@ -21,6 +21,27 @@ public enum ProcessError: Error, Sendable {
     case nonZeroExit(Int32, String)
 }
 
+extension ProcessError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .launchFailed(let reason):
+            "A process could not start: \(reason)"
+        case .timedOut(let executable, let args, let seconds):
+            "\(Self.command(executable, args)) took longer than \(Int(seconds)) seconds and was stopped."
+        case .nonZeroExit(let code, let stderr):
+            stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "A process exited with status \(code)."
+                : stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
+
+    /// `git` for `/usr/bin/env git ...`, else the executable's name.
+    private static func command(_ executable: String, _ args: [String]) -> String {
+        let name = (executable as NSString).lastPathComponent
+        return name == "env" ? args.first ?? name : name
+    }
+}
+
 extension Process {
     /// Hard cap on how long a child process may run before we SIGTERM it.
     /// Macos-26 CI exposed several pathological hangs in `git` (credential
@@ -50,7 +71,7 @@ extension Process {
         let inputPipe = stdinWriter.map { _ in Pipe() }
         let outPipe = Pipe()
         let errPipe = Pipe()
-        if let inputPipe { process.standardInput = inputPipe }
+        if let inputPipe { process.standardInput = inputPipe } else { process.neverPromptsOnStandardInput() }
         process.standardOutput = outPipe
         process.standardError = errPipe
 
@@ -161,6 +182,19 @@ extension Process {
         )
     }
 
+    /// Set by alas-host at startup: its git children must never prompt.
+    nonisolated(unsafe) public static var neverPromptsForGit = false
+
+    /// Under `neverPromptsForGit`, a child given no input reads an empty
+    /// one, never the host's terminal, so nothing it asks can wait there.
+    fileprivate func neverPromptsOnStandardInput() {
+        if Process.neverPromptsForGit { standardInput = FileHandle.nullDevice }
+    }
+
+    /// Set while alas-host acts on a paired client's paths: each names one
+    /// path, never a glob or pathspec magic.
+    @TaskLocal public static var gitLiteralPathspecs = false
+
     /// Builds the environment for every git invocation Alas spawns.
     ///
     /// Starts from the parent process env (so `PATH`, `HOME`, etc. work) and
@@ -176,8 +210,15 @@ extension Process {
     /// builds its env from `ProcessInfo.processInfo.environment` via
     /// `EnvBuilder`) is unaffected and user-typed `git` commands behave
     /// exactly as they would in any other terminal.
-    public static func gitEnv() -> [String: String] {
-        var env = ProcessInfo.processInfo.environment
+    ///
+    /// With `neverPrompts` (set only by alas-host, which has no terminal
+    /// to answer) git fails with its own message instead of waiting for
+    /// credentials or an ssh passphrase.
+    public static func gitEnv(
+        base: [String: String] = ProcessInfo.processInfo.environment,
+        neverPrompts: Bool = Process.neverPromptsForGit
+    ) -> [String: String] {
+        var env = base
         env["GIT_OPTIONAL_LOCKS"] = "0"
         // Force git to emit messages in English. We parse stderr in several
         // places (e.g. WorktreeService submodule/dirty/LFS matchers) and those
@@ -185,6 +226,14 @@ extension Process {
         // otherwise hit translated errors that no matcher recognizes. POSIX:
         // LC_ALL overrides LC_MESSAGES and LANG, so this is sufficient.
         env["LC_ALL"] = "C"
+        if neverPrompts {
+            env["GIT_TERMINAL_PROMPT"] = "0"
+            env["GCM_INTERACTIVE"] = "never"
+            // ponytail: overrides a repo's core.sshCommand on the host; append BatchMode to it if a host relies on one.
+            if env["GIT_SSH_COMMAND"] == nil, env["GIT_SSH"] == nil {
+                env["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
+            }
+        }
         if let shellPath = ShellEnvResolver.shared.resolvedPath {
             env["PATH"] = shellPath
         }
@@ -206,7 +255,7 @@ extension Process {
             try validateWorkingDirectory(cwd)
         }
         let invocation = GitInvocation.build(
-            gitArgs: args,
+            gitArgs: gitLiteralPathspecs ? ["--literal-pathspecs"] + args : args,
             cwd: cwd,
             host: host
         )
@@ -416,6 +465,7 @@ extension Process {
         process.arguments = args
         if let cwd { process.currentDirectoryURL = cwd }
         if let env { process.environment = env }
+        process.neverPromptsOnStandardInput()
 
         let outPipe = Pipe()
         let errPipe = Pipe()
@@ -551,6 +601,7 @@ extension Process {
         process.arguments = args
         if let cwd { process.currentDirectoryURL = cwd }
         if let env { process.environment = env }
+        process.neverPromptsOnStandardInput()
 
         let outPipe = Pipe()
         let errPipe = Pipe()
