@@ -235,20 +235,23 @@ public final class RemoteServer {
         return counts
     }
 
-    public func updateAccessPolicy(_ policy: RemoteAccessPolicy) {
-        accessPolicy = policy
-        // Pre-refresh unauthenticated sockets hold their original policy copy;
-        // close them so their first request cannot run under stale host rules.
+    /// Replaces both policies at once. Unauthenticated sockets hold a copy
+    /// of them; each gets the new pair in one step, so a request not yet
+    /// checked meets neither stale nor half-updated rules. Not by closing
+    /// them: the refresh can land just after a client wrote its request
+    /// (Tailscale's status, read as the host starts, races the first
+    /// `/pair`), and closing would drop that request.
+    public func updatePolicies(access: RemoteAccessPolicy, origin: RemoteOriginPolicy) {
+        accessPolicy = access
+        originPolicy = origin
         for (oid, conn) in connections where connectionDevice[oid] == nil {
-            conn.cancel()
+            conn.updatePolicies(access: access, origin: origin)
         }
     }
 
-    public func updateOriginPolicy(_ policy: RemoteOriginPolicy) {
-        originPolicy = policy
-        for (oid, conn) in connections where connectionDevice[oid] == nil {
-            conn.cancel()
-        }
+    /// Open sockets that have not authenticated as a device.
+    @_spi(Testing) public var unauthenticatedConnectionCount: Int {
+        connections.keys.filter { connectionDevice[$0] == nil }.count
     }
 
     private func accept(_ nwConn: NWConnection) {
@@ -287,7 +290,13 @@ public final class RemoteServer {
         let conn = RemoteConnection(
             conn: nwConn,
             queue: queue,
-            responder: { req, body in responder.response(for: req, body: body) },
+            // The CORS echo follows the current origin policy, as the
+            // connection's own gate does.
+            responder: { [weak self] req, body in
+                var current = responder
+                current.originPolicy = self?.originPolicy ?? responder.originPolicy
+                return current.response(for: req, body: body)
+            },
             authorize: { [weak self] token in
                 guard let self, let id = self.pairing.validate(token: token) else { return nil }
                 self.pairing.touch(deviceId: id)

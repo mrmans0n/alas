@@ -368,8 +368,10 @@ if let listen = config.hostRemoteListen {
             // The proxy's requests name the tailnet host, which the policy
             // must allow; a status that cannot be read leaves loopback only.
             guard let status = try? await RemoteTailscale.status(), servedPort == port else { return }
-            server.updateAccessPolicy(settings.accessPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
-            server.updateOriginPolicy(settings.originPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName))
+            server.updatePolicies(
+                access: settings.accessPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName),
+                origin: settings.originPolicy(interfaces: interfaces, tailnetDNSName: status.dnsName)
+            )
             guard listen.tailscaleServe, status.httpsEnabled, !isStopping,
                   let executable = RemoteTailscale.executable() else { return }
             do {

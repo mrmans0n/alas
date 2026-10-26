@@ -183,16 +183,28 @@ struct NativePeerReviewView: View {
     @State private var providerDecision = ProviderReviewDecision.comment
     @State private var providerSummaryBody = ""
     @State private var isProviderPublishing = false
-    /// Thread and publish errors and warnings, shown as a note and in the
-    /// confirmation.
+    /// Thread and publish failures, shown as a note and in the confirmation.
     @State private var providerError: String?
+    /// What a thread change or publish that went through could not finish,
+    /// such as one draft that failed to post: a note, not a failure.
+    @State private var providerWarning: String?
+    /// Threads with a reply or (un)resolve on its way to the host: a second
+    /// click on one is ignored until the first returns.
+    @State private var threadsInFlight: Set<String> = []
+    /// Set when re-reading the provider's threads failed: the ones read
+    /// before stay shown, with a note that they may be stale.
+    @State private var providerRefreshFailed = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
             if let failedMutation { failedMutationNote(failedMutation) }
             if let providerError, providerConfirmation == nil { note(providerError, color: "del") }
+            if let providerWarning, providerConfirmation == nil { note(providerWarning, color: "warn") }
             if readFailed { note(readFailedMessage, color: "del") }
+            if providerRefreshFailed {
+                note("Couldn't refresh this \(providerReview?.remote.kind == .gitlab ? "merge" : "pull") request's threads from the host.")
+            }
             if let reloadError { note(reloadError, color: "del") }
             if case .loaded(_, truncated: true) = diff {
                 note("The host cut off part of this review; some files or lines are not shown.")
@@ -329,14 +341,16 @@ struct NativePeerReviewView: View {
     private var inlineFeedbackActions: DiffReviewInlineFeedbackActions {
         var actions = DiffReviewInlineFeedbackActions()
         guard let capabilities = providerReview?.capabilities else { return actions }
+        let threadsInFlight = threadsInFlight
         actions.availability = { item, _ in
-            DiffReviewInlineFeedbackActionAvailability(
+            let idle = !threadsInFlight.contains(item.id)
+            return DiffReviewInlineFeedbackActionAvailability(
                 canOpenProvider: item.providerURL != nil,
                 canCopyContext: true,
                 canSendToAgent: false,
-                canReplyProvider: item.status == .actionable && capabilities.canReply,
-                canResolveProvider: item.status == .actionable && capabilities.canResolve,
-                canUnresolveProvider: item.status == .resolved && capabilities.canResolve
+                canReplyProvider: idle && item.status == .actionable && capabilities.canReply,
+                canResolveProvider: idle && item.status == .actionable && capabilities.canResolve,
+                canUnresolveProvider: idle && item.status == .resolved && capabilities.canResolve
             )
         }
         actions.replyProvider = { item, _, body in mutateThread(item, kind: .reply, body: body) }
@@ -357,7 +371,9 @@ struct NativePeerReviewView: View {
     }
 
     private func mutateThread(_ item: DiffReviewInlineFeedback, kind: ProviderThreadMutationKind, body: String?) {
+        guard threadsInFlight.insert(item.id).inserted else { return }
         Task { @MainActor in
+            defer { threadsInFlight.remove(item.id) }
             let result = await hosts.mutateReviewThread(
                 item.id, kind: kind, body: body, sessionID: selection.sessionID,
                 in: selection.worktree, serverId: selection.serverId
@@ -365,9 +381,11 @@ struct NativePeerReviewView: View {
             switch result {
             case .success(let mutated):
                 providerReview?.request = mutated.refreshedRequest
-                providerError = mutated.warnings.isEmpty ? nil : mutated.warnings.joined(separator: "\n")
+                providerError = nil
+                providerWarning = mutated.warnings.isEmpty ? nil : mutated.warnings.joined(separator: "\n")
             case .failure(let error):
                 providerError = error.message
+                providerWarning = nil
             }
         }
     }
@@ -454,9 +472,11 @@ struct NativePeerReviewView: View {
         case .success(let result):
             providerReview?.request = result.refreshedRequest
             providerConfirmation = nil
-            providerError = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
+            providerError = nil
+            providerWarning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
         case .failure(let error):
             providerError = error.message
+            providerWarning = nil
         }
     }
 
@@ -516,10 +536,15 @@ struct NativePeerReviewView: View {
         // ponytail: one provider read per `reviewsChanged`; cache on the host
         // if gh latency bites.
         guard providerReview != nil, review?.summary.record.target.kind == .reviewRequest else { return }
-        if case .success(let pr) = await hosts.providerReview(
+        let refreshed = await hosts.providerReview(
             selection.sessionID, in: selection.worktree, serverId: selection.serverId, withDiff: false
-        ), !Task.isCancelled {
+        )
+        guard !Task.isCancelled else { return }
+        if case .success(let pr) = refreshed {
             providerReview = pr
+            providerRefreshFailed = false
+        } else {
+            providerRefreshFailed = true
         }
     }
 
@@ -549,6 +574,8 @@ struct NativePeerReviewView: View {
             providerReview = pr
             reloadError = nil
             providerError = nil
+            providerWarning = nil
+            providerRefreshFailed = false
             return
         } catch ReviewSessionLoaderError.unsupportedTarget {
             message = "Not available from this Mac yet."

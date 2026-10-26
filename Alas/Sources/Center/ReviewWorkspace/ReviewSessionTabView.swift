@@ -120,6 +120,12 @@ struct ReviewSessionTabView: View {
     @State private var providerReviewSummaryBody = ""
     @State private var isProviderPublishing = false
     @State private var providerPublishError: String?
+    /// What a publish or thread change that went through could not finish:
+    /// shown apart from failures, as a warning.
+    @State private var providerPublishWarning: String?
+    /// Threads with a reply or (un)resolve on its way to the provider: a
+    /// second click on one is ignored until the first returns.
+    @State private var providerThreadsInFlight: Set<String> = []
 
     init(
         worktree: Worktree,
@@ -419,7 +425,14 @@ struct ReviewSessionTabView: View {
     private func reviewSurface(_ loaded: ReviewSessionLoadedContext, isPartial: Bool) -> some View {
         VStack(spacing: 0) {
             if let providerPublishError, !providerPublishError.isEmpty {
-                providerErrorBanner(providerPublishError)
+                providerBanner(providerPublishError, color: "del", identifier: "review-session-provider-error") {
+                    self.providerPublishError = nil
+                }
+            }
+            if let providerPublishWarning, !providerPublishWarning.isEmpty {
+                providerBanner(providerPublishWarning, color: "warn", identifier: "review-session-provider-warning") {
+                    self.providerPublishWarning = nil
+                }
             }
             if trackedRevision == nil, let loadError, !loadError.isEmpty {
                 trackedRefreshErrorBanner(loadError)
@@ -497,30 +510,30 @@ struct ReviewSessionTabView: View {
         )
     }
 
-    private func providerErrorBanner(_ message: String) -> some View {
+    private func providerBanner(
+        _ message: String, color: String, identifier: String, dismiss: @escaping () -> Void
+    ) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundColor(theme.color("del"))
+                .foregroundColor(theme.color(color))
             Text(message)
                 .font(.system(size: 11))
                 .foregroundColor(theme.color("fg"))
                 .lineLimit(2)
             Spacer(minLength: 8)
-            Button {
-                providerPublishError = nil
-            } label: {
+            Button(action: dismiss) {
                 Image(systemName: "xmark")
                     .font(.system(size: 11, weight: .semibold))
             }
             .buttonStyle(.plain)
             .foregroundColor(theme.color("fg-muted"))
             .help("Dismiss")
-            .accessibilityIdentifier("review-session-provider-error-dismiss")
+            .accessibilityIdentifier("\(identifier)-dismiss")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(theme.color("del").opacity(0.08))
+        .background(theme.color(color).opacity(0.08))
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(theme.color("line"))
@@ -528,7 +541,7 @@ struct ReviewSessionTabView: View {
         }
         .background(
             DiffReviewAccessibilityMarker(
-                identifier: "review-session-provider-error",
+                identifier: identifier,
                 label: message
             )
         )
@@ -1044,11 +1057,10 @@ struct ReviewSessionTabView: View {
             )
             replaceProviderReviewRequest(result.refreshedRequest)
             providerPublishConfirmation = nil
-            if !result.warnings.isEmpty {
-                providerPublishError = result.warnings.joined(separator: "\n")
-            }
+            providerPublishWarning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
         } catch {
             providerPublishError = error.localizedDescription
+            providerPublishWarning = nil
         }
     }
 
@@ -1148,19 +1160,21 @@ struct ReviewSessionTabView: View {
 
     private func inlineFeedbackActions(for loaded: ReviewSessionLoadedContext) -> DiffReviewInlineFeedbackActions {
         var actions = DiffReviewInlineFeedbackActions()
+        let threadsInFlight = providerThreadsInFlight
         actions.availability = { item, _ in
             guard let providerContext = loaded.providerContext,
                   let provider = providerRegistry.provider(for: providerContext.remote.kind)
             else { return .none }
 
             let capabilities = provider.capabilities
+            let idle = !threadsInFlight.contains(item.id)
             return DiffReviewInlineFeedbackActionAvailability(
                 canOpenProvider: item.providerURL != nil,
                 canCopyContext: true,
                 canSendToAgent: false,
-                canReplyProvider: item.status == .actionable && capabilities.canReply,
-                canResolveProvider: item.status == .actionable && capabilities.canResolve,
-                canUnresolveProvider: item.status == .resolved && capabilities.canResolve
+                canReplyProvider: idle && item.status == .actionable && capabilities.canReply,
+                canResolveProvider: idle && item.status == .actionable && capabilities.canResolve,
+                canUnresolveProvider: idle && item.status == .resolved && capabilities.canResolve
             )
         }
         actions.replyProvider = { item, file, body in
@@ -1195,8 +1209,10 @@ struct ReviewSessionTabView: View {
         body: String?
     ) async {
         guard let providerContext = loaded.providerContext,
-              let controller = makeProviderMutationController(for: loaded)
+              let controller = makeProviderMutationController(for: loaded),
+              providerThreadsInFlight.insert(item.id).inserted
         else { return }
+        defer { providerThreadsInFlight.remove(item.id) }
 
         do {
             let result = try await controller.mutateThread(
@@ -1210,9 +1226,11 @@ struct ReviewSessionTabView: View {
                 )
             )
             replaceProviderReviewRequest(result.refreshedRequest)
-            providerPublishError = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
+            providerPublishError = nil
+            providerPublishWarning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
         } catch {
             providerPublishError = error.localizedDescription
+            providerPublishWarning = nil
         }
     }
 

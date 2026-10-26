@@ -42,8 +42,11 @@ public final class RemoteConnection: @unchecked Sendable {
     private let makeGateway: @MainActor (RemoteGatewayChannel) -> RemoteSessionGateway
     private let responder: @MainActor (HTTPRequest, Data) -> Data
     private let authorize: @MainActor (String) -> String?   // token → deviceId (nil = reject)
-    private let accessPolicy: RemoteAccessPolicy
-    private let originPolicy: RemoteOriginPolicy
+    /// Queue-confined, like the state below: `updatePolicies` replaces them
+    /// there, so a request is checked against whichever rules are current
+    /// when its headers arrive.
+    private var accessPolicy: RemoteAccessPolicy
+    private var originPolicy: RemoteOriginPolicy
     private let makeHello: @MainActor () -> RemoteServerMessage?
     /// Answers a peer's `helloAck` challenge with a signature proving this
     /// Mac holds the key its peer records are pinned to. Nil (or a nil
@@ -162,6 +165,16 @@ public final class RemoteConnection: @unchecked Sendable {
     /// thread-safe and idempotent; `teardown()` also cancels, harmlessly.
     public func forceClose() {
         conn.cancel()
+    }
+
+    /// Checks the requests still to come on this socket against new rules.
+    /// Applied in place rather than by closing the socket: a client may
+    /// already have written its request, which closing would drop.
+    public func updatePolicies(access: RemoteAccessPolicy, origin: RemoteOriginPolicy) {
+        onQueue { [weak self] in
+            self?.accessPolicy = access
+            self?.originPolicy = origin
+        }
     }
 
     /// Pushes a fresh `hello` outside the initial handshake — e.g. when the
