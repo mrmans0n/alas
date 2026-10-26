@@ -868,8 +868,11 @@ struct NativePeerRightPaneView: View {
         guard let hosts = client.hosts, !checkpointInFlight else { return nil }
         checkpointInFlight = true
         checkpointCreateError = nil
+        let key = gitTargetKey
         let result = await hosts.createCheckpoint(label: label, in: target.worktree, serverId: target.serverId)
         checkpointInFlight = false
+        // The selection moved on: the answer belongs to another worktree.
+        guard gitTargetKey == key else { return nil }
         Task { await readCheckpoints() }
         switch result {
         case .success(let manifest):

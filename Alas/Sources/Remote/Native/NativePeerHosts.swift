@@ -362,7 +362,9 @@ final class NativePeerHosts {
     ) async -> Result<WorktreeCheckpointManifest, NativePeerReviewGitClientError> {
         await answer(
             .checkpointManifest(worktree: Self.ref(worktree), id: id),
-            served: servesCheckpoints(serverId: serverId), serverId: serverId, notFound: Self.checkpointGone
+            served: servesCheckpoints(serverId: serverId), serverId: serverId,
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            notFound: Self.checkpointGone
         ) { if case .checkpointManifest(let manifest) = $0 { manifest } else { nil } }
     }
 
@@ -371,8 +373,9 @@ final class NativePeerHosts {
     ) async -> Result<HostDiff, NativePeerReviewGitClientError> {
         await answer(
             .checkpointDiff(worktree: Self.ref(worktree), id: id, path: path),
-            served: servesCheckpoints(serverId: serverId), serverId: serverId, showsInvalidRequest: true,
-            notFound: Self.checkpointGone
+            served: servesCheckpoints(serverId: serverId), serverId: serverId,
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            showsInvalidRequest: true, notFound: Self.checkpointGone
         ) { if case .diff(let diff) = $0 { diff } else { nil } }
     }
 
@@ -382,7 +385,9 @@ final class NativePeerHosts {
     ) async -> Result<CheckpointRestorePreview, NativePeerReviewGitClientError> {
         await answer(
             .checkpointRestorePreview(worktree: Self.ref(worktree), id: id, groupIDs: groupIDs),
-            served: servesCheckpoints(serverId: serverId), serverId: serverId, notFound: Self.checkpointGone
+            served: servesCheckpoints(serverId: serverId), serverId: serverId,
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            notFound: Self.checkpointGone
         ) { if case .checkpointRestorePreview(let preview) = $0 { preview } else { nil } }
     }
 

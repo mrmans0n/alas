@@ -75,7 +75,7 @@ struct CreateCheckpointSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button(capturedManifest == nil ? "Create checkpoint" : "Done") {
-                    if capturedManifest != nil { dismiss() } else { create() }
+                    if capturedManifest != nil { dismiss() } else { submit() }
                 }
                 .keyboardShortcut(.defaultAction)
                 .disabled(capturedManifest == nil && (!model.canSubmit || disabled()))
@@ -98,7 +98,7 @@ struct CreateCheckpointSheet: View {
         }
     }
 
-    private func create() {
+    private func submit() {
         let label = model.label.trimmingCharacters(in: .whitespacesAndNewlines)
         Task { @MainActor in
             capturedManifest = await create(label)
