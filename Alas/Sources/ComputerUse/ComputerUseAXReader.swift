@@ -118,12 +118,14 @@ enum ComputerUseAXReader {
     /// Asks a Chromium or Electron app to build its web content's tree: `attribute` is set to true
     /// unless it already reads as true. `AXManualAccessibility` is set either way, since setting it
     /// again is what asks again, and an app that takes it counts as accepting it
-    /// (`acceptsManualAccessibility`). Returns whether Alas turned it on
+    /// (`acceptsManualAccessibility`). Returns how the set went and whether Alas turned it on
     /// (`ComputerUseWebContent.restores`), so it can be turned off again.
-    static func wakeWebContent(_ app: ComputerUseAppIdentity, attribute: String) async -> Bool {
+    static func wakeWebContent(_ app: ComputerUseAppIdentity, attribute: String) async -> ComputerUseWebContent.Wake {
         await withCheckedContinuation { continuation in
             queue.async {
-                guard let element = try? target(app.pid) else { return continuation.resume(returning: false) }
+                guard let element = try? target(app.pid) else {
+                    return continuation.resume(returning: .init(result: .failed, turnedOn: false))
+                }
                 var value: CFTypeRef?
                 var before: Bool?
                 if AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
@@ -131,10 +133,19 @@ enum ComputerUseAXReader {
                     before = CFBooleanGetValue((value as! CFBoolean))
                 }
                 let manual = attribute == ComputerUseWebContent.manualAccessibility
-                let set = (before == true && !manual)
-                    || AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue) == .success
-                if manual, set { manualAccessibilityAccepted.withLock { _ = $0.insert(app.pid) } }
-                continuation.resume(returning: ComputerUseWebContent.restores(before: before, setSucceeded: set))
+                let result: ComputerUseWebContent.SetResult
+                if before == true, !manual {
+                    result = .set
+                } else {
+                    result = switch AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue) {
+                    case .success: .set
+                    case .attributeUnsupported: .unsupported
+                    default: .failed
+                    }
+                }
+                if manual, result == .set { manualAccessibilityAccepted.withLock { _ = $0.insert(app.pid) } }
+                continuation.resume(returning: .init(
+                    result: result, turnedOn: ComputerUseWebContent.restores(before: before, setSucceeded: result == .set)))
             }
         }
     }

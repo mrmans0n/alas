@@ -202,8 +202,11 @@ struct ComputerUseSystem: Sendable {
     /// Running menu-bar (accessory) apps, which `runningApps` leaves out.
     var accessoryApps: @Sendable () async -> [ComputerUseAppIdentity] = { [] }
     /// Asks a Chromium or Electron app to build its web content's Accessibility tree by turning
-    /// an attribute on; true when Alas turned it on, so `restoreWebContent` turns it off again.
-    var wakeWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Bool = { _, _ in false }
+    /// an attribute on: how the set went, and whether Alas turned it on, so `restoreWebContent`
+    /// turns it off again.
+    var wakeWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> ComputerUseWebContent.Wake = { _, _ in
+        .init(result: .unsupported, turnedOn: false)
+    }
     var restoreWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Void = { _, _ in }
     /// When the process started, so a pid the system handed to a new process tells apart from the
     /// old one; nil when it can't be read.

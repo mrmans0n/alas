@@ -160,9 +160,11 @@ struct ComputerUseCoordinatorTests {
         #expect(json.contains(#""truncated_by":"time_limit""#))
     }
 
+    nonisolated private static let taken = ComputerUseWebContent.Wake(result: .set, turnedOn: true)
+
     /// An Electron window that shows only groups at first contact is woken and read again until its
     /// web area has content, also when the call's own read stops at its node budget in the
-    /// browser's toolbar; later reads of the app aren't.
+    /// browser's toolbar, then given a moment to fill in; later reads of the app aren't.
     @Test func aWebWindowReadAsEmptyGroupsIsWokenAndReadAgainOnce() async throws {
         let recorder = Recorder()
         let reads = Counter()
@@ -171,7 +173,7 @@ struct ComputerUseCoordinatorTests {
         system.usesManualAccessibility = { _ in true }
         system.wakeWebContent = { _, _ in
             _ = woken.next()
-            return true
+            return Self.taken
         }
         // A web area that fills only on the third read; a read with the inspect's own small budget
         // is cut short.
@@ -186,11 +188,12 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
         #expect(json.contains("AXTextField"))
-        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll])
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseWebContent.contentSettle])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
         // The call's read, two whole-window reads while waiting, the call's read again; then the second inspect's.
         #expect(reads.next() == 6)
-        #expect(woken.next() == 2)
+        // The wake, and once more as the content showed.
+        #expect(woken.next() == 3)
     }
 
     /// computer_open_app on an Electron app returns once its front window's web content shows.
@@ -199,6 +202,7 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { _ in true }
+        system.wakeWebContent = { _, _ in Self.taken }
         system.axTree = { _, _, _, _ in
             let filled = reads.next() >= 3
             let area = ComputerUseAXNode(role: "AXWebArea", children: filled ? [ComputerUseAXNode(role: "AXTextField")] : [])
@@ -207,20 +211,19 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         #expect(Self.text(await f.coordinator.perform(.init(action: .openApp, name: "Notes"), sessionID: "s")) != nil)
         #expect(reads.next() == 4)
-        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll])
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseWebContent.contentSettle])
     }
 
-    /// A Chromium browser still showing no web area after AXManualAccessibility, set again halfway
-    /// through the wait, gets AXEnhancedUserInterface, which the turn's end turns off again.
-    @Test func chromeGetsEnhancedUserInterfaceOnlyAsASecondTryAndUntilTheTurnEnds() async throws {
+    /// A Chromium browser without AXManualAccessibility (current Chrome) gets AXEnhancedUserInterface
+    /// at once, is waited for, and the turn's end turns it off again.
+    @Test func chromeWithoutManualAccessibilityGetsEnhancedUserInterfaceUntilTheTurnEnds() async throws {
         let recorder = Recorder()
         let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
         let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
         var system = Self.system(windows: [5: window])
-        system.usesManualAccessibility = { _ in true }
         system.wakeWebContent = { _, attribute in
             recorder.recordEvent("wake:\(attribute)")
-            return attribute == "AXEnhancedUserInterface"
+            return attribute == "AXEnhancedUserInterface" ? Self.taken : .init(result: .unsupported, turnedOn: false)
         }
         system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
         // The web content shows only once AXEnhancedUserInterface is set.
@@ -233,37 +236,39 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")))
         #expect(json.contains("AXWebArea"))
-        #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXManualAccessibility", "wake:AXEnhancedUserInterface"])
+        #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXEnhancedUserInterface", "wake:AXEnhancedUserInterface"])
         f.coordinator.turnEnded(sessionID: "s")
         try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
     }
 
-    /// A read cut short can't tell whether Chrome needs AXEnhancedUserInterface, so it doesn't use
-    /// up the try: the next complete read still sets it, after the wait.
-    @Test func chromeReadCutShortLeavesEnhancedUserInterfaceToALaterCompleteRead() async throws {
+    /// A browser that took AXManualAccessibility gets no AXEnhancedUserInterface. Its wait, set again
+    /// halfway, gives up at the deadline, and it is woken again only after a while.
+    @Test func aWakeThatTimedOutIsTriedAgainOnlyAfterAWhile() async throws {
         let recorder = Recorder()
-        let reads = Counter()
+        let clock = Recorder()
         let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
         let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
         var system = Self.system(windows: [5: window])
         system.wakeWebContent = { _, attribute in
             recorder.recordEvent("wake:\(attribute)")
-            return true
+            return Self.taken
         }
-        // The first inspect's reads are cut short, its whole-window read too; later ones are
-        // complete, without a web area.
         system.axTree = { _, _, _, _ in
-            let cut: ComputerUseReadCut? = reads.next() <= 2 ? .nodeBudget : nil
-            return (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
-                    cut, ComputerUseAXHandles())
+            (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
+             nil, ComputerUseAXHandles())
         }
-        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        let start = Date()
+        let f = Self.fixture(
+            system: system, recorder: recorder, allowed: [chrome],
+            now: { start.addingTimeInterval(clock.events.isEmpty ? 0 : ComputerUseWebContent.firstContactRetry) })
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
-        #expect(recorder.events == ["wake:AXManualAccessibility"])
+        #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXManualAccessibility"])
+        #expect(Double(recorder.sleeps.count) == ComputerUseWebContent.contentDeadline / ComputerUseCoordinator.webContentPoll)
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
-        #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXManualAccessibility", "wake:AXEnhancedUserInterface"])
-        // The wait after AXManualAccessibility, then the one after AXEnhancedUserInterface.
-        #expect(Double(recorder.sleeps.count) == 2 * (ComputerUseWebContent.contentDeadline / ComputerUseCoordinator.webContentPoll))
+        #expect(recorder.events.count == 2)
+        clock.recordEvent("later")
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
+        #expect(recorder.events.count == 4)
     }
 
     /// The woken state is per process: a relaunched app that got its old pid back is woken again.
@@ -275,7 +280,7 @@ struct ComputerUseCoordinatorTests {
         system.processStart = { _ in relaunch.events.isEmpty ? 1 : 2 }
         system.wakeWebContent = { _, _ in
             _ = woken.next()
-            return false
+            return Self.taken
         }
         system.axTree = { _, _, _, _ in
             (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
@@ -300,10 +305,11 @@ struct ComputerUseCoordinatorTests {
         let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
         var system = Self.system(windows: [5: window])
         system.wakeWebContent = { _, attribute in
-            guard attribute == "AXEnhancedUserInterface" else { return false }
+            guard attribute == "AXEnhancedUserInterface" else { return .init(result: .unsupported, turnedOn: false) }
             recorder.recordEvent("wake:\(attribute)")
             // Held until the session has ended; given up at the deadline if the test goes wrong first.
-            return (try? await eventually("the session end", { !gate.events.isEmpty })) != nil
+            let set = (try? await eventually("the session end", { !gate.events.isEmpty })) != nil
+            return .init(result: set ? .set : .failed, turnedOn: set)
         }
         system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
         system.axTree = { _, _, _, _ in

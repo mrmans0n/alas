@@ -3,9 +3,8 @@ import Foundation
 /// Chromium and Electron windows read as empty groups until the app builds its web content's
 /// Accessibility tree, which it starts on request and finishes a moment later.
 public enum ComputerUseWebContent {
-    /// Chromium browsers. Like Electron apps they are asked with `AXManualAccessibility` first;
-    /// one whose window still shows no web content gets `AXEnhancedUserInterface` (what VoiceOver
-    /// sets) as the second resort.
+    /// Chromium browsers. Like Electron apps they are asked with `AXManualAccessibility`; one that
+    /// doesn't have the attribute gets `AXEnhancedUserInterface` (what VoiceOver sets) instead.
     public static let chromeBundleIDs: Set<String> = [
         "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
         "org.chromium.Chromium", "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev",
@@ -21,43 +20,75 @@ public enum ComputerUseWebContent {
     }
     public static let enhancedUserInterface = "AXEnhancedUserInterface"
 
-    /// Whether a Chromium browser whose window still shows no web content after the wait for
-    /// `manualAccessibility` is asked once more, with `enhancedUserInterface`. That one is app-wide
-    /// and slows window moves under window managers, so it is the second resort, and is undone after.
-    public static func needsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode, cut: ComputerUseReadCut?) -> Bool {
-        chromeBundleIDs.contains(bundleID ?? "") && !showsContent(root: root, cut: cut)
+    /// How setting an attribute went.
+    public enum SetResult: Equatable, Sendable {
+        case set
+        /// The app has no such attribute (`kAXErrorAttributeUnsupported`).
+        case unsupported
+        /// Anything else: the app busy, or not answering yet. Nothing is known.
+        case failed
     }
 
-    /// The longest a first contact waits for the web content, from the wake.
-    public static let contentDeadline: Duration = .milliseconds(1500)
+    /// A wake: how its set went, and whether Alas turned the attribute on (`restores`), so it is
+    /// turned off again.
+    public struct Wake: Equatable, Sendable {
+        public var result: SetResult
+        public var turnedOn: Bool
 
-    /// Whether to read the window again after `waited` since the wake, read time included: its
-    /// web content isn't there yet (`showsContent`) and the deadline hasn't passed.
-    public static func keepsWaiting(
-        root: ComputerUseAXNode, cut: ComputerUseReadCut?, waited: Duration, deadline: Duration = contentDeadline
-    ) -> Bool {
-        !showsContent(root: root, cut: cut) && waited < deadline
+        public init(result: SetResult, turnedOn: Bool) {
+            self.result = result
+            self.turnedOn = turnedOn
+        }
     }
 
-    /// Whether the wait after the `manualAccessibility` wake sets it once more, `waited` since the
-    /// wake: from halfway to the deadline, once (`reasserted`). An app may still be starting up
-    /// when first asked, and miss it.
+    /// Whether a Chromium browser is asked with `enhancedUserInterface` after `manualAccessibility`:
+    /// only when it doesn't have that attribute, as current Chrome doesn't. A failure that may
+    /// pass isn't a reason: the app may just be starting. The attribute is app-wide and slows
+    /// window moves under window managers, so it is undone after.
+    public static func fallsBackToEnhancedUserInterface(after manual: SetResult, bundleID: String?) -> Bool {
+        manual == .unsupported && chromeBundleIDs.contains(bundleID ?? "")
+    }
+
+    /// The longest a first contact waits for the web content, from the wake: Chrome builds its
+    /// web tree seconds after a fresh launch.
+    public static let contentDeadline: Duration = .seconds(4)
+
+    /// Once the web content shows, how long it is left to fill in before the window is read.
+    public static let contentSettle: Duration = .milliseconds(500)
+
+    /// Whether to read the window again after `waited` since the wake, read time included: it
+    /// shows no web area with content yet (`hasWebContent`) and the deadline hasn't passed. A
+    /// read cut short counts only for what it holds.
+    public static func keepsWaiting(root: ComputerUseAXNode, waited: Duration, deadline: Duration = contentDeadline) -> Bool {
+        !hasWebContent(root) && waited < deadline
+    }
+
+    /// Whether the wait after the wake sets the attribute once more, `waited` since the wake:
+    /// from halfway to the deadline, once (`reasserted`). An app may still be starting up when
+    /// first asked, and miss it.
     public static func reasserts(waited: Duration, reasserted: Bool, deadline: Duration = contentDeadline) -> Bool {
         !reasserted && waited >= deadline / 2
     }
 
-    /// The longest `computer_open_app` waits for a launched web app's front window to show content.
-    public static let openDeadline: Duration = .seconds(3)
-
-    /// Whether a read can count as showing the window's content: a web area with something in it,
-    /// or a read that left elements unread (`cut`, or `childrenUnread` past its depth), which may
-    /// hold the content. Only a complete read without content asks for more.
-    public static func showsContent(root: ComputerUseAXNode, cut: ComputerUseReadCut?) -> Bool {
-        cut != nil || hasWebContent(root) || hasUnreadChildren(root)
+    /// What a process's first contact came to: its web content showed, or the wait gave up.
+    public enum FirstContact: Equatable, Sendable {
+        case complete
+        case timedOut(attempts: Int, at: Date)
     }
 
-    static func hasUnreadChildren(_ node: ComputerUseAXNode) -> Bool {
-        node.childrenUnread || node.children.contains(where: hasUnreadChildren)
+    /// Tries after a timeout, and the wait between them.
+    public static let firstContactAttempts = 3
+    public static let firstContactRetry: TimeInterval = 30
+
+    /// Whether a process is woken (again): never tried, or timed out fewer than
+    /// `firstContactAttempts` times and at least `firstContactRetry` ago. One whose content
+    /// showed isn't.
+    public static func wakesAgain(after last: FirstContact?, now: Date) -> Bool {
+        switch last {
+        case nil: true
+        case .complete: false
+        case .timedOut(let attempts, let at): attempts < firstContactAttempts && now.timeIntervalSince(at) >= firstContactRetry
+        }
     }
 
     /// Whether Alas turned an attribute on, and so turns it off again at stop, turn end and
@@ -66,16 +97,13 @@ public enum ComputerUseWebContent {
         before != true && setSucceeded
     }
 
-    /// Whether a read is worth repeating after asking for the web content's tree: the app is a
-    /// Chromium or Electron one (`acceptsManualAccessibility`, or a Chromium browser by bundle id),
-    /// this is the first such try for it, and the window showed no web content: no web area, or
-    /// one without anything in it yet, also in a read cut short.
+    /// Whether to wake the app: a Chromium or Electron one (`acceptsManualAccessibility`, or a
+    /// Chromium browser by bundle id), due a try (`wakesAgain`), whose window showed no web
+    /// content: no web area, or one without anything in it yet, also in a read cut short.
     public static func needsWake(
-        acceptsManualAccessibility: Bool, bundleID: String?, alreadyWoken: Bool, root: ComputerUseAXNode,
-        cut: ComputerUseReadCut? = nil
+        acceptsManualAccessibility: Bool, bundleID: String?, wakesAgain: Bool, root: ComputerUseAXNode
     ) -> Bool {
-        guard !alreadyWoken, acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "") else { return false }
-        // A read cut short still wakes the app: only content it shows makes the wake needless.
+        guard wakesAgain, acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "") else { return false }
         return !hasWebContent(root)
     }
 
