@@ -1110,6 +1110,8 @@ final class NativePeerSessions {
             routeWorkspaceRead(.commitDiff(sha: sha, path: path)) { .commitFileDiff(sessionId: $0, sha: sha, path: path) }
         case .file(let path):
             routeWorkspaceRead(.file(path: path)) { .readFile(sessionId: $0, path: path) }
+        case .stashDiff(let path, let stash):
+            readStashDiff(document, path: path, stash: stash)
         }
         if !sent {
             documentRequestsInFlight.remove(document)
@@ -1121,6 +1123,26 @@ final class NativePeerSessions {
 
     func closeDocument() {
         workspace.closeDocument()
+    }
+
+    /// Reads a stash file's diff over the selected worktree's host channel,
+    /// whether or not a session is selected: only the host serves stashes.
+    private func readStashDiff(_ document: NativePeerWorkspace.Document, path: String, stash: GitStash) -> Bool {
+        guard let hosts, let selection = selectedWorktree, let host = selectedWorktreeGroup?.host,
+              hosts.servesStash(serverId: selection.serverId)
+        else { return false }
+        let epoch = workspaceEpoch
+        Task { [weak self] in
+            let result = await hosts.stashDiff(stash, path: path, in: host, serverId: selection.serverId)
+            guard let self, workspaceEpoch == epoch else { return }
+            documentRequestsInFlight.remove(document)
+            workspace.finishDocument(document, with: result)
+            if documentRequestOutdated, workspace.document == document {
+                documentRequestOutdated = false
+                open(document)
+            }
+        }
+        return true
     }
 
     func openReview(_ sessionID: String, serverId: String, worktree: PeerHostWorktree) {

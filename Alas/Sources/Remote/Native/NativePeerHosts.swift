@@ -234,18 +234,25 @@ final class NativePeerHosts {
 
     /// The error message for `change`; nil once done.
     func mutate(_ change: HostWorktreeChange, in worktree: PeerHostWorktree, serverId: String) async -> String? {
-        guard servesGit(serverId: serverId), let channel = channels[serverId] else {
-            return FederatedSessionsProvider.peerUnavailableMessage
+        switch await self.change(change, in: worktree, serverId: serverId) {
+        case .success: nil
+        case .failure(let error): error.message
         }
+    }
+
+    /// The reply to `change`, or the error message to show.
+    func change(
+        _ change: HostWorktreeChange, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<HostResponse, NativePeerReviewGitClientError> {
+        let served = servesGit(serverId: serverId) && change.capability.map { supports(serverId, $0) } != false
         // A pull is a fetch then a rebase, each bounded at 30 s on the host.
         let request = HostRequest.mutateWorktree(
             worktree: Self.ref(worktree), branch: worktree.snapshot.worktree.branch, change: change
         )
-        switch await channel.request(request, timeout: .seconds(120)) {
-        case .done: return nil
-        case .failure(let error): return PeerWorktreeRemoval.message(for: error)
-        default: return "The host sent an unexpected reply."
-        }
+        return await answer(
+            request, served: served, serverId: serverId, timeout: .seconds(120),
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage)
+        ) { $0 }
     }
 
     /// What the host suggests `worktree`'s commit message from; nil when it cannot say.
@@ -263,6 +270,37 @@ final class NativePeerHosts {
               case .reviewStatus(let snapshot) = await channel.request(.reviewStatus(worktree: Self.ref(worktree)))
         else { return nil }
         return snapshot
+    }
+
+    /// Whether `serverId` lists, shows and changes its worktrees' stashes.
+    func servesStash(serverId: String) -> Bool {
+        servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesStashV1)
+    }
+
+    /// The repository's stashes as `worktree` lists them. Nil for a refusal or no answer.
+    func stashes(in worktree: PeerHostWorktree, serverId: String) async -> [GitStash]? {
+        guard servesStash(serverId: serverId), let channel = channels[serverId],
+              case .stashes(let stashes) = await channel.request(.listStashes(worktree: Self.ref(worktree)))
+        else { return nil }
+        return stashes
+    }
+
+    func stashFiles(
+        _ stash: GitStash, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<[GitStashFile], NativePeerReviewGitClientError> {
+        await answer(
+            .stashFiles(worktree: Self.ref(worktree), stash: HostStashRef(stash)),
+            served: servesStash(serverId: serverId), serverId: serverId
+        ) { if case .stashFiles(let files) = $0 { files } else { nil } }
+    }
+
+    func stashDiff(
+        _ stash: GitStash, path: String, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<HostDiff, NativePeerReviewGitClientError> {
+        await answer(
+            .stashDiff(worktree: Self.ref(worktree), stash: HostStashRef(stash), path: path),
+            served: servesStash(serverId: serverId), serverId: serverId
+        ) { if case .diff(let diff) = $0 { diff } else { nil } }
     }
 
     /// Whether `serverId` lists, reads and changes its worktrees' draft reviews.
@@ -351,16 +389,24 @@ final class NativePeerHosts {
         ) { if case .reviewPublished(let result) = $0 { result } else { nil } }
     }
 
-    /// `request`'s reply as `reply` reads it, or the host's refusal.
     private func providerRequest<Value>(
         _ request: HostRequest, serverId: String, timeout: Duration? = nil, reply: (HostResponse) -> Value?
     ) async -> Result<Value, NativePeerReviewGitClientError> {
-        guard servesProviderReviews(serverId: serverId), let channel = channels[serverId] else { return .failure(.unavailable) }
+        await answer(request, served: servesProviderReviews(serverId: serverId), serverId: serverId, timeout: timeout, reply: reply)
+    }
+
+    /// `request`'s reply as `reply` reads it, or the host's refusal;
+    /// `unavailable` unless `served`.
+    private func answer<Value>(
+        _ request: HostRequest, served: Bool, serverId: String, timeout: Duration? = nil,
+        unavailable: NativePeerReviewGitClientError = .unavailable, reply: (HostResponse) -> Value?
+    ) async -> Result<Value, NativePeerReviewGitClientError> {
+        guard served, let channel = channels[serverId] else { return .failure(unavailable) }
         let response = await channel.request(request, timeout: timeout)
-        if let value = reply(response) { return .success(value) }
         if case .failure(let error) = response {
             return .failure(NativePeerReviewGitClientError(message: PeerWorktreeRemoval.message(for: error)))
         }
+        if let value = reply(response) { return .success(value) }
         return .failure(NativePeerReviewGitClientError(message: "The host sent an unexpected reply."))
     }
 

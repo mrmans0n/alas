@@ -10,6 +10,15 @@ struct NativePeerChangesView: View {
         let onUnstage: ([ChangedFile]) -> Void
         let onDiscard: (PendingDiscard) -> Void
         let onCommit: () -> Void
+        /// Nil hides the Stashes section and "Stash Changes…".
+        let stashes: [GitStash]?
+        /// Each open stash's files, by ref.
+        let stashFiles: [String: NativePeerWorkspace.Load<[GitStashFile]>]
+        let onStashChanges: () -> Void
+        let onToggleStash: (GitStash) -> Void
+        let onApplyStash: (GitStash) -> Void
+        let onPopStash: (GitStash) -> Void
+        let onDropStash: (GitStash) -> Void
     }
 
     let changes: NativePeerWorkspace.Load<NativePeerWorkspace.Changes>
@@ -33,11 +42,16 @@ struct NativePeerChangesView: View {
         case .failed(let message):
             NativePeerRailMessage(text: message)
         case .loaded(let changes):
-            if changes.staged.isEmpty && changes.unstaged.isEmpty && changes.commits.isEmpty {
+            let unchanged = changes.staged.isEmpty && changes.unstaged.isEmpty && changes.commits.isEmpty
+            // Stashes still show, so changes stashed away can be popped back.
+            if unchanged && (git?.stashes ?? []).isEmpty {
                 NativePeerRailMessage(text: "No changes.")
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
+                        if unchanged {
+                            NativePeerRailMessage(text: "No changes.")
+                        }
                         treeSection(
                             "Working tree",
                             files: changes.staged + changes.unstaged,
@@ -50,6 +64,9 @@ struct NativePeerChangesView: View {
                             truncated: changes.truncated
                         )
                         commitSection(changes.commits, truncated: changes.commitsTruncated)
+                        if let git {
+                            stashSection(git)
+                        }
                         if changes.truncated {
                             NativePeerRailMessage(text: "The peer shortened these lists.")
                         }
@@ -113,6 +130,9 @@ struct NativePeerChangesView: View {
                         }
                         if !staged.isEmpty {
                             Button("Unstage All Changes") { git.onUnstage(staged) }.disabled(truncated)
+                        }
+                        if git.stashes != nil {
+                            Button("Stash Changes…", action: git.onStashChanges)
                         }
                         Divider()
                         Button("Discard all working tree changes…", role: .destructive) {
@@ -220,6 +240,56 @@ struct NativePeerChangesView: View {
                 }
                 if truncated {
                     NativePeerRailMessage(text: "Showing the latest \(commits.count) commits.")
+                }
+            }
+        }
+    }
+
+    /// As the local Stashes section: an open stash lists its files, each opening its diff.
+    @ViewBuilder
+    private func stashSection(_ git: Git) -> some View {
+        if let stashes = git.stashes, !stashes.isEmpty {
+            let title = "Stashes"
+            let expanded = !collapsedSections.contains(title)
+            SectionHeader(
+                role: .stashes,
+                title: title,
+                count: stashes.count,
+                expanded: expanded,
+                onToggle: { toggle(title) }
+            ) { EmptyView() }
+            if expanded {
+                ForEach(stashes) { stash in
+                    let files = git.stashFiles[stash.ref]
+                    StashSummaryRow(
+                        stash: stash,
+                        open: files != nil,
+                        loading: files == .some(.loading),
+                        onToggle: { git.onToggleStash(stash) },
+                        onApply: { git.onApplyStash(stash) },
+                        onPop: { git.onPopStash(stash) },
+                        onDrop: { git.onDropStash(stash) }
+                    )
+                    switch files {
+                    case nil:
+                        EmptyView()
+                    case .idle?, .loading?:
+                        StashEmptyRow(loading: true)
+                    case .failed(let message)?:
+                        NativePeerRailMessage(text: message)
+                    case .loaded(let loaded)?:
+                        if loaded.isEmpty {
+                            StashEmptyRow(loading: false)
+                        } else {
+                            ForEach(loaded) { file in
+                                StashFileRow(
+                                    file: file,
+                                    onSelect: { onOpen(.stashDiff(path: file.path, stash: stash)) },
+                                    dragPayload: { nil }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

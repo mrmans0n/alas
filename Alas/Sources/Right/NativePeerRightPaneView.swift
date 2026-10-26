@@ -25,6 +25,13 @@ struct NativePeerRightPaneView: View {
     /// The git target's draft reviews, as the host lists them.
     @State private var reviews: [HostReviewSummary] = []
     @State private var reviewsExpanded = true
+    /// The git target's stashes, as the host lists them; nil while it serves none.
+    @State private var stashes: [GitStash]?
+    /// Each open stash's files, by ref.
+    @State private var stashFiles: [String: NativePeerWorkspace.Load<[GitStashFile]>] = [:]
+    @State private var pendingStashDrop: PendingStashDrop?
+    /// The worktree "Stash Changes…" was chosen for, while its sheet shows.
+    @State private var stashChangesTarget: (serverId: String, worktree: PeerHostWorktree)?
 
     var body: some View {
         let tabs = self.tabs
@@ -73,6 +80,7 @@ struct NativePeerRightPaneView: View {
             openPaths = []
             gitError = nil
             pendingDiscard = nil
+            pendingStashDrop = nil
         }
         .onChange(of: state.config.changes.comparisonMode) { _, _ in
             client.reloadWorkspace()
@@ -81,6 +89,8 @@ struct NativePeerRightPaneView: View {
             // The previous worktree's pill and reviews must not stand in until the new read.
             reviewLoop.showHostSnapshot(nil)
             reviews = []
+            stashes = nil
+            stashFiles = [:]
             client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
         }
         .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
@@ -88,6 +98,9 @@ struct NativePeerRightPaneView: View {
         .task(id: client.hosts?.gitFollowKey) { await readReviewStatus() }
         .onChange(of: liveReviewStatus) { _, status in reviewLoop.showHostSnapshot(status) }
         .task(id: reviewsKey) { await readReviews() }
+        .task(id: stashesKey) { await readStashes() }
+        // A pop or apply changes the list as well; a drop is read after it runs.
+        .onChange(of: client.workspace.changes) { _, _ in Task { await readStashes() } }
         .alert(
             PendingDiscard.alertTitle(for: pendingDiscard ?? .placeholder),
             isPresented: Binding(
@@ -106,12 +119,44 @@ struct NativePeerRightPaneView: View {
                 Text(PendingDiscard.alertMessage(for: pending))
             }
         )
+        .alert(
+            PendingStashDrop.alertTitle(for: pendingStashDrop ?? .placeholder),
+            isPresented: Binding(
+                get: { pendingStashDrop != nil },
+                set: { if !$0 { pendingStashDrop = nil } }
+            ),
+            presenting: pendingStashDrop,
+            actions: { pending in
+                Button("Drop", role: .destructive) {
+                    pendingStashDrop = nil
+                    if let gitTarget { runStashChange(.dropStash(HostStashRef(pending.stash)), on: gitTarget) }
+                }
+                Button("Cancel", role: .cancel) { pendingStashDrop = nil }
+            },
+            message: { pending in
+                Text(PendingStashDrop.alertMessage(for: pending))
+            }
+        )
         .sheet(isPresented: Binding(
             get: { commitTarget != nil },
             set: { if !$0 { commitTarget = nil } }
         )) {
             if let commitTarget, let hosts = client.hosts {
                 commitSheet(commitTarget, hosts: hosts)
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { stashChangesTarget != nil },
+            set: { if !$0 { stashChangesTarget = nil } }
+        )) {
+            if let target = stashChangesTarget {
+                StashChangesSheet(
+                    onStash: { message, includeUntracked in
+                        stashChangesTarget = nil
+                        runStashChange(.stash(message: message, includeUntracked: includeUntracked), on: target)
+                    },
+                    onCancel: { stashChangesTarget = nil }
+                )
             }
         }
     }
@@ -158,6 +203,7 @@ struct NativePeerRightPaneView: View {
                 client.reloadWorkspace()
                 runRefreshGeneration += 1
                 Task { await readReviewStatus() }
+                Task { await readStashes() }
             }
         }
         .padding(.leading, 10)
@@ -227,8 +273,66 @@ struct NativePeerRightPaneView: View {
             onStage: { runGit(.stage(paths: $0.map(\.path)), on: gitTarget) },
             onUnstage: { runGit(.unstage(paths: $0.map(\.path)), on: gitTarget) },
             onDiscard: { pendingDiscard = $0 },
-            onCommit: { commitTarget = gitTarget }
+            onCommit: { commitTarget = gitTarget },
+            stashes: stashes,
+            stashFiles: stashFiles,
+            onStashChanges: { stashChangesTarget = gitTarget },
+            onToggleStash: { toggleStash($0, on: gitTarget) },
+            onApplyStash: { runStashChange(.applyStash(HostStashRef($0)), on: gitTarget) },
+            onPopStash: { runStashChange(.popStash(HostStashRef($0)), on: gitTarget) },
+            onDropStash: { pendingStashDrop = PendingStashDrop(stash: $0) }
         )
+    }
+
+    /// Runs a stash `change`, then lists the stashes again.
+    private func runStashChange(_ change: HostWorktreeChange, on target: (serverId: String, worktree: PeerHostWorktree)) {
+        runGit(change, on: target) { Task { await readStashes() } }
+    }
+
+    /// Opens or closes `stash`'s files; an open stash is read on the host.
+    private func toggleStash(_ stash: GitStash, on target: (serverId: String, worktree: PeerHostWorktree)) {
+        guard stashFiles.removeValue(forKey: stash.ref) == nil, let hosts = client.hosts else { return }
+        stashFiles[stash.ref] = .loading
+        let key = gitTargetKey
+        Task { @MainActor in
+            let result = await hosts.stashFiles(stash, in: target.worktree, serverId: target.serverId)
+            // Closed, or listed again as another stash, since it was asked for.
+            guard gitTargetKey == key, stashFiles[stash.ref] != nil,
+                  stashes?.first(where: { $0.ref == stash.ref })?.sha == stash.sha
+            else { return }
+            let load: NativePeerWorkspace.Load<[GitStashFile]> = switch result {
+            case .success(let files): .loaded(files)
+            case .failure(let error): .failed(error.message)
+            }
+            stashFiles[stash.ref] = load
+        }
+    }
+
+    /// Changes when the git target's stashes should be listed again: a new
+    /// target, the host serving stashes, or a reconnect.
+    private var stashesKey: String? {
+        guard let gitTarget, let gitTargetKey, let hosts = client.hosts,
+              hosts.servesStash(serverId: gitTarget.serverId)
+        else { return nil }
+        return "\(gitTargetKey)#\(hosts.subscriptions[gitTarget.serverId] ?? 0)"
+    }
+
+    /// The git target's stashes. A refusal or no answer keeps the last list;
+    /// an open stash whose ref now names another stash closes, as
+    /// `RightPaneState.reconcileStashCaches` does.
+    private func readStashes() async {
+        guard stashesKey != nil, let gitTarget, let hosts = client.hosts else {
+            stashes = nil
+            stashFiles = [:]
+            return
+        }
+        let key = gitTargetKey
+        let listed = await hosts.stashes(in: gitTarget.worktree, serverId: gitTarget.serverId)
+        guard !Task.isCancelled, gitTargetKey == key, let listed else { return }
+        let previous = Dictionary(uniqueKeysWithValues: (stashes ?? []).map { ($0.ref, $0.sha) })
+        let stable = Set(listed.filter { previous[$0.ref] == $0.sha }.map(\.ref))
+        stashFiles = stashFiles.filter { stable.contains($0.key) }
+        stashes = listed
     }
 
     /// Runs `change` on the host, shows its error in the rail, and reads the

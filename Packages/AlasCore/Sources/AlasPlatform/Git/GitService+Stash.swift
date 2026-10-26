@@ -2,7 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 
-public struct GitStash: Codable, Equatable, Identifiable, Sendable {
+public struct GitStash: Codable, Hashable, Identifiable, Sendable {
     public var id: String { ref }
 
     public let ref: String
