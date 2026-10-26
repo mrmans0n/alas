@@ -7,8 +7,8 @@ import Foundation
 /// the frontmost app are untouched. Mouse events carry their window and the point inside it,
 /// so they reach a window that isn't frontmost; see `ComputerUseSkyLight`. A background drag stays
 /// on that path; a system drag goes system-wide with the app activated and puts the cursor back
-/// after. Every sequence that
-/// presses something releases it before returning or checking for cancellation.
+/// after. Every sequence that presses something releases it before returning or checking for
+/// cancellation.
 enum ComputerUseInputPoster {
     /// Unicode text per keyboard event; larger strings are dropped by some apps.
     static let textChunkUnits = 20
@@ -47,6 +47,8 @@ enum ComputerUseInputPoster {
     static let systemDragSteps = 20
     private static let systemDragStepDelay: Duration = .milliseconds(16)
     private static let systemDragDownHold: Duration = .milliseconds(100)
+    /// Lets table views and Chromium arm their drag tracking before the first drag event.
+    private static let backgroundDragDownHold: Duration = .milliseconds(30)
     private static let systemDragHover: Duration = .milliseconds(300)
     /// Back at the start before a cancelled drag's release, for the trailing drag session to follow.
     private static let systemDragCancelSettle: Duration = .milliseconds(100)
@@ -187,19 +189,19 @@ enum ComputerUseInputPoster {
         let before = Set(screenWindows().map(\.id))
         post(down)
         pressed = true
-        await steadyPause(ComputerUseBackgroundDrag.stepDelay)
+        await steadyPause(backgroundDragDownHold)
         for drag in drags {
+            try checkInterrupt()
             if ComputerUseBackgroundDrag.startedSession(before: before, now: screenWindows(), sourcePID: pid) {
                 return .dragSession
             }
-            try checkInterrupt()
             post(drag)
             await steadyPause(ComputerUseBackgroundDrag.stepDelay)
         }
+        try checkInterrupt()
         if ComputerUseBackgroundDrag.startedSession(before: before, now: screenWindows(), sourcePID: pid) {
             return .dragSession
         }
-        try checkInterrupt()
         post(up)
         pressed = false
         return .done
