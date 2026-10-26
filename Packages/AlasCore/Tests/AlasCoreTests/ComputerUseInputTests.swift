@@ -732,23 +732,23 @@ struct ComputerUseInputTests {
         #expect(ComputerUseWebContent.isChromium(bundleID: bundleID, acceptsManualAccessibility: manual) == chromium)
     }
 
-    /// Text written by AX into a document window is followed by a net-zero key edit, or a warning
-    /// where keys don't reach. Never outside a document window, for a secure field, or in a
-    /// terminal or code editor.
+    /// Text for a document window goes as keys, which mark it edited; off screen it is the AX
+    /// write with a warning. Other fields, and terminals and code editors, are as today.
     @Test(arguments: [
-        (true, false, false, true, ComputerUseTextCheck.DocumentNudge.keys),
-        (true, false, false, false, .warn),
-        // No document: a plain text area or field.
-        (false, false, false, true, .none),
-        (false, false, false, false, .none),
-        (true, true, false, true, .none),
-        (true, false, true, true, .none),
+        (true, false, false, true, ComputerUseTextCheck.DocumentRoute.keys),
+        (true, false, false, false, .axWarned),
+        (false, false, false, true, .asToday),
+        (false, false, false, false, .asToday),
+        (true, true, false, true, .refuse),
+        (false, true, false, false, .refuse),
+        (true, false, true, true, .asToday),
+        (true, false, true, false, .asToday),
     ])
-    func aDocumentIsMarkedEditedAfterAnAXWrite(
-        inDocument: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool, nudge: ComputerUseTextCheck.DocumentNudge
+    func documentTextGoesAsKeys(
+        inDocument: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool, route: ComputerUseTextCheck.DocumentRoute
     ) {
-        #expect(ComputerUseTextCheck.documentNudge(
-            inDocument: inDocument, secure: secure, keyCommandApp: keyCommandApp, keysReach: keysReach) == nudge)
+        #expect(ComputerUseTextCheck.documentRoute(
+            inDocument: inDocument, secure: secure, keyCommandApp: keyCommandApp, keysReach: keysReach) == route)
     }
 
     @Test(arguments: [
@@ -761,22 +761,8 @@ struct ComputerUseInputTests {
         ("com.apple.Notes", false),
         (nil, false),
     ])
-    func terminalsCodeEditorsAndAlasGetNoLetterNudge(bundleID: String?, skips: Bool) {
+    func terminalsCodeEditorsAndAlasAreNotTypedAsDocuments(bundleID: String?, skips: Bool) {
         let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
         #expect(ComputerUseTextCheck.isKeyCommandApp(app, hostPID: 1) == skips)
-    }
-
-    /// The key edit counts only when the letter showed and the whole value settled back to what
-    /// was written; any other value is put back.
-    @Test(arguments: [
-        ("teh cat", true, String?("teh cat"), ComputerUseTextCheck.KeyEditCheck.marked),
-        ("teh cat", false, "teh cat", .notMarked),
-        // An autocorrection that kept the length.
-        ("teh cat", true, "the cat", .restore),
-        ("teh cat", false, "teh cata", .restore),
-        ("teh cat", true, nil, .restore),
-    ])
-    func aKeyEditThatChangedTheTextIsPutBack(before: String, sawLetter: Bool, after: String?, check: ComputerUseTextCheck.KeyEditCheck) {
-        #expect(ComputerUseTextCheck.keyEditCheck(before: before, sawLetter: sawLetter, after: after) == check)
     }
 }

@@ -42,34 +42,30 @@ public enum ComputerUseTextCheck {
         }
     }
 
-    /// What follows text that went in by AX, which skips the app's edit model: a document app
-    /// (TextEdit, any NSDocument one) doesn't mark the document edited, so it neither autosaves
-    /// the text nor keeps it on save, and an untitled one closes without asking.
-    public enum DocumentNudge: Equatable, Sendable {
-        /// Not a document window, or a secure field: nothing.
-        case none
-        /// A letter and a backspace as key events at the caret: a net-zero edit the document
-        /// registers. A letter, not a space, so nothing ends a word: no autocorrection, text
-        /// replacement or smart punctuation runs on the text before it.
+    /// How text gets into a document, which an AX write puts in without the app's edit model: a
+    /// document app (TextEdit, any NSDocument one) then doesn't mark it edited, so it neither
+    /// autosaves the text nor keeps it on save, and an untitled one closes without asking.
+    public enum DocumentRoute: Equatable, Sendable {
+        /// Not a document window, or a terminal or code editor: as any other field.
+        case asToday
+        /// Key events on the typing path, which mark the document edited as a person's typing does.
         case keys
-        /// Keys don't reach the window (it is off screen): the result says the app may not see
-        /// the edit as unsaved.
-        case warn
+        /// Keys don't reach the window (it is off screen): the AX write, with `documentWarning`.
+        case axWarned
+        /// A secure field.
+        case refuse
     }
 
-    /// After text went in by AX: only for an element in a document window (`inDocument`: the window
-    /// lists `AXDocument`, with a value or, untitled, without). The close button's `AXEdited` isn't
-    /// asked: it stays false in TextEdit even after typed edits. Never in a terminal or code editor
-    /// (`keyCommandApp`, `isKeyCommandApp`), where a letter can be a command, nor into a secure field.
-    public static func documentNudge(
-        inDocument: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool
-    ) -> DocumentNudge {
-        guard inDocument, !secure, !keyCommandApp else { return .none }
-        return keysReach ? .keys : .warn
+    /// For text typed into an element of a document window (`inDocument`: the window lists
+    /// `AXDocument`, with a value or, untitled, without). A terminal or code editor
+    /// (`keyCommandApp`, `isKeyCommandApp`) is left as today.
+    public static func documentRoute(inDocument: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool) -> DocumentRoute {
+        if secure { return .refuse }
+        guard inDocument, !keyCommandApp else { return .asToday }
+        return keysReach ? .keys : .axWarned
     }
 
-    /// Terminals and code editors, where a typed letter can run a command (a vim-style normal
-    /// mode) rather than edit text.
+    /// Terminals and code editors, whose windows are left to the AX write as before.
     public static let keyCommandBundleIDs: Set<String> = [
         "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
         "net.kovidgoyal.kitty", "io.alacritty", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92",
@@ -83,38 +79,9 @@ public enum ComputerUseTextCheck {
         return keyCommandBundleIDs.contains(bundleID) || bundleID.hasPrefix("com.jetbrains.")
     }
 
-    /// What the nudge's keys came to, from the whole value right after the AX write (`before`),
-    /// whether the letter showed (`sawLetter`), and the value once it settled (`after`, nil when
-    /// unreadable).
-    public enum KeyEditCheck: Equatable, Sendable {
-        /// The letter went in and came out again: the document registered an edit.
-        case marked
-        /// The letter never showed and the text is as written: nothing registered.
-        case notMarked
-        /// The text isn't as written: it is put back with the AX write.
-        case restore
-    }
-
-    public static func keyEditCheck(before: String, sawLetter: Bool, after: String?) -> KeyEditCheck {
-        guard after == before else { return .restore }
-        return sawLetter ? .marked : .notMarked
-    }
-
-    /// Said next to the result when a document's edit couldn't be marked (`DocumentNudge.warn`, or
-    /// keys that couldn't go).
-    public static let documentNotMarkedWarning =
-        "The text went in through accessibility, which the app may not see as an unsaved edit: saving or closing "
-            + "the document may keep the old text. Check before saving, or type something in the field with the window on screen."
-
-    /// Said when the keys that mark the edit changed the text, and it was put back as written.
-    public static let documentRestoredWarning =
-        "Marking the document edited changed the text, so it was put back as written through accessibility; "
-            + "the app may not see it as an unsaved edit. Check the text before saving."
-
-    /// Said when the keys changed the text and putting it back failed.
-    public static let documentNotRestoredWarning =
-        "Marking the document edited changed the text, and it couldn't be put back as written. "
-            + "Inspect the field and fix it before saving."
+    /// Said next to a document's text written through AX (`DocumentRoute.axWarned`).
+    public static let documentWarning =
+        "Typed through Accessibility; the app may not treat the document as edited — ask the user to save."
 
     /// An insert of `inserted` over `selection` (UTF-16 location and length, nil when unreadable).
     public static func insert(
