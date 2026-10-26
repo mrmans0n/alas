@@ -773,4 +773,50 @@ struct ComputerUseInputTests {
         let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
         #expect(ComputerUseTextCheck.isKeyCommandApp(app, hostPID: 1) == skips)
     }
+
+    @Test(arguments: [
+        (true, true, false, ComputerUseBackgroundDrag.Route.background),
+        (true, true, true, .foreground),
+        (false, true, false, .foreground),
+        (true, false, false, .foreground),
+    ] as [(Bool, Bool, Bool, ComputerUseBackgroundDrag.Route)])
+    func aDragStaysInTheBackgroundOnlyBetweenOnScreenPointsWhenNotDirect(
+        start: Bool, end: Bool, direct: Bool, route: ComputerUseBackgroundDrag.Route
+    ) {
+        #expect(ComputerUseBackgroundDrag.route(startOnScreen: start, endOnScreen: end, direct: direct) == route)
+    }
+
+    @Test(arguments: [
+        (Int32(7), 500, false, true),
+        (7, 500, true, false),
+        (8, 500, false, false),
+        (7, 0, false, false),
+        (7, 1000, false, true),
+    ] as [(Int32, Int, Bool, Bool)])
+    func aNewDragLayerWindowOfTheSourceMarksANativeDragSession(
+        pid: Int32, layer: Int, alreadyListed: Bool, started: Bool
+    ) {
+        let window = ComputerUseInputGeometry.ScreenWindow(id: 9, pid: pid, layer: layer, frame: .zero)
+        #expect(
+            ComputerUseBackgroundDrag.startedSession(
+                before: alreadyListed ? [9] : [], now: [window], sourcePID: 7) == started)
+    }
+
+    @Test(arguments: [
+        (true, true, true, true, 100, false),
+        (true, false, false, true, 100, false),
+        (true, false, true, true, 100, true),
+        (true, false, true, false, 100, false),
+        (false, false, true, true, 100, true),
+        (false, false, true, true, 500, false),
+    ] as [(Bool, Bool, Bool, Bool, Int, Bool)])
+    func aDropIsAwaitedOnlyWhileACrossWindowDragSessionIsLive(
+        dropped: Bool, startChanged: Bool, crossWindow: Bool, sessionActive: Bool, waitedMs: Int, polls: Bool
+    ) {
+        #expect(
+            ComputerUseBackgroundDrag.keepsPolling(
+                dropped: dropped, startChanged: startChanged, crossWindow: crossWindow,
+                sessionActive: sessionActive, waited: .milliseconds(waitedMs), deadline: .milliseconds(500)
+            ) == polls)
+    }
 }
