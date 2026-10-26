@@ -202,6 +202,9 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     /// Apply or undo one of the repository's commits, named by its SHA; a
     /// conflict leaves the operation in place (`host.worktrees.operations.v1`).
     case cherryPick(sha: String), revert(sha: String)
+    /// Merge a listed branch into the worktree's, or rebase its branch onto
+    /// one; a conflict leaves the operation in place (`host.worktrees.integrate.v1`).
+    case merge(branch: String), rebase(onto: String)
     /// Edit a commit above the fold of `comparisonMode`, nil for the host's,
     /// replaying the commits above it, as its editor does
     /// (`host.worktrees.commitEdit.v1`).
@@ -224,6 +227,7 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
              .revert:
             HostProtocolCapability.worktreesOperationsV1
         case .editCommit: HostProtocolCapability.worktreesCommitEditV1
+        case .merge, .rebase: HostProtocolCapability.worktreesIntegrateV1
         case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint: HostProtocolCapability.worktreesCheckpointsV1
         }
     }

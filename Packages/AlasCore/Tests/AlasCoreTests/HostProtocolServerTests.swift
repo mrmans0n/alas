@@ -874,6 +874,66 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["status", "--porcelain"], cwd: repo).stdout == "")
     }
 
+    /// A Mac merges or rebases onto another listed branch only, never over
+    /// changes git would lose or into an operation already in progress.
+    @Test func aMacMergesAndRebasesAListedWorktree() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let script = repo.appendingPathComponent(".alas/scripts/hello.sh")
+        func git(_ arguments: String...) async throws {
+            #expect(try await Process.git(arguments, cwd: repo).exitCode == 0)
+        }
+        func commit(_ contents: String) async throws {
+            try contents.write(to: script, atomically: true, encoding: .utf8)
+            try await git("commit", "-q", "-am", contents)
+        }
+        func sha(_ ref: String) async throws -> String {
+            try await Process.git(["rev-parse", ref], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func mutate(_ change: HostWorktreeChange, on branch: String = "feature") async throws -> HostResponse {
+            try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change))
+        }
+        try await git("branch", "-q", "feature")
+        try await commit("main\n")
+        let main = try await sha("main")
+        try await git("checkout", "-q", "feature")
+        try await fixture.host.worktrees.refresh(projectID: fixture.projectID, caller: .app)
+
+        #expect(try await mutate(.merge(branch: "feature"))
+            == .failure(error: .failed(message: "A worktree can't merge or rebase onto its own branch.")))
+        for (change, name) in [(HostWorktreeChange.rebase(onto: "--abort"), "--abort"), (.merge(branch: "nope"), "nope")] {
+            #expect(try await mutate(change) == .failure(error: .failed(message: "\(name) isn't a branch of this repository.")))
+        }
+
+        try "dirty\n".write(to: script, atomically: true, encoding: .utf8)
+        let head = try await sha("HEAD")
+        guard case .failure(.failed(let message)) = try await mutate(.merge(branch: "main")) else {
+            Issue.record("a merge over a dirty file must be refused")
+            return
+        }
+        #expect(!message.isEmpty)
+        #expect(try await sha("HEAD") == head)
+
+        try await git("checkout", "-q", "--", ".alas/scripts/hello.sh")
+        try await commit("feature\n")
+        #expect(try await mutate(.rebase(onto: "main")) == .done)
+        guard case .rebase? = try await GitService().mergeState(worktreePath: repo) else {
+            Issue.record("expected a rebase in progress")
+            return
+        }
+        // Mid-rebase the host lists the worktree detached.
+        try await fixture.host.worktrees.refresh(projectID: fixture.projectID, caller: .app)
+        #expect(try await mutate(.merge(branch: "main"), on: "(detached)") == .failure(error: .failed(
+            message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first."
+        )))
+
+        #expect(try await mutate(.abortOperation(kind: .rebase), on: "(detached)") == .done)
+        try await git("reset", "-q", "--hard", "HEAD~1")
+        #expect(try await mutate(.merge(branch: "main")) == .done)
+        #expect(try await Process.git(["merge-base", "--is-ancestor", main, "HEAD"], cwd: repo).exitCode == 0)
+    }
+
     /// Only an object ID crosses to git, and only one of this repository's commits.
     @Test(arguments: [
         ("HEAD", HostError.invalidRequest(reason: "A commit is named by its SHA.")),
