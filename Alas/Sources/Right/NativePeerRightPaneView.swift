@@ -34,6 +34,8 @@ struct NativePeerRightPaneView: View {
     @State private var stashReadGeneration = 0
     /// The worktree "Stash Changes…" was chosen for, while its sheet shows.
     @State private var stashChangesTarget: (serverId: String, worktree: PeerHostWorktree)?
+    /// The commit chosen to cherry-pick (`.cherryPick`) or revert (`.revert`), while its confirmation shows.
+    @State private var pendingCommitAction: (kind: HostOperationKind, commit: RemoteCommit)?
 
     var body: some View {
         let tabs = self.tabs
@@ -83,6 +85,7 @@ struct NativePeerRightPaneView: View {
             gitError = nil
             pendingDiscard = nil
             pendingStashDrop = nil
+            pendingCommitAction = nil
         }
         .onChange(of: state.config.changes.comparisonMode) { _, _ in
             client.reloadWorkspace()
@@ -141,6 +144,40 @@ struct NativePeerRightPaneView: View {
             },
             message: { pending in
                 Text(PendingStashDrop.alertMessage(for: pending))
+            }
+        )
+        // The local copy: RightPaneView's cherry-pick alert and CommitRow's revert dialog.
+        .alert(
+            "Cherry-pick commit?",
+            isPresented: Binding(
+                get: { pendingCommitAction?.kind == .cherryPick },
+                set: { if !$0 { pendingCommitAction = nil } }
+            ),
+            presenting: pendingCommitAction?.commit,
+            actions: { commit in
+                Button("Cherry-pick \(commit.revision.prefix(7))") { confirmCommitAction(.cherryPick(sha: commit.revision)) }
+                Button("Cancel", role: .cancel) { pendingCommitAction = nil }
+            },
+            message: { _ in
+                Text("Apply this commit to the current branch.")
+            }
+        )
+        .confirmationDialog(
+            "Revert commit?",
+            isPresented: Binding(
+                get: { pendingCommitAction?.kind == .revert },
+                set: { if !$0 { pendingCommitAction = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: pendingCommitAction?.commit,
+            actions: { commit in
+                Button("Revert \(String(commit.revision.prefix(7)))", role: .destructive) {
+                    confirmCommitAction(.revert(sha: commit.revision))
+                }
+                Button("Cancel", role: .cancel) { pendingCommitAction = nil }
+            },
+            message: { _ in
+                Text("Create a new commit that reverses this commit.")
             }
         )
         .sheet(isPresented: Binding(
@@ -275,6 +312,7 @@ struct NativePeerRightPaneView: View {
 
     private var gitActions: NativePeerChangesView.Git? {
         guard let gitTarget else { return nil }
+        let servesOperations = client.hosts?.servesOperations(serverId: gitTarget.serverId) == true
         return NativePeerChangesView.Git(
             onStage: { runGit(.stage(paths: $0.map(\.path)), on: gitTarget) },
             onUnstage: { runGit(.unstage(paths: $0.map(\.path)), on: gitTarget) },
@@ -286,8 +324,25 @@ struct NativePeerRightPaneView: View {
             onToggleStash: { toggleStash($0, on: gitTarget) },
             onApplyStash: { runStashChange(.applyStash(HostStashRef($0)), on: gitTarget) },
             onPopStash: { runStashChange(.popStash(HostStashRef($0)), on: gitTarget) },
-            onDropStash: { pendingStashDrop = PendingStashDrop(stash: $0) }
+            onDropStash: { pendingStashDrop = PendingStashDrop(stash: $0) },
+            servesOperations: servesOperations,
+            onContinue: { runGit(.continueOperation(kind: HostOperationKind($0)), on: gitTarget) },
+            onSkip: { runGit(.skipOperation(kind: HostOperationKind($0)), on: gitTarget) },
+            onAbort: { runGit(.abortOperation(kind: HostOperationKind($0)), on: gitTarget) },
+            onUseOurs: { runGit(.useOurs(path: $0.path), on: gitTarget) },
+            onUseTheirs: { runGit(.useTheirs(path: $0.path), on: gitTarget) },
+            onKeepDeleted: { runGit(.keepDeleted(path: $0.path), on: gitTarget) },
+            onMarkResolved: { runGit(.markResolved(path: $0.path), on: gitTarget) },
+            onCherryPick: servesOperations ? { pendingCommitAction = (kind: .cherryPick, commit: $0) } : nil,
+            onRevert: servesOperations ? { pendingCommitAction = (kind: .revert, commit: $0) } : nil,
+            onEditCommit: nil
         )
+    }
+
+    /// Runs the confirmed cherry-pick or revert.
+    private func confirmCommitAction(_ change: HostWorktreeChange) {
+        pendingCommitAction = nil
+        if let gitTarget { runGit(change, on: gitTarget) }
     }
 
     /// Runs a stash `change`, then lists the stashes again.

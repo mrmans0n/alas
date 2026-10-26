@@ -19,6 +19,19 @@ struct NativePeerChangesView: View {
         let onApplyStash: (GitStash) -> Void
         let onPopStash: (GitStash) -> Void
         let onDropStash: (GitStash) -> Void
+        /// False hides the operation card, the conflicts section and the commit actions.
+        let servesOperations: Bool
+        let onContinue: (MergeOperation) -> Void
+        let onSkip: (MergeOperation) -> Void
+        let onAbort: (MergeOperation) -> Void
+        let onUseOurs: (ChangedFile) -> Void
+        let onUseTheirs: (ChangedFile) -> Void
+        let onKeepDeleted: (ChangedFile) -> Void
+        let onMarkResolved: (ChangedFile) -> Void
+        /// Each nil leaves its item out of a commit row's menu.
+        let onCherryPick: ((RemoteCommit) -> Void)?
+        let onRevert: ((RemoteCommit) -> Void)?
+        let onEditCommit: ((RemoteCommit) -> Void)?
     }
 
     let changes: NativePeerWorkspace.Load<NativePeerWorkspace.Changes>
@@ -44,8 +57,11 @@ struct NativePeerChangesView: View {
             NativePeerRailMessage(text: message)
         case .loaded(let changes):
             let unchanged = changes.staged.isEmpty && changes.unstaged.isEmpty && changes.commits.isEmpty
+            let servesOperations = git?.servesOperations == true
+            let operation = servesOperations ? changes.operation : nil
+            let conflicts = servesOperations ? Self.conflicts(in: changes) : []
             // Stashes still show, so changes stashed away can be popped back.
-            if unchanged && (git?.stashes ?? []).isEmpty {
+            if unchanged && (git?.stashes ?? []).isEmpty && operation == nil {
                 NativePeerRailMessage(text: "No changes.")
             } else {
                 ScrollView {
@@ -53,9 +69,34 @@ struct NativePeerChangesView: View {
                         if unchanged {
                             NativePeerRailMessage(text: "No changes.")
                         }
+                        if let git, let operation {
+                            OperationCard(
+                                operation: operation,
+                                hasUnresolvedConflicts: !conflicts.isEmpty,
+                                onContinue: { git.onContinue(operation) },
+                                onSkip: { git.onSkip(operation) },
+                                onAbort: { git.onAbort(operation) }
+                            )
+                        }
+                        // A stash pop's conflicts come with no operation in progress.
+                        if let git, !conflicts.isEmpty {
+                            ConflictsSection(
+                                conflicts: conflicts,
+                                bulkInFlight: false,
+                                hasAgent: false,
+                                onSelect: { onOpen(.diff(path: $0.path, stage: .unstaged)) },
+                                onUseOurs: git.onUseOurs,
+                                onUseTheirs: git.onUseTheirs,
+                                onKeepDeleted: git.onKeepDeleted,
+                                onMarkResolved: git.onMarkResolved,
+                                onResolveAllWithAgent: {},
+                                onCancelBulkResolve: {}
+                            )
+                        }
                         treeSection(
                             "Working tree",
-                            files: changes.staged + changes.unstaged,
+                            // As locally, conflicted files show in Conflicts only.
+                            files: (changes.staged + changes.unstaged).filter { conflicts.isEmpty || $0.conflict == nil },
                             collapsedPaths: $collapsedWorkingTreePaths,
                             document: { .diff(path: $0.path, stage: $0.stage) },
                             onSelectStage: { file, stage in
@@ -235,6 +276,7 @@ struct NativePeerChangesView: View {
                     .help("\(commit.subject)\n\(commit.author)")
                     .accessibilityLabel("\(commit.shortSha) \(commit.subject)")
                     .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
+                    .contextMenu { commitMenu(commit) }
                     if isExpanded {
                         commitFilesSection(sha: sha)
                     }
@@ -244,6 +286,29 @@ struct NativePeerChangesView: View {
                 }
             }
         }
+    }
+
+    /// As `CommitRow`'s menu; empty, so no menu shows, without a full SHA.
+    @ViewBuilder
+    private func commitMenu(_ commit: RemoteCommit) -> some View {
+        if commit.sha != nil, let git {
+            if let onEditCommit = git.onEditCommit {
+                Button("Edit Commit…") { onEditCommit(commit) }
+            }
+            if let onCherryPick = git.onCherryPick {
+                Button("Cherry-pick…") { onCherryPick(commit) }
+            }
+            if let onRevert = git.onRevert {
+                Divider()
+                Button("Revert Commit…", role: .destructive) { onRevert(commit) }
+            }
+        }
+    }
+
+    /// The conflicted files, staged or not, one per path.
+    private static func conflicts(in changes: NativePeerWorkspace.Changes) -> [ChangedFile] {
+        var seen = Set<String>()
+        return (changes.staged + changes.unstaged).filter { $0.conflict != nil && seen.insert($0.path).inserted }
     }
 
     /// As the local Stashes section: an open stash lists its files, each opening its diff.

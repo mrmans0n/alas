@@ -271,6 +271,12 @@ final class NativePeerHosts {
         servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesStashV1)
     }
 
+    /// Whether `serverId` continues, skips and aborts its worktrees' git
+    /// operations, resolves their conflicts, and cherry-picks and reverts.
+    func servesOperations(serverId: String) -> Bool {
+        servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesOperationsV1)
+    }
+
     /// The repository's stashes as `worktree` lists them. Nil for a refusal or no answer.
     func stashes(in worktree: PeerHostWorktree, serverId: String) async -> [GitStash]? {
         guard servesStash(serverId: serverId), let channel = channels[serverId],
