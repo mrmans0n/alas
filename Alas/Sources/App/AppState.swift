@@ -1819,6 +1819,9 @@ final class AppState {
         installStackShepherdEffects()
         installSessionRecap()
         startLocalTextObservers()
+        AlasTerminationCoordinator.shared.confirm = { [weak self] in
+            await self?.confirmQuitWithUnsavedHostFiles() ?? true
+        }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
             self?.runScheduler.stop()
@@ -9890,6 +9893,43 @@ final class AppState {
     var hasActiveEditorTab: Bool {
         guard case .editor = activeTab else { return false }
         return true
+    }
+
+    var hasOpenPeerHostFile: Bool { nativePeerSessions?.openedHostFile != nil }
+
+    /// Before quitting with unsaved host files: Save All quits once every one saved, Discard
+    /// quits, Cancel does not.
+    func confirmQuitWithUnsavedHostFiles() async -> Bool {
+        let unsaved = nativePeerSessions?.unsavedHostFiles ?? []
+        guard !unsaved.isEmpty else { return true }
+        let hosts = Set(unsaved.map { $0.hostName })
+        let alert = NSAlert()
+        alert.messageText = "Save changes to files on \(hosts.count == 1 ? hosts.first ?? "" : "paired Macs")?"
+        alert.informativeText = unsaved.map { hosts.count == 1 ? $0.file.path : "\($0.hostName): \($0.file.path)" }
+            .sorted().joined(separator: "\n")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save All")
+        alert.addButton(withTitle: "Discard").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            for entry in unsaved {
+                do {
+                    try await entry.buffer.saveRecordingErrorAwaitingRemote()
+                } catch {
+                    showFileActionError(
+                        title: "Save Failed",
+                        message: "\(entry.file.path) on \(entry.hostName): \(error.localizedDescription)"
+                    )
+                    return false
+                }
+            }
+            return true
+        case .alertSecondButtonReturn:
+            return true
+        default:
+            return false
+        }
     }
 
     var hasActiveCodeEditorTab: Bool {

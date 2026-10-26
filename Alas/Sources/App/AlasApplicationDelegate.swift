@@ -5,6 +5,8 @@ import Darwin
 final class AlasTerminationCoordinator {
     static let shared = AlasTerminationCoordinator()
 
+    /// Asked before `flush`; false cancels the quit.
+    var confirm: (() async -> Bool)?
     var flush: (() async -> Void)?
     var finish: (() -> Void)?
 
@@ -22,6 +24,11 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
         }
         terminationInProgress = true
         Task {
+            if let confirm = AlasTerminationCoordinator.shared.confirm, !(await confirm()) {
+                terminationInProgress = false
+                sender.reply(toApplicationShouldTerminate: false)
+                return
+            }
             await flush()
             sender.reply(toApplicationShouldTerminate: true)
         }

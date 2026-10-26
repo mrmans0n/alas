@@ -8,6 +8,8 @@ struct NativePeerDocumentView: View {
     let content: NativePeerWorkspace.Load<NativePeerWorkspace.DocumentContent>
     var codeFontFamily: String = ""
     var codeFontSize: CGFloat = 13
+    /// Why a host file that could be edited shows read-only.
+    var readOnlyNote: String?
     let onClose: () -> Void
 
     @Environment(\.theme) private var theme
@@ -76,6 +78,7 @@ struct NativePeerDocumentView: View {
             note(message, color: "del")
         case .loaded(.text(let text, let truncated)):
             if truncated { note("Showing the start of this file; the peer cut off the rest.") }
+            if let readOnlyNote { note(readOnlyNote) }
             ReadonlyTextView(
                 text: text,
                 font: CenterTypography.resolveCodeFont(family: codeFontFamily, size: codeFontSize),
@@ -127,6 +130,75 @@ struct NativePeerDocumentView: View {
         }.value
         guard !Task.isCancelled else { return }
         displayModel = model
+    }
+}
+
+/// A host worktree's text file, edited in the editor and saved to the host. It
+/// covers the peer center pane until closed.
+struct NativePeerHostFileView: View {
+    let file: NativePeerHostFile
+    let client: NativePeerSessions
+    let state: AppState
+
+    @Environment(\.theme) private var theme
+    @State private var buffer: EditorBuffer?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+            if buffer != nil { editor }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(theme.color("bg-1"))
+        .onAppear {
+            let buffer = client.hostFileBuffer(for: file)
+            state.tabs.adoptBuffer(buffer, tabId: file.tabID)
+            self.buffer = buffer
+        }
+        .onDisappear {
+            state.tabs.releaseAdoptedBuffer(tabId: file.tabID)
+            client.releaseHostFileBuffer(file)
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Text((file.path as NSString).lastPathComponent)
+                .font(CenterTypography.codeFont(family: state.config.code.fontFamily, size: CGFloat(state.config.code.fontSize)))
+                .foregroundColor(theme.color("fg"))
+            Text("host")
+                .font(.system(size: 9.5, weight: .semibold))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(theme.color("accent").opacity(0.16))
+                .foregroundColor(theme.color("accent"))
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+            Spacer()
+            ToolbarBtn(icon: "x", tooltip: "Back to session", action: { client.closeDocument() })
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(theme.color("bg-2"))
+        .overlay(Divider().opacity(0.5), alignment: .bottom)
+    }
+
+    private var editor: some View {
+        let worktree = file.worktree.snapshot.worktree
+        return EditorTabView(
+            worktree: worktree,
+            worktreePath: URL(fileURLWithPath: worktree.path.path),
+            relativePath: file.path,
+            worktreeId: file.editorWorktreeID,
+            tabId: file.tabID,
+            revealLine: nil,
+            revealCharacter: nil,
+            revealRevision: nil,
+            appState: state,
+            externalAbsolutePath: nil,
+            peerHostFile: true,
+            originatingRelativePath: nil,
+            onRevealInFiles: { _ in }
+        )
     }
 }
 

@@ -154,6 +154,10 @@ final class NativePeerSessions {
     /// in request order, so only the last one answers the current attempt.
     @ObservationIgnored private var tabOpensInFlight: [String: Int] = [:]
     private(set) var workspace = NativePeerWorkspace()
+    /// Host files' editor buffers, created as their editor first shows.
+    @ObservationIgnored private var hostFileBuffers: [NativePeerHostFile: EditorBuffer] = [:]
+    /// Why a host refused to follow a file it served: the file opens read-only.
+    private var hostFileRefusals: [NativePeerHostFile: String] = [:]
     /// A host review opened over the center pane, as a document is.
     private(set) var openedReview: NativePeerReviewSelection?
     /// A host commit opened in the commit editor over the center pane.
@@ -375,6 +379,74 @@ final class NativePeerSessions {
         return (selectedWorktree.serverId, host)
     }
 
+    /// The selected worktree on a host that edits its files: folder projects included, archived ones not.
+    var hostFileTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard let selectedWorktree, let host = selectedWorktreeGroup?.host, !host.snapshot.isArchived,
+              hosts?.servesFiles(serverId: selectedWorktree.serverId) == true
+        else { return nil }
+        return (selectedWorktree.serverId, host)
+    }
+
+    /// The open `.file` document on `hostFileTarget`, while documents show.
+    private var hostFileDocument: NativePeerHostFile? {
+        guard canReadWorkspace, let target = hostFileTarget, case .file(let path)? = workspace.document else { return nil }
+        return NativePeerHostFile(serverId: target.serverId, worktree: target.worktree, path: path)
+    }
+
+    /// The open `.file` document, once the host served it as text with a version, on `hostFileTarget`.
+    var openedHostFile: NativePeerHostFile? {
+        guard workspace.documentVersion != nil, let file = hostFileDocument, hostFileRefusals[file] == nil else { return nil }
+        return file
+    }
+
+    /// Why the open `.file` document, loaded as text on a host that edits files, stays read-only.
+    var hostFileReadOnlyNote: String? {
+        guard let file = hostFileDocument, case .loaded(.text(_, _)) = workspace.documentContent else { return nil }
+        if let refusal = hostFileRefusals[file] { return "Read-only: \(refusal)" }
+        return workspace.documentVersion == nil ? "Read-only: the host doesn't save this file from a paired Mac." : nil
+    }
+
+    /// Created on first use, watching; kept while dirty after its view closes.
+    func hostFileBuffer(for file: NativePeerHostFile) -> EditorBuffer {
+        if let buffer = hostFileBuffers[file] { return buffer }
+        guard let hosts else { preconditionFailure("A host file opens only over a host channel.") }
+        let buffer = EditorBuffer(
+            hostWorktreeRoot: URL(fileURLWithPath: file.worktree.snapshot.worktree.path.path),
+            relativePath: file.path,
+            backend: hosts.hostFileBackend(in: file.worktree, serverId: file.serverId) { [weak self] refusal in
+                self?.hostFileRefusals[file] = refusal
+            }
+        )
+        buffer.startWatching()
+        hostFileBuffers[file] = buffer
+        return buffer
+    }
+
+    /// Closes and forgets `file`'s buffer unless it is dirty.
+    // ponytail: dirty host buffers live until the app quits (which asks about them), with no hot-exit.
+    func releaseHostFileBuffer(_ file: NativePeerHostFile) {
+        guard let buffer = hostFileBuffers[file], !buffer.dirty else { return }
+        hostFileBuffers[file] = nil
+        buffer.close(persistDirtySnapshot: false)
+    }
+
+    /// Host files with edits not saved yet, with their host's name.
+    var unsavedHostFiles: [(file: NativePeerHostFile, hostName: String, buffer: EditorBuffer)] {
+        hostFileBuffers.filter { $0.value.dirty }.map { file, buffer in
+            (file: file, hostName: snapshot.groups.first { $0.serverId == file.serverId }?.name ?? file.serverId, buffer: buffer)
+        }
+    }
+
+    func saveOpenedHostFile() {
+        guard let file = openedHostFile, let buffer = hostFileBuffers[file] else { return }
+        Task { try? await buffer.saveRecordingErrorAwaitingRemote() }
+    }
+
+    func revertOpenedHostFile() {
+        guard let file = openedHostFile else { return }
+        hostFileBuffers[file]?.revert()
+    }
+
     /// The selected tab-less worktree, read over its host's channel.
     private var hostReadTarget: (serverId: String, worktree: PeerHostWorktree)? {
         guard selectedTab == nil, let selectedWorktree, let host = selectedWorktreeGroup?.host,
@@ -460,6 +532,9 @@ final class NativePeerSessions {
         downstream = nil
         consoles?.stop()
         hosts?.stop()
+        for buffer in hostFileBuffers.values { buffer.close(persistDirtySnapshot: false) }
+        hostFileBuffers = [:]
+        hostFileRefusals = [:]
         selectedWorktree = nil
         selectedWorktreeTabs = []
         openedReview = nil
@@ -1103,7 +1178,10 @@ final class NativePeerSessions {
         guard canReadWorkspace else { return false }
         openedReview = nil
         openedCommitEditor = nil
-        if document != workspace.document { documentRequestOutdated = false }
+        if document != workspace.document {
+            documentRequestOutdated = false
+            hostFileRefusals = [:]
+        }
         workspace.beginDocument(document)
         guard !documentRequestsInFlight.contains(document) else {
             // A request for this exact document is already outstanding —
@@ -1142,6 +1220,7 @@ final class NativePeerSessions {
 
     func closeDocument() {
         workspace.closeDocument()
+        hostFileRefusals = [:]
     }
 
     /// Reads a stash or checkpoint file's diff over the selected worktree's

@@ -154,7 +154,7 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasSaveActiveTab, object: nil)
             }
             .keyboardShortcut("s", modifiers: .command)
-            .disabled(!state.hasActiveEditorTab)
+            .disabled(!state.hasActiveEditorTab && !state.hasOpenPeerHostFile)
             Button("Save As…") {
                 NotificationCenter.default.post(name: .alasSaveActiveTabAs, object: nil)
             }
@@ -169,7 +169,7 @@ struct AlasApp: App {
             Button("Revert") {
                 NotificationCenter.default.post(name: .alasRevertActiveTab, object: nil)
             }
-            .disabled(!state.hasActiveEditorTab)
+            .disabled(!state.hasActiveEditorTab && !state.hasOpenPeerHostFile)
             Divider()
             Button("Rename File…") {
                 NotificationCenter.default.post(name: .alasRenameActiveFile, object: nil)

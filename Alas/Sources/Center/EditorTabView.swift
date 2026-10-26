@@ -49,6 +49,8 @@ struct EditorTabView: View {
     let appState: AppState
     let externalAbsolutePath: String?
     var externalEditable: Bool = false
+    /// A paired host's file: nothing that reads or writes this Mac's disk, or needs LSP.
+    var peerHostFile: Bool = false
     let originatingRelativePath: String?
     let onRevealInFiles: (String) -> Void
     var onStartupRecoveryReady: () -> Void = {}
@@ -75,13 +77,14 @@ struct EditorTabView: View {
                 onRevealInFiles: onRevealInFiles,
                 menuItems: { index, pathPrefix in
                     let isLast = index == breadcrumbRelativePath.split(separator: "/").count - 1
-                    let isRemote = worktreePath.isRemoteAlasPath
+                    let isRemote = worktreePath.isRemoteAlasPath || peerHostFile
+                    let readsGit = externalAbsolutePath == nil && !peerHostFile
                     if isLast {
                         return .file(BreadcrumbFileMenu(
-                            onViewAtHEAD: externalAbsolutePath == nil
+                            onViewAtHEAD: readsGit
                                 ? { appState.openFileSnapshotAtHEAD(relativePath: relativePath, worktreeId: worktreeId) }
                                 : nil,
-                            onCompareWithHEAD: externalAbsolutePath == nil
+                            onCompareWithHEAD: readsGit
                                 ? { appState.openDiffTab(
                                     forFileInWorktree: worktree,
                                     relativePath: relativePath,
@@ -89,7 +92,7 @@ struct EditorTabView: View {
                                     compareWithHEAD: true
                                   ) }
                                 : nil,
-                            onFileHistory: externalAbsolutePath == nil
+                            onFileHistory: readsGit
                                 ? { appState.openFileHistory(relativePath: relativePath, worktreeId: worktreeId) }
                                 : nil,
                             onCopyRelativePath: externalAbsolutePath == nil ? { Clipboard.copy(relativePath) } : nil,
@@ -112,7 +115,7 @@ struct EditorTabView: View {
                     }
                 },
                 trailing: AnyView(HStack(spacing: 8) {
-                    statusBadge
+                    if !peerHostFile { statusBadge }
                     if runScriptScope != nil {
                         Button("Help me write this") { showsRunScriptWritingHelp = true }
                             .buttonStyle(.plain)
@@ -156,8 +159,10 @@ struct EditorTabView: View {
                 ) {
                     EditorConflictBanner(buffer: conflictBannerBuffer)
                 }
-                InstallNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
-                BlockedNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
+                if !peerHostFile {
+                    InstallNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
+                    BlockedNudgeBanner(appState: appState, absolutePath: nudgeAbsolutePath)
+                }
                 if findPresentation != .hidden {
                     EditorFindBarView(
                         findText: $findText,
@@ -198,49 +203,7 @@ struct EditorTabView: View {
                     onTextViewDetached: { detachFindController(from: $0) },
                     onInitialHighlightReady: onStartupRecoveryReady
                 )
-                WorkspaceEditRecoveryView(coordinator: appState.tabs.workspaceEditUndoCoordinator(forWorktreeId: worktreeId, worktreeRoot: worktreePath))
-                EditorNavigationResultsView(
-                    store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
-                    onOpen: { target in
-                        let sourceURI = externalAbsolutePath.map { URL(fileURLWithPath: $0).lspURI }
-                            ?? worktreePath.appendingPathComponent(relativePath).lspURI
-                        let sourcePosition = activeTextView.flatMap {
-                            TextEditCoordinates.lspPosition(
-                                utf16Offset: $0.sourceSelectedRange.location,
-                                in: $0.sourceString
-                            )
-                        } ?? LSPPosition(line: 0, character: 0)
-                        let source = EditorNavigationTarget(
-                            document: EditorDocumentID(
-                                host: RemoteHostRegistry.shared.host(forPath: worktreePath.path),
-                                worktreeID: worktreeId,
-                                uri: sourceURI
-                            ),
-                            position: sourcePosition
-                        )
-                        if appState.tabs.openNavigationTarget(
-                            target,
-                            worktreeRoot: worktreePath,
-                            originatingRelativePath: externalAbsolutePath == nil ? relativePath : originatingRelativePath,
-                            language: appState.lsp.language(
-                                forFileExtension: LanguageServerRegistry.extensionKey(forPath: relativePath)
-                            )
-                        ) {
-                            appState.tabs.navigationStore(forWorktreeId: worktreeId).recordJump(
-                                from: source,
-                                to: target
-                            )
-                        } else {
-                            appState.tabs.navigationStore(forWorktreeId: worktreeId).recordActivationFailure(for: target)
-                        }
-                    },
-                    onRerun: {
-                        appState.tabs.navigationStore(forWorktreeId: worktreeId).rerunReferences()
-                    },
-                    onReturnFocus: {
-                        activeTextView?.window?.makeFirstResponder(activeTextView)
-                    }
-                )
+                if !peerHostFile { localEditorPanels }
             }
         }
         .background(theme.color("bg-1"))
@@ -261,6 +224,54 @@ struct EditorTabView: View {
                   textView === activeTextView else { return }
             handleEditorTextChanged()
         }
+    }
+
+    /// Workspace edit recovery and navigation results: LSP over this Mac's worktree.
+    @ViewBuilder
+    private var localEditorPanels: some View {
+        WorkspaceEditRecoveryView(coordinator: appState.tabs.workspaceEditUndoCoordinator(forWorktreeId: worktreeId, worktreeRoot: worktreePath))
+        EditorNavigationResultsView(
+            store: appState.tabs.navigationStore(forWorktreeId: worktreeId),
+            onOpen: { target in
+                let sourceURI = externalAbsolutePath.map { URL(fileURLWithPath: $0).lspURI }
+                    ?? worktreePath.appendingPathComponent(relativePath).lspURI
+                let sourcePosition = activeTextView.flatMap {
+                    TextEditCoordinates.lspPosition(
+                        utf16Offset: $0.sourceSelectedRange.location,
+                        in: $0.sourceString
+                    )
+                } ?? LSPPosition(line: 0, character: 0)
+                let source = EditorNavigationTarget(
+                    document: EditorDocumentID(
+                        host: RemoteHostRegistry.shared.host(forPath: worktreePath.path),
+                        worktreeID: worktreeId,
+                        uri: sourceURI
+                    ),
+                    position: sourcePosition
+                )
+                if appState.tabs.openNavigationTarget(
+                    target,
+                    worktreeRoot: worktreePath,
+                    originatingRelativePath: externalAbsolutePath == nil ? relativePath : originatingRelativePath,
+                    language: appState.lsp.language(
+                        forFileExtension: LanguageServerRegistry.extensionKey(forPath: relativePath)
+                    )
+                ) {
+                    appState.tabs.navigationStore(forWorktreeId: worktreeId).recordJump(
+                        from: source,
+                        to: target
+                    )
+                } else {
+                    appState.tabs.navigationStore(forWorktreeId: worktreeId).recordActivationFailure(for: target)
+                }
+            },
+            onRerun: {
+                appState.tabs.navigationStore(forWorktreeId: worktreeId).rerunReferences()
+            },
+            onReturnFocus: {
+                activeTextView?.window?.makeFirstResponder(activeTextView)
+            }
+        )
     }
 
     private func attachFindController(to textView: CodeTextView) {
@@ -288,7 +299,8 @@ struct EditorTabView: View {
     }
 
     private func handleFindRequest(_ notification: Notification) {
-        guard appState.tabs.activeTabId(forWorktree: worktreeId) == tabId else { return }
+        // Only one editor shows in the peer center, and it is no worktree's tab.
+        guard peerHostFile || appState.tabs.activeTabId(forWorktree: worktreeId) == tabId else { return }
 
         let request = notification.object as? EditorFindRequest ?? .showReplace
         switch request {
@@ -540,7 +552,7 @@ struct EditorTabView: View {
     }
 
     private var runScriptScope: RunScriptScope? {
-        guard !worktreePath.isRemoteAlasPath,
+        guard !worktreePath.isRemoteAlasPath, !peerHostFile,
               externalAbsolutePath == nil || externalEditable,
               !isBinary else { return nil }
         return RunScriptWritingHelp.scope(for: absoluteFileURL, worktreeRoot: worktreePath)
