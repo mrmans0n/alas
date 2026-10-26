@@ -17,6 +17,8 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
     public let json: String?         // JSON string for structured kinds; nil otherwise
     public let index: Int            // transcript position; the client orders and windows by this
     public var isHidden: Bool? = nil
+    /// A user row's automatic checkpoint; the key is left out when nil.
+    public var checkpointId: String? = nil
 
     /// A conservative bound for compact JSONEncoder output, without serializing
     /// or copying the bodies. The fixed overhead covers keys, punctuation,
@@ -32,6 +34,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
             count += 10 + Self.escapedTransportByteCount(json)
         }
         if isHidden != nil { count += 17 }
+        if checkpointId != nil { count += 16 + 36 }
         return count
     }
 
@@ -76,13 +79,17 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
         return count
     }
 
-    public init(stableId: String, kind: String, text: String?, json: String?, index: Int, isHidden: Bool? = nil) {
+    public init(
+        stableId: String, kind: String, text: String?, json: String?, index: Int, isHidden: Bool? = nil,
+        checkpointId: String? = nil
+    ) {
         self.stableId = stableId
         self.kind = kind
         self.text = text
         self.json = json
         self.index = index
         self.isHidden = isHidden
+        self.checkpointId = checkpointId
     }
 }
 

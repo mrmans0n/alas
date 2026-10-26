@@ -107,7 +107,8 @@ public final class ACPSessionManager: ChangeTracking {
     /// Every turn that reached the agent, superseded ones included, for usage history.
     private let onTurnUsage: ((ACPTurnCompletion) -> Void)?
     private let onChildBlocked: ((ACPChildBlocker) -> Void)?
-    private let onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
+    /// Read when each runner is made; a host installs it after creating the manager.
+    @ObservationIgnored public var onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)?
     private let pluginContext: (@MainActor (_ sessionID: String) async -> [String])?
     private let sessionReferenceContext: (@MainActor (_ referencedSessionId: String) async -> String?)?
     private let mcpProjectContextProvider: MCPProjectContextProvider?

@@ -1109,6 +1109,46 @@ struct HostProtocolServerTests {
         #expect(catalog.summaries.contains { $0.kind == .recovery && $0.label == "Before checkpoint restore" })
     }
 
+    /// As the app does, the host checkpoints a worktree before each prompt and
+    /// the user row carries its id; a failed capture still sends the prompt.
+    @Test(arguments: [false, true])
+    func aHostPromptTakesAnAutomaticCheckpointFirst(captureFails: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let sessions = fixture.host.sessions
+        let session = try await sessions.create(.worktree(ref), agentID: "gemini", caller: .app)
+        let id = session.id
+        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        if captureFails {
+            // A file where the checkpoint store's directory belongs, once the session is past the recovery gate.
+            try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("checkpoints"))
+            try Data().write(to: fixture.root.appendingPathComponent("checkpoints"))
+        }
+        try await sessions.send(id, prompt: "fix it", caller: .app)
+
+        let agent = fixture.agent
+        try await eventually { agent.sent.contains { $0.method == "session/prompt" } }
+        let manager = try #require(fixture.core.sessionManagers[.worktree(worktree.id)])
+        let user = try #require(manager.liveSession(for: id)?.transcript.messages.first {
+            if case .user = $0 { return true }
+            return false
+        })
+        guard case .user(_, _, _, let attachments, _, _) = user else { return }
+        let carried = attachments.compactMap(\.checkpointID)
+        #expect(RemoteSessionGateway.toWire(user, index: 0).checkpointId == carried.first?.uuidString)
+        if captureFails {
+            #expect(carried.isEmpty)
+            return
+        }
+        let target = try #require(fixture.core.checkpointTarget(for: worktree))
+        let automatic = try await fixture.core.checkpoints.summaries(target: target).summaries.filter { $0.kind == .automatic }
+        #expect(automatic.map(\.label) == ["Before: fix it"])
+        #expect(carried == automatic.map(\.id))
+    }
+
     /// A Mac names only checkpoints of the worktree it asks about, and paths inside it.
     @Test func checkpointRequestsNameOnlyThisWorktreesCheckpoints() async throws {
         let fixture = try await RepoFixture()
@@ -1940,6 +1980,7 @@ struct HostProtocolServerTests {
         let host: AlasHost
         let connection: HostProtocolConnection
         let client = Client()
+        let agent = ACPMockClient()
         let projectID: String
         /// With `aheadOfOrigin`, `main`'s three commits `origin/main` lacks, bottom-up.
         let aheadSHAs: [String]
@@ -1955,9 +1996,10 @@ struct HostProtocolServerTests {
                 aheadSHAs = []
             }
             projectsFile = root.appendingPathComponent("projects.json")
-            let agent = ACPMockClient()
+            let agent = self.agent
             agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
             agent.script(method: "session/new") { _ in Data(#"{"sessionId":"agent-1"}"#.utf8) }
+            agent.script(method: "session/prompt") { _ in Data("null".utf8) }
             let database = root.appendingPathComponent("sessions.sqlite")
             // The checkpoint store refuses a root reached through a symlink, as `/var` is.
             let realRoot = try #require(realpath(root.path, nil))

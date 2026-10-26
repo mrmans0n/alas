@@ -474,6 +474,11 @@ public final class AlasCoreContext {
         if let manager = sessionManagers[owner] { return manager }
         let manager = makeSessionManager(owner, worktree)
         let worktreeId = worktree.id
+        if environment.servesWorktreeGit, manager.onCheckpointCapture == nil {
+            manager.onCheckpointCapture = { [weak self] prompt, hasAttachments in
+                await self?.captureAutomaticCheckpoint(worktree, prompt: prompt, hasAttachments: hasAttachments)
+            }
+        }
         manager.admitsNewWork = { [weak self] in self?.projects.admitsNewWork(worktreeId: worktreeId) ?? false }
         sessionManagers[owner] = manager
         return manager

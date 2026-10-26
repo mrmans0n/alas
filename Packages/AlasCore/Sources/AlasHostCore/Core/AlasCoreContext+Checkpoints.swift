@@ -2,6 +2,9 @@ import Foundation
 import AlasFeatures
 import AlasModel
 import AlasPlatform
+import os
+
+private let checkpointLogger = Logger(subsystem: "io.nlopez.alas", category: "AlasHost")
 
 extension AlasCoreContext {
     /// Nil for a remote path, a folder project or no lineage; repository name from the project, no workspace.
@@ -14,6 +17,20 @@ extension AlasCoreContext {
             worktreeID: worktree.id, projectID: worktree.projectId, path: worktree.path, lineageID: lineageID,
             branch: worktree.branch, repositoryName: project?.name ?? worktree.name, workspaceName: nil
         )
+    }
+
+    /// The app's automatic checkpoint before a prompt, on a headless host: nil
+    /// without a target or on any failure, which never holds the prompt back.
+    /// The store keeps at most 50 automatic checkpoints, oldest pruned, as the app's.
+    func captureAutomaticCheckpoint(_ worktree: Worktree, prompt: String, hasAttachments: Bool) async -> CheckpointID? {
+        guard let target = checkpointTarget(for: worktree) else { return nil }
+        do {
+            let label = AutomaticCheckpointLabel.make(prompt: prompt, hasAttachments: hasAttachments)
+            return try await checkpoints.createAutomatic(target: target, label: label).id
+        } catch {
+            checkpointLogger.error("Automatic checkpoint failed: \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     /// Sessions: the worktree manager's runners plus a starting one. Terminals: its runs, pending
