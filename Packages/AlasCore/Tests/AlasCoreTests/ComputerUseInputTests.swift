@@ -692,25 +692,44 @@ struct ComputerUseInputTests {
         #expect(ComputerUseTextCheck.replace(with: text, before: before, after: after) == verdict)
     }
 
-    /// A web page's field is never written by AX, and its read-back never counts: keys, or a
-    /// refusal off screen. A native field keeps the read-back.
+    /// A Chromium or Electron web page's field is never written by AX, and its read-back never
+    /// counts: keys, or a refusal off screen. A native field, and a WebKit page's (Safari), keep
+    /// the read-back.
     @Test(arguments: [
-        (Verdict?.none, false, true, ComputerUseTextCheck.Outcome.write),
-        (nil, false, false, .write),
-        (.landed, false, true, .landed),
-        (.unknown, false, false, .landed),
-        (.unchanged, false, true, .typeAsKeys),
-        (.unchanged, false, false, .refuse),
-        (nil, true, true, .typeAsKeys),
-        (nil, true, false, .refuse),
-        (.landed, true, true, .typeAsKeys),
-        (.landed, true, false, .refuse),
-        (.unknown, true, true, .typeAsKeys),
+        // A native field, in any app.
+        (Verdict?.none, false, false, true, ComputerUseTextCheck.Outcome.write),
+        (nil, false, true, false, .write),
+        (.landed, false, true, true, .landed),
+        (.unknown, false, false, false, .landed),
+        (.unchanged, false, false, true, .typeAsKeys),
+        (.unchanged, false, true, false, .refuse),
+        // A Safari page's field.
+        (nil, true, false, true, .write),
+        (nil, true, false, false, .write),
+        (.landed, true, false, true, .landed),
+        (.unchanged, true, false, true, .typeAsKeys),
+        (.unchanged, true, false, false, .refuse),
+        // A Chrome or Electron page's field.
+        (nil, true, true, true, .typeAsKeys),
+        (nil, true, true, false, .refuse),
+        (.landed, true, true, true, .typeAsKeys),
+        (.landed, true, true, false, .refuse),
+        (.unknown, true, true, true, .typeAsKeys),
     ])
-    func aWebAreaReadBackNeverCountsAsLanded(
-        readBack: Verdict?, inWebArea: Bool, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome
+    func aChromiumWebAreaReadBackNeverCountsAsLanded(
+        readBack: Verdict?, inWebArea: Bool, chromium: Bool, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome
     ) {
-        #expect(ComputerUseTextCheck.outcome(readBack, inWebArea: inWebArea, keysReach: keysReach) == outcome)
+        #expect(ComputerUseTextCheck.outcome(readBack, inWebArea: inWebArea, chromium: chromium, keysReach: keysReach) == outcome)
+    }
+
+    @Test(arguments: [
+        (String?("com.google.Chrome"), false, true),
+        ("com.tinyspeck.slackmacgap", true, true),
+        ("com.apple.Safari", false, false),
+        (nil, false, false),
+    ])
+    func chromiumMeansAChromeBundleOrAnAppThatTookManualAccessibility(bundleID: String?, manual: Bool, chromium: Bool) {
+        #expect(ComputerUseWebContent.isChromium(bundleID: bundleID, acceptsManualAccessibility: manual) == chromium)
     }
 
     /// Text written by AX into a document window is followed by a net-zero key edit, or a warning

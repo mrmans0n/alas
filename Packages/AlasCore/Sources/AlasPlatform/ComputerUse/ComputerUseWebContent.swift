@@ -14,6 +14,11 @@ public enum ComputerUseWebContent {
     ]
 
     public static let manualAccessibility = "AXManualAccessibility"
+
+    /// A Chromium browser (by bundle id) or an Electron app (one that took `manualAccessibility`).
+    public static func isChromium(bundleID: String?, acceptsManualAccessibility: Bool) -> Bool {
+        acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "")
+    }
     public static let enhancedUserInterface = "AXEnhancedUserInterface"
 
     /// Whether a Chromium browser whose window still shows no web content after the wait for

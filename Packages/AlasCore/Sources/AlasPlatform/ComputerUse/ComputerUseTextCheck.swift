@@ -26,14 +26,15 @@ public enum ComputerUseTextCheck {
     }
 
     /// Asked before the write (`readBack` nil) and after it, with its verdict. A text-entry element
-    /// inside a web page (`inWebArea`, an `AXWebArea` ancestor: Chromium, Electron, WebKit) is never
-    /// written by AX: its AX value can show the text while the page never got it, so a read-back
-    /// there proves nothing, and keys after a write that did reach the page would type it twice. It
-    /// gets key events, or a refusal where they don't reach the window (`keysReach`). Anywhere else
+    /// inside a web page (`inWebArea`, an `AXWebArea` ancestor) of a Chromium or Electron app
+    /// (`chromium`, `ComputerUseWebContent.isChromium`) is never written by AX: its AX value can
+    /// show the text while the page never got it, so a read-back there proves nothing, and keys
+    /// after a write that did reach the page would type it twice. It gets key events, or a refusal
+    /// where they don't reach the window (`keysReach`). Anywhere else, WebKit's web pages included,
     /// a value read back unchanged gets the same, and any other verdict counts as landed.
-    public static func outcome(_ readBack: Verdict?, inWebArea: Bool, keysReach: Bool) -> Outcome {
+    public static func outcome(_ readBack: Verdict?, inWebArea: Bool, chromium: Bool, keysReach: Bool) -> Outcome {
         let instead: Outcome = keysReach ? .typeAsKeys : .refuse
-        if inWebArea { return instead }
+        if inWebArea, chromium { return instead }
         switch readBack {
         case nil: return .write
         case .landed, .unknown: return .landed

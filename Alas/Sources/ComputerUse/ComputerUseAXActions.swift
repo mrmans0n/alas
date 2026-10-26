@@ -43,8 +43,9 @@ enum ComputerUseAXActions {
 
     /// Replaces the element's value. Refuses secure text fields. Throws
     /// `Unsupported` when the element doesn't take a value this way, reads
-    /// back as it was, or is a web page's field, so typing can be tried instead;
-    /// where keys don't reach the window (`keysReach`), refuses those last two
+    /// back as it was, or is a Chromium or Electron web page's field, so typing
+    /// can be tried instead; where keys don't reach the window (`keysReach`),
+    /// refuses those last two
     /// (`ComputerUseTextCheck.outcome`).
     static func setValue(
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, keysReach: Bool,
@@ -862,7 +863,8 @@ extension ComputerUseAXActions {
 
     /// Inserts `text` at the element's caret, replacing its selection. Refuses secure text fields.
     /// Focuses the element first, keeping its selection; see `insert` for chunking and interrupts.
-    /// A web page's field is neither focused nor written here (`ComputerUseTextCheck.outcome`).
+    /// A Chromium or Electron web page's field is neither focused nor written here
+    /// (`ComputerUseTextCheck.outcome`).
     static func insertText(
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, keysReach: Bool,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -870,7 +872,8 @@ extension ComputerUseAXActions {
         let element = try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
-            try settle(ComputerUseTextCheck.outcome(nil, inWebArea: isWebTextEntry(element), keysReach: keysReach), app: app)
+            try settle(ComputerUseTextCheck.outcome(
+                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app)
             focusKeepingSelection(element, app: app)
             return Retained(element)
         }
@@ -968,6 +971,12 @@ extension ComputerUseAXActions {
     private static func fieldText(_ element: AXUIElement) -> FieldText {
         let count = number(of: element, kAXNumberOfCharactersAttribute)
         return FieldText(count: count, value: (count ?? 0) <= valueCheckCharacters ? textValue(of: element) : nil)
+    }
+
+    /// Whether a web page's AX read-back is untrusted in the app (`ComputerUseTextCheck.outcome`).
+    private static func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
+        ComputerUseWebContent.isChromium(
+            bundleID: app.bundleID, acceptsManualAccessibility: ComputerUseAXReader.acceptsManualAccessibility(app.pid))
     }
 
     /// Whether the element takes typed text and sits in a web page.
@@ -1295,7 +1304,7 @@ extension ComputerUseAXActions {
     /// (`ComputerUseTextCheck`), or its length where the value can't be read, since some apps
     /// (Chromium) report success and insert nothing; that first failure is `Unsupported`, so events
     /// may type the text instead, or the off-screen refusal where they don't reach the window
-    /// (`keysReach`). A web page's field (`TextTarget.inWebArea`) is never written.
+    /// (`keysReach`). A Chromium or Electron web page's field (`TextTarget.inWebArea`) is never written.
     /// Any later failure is a tool error, so nothing already inserted gets typed twice.
     /// Each chunk goes at the caret the text so far left (from the selection read before the first
     /// one): the user or the app moving the caret in between stops the input rather than splitting
@@ -1326,7 +1335,8 @@ extension ComputerUseAXActions {
                 var selection: CFRange?
                 var valueBefore: String?
                 if typedSoFar == 0 {
-                    try settle(ComputerUseTextCheck.outcome(nil, inWebArea: target.inWebArea, keysReach: keysReach), app: app)
+                    try settle(ComputerUseTextCheck.outcome(
+                        nil, inWebArea: target.inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app)
                     guard target.canSetSelectedText() else { throw Unsupported(error: .attributeUnsupported) }
                     countBefore = target.characterCount()
                     selection = target.selectedRange()
@@ -1363,7 +1373,7 @@ extension ComputerUseAXActions {
                     if landed == .unknown, selection?.length == 0, let countBefore, target.characterCount() == countBefore {
                         landed = .unchanged
                     }
-                    try settle(ComputerUseTextCheck.outcome(landed, inWebArea: false, keysReach: keysReach), app: app)
+                    try settle(ComputerUseTextCheck.outcome(landed, inWebArea: false, chromium: false, keysReach: keysReach), app: app)
                 }
                 return startLocation
             }
@@ -1394,7 +1404,8 @@ extension ComputerUseAXActions {
         var setSelectedText: (String) -> AXError
         /// The whole value, empty included; nil when it can't be read.
         var value: () -> String? = { nil }
-        /// A text-entry element inside a web page, which AX doesn't write (`ComputerUseTextCheck.outcome`).
+        /// A text-entry element inside a web page, which AX doesn't write in a Chromium or Electron
+        /// app (`ComputerUseTextCheck.outcome`).
         var inWebArea = false
     }
 
@@ -1427,13 +1438,14 @@ extension ComputerUseAXActions {
     private static func setValueChecked(
         _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool
     ) throws {
-        try settle(ComputerUseTextCheck.outcome(nil, inWebArea: isWebTextEntry(element), keysReach: keysReach), app: app)
+        try settle(ComputerUseTextCheck.outcome(
+                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app)
         let before = isLong(element) ? nil : textValue(of: element)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
         guard result == .success else { throw failure(result, app: app) }
         guard let before else { return }
         let landed = awaitLanded { ComputerUseTextCheck.replace(with: text, before: before, after: textValue(of: element)) }
-        try settle(ComputerUseTextCheck.outcome(landed, inWebArea: false, keysReach: keysReach), app: app)
+        try settle(ComputerUseTextCheck.outcome(landed, inWebArea: false, chromium: false, keysReach: keysReach), app: app)
     }
 
     private static func isLong(_ element: AXUIElement) -> Bool {
