@@ -297,10 +297,19 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// completely would require a hand-rolled `openat`-per-component walk;
     /// not implemented here as disproportionate to the residual risk.
     private static func openRegularFileNoFollow(at url: URL) -> Int32? {
-        let fd = url.withUnsafeFileSystemRepresentation { representation -> Int32 in
+        regularFile(url.withUnsafeFileSystemRepresentation { representation -> Int32 in
             guard let representation else { return -1 }
             return open(representation, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        }
+        })
+    }
+
+    /// `openRegularFileNoFollow`, for `name` in the held `folder`.
+    private static func openRegularFileNoFollow(_ name: String, in folder: Int32) -> Int32? {
+        regularFile(openat(folder, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
+    }
+
+    /// `fd` when it is open on a regular file; otherwise closes it.
+    private static func regularFile(_ fd: Int32) -> Int32? {
         guard fd >= 0 else { return nil }
         var status = stat()
         guard fstat(fd, &status) == 0, (status.st_mode & S_IFMT) == S_IFREG else {
@@ -310,7 +319,7 @@ public enum RemoteWorktreeFileAccess: Sendable {
         return fd
     }
 
-    /// Reads the ENTIRE contents of `url` via a single open/fstat/read
+    /// Reads the ENTIRE contents of `fd`'s file (closing it) via one open/fstat/read
     /// sequence (see `openRegularFileNoFollow`), capped at `maxBytes`. The
     /// size check and the read both happen against the SAME already-opened
     /// descriptor — no re-`stat`, no re-`open` by path — so a concurrent
@@ -318,8 +327,8 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// the read loop's own running total rather than a stale earlier stat.
     /// The version's hash and mtime come from that same descriptor, so they
     /// describe exactly the bytes returned.
-    private static func openReadCapped(at url: URL, maxBytes: Int) -> FileVersionProbe {
-        guard let fd = openRegularFileNoFollow(at: url) else { return .missing }
+    private static func readCapped(_ fd: Int32?, maxBytes: Int) -> FileVersionProbe {
+        guard let fd else { return .missing }
         defer { close(fd) }
 
         var status = stat()
@@ -372,7 +381,7 @@ public enum RemoteWorktreeFileAccess: Sendable {
     }
 
     /// Stats, caps, reads, and UTF-8-decodes `url` entirely off the caller's
-    /// actor, via a single open/fstat/read sequence (`openReadCapped`) so no
+    /// actor, via a single open/fstat/read sequence (`readCapped`) so no
     /// path is ever re-resolved between the size check and the actual read.
     /// Callers on `@MainActor` (`AppState`) must `await` this rather than
     /// reading the file directly, so an unbounded read never blocks the UI
@@ -384,7 +393,7 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// `readFileContents`, plus the version of the bytes read: nil unless `.text`.
     public static func readVersionedFileContents(at url: URL) async -> (outcome: FileReadOutcome, version: WorktreeFileVersion?) {
         await Task.detached(priority: .userInitiated) {
-            switch openReadCapped(at: url, maxBytes: maxFileBytes) {
+            switch readCapped(openRegularFileNoFollow(at: url), maxBytes: maxFileBytes) {
             case .missing: return (.notFound, nil)
             case .tooLarge(let byteSize): return (.tooLarge(byteSize: byteSize), nil)
             case .version(let version, let data):
@@ -399,27 +408,41 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// The regular file at `url` as one no-follow open, capped at `maxFileBytes`.
     public static func probeVersion(at url: URL) async -> FileVersionProbe {
         await Task.detached(priority: .userInitiated) {
-            openReadCapped(at: url, maxBytes: maxFileBytes)
+            readCapped(openRegularFileNoFollow(at: url), maxBytes: maxFileBytes)
         }.value
     }
 
-    /// Writes `data` to a temp file beside `url`, fsyncs it, sets the permission bits `url` had (0644 for a
-    /// new file), and renames it over `url`, fsyncing the folder after. With `creating`, the rename throws
-    /// `EEXIST` rather than replace anything. Returns the version written. The temp file never outlives a failure.
-    public static func replaceAtomically(_ url: URL, with data: Data, creating: Bool = false) async throws -> WorktreeFileVersion {
+    /// `probeVersion`, for `name` in the held `folder`.
+    public static func probeVersion(_ name: String, in folder: FileHandle) async -> FileVersionProbe {
+        await Task.detached(priority: .userInitiated) {
+            readCapped(openRegularFileNoFollow(name, in: folder.fileDescriptor), maxBytes: maxFileBytes)
+        }.value
+    }
+
+    /// Writes `data` to a temp file beside `name` in the held `folder`, fsyncs it, sets the permission bits
+    /// `name` had (0644 for a new file), and renames it over `name`, fsyncing the folder after. Every step is
+    /// relative to `folder`, so a folder on the way swapped for a symlink since it was opened changes nothing.
+    /// With `creating`, the rename throws `EEXIST` rather than replace anything; so does anything but a regular
+    /// file at `name`. Returns the version written. The temp file never outlives a failure.
+    public static func replaceAtomically(_ name: String, in folder: FileHandle, with data: Data, creating: Bool = false) async throws -> WorktreeFileVersion {
         try await Task.detached(priority: .userInitiated) {
             func failure() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            let directory = folder.fileDescriptor
             // Bounded, so a long name still leaves room for the suffix.
-            let name = String(decoding: url.lastPathComponent.utf8.prefix(64), as: UTF8.self)
-            let directory = url.deletingLastPathComponent()
-            let temp = directory.appendingPathComponent(".\(name).alas-\(UUID().uuidString)")
+            let temp = ".\(String(decoding: name.utf8.prefix(64), as: UTF8.self)).alas-\(UUID().uuidString)"
             var existing = stat()
-            // Permission bits only: never setuid, setgid or sticky.
-            let mode = lstat(url.path, &existing) == 0 ? existing.st_mode & 0o777 : 0o644
-            let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            let mode: mode_t
+            if fstatat(directory, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
+                guard existing.st_mode & S_IFMT == S_IFREG else { throw POSIXError(.EEXIST) }
+                // Permission bits only: never setuid, setgid or sticky.
+                mode = existing.st_mode & 0o777
+            } else {
+                mode = 0o644
+            }
+            let fd = openat(directory, temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
             guard fd >= 0 else { throw failure() }
             var renamed = false
-            defer { if !renamed { unlink(temp.path) } }
+            defer { if !renamed { unlinkat(directory, temp, 0) } }
             let written: Result<stat, POSIXError> = data.withUnsafeBytes { bytes in
                 defer { close(fd) }
                 var offset = 0
@@ -434,14 +457,10 @@ public enum RemoteWorktreeFileAccess: Sendable {
                 return .success(status)
             }
             let status = try written.get()
-            guard renamex_np(temp.path, url.path, creating ? UInt32(RENAME_EXCL) : 0) == 0 else { throw failure() }
+            guard renameatx_np(directory, temp, directory, name, creating ? UInt32(RENAME_EXCL) : 0) == 0 else { throw failure() }
             renamed = true
             // The rename is durable once its folder is.
-            let folder = open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-            if folder >= 0 {
-                fsync(folder)
-                close(folder)
-            }
+            fsync(directory)
             return WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: data), modified: modified(status))
         }.value
     }
