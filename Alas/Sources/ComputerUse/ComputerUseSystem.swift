@@ -619,9 +619,9 @@ extension LiveComputerUseSystem {
         case .type(let text, .element(let handles, let handle), let replace):
             do {
                 if replace {
-                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
+                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, keysReach: true, interrupt: interrupt)
                 } else {
-                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
+                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, keysReach: true, interrupt: interrupt)
                 }
                 return ComputerUseDelivered.ax
             } catch is ComputerUseAXActions.Unsupported {
@@ -709,9 +709,10 @@ extension LiveComputerUseSystem {
             case .type(let text, .element(let handles, let handle), let replace):
                 do {
                     if replace {
-                        try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
+                        try await ComputerUseAXActions.setValue(text, handles, handle, app: app, keysReach: false, interrupt: interrupt)
                     } else {
-                        try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
+                        try await ComputerUseAXActions.insertText(
+                            text, handles, handle, app: app, keysReach: false, interrupt: interrupt)
                     }
                     return (true, .ax)
                 } catch is ComputerUseAXActions.Unsupported {
@@ -720,7 +721,8 @@ extension LiveComputerUseSystem {
             case .type(let text, _, let replace):
                 do {
                     // Refuses a secure focused element, as typing does.
-                    try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
+                    try await ComputerUseAXActions.typeIntoFocused(
+                        text, replace: replace, app: app, keysReach: false, interrupt: interrupt)
                     return (true, .ax)
                 } catch is ComputerUseAXActions.Unsupported {
                     return (true, nil)
@@ -735,15 +737,9 @@ extension LiveComputerUseSystem {
             if let delivered { return delivered }
             fallthrough
         case .refuse, .events:
-            if case .type = input { throw ComputerUseSystemError.actionFailed(offScreenTypeRefusal(app)) }
+            if case .type = input { throw ComputerUseSystemError.actionFailed(ComputerUseAXActions.offScreenTypeRefusal(app)) }
             throw ComputerUseSystemError.actionFailed(offScreenKeyRefusal(app))
         }
-    }
-
-    static func offScreenTypeRefusal(_ app: ComputerUseAppIdentity) -> String {
-        "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches it through "
-            + "accessibility, and the element doesn't take it that way (or another of its windows has focus). Use a ref "
-            + "to a text field, or ask the user to bring the window on screen."
     }
 
     static func offScreenKeyRefusal(_ app: ComputerUseAppIdentity) -> String {
@@ -850,7 +846,7 @@ extension LiveComputerUseSystem {
         switch input {
         case .type(let text, nil, let replace):
             do {
-                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
+                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, keysReach: true, interrupt: interrupt)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // Nothing focused takes text this way; type it instead.

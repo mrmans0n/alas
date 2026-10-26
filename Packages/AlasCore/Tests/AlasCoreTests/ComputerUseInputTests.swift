@@ -691,4 +691,25 @@ struct ComputerUseInputTests {
     func aReplaceLandedWhenTheValueIsTheTextOrChanged(text: String, before: String?, after: String?, verdict: Verdict) {
         #expect(ComputerUseTextCheck.replace(with: text, before: before, after: after) == verdict)
     }
+
+    /// A web page's field is never written by AX, and its read-back never counts: keys, or a
+    /// refusal off screen. A native field keeps the read-back.
+    @Test(arguments: [
+        (Verdict?.none, false, true, ComputerUseTextCheck.Outcome.write),
+        (nil, false, false, .write),
+        (.landed, false, true, .landed),
+        (.unknown, false, false, .landed),
+        (.unchanged, false, true, .typeAsKeys),
+        (.unchanged, false, false, .refuse),
+        (nil, true, true, .typeAsKeys),
+        (nil, true, false, .refuse),
+        (.landed, true, true, .typeAsKeys),
+        (.landed, true, false, .refuse),
+        (.unknown, true, true, .typeAsKeys),
+    ])
+    func aWebAreaReadBackNeverCountsAsLanded(
+        readBack: Verdict?, inWebArea: Bool, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome
+    ) {
+        #expect(ComputerUseTextCheck.outcome(readBack, inWebArea: inWebArea, keysReach: keysReach) == outcome)
+    }
 }

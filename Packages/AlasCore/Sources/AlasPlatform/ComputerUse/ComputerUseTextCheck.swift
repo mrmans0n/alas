@@ -13,6 +13,34 @@ public enum ComputerUseTextCheck {
         case unknown
     }
 
+    /// What typing by AX comes to.
+    public enum Outcome: Equatable, Sendable {
+        /// Write the text by AX, then decide on its read-back.
+        case write
+        /// The text went in.
+        case landed
+        /// Type the text as key events instead.
+        case typeAsKeys
+        /// Keys don't reach the window either (it is off screen): refuse.
+        case refuse
+    }
+
+    /// Asked before the write (`readBack` nil) and after it, with its verdict. A text-entry element
+    /// inside a web page (`inWebArea`, an `AXWebArea` ancestor: Chromium, Electron, WebKit) is never
+    /// written by AX: its AX value can show the text while the page never got it, so a read-back
+    /// there proves nothing, and keys after a write that did reach the page would type it twice. It
+    /// gets key events, or a refusal where they don't reach the window (`keysReach`). Anywhere else
+    /// a value read back unchanged gets the same, and any other verdict counts as landed.
+    public static func outcome(_ readBack: Verdict?, inWebArea: Bool, keysReach: Bool) -> Outcome {
+        let instead: Outcome = keysReach ? .typeAsKeys : .refuse
+        if inWebArea { return instead }
+        switch readBack {
+        case nil: return .write
+        case .landed, .unknown: return .landed
+        case .unchanged: return instead
+        }
+    }
+
     /// An insert of `inserted` over `selection` (UTF-16 location and length, nil when unreadable).
     public static func insert(
         _ inserted: String, before: String?, selection: (location: Int, length: Int)?, after: String?

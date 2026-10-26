@@ -42,16 +42,18 @@ enum ComputerUseAXActions {
     }
 
     /// Replaces the element's value. Refuses secure text fields. Throws
-    /// `Unsupported` when the element doesn't take a value this way, or reads
-    /// back as it was, so typing can be tried instead.
+    /// `Unsupported` when the element doesn't take a value this way, reads
+    /// back as it was, or is a web page's field, so typing can be tried instead;
+    /// where keys don't reach the window (`keysReach`), refuses those last two
+    /// (`ComputerUseTextCheck.outcome`).
     static func setValue(
-        _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
+        _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, keysReach: Bool,
         interrupt: @escaping Interrupt
     ) async throws {
         try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
-            try setValueChecked(text, element, app: app)
+            try setValueChecked(text, element, app: app, keysReach: keysReach)
         }
     }
 
@@ -116,10 +118,7 @@ enum ComputerUseAXActions {
             let identity = ComputerUseSecureFocus.Element(
                 role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute))
             guard ComputerUseSecureFocus.isTextEntry(identity) else { return false }
-            let inWebArea = ancestor(of: element, levels: webAreaAncestorLevels) {
-                string(of: $0, kAXRoleAttribute) == webAreaRole
-            } != nil
-            guard ComputerUseSecureFocus.focusesOnClick(identity, inWebArea: inWebArea) else { return false }
+            guard ComputerUseSecureFocus.focusesOnClick(identity, inWebArea: isInWebArea(element)) else { return false }
             // Confirmed by the caller through the app's focused element, so the result says nothing.
             AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
             return true
@@ -863,33 +862,68 @@ extension ComputerUseAXActions {
 
     /// Inserts `text` at the element's caret, replacing its selection. Refuses secure text fields.
     /// Focuses the element first, keeping its selection; see `insert` for chunking and interrupts.
+    /// A web page's field is neither focused nor written here (`ComputerUseTextCheck.outcome`).
     static func insertText(
-        _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity,
+        _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, keysReach: Bool,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         let element = try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
+            try settle(ComputerUseTextCheck.outcome(nil, inWebArea: isWebTextEntry(element), keysReach: keysReach), app: app)
             focusKeepingSelection(element, app: app)
             return Retained(element)
         }
-        try await insert(text, into: textTarget(element.element), app: app, interrupt: interrupt)
+        try await insert(text, into: textTarget(element.element), app: app, keysReach: keysReach, interrupt: interrupt)
     }
 
     /// Types into the app's focused element: replaces its value or inserts at its caret.
     /// Refuses secure text fields; `Unsupported` when nothing has focus.
     static func typeIntoFocused(
-        _ text: String, replace: Bool, app: ComputerUseAppIdentity,
+        _ text: String, replace: Bool, app: ComputerUseAppIdentity, keysReach: Bool,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         let element = try await onQueue(interrupt: interrupt) { () -> Retained? in
             guard let element = focusedElement(of: app) else { throw Unsupported(error: .noValue) }
             try refuseSecure(element, app: app)
             guard replace else { return Retained(element) }
-            try setValueChecked(text, element, app: app)
+            try setValueChecked(text, element, app: app, keysReach: keysReach)
             return nil
         }
-        if let element { try await insert(text, into: textTarget(element.element), app: app, interrupt: interrupt) }
+        if let element {
+            let inWebArea = try await onQueue(interrupt: interrupt) { isWebTextEntry(element.element) }
+            try await insert(
+                text, into: textTarget(element.element, inWebArea: inWebArea), app: app, keysReach: keysReach,
+                interrupt: interrupt)
+        }
+    }
+
+    /// Whether the element takes typed text and sits in a web page.
+    private static func isWebTextEntry(_ element: AXUIElement) -> Bool {
+        ComputerUseSecureFocus.isTextEntry(
+            .init(role: string(of: element, kAXRoleAttribute), subrole: string(of: element, kAXSubroleAttribute)))
+            && isInWebArea(element)
+    }
+
+    /// Whether an `AXWebArea` is among the element's ancestors, itself included.
+    private static func isInWebArea(_ element: AXUIElement) -> Bool {
+        ancestor(of: element, levels: webAreaAncestorLevels) { string(of: $0, kAXRoleAttribute) == webAreaRole } != nil
+    }
+
+    /// Goes on for `.write` and `.landed`; `Unsupported` for `.typeAsKeys`, so the text is typed
+    /// as events; the off-screen refusal for `.refuse`.
+    private static func settle(_ outcome: ComputerUseTextCheck.Outcome, app: ComputerUseAppIdentity) throws {
+        switch outcome {
+        case .write, .landed: return
+        case .typeAsKeys: throw Unsupported(error: .attributeUnsupported)
+        case .refuse: throw ComputerUseSystemError.actionFailed(offScreenTypeRefusal(app))
+        }
+    }
+
+    static func offScreenTypeRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches it through "
+            + "accessibility, and the element doesn't take it that way (or another of its windows has focus). Use a ref "
+            + "to a text field, or ask the user to bring the window on screen."
     }
 
     /// An element carried from one block on the AX queue to the next; only messaged there.
@@ -1188,13 +1222,14 @@ extension ComputerUseAXActions {
     /// characters inserted so far. Checks the first chunk went in by reading the value back
     /// (`ComputerUseTextCheck`), or its length where the value can't be read, since some apps
     /// (Chromium) report success and insert nothing; that first failure is `Unsupported`, so events
-    /// may type the text instead.
+    /// may type the text instead, or the off-screen refusal where they don't reach the window
+    /// (`keysReach`). A web page's field (`TextTarget.inWebArea`) is never written.
     /// Any later failure is a tool error, so nothing already inserted gets typed twice.
     /// Each chunk goes at the caret the text so far left (from the selection read before the first
     /// one): the user or the app moving the caret in between stops the input rather than splitting
     /// the text across two places. Without a readable selection the chunks go wherever the caret is.
     static func insert(
-        _ text: String, into target: TextTarget, app: ComputerUseAppIdentity,
+        _ text: String, into target: TextTarget, app: ComputerUseAppIdentity, keysReach: Bool = true,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         let total = text.count
@@ -1219,6 +1254,7 @@ extension ComputerUseAXActions {
                 var selection: CFRange?
                 var valueBefore: String?
                 if typedSoFar == 0 {
+                    try settle(ComputerUseTextCheck.outcome(nil, inWebArea: target.inWebArea, keysReach: keysReach), app: app)
                     guard target.canSetSelectedText() else { throw Unsupported(error: .attributeUnsupported) }
                     countBefore = target.characterCount()
                     selection = target.selectedRange()
@@ -1246,20 +1282,16 @@ extension ComputerUseAXActions {
                         "\(app.name) stopped taking the text after \(typedSoFar) of \(total) characters (AXError \(result.rawValue)).")
                 }
                 if typedSoFar == 0, !chunk.isEmpty {
-                    let landed = awaitLanded {
+                    var landed = awaitLanded {
                         ComputerUseTextCheck.insert(
                             chunk, before: valueBefore, selection: selection.map { (location: $0.location, length: $0.length) },
                             after: valueBefore == nil ? nil : target.value())
                     }
-                    switch landed {
-                    case .landed: break
-                    case .unchanged: throw Unsupported(error: .attributeUnsupported)
-                    case .unknown:
-                        // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
-                        if selection?.length == 0, let countBefore, target.characterCount() == countBefore {
-                            throw Unsupported(error: .attributeUnsupported)
-                        }
+                    // Only with nothing selected does an unchanged length prove nothing went in, so events can't type it twice.
+                    if landed == .unknown, selection?.length == 0, let countBefore, target.characterCount() == countBefore {
+                        landed = .unchanged
                     }
+                    try settle(ComputerUseTextCheck.outcome(landed, inWebArea: false, keysReach: keysReach), app: app)
                 }
                 return startLocation
             }
@@ -1290,9 +1322,11 @@ extension ComputerUseAXActions {
         var setSelectedText: (String) -> AXError
         /// The whole value, empty included; nil when it can't be read.
         var value: () -> String? = { nil }
+        /// A text-entry element inside a web page, which AX doesn't write (`ComputerUseTextCheck.outcome`).
+        var inWebArea = false
     }
 
-    private static func textTarget(_ element: AXUIElement) -> TextTarget {
+    private static func textTarget(_ element: AXUIElement, inWebArea: Bool = false) -> TextTarget {
         TextTarget(
             canSetSelectedText: { isSettable(element, kAXSelectedTextAttribute) },
             characterCount: { number(of: element, kAXNumberOfCharactersAttribute) },
@@ -1303,7 +1337,7 @@ extension ComputerUseAXActions {
                 return AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value) == .success
             },
             setSelectedText: { AXUIElementSetAttributeValue(element, kAXSelectedTextAttribute as CFString, $0 as CFString) },
-            value: { textValue(of: element) })
+            value: { textValue(of: element) }, inWebArea: inWebArea)
     }
 
     /// The element's value as text, empty included; nil when it isn't a string or can't be read.
@@ -1316,14 +1350,18 @@ extension ComputerUseAXActions {
     }
 
     /// Sets the element's whole value and reads it back; `Unsupported` when it stayed as it was,
-    /// so events can type the text instead. Call on the AX queue.
-    private static func setValueChecked(_ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity) throws {
+    /// so events can type the text instead (`ComputerUseTextCheck.outcome`, which also keeps a web
+    /// page's field from being written at all). Call on the AX queue.
+    private static func setValueChecked(
+        _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool
+    ) throws {
+        try settle(ComputerUseTextCheck.outcome(nil, inWebArea: isWebTextEntry(element), keysReach: keysReach), app: app)
         let before = isLong(element) ? nil : textValue(of: element)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
         guard result == .success else { throw failure(result, app: app) }
         guard let before else { return }
         let landed = awaitLanded { ComputerUseTextCheck.replace(with: text, before: before, after: textValue(of: element)) }
-        if landed == .unchanged { throw Unsupported(error: .attributeUnsupported) }
+        try settle(ComputerUseTextCheck.outcome(landed, inWebArea: false, keysReach: keysReach), app: app)
     }
 
     private static func isLong(_ element: AXUIElement) -> Bool {
