@@ -114,16 +114,7 @@ public struct ACPV2MessageTranscript: Sendable {
         case .replace(let blocks): content = blocks
         case .append(let block): content.append(block)
         }
-        var metadata = old?.metadata ?? [:]
-        switch mutation.metadata {
-        case .unchanged: break
-        case .clear: metadata.removeAll()
-        case .patch(let fields):
-            for (key, value) in fields {
-                if value == .null { metadata.removeValue(forKey: key) }
-                else { metadata[key] = value }
-            }
-        }
+        let metadata = mutation.metadata.applying(to: old?.metadata ?? [:])
         let localRowID = key.kind == .user
             ? requestByMessage[key.messageID].flatMap { registrations[$0]?.localRowID } : nil
         let message = Message(key: key, content: content, metadata: metadata, localRowID: localRowID)

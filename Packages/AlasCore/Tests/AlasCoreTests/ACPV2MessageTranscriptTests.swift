@@ -21,7 +21,7 @@ struct ACPV2MessageTranscriptTests {
         #expect(try LSPJSONValue.decode(from: event.encodedData()) == raw)
     }
 
-    @Test(arguments: ["_future", "tool_call_update", "plan_update", "state_update", "notice"])
+    @Test(arguments: ["_future", "state_update", "notice"])
     func unhandledUpdatesStayLossless(variant: String) throws {
         let raw: LSPJSONValue = .object(["sessionId": .string("s"),
             "update": .object(["sessionUpdate": .string(variant), "future": .number("1234567890123456789012345678901234567890")])])
@@ -236,6 +236,106 @@ struct ACPV2MessageTranscriptTests {
         #expect(transcript.accept(requestID: 1, response: try accepted("m"), context: context) == .bound)
         _ = transcript.apply(try decode(#"{"sessionUpdate":"user_message","messageId":"m"}"#), context: context)
         #expect(transcript.messages.first?.localRowID == row)
+    }
+
+    @Test(arguments: [
+        #"{"sessionUpdate":"tool_call_update","toolCallId":"shared","rawInput":{"opaque":1e999}}"#,
+        #"{"sessionUpdate":"tool_call_content_chunk","toolCallId":"shared","content":{"type":"_future","value":1e999},"_meta":{"chunk":null}}"#,
+        #"{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"shared","entries":[{"content":"x","priority":"_future","status":"future"}],"_meta":{"plan":null}}}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":"shared","output":{"data":"YQ==","_meta":{"snapshot":null}},"exitStatus":{}}"#,
+        #"{"sessionUpdate":"terminal_output_chunk","terminalId":"shared","data":"Yg==","_meta":{"chunk":null}}"#,
+    ])
+    func activityEnvelopesKeepTypedAndRawValues(update: String) throws {
+        let event = try decode(update)
+        guard case .object(let fields) = try LSPJSONValue.decode(from: Data(update.utf8)) else {
+            Issue.record("Invalid fixture")
+            return
+        }
+        switch (fields["sessionUpdate"], event.payload) {
+        case (.string("tool_call_update"), .toolCall(let value)):
+            #expect(value.toolCallID == "shared")
+            #expect(value.rawInput == .value(.object(["opaque": .number("1e999")])))
+        case (.string("tool_call_content_chunk"), .toolContentChunk(let value)):
+            #expect(value.toolCallID == "shared")
+            #expect(value.content.rawValue == .object(["type": .string("_future"), "value": .number("1e999")]))
+        case (.string("plan_update"), .plan(let value)):
+            #expect(value.planID == "shared")
+            #expect(value.entries?.count == 1)
+        case (.string("terminal_update"), .terminal(let value)):
+            guard case .value(let output) = value.output else {
+                Issue.record("Snapshot was not decoded")
+                return
+            }
+            #expect(output.data == Data([0x61]))
+            #expect(output.metadata == ["snapshot": .null])
+        case (.string("terminal_output_chunk"), .terminalOutputChunk(let value)):
+            #expect(value.terminalID == "shared")
+            #expect(value.data == Data([0x62]))
+        default: Issue.record("Wrong typed activity payload")
+        }
+        #expect(event.message == nil)
+        #expect(try LSPJSONValue.decode(from: event.encodedData()) == event.rawValue)
+    }
+
+    @Test(arguments: [
+        #"{"sessionUpdate":"tool_call_update","toolCallId":null}"#,
+        #"{"sessionUpdate":"tool_call_update","toolCallId":"t","status":7}"#,
+        #"{"sessionUpdate":"tool_call_update","toolCallId":"t","content":{}}"#,
+        #"{"sessionUpdate":"tool_call_update","toolCallId":"t","locations":[{"path":"p","line":-1}]}"#,
+        #"{"sessionUpdate":"tool_call_update","toolCallId":"t","locations":[{"path":7}]}"#,
+        #"{"sessionUpdate":"tool_call_update","toolCallId":"t","_meta":[]}"#,
+        #"{"sessionUpdate":"tool_call_content_chunk","toolCallId":"t"}"#,
+        #"{"sessionUpdate":"tool_call_content_chunk","toolCallId":"t","content":{"type":"terminal"}}"#,
+        #"{"sessionUpdate":"tool_call_content_chunk","toolCallId":"t","content":{"type":"_future","_meta":[]}}"#,
+        #"{"sessionUpdate":"plan_update"}"#,
+        #"{"sessionUpdate":"plan_update","plan":{"type":"_future"}}"#,
+        #"{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p","entries":null}}"#,
+        #"{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p","entries":[{"content":"x","status":"pending"}]}}"#,
+        #"{"sessionUpdate":"plan_update","plan":{"type":"items","planId":"p","entries":[{"content":"x","priority":"high","status":false}]}}"#,
+        #"{"sessionUpdate":"plan_update","plan":{"type":"_future","planId":"p","_meta":[]}}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":false}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":"t","command":2}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":"t","cwd":[]}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":"t","output":{}}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":"t","output":{"data":"%%%"}}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":"t","output":{"data":"","_meta":[]}}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":"t","exitStatus":{"signal":true}}"#,
+        #"{"sessionUpdate":"terminal_update","terminalId":"t","exitStatus":{"_meta":[]}}"#,
+        #"{"sessionUpdate":"terminal_output_chunk","terminalId":"t"}"#,
+        #"{"sessionUpdate":"terminal_output_chunk","terminalId":"t","data":null}"#,
+        #"{"sessionUpdate":"terminal_output_chunk","terminalId":"t","data":"YR=="}"#,
+    ])
+    func malformedActivityFieldsAreRejected(update: String) {
+        #expect(throws: DecodingError.self) { try decode(update) }
+    }
+
+    @Test(arguments: [
+        ("0", UInt32?.some(0)), ("-0", .some(0)), ("1e2", .some(100)),
+        ("1.0", .some(1)), ("4294967295", .some(UInt32.max)),
+        ("-1", nil), ("1.5", nil), ("4294967296", nil), ("1e999", nil),
+        ("4294967295.00000000000000000000000000000000000001", nil),
+        ("1e-999999999999999999999999999999999999999", nil),
+    ])
+    func unsignedFieldsFollowNumericValueRatherThanTokenSpelling(token: String, expected: UInt32?) throws {
+        let json = #"{"sessionUpdate":"terminal_update","terminalId":"t","exitStatus":{"exitCode":\#(token)}}"#
+        if let expected {
+            let event = try decode(json)
+            guard case .terminal(let terminal) = event.payload, case .value(let exit) = terminal.exitStatus else {
+                Issue.record("Expected a typed exit report")
+                return
+            }
+            #expect(exit.exitCode == expected)
+        } else {
+            #expect(throws: DecodingError.self) { try decode(json) }
+        }
+    }
+
+    @Test(arguments: ["1-2", "00", "1.", "0e", "--0", " 1"])
+    func malformedRawNumberTokensAreRejectedBeforeInterpretation(token: String) {
+        #expect(throws: DecodingError.self) {
+            try envelope(["sessionUpdate": .string("terminal_update"), "terminalId": .string("t"),
+                "exitStatus": .object(["exitCode": .number(token)])])
+        }
     }
 
     private func accepted(_ messageID: String) throws -> ACPV2PromptAccepted {
