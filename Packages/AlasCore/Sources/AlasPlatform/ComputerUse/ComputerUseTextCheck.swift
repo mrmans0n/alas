@@ -41,6 +41,32 @@ public enum ComputerUseTextCheck {
         }
     }
 
+    /// What follows text that went in by AX, which skips the app's edit model: a document app
+    /// (TextEdit, any NSDocument one) doesn't mark the document edited, so it neither autosaves
+    /// the text nor keeps it on save.
+    public enum DocumentNudge: Equatable, Sendable {
+        /// Not in a document window, or a secure field: nothing.
+        case none
+        /// A space and a backspace as key events: a net-zero edit the document registers.
+        case keys
+        /// Keys don't reach the window (it is off screen): the result says the app may not see
+        /// the edit as unsaved.
+        case warn
+    }
+
+    /// After text went in by AX into an element of a window with a document (`inDocument`, an
+    /// `AXDocument` on the window). Never keys into a secure field.
+    public static func documentNudge(inDocument: Bool, secure: Bool, keysReach: Bool) -> DocumentNudge {
+        guard inDocument, !secure else { return .none }
+        return keysReach ? .keys : .warn
+    }
+
+    /// Said next to the result when a document's edit couldn't be marked (`DocumentNudge.warn`, or
+    /// keys that couldn't go or moved the text).
+    public static let documentNotMarkedWarning =
+        "The text went in through accessibility, which the app may not see as an unsaved edit: saving or closing "
+            + "the document may keep the old text. Check before saving, or type something in the field with the window on screen."
+
     /// An insert of `inserted` over `selection` (UTF-16 location and length, nil when unreadable).
     public static func insert(
         _ inserted: String, before: String?, selection: (location: Int, length: Int)?, after: String?

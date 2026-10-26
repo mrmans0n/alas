@@ -552,7 +552,9 @@ extension LiveComputerUseSystem {
            try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
             throw ComputerUseAXActions.hiddenRefusal
         }
-        if let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
+        if let delivered = try await viaAX(input, in: window, interrupt: interrupt) {
+            return await documentEdited(delivered, by: input, in: window, keys: .keyFirst, interrupt: interrupt)
+        }
         // From making the window key until it is handed back below, no other input may move key
         // status in this app: its events would land in whichever window the other one left key.
         return try await keyLocks.run(app.pid) {
@@ -734,7 +736,7 @@ extension LiveComputerUseSystem {
         switch ComputerUseInputGeometry.offScreenInput(
             windowOnScreen: false, targetIsFocusedWindow: focused, deliveredThroughAX: delivered != nil) {
         case .ax:
-            if let delivered { return delivered }
+            if let delivered { return await documentEdited(delivered, by: input, in: window, keys: .none, interrupt: interrupt) }
             fallthrough
         case .refuse, .events:
             if case .type = input { throw ComputerUseSystemError.actionFailed(ComputerUseAXActions.offScreenTypeRefusal(app)) }
@@ -809,7 +811,9 @@ extension LiveComputerUseSystem {
             idleSeconds: secondsSinceUserInput())
         if route == .background {
             // A key window validates the app's menus, so a chord's menu item is enabled now.
-            if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
+            if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) {
+                return await documentEdited(delivered, by: input, in: window, keys: .keyWindow, interrupt: interrupt)
+            }
             // Making the window key took a few round trips; the user may have come back since.
             if interrupt() == .userActive { throw ComputerUseSystemError.userActive }
             try await postEvents(input, in: window, paste: false, background: true, ignoring: ignoring, interrupt: interrupt)
@@ -820,13 +824,80 @@ extension LiveComputerUseSystem {
         if actsOnKeyWindow(input) {
             do {
                 try await ComputerUseAXActions.makeActiveWindow(window, raise: false, isCancelled: isCancelled)
-                if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
+                if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) {
+                    // The window isn't key through the records, so keys may not reach it.
+                    return await documentEdited(delivered, by: input, in: window, keys: .none, interrupt: interrupt)
+                }
             } catch ComputerUseSystemError.notActiveWindow {
                 // Activation makes it the active window.
             }
         }
         guard route == .activation else { throw ComputerUseSystemError.userActive }
         return try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
+    }
+
+    /// How the keys of a document's net-zero edit reach the window.
+    private enum EditKeys {
+        /// They don't: the window is off screen, or not confirmed key.
+        case none
+        /// The window is key, under the app's key lock.
+        case keyWindow
+        /// Made key first, under the app's key lock, as events are.
+        case keyFirst
+    }
+
+    /// After text went in by AX into a document window: a space and a backspace as key events, so
+    /// the app marks the document edited (`ComputerUseTextCheck.documentNudge`), or the warning
+    /// where they can't go, or moved the text. Never throws: the text is in either way.
+    private static func documentEdited(
+        _ delivered: ComputerUseDelivered, by input: ComputerUseInput, in window: ComputerUseWindow, keys: EditKeys,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async -> ComputerUseDelivered {
+        guard delivered.delivery == .ax, case .type(let text, let at, let replace) = input, !text.isEmpty else { return delivered }
+        if case .point = at { return delivered }
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        let app = window.app
+        guard let nudge = try? await ComputerUseAXActions.documentNudge(
+            after: at, app: app, keysReach: keys != .none, isCancelled: isCancelled), nudge != .none
+        else { return delivered }
+        var delivered = delivered
+        /// The edit, with the window key; true once the text reads as before it.
+        let edit: @Sendable () async -> Bool = {
+            guard nudge == .keys,
+                  let before = try? await ComputerUseAXActions.prepareKeyEdit(
+                      after: at, app: app, caretToEnd: replace, isCancelled: isCancelled),
+                  interrupt() == nil,
+                  (try? ComputerUseInputPoster.postKey(CGKeyCode(kVK_Space), flags: [], pid: app.pid)) != nil,
+                  (try? ComputerUseInputPoster.postKey(CGKeyCode(kVK_Delete), flags: [], pid: app.pid)) != nil
+            else { return false }
+            return (try? await ComputerUseAXActions.awaitFieldText(before, after: at, app: app, isCancelled: isCancelled)) == true
+        }
+        let marked: Bool
+        switch keys {
+        case .none: marked = false
+        case .keyWindow: marked = await edit()
+        case .keyFirst:
+            let result = try? await keyLocks.run(app.pid) { () -> (Bool, Bool) in
+                var keying = KeyAttempt()
+                do {
+                    try await makeKeyInBackground(window, &keying, interrupt: interrupt)
+                    let marked = keying.confirmed ? await edit() : false
+                    await keying.restoreUserKeyWindow(window)
+                    return (marked, keying.keyedInBackground)
+                } catch {
+                    await keying.restoreUserKeyWindow(window)
+                    if keying.keyedInBackground { defocusIfInBackground(window) }
+                    return (false, false)
+                }
+            }
+            marked = result?.0 ?? false
+            delivered.keyedInBackground = delivered.keyedInBackground || result?.1 == true
+        }
+        if !marked {
+            delivered.warning = [delivered.warning, ComputerUseTextCheck.documentNotMarkedWarning]
+                .compactMap { $0 }.joined(separator: " ")
+        }
+        return delivered
     }
 
     private static func actsOnKeyWindow(_ input: ComputerUseInput) -> Bool {

@@ -712,4 +712,18 @@ struct ComputerUseInputTests {
     ) {
         #expect(ComputerUseTextCheck.outcome(readBack, inWebArea: inWebArea, keysReach: keysReach) == outcome)
     }
+
+    /// Text written by AX into a document window is followed by a net-zero key edit, or a warning
+    /// where keys don't reach; never for a secure field, nor outside a document.
+    @Test(arguments: [
+        (true, false, true, ComputerUseTextCheck.DocumentNudge.keys),
+        (true, false, false, .warn),
+        (true, true, true, .none),
+        (true, true, false, .none),
+        (false, false, true, .none),
+        (false, false, false, .none),
+    ])
+    func aDocumentIsMarkedEditedAfterAnAXWrite(inDocument: Bool, secure: Bool, keysReach: Bool, nudge: ComputerUseTextCheck.DocumentNudge) {
+        #expect(ComputerUseTextCheck.documentNudge(inDocument: inDocument, secure: secure, keysReach: keysReach) == nudge)
+    }
 }
