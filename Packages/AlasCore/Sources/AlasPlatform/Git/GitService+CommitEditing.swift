@@ -2,7 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 
-public struct CommitEditResult: Equatable, Sendable {
+public struct CommitEditResult: Equatable, Codable, Sendable {
     public let currentSha: String
     public let shaMap: [String: String]
 
@@ -141,6 +141,13 @@ extension GitService {
         if case .dropHunk(let path, _) = action {
             let details = try await commitDetails(at: worktreePath, sha: targetSha)
             guard details.files.first(where: { $0.path == path })?.status == "M" else {
+                throw CommitEditError.unsupportedAction
+            }
+        }
+        // Dropping a rename, copy or type change would delete the file, not undo the change.
+        if case .dropFile(let path) = action {
+            let details = try await commitDetails(at: worktreePath, sha: targetSha)
+            guard let status = details.files.first(where: { $0.path == path })?.status, ["A", "M", "D"].contains(status) else {
                 throw CommitEditError.unsupportedAction
             }
         }

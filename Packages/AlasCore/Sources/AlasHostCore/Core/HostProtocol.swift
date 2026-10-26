@@ -161,6 +161,8 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case stashFiles(worktree: WorktreeRef, stash: HostStashRef)
     /// One file's diff in `stash`, as listed (`host.worktrees.stash.v1`).
     case stashDiff(worktree: WorktreeRef, stash: HostStashRef, path: String)
+    /// A commit as its editor shows it, named by its SHA (`host.worktrees.commitEdit.v1`).
+    case commitDetails(worktree: WorktreeRef, sha: String)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -182,6 +184,10 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     /// Apply or undo one of the repository's commits, named by its SHA; a
     /// conflict leaves the operation in place (`host.worktrees.operations.v1`).
     case cherryPick(sha: String), revert(sha: String)
+    /// Edit a commit above the fold of `comparisonMode`, nil for the host's,
+    /// replaying the commits above it, as its editor does
+    /// (`host.worktrees.commitEdit.v1`).
+    case editCommit(sha: String, edit: HostCommitEdit, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
 
     /// The capability beyond host.worktrees.git.v1 a change needs; nil for the original seven.
     public var capability: String? {
@@ -191,6 +197,7 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
         case .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .cherryPick,
              .revert:
             HostProtocolCapability.worktreesOperationsV1
+        case .editCommit: HostProtocolCapability.worktreesCommitEditV1
         }
     }
 
@@ -201,6 +208,14 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
         default: false
         }
     }
+}
+
+/// One edit of a commit, as a paired Mac asks it.
+public enum HostCommitEdit: Codable, Equatable, Sendable {
+    case message(subject: String, body: String)
+    case dropFile(path: String)
+    /// The `index`th hunk of the commit's diff of `path`, which must have `header`.
+    case dropHunk(path: String, index: Int, header: String)
 }
 
 /// The kind of a worktree's in-progress git operation, as a client names it.
@@ -496,6 +511,10 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case stashFiles(files: [GitStashFile])
     /// The answer to `stashDiff`.
     case diff(diff: HostDiff)
+    /// The answer to `commitDetails`, its files capped as a commit's files read is.
+    case commitDetails(details: CommitDetails)
+    /// The answer to an `editCommit` change.
+    case commitEdited(result: CommitEditResult)
     case failure(error: HostError)
 }
 

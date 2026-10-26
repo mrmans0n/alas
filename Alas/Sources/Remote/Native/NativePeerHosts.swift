@@ -303,6 +303,43 @@ final class NativePeerHosts {
         ) { if case .diff(let diff) = $0 { diff } else { nil } }
     }
 
+    /// Whether `serverId` shows its worktrees' commits and edits them as the commit editor does.
+    func servesCommitEdit(serverId: String) -> Bool {
+        servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesCommitEditV1)
+    }
+
+    /// Commit `sha` as its editor shows it, its files capped.
+    func commitDetails(
+        _ sha: String, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<CommitDetails, NativePeerReviewGitClientError> {
+        await answer(
+            .commitDetails(worktree: Self.ref(worktree), sha: sha),
+            served: servesCommitEdit(serverId: serverId), serverId: serverId,
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            showsInvalidRequest: true, notFound: Self.commitGoneMessage
+        ) { if case .commitDetails(let details) = $0 { details } else { nil } }
+    }
+
+    /// The commit editor's copy for a commit the host no longer has.
+    private static let commitGoneMessage = "This commit is no longer on the host. Refresh and try again."
+
+    /// Rewrites commit `sha` above the fold of `comparisonMode`, as the commit editor does.
+    func editCommit(
+        _ sha: String, _ edit: HostCommitEdit, comparisonMode: AppConfig.Changes.ChangesComparisonMode,
+        in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<CommitEditResult, NativePeerReviewGitClientError> {
+        let request = HostRequest.mutateWorktree(
+            worktree: Self.ref(worktree), branch: worktree.snapshot.worktree.branch,
+            change: .editCommit(sha: sha, edit: edit, comparisonMode: comparisonMode)
+        )
+        // The commits above it are replayed, each a git call on the host.
+        return await answer(
+            request, served: servesCommitEdit(serverId: serverId), serverId: serverId, timeout: .seconds(120),
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            notFound: Self.commitGoneMessage
+        ) { if case .commitEdited(let result) = $0 { result } else { nil } }
+    }
+
     /// Whether `serverId` lists, reads and changes its worktrees' draft reviews.
     func servesReviews(serverId: String) -> Bool {
         channels[serverId]?.isSubscribed == true && supports(serverId, HostProtocolCapability.reviewsV1)
@@ -401,11 +438,15 @@ final class NativePeerHosts {
     private func answer<Value>(
         _ request: HostRequest, served: Bool, serverId: String, timeout: Duration? = nil,
         unavailable: NativePeerReviewGitClientError = .unavailable, showsInvalidRequest: Bool = false,
-        reply: (HostResponse) -> Value?
+        notFound: String? = nil, reply: (HostResponse) -> Value?
     ) async -> Result<Value, NativePeerReviewGitClientError> {
         guard served, let channel = channels[serverId] else { return .failure(unavailable) }
         let response = await channel.request(request, timeout: timeout)
         if case .failure(let error) = response {
+            // Only a missing commit: a missing worktree keeps its own message.
+            if let notFound, case .notFound(let what) = error, what.hasPrefix("commit ") {
+                return .failure(NativePeerReviewGitClientError(message: notFound))
+            }
             if showsInvalidRequest, case .invalidRequest(let reason) = error {
                 return .failure(NativePeerReviewGitClientError(message: reason))
             }

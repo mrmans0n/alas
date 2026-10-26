@@ -1038,6 +1038,124 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["diff", "--name-only", "--diff-filter=U"], cwd: repo).stdout == "")
     }
 
+    @Test func aMacRewordsAHostCommit() async throws {
+        let fixture = try await RepoFixture(aheadOfOrigin: true)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let shas = fixture.aheadSHAs
+
+        guard case .commitDetails(let details) = try await fixture.request(.commitDetails(worktree: ref, sha: shas[1])) else {
+            Issue.record("expected the commit's details")
+            return
+        }
+        #expect(details.info.rawSubject == "entry 2")
+        guard case .commitEdited(let result) = try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .editCommit(sha: shas[1], edit: .message(subject: "Reworded", body: ""), comparisonMode: nil)
+        )) else {
+            Issue.record("expected the commit edited")
+            return
+        }
+        #expect(result.currentSha != shas[1])
+        #expect(try await Process.git(["log", "--format=%s", "origin/main..HEAD"], cwd: repo).stdout == "entry 3\nReworded\nentry 1\n")
+    }
+
+    /// The host drops the file, or the hunk at the index the Mac saw, and
+    /// replays the commit above it.
+    @Test(arguments: [true, false])
+    func aMacDropsAFileOrAHunkFromAHostCommit(_ dropsHunk: Bool) async throws {
+        let fixture = try await RepoFixture(aheadOfOrigin: true)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let notes = repo.appendingPathComponent("notes.txt")
+        let lines = (1...20).map { "line \($0)" }
+        for (contents, subject) in [
+            (lines, "Add notes"), (["first"] + lines.dropFirst().dropLast() + ["last"], "Edit notes"),
+        ] {
+            try (contents.joined(separator: "\n") + "\n").write(to: notes, atomically: true, encoding: .utf8)
+            // Dropping notes.txt must leave the edit something to commit.
+            try subject.write(to: repo.appendingPathComponent("other.txt"), atomically: true, encoding: .utf8)
+            #expect(try await Process.git(["add", "notes.txt", "other.txt"], cwd: repo).exitCode == 0)
+            #expect(try await Process.git(["commit", "-q", "-m", subject], cwd: repo).exitCode == 0)
+        }
+        let target = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(try await Process.git(["commit", "-q", "--allow-empty", "-m", "Above"], cwd: repo).exitCode == 0)
+        let hunks = try await GitService().diff(worktreePath: repo, sha: target, file: "notes.txt").hunks
+        try #require(hunks.count == 2)
+        let edit: HostCommitEdit = dropsHunk ? .dropHunk(path: "notes.txt", index: 1, header: hunks[1].header) : .dropFile(path: "notes.txt")
+
+        guard case .commitEdited = try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .editCommit(sha: target, edit: edit, comparisonMode: nil)
+        )) else {
+            Issue.record("expected the commit edited")
+            return
+        }
+        let kept = dropsHunk ? ["first"] + lines.dropFirst() : lines
+        #expect(try String(contentsOf: notes, encoding: .utf8) == kept.joined(separator: "\n") + "\n")
+        #expect(try await Process.git(["log", "--format=%s", "-2"], cwd: repo).stdout == "Above\nEdit notes\n")
+    }
+
+    enum StaleEdit: CaseIterable { case notASHA, belowTheFold, otherHunk, unseenHunk, outsidePath, dirtyTree, renamedFile }
+
+    /// The host edits only a commit above its own fold, named by SHA, and
+    /// drops only a hunk its own parse of that commit still has and the Mac was sent whole.
+    @Test(arguments: StaleEdit.allCases)
+    func commitEditsTakeOnlyWhatTheMacSaw(_ stale: StaleEdit) async throws {
+        let fixture = try await RepoFixture(aheadOfOrigin: true)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let script = ".alas/scripts/hello.sh"
+        if stale == .otherHunk {
+            try "#!/bin/sh\necho hello from run\necho more\n".write(to: repo.appendingPathComponent(script), atomically: true, encoding: .utf8)
+            #expect(try await Process.git(["commit", "-q", "-am", "entry 4"], cwd: repo).exitCode == 0)
+        }
+        // A first hunk over the diff cap: the Mac never saw the hunk after it.
+        var unseenHeader = ""
+        if stale == .unseenHunk {
+            let cap = RemoteWorktreeFileAccess.maxDiffLines
+            let lines = (1...cap + 20).map { "line \($0)" }
+            for (index, contents) in [lines, lines.prefix(cap).map { $0 + " edited" } + lines.dropFirst(cap).dropLast() + ["last"]].enumerated() {
+                try (contents.joined(separator: "\n") + "\n").write(to: repo.appendingPathComponent("big.txt"), atomically: true, encoding: .utf8)
+                #expect(try await Process.git(["add", "big.txt"], cwd: repo).exitCode == 0)
+                #expect(try await Process.git(["commit", "-q", "-m", "entry \(index + 4)"], cwd: repo).exitCode == 0)
+            }
+            let hunks = try await GitService().diff(worktreePath: repo, sha: "HEAD", file: "big.txt").hunks
+            try #require(hunks.count == 2)
+            unseenHeader = hunks[1].header
+        }
+        if stale == .renamedFile {
+            #expect(try await Process.git(["mv", script, "renamed.sh"], cwd: repo).exitCode == 0)
+            #expect(try await Process.git(["commit", "-q", "-m", "entry 4"], cwd: repo).exitCode == 0)
+        }
+        if stale == .dirtyTree {
+            try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        }
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = try await Process.git(["rev-parse", "origin/main"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shas = fixture.aheadSHAs
+        let notAboveFold = try #require(CommitEditError.targetNotAboveFold.errorDescription)
+        let dirty = try #require(CommitEditError.dirtyWorktree.errorDescription)
+        let unsupported = try #require(CommitEditError.unsupportedAction.errorDescription)
+        let (sha, edit, expected): (String, HostCommitEdit, HostError) = switch stale {
+        case .notASHA: ("HEAD~1", .message(subject: "x", body: ""), .invalidRequest(reason: "A commit is named by its SHA."))
+        case .belowTheFold: (base, .message(subject: "x", body: ""), .failed(message: notAboveFold))
+        case .otherHunk:
+            (head, .dropHunk(path: script, index: 0, header: "@@ -9 +9 @@"),
+             .failed(message: "This commit changed since it was shown. Refresh and try again."))
+        case .unseenHunk:
+            (head, .dropHunk(path: "big.txt", index: 1, header: unseenHeader),
+             .failed(message: "This commit changed since it was shown. Refresh and try again."))
+        case .outsidePath: (shas[1], .dropFile(path: "../x"), .invalidRequest(reason: "The path ../x is outside the worktree."))
+        case .dirtyTree: (shas[1], .message(subject: "Reworded", body: ""), .failed(message: dirty))
+        // As locally, a rename is not dropped: it would delete the file.
+        case .renamedFile: (head, .dropFile(path: "renamed.sh"), .failed(message: unsupported))
+        }
+
+        #expect(try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .editCommit(sha: sha, edit: edit, comparisonMode: nil)
+        )) == .failure(error: expected))
+        #expect(try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines) == head)
+    }
+
     /// Paired Macs of other versions decode this, so its shape must not drift.
     @Test func repoHookConsentKeepsItsWireShape() throws {
         let encoder = JSONEncoder()
@@ -1723,12 +1841,19 @@ struct HostProtocolServerTests {
         let connection: HostProtocolConnection
         let client = Client()
         let projectID: String
+        /// With `aheadOfOrigin`, `main`'s three commits `origin/main` lacks, bottom-up.
+        let aheadSHAs: [String]
 
-        init(environment: (any AlasHostEnvironment)? = nil) async throws {
+        init(environment: (any AlasHostEnvironment)? = nil, aheadOfOrigin: Bool = false) async throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remove-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let repo = root.appendingPathComponent("repo")
-            try await GitTemplate.repository(at: repo)
+            if aheadOfOrigin {
+                aheadSHAs = try await GitTemplate.repositoryAheadOfOrigin(at: repo)
+            } else {
+                try await GitTemplate.repository(at: repo)
+                aheadSHAs = []
+            }
             projectsFile = root.appendingPathComponent("projects.json")
             let agent = ACPMockClient()
             agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }

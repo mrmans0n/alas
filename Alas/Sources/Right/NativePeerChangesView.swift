@@ -297,6 +297,7 @@ struct NativePeerChangesView: View {
                 Button("Edit Commit…") { onEditCommit(commit) }
             }
             if let onCherryPick = git.onCherryPick {
+                if git.onEditCommit != nil { Divider() }
                 Button("Cherry-pick…") { onCherryPick(commit) }
             }
             if let onRevert = git.onRevert {

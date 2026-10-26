@@ -415,6 +415,30 @@ struct RootView: View {
             // A new review starts from fresh state, so a reply to the
             // previous one lands nowhere.
             .id("\(review.serverId)/\(review.worktree.snapshot.worktree.id)/\(review.sessionID)")
+        } else if let editor = client.openedCommitEditor, let hosts = client.hosts {
+            let worktree = editor.worktree.snapshot.worktree
+            CommitEditorTabView(
+                worktreePath: worktree.path,
+                worktreeId: worktree.id,
+                // The host computes the comparison ref, so `baseRef` goes unused.
+                tabState: CommitEditorTabState(
+                    worktreeId: worktree.id, baseRef: "", originalSha: editor.sha, currentSha: editor.sha,
+                    title: String(editor.sha.prefix(7))
+                ),
+                executionTarget: .local,
+                appState: state,
+                source: .peer(editor, hosts: hosts) { [client] result in
+                    // Closed or moved to another commit while the edit ran.
+                    guard client.openedCommitEditor == editor else { return }
+                    var edited = editor
+                    edited.sha = result.currentSha
+                    client.openCommitEditor(edited)
+                    client.reloadWorkspace()
+                },
+                onClose: { client.closeCommitEditor() }
+            )
+            // An edit moves it to the rewritten commit: a fresh editor reads it.
+            .id("\(editor.serverId)/\(worktree.id)/\(editor.sha)")
         } else if client.canReadWorkspace, let document = client.workspace.document {
             // A session's document, or one of a selected idle worktree read
             // over its host's channel.
