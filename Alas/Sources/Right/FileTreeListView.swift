@@ -23,6 +23,8 @@ struct FileTreeContext {
     let onRemoveBookmark: (String) -> Void
     /// Peer worktrees: offer only open and copy actions, never this Mac's files.
     var readOnly: Bool = false
+    /// With `readOnly`: directories also offer New File and New Folder, made on the host.
+    var createsOnPeer: Bool = false
 }
 
 /// Renders a file tree as indented rows. Used twice by `FilesTabView`: once for
@@ -266,7 +268,7 @@ struct FileTreeListView: View {
     @ViewBuilder private func contextMenu(for node: FileTreeNode, expansionPath: String? = nil) -> some View {
         let expansionPath = expansionPath ?? node.path
         let configuration: FileContextMenuConfiguration = context.readOnly
-            ? .readOnlyFile(kind: node.kind)
+            ? .readOnlyFile(kind: node.kind, createsItems: context.createsOnPeer)
             : .filesTab(
                 target: FileContextMenuTarget.resolve(
                     kind: node.kind,

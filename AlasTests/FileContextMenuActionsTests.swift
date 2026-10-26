@@ -110,13 +110,16 @@ struct FileContextMenuActionsTests {
         #expect(AppState.childPath(name: "App.swift", directoryPath: "Sources") == "Sources/App.swift")
     }
 
-    @Test(arguments: [FileTreeNode.Kind.file, .dir])
-    func readOnlyTargetsOfferNoLocalOrWriteActions(kind: FileTreeNode.Kind) {
-        let configuration = FileContextMenuConfiguration.readOnlyFile(kind: kind)
+    @Test(arguments: [FileTreeNode.Kind.file, .dir], [false, true])
+    func readOnlyTargetsOfferNoLocalOrWriteActions(kind: FileTreeNode.Kind, createsItems: Bool) {
+        let configuration = FileContextMenuConfiguration.readOnlyFile(kind: kind, createsItems: createsItems)
         #expect(configuration.target.localURL == nil)
-        let expected: [FileContextMenuAction] = kind == .file
-            ? [.openInAlas, .copyRelativePath, .copyFullPath]
+        let expected: [FileContextMenuAction] = switch kind {
+        case .file: [.openInAlas, .copyRelativePath, .copyFullPath]
+        case .dir: createsItems
+            ? [.newFile, .newFolder, .copyRelativePath, .copyFullPath]
             : [.copyRelativePath, .copyFullPath]
+        }
         #expect(configuration.actions == expected)
     }
 }

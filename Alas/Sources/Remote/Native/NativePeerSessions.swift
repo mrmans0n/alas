@@ -439,6 +439,18 @@ final class NativePeerSessions {
         }
     }
 
+    /// Dirty host buffers of `worktreeID` on `serverId`, by path, sorted.
+    func unsavedHostFilePaths(serverId: String, worktreeID: String) -> [String] {
+        hostFileBuffers.filter { file, buffer in
+            buffer.dirty && file.serverId == serverId && file.worktree.snapshot.worktree.id == worktreeID
+        }.map(\.key.path).sorted()
+    }
+
+    /// "Save or discard unsaved edits to <paths> before restoring.", or nil when `paths` is empty.
+    static func restoreRefusal(unsavedPaths paths: [String]) -> String? {
+        paths.isEmpty ? nil : "Save or discard unsaved edits to \(paths.joined(separator: ", ")) before restoring."
+    }
+
     func saveOpenedHostFile() {
         guard let file = openedHostFile, let buffer = hostFileBuffers[file] else { return }
         Task { try? await buffer.saveRecordingErrorAwaitingRemote() }

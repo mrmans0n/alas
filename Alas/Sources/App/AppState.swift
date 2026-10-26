@@ -8711,7 +8711,7 @@ final class AppState {
         return name
     }
 
-    private func promptForChildName(title: String, defaultValue: String) -> String? {
+    func promptForChildName(title: String, defaultValue: String) -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = "Enter a name."

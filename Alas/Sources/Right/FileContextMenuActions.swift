@@ -55,10 +55,12 @@ struct FileContextMenuConfiguration: Equatable {
 
     /// A peer's worktree lives on another Mac: nothing on this disk to open
     /// or reveal (even when the same path happens to exist here), and no
-    /// write actions to offer.
-    static func readOnlyFile(kind: FileTreeNode.Kind) -> Self {
+    /// write actions to offer. With `createsItems`, a directory also offers
+    /// New File and New Folder, still with no local actions.
+    static func readOnlyFile(kind: FileTreeNode.Kind, createsItems: Bool = false) -> Self {
         var actions: [FileContextMenuAction] = []
         if kind == .file { actions.append(.openInAlas) }
+        if kind == .dir, createsItems { actions += [.newFile, .newFolder] }
         actions += [.copyRelativePath, .copyFullPath]
         return Self(target: FileContextMenuTarget(kind: kind, localURL: nil), actions: actions)
     }
