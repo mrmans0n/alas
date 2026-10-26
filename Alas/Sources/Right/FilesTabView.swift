@@ -37,7 +37,7 @@ struct FilesTabView: View {
     var onCommitBookmarksPaneHeight: () -> Void = {}
     var bookmarksCollapsed: Bool = false
     var onToggleBookmarksCollapsed: () -> Void = {}
-    /// Peer worktrees: read-only menus and no root menu (it only creates).
+    /// Peer worktrees: read-only menus, and no root menu unless `createsOnPeer`.
     var readOnly: Bool = false
     /// With `readOnly`: read-only menus plus creation; the root menu offers only New File and New Folder.
     var createsOnPeer: Bool = false

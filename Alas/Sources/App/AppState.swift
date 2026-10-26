@@ -863,10 +863,6 @@ final class AppState {
         }
     }
 
-    /// Starts or stops the remote server to match `config.remote`. Idempotent;
-    /// call at launch and after toggling the config. A bind failure is captured
-    /// in `lastRemoteError` rather than thrown — the app must not crash because
-    /// a port is busy.
     /// The Remote access toggle. Turning it off with unsaved host files asks first; Cancel leaves it on.
     func setRemoteEnabled(_ enabled: Bool) {
         guard !enabled, nativePeerSessions?.unsavedHostFiles.isEmpty == false else {
@@ -886,6 +882,10 @@ final class AppState {
         syncRemoteServer()
     }
 
+    /// Starts or stops the remote server to match `config.remote`. Idempotent;
+    /// call at launch and after toggling the config. A bind failure is captured
+    /// in `lastRemoteError` rather than thrown — the app must not crash because
+    /// a port is busy.
     func syncRemoteServer() {
         defer {
             syncPairingApprovalState()
