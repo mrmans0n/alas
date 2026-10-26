@@ -1219,7 +1219,14 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let e = d
             .onReceive(NotificationCenter.default.publisher(for: .alasNewTerminalTab)) { _ in
-                if let checkout = state.selectedWorkspaceCheckout {
+                // A peer worktree covers the hidden local selection: open
+                // the shell on its host, as the peer sidebar's New Terminal does.
+                if let client = state.nativePeerSessions, client.coversCenterPane {
+                    if let serverId = client.selectedWorktree?.serverId,
+                       let worktreeId = client.selectedWorktreeGroup?.peerWorktreeId {
+                        client.consoles?.openTerminal(serverId: serverId, worktreeId: worktreeId)
+                    }
+                } else if let checkout = state.selectedWorkspaceCheckout {
                     Task { @MainActor in
                         _ = try? await state.openWorkspaceCheckoutTerminalTab(checkout)
                     }
