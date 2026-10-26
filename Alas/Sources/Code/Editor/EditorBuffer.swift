@@ -192,30 +192,53 @@ extension EditorRemoteBackend {
                 defer { files.release(path) } // the caller starts watching in the same turn, keeping the follow
                 _ = await following.value
                 let (result, version) = try await files.current(path)
-                if let version { files.baselines[path] = version }
+                if let version {
+                    files.baselines[path] = version
+                    files.conflicted[path] = nil
+                }
                 return result
             },
             probe: { path in
                 let (result, version) = try await files.current(path)
-                if case .missing = result { return .deleted }
-                guard let version, version.contentHash == files.baselines[path]?.contentHash else { return .changed }
+                if case .missing = result {
+                    files.conflicted[path] = .some(nil)
+                    return .deleted
+                }
+                guard let version, version.contentHash == files.baselines[path]?.contentHash else {
+                    files.conflicted[path] = version
+                    return .changed
+                }
                 files.baselines[path] = version
                 return .unchanged
             },
             currentMtime: { path in try await files.current(path).version?.modified },
             verifyContained: { _ in }, // the host checks the path on every write
             write: { path, content, expectedMtime, _ in
-                // Without a baseline (Keep mine, Save anyway) the save lands on the current version.
-                let expected = expectedMtime == nil ? try await files.current(path).version : files.baselines[path]
+                // Without a baseline (Keep mine, Save anyway) the save lands on the version the conflict
+                // showed, so a later change is refused rather than overwritten unseen.
+                let expected: WorktreeFileVersion?
+                if expectedMtime != nil {
+                    expected = files.baselines[path]
+                } else if let shown = files.conflicted[path] {
+                    expected = shown
+                } else {
+                    expected = try await files.current(path).version
+                }
                 files.writing[path, default: 0] += 1
                 let version: WorktreeFileVersion
                 do {
                     version = try await write(path, content, expected)
                 } catch {
                     files.wrote(path, version: nil)
+                    if case RemoteFileAccessError.saveConflict(let kind) = error {
+                        // The banner this raises shows the file as it is now.
+                        let shown: WorktreeFileVersion? = kind == .deleted ? nil : try? await files.current(path).version
+                        files.conflicted[path] = .some(shown)
+                    }
                     throw error
                 }
                 files.baselines[path] = version
+                files.conflicted[path] = nil
                 files.wrote(path, version: version)
                 return version.modified
             },
@@ -239,6 +262,8 @@ extension EditorRemoteBackend {
         private let follow: @MainActor (String, @escaping @MainActor (WorktreeFileVersion?) -> Void) async -> @MainActor () -> Void
         /// The version each file was last read or written at.
         var baselines: [String: WorktreeFileVersion] = [:]
+        /// The version each file's last conflict showed (nil: gone); Keep mine saves over exactly that.
+        var conflicted: [String: WorktreeFileVersion?] = [:]
         /// Each followed file's follow, resolving to its stop once the host follows it.
         private var follows: [String: Task<@MainActor () -> Void, Never>] = [:]
         /// The reads and watches holding each follow.

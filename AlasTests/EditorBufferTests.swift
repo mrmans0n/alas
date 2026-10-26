@@ -160,6 +160,14 @@ struct EditorBufferTests {
 
         buffer.resolveConflictKeepingMine()
         try await eventually("Keep mine's probe") { buffer.originalMtime == theirs.modified }
+        // Keep mine kept the version the conflict showed: a change not heard of yet is refused, not overwritten.
+        host.set("unheard\n")
+        let unheard = host.version
+        await #expect(throws: (any Error).self) { try await buffer.saveRecordingErrorAwaitingRemote() }
+        #expect(buffer.conflict == .changedOnDisk)
+        #expect(host.text == "unheard\n")
+        buffer.resolveConflictKeepingMine()
+        try await eventually("Keep mine's probe") { buffer.originalMtime == unheard.modified }
         // Another outside change takes back Keep mine: the save must not overwrite it unseen.
         host.set("theirs 2\n")
         let theirs2 = host.version
