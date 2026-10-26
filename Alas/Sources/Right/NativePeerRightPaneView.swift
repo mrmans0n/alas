@@ -708,10 +708,8 @@ struct NativePeerRightPaneView: View {
         .task(id: checkpointsKey) { await readCheckpoints() }
         // "Restore files to before this request" in the peer transcript.
         .onChange(of: client.pendingCheckpointRestore) { _, requested in
-            guard requested != nil, let id = client.takeCheckpointRestore(), let gitTarget,
-                  client.hosts?.servesCheckpoints(serverId: gitTarget.serverId) == true
-            else { return }
-            openCheckpointRestore(id, on: gitTarget)
+            guard requested != nil, let id = client.takeCheckpointRestore() else { return }
+            openTranscriptCheckpointRestore(id)
         }
         .sheet(isPresented: $creatingCheckpoint) {
             if let gitTarget {
@@ -890,6 +888,20 @@ struct NativePeerRightPaneView: View {
         }
     }
 
+    /// The transcript's restore: shows Changes, where the sheet's context and
+    /// any refusal are visible, then opens the restore as the card does.
+    private func openTranscriptCheckpointRestore(_ id: CheckpointID) {
+        guard let gitTarget, client.hosts?.servesCheckpoints(serverId: gitTarget.serverId) == true else { return }
+        let tabs = self.tabs
+        // Not `resolve`: it collapses the pane when Changes is already shown.
+        handle(collapsed ? .expand(.changes) : .select(.changes), tabs: tabs)
+        guard !checkpointInFlight else {
+            gitError = "A checkpoint action is already running."
+            return
+        }
+        openCheckpointRestore(id, on: gitTarget)
+    }
+
     /// Reads what restoring checkpoint `id` would change and shows it in the restore sheet.
     private func openCheckpointRestore(_ id: CheckpointID, on target: (serverId: String, worktree: PeerHostWorktree)) {
         gitError = nil
@@ -1027,12 +1039,7 @@ struct NativePeerRightPaneView: View {
     }
 
     /// The selected worktree on a host that serves its git actions.
-    private var gitTarget: (serverId: String, worktree: PeerHostWorktree)? {
-        guard !isFolder, let selection = client.selectedWorktree, let host = client.selectedWorktreeGroup?.host,
-              !host.snapshot.isArchived, client.hosts?.servesGit(serverId: selection.serverId) == true
-        else { return nil }
-        return (selection.serverId, host)
-    }
+    private var gitTarget: (serverId: String, worktree: PeerHostWorktree)? { client.hostGitTarget }
 
     private var gitTargetKey: String? {
         gitTarget.map { "\($0.serverId)/\($0.worktree.snapshot.worktree.id)" }

@@ -366,6 +366,15 @@ final class NativePeerSessions {
         (selectedRow?.worktree ?? selectedWorktreeGroup?.worktree)?.path
     }
 
+    /// The selected worktree on a host that serves its git actions. A folder
+    /// project or an archived worktree has none.
+    var hostGitTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard let selectedWorktree, let group = selectedWorktreeGroup, !group.isFolder, let host = group.host,
+              !host.snapshot.isArchived, hosts?.servesGit(serverId: selectedWorktree.serverId) == true
+        else { return nil }
+        return (selectedWorktree.serverId, host)
+    }
+
     /// The selected tab-less worktree, read over its host's channel.
     private var hostReadTarget: (serverId: String, worktree: PeerHostWorktree)? {
         guard selectedTab == nil, let selectedWorktree, let host = selectedWorktreeGroup?.host,

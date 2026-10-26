@@ -68,9 +68,10 @@ struct NativePeerSessionView: View {
         )
     }
 
+    /// Matches the right pane, which opens the restore for this target only.
     private var servesCheckpoints: Bool {
-        guard let serverId = client.selectedPeer?.serverId else { return false }
-        return client.hosts?.servesCheckpoints(serverId: serverId) == true
+        guard let target = client.hostGitTarget else { return false }
+        return client.hosts?.servesCheckpoints(serverId: target.serverId) == true
     }
 
     private func leadingRows(_ transcript: NativePeerTranscript) -> [NativePeerTranscriptExtraRow] {

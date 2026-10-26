@@ -517,7 +517,7 @@ private struct NativePeerRowView: View {
                 typography: typography
             )
             .frame(maxWidth: .infinity, alignment: .leading)
-            .contextMenu { messageMenu(text) }
+            .contextMenu { messageMenu(text, checkpointID: nil) }
         case .thought(let text):
             ACPThoughtView(buffer: rowCache.thoughtBuffer(for: stableId, seed: text))
         case .toolCall(let call):
@@ -533,7 +533,7 @@ private struct NativePeerRowView: View {
         }
     }
     @ViewBuilder
-    private func messageMenu(_ text: String, checkpointID: CheckpointID? = nil) -> some View {
+    private func messageMenu(_ text: String, checkpointID: CheckpointID?) -> some View {
         // Ordered as ACPMessageActionsMenu.make orders the local row's menu.
         if let checkpointID, let onRestoreCheckpoint {
             Button("Restore files to before this request") { onRestoreCheckpoint(checkpointID) }
