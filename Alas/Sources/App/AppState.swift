@@ -1101,7 +1101,13 @@ final class AppState {
     let reviewPalette = ReviewTargetPaletteModel()
     let runScriptPalette = RunScriptPaletteModel()
 
+    /// Whether a peer worktree or tab covers the center pane. The local
+    /// selection stays set underneath, so the file search, agent launcher,
+    /// review, and run script palettes — which all act on it — stay closed.
+    var peerCoversCenterPane: Bool { nativePeerSessions?.coversCenterPane == true }
+
     func openSearchOverlay() {
+        guard !peerCoversCenterPane else { return }
         reviewPalette.close()
         isReviewPaletteOpen = false
         repoSelector.close()
@@ -1137,6 +1143,7 @@ final class AppState {
     }
 
     func openAgentLauncherOverlay(mode: AppConfig.LauncherMode? = nil, locked: Bool = false) {
+        guard !peerCoversCenterPane else { return }
         reviewPalette.close()
         isReviewPaletteOpen = false
         search.close()
@@ -1153,7 +1160,7 @@ final class AppState {
     }
 
     func openRunScriptPaletteOverlay(mode: RunScriptPaletteModel.Mode = .run) {
-        guard !isRunScriptPaletteOpen else { return }
+        guard !isRunScriptPaletteOpen, !peerCoversCenterPane else { return }
         reviewPalette.close()
         isReviewPaletteOpen = false
         search.close()
