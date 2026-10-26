@@ -890,6 +890,16 @@ struct ReviewSessionTabViewTests {
         )
     }
 
+    @Test(arguments: [
+        (ProviderReviewDecision.approve, [ProviderReviewDecision.comment], "", "Approve is not supported by this provider."),
+        (.requestChanges, [.comment, .requestChanges], " \n", "Request changes requires a review summary."),
+        (.approve, [.approve], "", nil),
+        (.requestChanges, [.requestChanges], "Fix it", nil),
+    ] as [(ProviderReviewDecision, [ProviderReviewDecision], String, String?)])
+    func publishRefusal(decision: ProviderReviewDecision, allowed: [ProviderReviewDecision], body: String, refusal: String?) {
+        #expect(ReviewSessionTabView.publishRefusal(decision: decision, allowed: allowed, summaryBody: body) == refusal)
+    }
+
     private static func parsedDiff() -> ParsedDiff {
         DiffParser.parse("""
         diff --git a/Sources/App.swift b/Sources/App.swift

@@ -249,11 +249,12 @@ struct NativePeerWorkspaceTests {
         #expect(!workspace.fileTreeTruncated)
     }
 
-    enum Kind: Sendable, CaseIterable { case localChanges, commit, commitRange, branch }
+    enum Kind: Sendable, CaseIterable { case localChanges, commit, commitRange, branch, reviewRequest }
 
     /// A comment the host files, an agent's or a Mac's, lands on the file and
     /// changed line the Mac builds through the peer loader: the same stage
-    /// when one path is both staged and unstaged. `@MainActor`: the host's
+    /// when one path is both staged and unstaged, and the host's provider
+    /// diff for a pull request. `@MainActor`: the host's
     /// `AlasCoreContext` is main-actor isolated.
     @MainActor
     @Test(arguments: Kind.allCases)
@@ -311,6 +312,17 @@ struct NativePeerWorkspaceTests {
                 origin: worktree, path: "a.txt", startLine: 2, endLine: nil, side: nil,
                 body: "Agent", sessionID: nil, projectWorktrees: [worktree]
             )
+        case .reviewRequest:
+            try write("ONE\ntwo\n")
+            try await git("commit", "-q", "-am", "edit")
+            try await git("remote", "add", "origin", "https://github.com/acme/app.git")
+            let diff = try await Process.git(["diff", "HEAD~1", "HEAD"], cwd: repo).stdout
+            core.codeHostProviders = CodeHostProviderRegistry(providers: [.github: ReviewSessionLoaderTests.FakeReviewRequestProvider(diff: diff)])
+            sessionID = try await reviews.openProviderReview(number: 7, in: worktree, caller: .app).summary.sessionID
+            _ = await reviews.addComment(
+                origin: worktree, path: "a.txt", startLine: 1, endLine: nil, side: nil,
+                body: "Agent", sessionID: sessionID, projectWorktrees: [worktree]
+            )
         case .commit, .commitRange, .branch:
             let base = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -335,7 +347,13 @@ struct NativePeerWorkspaceTests {
         #expect(review.comments.count == (kind == .localChanges ? 2 : 1))
 
         let client = NativePeerReviewGitClient(read: { await core.remoteRead($0, in: worktree, replyingAs: worktree.id) })
-        let session = try await ReviewSessionLoader.peer(git: client).load(target: review.summary.record.target).session
+        let providerReview: HostProviderReview? = if kind == .reviewRequest {
+            try await reviews.providerReview(sessionID, in: worktree, withDiff: true)
+        } else {
+            nil
+        }
+        let session = try await ReviewSessionLoader.peer(git: client, providerReview: providerReview)
+            .load(target: review.summary.record.target).session
 
         for comment in review.comments {
             let file = try #require(session.files.first { $0.summary.id == comment.fileID })

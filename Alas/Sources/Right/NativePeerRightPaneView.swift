@@ -207,12 +207,14 @@ struct NativePeerRightPaneView: View {
                 if let gitTarget, reviewsKey != nil {
                     reviewsSection(gitTarget)
                 }
-                if gitTarget != nil, reviewLoop.snapshot != nil {
+                if let gitTarget, reviewLoop.snapshot != nil {
                     ReviewLoopDrawer(
                         state: reviewLoop,
                         canOpenAgentHandoff: false,
                         onAction: { handleReviewAction($0) },
-                        servedActions: ReviewReadinessActionKind.peerServed
+                        servedActions: client.hosts?.servesProviderReviews(serverId: gitTarget.serverId) == true
+                            ? ReviewReadinessActionKind.peerServed.union([.inspectReviewEvidence])
+                            : ReviewReadinessActionKind.peerServed
                     )
                 }
             }
@@ -270,9 +272,41 @@ struct NativePeerRightPaneView: View {
             runGit(.push(forceWithLease: kind == .forcePushBranch), on: gitTarget) { reviewLoop.endAction(kind) }
         case .openReviewRequest:
             if let url = reviewLoop.snapshot?.reviewRequest?.url { NSWorkspace.shared.open(url) }
+        case .inspectReviewEvidence:
+            if let number = reviewLoop.snapshot?.reviewRequest?.number { startProviderReview(number, on: gitTarget) }
         default:
             break // `peerServed` offers no other action.
         }
+    }
+
+    /// Opens or reuses the host's review of `number` and shows it; an error lands in `gitError`.
+    private func startProviderReview(_ number: Int, on target: (serverId: String, worktree: PeerHostWorktree)) {
+        guard let hosts = client.hosts else { return }
+        gitError = nil
+        let key = gitTargetKey
+        Task { @MainActor in
+            let result = await hosts.openProviderReview(number: number, in: target.worktree, serverId: target.serverId)
+            // The selection moved on: the answer belongs to another worktree.
+            guard gitTargetKey == key else { return }
+            switch result {
+            case .success(let review):
+                client.openReview(review.summary.sessionID, serverId: target.serverId, worktree: target.worktree)
+            case .failure(let error):
+                gitError = error.message
+            }
+        }
+    }
+
+    /// The git target's pull or merge request, while the host serves its
+    /// review and lists none of it yet.
+    private func unlistedReviewRequest(serverId: String) -> ReviewRequest? {
+        guard client.hosts?.servesProviderReviews(serverId: serverId) == true,
+              let request = reviewLoop.snapshot?.reviewRequest
+        else { return nil }
+        let listed = reviews.contains {
+            if case .reviewRequest(_, _, _, let number, _) = $0.record.target.payload { number == request.number } else { false }
+        }
+        return listed ? nil : request
     }
 
     /// The host's reviews, led by its local changes until they are listed,
@@ -305,6 +339,12 @@ struct NativePeerRightPaneView: View {
     private func reviewRows(
         _ target: (serverId: String, worktree: PeerHostWorktree), localChanges: String, listsLocalChanges: Bool
     ) -> some View {
+        if let request = unlistedReviewRequest(serverId: target.serverId) {
+            let title = "Review \(request.provider.reviewRequestLabel) \(request.provider.reviewRequestNumberPrefix)\(request.number)"
+            reviewRow(title: title, subtitle: nil, verdict: nil, openCount: 0) {
+                startProviderReview(request.number, on: target)
+            }
+        }
         if !listsLocalChanges {
             reviewRow(title: "Review local changes", subtitle: nil, verdict: nil, openCount: 0) {
                 client.openReview(localChanges, serverId: target.serverId, worktree: target.worktree)

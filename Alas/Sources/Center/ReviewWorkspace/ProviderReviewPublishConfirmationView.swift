@@ -12,6 +12,8 @@ struct ProviderReviewPublishConfirmationView: View {
     let errorMessage: String?
     let onCancel: () -> Void
     let onConfirm: () -> Void
+    /// The host login it posts as, for a paired host's review.
+    var account: String? = nil
 
     @Environment(\.theme) private var theme
 
@@ -24,6 +26,12 @@ struct ProviderReviewPublishConfirmationView: View {
             Text("\(providerName) \(reviewIdentity)")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundColor(theme.color("fg-muted"))
+
+            if let account {
+                Text("Posts as \(account), the host's \(providerName) login.")
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-muted"))
+            }
 
             Picker("Decision", selection: $selectedDecision) {
                 ForEach(allowedDecisions, id: \.self) { decision in

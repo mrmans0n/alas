@@ -471,7 +471,7 @@ struct ReviewSessionLoaderTests {
         }
     }
 
-    private struct FakeReviewRequestProvider: CodeHostProvider {
+    struct FakeReviewRequestProvider: CodeHostProvider {
         let kind: CodeHostKind = .github
         let diff: String
 

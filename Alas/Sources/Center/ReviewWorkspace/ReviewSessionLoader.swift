@@ -300,10 +300,11 @@ struct ReviewSessionLoader: @unchecked Sendable {
     }
 
     /// A paired host's review, read over its host channel: local changes,
-    /// commits, commit ranges and branches. Everything else is
+    /// commits, commit ranges and branches, and a pull or merge request from
+    /// `providerReview`, the host's read of it. Everything else is
     /// `unsupportedTarget`.
     @MainActor
-    static func peer(git: NativePeerReviewGitClient) -> ReviewSessionLoader {
+    static func peer(git: NativePeerReviewGitClient, providerReview: HostProviderReview? = nil) -> ReviewSessionLoader {
         let changesLoader = ReviewChangesLoader(git: git)
         let commitLoader = CommitReviewLoader(git: git)
         return ReviewSessionLoader(
@@ -343,6 +344,17 @@ struct ReviewSessionLoader: @unchecked Sendable {
                     throw ReviewSessionLoaderError.unsupportedTarget
                 }
                 return try await peerRange(git: git, target: target, base: base, head: head, threeDot: true, onFileList: onFileList)
+            },
+            reviewRequest: { target in
+                guard let providerReview else { throw ReviewSessionLoaderError.unsupportedTarget }
+                let remote = providerReview.remote, request = providerReview.request
+                let loadedSession = try await ReviewRequestDiffLoader(
+                    provider: NativePeerProviderDiff(kind: remote.kind, diff: providerReview.diff ?? "")
+                ).load(remote: remote, request: request, cwd: target.repositoryPath)
+                return ReviewSessionProviderLoadedSession(
+                    loadedSession: loadedSession,
+                    providerContext: ReviewSessionProviderContext(remote: remote, reviewRequest: request)
+                )
             }
         )
     }

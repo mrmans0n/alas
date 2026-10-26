@@ -176,11 +176,22 @@ struct NativePeerReviewView: View {
     @State private var layoutMode: DiffLayoutMode = .split
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    /// A pull or merge request review's threads, capabilities and account,
+    /// as the host's provider shows them; its diff is kept only for the load.
+    @State private var providerReview: HostProviderReview?
+    @State private var providerConfirmation: ProviderReviewPublishConfirmationState?
+    @State private var providerDecision = ProviderReviewDecision.comment
+    @State private var providerSummaryBody = ""
+    @State private var isProviderPublishing = false
+    /// Thread and publish errors and warnings, shown as a note and in the
+    /// confirmation.
+    @State private var providerError: String?
 
     var body: some View {
         VStack(spacing: 0) {
             header
             if let failedMutation { failedMutationNote(failedMutation) }
+            if let providerError, providerConfirmation == nil { note(providerError, color: "del") }
             if readFailed { note(readFailedMessage, color: "del") }
             if let reloadError { note(reloadError, color: "del") }
             if case .loaded(_, truncated: true) = diff {
@@ -190,6 +201,7 @@ struct NativePeerReviewView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
+        .overlay(providerConfirmationOverlay)
         .task(id: ReadKey(
             revision: hosts.reviewRevisions[selection.serverId]?[selection.worktree.snapshot.worktree.id],
             subscription: hosts.subscriptions[selection.serverId],
@@ -260,6 +272,16 @@ struct NativePeerReviewView: View {
                     codeFontFamily: codeFontFamily,
                     codeFontSize: codeFontSize,
                     showsRailDisplayControls: true,
+                    // Lets a review with no drafts still approve or request changes.
+                    showsDraftSummaryRail: review?.summary.record.target.kind == .reviewRequest && providerReview != nil,
+                    inlineFeedbackByFileID: providerReview.map { pr in
+                        ReviewSessionTabView.inlineFeedbackByFileID(
+                            threads: pr.request.threads,
+                            files: loaded.session.summary.files,
+                            providerName: pr.remote.kind.displayName
+                        )
+                    } ?? [:],
+                    inlineFeedbackActions: inlineFeedbackActions,
                     reviewFeedbackTarget: loaded.feedbackTarget,
                     draftCommentsByFileID: ReviewDraftCommentGrouping.commentsByFileID(review?.comments ?? []),
                     draftCommentActions: commentActions,
@@ -277,7 +299,8 @@ struct NativePeerReviewView: View {
     /// As `ReviewDraftWorkspaceActions`, less what only this Mac's agents and
     /// providers could do.
     private var commentActions: ReviewDraftCommentActions {
-        ReviewDraftCommentActions(
+        let publishes = review?.summary.record.target.kind == .reviewRequest ? providerReview : nil
+        return ReviewDraftCommentActions(
             availability: { comment in
                 ReviewDraftCommentActionAvailability(
                     canEdit: comment.isActive,
@@ -286,14 +309,155 @@ struct NativePeerReviewView: View {
                     canDismiss: comment.isActive,
                     canCopyPrompt: false,
                     canShowSendToAgent: false,
-                    canSendToAgent: false
+                    canSendToAgent: false,
+                    canPublishProvider: publishes != nil && !ProviderReviewPublishPlanner.publishableDrafts([comment]).isEmpty
                 )
+            },
+            canPublishReview: {
+                publishes.map { $0.capabilities.canComment || $0.capabilities.canSubmitReview } ?? false
             },
             edit: { comment, body in mutate(.edit(commentID: comment.id, body: body)) },
             delete: { mutate(.delete(commentID: $0.id)) },
             resolve: { mutate(.resolve(commentID: $0.id)) },
-            dismiss: { mutate(.dismiss(commentID: $0.id)) }
+            dismiss: { mutate(.dismiss(commentID: $0.id)) },
+            publishProvider: { openProviderConfirmation(commentID: $0.id) },
+            publishReview: { openProviderConfirmation(commentID: nil) }
         )
+    }
+
+    /// As the local review's, over the host's capabilities.
+    private var inlineFeedbackActions: DiffReviewInlineFeedbackActions {
+        var actions = DiffReviewInlineFeedbackActions()
+        guard let capabilities = providerReview?.capabilities else { return actions }
+        actions.availability = { item, _ in
+            DiffReviewInlineFeedbackActionAvailability(
+                canOpenProvider: item.providerURL != nil,
+                canCopyContext: true,
+                canSendToAgent: false,
+                canReplyProvider: item.status == .actionable && capabilities.canReply,
+                canResolveProvider: item.status == .actionable && capabilities.canResolve,
+                canUnresolveProvider: item.status == .resolved && capabilities.canResolve
+            )
+        }
+        actions.replyProvider = { item, _, body in mutateThread(item, kind: .reply, body: body) }
+        actions.resolveProvider = { item, _ in mutateThread(item, kind: .resolve, body: nil) }
+        actions.unresolveProvider = { item, _ in mutateThread(item, kind: .unresolve, body: nil) }
+        actions.openProvider = { item, _ in
+            guard let url = item.providerURL else { return }
+            NSWorkspace.shared.open(url)
+        }
+        actions.copyContext = { item, file in
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(
+                DiffReviewInlineFeedbackContextFormatter.format(item: item, file: file),
+                forType: .string
+            )
+        }
+        return actions
+    }
+
+    private func mutateThread(_ item: DiffReviewInlineFeedback, kind: ProviderThreadMutationKind, body: String?) {
+        Task { @MainActor in
+            let result = await hosts.mutateReviewThread(
+                item.id, kind: kind, body: body, sessionID: selection.sessionID,
+                in: selection.worktree, serverId: selection.serverId
+            )
+            switch result {
+            case .success(let mutated):
+                providerReview?.request = mutated.refreshedRequest
+                providerError = mutated.warnings.isEmpty ? nil : mutated.warnings.joined(separator: "\n")
+            case .failure(let error):
+                providerError = error.message
+            }
+        }
+    }
+
+    /// As `ReviewSessionTabView.openProviderPublishConfirmation`, over the
+    /// host's drafts and capabilities.
+    private func openProviderConfirmation(commentID: String?) {
+        guard let pr = providerReview else { return }
+        let all = review?.comments ?? []
+        let filtered = commentID.map { id in all.filter { $0.id == id } } ?? all
+        let comments = ProviderReviewPublishPlanner.publishableDrafts(filtered)
+        let unpublishableMessages = ProviderReviewPublishPlanner.unpublishableMessages(filtered)
+        guard commentID == nil || !comments.isEmpty || !unpublishableMessages.isEmpty else { return }
+        guard !comments.isEmpty || !unpublishableMessages.isEmpty || pr.capabilities.canSubmitReview else { return }
+        let allowedDecisions = ReviewSessionTabView.allowedProviderDecisions(
+            commentCount: comments.count, capabilities: pr.capabilities
+        )
+        guard !allowedDecisions.isEmpty else { return }
+        providerDecision = ReviewSessionTabView.defaultProviderDecision(allowedDecisions: allowedDecisions)
+        providerSummaryBody = ""
+        providerError = nil
+        providerConfirmation = ProviderReviewPublishConfirmationState(
+            commentID: commentID,
+            providerName: pr.remote.kind.displayName,
+            reviewIdentity: pr.request.displayIdentity,
+            commentCount: comments.count,
+            unpublishableMessages: unpublishableMessages,
+            allowedDecisions: allowedDecisions
+        )
+    }
+
+    @ViewBuilder
+    private var providerConfirmationOverlay: some View {
+        if let providerConfirmation {
+            ZStack {
+                theme.color("bg-0").opacity(0.45)
+                    .ignoresSafeArea()
+                ProviderReviewPublishConfirmationView(
+                    providerName: providerConfirmation.providerName,
+                    reviewIdentity: providerConfirmation.reviewIdentity,
+                    commentCount: providerConfirmation.commentCount,
+                    unpublishableMessages: providerConfirmation.unpublishableMessages,
+                    allowedDecisions: providerConfirmation.allowedDecisions,
+                    selectedDecision: $providerDecision,
+                    summaryBody: $providerSummaryBody,
+                    isPublishing: isProviderPublishing,
+                    errorMessage: providerError,
+                    onCancel: {
+                        self.providerConfirmation = nil
+                        providerError = nil
+                    },
+                    onConfirm: { Task { @MainActor in await confirmProviderPublish() } },
+                    account: providerReview?.account
+                )
+            }
+        }
+    }
+
+    /// Per-draft results arrive with the comments the host's
+    /// `reviewsChanged` reads again.
+    private func confirmProviderPublish() async {
+        guard !isProviderPublishing, let confirmation = providerConfirmation, providerReview != nil,
+              case .loaded(let loaded, _) = diff else { return }
+        if let refusal = ReviewSessionTabView.publishRefusal(
+            decision: providerDecision, allowed: confirmation.allowedDecisions, summaryBody: providerSummaryBody
+        ) {
+            providerError = refusal
+            return
+        }
+        isProviderPublishing = true
+        providerError = nil
+        defer { isProviderPublishing = false }
+        let publish = HostReviewPublish(
+            decision: providerDecision,
+            body: providerSummaryBody.trimmingCharacters(in: .whitespacesAndNewlines),
+            draftIDs: confirmation.commentID.map { [$0] },
+            // The head the diff showed: thread re-reads replace
+            // `providerReview`, only a reload replaces the diff.
+            headSHA: loaded.providerContext?.reviewRequest.headSHA
+        )
+        switch await hosts.publishReview(
+            publish, sessionID: selection.sessionID, in: selection.worktree, serverId: selection.serverId
+        ) {
+        case .success(let result):
+            providerReview?.request = result.refreshedRequest
+            providerConfirmation = nil
+            providerError = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
+        case .failure(let error):
+            providerError = error.message
+        }
     }
 
     /// The host's `reviewsChanged` then reads the comments again.
@@ -349,6 +513,14 @@ struct NativePeerReviewView: View {
         // A failed re-read keeps the comments last read.
         readFailed = read == nil
         if let read { review = read }
+        // ponytail: one provider read per `reviewsChanged`; cache on the host
+        // if gh latency bites.
+        guard providerReview != nil, review?.summary.record.target.kind == .reviewRequest else { return }
+        if case .success(let pr) = await hosts.providerReview(
+            selection.sessionID, in: selection.worktree, serverId: selection.serverId, withDiff: false
+        ), !Task.isCancelled {
+            providerReview = pr
+        }
     }
 
     private func loadDiff() async {
@@ -363,10 +535,20 @@ struct NativePeerReviewView: View {
         })
         let message: String
         do {
-            let loaded = try await ReviewSessionLoader.peer(git: git).load(target: target)
+            // Without the host's provider reviews, the loader refuses the target.
+            var pr: HostProviderReview?
+            if target.kind == .reviewRequest, hosts.servesProviderReviews(serverId: selection.serverId) {
+                pr = try await hosts.providerReview(
+                    selection.sessionID, in: selection.worktree, serverId: selection.serverId, withDiff: true
+                ).get()
+            }
+            let loaded = try await ReviewSessionLoader.peer(git: git, providerReview: pr).load(target: target)
             guard !Task.isCancelled else { return }
-            diff = .loaded(loaded, truncated: git.notes.truncated)
+            diff = .loaded(loaded, truncated: git.notes.truncated || pr?.diffTruncated == true)
+            pr?.diff = nil
+            providerReview = pr
             reloadError = nil
+            providerError = nil
             return
         } catch ReviewSessionLoaderError.unsupportedTarget {
             message = "Not available from this Mac yet."

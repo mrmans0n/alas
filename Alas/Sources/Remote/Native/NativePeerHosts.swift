@@ -275,6 +275,69 @@ final class NativePeerHosts {
         }
     }
 
+    /// Whether `serverId` reads, opens and publishes its worktrees' pull and merge request reviews.
+    func servesProviderReviews(serverId: String) -> Bool {
+        servesReviews(serverId: serverId) && supports(serverId, HostProtocolCapability.reviewsProviderV1)
+    }
+
+    /// Pull or merge request review `sessionID` as the host's provider shows
+    /// it, with its raw diff when `withDiff`.
+    func providerReview(
+        _ sessionID: String, in worktree: PeerHostWorktree, serverId: String, withDiff: Bool
+    ) async -> Result<HostProviderReview, NativePeerReviewGitClientError> {
+        // A large provider diff can take a while to fetch on the host.
+        await providerRequest(
+            .readProviderReview(worktree: Self.ref(worktree), sessionID: sessionID, withDiff: withDiff),
+            serverId: serverId, timeout: withDiff ? .seconds(120) : nil
+        ) { if case .providerReview(let review) = $0 { review } else { nil } }
+    }
+
+    /// Opens, or reuses, the host's review of `worktree`'s pull or merge request `number`.
+    func openProviderReview(
+        number: Int, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<HostReview, NativePeerReviewGitClientError> {
+        await providerRequest(.openProviderReview(worktree: Self.ref(worktree), number: number), serverId: serverId) {
+            if case .review(let review) = $0 { review } else { nil }
+        }
+    }
+
+    /// Replies to, resolves or unresolves a provider thread, as the host's user.
+    func mutateReviewThread(
+        _ threadID: String, kind: ProviderThreadMutationKind, body: String?, sessionID: String,
+        in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<ProviderThreadMutationResult, NativePeerReviewGitClientError> {
+        let request = HostRequest.mutateReviewThread(
+            worktree: Self.ref(worktree), sessionID: sessionID, threadID: threadID, kind: kind, body: body
+        )
+        return await providerRequest(request, serverId: serverId) {
+            if case .reviewThreadMutated(let result) = $0 { result } else { nil }
+        }
+    }
+
+    /// Publishes the review on its provider, as the host's user.
+    func publishReview(
+        _ publish: HostReviewPublish, sessionID: String, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<ProviderReviewPublishResult, NativePeerReviewGitClientError> {
+        // A GitLab publish posts one discussion per draft.
+        await providerRequest(
+            .publishReview(worktree: Self.ref(worktree), sessionID: sessionID, publish: publish),
+            serverId: serverId, timeout: .seconds(120)
+        ) { if case .reviewPublished(let result) = $0 { result } else { nil } }
+    }
+
+    /// `request`'s reply as `reply` reads it, or the host's refusal.
+    private func providerRequest<Value>(
+        _ request: HostRequest, serverId: String, timeout: Duration? = nil, reply: (HostResponse) -> Value?
+    ) async -> Result<Value, NativePeerReviewGitClientError> {
+        guard servesProviderReviews(serverId: serverId), let channel = channels[serverId] else { return .failure(.unavailable) }
+        let response = await channel.request(request, timeout: timeout)
+        if let value = reply(response) { return .success(value) }
+        if case .failure(let error) = response {
+            return .failure(NativePeerReviewGitClientError(message: PeerWorktreeRemoval.message(for: error)))
+        }
+        return .failure(NativePeerReviewGitClientError(message: "The host sent an unexpected reply."))
+    }
+
     /// Follows `worktree`'s review status in place of the previous target's.
     func followGit(_ worktree: PeerHostWorktree?, serverId: String?) {
         let next = worktree.flatMap { worktree in
