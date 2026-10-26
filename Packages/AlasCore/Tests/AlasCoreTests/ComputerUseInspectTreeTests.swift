@@ -196,6 +196,18 @@ struct ComputerUseWebContentTests {
         #expect(ComputerUseWebContent.needsEnhancedUserInterface(bundleID: bundleID, root: root, cut: nil) == sets)
     }
 
+    /// The wait after the AXManualAccessibility wake sets it once more, from halfway to the deadline.
+    @Test(arguments: [
+        (Duration.zero, false, false),
+        (.milliseconds(500), false, false),
+        (.milliseconds(750), false, true),
+        (.milliseconds(1250), false, true),
+        (.milliseconds(1250), true, false),
+    ])
+    func theManualAccessibilityWakeIsSetAgainHalfwayThroughTheWait(waited: Duration, reasserted: Bool, sets: Bool) {
+        #expect(ComputerUseWebContent.reasserts(waited: waited, reasserted: reasserted) == sets)
+    }
+
     /// Only a setting Alas turned on is turned off again.
     @Test(arguments: [(Bool?(false), true, true), (nil, true, true), (true, true, false), (false, false, false)])
     func onlyWhatAlasTurnedOnIsRestored(before: Bool?, setSucceeded: Bool, restores: Bool) {

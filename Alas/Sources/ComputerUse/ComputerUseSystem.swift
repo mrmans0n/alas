@@ -205,6 +205,9 @@ struct ComputerUseSystem: Sendable {
     /// an attribute on; true when Alas turned it on, so `restoreWebContent` turns it off again.
     var wakeWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Bool = { _, _ in false }
     var restoreWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Void = { _, _ in }
+    /// When the process started, so a pid the system handed to a new process tells apart from the
+    /// old one; nil when it can't be read.
+    var processStart: @Sendable (Int32) -> TimeInterval? = { _ in nil }
     /// The online displays' frames, CG global, top-left (`ComputerUseAXReader.displayFrames`).
     var displays: @Sendable () -> [CGRect] = { [.infinite] }
     /// The frames of the AXSheets in each app's windows, read for the apps among `pids`, so the
@@ -247,6 +250,7 @@ struct ComputerUseSystem: Sendable {
             accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
             wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0, attribute: $1) },
             restoreWebContent: { await ComputerUseAXReader.restoreWebContent($0, attribute: $1) },
+            processStart: { LiveComputerUseSystem.processStart($0) },
             displays: { LiveComputerUseSystem.displayFrames() },
             sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) }
         )
@@ -256,6 +260,16 @@ struct ComputerUseSystem: Sendable {
 private enum LiveComputerUseSystem {
     /// Same cap as preview_capture.
     static let maxPNGBytes = 8 * 1024 * 1024
+
+    /// The kernel's start time of the process, in seconds since 1970.
+    static func processStart(_ pid: Int32) -> TimeInterval? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let start = info.kp_proc.p_un.__p_starttime
+        return TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000
+    }
 
     private struct CGWindowEntry {
         var id: UInt32

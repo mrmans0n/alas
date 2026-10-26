@@ -116,7 +116,9 @@ enum ComputerUseAXReader {
     }
 
     /// Asks a Chromium or Electron app to build its web content's tree: `attribute` is set to true
-    /// unless it already reads as true. Returns whether Alas turned it on
+    /// unless it already reads as true. `AXManualAccessibility` is set either way, since setting it
+    /// again is what asks again, and an app that takes it counts as accepting it
+    /// (`acceptsManualAccessibility`). Returns whether Alas turned it on
     /// (`ComputerUseWebContent.restores`), so it can be turned off again.
     static func wakeWebContent(_ app: ComputerUseAppIdentity, attribute: String) async -> Bool {
         await withCheckedContinuation { continuation in
@@ -128,8 +130,10 @@ enum ComputerUseAXReader {
                    let value, CFGetTypeID(value) == CFBooleanGetTypeID() {
                     before = CFBooleanGetValue((value as! CFBoolean))
                 }
-                let set = before == true
+                let manual = attribute == ComputerUseWebContent.manualAccessibility
+                let set = (before == true && !manual)
                     || AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue) == .success
+                if manual, set { manualAccessibilityAccepted.withLock { _ = $0.insert(app.pid) } }
                 continuation.resume(returning: ComputerUseWebContent.restores(before: before, setSucceeded: set))
             }
         }

@@ -3,8 +3,9 @@ import Foundation
 /// Chromium and Electron windows read as empty groups until the app builds its web content's
 /// Accessibility tree, which it starts on request and finishes a moment later.
 public enum ComputerUseWebContent {
-    /// Chromium browsers, which build their tree for `AXEnhancedUserInterface` (what VoiceOver
-    /// sets). Electron apps take `AXManualAccessibility` instead.
+    /// Chromium browsers. Like Electron apps they are asked with `AXManualAccessibility` first;
+    /// one whose window still shows no web content gets `AXEnhancedUserInterface` (what VoiceOver
+    /// sets) as the second resort.
     public static let chromeBundleIDs: Set<String> = [
         "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.dev", "com.google.Chrome.canary",
         "org.chromium.Chromium", "com.microsoft.edgemac", "com.microsoft.edgemac.Beta", "com.microsoft.edgemac.Dev",
@@ -15,15 +16,9 @@ public enum ComputerUseWebContent {
     public static let manualAccessibility = "AXManualAccessibility"
     public static let enhancedUserInterface = "AXEnhancedUserInterface"
 
-    /// What first contact sets: `manualAccessibility`, which Electron apps take; nil for a Chromium
-    /// browser, which gets only the wait first.
-    public static func wakeAttribute(bundleID: String?) -> String? {
-        chromeBundleIDs.contains(bundleID ?? "") ? nil : manualAccessibility
-    }
-
-    /// Whether a Chromium browser whose window still shows no web content after the first wait is
-    /// asked once more, with `enhancedUserInterface`. That one is app-wide and slows window moves
-    /// under window managers, so it is the second resort, and is undone after.
+    /// Whether a Chromium browser whose window still shows no web content after the wait for
+    /// `manualAccessibility` is asked once more, with `enhancedUserInterface`. That one is app-wide
+    /// and slows window moves under window managers, so it is the second resort, and is undone after.
     public static func needsEnhancedUserInterface(bundleID: String?, root: ComputerUseAXNode, cut: ComputerUseReadCut?) -> Bool {
         chromeBundleIDs.contains(bundleID ?? "") && !showsContent(root: root, cut: cut)
     }
@@ -37,6 +32,13 @@ public enum ComputerUseWebContent {
         root: ComputerUseAXNode, cut: ComputerUseReadCut?, waited: Duration, deadline: Duration = contentDeadline
     ) -> Bool {
         !showsContent(root: root, cut: cut) && waited < deadline
+    }
+
+    /// Whether the wait after the `manualAccessibility` wake sets it once more, `waited` since the
+    /// wake: from halfway to the deadline, once (`reasserted`). An app may still be starting up
+    /// when first asked, and miss it.
+    public static func reasserts(waited: Duration, reasserted: Bool, deadline: Duration = contentDeadline) -> Bool {
+        !reasserted && waited >= deadline / 2
     }
 
     /// The longest `computer_open_app` waits for a launched web app's front window to show content.

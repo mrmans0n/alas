@@ -96,11 +96,18 @@ final class ComputerUseCoordinator {
     /// Windows of background apps an input made key, per session and window id: each is handed
     /// back once its action settled, or at the stop, turn end or session end that cut it short.
     @ObservationIgnored private var backgroundKeyed: [String: [UInt32: ComputerUseWindow]] = [:]
-    /// Chromium and Electron apps asked once to build their web content's tree (`ComputerUseWebContent`).
-    @ObservationIgnored private var wokenWebContent: Set<Int32> = []
+    /// Chromium and Electron processes asked once to build their web content's tree
+    /// (`ComputerUseWebContent`). A relaunched app that got its old pid back is another process.
+    @ObservationIgnored private var wokenWebContent: Set<WokenProcess> = []
     /// Per session, the apps whose AXEnhancedUserInterface Alas turned on: turned off again at its
     /// stop, turn end or session end.
     @ObservationIgnored private var enhancedUserInterface: [String: [Int32: ComputerUseAppIdentity]] = [:]
+
+    /// A process by pid and start time (`ComputerUseSystem.processStart`), nil when unreadable.
+    private struct WokenProcess: Hashable {
+        var pid: Int32
+        var start: TimeInterval?
+    }
 
     private struct SnapshotKey: Hashable {
         var sessionID: String
@@ -565,7 +572,8 @@ final class ComputerUseCoordinator {
         // Another session may still rely on it.
         let stillUsed = Set(enhancedUserInterface.values.flatMap(\.keys))
         let restored = apps.filter { !stillUsed.contains($0.pid) }
-        for app in restored { wokenWebContent.remove(app.pid) }
+        let restoredPIDs = Set(restored.map(\.pid))
+        wokenWebContent = wokenWebContent.filter { !restoredPIDs.contains($0.pid) }
         let system = system
         return Task {
             for app in restored {
@@ -1519,18 +1527,25 @@ final class ComputerUseCoordinator {
         let readLimit = min(timeLimit, ComputerUseAXReader.deadline)
         var tree = try await system.axTree(window, maxDepth, budget, readLimit)
         // A Chromium or Electron window may show only empty groups, or an empty web area, at first
-        // contact: an Electron app is asked for its tree, and the window is read again until its
-        // web content shows, up to a deadline.
+        // contact: the app is asked for its tree, and the window is read again until its web
+        // content shows, up to a deadline.
         // The deadline counts the reads' time too, and each read gets a short limit; a read cut
         // short ends the wait, since what it left unread may be the content.
-        func awaitWebContent() async throws {
+        // `reassert`: the attribute the wake set, set once more halfway through the wait.
+        func awaitWebContent(reassert attribute: String? = nil) async throws {
             let clock = ContinuousClock()
             let start = clock.now
             var slept = Duration.zero
+            var reasserted = attribute == nil
             while ComputerUseWebContent.keepsWaiting(root: tree.root, cut: tree.cut, waited: max(slept, clock.now - start)) {
                 await sleep(Self.webContentPoll)
                 slept += Self.webContentPoll
                 try checkStillActive(context)
+                if let attribute, ComputerUseWebContent.reasserts(waited: max(slept, clock.now - start), reasserted: reasserted) {
+                    reasserted = true
+                    _ = await system.wakeWebContent(window.app, attribute)
+                    try checkStillActive(context)
+                }
                 tree = try await system.axTree(window, maxDepth, budget, min(readLimit, Self.webContentReadLimit))
             }
             // A short read that stopped the wait is read again with the call's own limit.
@@ -1538,21 +1553,23 @@ final class ComputerUseCoordinator {
                 tree = try await system.axTree(window, maxDepth, budget, readLimit)
             }
         }
+        let process = WokenProcess(pid: window.app.pid, start: system.processStart(window.app.pid))
         if ComputerUseWebContent.needsWake(
             acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid), bundleID: window.app.bundleID,
-            alreadyWoken: wokenWebContent.contains(window.app.pid), root: tree.root, cut: tree.cut) {
-            wokenWebContent.insert(window.app.pid)
-            if let attribute = ComputerUseWebContent.wakeAttribute(bundleID: window.app.bundleID) {
-                _ = await system.wakeWebContent(window.app, attribute)
-            }
-            try await awaitWebContent()
+            alreadyWoken: wokenWebContent.contains(process), root: tree.root, cut: tree.cut) {
+            wokenWebContent.insert(process)
+            let manual = ComputerUseWebContent.manualAccessibility
+            _ = await system.wakeWebContent(window.app, manual)
+            // The wait comes either way: a browser also builds its tree as it is read. Only an app
+            // that took the attribute is asked again halfway.
+            try await awaitWebContent(reassert: system.usesManualAccessibility(window.app.pid) ? manual : nil)
             // A Chromium browser that still shows none gets what VoiceOver sets, for the turn.
             if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: tree.root, cut: tree.cut) {
                 if await system.wakeWebContent(window.app, ComputerUseWebContent.enhancedUserInterface) {
                     // A stop, turn end or session end during the set already restored what it found:
                     // this one is turned off at once instead of waiting for a lifecycle hook that ran.
                     guard (try? checkStillActive(context)) != nil else {
-                        wokenWebContent.remove(window.app.pid)
+                        wokenWebContent.remove(process)
                         await system.restoreWebContent(window.app, ComputerUseWebContent.enhancedUserInterface)
                         try checkStillActive(context)
                         throw CancellationError()
@@ -1564,7 +1581,7 @@ final class ComputerUseCoordinator {
                       !ComputerUseWebContent.hasWebContent(tree.root) {
                 // A read cut short can't tell whether the browser needs AXEnhancedUserInterface:
                 // the try isn't used up, so a complete read later still decides.
-                wokenWebContent.remove(window.app.pid)
+                wokenWebContent.remove(process)
             }
         }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
