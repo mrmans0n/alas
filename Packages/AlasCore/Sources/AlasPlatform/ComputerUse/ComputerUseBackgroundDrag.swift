@@ -13,6 +13,9 @@ public enum ComputerUseBackgroundDrag {
     public static let stepDelay = Duration.milliseconds(16)
     /// How often the window list is read while waiting for a drop to land.
     public static let sessionPoll = Duration.milliseconds(50)
+    /// How long after a cross-window drop the start window is still read with the drag image
+    /// gone: a moved item's source window refreshes a moment after the drop.
+    public static let sourceSettle = Duration.milliseconds(500)
 
     /// A drag goes in the background only between two on-screen points, and not when the caller
     /// asked for the direct (foreground) drag.
@@ -37,13 +40,14 @@ public enum ComputerUseBackgroundDrag {
 
     /// Whether to keep waiting for a drop to land. Stops at the deadline; once the drop shows and
     /// the start window changed or isn't involved; and once it shows with no drag session active
-    /// (a copy drag leaves the start window as it was).
+    /// past `sourceSettle` (a copy drag leaves the start window as it was, while a move's source
+    /// refreshes within the settle).
     public static func keepsPolling(
         dropped: Bool, startChanged: Bool, crossWindow: Bool, sessionActive: Bool,
         waited: Duration, deadline: Duration
     ) -> Bool {
         guard waited < deadline else { return false }
         guard dropped else { return true }
-        return !startChanged && crossWindow && sessionActive
+        return !startChanged && crossWindow && (sessionActive || waited < sourceSettle)
     }
 }

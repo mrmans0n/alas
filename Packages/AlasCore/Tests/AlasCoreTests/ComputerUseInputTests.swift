@@ -806,9 +806,12 @@ struct ComputerUseInputTests {
         (true, true, true, true, 100, false),
         (true, false, false, true, 100, false),
         (true, false, true, true, 100, true),
-        (true, false, true, false, 100, false),
+        // A copy: the image is gone and the source settle is over.
+        (true, false, true, false, 600, false),
+        // A move: the image is gone, but the source window may still be refreshing.
+        (true, false, true, false, 100, true),
         (false, false, true, true, 100, true),
-        (false, false, true, true, 500, false),
+        (false, false, true, true, 1500, false),
     ] as [(Bool, Bool, Bool, Bool, Int, Bool)])
     func aDropIsAwaitedOnlyWhileACrossWindowDragSessionIsLive(
         dropped: Bool, startChanged: Bool, crossWindow: Bool, sessionActive: Bool, waitedMs: Int, polls: Bool
@@ -816,7 +819,7 @@ struct ComputerUseInputTests {
         #expect(
             ComputerUseBackgroundDrag.keepsPolling(
                 dropped: dropped, startChanged: startChanged, crossWindow: crossWindow,
-                sessionActive: sessionActive, waited: .milliseconds(waitedMs), deadline: .milliseconds(500)
+                sessionActive: sessionActive, waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
             ) == polls)
     }
 }

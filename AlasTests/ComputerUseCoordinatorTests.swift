@@ -1091,8 +1091,9 @@ struct ComputerUseCoordinatorTests {
             if window.windowID == 5 {
                 let read = endReads.next()
                 if drop == .mappedLate ? read >= 3 : read == 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
-            } else if drop == .sourceLate, startReads.next() >= 5 {
-                // From its fifth read, a few polls after the drop, the moved item is gone from it.
+            } else if drop == .sourceLate, startReads.next() >= 4 {
+                // From its fourth read, the second poll after the drop and within the source settle
+                // (the drag image is gone by then), the moved item is gone from it.
                 tree.children.removeAll()
             }
             return (tree, nil, ComputerUseAXHandles())
@@ -1101,8 +1102,6 @@ struct ComputerUseCoordinatorTests {
             recorder.record(input)
             return .activation
         }
-        // A move's drag image stays up until the move lands.
-        system.dragSessionActive = { _ in true }
         // The activation and the mouse-down move focus and selection at once, before the start
         // window shows the drop.
         if drop == .sourceLate {
