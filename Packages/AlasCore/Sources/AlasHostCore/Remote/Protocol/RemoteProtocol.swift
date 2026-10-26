@@ -1518,7 +1518,8 @@ public enum HostProtocolCapability: Sendable {
     /// `checkpointDiff`, `checkpointRestorePreview` and the checkpoint changes
     /// of `mutateWorktree`. Only a headless host.
     public static let worktreesCheckpointsV1 = "host.worktrees.checkpoints.v1"
-    /// Hosts that serve `writeFile` and `createFolder`. Only a headless host.
+    /// Hosts that serve `writeFile`, `createFolder`, `followFile` and `unfollowFile`, and send the
+    /// `fileChanged` event. Only a headless host.
     public static let worktreesFilesV1 = "host.worktrees.files.v1"
     /// Hosts whose `createWorktreeSession` takes `repoHook`, answering
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user

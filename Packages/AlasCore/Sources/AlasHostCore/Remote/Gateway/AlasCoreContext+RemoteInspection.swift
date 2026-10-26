@@ -776,7 +776,9 @@ extension AlasCoreContext {
         case .binary(let byteSize):
             return .failure(reason: .binary, byteSize: byteSize, message: nil)
         case .text(let text):
-            return .success(text: text, truncated: false, version: version)
+            // A Mac opens a file editable only with a version: none for one a save would refuse.
+            let writable = (try? Self.writableLocation(normalizedPath, in: worktree.path).get()) != nil
+            return .success(text: text, truncated: false, version: writable ? version : nil)
         }
     }
 

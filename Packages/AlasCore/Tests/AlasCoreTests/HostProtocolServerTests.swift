@@ -696,7 +696,7 @@ struct HostProtocolServerTests {
             #expect(try await fixture.request(.listStashes(worktree: ref))
                 == .failure(error: .invalidRequest(reason: "This host does not serve this git action.")))
             #expect(try await fixture.request(.followFile(worktree: ref, path: "notes.txt"))
-                == .failure(error: .invalidRequest(reason: "This host does not serve this git action.")))
+                == .failure(error: .invalidRequest(reason: "This host does not serve file editing.")))
         case .hidden:
             fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: repo, hidden: true)
             expected = .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")
@@ -1080,10 +1080,27 @@ struct HostProtocolServerTests {
         if shape == .nestedWorktree {
             #expect(!FileManager.default.fileExists(atPath: repo.appendingPathComponent(path).path))
         }
+        // A read never hands out a version a save would refuse.
+        if shape == .nestedWorktree { try Data("a\n".utf8).write(to: repo.appendingPathComponent(path)) }
+        let read = try await fixture.request(.readWorktree(worktree: ref, read: .file(path: path)))
+        switch shape {
+        case .nestedWorktree:
+            guard case .worktreeRead(.fileContents(_, _, _, _, .none)) = read else {
+                Issue.record("expected the content without a version, got \(read)")
+                return
+            }
+        case .ignored:
+            guard case .worktreeRead(.fileUnavailable(_, _, .pathRejected, _, _)) = read else {
+                Issue.record("expected the read refused, got \(read)")
+                return
+            }
+        default:
+            if case .worktreeRead(.fileContents(_, _, _, _, .some)) = read { Issue.record("expected no version, got \(read)") }
+        }
     }
 
     /// A folder has no ignore rules, and its tree lists every file: what a
-    /// Mac can read there it can save. In a git project the same file is
+    /// Mac can read there it can save, unless reached through a symlink. In a git project the same file is
     /// refused (`fileWritesStayOnRegularFilesInsideTheWorktree`).
     @Test func ignoredFilesAreEditedInFolderProjects() async throws {
         let fixture = try await RepoFixture()
@@ -1103,6 +1120,16 @@ struct HostProtocolServerTests {
             return
         }
         #expect(try Data(contentsOf: log) == Data("b\n".utf8))
+
+        // Read through a symlinked folder, but not saved there, so it carries no version.
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("real"), withIntermediateDirectories: true)
+        try Data("a\n".utf8).write(to: root.appendingPathComponent("real/a.txt"))
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("alias"), withDestinationURL: root.appendingPathComponent("real"))
+        let read = try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "alias/a.txt")))
+        guard case .worktreeRead(.fileContents(_, _, "a\n", _, .none)) = read else {
+            Issue.record("expected the content without a version, got \(read)")
+            return
+        }
     }
 
     enum WriteGate: CaseIterable { case restoreHold, pendingRecovery, overCap, appHost }
@@ -1200,26 +1227,35 @@ struct HostProtocolServerTests {
         #expect(try JSONDecoder().decode(HostServerMessage.self, from: JSONEncoder().encode(batch)) == batch)
     }
 
-    /// One Mac going away leaves the file watched for the others; the last
-    /// one to let go ends the watch.
+    /// One Mac going away leaves the file watched for the others, through
+    /// its folder being removed and made again; the last one to let go ends
+    /// the watch.
     @Test func aFileStaysWatchedWhileAnyMacFollowsIt() async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
         let (repo, ref) = try await fixture.mainWorktree()
-        let notes = repo.appendingPathComponent("notes.txt")
+        let docs = repo.appendingPathComponent("docs")
+        let notes = docs.appendingPathComponent("notes.txt")
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
         try "a\n".write(to: notes, atomically: true, encoding: .utf8)
         let a = try await fixture.fileFollower()
         let b = try await fixture.fileFollower()
         defer { b.connection.close() }
         for mac in [a, b] {
-            #expect(await mac.request(.followFile(worktree: ref, path: "notes.txt")) == .done)
+            #expect(await mac.request(.followFile(worktree: ref, path: "docs/notes.txt")) == .done)
         }
         a.connection.close()
 
+        let hashes = ["b\n", "c\n"].map { WorktreeFileVersion.contentHash(of: Data($0.utf8)) }
         try "b\n".write(to: notes, atomically: true, encoding: .utf8)
-        let hash = WorktreeFileVersion.contentHash(of: Data("b\n".utf8))
-        try await b.client.waitFor(within: .seconds(60)) { Self.notesVersions($0).last??.contentHash == hash }
-        #expect(await b.request(.unfollowFile(worktree: ref, path: "notes.txt")) == .done)
+        try await b.client.waitFor(within: .seconds(60)) { Self.notesVersions($0, "docs/notes.txt").last??.contentHash == hashes[0] }
+        // As a branch switch does.
+        try FileManager.default.removeItem(at: docs)
+        try await b.client.waitFor(within: .seconds(60)) { Self.notesVersions($0, "docs/notes.txt").last == .some(nil) }
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        try "c\n".write(to: notes, atomically: true, encoding: .utf8)
+        try await b.client.waitFor(within: .seconds(60)) { Self.notesVersions($0, "docs/notes.txt").last??.contentHash == hashes[1] }
+        #expect(await b.request(.unfollowFile(worktree: ref, path: "docs/notes.txt")) == .done)
         #expect(fixture.host.eventSource?.fileWatcher.watches.isEmpty == true)
     }
 
@@ -1230,10 +1266,10 @@ struct HostProtocolServerTests {
         }
     }
 
-    /// The versions `fileChanged` sent for notes.txt, in order.
-    private static func notesVersions(_ messages: [HostServerMessage]) -> [WorktreeFileVersion?] {
+    /// The versions `fileChanged` sent for `path`, in order.
+    private static func notesVersions(_ messages: [HostServerMessage], _ path: String = "notes.txt") -> [WorktreeFileVersion?] {
         var versions: [WorktreeFileVersion?] = []
-        for case .fileChanged(_, "notes.txt", let version) in events(messages) {
+        for case .fileChanged(_, path, let version) in events(messages) {
             versions.append(version)
         }
         return versions

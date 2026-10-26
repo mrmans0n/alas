@@ -9,10 +9,7 @@ extension AlasCoreContext {
     /// unlisted or archived, busy (`isWorktreeIdle`), held by a checkpoint restore, or with a restore
     /// pending. No branch check: the version is the guard.
     func changeListedFiles<T: Sendable>(in worktree: Worktree, _ body: @MainActor (Worktree) async throws -> T) async throws -> T {
-        guard !worktree.path.isRemoteAlasPath else {
-            throw HostError.invalidRequest(reason: "The host does not edit files of remote projects.")
-        }
-        return try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { @MainActor [self] in
+        try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { @MainActor [self] in
             try refuseIfStopping()
             guard let listed = projects.worktrees(projectId: worktree.projectId).first(where: { $0.id == worktree.id }) else {
                 throw HostError.failed(message: "The worktree changed since it was listed.")
@@ -75,16 +72,33 @@ extension AlasCoreContext {
     }
 
     /// `path` in `worktree` under the real root, else invalidRequest("The host does not edit <path>."):
-    /// no NUL, `..`, `.` or `.git` in any case, no symlink at any component, no nested worktree or
-    /// repository on the way, the last a regular file (or a folder, with `folder`) or absent, and not
-    /// ignored by git. The folder holding it must exist.
+    /// what `writableLocation` refuses, or a path git ignores. The folder holding it must exist.
     func writableURL(_ path: String, in worktree: Worktree, folder: Bool = false) async throws -> URL {
-        let refused = HostError.invalidRequest(reason: "The host does not edit \(path).")
+        let url: URL
+        switch Self.writableLocation(path, in: worktree.path, folder: folder) {
+        case .success(let found): url = found
+        case .failure(.parentGone): throw Self.parentGone(path)
+        case .failure(.refused): throw HostError.invalidRequest(reason: "The host does not edit \(path).")
+        }
+        // A folder has no ignore rules, and its tree lists every file.
+        if !isFolderWorktree(worktree), let normalized = RemoteWorktreeFileAccess.normalizedRelativePath(path),
+           try await GitService().isPathIgnored(worktreePath: worktree.path, path: folder ? normalized + "/" : normalized) {
+            throw HostError.invalidRequest(reason: "The host does not edit \(path).")
+        }
+        return url
+    }
+
+    enum WritableRefusal: Error { case refused, parentGone }
+
+    /// `path` under `root`'s real path, by its shape alone (no git): no NUL, `..`, `.` or `.git` in any
+    /// case, no symlink at any component, no nested worktree or repository on the way, the last a regular
+    /// file (or a folder, with `folder`) or absent. `.parentGone` when a folder on the way is not there.
+    nonisolated static func writableLocation(_ path: String, in root: URL, folder: Bool = false) -> Result<URL, WritableRefusal> {
         // Checked as a string first: nothing a bad path names is ever touched.
-        guard !path.contains("\0"), let normalized = RemoteWorktreeFileAccess.normalizedRelativePath(path) else { throw refused }
+        guard !path.contains("\0"), let normalized = RemoteWorktreeFileAccess.normalizedRelativePath(path) else { return .failure(.refused) }
         let components = normalized.split(separator: "/").map(String.init)
-        guard !components.contains(where: { $0 == "." || $0.lowercased() == ".git" }) else { throw refused }
-        guard let resolvedRoot = realpath(worktree.path.path, nil) else { throw Self.parentGone(path) }
+        guard !components.contains(where: { $0 == "." || $0.lowercased() == ".git" }) else { return .failure(.refused) }
+        guard let resolvedRoot = realpath(root.path, nil) else { return .failure(.parentGone) }
         var url = URL(fileURLWithPath: String(cString: resolvedRoot), isDirectory: true)
         free(resolvedRoot)
         // lstat each component from the real root: a symlink anywhere is refused, so the
@@ -94,22 +108,16 @@ extension AlasCoreContext {
             let isLast = index == components.count - 1
             var status = stat()
             guard lstat(url.path, &status) == 0 else {
-                guard errno == ENOENT else { throw refused }
+                guard errno == ENOENT else { return .failure(.refused) }
                 if isLast { break }
-                throw Self.parentGone(path)
+                return .failure(.parentGone)
             }
             let type = status.st_mode & S_IFMT
-            guard isLast ? type == S_IFREG || (folder && type == S_IFDIR) : type == S_IFDIR else { throw refused }
+            guard isLast ? type == S_IFREG || (folder && type == S_IFDIR) : type == S_IFDIR else { return .failure(.refused) }
             // A nested worktree or repository answers to its own gate.
-            if !isLast, lstat(url.appendingPathComponent(".git").path, &status) == 0 { throw refused }
+            if !isLast, lstat(url.appendingPathComponent(".git").path, &status) == 0 { return .failure(.refused) }
         }
-        // A folder has no ignore rules, and its tree lists every file.
-        if !isFolderWorktree(worktree) {
-            if try await GitService().isPathIgnored(worktreePath: worktree.path, path: folder ? normalized + "/" : normalized) {
-                throw refused
-            }
-        }
-        return url
+        return .success(url)
     }
 
     private static func parentGone(_ path: String) -> HostError {

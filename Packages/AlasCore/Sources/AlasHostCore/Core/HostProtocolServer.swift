@@ -317,14 +317,11 @@ public final class HostProtocolConnection {
         case .unfollowWorktree(let id):
             try subscribed().unfollowWorktree(id)
         case .followFile(let ref, let path):
-            let listed = try servedWorktree(ref, capability: HostProtocolCapability.worktreesFilesV1)
+            let listed = try fileWorktree(ref)
             _ = try subscribed()
             // The paths a Mac may edit, and no others: a follow watches the file.
             _ = try await host.core.writableURL(path, in: listed)
-            guard let normalized = RemoteWorktreeFileAccess.normalizedRelativePath(path) else {
-                throw HostError.invalidRequest(reason: "The host does not edit \(path).")
-            }
-            try await subscribed().followFile(listed, path: normalized)
+            try await subscribed().followFile(listed, path: RemoteWorktreeFileAccess.normalizedRelativePath(path) ?? path)
         case .unfollowFile(let ref, let path):
             try subscribed().unfollowFile(
                 // A worktree no longer listed was unfollowed with its removal.
@@ -533,12 +530,16 @@ public final class HostProtocolConnection {
         return try visibleWorktree(ref)
     }
 
-    /// A visible worktree whose files this host edits, under the project's gate.
+    /// A visible worktree whose files this host edits, under the project's gate. Never a remote project's.
     private func fileWorktree(_ ref: WorktreeRef) throws -> Worktree {
         guard host.servedCapabilities.contains(HostProtocolCapability.worktreesFilesV1) else {
             throw HostError.invalidRequest(reason: "This host does not serve file editing.")
         }
-        return try visibleWorktree(ref)
+        let listed = try visibleWorktree(ref)
+        guard !listed.path.isRemoteAlasPath else {
+            throw HostError.invalidRequest(reason: "The host does not edit files of remote projects.")
+        }
+        return listed
     }
 
     /// A visible worktree whose checkpoints this host serves. Reads, outside the gate as `readWorktree` is.

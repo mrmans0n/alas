@@ -493,6 +493,21 @@ struct AlasHostTests {
         #expect(await Self.next(log.subscribe(after: subscription.cursor)) == [.runRemoved(id: "c")])
     }
 
+    /// A client holds at most 64 file watches; following one it already
+    /// follows takes no new one.
+    @Test func aSubscriptionFollowsAtMost64Files() async throws {
+        let log = HostEventLog()
+        let subscription = log.subscribe(after: log.cursor)
+        let worktree = Self.worktree("w")
+        for index in 0..<HostSubscription.maxFollowedFiles {
+            try await subscription.followFile(worktree, path: "\(index).txt")
+        }
+        try await subscription.followFile(worktree, path: "0.txt")
+        await #expect(throws: HostError.invalidRequest(reason: "A client follows at most 64 files.")) {
+            try await subscription.followFile(worktree, path: "64.txt")
+        }
+    }
+
     /// A subscriber that falls too far behind, or asks for events the log no
     /// longer keeps or never issued, is told to resync instead.
     @Test func laggingSubscribersResync() async {
