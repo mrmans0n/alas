@@ -312,7 +312,7 @@ public struct RebasePlan: Equatable, Sendable, Codable {
 }
 
 public struct RebasePlanCommit: Equatable, Sendable, Codable {
-    public enum State: Equatable, Sendable, Codable { case done, current, pending }
+    public enum State: String, Equatable, Sendable, Codable { case done, current, pending }
     public let sha: String          // short SHA as it appears in the todo file
     public let summary: String      // first line of commit message
     public let state: State

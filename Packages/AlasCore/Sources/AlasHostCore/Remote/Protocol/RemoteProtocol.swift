@@ -1105,7 +1105,7 @@ extension RemoteServerMessage: Codable {
                 truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
                 commitsTruncated: try c.decodeIfPresent(Bool.self, forKey: .commitsTruncated) ?? false,
                 workingTreeTruncated: try c.decodeIfPresent(Bool.self, forKey: .workingTreeTruncated),
-                operation: try c.decodeIfPresent(MergeOperation.self, forKey: .operation))
+                operation: (try? c.decodeIfPresent(MergeOperation.self, forKey: .operation)) ?? nil)
         case "changeListFailed":
             self = .changeListFailed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
