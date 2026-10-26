@@ -120,6 +120,9 @@ struct ReviewSessionTabView: View {
     @State private var providerReviewSummaryBody = ""
     @State private var isProviderPublishing = false
     @State private var providerPublishError: String?
+    /// Threads with a reply or (un)resolve on its way to the provider: a
+    /// second click on one is ignored until the first returns.
+    @State private var providerThreadsInFlight: Set<String> = []
 
     init(
         worktree: Worktree,
@@ -1148,19 +1151,21 @@ struct ReviewSessionTabView: View {
 
     private func inlineFeedbackActions(for loaded: ReviewSessionLoadedContext) -> DiffReviewInlineFeedbackActions {
         var actions = DiffReviewInlineFeedbackActions()
+        let threadsInFlight = providerThreadsInFlight
         actions.availability = { item, _ in
             guard let providerContext = loaded.providerContext,
                   let provider = providerRegistry.provider(for: providerContext.remote.kind)
             else { return .none }
 
             let capabilities = provider.capabilities
+            let idle = !threadsInFlight.contains(item.id)
             return DiffReviewInlineFeedbackActionAvailability(
                 canOpenProvider: item.providerURL != nil,
                 canCopyContext: true,
                 canSendToAgent: false,
-                canReplyProvider: item.status == .actionable && capabilities.canReply,
-                canResolveProvider: item.status == .actionable && capabilities.canResolve,
-                canUnresolveProvider: item.status == .resolved && capabilities.canResolve
+                canReplyProvider: idle && item.status == .actionable && capabilities.canReply,
+                canResolveProvider: idle && item.status == .actionable && capabilities.canResolve,
+                canUnresolveProvider: idle && item.status == .resolved && capabilities.canResolve
             )
         }
         actions.replyProvider = { item, file, body in
@@ -1195,8 +1200,10 @@ struct ReviewSessionTabView: View {
         body: String?
     ) async {
         guard let providerContext = loaded.providerContext,
-              let controller = makeProviderMutationController(for: loaded)
+              let controller = makeProviderMutationController(for: loaded),
+              providerThreadsInFlight.insert(item.id).inserted
         else { return }
+        defer { providerThreadsInFlight.remove(item.id) }
 
         do {
             let result = try await controller.mutateThread(

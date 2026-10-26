@@ -188,6 +188,9 @@ struct NativePeerReviewView: View {
     /// What a thread change or publish that went through could not finish,
     /// such as one draft that failed to post: a note, not a failure.
     @State private var providerWarning: String?
+    /// Threads with a reply or (un)resolve on its way to the host: a second
+    /// click on one is ignored until the first returns.
+    @State private var threadsInFlight: Set<String> = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -332,14 +335,16 @@ struct NativePeerReviewView: View {
     private var inlineFeedbackActions: DiffReviewInlineFeedbackActions {
         var actions = DiffReviewInlineFeedbackActions()
         guard let capabilities = providerReview?.capabilities else { return actions }
+        let threadsInFlight = threadsInFlight
         actions.availability = { item, _ in
-            DiffReviewInlineFeedbackActionAvailability(
+            let idle = !threadsInFlight.contains(item.id)
+            return DiffReviewInlineFeedbackActionAvailability(
                 canOpenProvider: item.providerURL != nil,
                 canCopyContext: true,
                 canSendToAgent: false,
-                canReplyProvider: item.status == .actionable && capabilities.canReply,
-                canResolveProvider: item.status == .actionable && capabilities.canResolve,
-                canUnresolveProvider: item.status == .resolved && capabilities.canResolve
+                canReplyProvider: idle && item.status == .actionable && capabilities.canReply,
+                canResolveProvider: idle && item.status == .actionable && capabilities.canResolve,
+                canUnresolveProvider: idle && item.status == .resolved && capabilities.canResolve
             )
         }
         actions.replyProvider = { item, _, body in mutateThread(item, kind: .reply, body: body) }
@@ -360,7 +365,9 @@ struct NativePeerReviewView: View {
     }
 
     private func mutateThread(_ item: DiffReviewInlineFeedback, kind: ProviderThreadMutationKind, body: String?) {
+        guard threadsInFlight.insert(item.id).inserted else { return }
         Task { @MainActor in
+            defer { threadsInFlight.remove(item.id) }
             let result = await hosts.mutateReviewThread(
                 item.id, kind: kind, body: body, sessionID: selection.sessionID,
                 in: selection.worktree, serverId: selection.serverId
