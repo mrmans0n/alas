@@ -1147,7 +1147,8 @@ struct ComputerUseCoordinatorTests {
         }
     }
 
-    enum TierHold { case drag, sessionEnd }
+    /// `takeover`: the in-app drag throws the user's takeover at once, as the poster does.
+    enum TierHold { case drag, sessionEnd, takeover }
 
     /// `perform` with drags going through the real tiers (`ComputerUseDragTiers`): the in-app drag
     /// records "background" and ends with `outcome`; a drag session's image shows for
@@ -1167,6 +1168,7 @@ struct ComputerUseCoordinatorTests {
                 direct: direct,
                 background: {
                     recorder.recordEvent("background")
+                    if holding == .takeover { throw ComputerUseSystemError.userTookOverDrag }
                     if holding == .drag { await gate?.enter(1) }
                     if interrupt() == .cancelled { throw CancellationError() }
                     return outcome
@@ -1199,22 +1201,34 @@ struct ComputerUseCoordinatorTests {
     }
 
     /// A drag that started a drag and drop session was released where it began; the foreground
-    /// drag runs once the session's image is gone.
-    @Test func aDragThatStartsADragSessionFallsBackToTheForeground() async throws {
+    /// drag runs once the session's image is gone, and never while it still shows at the deadline.
+    @Test(arguments: [2, 100])
+    func aDragThatStartsADragSessionFallsBackToTheForeground(sessionLooks: Int) async throws {
         let recorder = Recorder()
         let tierSleeps = Recorder()
         var system = Self.system(recorder: recorder)
-        system.perform = Self.tiered(.dragSession, recorder: recorder, tierSleeps: tierSleeps, sessionLooks: 2)
+        system.perform = Self.tiered(.dragSession, recorder: recorder, tierSleeps: tierSleeps, sessionLooks: sessionLooks)
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
-        #expect(try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s"))).contains(#""delivery":"activation""#))
-        #expect(recorder.events == ["background", "foreground"] && recorder.inputs.count == 1)
-        #expect(tierSleeps.sleeps == [ComputerUseBackgroundDrag.sessionPoll, ComputerUseBackgroundDrag.sessionPoll])
+        let response = await f.coordinator.perform(drag, sessionID: "s")
+        let polls = tierSleeps.sleeps
+        #expect(Set(polls) == [ComputerUseBackgroundDrag.sessionPoll])
+        if sessionLooks < 100 {
+            #expect(try #require(Self.text(response)).contains(#""delivery":"activation""#))
+            #expect(recorder.events == ["background", "foreground"] && recorder.inputs.count == 1)
+            #expect(polls.count == sessionLooks)
+        } else {
+            #expect(response == .error(
+                "computer_action_failed: The app started a drag and drop that didn't end; nothing was dragged in the front."))
+            #expect(recorder.events == ["background"])
+            #expect(polls.reduce(.zero, +) == ComputerUseDragTiers.sessionEndDeadline)
+        }
     }
 
-    /// A Stop in the in-app drag, or while its drag session ends, never brings the app forward.
-    @Test(arguments: [TierHold.drag, .sessionEnd])
+    /// A Stop in the in-app drag or while its drag session ends, or the user taking over, never
+    /// brings the app forward.
+    @Test(arguments: [TierHold.drag, .sessionEnd, .takeover])
     func aStopDuringABackgroundDragNeverFallsBack(_ holding: TierHold) async throws {
         let recorder = Recorder()
         let gate = TreeGate()
@@ -1224,10 +1238,14 @@ struct ComputerUseCoordinatorTests {
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
         let call = Task { await f.coordinator.perform(drag, sessionID: "s") }
-        try await eventually("dragging") { gate.entered == [1] }
-        await f.coordinator.stop(sessionID: "s")
-        gate.open(1)
-        #expect(await call.value == .error(ComputerUseCoordinator.Message.stopped))
+        if holding == .takeover {
+            #expect(await call.value == .error(ComputerUseCoordinator.Message.userTookOverDrag))
+        } else {
+            try await eventually("dragging") { gate.entered == [1] }
+            await f.coordinator.stop(sessionID: "s")
+            gate.open(1)
+            #expect(await call.value == .error(ComputerUseCoordinator.Message.stopped))
+        }
         #expect(recorder.events == ["background"])
     }
 

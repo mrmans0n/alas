@@ -152,6 +152,8 @@ enum ComputerUseInputPoster {
         screenWindows: @Sendable () -> [ComputerUseInputGeometry.ScreenWindow],
         interrupt: @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> BackgroundDragOutcome {
+        // Every event, a cross-window drop's too, is addressed to the source window; a file-style
+        // drag into another window reaches it through the drag-session fallback.
         let target = Target(pid: pid, windowID: windowID, windowOrigin: windowFrame.origin)
         let gesture = Int64.random(in: 1 ... Int64(Int32.max))
         func event(_ type: CGEventType, at point: CGPoint, clickState: Int) throws -> CGEvent {
@@ -199,6 +201,8 @@ enum ComputerUseInputPoster {
             await steadyPause(ComputerUseBackgroundDrag.stepDelay)
         }
         try checkInterrupt()
+        // One last look: a drag image can come up a moment after the last move.
+        await steadyPause(ComputerUseBackgroundDrag.sessionPoll)
         if ComputerUseBackgroundDrag.startedSession(before: before, now: screenWindows(), sourcePID: pid) {
             return .dragSession
         }

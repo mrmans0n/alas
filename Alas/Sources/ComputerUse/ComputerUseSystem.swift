@@ -305,9 +305,13 @@ enum ComputerUseDragTiers {
                 waited += ComputerUseBackgroundDrag.sessionPoll
             }
             if isCancelled() { throw CancellationError() }
+            // A session still going would carry the foreground drag's item along with its own.
+            if sessionActive() { throw ComputerUseSystemError.actionFailed(sessionOutlastedRefusal) }
             return try await foreground()
         }
     }
+
+    static let sessionOutlastedRefusal = "The app started a drag and drop that didn't end; nothing was dragged in the front."
 }
 
 private enum LiveComputerUseSystem {
