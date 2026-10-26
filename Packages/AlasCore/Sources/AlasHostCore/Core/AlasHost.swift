@@ -21,7 +21,7 @@ public final class AlasHost {
     /// For what a headless host builds over the core, such as its session presenter.
     @_spi(AppHost) public var coreContext: AlasCoreContext { core }
     /// Started by the first snapshot: nobody holds a cursor before it.
-    private var eventSource: HostEventSource?
+    private(set) var eventSource: HostEventSource?
     /// Test hook that replaces the session step of a Remote client's
     /// worktree-and-session creation.
     @_spi(Testing) public var remoteSessionCreator: (@MainActor (RemoteSessionCreation) async -> RemoteCreateSessionResult)?

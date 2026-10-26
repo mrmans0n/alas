@@ -316,6 +316,21 @@ public final class HostProtocolConnection {
             try subscribed().followWorktree(id)
         case .unfollowWorktree(let id):
             try subscribed().unfollowWorktree(id)
+        case .followFile(let ref, let path):
+            let listed = try servedWorktree(ref, capability: HostProtocolCapability.worktreesFilesV1)
+            _ = try subscribed()
+            // The paths a Mac may edit, and no others: a follow watches the file.
+            _ = try await host.core.writableURL(path, in: listed)
+            guard let normalized = RemoteWorktreeFileAccess.normalizedRelativePath(path) else {
+                throw HostError.invalidRequest(reason: "The host does not edit \(path).")
+            }
+            try await subscribed().followFile(listed, path: normalized)
+        case .unfollowFile(let ref, let path):
+            try subscribed().unfollowFile(
+                // A worktree no longer listed was unfollowed with its removal.
+                worktreeID: (try? worktree(ref))?.id ?? Worktree.makeId(path: URL(fileURLWithPath: ref.path)),
+                path: RemoteWorktreeFileAccess.normalizedRelativePath(path) ?? path
+            )
         case .capabilities:
             return .capabilities(capabilities: host.servedCapabilities)
         case .runOutput(let runID, let projectID):

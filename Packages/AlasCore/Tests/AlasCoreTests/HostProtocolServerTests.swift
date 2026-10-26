@@ -695,6 +695,8 @@ struct HostProtocolServerTests {
             #expect(!capabilities.contains(HostProtocolCapability.worktreesGitV1))
             #expect(try await fixture.request(.listStashes(worktree: ref))
                 == .failure(error: .invalidRequest(reason: "This host does not serve this git action.")))
+            #expect(try await fixture.request(.followFile(worktree: ref, path: "notes.txt"))
+                == .failure(error: .invalidRequest(reason: "This host does not serve this git action.")))
         case .hidden:
             fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: repo, hidden: true)
             expected = .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")
@@ -1155,6 +1157,86 @@ struct HostProtocolServerTests {
         }
         #expect(try Data(contentsOf: repo.appendingPathComponent(path)) == Data("resolved\n".utf8))
         #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
+    }
+
+    /// A Mac hears when a file it follows changes, however it is saved, and
+    /// only while it follows it; a Mac that does not follow it hears nothing.
+    @Test func aFollowedFileChangeReachesOnlyTheMacsFollowingIt() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let notes = repo.appendingPathComponent("notes.txt")
+        try "a\n".write(to: notes, atomically: true, encoding: .utf8)
+        let a = try await fixture.fileFollower()
+        let b = try await fixture.fileFollower()
+        defer {
+            a.connection.close()
+            b.connection.close()
+        }
+        #expect(await a.request(.followFile(worktree: ref, path: "../notes.txt"))
+            == .failure(error: .invalidRequest(reason: "The host does not edit ../notes.txt.")))
+        #expect(await a.request(.followFile(worktree: ref, path: "notes.txt")) == .done)
+        let hashes = ["b\n", "c\n"].map { WorktreeFileVersion.contentHash(of: Data($0.utf8)) }
+
+        try "b\n".write(to: notes, atomically: true, encoding: .utf8)
+        try await a.client.waitFor(within: .seconds(60)) { Self.notesVersions($0).last??.contentHash == hashes[0] }
+        // A rename save swaps the file for a new one, which is watched too.
+        try "c\n".write(to: notes, atomically: true, encoding: .utf8)
+        try await a.client.waitFor(within: .seconds(60)) { Self.notesVersions($0).last??.contentHash == hashes[1] }
+        try FileManager.default.removeItem(at: notes)
+        try await a.client.waitFor(within: .seconds(60)) { Self.notesVersions($0).last == .some(nil) }
+
+        #expect(await a.request(.unfollowFile(worktree: ref, path: "notes.txt")) == .done)
+        try "d\n".write(to: notes, atomically: true, encoding: .utf8)
+        // A later event both Macs get proves each had its chance.
+        fixture.core.projects.setOperationState(for: worktree, state: .archiving(projectId: fixture.projectID))
+        for mac in [a, b] {
+            try await mac.client.waitFor { Self.events($0).contains { if case .worktreeChanged = $0 { true } else { false } } }
+        }
+        #expect(Self.notesVersions(a.client.messages).map { $0?.contentHash } == hashes + [nil])
+        #expect(Self.notesVersions(b.client.messages).isEmpty)
+        let batch = try #require(a.client.messages.first { !Self.notesVersions([$0]).isEmpty })
+        #expect(try JSONDecoder().decode(HostServerMessage.self, from: JSONEncoder().encode(batch)) == batch)
+    }
+
+    /// One Mac going away leaves the file watched for the others; the last
+    /// one to let go ends the watch.
+    @Test func aFileStaysWatchedWhileAnyMacFollowsIt() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let notes = repo.appendingPathComponent("notes.txt")
+        try "a\n".write(to: notes, atomically: true, encoding: .utf8)
+        let a = try await fixture.fileFollower()
+        let b = try await fixture.fileFollower()
+        defer { b.connection.close() }
+        for mac in [a, b] {
+            #expect(await mac.request(.followFile(worktree: ref, path: "notes.txt")) == .done)
+        }
+        a.connection.close()
+
+        try "b\n".write(to: notes, atomically: true, encoding: .utf8)
+        let hash = WorktreeFileVersion.contentHash(of: Data("b\n".utf8))
+        try await b.client.waitFor(within: .seconds(60)) { Self.notesVersions($0).last??.contentHash == hash }
+        #expect(await b.request(.unfollowFile(worktree: ref, path: "notes.txt")) == .done)
+        #expect(fixture.host.eventSource?.fileWatcher.watches.isEmpty == true)
+    }
+
+    private static func events(_ messages: [HostServerMessage]) -> [HostEvent] {
+        messages.flatMap { message -> [HostEvent] in
+            guard case .events(let batch, _) = message else { return [] }
+            return batch
+        }
+    }
+
+    /// The versions `fileChanged` sent for notes.txt, in order.
+    private static func notesVersions(_ messages: [HostServerMessage]) -> [WorktreeFileVersion?] {
+        var versions: [WorktreeFileVersion?] = []
+        for case .fileChanged(_, "notes.txt", let version) in events(messages) {
+            versions.append(version)
+        }
+        return versions
     }
 
     /// A branch with no upstream is pushed as the review pill pushes it,
@@ -2485,6 +2567,14 @@ struct HostProtocolServerTests {
             return preview
         }
 
+        /// Another Mac on this host, subscribed to `fileChanged`.
+        func fileFollower() async throws -> Mac {
+            let client = Client()
+            let mac = Mac(connection: HostProtocolServer(host: host).connect(caller: .localUser(uid: 501), send: client.receive), client: client)
+            #expect(await mac.request(.subscribeAccepting(after: try await host.snapshot().cursor, events: ["fileChanged"])) == .subscribed)
+            return mac
+        }
+
         func tearDown() {
             connection.close()
             core.sessionManagers.values.forEach { $0.shutdownBackgroundTasks() }
@@ -2640,6 +2730,21 @@ struct HostProtocolServerTests {
         ) async throws {}
     }
 
+    @MainActor
+    private struct Mac {
+        let connection: HostProtocolConnection
+        let client: Client
+
+        func request(_ request: HostRequest) async -> HostResponse? {
+            let id = client.messages.count + 1
+            await connection.receive(HostClientMessage(id: id, request: request))
+            for case .response(id, let result) in client.messages {
+                return result
+            }
+            return nil
+        }
+    }
+
     /// What a transport would write, in order. Can hold the first event batch
     /// to play a client that reads slowly.
     @MainActor
@@ -2671,8 +2776,10 @@ struct HostProtocolServerTests {
             gate = nil
         }
 
-        func waitFor(_ condition: @escaping @MainActor @Sendable ([HostServerMessage]) -> Bool) async throws {
-            try await eventually { await condition(self.messages) }
+        func waitFor(
+            within timeout: Duration = .seconds(10), _ condition: @escaping @MainActor @Sendable ([HostServerMessage]) -> Bool
+        ) async throws {
+            try await eventually(within: timeout) { await condition(self.messages) }
         }
     }
 }

@@ -177,6 +177,10 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case writeFile(worktree: WorktreeRef, path: String, text: String, expected: WorktreeFileVersion?)
     /// Makes folder `path` in a folder that exists (`host.worktrees.files.v1`).
     case createFolder(worktree: WorktreeRef, path: String)
+    /// Sends `fileChanged` for `path` on the connection's subscription while it
+    /// follows the file (`host.worktrees.files.v1`).
+    case followFile(worktree: WorktreeRef, path: String)
+    case unfollowFile(worktree: WorktreeRef, path: String)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
