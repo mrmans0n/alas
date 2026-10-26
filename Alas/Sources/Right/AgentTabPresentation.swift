@@ -379,10 +379,12 @@ struct AgentSidebarRowView: View {
                     }
                     .tint(theme.color("del"))
                 }
-                Button("Follow up", systemImage: "arrowshape.turn.up.left.fill") {
-                    isEditing.toggle()
+                if actions.onFollowUp != nil {
+                    Button("Follow up", systemImage: "arrowshape.turn.up.left.fill") {
+                        isEditing.toggle()
+                    }
+                    .tint(theme.color("accent"))
                 }
-                .tint(theme.color("accent"))
                 if let onDelegate = actions.onDelegate {
                     Button("Delegate", systemImage: "person.badge.plus") {
                         onDelegate(sessionID)
@@ -416,7 +418,7 @@ struct AgentSidebarRowView: View {
                 }
                 Spacer(minLength: 0)
                 Button(delivery == .sending ? "Sending…" : "Send", systemImage: "arrow.up") {
-                    actions.onFollowUp(sessionID, draft)
+                    actions.onFollowUp?(sessionID, draft)
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(theme.color("accent"))

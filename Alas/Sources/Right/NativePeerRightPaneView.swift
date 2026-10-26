@@ -477,10 +477,13 @@ struct NativePeerRightPaneView: View {
                     onFocus: { rowID in
                         if case .acp(let sessionID) = rowID { client.openSession(sessionID) }
                     },
-                    onInterrupt: { _ in },
-                    onFollowUp: { _, _ in },
+                    onInterrupt: { client.stop(sessionId: $0) },
+                    onFollowUp: nil,
                     onDelegate: nil
                 ),
+                controllableSessionIDs: client.selectedWorktreePeer?.state.carriesSessions == true
+                    ? Set((client.selectedWorktreeGroup?.sessions ?? []).filter(\.isActive).map(\.id))
+                    : [],
                 followUps: .constant([:]),
                 disabledReason: { row in
                     row.state == .detached && !canOpen
