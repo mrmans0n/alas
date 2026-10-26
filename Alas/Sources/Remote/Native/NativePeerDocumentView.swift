@@ -151,9 +151,9 @@ struct NativePeerHostFileView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
         .onAppear {
-            let buffer = client.hostFileBuffer(for: file)
-            state.tabs.adoptBuffer(buffer, tabId: file.tabID)
-            self.buffer = buffer
+            guard let opened = client.hostFileBuffer(for: file) else { return }
+            state.tabs.adoptBuffer(opened, tabId: file.tabID)
+            buffer = opened
         }
         .onDisappear {
             state.tabs.releaseAdoptedBuffer(tabId: file.tabID)

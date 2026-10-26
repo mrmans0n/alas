@@ -249,6 +249,24 @@ struct NativePeerWorkspaceTests {
         #expect(!workspace.fileTreeTruncated)
     }
 
+    enum VersionStep: Sendable, CaseIterable { case reopenSameFile, openOtherFile, unversionedReply }
+
+    /// The version an editor opens on outlives a reload of the same file, not a switch to
+    /// another one or a reply the host would not save.
+    @Test(arguments: VersionStep.allCases)
+    func documentVersionLastsOnlyWhileTheSameFileReloadsWithOne(_ step: VersionStep) {
+        let version = WorktreeFileVersion(contentHash: "h1", modified: .distantPast)
+        var workspace = NativePeerWorkspace()
+        workspace.beginDocument(.file(path: "a.swift"))
+        _ = workspace.apply(.fileContents(sessionId: "B:s", path: "a.swift", text: "a", truncated: false, version: version))
+        switch step {
+        case .reopenSameFile: workspace.beginDocument(.file(path: "a.swift"))
+        case .openOtherFile: workspace.beginDocument(.file(path: "b.swift"))
+        case .unversionedReply: _ = workspace.apply(.fileContents(sessionId: "B:s", path: "a.swift", text: "b", truncated: false))
+        }
+        #expect(workspace.documentVersion == (step == .reopenSameFile ? version : nil))
+    }
+
     enum Kind: Sendable, CaseIterable { case localChanges, commit, commitRange, branch, reviewRequest }
 
     /// A comment the host files, an agent's or a Mac's, lands on the file and

@@ -744,6 +744,8 @@ final class EditorBuffer {
     private let remoteBackend: EditorRemoteBackend?
     private var remoteHost: String? { remoteBackend?.sshHost }
     var isRemote: Bool { remoteHost != nil }
+    /// A paired host's file: its path names a file on the host, never one this Mac's language servers have open.
+    var isPeerHost: Bool { remoteBackend != nil && remoteHost == nil }
     @ObservationIgnored
     private var remoteWatch: EditorRemoteWatch?
     @ObservationIgnored

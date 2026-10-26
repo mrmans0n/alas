@@ -867,6 +867,25 @@ final class AppState {
     /// call at launch and after toggling the config. A bind failure is captured
     /// in `lastRemoteError` rather than thrown — the app must not crash because
     /// a port is busy.
+    /// The Remote access toggle. Turning it off with unsaved host files asks first; Cancel leaves it on.
+    func setRemoteEnabled(_ enabled: Bool) {
+        guard !enabled, nativePeerSessions?.unsavedHostFiles.isEmpty == false else {
+            applyRemoteEnabled(enabled)
+            return
+        }
+        Task {
+            let reason = "Turning off remote control disconnects paired Macs and discards edits not saved to them."
+            guard await confirmDiscardingUnsavedHostFiles(reason: reason) else { return }
+            applyRemoteEnabled(false)
+        }
+    }
+
+    private func applyRemoteEnabled(_ enabled: Bool) {
+        config.remote.enabled = enabled
+        saveConfig()
+        syncRemoteServer()
+    }
+
     func syncRemoteServer() {
         defer {
             syncPairingApprovalState()
@@ -1820,7 +1839,7 @@ final class AppState {
         installSessionRecap()
         startLocalTextObservers()
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
-            await self?.confirmQuitWithUnsavedHostFiles() ?? true
+            await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
         }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
@@ -9897,16 +9916,16 @@ final class AppState {
 
     var hasOpenPeerHostFile: Bool { nativePeerSessions?.openedHostFile != nil }
 
-    /// Before quitting with unsaved host files: Save All quits once every one saved, Discard
-    /// quits, Cancel does not.
-    func confirmQuitWithUnsavedHostFiles() async -> Bool {
+    /// Before something that drops unsaved host files (`reason` says what): true once Save All
+    /// saved every one, or for Discard; false for Cancel or a failed save.
+    func confirmDiscardingUnsavedHostFiles(reason: String) async -> Bool {
         let unsaved = nativePeerSessions?.unsavedHostFiles ?? []
         guard !unsaved.isEmpty else { return true }
         let hosts = Set(unsaved.map { $0.hostName })
         let alert = NSAlert()
         alert.messageText = "Save changes to files on \(hosts.count == 1 ? hosts.first ?? "" : "paired Macs")?"
-        alert.informativeText = unsaved.map { hosts.count == 1 ? $0.file.path : "\($0.hostName): \($0.file.path)" }
-            .sorted().joined(separator: "\n")
+        let files = unsaved.map { hosts.count == 1 ? $0.file.path : "\($0.hostName): \($0.file.path)" }.sorted()
+        alert.informativeText = "\(reason)\n\n" + files.joined(separator: "\n")
         alert.alertStyle = .warning
         alert.addButton(withTitle: "Save All")
         alert.addButton(withTitle: "Discard").hasDestructiveAction = true

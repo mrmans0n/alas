@@ -18,8 +18,8 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
     private var terminationInProgress = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        AlasTerminationCoordinator.shared.finish?()
         guard !terminationInProgress, let flush = AlasTerminationCoordinator.shared.flush else {
+            AlasTerminationCoordinator.shared.finish?()
             return .terminateNow
         }
         terminationInProgress = true
@@ -29,6 +29,8 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
                 sender.reply(toApplicationShouldTerminate: false)
                 return
             }
+            // Only once the quit goes ahead: a cancelled one keeps the launch's marker.
+            AlasTerminationCoordinator.shared.finish?()
             await flush()
             sender.reply(toApplicationShouldTerminate: true)
         }

@@ -550,7 +550,7 @@ final class CodeEditorCoordinator {
         textView?.bindUndo(to: buffer)
         self.currentRoot = buffer.worktreeRoot
         self.currentRelativePath = buffer.relativePath
-        if let worktreeID = currentWorktreeId {
+        if let worktreeID = currentWorktreeId, !buffer.isPeerHost {
             lspBinding = EditorLSPBinding(
                 manager: appState.lsp,
                 buffer: buffer,
@@ -1207,7 +1207,7 @@ final class CodeEditorCoordinator {
     }
 
     private func makeLSPDidChangePayload(edits: [EditorTextEdit]? = nil) -> LSPDidChangePayload? {
-        guard let buffer, let language = currentLanguage else { return nil }
+        guard let buffer, let language = currentLanguage, !buffer.isPeerHost else { return nil }
         guard !buffer.isExternal || buffer.externalEditable else { return nil }
         let url = buffer.worktreeRoot.appendingPathComponent(buffer.relativePath)
         return LSPDidChangePayload(
@@ -1611,7 +1611,8 @@ final class CodeEditorCoordinator {
     /// then subscribes to diagnostics. The buffer owns open/close; the
     /// coordinator only wires the diagnostic stream.
     private func subscribeIfPossible(theme: Theme) {
-        guard let buffer else { return }
+        // A host file's path may name a local file a server has open: its diagnostics are not this file's.
+        guard let buffer, !buffer.isPeerHost else { return }
         diagnosticsSetupTask?.cancel()
         diagnosticsTask?.cancel()
         // Restore from cache instead of clearing. The LSP server doesn't

@@ -387,9 +387,11 @@ final class NativePeerSessions {
         return (selectedWorktree.serverId, host)
     }
 
-    /// The open `.file` document on `hostFileTarget`, while documents show.
+    /// The open `.file` document on `hostFileTarget`, while documents show and no review or commit covers them.
     private var hostFileDocument: NativePeerHostFile? {
-        guard canReadWorkspace, let target = hostFileTarget, case .file(let path)? = workspace.document else { return nil }
+        guard canReadWorkspace, openedReview == nil, openedCommitEditor == nil, let target = hostFileTarget,
+              case .file(let path)? = workspace.document
+        else { return nil }
         return NativePeerHostFile(serverId: target.serverId, worktree: target.worktree, path: path)
     }
 
@@ -406,10 +408,10 @@ final class NativePeerSessions {
         return workspace.documentVersion == nil ? "Read-only: the host doesn't save this file from a paired Mac." : nil
     }
 
-    /// Created on first use, watching; kept while dirty after its view closes.
-    func hostFileBuffer(for file: NativePeerHostFile) -> EditorBuffer {
+    /// Created on first use, watching; kept while dirty after its view closes. Nil without a host channel.
+    func hostFileBuffer(for file: NativePeerHostFile) -> EditorBuffer? {
         if let buffer = hostFileBuffers[file] { return buffer }
-        guard let hosts else { preconditionFailure("A host file opens only over a host channel.") }
+        guard let hosts else { return nil }
         let buffer = EditorBuffer(
             hostWorktreeRoot: URL(fileURLWithPath: file.worktree.snapshot.worktree.path.path),
             relativePath: file.path,
