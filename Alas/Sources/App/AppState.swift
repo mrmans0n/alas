@@ -1101,7 +1101,13 @@ final class AppState {
     let reviewPalette = ReviewTargetPaletteModel()
     let runScriptPalette = RunScriptPaletteModel()
 
+    /// Whether a peer worktree or tab covers the center pane. The local
+    /// selection stays set underneath, so the file search, agent launcher,
+    /// review, and run script palettes — which all act on it — stay closed.
+    var peerCoversCenterPane: Bool { nativePeerSessions?.coversCenterPane == true }
+
     func openSearchOverlay() {
+        guard !peerCoversCenterPane else { return }
         reviewPalette.close()
         isReviewPaletteOpen = false
         repoSelector.close()
@@ -1137,6 +1143,7 @@ final class AppState {
     }
 
     func openAgentLauncherOverlay(mode: AppConfig.LauncherMode? = nil, locked: Bool = false) {
+        guard !peerCoversCenterPane else { return }
         reviewPalette.close()
         isReviewPaletteOpen = false
         search.close()
@@ -1153,7 +1160,7 @@ final class AppState {
     }
 
     func openRunScriptPaletteOverlay(mode: RunScriptPaletteModel.Mode = .run) {
-        guard !isRunScriptPaletteOpen else { return }
+        guard !isRunScriptPaletteOpen, !peerCoversCenterPane else { return }
         reviewPalette.close()
         isReviewPaletteOpen = false
         search.close()
@@ -8961,6 +8968,23 @@ final class AppState {
     func renamePeerSessionTab(_ session: RemoteSessionSummary) {
         guard let client = nativePeerSessions, let title = promptForSessionTitle(session.title) else { return }
         client.renameSession(session.id, title: title)
+    }
+
+    /// Archives a peer session on its host after asking: it stops the agent
+    /// and hides the session, and nothing on this Mac brings it back.
+    func archivePeerSession(_ session: RemoteSessionSummary) {
+        guard let client = nativePeerSessions, let hosts = client.hosts,
+              let id = RemoteFederatedSessionID.parse(session.id, peers: Set(client.snapshot.groups.map(\.serverId))),
+              hosts.canArchiveSessions(serverId: id.serverId) else { return }
+        let peerName = client.snapshot.groups.first { $0.serverId == id.serverId }?.name ?? "the host"
+        let alert = NSAlert()
+        alert.messageText = "Archive “\(session.title)”?"
+        alert.informativeText = "This stops the session on \(peerName) and removes it from the list."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Archive")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        hosts.archiveSession(id.sessionId, serverId: id.serverId)
     }
 
     /// Copy and Save Session as Markdown for a peer session, whose

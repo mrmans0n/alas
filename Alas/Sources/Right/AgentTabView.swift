@@ -4,7 +4,8 @@ import Combine
 struct AgentSidebarActions {
     let onFocus: (AgentSidebarRowID) -> Void
     let onInterrupt: (ACPSession.ID) -> Void
-    let onFollowUp: (ACPSession.ID, String) -> Void
+    /// Nil where the rail cannot send follow-ups; hides the Follow up button.
+    let onFollowUp: ((ACPSession.ID, String) -> Void)?
     let onDelegate: ((ACPSession.ID) -> Void)?
     /// Parent session id, subagent session id. Nil where the rail cannot cancel.
     var onCancelSubagent: ((ACPSession.ID, String) -> Void)? = nil

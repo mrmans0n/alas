@@ -4,6 +4,7 @@ import Foundation
 extension AppState {
     @MainActor
     func openReviewPaletteOverlay(prefill worktree: Worktree? = nil, rangeAnchorSHA: String? = nil) {
+        guard !peerCoversCenterPane else { return }
         search.close()
         isSearchOpen = false
         repoSelector.close()
@@ -43,6 +44,7 @@ extension AppState {
     /// which must be a git project.
     @MainActor
     var canOpenReviewPalette: Bool {
+        guard !peerCoversCenterPane else { return false }
         let projectId = selectedWorktreeId.flatMap { worktree(withId: $0)?.projectId } ?? projects.first?.id
         return projects.first { $0.id == projectId }.map { !$0.isFolder } ?? false
     }

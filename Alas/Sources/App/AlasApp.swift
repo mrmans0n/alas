@@ -260,6 +260,7 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasOpenSearch, object: nil)
             }
             .keyboardShortcut(state.shortcut(for: .searchFiles))
+            .disabled(state.peerCoversCenterPane)
             Divider()
             Button("Split Selection into Lines") {
                 NSApp.sendAction(#selector(CodeTextView.splitSelectionIntoLines(_:)), to: nil, from: nil)
@@ -338,19 +339,19 @@ struct AlasApp: App {
                                                 object: AgentLauncherRequest.picker)
             }
             .keyboardShortcut(state.shortcut(for: .launchAgent))
-            .disabled(state.projects.isEmpty)
+            .disabled(state.projects.isEmpty || state.peerCoversCenterPane)
             Button("Launch Agent in Chat…") {
                 NotificationCenter.default.post(name: .alasOpenAgentLauncher,
                                                 object: AgentLauncherRequest.locked(.acp))
             }
             .keyboardShortcut(state.shortcut(for: .launchAgentInChat))
-            .disabled(state.projects.isEmpty)
+            .disabled(state.projects.isEmpty || state.peerCoversCenterPane)
             Button("Launch Agent in Terminal…") {
                 NotificationCenter.default.post(name: .alasOpenAgentLauncher,
                                                 object: AgentLauncherRequest.locked(.terminal))
             }
             .keyboardShortcut(state.shortcut(for: .launchAgentInTerminal))
-            .disabled(state.projects.isEmpty)
+            .disabled(state.projects.isEmpty || state.peerCoversCenterPane)
             Button("Close Tab") {
                 NotificationCenter.default.post(name: .alasCloseTab, object: nil)
             }
@@ -441,7 +442,7 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasOpenRunScriptPalette, object: nil)
             }
             .keyboardShortcut(state.shortcut(for: .runScript))
-            .disabled(state.projects.isEmpty)
+            .disabled(state.projects.isEmpty || state.peerCoversCenterPane)
             Divider()
             Button("Refresh Worktrees") {
                 NotificationCenter.default.post(name: .alasRefreshWorktrees, object: nil)
