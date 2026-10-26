@@ -175,6 +175,156 @@ extension EditorRemoteBackend {
             helperSession = nil
         }
     }
+
+    /// A paired host's file. Its closures share the version last read or written (the baseline); the host
+    /// compares content hashes, so a touch is no change. `follow` returns once the host follows the file:
+    /// a read follows first, so no change between the read and the follow is missed.
+    @MainActor static func peer(
+        read: @escaping @MainActor (_ path: String) async -> RemoteServerMessage?,
+        write: @escaping @MainActor (_ path: String, _ text: String, _ expected: WorktreeFileVersion?) async throws -> WorktreeFileVersion,
+        follow: @escaping @MainActor (_ path: String, _ onChange: @escaping @MainActor (WorktreeFileVersion?) -> Void) async -> @MainActor () -> Void
+    ) -> Self {
+        let files = PeerFiles(fetch: read, follow: follow)
+        return Self(
+            sshHost: nil,
+            read: { path in
+                let following = files.hold(path)
+                defer { files.release(path) } // the caller starts watching in the same turn, keeping the follow
+                _ = await following.value
+                let (result, version) = try await files.current(path)
+                if let version { files.baselines[path] = version }
+                return result
+            },
+            probe: { path in
+                let (result, version) = try await files.current(path)
+                if case .missing = result { return .deleted }
+                guard let version, version.contentHash == files.baselines[path]?.contentHash else { return .changed }
+                files.baselines[path] = version
+                return .unchanged
+            },
+            currentMtime: { path in try await files.current(path).version?.modified },
+            verifyContained: { _ in }, // the host checks the path on every write
+            write: { path, content, expectedMtime, _ in
+                // Without a baseline (Keep mine, Save anyway) the save lands on the current version.
+                let expected = expectedMtime == nil ? try await files.current(path).version : files.baselines[path]
+                let version = try await write(path, content, expected)
+                files.baselines[path] = version
+                return version.modified
+            },
+            watch: { path, observed, check in
+                let id = files.watch(path, observed: observed, check: check)
+                return EditorRemoteWatch(stop: { files.unwatch(path, id: id) })
+            }
+        )
+    }
+
+    /// The baselines and host follows of one `.peer` backend's files, by path.
+    @MainActor
+    private final class PeerFiles {
+        private struct Watcher {
+            let id: UUID
+            let observed: @MainActor () -> Void
+            let check: @MainActor () async -> Void
+        }
+
+        private let fetch: @MainActor (String) async -> RemoteServerMessage?
+        private let follow: @MainActor (String, @escaping @MainActor (WorktreeFileVersion?) -> Void) async -> @MainActor () -> Void
+        /// The version each file was last read or written at.
+        var baselines: [String: WorktreeFileVersion] = [:]
+        /// Each followed file's follow, resolving to its stop once the host follows it.
+        private var follows: [String: Task<@MainActor () -> Void, Never>] = [:]
+        /// The reads and watches holding each follow.
+        private var holds: [String: Int] = [:]
+        private var watchers: [String: Watcher] = [:]
+        /// Files that changed while unwatched: looked at again once watched.
+        private var missed: Set<String> = []
+
+        init(
+            fetch: @escaping @MainActor (String) async -> RemoteServerMessage?,
+            follow: @escaping @MainActor (String, @escaping @MainActor (WorktreeFileVersion?) -> Void) async -> @MainActor () -> Void
+        ) {
+            self.fetch = fetch
+            self.follow = follow
+        }
+
+        /// The file as the host has it now, and its version when it is editable.
+        func current(_ path: String) async throws -> (result: RemoteReadResult, version: WorktreeFileVersion?) {
+            switch await fetch(path) {
+            case .fileContents(_, _, let text, _, let version?):
+                return (.file(data: Data(text.utf8), mtime: version.modified), version)
+            case .fileContents:
+                return (.unreadable("The host sent no version of this file."), nil)
+            case .fileUnavailable(_, _, .notFound, _, _):
+                return (.missing, nil)
+            case .fileUnavailable(_, _, let reason, _, let message):
+                return (.unreadable(NativePeerWorkspace.describe(reason, message: message)), nil)
+            case nil:
+                throw RemoteFileAccessError.connectionFailed(FederatedSessionsProvider.peerUnavailableMessage)
+            default:
+                return (.unreadable("The host sent an unexpected reply."), nil)
+            }
+        }
+
+        /// Holds `path`'s follow, starting it if none; the task resolves once the host follows the file.
+        func hold(_ path: String) -> Task<@MainActor () -> Void, Never> {
+            holds[path, default: 0] += 1
+            if let following = follows[path] { return following }
+            let follow = follow
+            let following = Task { [weak self] in
+                await follow(path) { version in self?.changed(path, to: version) }
+            }
+            follows[path] = following
+            return following
+        }
+
+        /// A turn later, so a watch restarted in the same turn keeps the follow.
+        func release(_ path: String) {
+            Task { [weak self] in
+                guard let self, let count = holds[path] else { return }
+                guard count <= 1 else {
+                    holds[path] = count - 1
+                    return
+                }
+                holds[path] = nil
+                guard let following = follows.removeValue(forKey: path) else { return }
+                await following.value()
+            }
+        }
+
+        func watch(_ path: String, observed: @escaping @MainActor () -> Void, check: @escaping @MainActor () async -> Void) -> UUID {
+            let watcher = Watcher(id: UUID(), observed: observed, check: check)
+            watchers[path] = watcher
+            _ = hold(path)
+            if missed.remove(path) != nil { notify(watcher) }
+            return watcher.id
+        }
+
+        func unwatch(_ path: String, id: UUID) {
+            guard watchers[path]?.id == id else { return }
+            watchers[path] = nil
+            release(path)
+        }
+
+        /// A version with the baseline's content, such as this Mac's own save coming back, only refreshes it;
+        /// anything else, nil included (gone, or look again), is a change to check.
+        private func changed(_ path: String, to version: WorktreeFileVersion?) {
+            if let version, version.contentHash == baselines[path]?.contentHash {
+                baselines[path] = version
+                return
+            }
+            guard let watcher = watchers[path] else {
+                missed.insert(path)
+                return
+            }
+            notify(watcher)
+        }
+
+        private func notify(_ watcher: Watcher) {
+            watcher.observed()
+            let check = watcher.check
+            Task { @MainActor in await check() }
+        }
+    }
 }
 
 struct RemoteHelperFileWatchMatcher {
@@ -721,6 +871,11 @@ final class EditorBuffer {
 
     convenience init(worktreeRoot: URL, relativePath: String, store: EditorBufferStore, worktreeId: String, tabId: String, lsp: WorkspaceLSPManager, loadSynchronously: Bool, navigationResolvedRoot: URL? = nil) {
         self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot)
+    }
+
+    /// A paired host's file: no store, no LSP; `backend` reads, saves and watches it.
+    convenience init(hostWorktreeRoot: URL, relativePath: String, backend: EditorRemoteBackend) {
+        self.init(worktreeRoot: hostWorktreeRoot, relativePath: relativePath, isExternal: false, store: nil, worktreeId: nil, tabId: nil, restoreEnabled: false, lsp: nil, remoteBackend: backend)
     }
 
     /// External-mode init: loads `absoluteURL` synchronously, marks the buffer

@@ -59,7 +59,7 @@ struct PeerHostChannelTests {
         channel.receive(.response(id: 1, result: .snapshot(snapshot: snapshot([feature]))))
         try await eventually { @MainActor in sent.messages.count == 2 }
         #expect(channel.state?.worktrees == [feature])
-        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged"]))
+        #expect(sent.messages[1].request == .subscribeAccepting(after: cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged"]))
         #expect(!channel.isSubscribed)
         #expect(changes == 1)
 
@@ -96,6 +96,14 @@ struct PeerHostChannelTests {
         let worktreeNotice = HostWorktreeNotice(id: UUID(), worktreeID: "w", title: nil, body: "Tests failed")
         channel.receive(.events(events: [.worktreeNotice(worktreeNotice)], cursor: cursor))
         #expect(gotWorktree == [worktreeNotice])
+        #expect(channel.state == before)
+
+        var gotFiles: [String] = []
+        channel.onFileChanged = { worktreeID, path, version in gotFiles.append("\(worktreeID)/\(path)@\(version?.contentHash ?? "gone")") }
+        let version = WorktreeFileVersion(contentHash: "h", modified: .distantPast)
+        channel.receive(.events(events: [.fileChanged(worktreeID: "w", path: "a.txt", version: version),
+                                         .fileChanged(worktreeID: "w", path: "b.txt", version: nil)], cursor: cursor))
+        #expect(gotFiles == ["w/a.txt@h", "w/b.txt@gone"])
         #expect(channel.state == before)
 
         var summary = HostSessionSummary(

@@ -2,6 +2,7 @@ import Foundation
 import AlasModel
 import AlasFeatures
 import AlasIntegrations
+import AlasPlatform
 
 /// The host protocol, spoken to one paired peer: requests matched to their
 /// answers by id, and the peer's state kept current from a snapshot and the
@@ -100,6 +101,8 @@ public final class PeerHostChannel {
     public var onNotice: (@MainActor (HostNotice) -> Void)?
     /// Called with each worktree notice the peer relays.
     public var onWorktreeNotice: (@MainActor (HostWorktreeNotice) -> Void)?
+    /// Called with each change to a file this connection follows: its new version, or nil once gone.
+    public var onFileChanged: (@MainActor (_ worktreeID: String, _ path: String, _ version: WorktreeFileVersion?) -> Void)?
 
     private let timeout: Duration
     private let send: @MainActor (HostClientMessage) -> Void
@@ -130,8 +133,10 @@ public final class PeerHostChannel {
         onChange?()
         subscribeID = nextID
         // Channels exist only for `host.events.v1` peers, which serve it; a host
-        // that predates `worktreeNotice`, `reviewStatus` or `reviewsChanged` just never matches that kind.
-        _ = await request(.subscribeAccepting(after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged"])) // `finish` sets isSubscribed on .subscribed
+        // that predates `worktreeNotice`, `reviewStatus`, `reviewsChanged` or `fileChanged` just never matches that kind.
+        _ = await request(.subscribeAccepting(
+            after: snapshot.cursor, events: ["notice", "worktreeNotice", "reviewStatus", "reviewsChanged", "fileChanged"]
+        )) // `finish` sets isSubscribed on .subscribed
     }
 
     /// Sends `request` and waits for its answer, or fails with
@@ -161,6 +166,7 @@ public final class PeerHostChannel {
             guard isSubscribed, var next = state else { return }
             for case .notice(let notice) in events { onNotice?(notice) }
             for case .worktreeNotice(let notice) in events { onWorktreeNotice?(notice) }
+            for case .fileChanged(let worktreeID, let path, let version) in events { onFileChanged?(worktreeID, path, version) }
             if events.contains(.resync) {
                 isSubscribed = false
                 onChange?()

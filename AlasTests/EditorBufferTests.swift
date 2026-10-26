@@ -144,6 +144,58 @@ struct EditorBufferTests {
         #expect(notifications > 0, "Remote content arrival must notify edit observers so the coordinator can re-apply editor styling")
     }
 
+    @Test func aHostFileSaveMeetingANewerVersionKeepsTheEditsAndKeepMineResaves() async throws {
+        let host = FakeHostFile("a\n")
+        let buffer = EditorBuffer(hostWorktreeRoot: URL(fileURLWithPath: "/srv/repo"), relativePath: "a.txt", backend: host.backend)
+        defer { buffer.close(persistDirtySnapshot: false) }
+        try await eventually("host file load") { buffer.storage.string == "a\n" && !buffer.readOnly }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "mine\n")
+        host.set("theirs\n")
+        let theirs = host.version
+
+        await #expect(throws: (any Error).self) { try await buffer.saveRecordingErrorAwaitingRemote() }
+        #expect(buffer.conflict == .changedOnDisk)
+        #expect(buffer.storage.string == "mine\n")
+        #expect(host.text == "theirs\n")
+
+        buffer.resolveConflictKeepingMine()
+        try await eventually("Keep mine's probe") { buffer.originalMtime == theirs.modified }
+        try await buffer.saveRecordingErrorAwaitingRemote()
+        #expect(host.text == "mine\n")
+        #expect(host.writes.last == theirs)
+        #expect(!buffer.dirty)
+        #expect(buffer.conflict == nil)
+
+        let saved = host.version
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "mine 2\n")
+        try await buffer.saveRecordingErrorAwaitingRemote()
+        #expect(host.writes.last == saved)
+        #expect(host.text == "mine 2\n")
+    }
+
+    @Test func aHostChangeWithTheSameContentNeitherReloadsNorConflicts() async throws {
+        let host = FakeHostFile("a\n")
+        let buffer = EditorBuffer(hostWorktreeRoot: URL(fileURLWithPath: "/srv/repo"), relativePath: "a.txt", backend: host.backend)
+        defer { buffer.close(persistDirtySnapshot: false) }
+        try await eventually("host file load") { buffer.storage.string == "a\n" && !buffer.readOnly }
+        #expect(host.reads == 1)
+        let onChange = try #require(host.onChange)
+
+        var touched = host.version
+        touched.modified = touched.modified.addingTimeInterval(60)
+        onChange(touched)
+        #expect(buffer.conflict == nil)
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "mine\n")
+        onChange(touched)
+        #expect(buffer.conflict == nil)
+
+        host.set("theirs\n")
+        onChange(host.version)
+        try await eventually("conflict") { buffer.conflict == .changedOnDisk }
+        #expect(buffer.storage.string == "mine\n")
+        #expect(host.reads == 2) // the load and the real change's probe: the touches read nothing
+    }
+
     @Test func remoteFailedLSPOpenRetriesThroughNormalReopen() async throws {
         let root = URL(fileURLWithPath: RemotePath.virtual(host: "retry-host", realPath: tempWorktree().path))
         let file = root.appendingPathComponent("main.swift")
@@ -2353,5 +2405,51 @@ private actor AsyncLoadGate {
         for continuation in pending {
             continuation.resume()
         }
+    }
+}
+
+/// A paired host's file, in memory, behind `EditorRemoteBackend.peer`.
+@MainActor
+private final class FakeHostFile {
+    private(set) var text: String
+    private(set) var version: WorktreeFileVersion
+    private(set) var reads = 0
+    /// The version each save named.
+    private(set) var writes: [WorktreeFileVersion?] = []
+    /// The follower's handler, once the backend follows the file.
+    private(set) var onChange: (@MainActor (WorktreeFileVersion?) -> Void)?
+    private var saves = 0
+
+    init(_ text: String) {
+        self.text = text
+        version = WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: Data(text.utf8)), modified: Date(timeIntervalSince1970: 0))
+    }
+
+    func set(_ text: String) {
+        saves += 1
+        self.text = text
+        version = WorktreeFileVersion(
+            contentHash: WorktreeFileVersion.contentHash(of: Data(text.utf8)), modified: Date(timeIntervalSince1970: Double(saves))
+        )
+    }
+
+    var backend: EditorRemoteBackend {
+        .peer(
+            read: { [self] path in
+                #expect(onChange != nil, "a host file is followed before it is read")
+                reads += 1
+                return .fileContents(sessionId: "s", path: path, text: text, truncated: false, version: version)
+            },
+            write: { [self] _, text, expected in
+                writes.append(expected)
+                guard expected?.contentHash == version.contentHash else { throw RemoteFileAccessError.saveConflict(.changed) }
+                set(text)
+                return version
+            },
+            follow: { [self] _, onChange in
+                self.onChange = onChange
+                return {}
+            }
+        )
     }
 }
