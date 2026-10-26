@@ -147,12 +147,13 @@ extension RemoteWorktreeInspecting {
             switch await remoteChangeList(sessionId: id, comparisonMode: comparisonMode) {
             case .success(
                 let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated,
-                let workingTreeTruncated
+                let workingTreeTruncated, let operation
             ):
                 return .changeList(
                     sessionId: id, comparisonRef: ref, metricsAvailable: available,
                     files: files, staged: staged, unstaged: unstaged, commits: commits,
-                    truncated: truncated, commitsTruncated: commitsTruncated, workingTreeTruncated: workingTreeTruncated)
+                    truncated: truncated, commitsTruncated: commitsTruncated, workingTreeTruncated: workingTreeTruncated,
+                    operation: operation)
             case .failure(let reason, let message):
                 return .changeListFailed(sessionId: id, reason: reason, message: message)
             }

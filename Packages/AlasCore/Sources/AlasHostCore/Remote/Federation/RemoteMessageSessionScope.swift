@@ -109,7 +109,7 @@ extension RemoteServerMessage {
              .elicitationResolved(let id, _), .sessionClosed(let id), .promptRejected(let id, _), .visualAidRejected(let id, _, _, _),
              .sessionTabActionSucceeded(let id), .sessionTabActionFailed(let id, _),
              .sessionRenamed(let id, _), .queueState(let id, _), .queueEditRestored(let id, _, _),
-             .changeList(let id, _, _, _, _, _, _, _, _, _), .changeListFailed(let id, _, _),
+             .changeList(let id, _, _, _, _, _, _, _, _, _, _), .changeListFailed(let id, _, _),
              .fileDiffResult(let id, _, _, _, _, _), .fileDiffFailed(let id, _, _, _, _),
              .commitFiles(let id, _, _, _), .commitFilesFailed(let id, _, _, _),
              .commitDiffResult(let id, _, _, _, _, _), .commitDiffFailed(let id, _, _, _, _),
@@ -167,11 +167,12 @@ extension RemoteServerMessage {
             return .queueEditRestored(sessionId: new, itemId: itemId, text: text)
         case .changeList(
             _, let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated,
-            let workingTreeTruncated
+            let workingTreeTruncated, let operation
         ):
             return .changeList(sessionId: new, comparisonRef: ref, metricsAvailable: available, files: files,
                                staged: staged, unstaged: unstaged, commits: commits, truncated: truncated,
-                               commitsTruncated: commitsTruncated, workingTreeTruncated: workingTreeTruncated)
+                               commitsTruncated: commitsTruncated, workingTreeTruncated: workingTreeTruncated,
+                               operation: operation)
         case .changeListFailed(_, let reason, let message):
             return .changeListFailed(sessionId: new, reason: reason, message: message)
         case .fileDiffResult(_, let path, let stage, let hunks, let truncated, let metadataNote):

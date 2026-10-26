@@ -1676,7 +1676,7 @@ struct RemoteAppStateAccessTests {
         let tab = try #require(acpTabs(in: state).first)
 
         let result = await state.core.remoteChangeList(sessionId: tab.sessionId)
-        guard case let .success(_, _, _, staged, unstaged, _, _, _, _) = result else {
+        guard case let .success(_, _, _, staged, unstaged, _, _, _, _, _) = result else {
             Issue.record("expected a successful change list, got \(result)")
             return
         }
@@ -1709,7 +1709,7 @@ struct RemoteAppStateAccessTests {
         let tab = try #require(acpTabs(in: state).first)
 
         let result = await state.core.remoteChangeList(sessionId: tab.sessionId)
-        guard case let .success(_, _, _, _, unstaged, _, _, _, _) = result else {
+        guard case let .success(_, _, _, _, unstaged, _, _, _, _, _) = result else {
             Issue.record("expected a successful change list, got \(result)")
             return
         }

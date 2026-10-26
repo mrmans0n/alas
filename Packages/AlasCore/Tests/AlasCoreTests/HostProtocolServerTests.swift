@@ -896,7 +896,7 @@ struct HostProtocolServerTests {
             return
         }
         #expect(after.map(HostStashRef.init) == [stash])
-        guard case .worktreeRead(.changeList(_, _, _, let files, let staged, let unstaged, _, _, _, _)) =
+        guard case .worktreeRead(.changeList(_, _, _, let files, let staged, let unstaged, _, _, _, _, _)) =
             try await fixture.request(.readWorktree(worktree: ref, read: .changes(comparisonMode: nil)))
         else {
             Issue.record("expected the changes")

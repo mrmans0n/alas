@@ -202,6 +202,33 @@ struct HostProtocolTests {
         ))
     }
 
+    /// The changes reply carries the host's in-progress operation; an older host sends none.
+    @Test func aChangeListCarriesTheHostsOperation() throws {
+        let op = MergeOperation.rebase(plan: RebasePlan(
+            ontoBranch: "abc", sourceBranch: "main", commits: [.init(sha: "d1", summary: "s", state: .current)]
+        ))
+        let message = RemoteServerMessage.changeList(
+            sessionId: "a", comparisonRef: nil, metricsAvailable: true, files: [], staged: [], unstaged: [],
+            commits: [], truncated: false, operation: op
+        )
+        let data = try JSONEncoder().encode(message)
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == message)
+        guard case .changeList(_, _, _, _, _, _, _, _, _, _, let scoped) = message.replacingSessionId("b") else {
+            Issue.record("expected a changeList")
+            return
+        }
+        #expect(scoped == op)
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        json["operation"] = nil
+        guard case .changeList(_, _, _, _, _, _, _, _, _, _, let old) = try JSONDecoder().decode(
+            RemoteServerMessage.self, from: JSONSerialization.data(withJSONObject: json)
+        ) else {
+            Issue.record("expected a changeList")
+            return
+        }
+        #expect(old == nil)
+    }
+
     /// A host without shepherds sends no `shepherd`; a newer one may send one this Mac can't read.
     @Test(arguments: [nil, ##"{"badge":1,"number":"#7"}"##])
     func aSummaryWithoutAReadableShepherdDecodesWithNone(_ shepherd: String?) throws {
