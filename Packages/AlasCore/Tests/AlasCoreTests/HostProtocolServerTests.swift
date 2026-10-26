@@ -1088,10 +1088,10 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["log", "--format=%s", "-2"], cwd: repo).stdout == "Above\nEdit notes\n")
     }
 
-    enum StaleEdit: CaseIterable { case notASHA, belowTheFold, otherHunk, outsidePath, dirtyTree, renamedFile }
+    enum StaleEdit: CaseIterable { case notASHA, belowTheFold, otherHunk, unseenHunk, outsidePath, dirtyTree, renamedFile }
 
     /// The host edits only a commit above its own fold, named by SHA, and
-    /// drops only a hunk its own parse of that commit still has.
+    /// drops only a hunk its own parse of that commit still has and the Mac was sent whole.
     @Test(arguments: StaleEdit.allCases)
     func commitEditsTakeOnlyWhatTheMacSaw(_ stale: StaleEdit) async throws {
         let fixture = try await RepoFixture(aheadOfOrigin: true)
@@ -1101,6 +1101,20 @@ struct HostProtocolServerTests {
         if stale == .otherHunk {
             try "#!/bin/sh\necho hello from run\necho more\n".write(to: repo.appendingPathComponent(script), atomically: true, encoding: .utf8)
             #expect(try await Process.git(["commit", "-q", "-am", "entry 4"], cwd: repo).exitCode == 0)
+        }
+        // A first hunk over the diff cap: the Mac never saw the hunk after it.
+        var unseenHeader = ""
+        if stale == .unseenHunk {
+            let cap = RemoteWorktreeFileAccess.maxDiffLines
+            let lines = (1...cap + 20).map { "line \($0)" }
+            for (index, contents) in [lines, lines.prefix(cap).map { $0 + " edited" } + lines.dropFirst(cap).dropLast() + ["last"]].enumerated() {
+                try (contents.joined(separator: "\n") + "\n").write(to: repo.appendingPathComponent("big.txt"), atomically: true, encoding: .utf8)
+                #expect(try await Process.git(["add", "big.txt"], cwd: repo).exitCode == 0)
+                #expect(try await Process.git(["commit", "-q", "-m", "entry \(index + 4)"], cwd: repo).exitCode == 0)
+            }
+            let hunks = try await GitService().diff(worktreePath: repo, sha: "HEAD", file: "big.txt").hunks
+            try #require(hunks.count == 2)
+            unseenHeader = hunks[1].header
         }
         if stale == .renamedFile {
             #expect(try await Process.git(["mv", script, "renamed.sh"], cwd: repo).exitCode == 0)
@@ -1120,6 +1134,9 @@ struct HostProtocolServerTests {
         case .belowTheFold: (base, .message(subject: "x", body: ""), .failed(message: notAboveFold))
         case .otherHunk:
             (head, .dropHunk(path: script, index: 0, header: "@@ -9 +9 @@"),
+             .failed(message: "This commit changed since it was shown. Refresh and try again."))
+        case .unseenHunk:
+            (head, .dropHunk(path: "big.txt", index: 1, header: unseenHeader),
              .failed(message: "This commit changed since it was shown. Refresh and try again."))
         case .outsidePath: (shas[1], .dropFile(path: "../x"), .invalidRequest(reason: "The path ../x is outside the worktree."))
         case .dirtyTree: (shas[1], .message(subject: "Reworded", body: ""), .failed(message: dirty))
