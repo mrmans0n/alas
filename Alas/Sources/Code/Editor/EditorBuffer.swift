@@ -290,10 +290,11 @@ extension EditorRemoteBackend {
             return following
         }
 
-        /// A turn later, so a watch restarted in the same turn keeps the follow.
+        /// A turn later, so a watch restarted in the same turn keeps the follow. Holds `self`: a closed
+        /// buffer frees its backend in the same turn, and the host must still hear the unfollow.
         func release(_ path: String) {
-            Task { [weak self] in
-                guard let self, let count = holds[path] else { return }
+            Task {
+                guard let count = holds[path] else { return }
                 guard count <= 1 else {
                     holds[path] = count - 1
                     return
@@ -1353,7 +1354,7 @@ final class EditorBuffer {
         do {
             let probe = try await remoteBackend.probe(relativePath)
             guard probe != .deleted else {
-                if dirty { conflict = .deletedOnDisk }
+                if dirty { raiseRemoteConflict(.deletedOnDisk) }
                 return
             }
             if let host = remoteHost { RemoteHostStatusStore.shared.reportSuccess(host: host) }
@@ -1366,7 +1367,7 @@ final class EditorBuffer {
                 return
             }
             if dirty {
-                conflict = .changedOnDisk
+                raiseRemoteConflict(.changedOnDisk)
             } else {
                 reloadAfterExternalChange()
             }
@@ -1375,6 +1376,12 @@ final class EditorBuffer {
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }
         }
+    }
+
+    /// A host file's new outside change takes back an earlier Keep mine, so a plain save can't overwrite it.
+    private func raiseRemoteConflict(_ newConflict: Conflict) {
+        if isPeerHost { remoteOverwriteAfterConflict = false }
+        conflict = newConflict
     }
 
     private func handleWatcherEvent() {

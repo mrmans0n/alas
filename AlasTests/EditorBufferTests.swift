@@ -160,9 +160,20 @@ struct EditorBufferTests {
 
         buffer.resolveConflictKeepingMine()
         try await eventually("Keep mine's probe") { buffer.originalMtime == theirs.modified }
+        // Another outside change takes back Keep mine: the save must not overwrite it unseen.
+        host.set("theirs 2\n")
+        let theirs2 = host.version
+        let onChange = try #require(host.onChange)
+        onChange(theirs2)
+        try await eventually("second conflict") { buffer.conflict == .changedOnDisk }
+        await #expect(throws: (any Error).self) { try await buffer.saveRecordingErrorAwaitingRemote() }
+        #expect(host.text == "theirs 2\n")
+
+        buffer.resolveConflictKeepingMine()
+        try await eventually("Keep mine's probe") { buffer.originalMtime == theirs2.modified }
         try await buffer.saveRecordingErrorAwaitingRemote()
         #expect(host.text == "mine\n")
-        #expect(host.writes.last == theirs)
+        #expect(host.writes.last == theirs2)
         #expect(!buffer.dirty)
         #expect(buffer.conflict == nil)
 
@@ -171,6 +182,16 @@ struct EditorBufferTests {
         try await buffer.saveRecordingErrorAwaitingRemote()
         #expect(host.writes.last == saved)
         #expect(host.text == "mine 2\n")
+    }
+
+    @Test func closingAHostFileUnfollowsIt() async throws {
+        let host = FakeHostFile("a\n")
+        do {
+            let buffer = EditorBuffer(hostWorktreeRoot: URL(fileURLWithPath: "/srv/repo"), relativePath: "a.txt", backend: host.backend)
+            try await eventually("host file load") { buffer.storage.string == "a\n" && !buffer.readOnly }
+            buffer.close(persistDirtySnapshot: false)
+        }
+        try await eventually("unfollow") { host.unfollows == 1 }
     }
 
     @Test func aHostChangeWithTheSameContentNeitherReloadsNorConflicts() async throws {
@@ -2436,6 +2457,8 @@ private final class FakeHostFile {
     private(set) var writes: [WorktreeFileVersion?] = []
     /// The follower's handler, once the backend follows the file.
     private(set) var onChange: (@MainActor (WorktreeFileVersion?) -> Void)?
+    /// Calls to the follow's stop.
+    private(set) var unfollows = 0
     /// Runs once a save landed, before it answers.
     var duringWrite: (@MainActor () async -> Void)?
     private var saves = 0
@@ -2470,7 +2493,7 @@ private final class FakeHostFile {
             },
             follow: { [self] _, onChange in
                 self.onChange = onChange
-                return {}
+                return { [self] in unfollows += 1 }
             }
         )
     }

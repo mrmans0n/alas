@@ -395,9 +395,12 @@ final class NativePeerSessions {
         return NativePeerHostFile(serverId: target.serverId, worktree: target.worktree, path: path)
     }
 
-    /// The open `.file` document, once the host served it as text with a version, on `hostFileTarget`.
+    /// The open `.file` document, once the host served it as text with a version, on `hostFileTarget`. A dirty
+    /// buffer keeps it after the file is gone, so its deleted-on-disk banner and Keep mine stay reachable.
     var openedHostFile: NativePeerHostFile? {
-        guard workspace.documentVersion != nil, let file = hostFileDocument, hostFileRefusals[file] == nil else { return nil }
+        guard let file = hostFileDocument, hostFileRefusals[file] == nil,
+              workspace.documentVersion != nil || hostFileBuffers[file]?.dirty == true
+        else { return nil }
         return file
     }
 

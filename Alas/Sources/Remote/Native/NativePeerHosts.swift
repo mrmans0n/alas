@@ -416,6 +416,8 @@ final class NativePeerHosts {
             guard let sent = follow.sent, let channel = channels[serverId] else { return }
             Task {
                 await sent.value // an unfollow overtaking its follow would leave the file followed
+                // A re-follow since then owns the host's follow (a set, not a count); its stop unfollows.
+                guard self.fileFollows[key] == nil else { return }
                 _ = await channel.request(.unfollowFile(worktree: follow.worktree, path: key.path))
             }
         }
