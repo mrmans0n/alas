@@ -883,7 +883,9 @@ public enum RemoteServerMessage: Equatable, Sendable {
         files: [RemoteChangedFile], staged: [RemoteChangedFile], unstaged: [RemoteChangedFile],
         commits: [RemoteCommit], truncated: Bool, commitsTruncated: Bool = false,
         // Whether `staged`/`unstaged` were capped, apart from `files`; nil from older hosts.
-        workingTreeTruncated: Bool? = nil)
+        workingTreeTruncated: Bool? = nil,
+        // The worktree's in-progress cherry-pick/revert/merge/rebase; nil from older hosts and with none.
+        operation: MergeOperation? = nil)
     case changeListFailed(sessionId: String, reason: RemoteFileAccessReason, message: String?)
     case fileDiffResult(
         sessionId: String, path: String, stage: String? = nil, hunks: [RemoteDiffHunk], truncated: Bool,
@@ -920,7 +922,7 @@ extension RemoteServerMessage: Codable {
         case firstIndex, totalCount, epoch, revision
         case items, itemId, text
         case path, files, staged, unstaged, commits, comparisonRef, metricsAvailable, truncated, hunks, nodes, reason, byteSize
-        case metadataNote, commitsTruncated, workingTreeTruncated, sha
+        case metadataNote, commitsTruncated, workingTreeTruncated, operation, sha
         case protocolVersion, serverId, name, hubEnabled, federationEnabled, peers, capabilities, console, host
         case challenge, publicKey, signature
         case visualId
@@ -1102,7 +1104,8 @@ extension RemoteServerMessage: Codable {
                 commits: try c.decodeIfPresent([RemoteCommit].self, forKey: .commits) ?? [],
                 truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
                 commitsTruncated: try c.decodeIfPresent(Bool.self, forKey: .commitsTruncated) ?? false,
-                workingTreeTruncated: try c.decodeIfPresent(Bool.self, forKey: .workingTreeTruncated))
+                workingTreeTruncated: try c.decodeIfPresent(Bool.self, forKey: .workingTreeTruncated),
+                operation: (try? c.decodeIfPresent(MergeOperation.self, forKey: .operation)) ?? nil)
         case "changeListFailed":
             self = .changeListFailed(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1353,7 +1356,7 @@ extension RemoteServerMessage: Codable {
         try c.encodeIfPresent(sessionId, forKey: .sessionId)
         case .changeList(
             let s, let ref, let available, let files, let staged, let unstaged, let commits, let truncated, let commitsTruncated,
-            let workingTreeTruncated
+            let workingTreeTruncated, let operation
         ):
             try c.encode("changeList", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1366,6 +1369,7 @@ extension RemoteServerMessage: Codable {
             try c.encode(truncated, forKey: .truncated)
             try c.encode(commitsTruncated, forKey: .commitsTruncated)
             try c.encodeIfPresent(workingTreeTruncated, forKey: .workingTreeTruncated)
+            try c.encodeIfPresent(operation, forKey: .operation)
         case .changeListFailed(let s, let reason, let message):
             try c.encode("changeListFailed", forKey: .type)
             try c.encode(s, forKey: .sessionId)
@@ -1499,6 +1503,10 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve `listStashes`, `stashFiles`, `stashDiff` and the
     /// stash changes of `mutateWorktree`: only a headless host.
     public static let worktreesStashV1 = "host.worktrees.stash.v1"
+    /// Hosts that serve the operation and conflict changes of
+    /// `mutateWorktree`: continue, skip, abort, use ours, use theirs, keep
+    /// deleted and mark resolved. Only a headless host.
+    public static let worktreesOperationsV1 = "host.worktrees.operations.v1"
     /// Hosts whose `createWorktreeSession` takes `repoHook`, answering
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
     /// must approve first.
@@ -1509,7 +1517,7 @@ public enum HostProtocolCapability: Sendable {
         worktreesRenameBranchV1, repoHooksApprovalV1,
     ]
     /// What only a headless host serves.
-    public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1]
+    public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

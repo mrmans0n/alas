@@ -173,12 +173,46 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     case stash(message: String, includeUntracked: Bool)
     /// Act on a stash as listed (`host.worktrees.stash.v1`).
     case applyStash(HostStashRef), popStash(HostStashRef), dropStash(HostStashRef)
+    /// Leave the in-progress operation of `kind`, the one the client saw
+    /// (`host.worktrees.operations.v1`).
+    case continueOperation(kind: HostOperationKind), skipOperation(kind: HostOperationKind), abortOperation(kind: HostOperationKind)
+    /// Resolve a conflicted path, with or without an operation in progress
+    /// (`host.worktrees.operations.v1`).
+    case useOurs(path: String), useTheirs(path: String), keepDeleted(path: String), markResolved(path: String)
+    /// Apply or undo one of the repository's commits, named by its SHA; a
+    /// conflict leaves the operation in place (`host.worktrees.operations.v1`).
+    case cherryPick(sha: String), revert(sha: String)
 
     /// The capability beyond host.worktrees.git.v1 a change needs; nil for the original seven.
     public var capability: String? {
         switch self {
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch: nil
         case .stash, .applyStash, .popStash, .dropStash: HostProtocolCapability.worktreesStashV1
+        case .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .cherryPick,
+             .revert:
+            HostProtocolCapability.worktreesOperationsV1
+        }
+    }
+
+    /// The changes that leave or resolve an operation: the rebase gate lets only these through.
+    public var leavesAnOperation: Bool {
+        switch self {
+        case .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved: true
+        default: false
+        }
+    }
+}
+
+/// The kind of a worktree's in-progress git operation, as a client names it.
+public enum HostOperationKind: String, Codable, Sendable {
+    case merge, rebase, cherryPick, revert
+
+    public init(_ operation: MergeOperation) {
+        switch operation {
+        case .merge: self = .merge
+        case .rebase: self = .rebase
+        case .cherryPick: self = .cherryPick
+        case .revert: self = .revert
         }
     }
 }

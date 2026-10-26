@@ -78,6 +78,9 @@ struct HostProtocolTests {
         HostClientMessage(id: 32, request: .mutateWorktree(
             worktree: ref, branch: "feature", change: .applyStash(HostStashRef(ref: "stash@{1}", sha: "def5678"))
         )),
+        HostClientMessage(id: 33, request: .mutateWorktree(worktree: ref, branch: "feature", change: .continueOperation(kind: .rebase))),
+        HostClientMessage(id: 34, request: .mutateWorktree(worktree: ref, branch: "feature", change: .useOurs(path: "a.txt"))),
+        HostClientMessage(id: 35, request: .mutateWorktree(worktree: ref, branch: "feature", change: .cherryPick(sha: "abc1234"))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -200,6 +203,38 @@ struct HostProtocolTests {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: Data(old.utf8)).request == .deleteWorktree(
             worktree: Self.ref, lineageID: "l", branch: "feature", force: true, deleteBranchIfMerged: false, discardUnsavedEdits: nil
         ))
+    }
+
+    /// The changes reply carries the host's in-progress operation; an older
+    /// host sends none, and one this Mac can't read is dropped, not the list.
+    @Test func aChangeListCarriesTheHostsOperation() throws {
+        let op = MergeOperation.rebase(plan: RebasePlan(
+            ontoBranch: "abc", sourceBranch: "main", commits: [.init(sha: "d1", summary: "s", state: .current)]
+        ))
+        func changeList(_ operation: MergeOperation?) -> RemoteServerMessage {
+            .changeList(
+                sessionId: "a", comparisonRef: nil, metricsAvailable: true,
+                files: [RemoteChangedFile(path: "a.txt", status: "M", add: 1, del: 0, conflict: nil, renameFrom: nil)],
+                staged: [], unstaged: [], commits: [], truncated: false, operation: operation
+            )
+        }
+        let data = try JSONEncoder().encode(changeList(op))
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == changeList(op))
+        guard case .changeList(_, _, _, _, _, _, _, _, _, _, let scoped) = changeList(op).replacingSessionId("b") else {
+            Issue.record("expected a changeList")
+            return
+        }
+        #expect(scoped == op)
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let wire = try #require(json["operation"] as? [String: Any])
+        let plan = try #require((wire["rebase"] as? [String: Any])?["plan"] as? [String: Any])
+        #expect((plan["commits"] as? [[String: Any]])?.first?["state"] as? String == "current")
+        for unreadable in [nil, ["bisect": [String: Any]()]] as [Any?] {
+            json["operation"] = unreadable
+            #expect(try JSONDecoder().decode(
+                RemoteServerMessage.self, from: JSONSerialization.data(withJSONObject: json)
+            ) == changeList(nil))
+        }
     }
 
     /// A host without shepherds sends no `shepherd`; a newer one may send one this Mac can't read.

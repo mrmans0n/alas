@@ -27,7 +27,14 @@ extension AlasCoreContext {
             // A headless host watches no HEAD, so the listing can lag a
             // checkout made on the host: git has the last word.
             let head = try await GitService().currentBranch(worktreePath: listed.path)
-            guard (head.isEmpty ? "(detached)" : head) == branch else { throw changed }
+            if (head.isEmpty ? "(detached)" : head) != branch {
+                // Mid-rebase git is detached while the listing still names the
+                // branch being rebased: only a way out of that rebase passes.
+                guard change.leavesAnOperation, head.isEmpty,
+                      case .rebase(let plan)? = try await GitService().mergeState(worktreePath: listed.path),
+                      plan.sourceBranch == branch
+                else { throw changed }
+            }
             guard isWorktreeIdle(listed) else { throw WorktreeBusyError() }
             if await environment.checkpointRecoveryBlocksRemoval(listed) {
                 throw HostError.failed(message: "A checkpoint restore is pending on the host; finish it there first.")
@@ -40,11 +47,12 @@ extension AlasCoreContext {
         let root = worktree.path
         let git = GitService()
         switch change {
-        case .commit, .push, .pull:
+        case .commit, .push, .pull, .cherryPick, .revert:
             if try await git.mergeState(worktreePath: root) != nil {
-                throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first.")
+                throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first.")
             }
-        case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash:
+        case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash, .continueOperation, .skipOperation,
+             .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved:
             break
         }
         switch change {
@@ -88,7 +96,7 @@ extension AlasCoreContext {
             // As locally, a conflict leaves the rebase in place to resolve.
             switch try await git.pull(worktreePath: root) {
             case .clean: break
-            case .conflict: throw HostError.failed(message: "Pull stopped on conflicts; resolve them on the host.")
+            case .conflict: throw HostError.failed(message: "Pull stopped on conflicts; resolve them, then continue.")
             case .error(let message): throw HostError.failed(message: message)
             }
         case .fetch:
@@ -106,6 +114,47 @@ extension AlasCoreContext {
             // They name no client paths, and git's own `:/` pathspec, which
             // cleans stashed untracked files, must not be taken literally.
             try await Process.$gitLiteralPathspecs.withValue(false) { try await Self.applyStashChange(change, at: root) }
+        case .continueOperation(let kind), .skipOperation(let kind), .abortOperation(let kind):
+            // Only the operation the client saw: a conflict it led to shows in the next changes read.
+            guard let operation = try await git.mergeState(worktreePath: root), HostOperationKind(operation) == kind else {
+                throw HostError.failed(message: "The operation on the host changed; refresh and try again.")
+            }
+            switch change {
+            case .abortOperation: try await git.abortOperation(worktreePath: root, op: operation)
+            case .skipOperation: try Self.throwIfFailed(await git.skipOperation(worktreePath: root, op: operation))
+            default: try Self.throwIfFailed(await git.continueOperation(worktreePath: root, op: operation))
+            }
+            // A rebase that ended restores its branch, which a listing read
+            // mid-rebase shows as `(detached)`: list it again, as a rename does.
+            let head = try await git.currentBranch(worktreePath: root)
+            if !head.isEmpty, head != worktree.branch {
+                projects.applyHeadUpdates(projectId: worktree.projectId, branchByWorktreePath: [root: head])
+                // Git already moved: a failed save does not fail the change.
+                try? saveProjects()
+            }
+        // Conflicted paths are resolved as locally, with or without an
+        // operation: a conflicting stash pop leaves none.
+        case .useOurs(let path):
+            try await Self.refuseOutside([path], of: root)
+            try await Self.refuseUnlessConflicted(path, at: root)
+            try await git.useOurs(worktreePath: root, relativePath: path)
+            try await git.markResolved(worktreePath: root, relativePath: path)
+        case .useTheirs(let path):
+            try await Self.refuseOutside([path], of: root)
+            try await Self.refuseUnlessConflicted(path, at: root)
+            try await git.useTheirs(worktreePath: root, relativePath: path)
+            try await git.markResolved(worktreePath: root, relativePath: path)
+        case .keepDeleted(let path):
+            try await Self.refuseOutside([path], of: root)
+            try await Self.refuseUnlessConflicted(path, at: root)
+            try await git.keepDeleted(worktreePath: root, relativePath: path)
+        case .markResolved(let path):
+            try await Self.refuseOutside([path], of: root)
+            try await git.markResolved(worktreePath: root, relativePath: path)
+        case .cherryPick(let sha):
+            try Self.throwIfFailed(await git.cherryPick(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
+        case .revert(let sha):
+            try Self.throwIfFailed(await git.revert(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
         }
         return .done
     }
@@ -121,7 +170,8 @@ extension AlasCoreContext {
             try throwIfFailed(await git.popStash(worktreePath: root, stash: listedStash(stash, at: root)))
         case .dropStash(let stash):
             try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
-        case .stage, .unstage, .discard, .commit, .push, .pull, .fetch:
+        case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .continueOperation, .skipOperation, .abortOperation, .useOurs,
+             .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert:
             preconditionFailure("not a stash change")
         }
     }
@@ -162,6 +212,36 @@ extension AlasCoreContext {
         case .clean: break
         case .conflict(let message), .error(let message): throw HostError.failed(message: message)
         }
+    }
+
+    /// Taking a side or deleting a path that is no longer unmerged would
+    /// overwrite or remove the host's work: a stale client is refused. The
+    /// path itself must be unmerged; a folder holding a conflict is not, and
+    /// taking a side on it would restore every merged file in it.
+    private static func refuseUnlessConflicted(_ path: String, at root: URL) async throws {
+        // `<mode> <sha> <stage>\t<path>`, NUL-terminated.
+        let unmerged = try await Process.git(["ls-files", "-u", "-z", "--", path], cwd: root)
+        let paths = unmerged.stdout.split(separator: "\0").compactMap { $0.split(separator: "\t", maxSplits: 1).last }
+        guard unmerged.exitCode == 0, paths.contains(where: { $0 == path }) else {
+            throw HostError.failed(message: "The conflict on \(path) changed; refresh and try again.")
+        }
+    }
+
+    /// `sha` as a full commit SHA of this repository: a client never hands
+    /// git a rev expression or an option.
+    static func verifiedCommit(_ sha: String, at root: URL) async throws -> String {
+        guard RemoteWorktreeFileAccess.isCommitSHA(sha) else {
+            throw HostError.invalidRequest(reason: "A commit is named by its SHA.")
+        }
+        let resolved = try await Process.git(["rev-parse", "--verify", "--quiet", "\(sha)^{commit}"], cwd: root)
+        let full = resolved.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard resolved.exitCode == 0, !full.isEmpty else { throw HostError.notFound(what: "commit \(sha)") }
+        return full
+    }
+
+    /// A conflict is left to the next changes read; an error is shown.
+    private static func throwIfFailed(_ result: MergeResult) throws {
+        if case .error(let message) = result { throw HostError.failed(message: message) }
     }
 
     /// Client paths name files inside the worktree: never an empty path or
