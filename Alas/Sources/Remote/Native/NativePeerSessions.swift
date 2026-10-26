@@ -828,6 +828,14 @@ final class NativePeerSessions {
     }
 
     func stopSelected() { routeWhileOnline { .stop(sessionId: $0) } }
+
+    /// Stops `sessionId`'s turn on its host, whether or not it is selected.
+    func stop(sessionId: String) {
+        guard let downstream,
+              snapshot.groups.first(where: { sessionId.hasPrefix($0.serverId + ":") })?.state.carriesSessions == true
+        else { return }
+        _ = federation.route(.stop(sessionId: sessionId), from: downstream)
+    }
     func takeOver() { routeWhileOnline { .takeOver(sessionId: $0) } }
 
     func beginNewSession(peer: NativePeerGroup, repo: NativePeerRepoGroup) {

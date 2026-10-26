@@ -14,6 +14,7 @@ struct NativePeerTabBar: View {
     let onRenameSession: (RemoteSessionSummary) -> Void
     let onCopySessionMarkdown: (RemoteSessionSummary) -> Void
     let onSaveSessionMarkdown: (RemoteSessionSummary) -> Void
+    let onArchiveSession: (RemoteSessionSummary) -> Void
 
     private var peer: NativePeerGroup? {
         client.snapshot.groups.first { $0.serverId == selection.serverId }
@@ -74,6 +75,9 @@ struct NativePeerTabBar: View {
                             .disabled(!exportable)
                         Button("Save Session as Markdown…") { onSaveSessionMarkdown(session) }
                             .disabled(!exportable)
+                        Divider()
+                        Button("Archive Session…") { onArchiveSession(session) }
+                            .disabled(client.hosts?.canArchiveSessions(serverId: selection.serverId) != true)
                     }
                 }
                 .id(row.id)
