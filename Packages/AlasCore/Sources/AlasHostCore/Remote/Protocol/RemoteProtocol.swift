@@ -1496,6 +1496,9 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve `readProviderReview`, `openProviderReview`,
     /// `mutateReviewThread` and `publishReview`: only a headless host.
     public static let reviewsProviderV1 = "host.reviews.provider.v1"
+    /// Hosts that serve `listStashes`, `stashFiles`, `stashDiff` and the
+    /// stash changes of `mutateWorktree`: only a headless host.
+    public static let worktreesStashV1 = "host.worktrees.stash.v1"
     /// Hosts whose `createWorktreeSession` takes `repoHook`, answering
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
     /// must approve first.
@@ -1505,6 +1508,8 @@ public enum HostProtocolCapability: Sendable {
         v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
         worktreesRenameBranchV1, repoHooksApprovalV1,
     ]
+    /// What only a headless host serves.
+    public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

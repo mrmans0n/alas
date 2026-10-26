@@ -73,6 +73,11 @@ struct HostProtocolTests {
             worktree: ref, sessionID: "s",
             publish: HostReviewPublish(decision: .requestChanges, body: "Fix it.", draftIDs: ["c"], headSHA: "abc1234")
         )),
+        HostClientMessage(id: 30, request: .listStashes(worktree: ref)),
+        HostClientMessage(id: 31, request: .stashDiff(worktree: ref, stash: HostStashRef(ref: "stash@{0}", sha: "abc1234"), path: "a.txt")),
+        HostClientMessage(id: 32, request: .mutateWorktree(
+            worktree: ref, branch: "feature", change: .applyStash(HostStashRef(ref: "stash@{1}", sha: "def5678"))
+        )),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -113,6 +118,13 @@ struct HostProtocolTests {
             published: [ProviderReviewPublishedComment(localDraftID: "c", providerThreadID: "t", providerCommentID: "1", providerURL: nil)],
             failed: [ProviderReviewFailedComment(localDraftID: "d", message: "outdated")],
             refreshedRequest: ShepherdFixtures.request(), warnings: ["w"]
+        ))),
+        .response(id: 20, result: .stashes(stashes: [GitStash(ref: "stash@{0}", subject: "On main: wip", relativeTime: "now", sha: "abc1234")])),
+        .response(id: 21, result: .diff(diff: HostDiff(
+            hunks: [RemoteDiffHunk(header: "@@ -0,0 +1 @@", oldStart: 0, newStart: 1, lines: [
+                RemoteDiffLine(kind: "add", text: "hi", oldNumber: nil, newNumber: 1, noTrailingNewline: false),
+            ])],
+            truncated: true, note: "mode changed"
         ))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
@@ -229,9 +241,7 @@ struct HostProtocolTests {
         }
         #expect(caps == console + [PeerSessionTabsCapability.v1] + HostProtocolCapability.served)
         // An app host keeps git to the user at it; only a headless host adds it.
-        #expect(!caps.contains(HostProtocolCapability.worktreesGitV1))
-        #expect(!caps.contains(HostProtocolCapability.reviewsV1))
-        #expect(!caps.contains(HostProtocolCapability.reviewsProviderV1))
+        #expect(Set(caps).isDisjoint(with: HostProtocolCapability.headlessOnly))
     }
 
     /// A provider diff over its cap keeps only whole files.

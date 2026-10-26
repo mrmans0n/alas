@@ -227,25 +227,6 @@ extension AlasCoreContext {
             add: commit.insertions, del: commit.deletions)
     }
 
-    private static func remoteDiffHunk(_ hunk: ParsedDiff.Hunk) -> RemoteDiffHunk {
-        RemoteDiffHunk(
-            header: hunk.header,
-            oldStart: hunk.oldStart,
-            newStart: hunk.newStart,
-            lines: hunk.lines.map { line in
-                let kind: String
-                switch line.kind {
-                case .context: kind = "context"
-                case .add: kind = "add"
-                case .delete: kind = "delete"
-                }
-                return RemoteDiffLine(
-                    kind: kind, text: line.text,
-                    oldNumber: line.oldNumber, newNumber: line.newNumber,
-                    noTrailingNewline: line.noTrailingNewline)
-            })
-    }
-
     /// Drops ignored and excluded nodes at the wire boundary: the remote file
     /// browser is git-aware, so build output never reaches the phone.
     ///
@@ -443,7 +424,7 @@ extension AlasCoreContext {
             }
             let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
             return .success(
-                hunks: capped.hunks.map(Self.remoteDiffHunk),
+                hunks: capped.hunks.map(RemoteDiffHunk.init),
                 truncated: capped.truncated,
                 metadataNote: parsed.metadataSummary)
         } catch {
@@ -507,7 +488,7 @@ extension AlasCoreContext {
                 maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
             guard !parsed.isBinary else { return .failure(reason: .binary, message: nil) }
             let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
-            return .success(hunks: capped.hunks.map(Self.remoteDiffHunk),
+            return .success(hunks: capped.hunks.map(RemoteDiffHunk.init),
                             truncated: capped.truncated, metadataNote: parsed.metadataSummary)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
@@ -580,7 +561,7 @@ extension AlasCoreContext {
                 maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
             guard !parsed.isBinary else { return .failure(reason: .binary, message: nil) }
             let capped = RemoteWorktreeFileAccess.truncateHunks(parsed.hunks)
-            return .success(hunks: capped.hunks.map(Self.remoteDiffHunk),
+            return .success(hunks: capped.hunks.map(RemoteDiffHunk.init),
                             truncated: capped.truncated, metadataNote: parsed.metadataSummary)
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
@@ -855,5 +836,26 @@ extension AlasCoreContext {
 
     func isFolderWorktree(_ worktree: Worktree) -> Bool {
         projects.projects.first { $0.id == worktree.projectId }?.isFolder == true
+    }
+}
+
+extension RemoteDiffHunk {
+    init(_ hunk: ParsedDiff.Hunk) {
+        self.init(
+            header: hunk.header,
+            oldStart: hunk.oldStart,
+            newStart: hunk.newStart,
+            lines: hunk.lines.map { line in
+                let kind: String
+                switch line.kind {
+                case .context: kind = "context"
+                case .add: kind = "add"
+                case .delete: kind = "delete"
+                }
+                return RemoteDiffLine(
+                    kind: kind, text: line.text,
+                    oldNumber: line.oldNumber, newNumber: line.newNumber,
+                    noTrailingNewline: line.noTrailingNewline)
+            })
     }
 }

@@ -672,6 +672,8 @@ struct HostProtocolServerTests {
                 return
             }
             #expect(!capabilities.contains(HostProtocolCapability.worktreesGitV1))
+            #expect(try await fixture.request(.listStashes(worktree: ref))
+                == .failure(error: .invalidRequest(reason: "This host does not serve this git action.")))
         case .hidden:
             fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: repo, hidden: true)
             expected = .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")
@@ -793,6 +795,118 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["rev-parse", "main"], cwd: origin).stdout
             == Process.git(["rev-parse", "HEAD"], cwd: repo).stdout)
         #expect(try await Process.git(["rev-parse", "--abbrev-ref", "@{u}"], cwd: repo).stdout == "origin/main\n")
+    }
+
+    @Test func aMacStashesAndPopsAHostWorktreesChanges() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+
+        #expect(try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .stash(message: "wip", includeUntracked: true)
+        )) == .done)
+        let status = try await Process.git(["status", "--porcelain"], cwd: repo).stdout
+        #expect(status == "")
+        guard case .stashes(let stashes) = try await fixture.request(.listStashes(worktree: ref)) else {
+            Issue.record("expected stashes")
+            return
+        }
+        #expect(stashes.map(\.subject) == ["On main: wip"])
+        let stash = HostStashRef(try #require(stashes.first))
+        guard case .stashFiles(let files) = try await fixture.request(.stashFiles(worktree: ref, stash: stash)) else {
+            Issue.record("expected stash files")
+            return
+        }
+        #expect(files.map(\.path) == ["new.txt"])
+        #expect(files.first?.isUntracked == true)
+        guard case .diff(let diff) = try await fixture.request(.stashDiff(worktree: ref, stash: stash, path: "new.txt")) else {
+            Issue.record("expected a diff")
+            return
+        }
+        #expect(diff.hunks.count == 1)
+        // The host reads it bounded: past the cap, git's output is cut and reported.
+        let listed = try #require(await GitService().stashes(worktreePath: repo).first)
+        let file = try #require(await GitService().stashFiles(worktreePath: repo, stash: listed).first)
+        #expect(try await GitService().stashDiff(worktreePath: repo, stash: listed, file: file, maxOutputBytes: 8).truncated)
+
+        let popped = try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .popStash(stash)))
+        #expect(popped == .done)
+        #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent("new.txt").path))
+        #expect(try await fixture.request(.listStashes(worktree: ref)) == .stashes(stashes: []))
+    }
+
+    enum StaleStash: CaseIterable { case otherSHA, unlistedRef, optionRef, missingFile }
+
+    /// The Mac names a stash by ref and SHA; the host acts only on the one
+    /// `git stash list` still holds, and never hands git a ref it did not list.
+    @Test(arguments: StaleStash.allCases)
+    func stashActionsActOnlyOnTheStashTheMacSaw(_ stale: StaleStash) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        #expect(try await Process.git(["stash", "push", "-q", "--include-untracked"], cwd: repo).exitCode == 0)
+        let list = try await Process.git(["stash", "list", "--format=%gd %H"], cwd: repo).stdout
+        let listed = list.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let stash = HostStashRef(ref: listed[0], sha: listed[1])
+
+        switch stale {
+        case .missingFile:
+            #expect(try await fixture.request(.stashDiff(worktree: ref, stash: stash, path: "nope.txt"))
+                == .failure(error: .invalidRequest(reason: "The stash has no file nope.txt.")))
+        case .otherSHA, .unlistedRef, .optionRef:
+            let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            let seen = switch stale {
+            case .otherSHA: HostStashRef(ref: stash.ref, sha: head)
+            case .unlistedRef: HostStashRef(ref: "stash@{3}", sha: stash.sha)
+            default: HostStashRef(ref: "--index", sha: stash.sha)
+            }
+            let changed = HostResponse.failure(error: .failed(message: "This stash changed since it was listed. Refresh and try again."))
+            for change in [HostWorktreeChange.dropStash(seen), .applyStash(seen), .popStash(seen)] {
+                #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change)) == changed)
+            }
+            #expect(try await fixture.request(.stashFiles(worktree: ref, stash: seen)) == changed)
+        }
+        #expect(try await Process.git(["stash", "list", "--format=%gd %H"], cwd: repo).stdout == list)
+    }
+
+    /// As locally, a conflicting pop keeps the stash and leaves the conflict
+    /// in the worktree to resolve.
+    @Test func aConflictingStashPopKeepsTheStashAndShowsTheConflict() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let script = repo.appendingPathComponent(".alas/scripts/hello.sh")
+        try "stashed\n".write(to: script, atomically: true, encoding: .utf8)
+        #expect(try await Process.git(["stash", "push", "-q"], cwd: repo).exitCode == 0)
+        try "committed\n".write(to: script, atomically: true, encoding: .utf8)
+        #expect(try await Process.git(["commit", "-q", "-am", "Conflict"], cwd: repo).exitCode == 0)
+        guard case .stashes(let stashes) = try await fixture.request(.listStashes(worktree: ref)) else {
+            Issue.record("expected stashes")
+            return
+        }
+        let stash = HostStashRef(try #require(stashes.first))
+
+        guard case .failure(.failed(let message)) = try await fixture.request(
+            .mutateWorktree(worktree: ref, branch: "main", change: .popStash(stash))
+        ) else {
+            Issue.record("expected the pop to fail")
+            return
+        }
+        #expect(message.contains("CONFLICT"))
+        guard case .stashes(let after) = try await fixture.request(.listStashes(worktree: ref)) else {
+            Issue.record("expected stashes")
+            return
+        }
+        #expect(after.map(HostStashRef.init) == [stash])
+        guard case .worktreeRead(.changeList(_, _, _, let files, let staged, let unstaged, _, _, _, _)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .changes(comparisonMode: nil)))
+        else {
+            Issue.record("expected the changes")
+            return
+        }
+        #expect((files + staged + unstaged).contains { $0.path == ".alas/scripts/hello.sh" && $0.conflict != nil })
     }
 
     /// Paired Macs of other versions decode this, so its shape must not drift.

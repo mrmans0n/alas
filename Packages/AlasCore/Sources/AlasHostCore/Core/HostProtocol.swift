@@ -154,6 +154,13 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// Publishes pull or merge request review `sessionID` on its provider, as
     /// the host's user (`host.reviews.provider.v1`).
     case publishReview(worktree: WorktreeRef, sessionID: String, publish: HostReviewPublish)
+    /// The repository's stashes, as a worktree's Stashes list shows them
+    /// (`host.worktrees.stash.v1`).
+    case listStashes(worktree: WorktreeRef)
+    /// The files of `stash`, as listed (`host.worktrees.stash.v1`).
+    case stashFiles(worktree: WorktreeRef, stash: HostStashRef)
+    /// One file's diff in `stash`, as listed (`host.worktrees.stash.v1`).
+    case stashDiff(worktree: WorktreeRef, stash: HostStashRef, path: String)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -162,6 +169,18 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     case stage(paths: [String]), unstage(paths: [String]), discard(paths: [String])
     case commit(subject: String, body: String, amend: Bool)
     case push(forceWithLease: Bool), pull, fetch
+    /// Stashes the worktree's changes (`host.worktrees.stash.v1`).
+    case stash(message: String, includeUntracked: Bool)
+    /// Act on a stash as listed (`host.worktrees.stash.v1`).
+    case applyStash(HostStashRef), popStash(HostStashRef), dropStash(HostStashRef)
+
+    /// The capability beyond host.worktrees.git.v1 a change needs; nil for the original seven.
+    public var capability: String? {
+        switch self {
+        case .stage, .unstage, .discard, .commit, .push, .pull, .fetch: nil
+        case .stash, .applyStash, .popStash, .dropStash: HostProtocolCapability.worktreesStashV1
+        }
+    }
 }
 
 /// One read of a worktree's code, as the Remote session requests of the same name.
@@ -283,6 +302,47 @@ public struct HostProviderReview: Codable, Equatable, Sendable {
     }
 }
 
+/// A stash as a Mac saw it listed: the host acts on it only while `ref`
+/// still names `sha`.
+public struct HostStashRef: Codable, Hashable, Sendable {
+    public var ref: String
+    public var sha: String
+
+    public init(ref: String, sha: String) {
+        self.ref = ref
+        self.sha = sha
+    }
+
+    public init(_ stash: GitStash) {
+        self.init(ref: stash.ref, sha: stash.sha)
+    }
+}
+
+/// One file's diff, as a commit's is sent.
+public struct HostDiff: Codable, Equatable, Sendable {
+    public var hunks: [RemoteDiffHunk]
+    public var truncated: Bool
+    /// A metadata summary, or why there are no hunks.
+    public var note: String?
+
+    public init(hunks: [RemoteDiffHunk], truncated: Bool, note: String?) {
+        self.hunks = hunks
+        self.truncated = truncated
+        self.note = note
+    }
+
+    /// Capped as a commit diff is (`RemoteWorktreeFileAccess.truncateHunks`); a binary diff
+    /// has no hunks and the note "Binary files cannot be shown."
+    public init(_ diff: ParsedDiff) {
+        guard !diff.isBinary else {
+            self.init(hunks: [], truncated: false, note: "Binary files cannot be shown.")
+            return
+        }
+        let capped = RemoteWorktreeFileAccess.truncateHunks(diff.hunks)
+        self.init(hunks: capped.hunks.map(RemoteDiffHunk.init), truncated: capped.truncated, note: diff.metadataSummary)
+    }
+}
+
 /// An element that decodes as nil when it is in a shape this side can't read.
 private struct Lossy<Value: Decodable>: Decodable {
     let value: Value?
@@ -396,6 +456,12 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case reviewThreadMutated(result: ProviderThreadMutationResult)
     /// The answer to `publishReview`, warnings included.
     case reviewPublished(result: ProviderReviewPublishResult)
+    /// The answer to `listStashes`.
+    case stashes(stashes: [GitStash])
+    /// The answer to `stashFiles`.
+    case stashFiles(files: [GitStashFile])
+    /// The answer to `stashDiff`.
+    case diff(diff: HostDiff)
     case failure(error: HostError)
 }
 

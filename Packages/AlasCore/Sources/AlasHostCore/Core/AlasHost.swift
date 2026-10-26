@@ -34,11 +34,7 @@ public final class AlasHost {
 
     /// The `HostProtocolCapability` values this host serves.
     public var servedCapabilities: [String] {
-        HostProtocolCapability.served + (
-            core.environment.servesWorktreeGit
-                ? [HostProtocolCapability.worktreesGitV1, HostProtocolCapability.reviewsV1, HostProtocolCapability.reviewsProviderV1]
-                : []
-        )
+        HostProtocolCapability.served + (core.environment.servesWorktreeGit ? HostProtocolCapability.headlessOnly : [])
     }
 
     /// Lists the projects' worktrees, from the cache and then from git. A
@@ -375,9 +371,10 @@ public struct WorktreesAPI {
 
     /// Applies `change` to `worktree`, refusing one no longer on `branch`,
     /// busy, or waiting on a checkpoint restore.
-    public func mutate(_ worktree: Worktree, branch: String, change: HostWorktreeChange, caller: HostCaller) async throws {
+    @discardableResult
+    public func mutate(_ worktree: Worktree, branch: String, change: HostWorktreeChange, caller: HostCaller) async throws -> HostResponse {
         caller.log("worktrees.mutate", worktree.path.path)
-        try await core.mutateListedWorktree(worktree, branch: branch, change: change)
+        return try await core.mutateListedWorktree(worktree, branch: branch, change: change)
     }
 }
 

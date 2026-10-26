@@ -8,12 +8,12 @@ extension AlasCoreContext {
     /// A paired Mac's git action on a listed worktree on `branch`, the one it
     /// saw, under the project's mutation gate as a rename is. Paths outside
     /// the worktree are refused.
-    func mutateListedWorktree(_ worktree: Worktree, branch: String, change: HostWorktreeChange) async throws {
+    func mutateListedWorktree(_ worktree: Worktree, branch: String, change: HostWorktreeChange) async throws -> HostResponse {
         // Not awaited: the reply does not wait on the code host. A change
         // that threw, such as a pull stopped on conflicts, may have moved
         // the worktree too.
         defer { Task { _ = await refreshFollowedReviewStatus(worktree.id) } }
-        try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { @MainActor [self] in
+        return try await ProjectMutationGate.shared.withMutation(projectID: worktree.projectId) { @MainActor [self] in
             try refuseIfStopping()
             let changed = HostError.failed(message: "The worktree changed since it was listed.")
             guard let listed = projects.worktrees(projectId: worktree.projectId).first(where: { $0.id == worktree.id }),
@@ -32,11 +32,11 @@ extension AlasCoreContext {
             if await environment.checkpointRecoveryBlocksRemoval(listed) {
                 throw HostError.failed(message: "A checkpoint restore is pending on the host; finish it there first.")
             }
-            try await Process.$gitLiteralPathspecs.withValue(true) { try await apply(change, to: listed) }
+            return try await Process.$gitLiteralPathspecs.withValue(true) { try await apply(change, to: listed) }
         }
     }
 
-    private func apply(_ change: HostWorktreeChange, to worktree: Worktree) async throws {
+    private func apply(_ change: HostWorktreeChange, to worktree: Worktree) async throws -> HostResponse {
         let root = worktree.path
         let git = GitService()
         switch change {
@@ -44,7 +44,7 @@ extension AlasCoreContext {
             if try await git.mergeState(worktreePath: root) != nil {
                 throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first.")
             }
-        case .stage, .unstage, .discard, .fetch:
+        case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash:
             break
         }
         switch change {
@@ -102,6 +102,65 @@ extension AlasCoreContext {
                let remote = base.remote {
                 try await git.fetchRef(worktreePath: root, remote: remote, branch: base.fetchBranch ?? baseBranch)
             }
+        case .stash, .applyStash, .popStash, .dropStash:
+            // They name no client paths, and git's own `:/` pathspec, which
+            // cleans stashed untracked files, must not be taken literally.
+            try await Process.$gitLiteralPathspecs.withValue(false) { try await Self.applyStashChange(change, at: root) }
+        }
+        return .done
+    }
+
+    private static func applyStashChange(_ change: HostWorktreeChange, at root: URL) async throws {
+        let git = GitService()
+        switch change {
+        case .stash(let message, let includeUntracked):
+            try throwIfFailed(await git.pushStash(worktreePath: root, message: message, includeUntracked: includeUntracked))
+        case .applyStash(let stash):
+            try throwIfFailed(await git.applyStash(worktreePath: root, stash: listedStash(stash, at: root)))
+        case .popStash(let stash):
+            try throwIfFailed(await git.popStash(worktreePath: root, stash: listedStash(stash, at: root)))
+        case .dropStash(let stash):
+            try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
+        case .stage, .unstage, .discard, .commit, .push, .pull, .fetch:
+            preconditionFailure("not a stash change")
+        }
+    }
+
+    /// The repository's stashes, as the worktree lists them.
+    func stashes(in worktree: Worktree) async throws -> [GitStash] {
+        try await GitService().stashes(worktreePath: worktree.path)
+    }
+
+    func stashFiles(_ stash: HostStashRef, in worktree: Worktree) async throws -> [GitStashFile] {
+        try await GitService().stashFiles(worktreePath: worktree.path, stash: Self.listedStash(stash, at: worktree.path))
+    }
+
+    func stashDiff(_ stash: HostStashRef, path: String, in worktree: Worktree) async throws -> HostDiff {
+        let git = GitService()
+        let listed = try await Self.listedStash(stash, at: worktree.path)
+        guard let file = try await git.stashFiles(worktreePath: worktree.path, stash: listed).first(where: { $0.path == path }) else {
+            throw HostError.invalidRequest(reason: "The stash has no file \(path).")
+        }
+        let read = try await git.stashDiff(worktreePath: worktree.path, stash: listed, file: file,
+                                           maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+        var diff = HostDiff(read.diff)
+        diff.truncated = diff.truncated || read.truncated
+        return diff
+    }
+
+    /// The entry of `git stash list` equal to `stash`, else "This stash changed since it was listed. Refresh and try again."
+    /// A client ref is never handed to git unless the list holds it.
+    private static func listedStash(_ stash: HostStashRef, at root: URL) async throws -> GitStash {
+        guard let listed = try await GitService().stashes(worktreePath: root).first(where: { $0.ref == stash.ref && $0.sha == stash.sha })
+        else { throw HostError.failed(message: "This stash changed since it was listed. Refresh and try again.") }
+        return listed
+    }
+
+    /// As locally, a conflict or error is shown; conflicted files stay in the worktree.
+    private static func throwIfFailed(_ result: StashOperationResult) throws {
+        switch result {
+        case .clean: break
+        case .conflict(let message), .error(let message): throw HostError.failed(message: message)
         }
     }
 

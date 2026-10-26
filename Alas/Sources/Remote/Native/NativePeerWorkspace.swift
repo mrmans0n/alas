@@ -33,10 +33,12 @@ struct NativePeerWorkspace: Equatable {
         case diff(path: String, stage: ChangeStage?)
         case commitDiff(path: String, sha: String)
         case file(path: String)
+        /// Served over the host channel only, as the stash was listed.
+        case stashDiff(path: String, stash: HostStashRef)
 
         var path: String {
             switch self {
-            case .diff(let path, _), .commitDiff(let path, _), .file(let path): path
+            case .diff(let path, _), .commitDiff(let path, _), .file(let path), .stashDiff(let path, _): path
             }
         }
     }
@@ -133,6 +135,16 @@ struct NativePeerWorkspace: Equatable {
     mutating func beginDocument(_ document: Document) {
         self.document = document
         documentContent = .loading
+    }
+
+    /// Lands a host-served diff for `document` if it is still the open one.
+    mutating func finishDocument(_ document: Document, with result: Result<HostDiff, NativePeerReviewGitClientError>) {
+        guard document == self.document else { return }
+        documentContent = switch result {
+        case .success(let diff):
+            .loaded(.diff(ParsedDiff(hunks: diff.hunks.map(Self.hunk), metadataSummary: diff.note), truncated: diff.truncated))
+        case .failure(let error): .failed(error.message)
+        }
     }
 
     mutating func closeDocument() {
