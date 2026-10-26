@@ -5,7 +5,7 @@ use alas_helper::acp_broker::{
 };
 use alas_helper::acp_broker_protocol::{
     AcpAckParams, AcpAttachParams, AcpBrokerMethod, AcpCloseParams, AcpDetachParams, AcpListResult,
-    AcpOpenParams, AcpOpenResult, AcpRespondParams, AcpSendParams,
+    AcpOpenParams, AcpOpenResult, AcpRawJSONPayload, AcpRespondParams, AcpSendParams,
 };
 use serde::{de::DeserializeOwned, Serialize};
 use serde_json::{json, Value};
@@ -767,5 +767,80 @@ fn delivered_hook_rejection_releases_cache_without_pruning_journal() {
         broker.consume_hook_review_rejection(&key, first.adapter_request_id);
         assert_eq!(broker.replay_after_ack(), journal);
         assert_eq!(broker.begin_operation(key, "session/prompt", json!({})).unwrap().replayed, !releasable);
+    }
+}
+
+fn raw_payload_corpus() -> Value {
+    serde_json::from_str(include_str!(
+        "../../Packages/AlasCore/Tests/AlasCoreTests/Fixtures/acp-raw-json-payloads.json"
+    ))
+    .unwrap()
+}
+
+fn raw_payload_expected_bytes(fixture: &Value) -> Vec<u8> {
+    assert_ne!(
+        fixture.get("sourceUTF8").is_some(),
+        fixture.get("sourceBytes").is_some()
+    );
+    if let Some(source) = fixture["sourceUTF8"].as_str() {
+        return source.as_bytes().to_vec();
+    }
+    fixture["sourceBytes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|byte| u8::try_from(byte.as_u64().unwrap()).unwrap())
+        .collect()
+}
+
+#[test]
+fn raw_payload_shared_fixtures_preserve_exact_source_bytes() {
+    let corpus = raw_payload_corpus();
+    for fixture in corpus["valid"].as_array().unwrap() {
+        let expected = raw_payload_expected_bytes(fixture);
+        let decoded: AcpRawJSONPayload = serde_json::from_value(fixture["wire"].clone()).unwrap();
+        assert_eq!(decoded.bytes(), expected.as_slice(), "{}", fixture["name"]);
+        assert_eq!(
+            serde_json::to_value(AcpRawJSONPayload::new(expected)).unwrap(),
+            fixture["wire"]
+        );
+    }
+}
+
+#[test]
+fn raw_payload_generic_carriers_preserve_evidence_across_hops() {
+    let corpus = raw_payload_corpus();
+    for fixture in corpus["valid"].as_array().unwrap() {
+        let expected = raw_payload_expected_bytes(fixture);
+        let payload = AcpRawJSONPayload::new(expected.clone());
+        let mut carrier = json!({
+            "event": { "cursor": 7, "rawPayload": &payload },
+            "cachedOutcome": { "rawPayload": &payload }
+        });
+        for _ in 0..2 {
+            carrier = serde_json::from_slice(&serde_json::to_vec(&carrier).unwrap()).unwrap();
+        }
+        for key in ["event", "cachedOutcome"] {
+            let recovered: AcpRawJSONPayload =
+                serde_json::from_value(carrier[key]["rawPayload"].clone()).unwrap();
+            assert_eq!(
+                recovered.bytes(),
+                expected.as_slice(),
+                "{} {key}",
+                fixture["name"]
+            );
+        }
+    }
+}
+
+#[test]
+fn raw_payload_rejects_malformed_wrappers() {
+    let corpus = raw_payload_corpus();
+    for fixture in corpus["invalid"].as_array().unwrap() {
+        assert!(
+            serde_json::from_value::<AcpRawJSONPayload>(fixture["wire"].clone()).is_err(),
+            "{}",
+            fixture["name"]
+        );
     }
 }
