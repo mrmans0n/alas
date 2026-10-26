@@ -335,7 +335,15 @@ struct NativePeerRightPaneView: View {
             onMarkResolved: { runGit(.markResolved(path: $0.path), on: gitTarget) },
             onCherryPick: servesOperations ? { pendingCommitAction = (kind: .cherryPick, commit: $0) } : nil,
             onRevert: servesOperations ? { pendingCommitAction = (kind: .revert, commit: $0) } : nil,
-            onEditCommit: nil
+            onEditCommit: client.hosts?.servesCommitEdit(serverId: gitTarget.serverId) == true
+                ? { commit in
+                    guard let sha = commit.sha else { return }
+                    client.openCommitEditor(NativePeerCommitEditorSelection(
+                        serverId: gitTarget.serverId, worktree: gitTarget.worktree, sha: sha,
+                        comparisonMode: state.config.changes.comparisonMode
+                    ))
+                }
+                : nil
         )
     }
 
