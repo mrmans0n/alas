@@ -89,11 +89,7 @@ enum ComputerUseAXReader {
                 let manual = attribute == ComputerUseWebContent.manualAccessibility
                 // Written also when it reads as true already: setting it again is what asks again.
                 let error = AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue)
-                let result: ComputerUseWebContent.SetResult = switch error {
-                case .success: .set
-                case .attributeUnsupported: .unsupported
-                default: .failed
-                }
+                let result = ComputerUseWebContent.setResult(error.rawValue)
                 if manual, result == .set { manualAccessibilityAccepted.withLock { _ = $0.insert(app.pid) } }
                 continuation.resume(returning: .init(
                     result: result, turnedOn: ComputerUseWebContent.restores(before: before, setSucceeded: result == .set),
@@ -119,6 +115,24 @@ enum ComputerUseAXReader {
         private let flag = Atomic<Bool>(false)
         func set() { flag.store(true, ordering: .relaxed) }
         var isSet: Bool { flag.load(ordering: .relaxed) }
+    }
+
+    /// Whether the window shows a web area with content, looked for as cheaply as the first
+    /// contact's wait needs (`ComputerUseWebContent.findsWebContent`): breadth first, only each
+    /// element's role and children, through at most `nodes` elements within `timeLimit`.
+    static func showsWebContent(_ window: ComputerUseWindow, nodes: Int, timeLimit: Duration) async throws -> Bool {
+        let cancel = CancelFlag()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                queue.async {
+                    if cancel.isSet { return continuation.resume(throwing: CancellationError()) }
+                    let walk = Walk(budget: nodes, maxDepth: .max, deadline: .now + timeLimit, isCancelled: { cancel.isSet })
+                    continuation.resume(with: Result { try walk.showsWebContent(window) })
+                }
+            }
+        } onCancel: {
+            cancel.set()
+        }
     }
 
     /// Throws `CancellationError` when the calling task is cancelled. `cut` says why the walk
@@ -253,6 +267,30 @@ enum ComputerUseAXReader {
                 appNotResponding: appStalled || skippedUnanswered, timedOut: ContinuousClock.now >= deadline,
                 budgetSpent: cutOff)
             return (root, cut, ComputerUseAXHandles(elements))
+        }
+
+        /// `ComputerUseWebContent.findsWebContent` over the window's AX elements, each message
+        /// bounded by the deadline.
+        func showsWebContent(_ window: ComputerUseWindow) throws -> Bool {
+            func limitWait(_ element: AXUIElement) {
+                let remaining = deadline - ContinuousClock.now
+                let seconds = Float(remaining.components.seconds) + Float(remaining.components.attoseconds) / 1e18
+                AXUIElementSetMessagingTimeout(element, max(0.01, min(ComputerUseAXReader.messagingTimeout, seconds)))
+            }
+            let application = try ComputerUseAXReader.target(window.app.pid)
+            limitWait(application)
+            guard let windowsRef = attribute(application, kAXWindowsAttribute), let axWindows = windowsRef as? [AXUIElement],
+                  let root = ComputerUseAXReader.axWindow(
+                      axWindows, for: window, frame: { frame(of: $0) }, title: { string(of: $0, kAXTitleAttribute) },
+                      shouldStop: { isHalted })
+            else { return false }
+            return ComputerUseWebContent.findsWebContent(
+                from: root, budget: budget,
+                role: { element in
+                    limitWait(element)
+                    return string(of: element, kAXRoleAttribute)
+                },
+                children: { childElements(of: $0) }, halted: { isHalted })
         }
 
         private func notResponding(_ window: ComputerUseWindow) -> ComputerUseSystemError {

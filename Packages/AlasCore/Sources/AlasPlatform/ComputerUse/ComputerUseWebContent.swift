@@ -23,10 +23,23 @@ public enum ComputerUseWebContent {
     /// How setting an attribute went.
     public enum SetResult: Equatable, Sendable {
         case set
-        /// The app has no such attribute (`kAXErrorAttributeUnsupported`).
+        /// The app won't take it: it has no such attribute, doesn't implement setting it, or
+        /// can't be messaged. Asking again is pointless.
         case unsupported
-        /// Anything else: the app busy, or not answering yet. Nothing is known.
+        /// The app busy, or not answering yet (still starting): it may take it later.
         case failed
+    }
+
+    /// The `SetResult` of an `AXError`'s raw value: success; `cannotComplete` (-25204) and
+    /// `failure` (-25200), which pass once an app is up, are worth another try; anything else
+    /// (`attributeUnsupported` -25205, `notImplemented` -25208, `apiDisabled`, an invalid element)
+    /// isn't.
+    public static func setResult(_ error: Int32) -> SetResult {
+        switch error {
+        case 0: .set
+        case -25204, -25200: .failed
+        default: .unsupported
+        }
     }
 
     /// A wake: how its set went, and whether Alas turned the attribute on (`restores`), so it is
@@ -51,10 +64,11 @@ public enum ComputerUseWebContent {
         /// It failed in a way that may pass (an app still starting): set it again at the next
         /// poll, within the wait's deadline.
         case retry
-        /// The app has no such attribute: set this one instead, at once.
+        /// The app won't take it: set this one instead, at once.
         case fallBack(String)
-        /// Nothing to ask with: no wait.
-        case giveUp
+        /// Nothing more to ask with: the wait for the content goes on without asking again (a
+        /// browser also builds its tree as it is read).
+        case waitOnly
     }
 
     /// After a set of `attribute` came to `result`: `manualAccessibility` falls back to
@@ -66,7 +80,7 @@ public enum ComputerUseWebContent {
         case .failed: .retry
         case .unsupported:
             attribute == manualAccessibility && fallsBackToEnhancedUserInterface(after: .unsupported, bundleID: bundleID)
-                ? .fallBack(enhancedUserInterface) : .giveUp
+                ? .fallBack(enhancedUserInterface) : .waitOnly
         }
     }
 
@@ -82,19 +96,45 @@ public enum ComputerUseWebContent {
     /// web tree seconds after a fresh launch.
     public static let contentDeadline: Duration = .seconds(4)
 
-    /// How deep and how wide the wait's read of the window looks for a web area with content: the
-    /// page's web area sits a few levels under the browser's toolbar.
-    public static let probeDepth = 10
-    public static let probeNodes = 400
+    /// How many elements the wait's look for a web area with content reads (`findsWebContent`):
+    /// the page's web area sits under a toolbar of a few hundred.
+    public static let probeNodes = 3000
+
+    /// Whether a web area with content is among `root`'s descendants, looked for breadth first
+    /// through at most `budget` elements, reading only each one's role and children, and stopping
+    /// at the first web area with children; a menu bar is skipped. False once `halted` (a
+    /// deadline, a stop), or when the budget runs out first.
+    public static func findsWebContent<Element>(
+        from root: Element, budget: Int, role: (Element) -> String?, children: (Element) -> [Element],
+        halted: () -> Bool = { false }
+    ) -> Bool {
+        var level = [root]
+        var read = 0
+        while !level.isEmpty {
+            var next: [Element] = []
+            for element in level {
+                read += 1
+                guard read <= budget, !halted() else { return false }
+                let role = role(element)
+                if halted() { return false }
+                if role == "AXMenuBar" { continue }
+                let below = children(element)
+                if role == "AXWebArea", !below.isEmpty { return true }
+                next += below
+            }
+            level = next
+        }
+        return false
+    }
 
     /// Once the web content shows, how long it is left to fill in before the window is read.
     public static let contentSettle: Duration = .milliseconds(500)
 
-    /// Whether to read the window again after `waited` since the wake, read time included: it
-    /// shows no web area with content yet (`hasWebContent`) and the deadline hasn't passed. A
-    /// read cut short counts only for what it holds.
-    public static func keepsWaiting(root: ComputerUseAXNode, waited: Duration, deadline: Duration = contentDeadline) -> Bool {
-        !hasWebContent(root) && waited < deadline
+    /// Whether to look at the window again after `waited` since the wake, look time included:
+    /// it shows no web area with content yet (`showsContent`) and the deadline hasn't passed. A
+    /// look cut short counts only for what it found.
+    public static func keepsWaiting(showsContent: Bool, waited: Duration, deadline: Duration = contentDeadline) -> Bool {
+        !showsContent && waited < deadline
     }
 
     /// Whether the wait after the wake sets the attribute once more, `waited` since the wake:
@@ -140,12 +180,12 @@ public enum ComputerUseWebContent {
 
     /// Whether to wake the app: a Chromium or Electron one (`acceptsManualAccessibility`, or a
     /// Chromium browser by bundle id), due a try (`wakesAgain`), whose window showed no web
-    /// content: no web area, or one without anything in it yet, also in a read cut short.
+    /// content (`showsContent`, `hasWebContent`): no web area, or one without anything in it
+    /// yet, also in a read cut short.
     public static func needsWake(
-        acceptsManualAccessibility: Bool, bundleID: String?, wakesAgain: Bool, root: ComputerUseAXNode
+        acceptsManualAccessibility: Bool, bundleID: String?, wakesAgain: Bool, showsContent: Bool
     ) -> Bool {
-        guard wakesAgain, acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "") else { return false }
-        return !hasWebContent(root)
+        wakesAgain && (acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "")) && !showsContent
     }
 
     /// A web area with something in it.

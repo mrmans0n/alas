@@ -208,6 +208,9 @@ struct ComputerUseSystem: Sendable {
         .init(result: .unsupported, turnedOn: false)
     }
     var restoreWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Void = { _, _ in }
+    /// Whether the window shows a web area with content (`ComputerUseAXReader.showsWebContent`);
+    /// nil to look in an `axTree` read instead, as the fakes do.
+    var showsWebContent: (@Sendable (ComputerUseWindow) async throws -> Bool)?
     /// When the process started, so a pid the system handed to a new process tells apart from the
     /// old one; nil when it can't be read.
     var processStart: @Sendable (Int32) -> TimeInterval? = { _ in nil }
@@ -253,6 +256,10 @@ struct ComputerUseSystem: Sendable {
             accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
             wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0, attribute: $1) },
             restoreWebContent: { await ComputerUseAXReader.restoreWebContent($0, attribute: $1) },
+            showsWebContent: {
+                try await ComputerUseAXReader.showsWebContent(
+                    $0, nodes: ComputerUseWebContent.probeNodes, timeLimit: ComputerUseCoordinator.webContentReadLimit)
+            },
             processStart: { LiveComputerUseSystem.processStart($0) },
             displays: { LiveComputerUseSystem.displayFrames() },
             sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) }

@@ -175,20 +175,22 @@ struct ComputerUseWebContentTests {
 
     /// Only a Chromium or Electron window without a web area with content, due a try, is woken.
     @Test(arguments: [
-        (true, String?("com.tinyspeck.slackmacgap"), true, empty, true),
-        (false, "com.google.Chrome", true, empty, true),
-        (false, "com.google.Chrome", true, unbuilt, true),
-        (true, "com.tinyspeck.slackmacgap", true, built, false),
-        (true, "com.tinyspeck.slackmacgap", true, hollow, true),
-        (true, "com.tinyspeck.slackmacgap", true, deep, true),
-        (true, "com.tinyspeck.slackmacgap", false, empty, false),
-        (false, "com.apple.TextEdit", true, empty, false),
+        (true, String?("com.tinyspeck.slackmacgap"), true, false, true),
+        (false, "com.google.Chrome", true, false, true),
+        (true, "com.tinyspeck.slackmacgap", true, true, false),
+        (true, "com.tinyspeck.slackmacgap", false, false, false),
+        (false, "com.apple.TextEdit", true, false, false),
     ])
-    func aWebWindowWithoutItsWebContentIsWoken(
-        manual: Bool, bundleID: String?, due: Bool, root: ComputerUseAXNode, wakes: Bool
-    ) {
+    func aWebWindowWithoutItsWebContentIsWoken(manual: Bool, bundleID: String?, due: Bool, content: Bool, wakes: Bool) {
         #expect(ComputerUseWebContent.needsWake(
-            acceptsManualAccessibility: manual, bundleID: bundleID, wakesAgain: due, root: root) == wakes)
+            acceptsManualAccessibility: manual, bundleID: bundleID, wakesAgain: due, showsContent: content) == wakes)
+    }
+
+    /// Content is a web area with something in it: not groups alone (Chrome's page area before its
+    /// tree is built), not an empty web area, not a read that stopped above it.
+    @Test(arguments: [(empty, false), (unbuilt, false), (hollow, false), (deep, false), (built, true)])
+    func webContentIsAWebAreaWithSomethingInIt(root: ComputerUseAXNode, shows: Bool) {
+        #expect(ComputerUseWebContent.hasWebContent(root) == shows)
     }
 
     /// AXEnhancedUserInterface only for a Chromium browser that has no AXManualAccessibility; a
@@ -217,13 +219,48 @@ struct ComputerUseWebContentTests {
         (.failed, "AXEnhancedUserInterface", "com.google.Chrome", .retry),
         (.failed, "AXManualAccessibility", "com.tinyspeck.slackmacgap", .retry),
         (.unsupported, "AXManualAccessibility", "com.google.Chrome", .fallBack("AXEnhancedUserInterface")),
-        (.unsupported, "AXEnhancedUserInterface", "com.google.Chrome", .giveUp),
-        (.unsupported, "AXManualAccessibility", "com.tinyspeck.slackmacgap", .giveUp),
+        (.unsupported, "AXEnhancedUserInterface", "com.google.Chrome", .waitOnly),
+        (.unsupported, "AXManualAccessibility", "com.tinyspeck.slackmacgap", .waitOnly),
     ])
     func aFailedSetIsTriedAgainAndAMissingAttributeFallsBack(
         result: ComputerUseWebContent.SetResult, attribute: String, bundleID: String?, next: ComputerUseWebContent.NextSet
     ) {
         #expect(ComputerUseWebContent.next(after: result, of: attribute, bundleID: bundleID) == next)
+    }
+
+    /// Only a busy or still starting app is asked again: Chrome answers AXEnhancedUserInterface
+    /// with notImplemented every time.
+    @Test(arguments: [
+        (Int32(0), ComputerUseWebContent.SetResult.set),
+        (-25204, .failed),
+        (-25200, .failed),
+        (-25205, .unsupported),
+        (-25208, .unsupported),
+        (-25211, .unsupported),
+        (-25202, .unsupported),
+    ])
+    func onlyATransientErrorIsTriedAgain(error: Int32, result: ComputerUseWebContent.SetResult) {
+        #expect(ComputerUseWebContent.setResult(error) == result)
+    }
+
+    /// The wait's look finds the page's web area under a toolbar of more elements than a small
+    /// depth-first read covers, skips the menu bar, and needs the web area to have content.
+    @Test(arguments: [
+        (500, true, 3000, true),
+        (500, false, 3000, false),
+        (5000, true, 3000, false),
+        (0, true, 3000, true),
+    ])
+    func theWaitsLookFindsAWebAreaUnderABigToolbar(toolbar: Int, filled: Bool, budget: Int, finds: Bool) {
+        let buttons = (0 ..< toolbar).map { _ in ComputerUseAXNode(role: "AXButton") }
+        var page = ComputerUseAXNode(role: "AXWebArea", children: filled ? [ComputerUseAXNode(role: "AXTextField")] : [])
+        for _ in 0 ..< 7 { page = ComputerUseAXNode(role: "AXGroup", children: [page]) }
+        let menus = ComputerUseAXNode(role: "AXMenuBar", children: (0 ..< 5000).map { _ in ComputerUseAXNode(role: "AXMenuItem") })
+        let window = ComputerUseAXNode(role: "AXWindow", children: [
+            menus, ComputerUseAXNode(role: "AXToolbar", children: buttons), page,
+        ])
+        #expect(ComputerUseWebContent.findsWebContent(
+            from: window, budget: budget, role: { $0.role }, children: { $0.children }) == finds)
     }
 
     /// The wait after the wake sets the attribute once more, from halfway to the deadline.
@@ -244,21 +281,16 @@ struct ComputerUseWebContentTests {
         #expect(ComputerUseWebContent.restores(before: before, setSucceeded: setSucceeded) == restores)
     }
 
-    /// After the wake, the window is read again until a web area has something in it, for at
-    /// most `contentDeadline`. A read cut short counts only for what it holds.
+    /// After the wake, the window is looked at again until a web area has something in it, for at
+    /// most `contentDeadline`.
     @Test(arguments: [
-        (empty, Duration.zero, true),
-        // No web area at all, as Chrome's page area before its tree is built.
-        (unbuilt, .zero, true),
-        (unbuilt, .milliseconds(3900), true),
-        (unbuilt, .seconds(4), false),
-        (hollow, .milliseconds(3900), true),
-        (hollow, .seconds(4), false),
-        (deep, .zero, true),
-        (built, .zero, false),
+        (false, Duration.zero, true),
+        (false, .milliseconds(3900), true),
+        (false, .seconds(4), false),
+        (true, .zero, false),
     ])
-    func firstContactWaitsForWebContentUntilTheDeadline(root: ComputerUseAXNode, waited: Duration, waits: Bool) {
-        #expect(ComputerUseWebContent.keepsWaiting(root: root, waited: waited) == waits)
+    func firstContactWaitsForWebContentUntilTheDeadline(content: Bool, waited: Duration, waits: Bool) {
+        #expect(ComputerUseWebContent.keepsWaiting(showsContent: content, waited: waited) == waits)
     }
 
     /// A process whose content showed isn't woken again; one that timed out is, after a while, a
