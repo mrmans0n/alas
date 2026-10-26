@@ -850,7 +850,7 @@ struct RemoteServerIntegrationTests {
         second.cancel(with: .goingAway, reason: nil)
     }
 
-    @Test func updateAccessPolicyClosesIdleConnectionsAndAppliesToNewRequests() async throws {
+    @Test func updateAccessPolicyAppliesToOpenConnectionsAndNewRequests() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
@@ -865,14 +865,12 @@ struct RemoteServerIntegrationTests {
 
         server.updateAccessPolicy(RemoteAccessPolicy(allowedHosts: ["evil.example"]))
 
+        // The socket stays open, so a request already written is answered,
+        // and under the new rules.
         try await send("\r\n", on: conn)
-        do {
-            let staleResponse = try await receiveHTTPResponse(from: conn, on: queue, timeout: 1)
-            let text = try #require(String(data: staleResponse, encoding: .utf8))
-            #expect(!text.hasPrefix("HTTP/1.1 200 OK"))
-        } catch {
-            // Expected if the server closed the pre-refresh idle connection.
-        }
+        let staleResponse = try await receiveHTTPResponse(from: conn, on: queue, timeout: 1)
+        let text = try #require(String(data: staleResponse, encoding: .utf8))
+        #expect(text.hasPrefix("HTTP/1.1 403"), "\(text)")
 
         var req = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/health")!)
         req.setValue("evil.example", forHTTPHeaderField: "Host")
