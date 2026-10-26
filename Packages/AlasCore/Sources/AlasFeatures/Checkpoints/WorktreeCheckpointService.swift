@@ -165,8 +165,8 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                 func side(_ diffSide: CheckpointDiffSide) async -> ImageDiffSide {
                     guard diffSide.state.kind != .absent, let data = diffSide.data else { return .missing }
                     let decoded = await Self.decodeImage(data, worktreePath: target.path)
-                    // Keep the checkpoint copy for plain decode failures; LFS keeps its own.
-                    if case .failed(let failure) = decoded, failure.message == "decode" {
+                    // The pane shows the message verbatim, so keep the checkpoint copy for every failure.
+                    if case .failed = decoded {
                         return .failed(.init(message: "Image could not be decoded."))
                     }
                     return decoded
