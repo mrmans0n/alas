@@ -1204,7 +1204,9 @@ struct HostProtocolServerTests {
         try await sessions.send(id, prompt: "fix it", caller: .app)
 
         let agent = fixture.agent
-        try await eventually { agent.sent.contains { $0.method == "session/prompt" } }
+        // The prompt waits for the capture: two full snapshots, about two dozen git processes in turn,
+        // which take well over the default 10 s on a loaded 3-vCPU runner.
+        try await eventually(within: .seconds(60)) { agent.sent.contains { $0.method == "session/prompt" } }
         let manager = try #require(fixture.core.sessionManagers[.worktree(worktree.id)])
         let user = try #require(manager.liveSession(for: id)?.transcript.messages.first {
             if case .user = $0 { return true }
