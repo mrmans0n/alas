@@ -191,7 +191,12 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     }
 
     /// The changes that leave or resolve an operation: the rebase gate lets only these through.
-    public var leavesAnOperation: Bool { capability == HostProtocolCapability.worktreesOperationsV1 }
+    public var leavesAnOperation: Bool {
+        switch self {
+        case .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved: true
+        default: false
+        }
+    }
 }
 
 /// The kind of a worktree's in-progress git operation, as a client names it.

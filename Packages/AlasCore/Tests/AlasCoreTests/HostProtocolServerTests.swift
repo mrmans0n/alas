@@ -629,8 +629,8 @@ struct HostProtocolServerTests {
     }
 
     enum Refusal: CaseIterable {
-        case branchChanged, checkedOutSinceListed, staleDiscard, nothingStaged, tooManyPaths, pendingCheckpoint, appHost, hidden,
-            archivedWhileQueued
+        case branchChanged, checkedOutSinceListed, staleDiscard, staleConflict, nothingStaged, tooManyPaths, pendingCheckpoint, appHost,
+            hidden, archivedWhileQueued
     }
 
     @Test(arguments: Refusal.allCases)
@@ -660,6 +660,11 @@ struct HostProtocolServerTests {
         case .staleDiscard:
             change = .discard(paths: ["missing.txt"])
             expected = .failed(message: "These changes are no longer in the worktree.")
+        case .staleConflict:
+            // Not unmerged: taking a side would overwrite the host's edit.
+            try "edited\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+            change = .useTheirs(path: ".alas/scripts/hello.sh")
+            expected = .failed(message: "The conflict on .alas/scripts/hello.sh changed; refresh and try again.")
         case .nothingStaged:
             change = .commit(subject: "Empty", body: "", amend: false)
             expected = .failed(message: "Nothing is staged to commit.")
@@ -688,6 +693,9 @@ struct HostProtocolServerTests {
         }
 
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: expected))
+        if refusal == .staleConflict {
+            #expect(try String(contentsOf: repo.appendingPathComponent(".alas/scripts/hello.sh"), encoding: .utf8) == "edited\n")
+        }
     }
 
     /// Paths come from the client: the host acts only inside the worktree,

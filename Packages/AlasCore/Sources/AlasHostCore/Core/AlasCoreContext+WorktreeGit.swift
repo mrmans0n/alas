@@ -128,14 +128,17 @@ extension AlasCoreContext {
         // operation: a conflicting stash pop leaves none.
         case .useOurs(let path):
             try await Self.refuseOutside([path], of: root)
+            try await Self.refuseUnlessConflicted(path, at: root)
             try await git.useOurs(worktreePath: root, relativePath: path)
             try await git.markResolved(worktreePath: root, relativePath: path)
         case .useTheirs(let path):
             try await Self.refuseOutside([path], of: root)
+            try await Self.refuseUnlessConflicted(path, at: root)
             try await git.useTheirs(worktreePath: root, relativePath: path)
             try await git.markResolved(worktreePath: root, relativePath: path)
         case .keepDeleted(let path):
             try await Self.refuseOutside([path], of: root)
+            try await Self.refuseUnlessConflicted(path, at: root)
             try await git.keepDeleted(worktreePath: root, relativePath: path)
         case .markResolved(let path):
             try await Self.refuseOutside([path], of: root)
@@ -195,6 +198,15 @@ extension AlasCoreContext {
         switch result {
         case .clean: break
         case .conflict(let message), .error(let message): throw HostError.failed(message: message)
+        }
+    }
+
+    /// Taking a side or deleting a path that is no longer unmerged would
+    /// overwrite or remove the host's work: a stale client is refused.
+    private static func refuseUnlessConflicted(_ path: String, at root: URL) async throws {
+        let unmerged = try await Process.git(["ls-files", "-u", "--", path], cwd: root)
+        guard unmerged.exitCode == 0, !unmerged.stdout.isEmpty else {
+            throw HostError.failed(message: "The conflict on \(path) changed; refresh and try again.")
         }
     }
 
