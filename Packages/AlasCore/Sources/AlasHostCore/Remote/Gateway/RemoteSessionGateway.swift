@@ -1352,8 +1352,8 @@ public final class RemoteSessionGateway {
             let isImage = { (a: ACPMessage.Attachment) in a.mimeType?.hasPrefix("image/") == true }
             let rowText = userRowText(text: text, attachmentNames: shown.filter(isImage).map(\.name),
                                       resourceNames: shown.filter { !isImage($0) }.map(\.name))
-            return .init(stableId: sid, kind: "user", text: rowText,
-                         json: nil, index: index)
+            return .init(stableId: sid, kind: "user", text: rowText, json: nil, index: index,
+                         checkpointId: attachments.first(where: \.isCheckpointReference)?.checkpointID?.uuidString)
         case .agent(_, _, let streaming):
             return .init(stableId: sid, kind: "agent", text: streaming.value, json: nil, index: index)
         case .thought(_, _, let streaming):

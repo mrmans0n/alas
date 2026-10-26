@@ -1,36 +1,6 @@
 import Observation
 import SwiftUI
 
-enum CheckpointRestoreErrorPresentation {
-    static func message(_ error: Error) -> String {
-        guard let restoreError = error as? CheckpointRestoreError else {
-            return error.localizedDescription
-        }
-        switch restoreError {
-        case let .blocked(blocker):
-            return blocker.description
-        case .stalePreview:
-            return "Refresh the restore preview before trying again."
-        case .emptySelection:
-            return "Select at least one file group to restore."
-        case let .missingPreviewGroup(id):
-            return "The restore preview no longer contains group \(id.uuidString). Refresh the preview."
-        case let .missingCurrentPath(path):
-            return "The current worktree state for \(path) could not be read. Refresh the preview."
-        case let .missingDesiredPath(path):
-            return "The checkpoint state for \(path) could not be read."
-        case .invalidGitOutput:
-            return "Git returned output Alas could not parse."
-        case .invalidJournal:
-            return "The interrupted restore journal is invalid."
-        case .restoreFailedButRecovered:
-            return "Restore failed and the pre-restore state was recovered."
-        case let .recoveryRequired(operationID, paths, phase):
-            return "Restore interrupted in \(CheckpointRecoveryPresentation.phase(phase)) for \(paths.count) paths. Recover operation \(CheckpointRecoveryPresentation.operationSuffix(operationID)) before continuing."
-        }
-    }
-}
-
 @Observable
 final class RestoreCheckpointSheetModel {
     var selectedGroupIDs: Set<UUID>
@@ -91,16 +61,46 @@ final class RestoreCheckpointSheetModel {
     }
 }
 
+/// Restores a checkpoint's selected groups: this Mac's worktree through
+/// `RightPaneState`, a paired host's through closures.
 struct RestoreCheckpointSheet: View {
-    @Bindable var rps: RightPaneState
     let preview: CheckpointRestorePreview
+    /// Read in `body`, so a `RightPaneState` source stays observed.
+    private let error: @MainActor () -> String?
+    private let inFlight: @MainActor () -> Bool
+    private let refresh: @MainActor (Set<UUID>) async -> Void
+    /// True once restored, to dismiss.
+    private let restore: @MainActor (Set<UUID>) async -> Bool
+    private let cancel: @MainActor () -> Void
 
     @State private var model: RestoreCheckpointSheetModel
     @Environment(\.dismiss) private var dismiss
 
-    init(rps: RightPaneState, preview: CheckpointRestorePreview) {
-        self.rps = rps
+    init(
+        preview: CheckpointRestorePreview, error: String?, inFlight: Bool,
+        refresh: @escaping @MainActor (Set<UUID>) async -> Void,
+        restore: @escaping @MainActor (Set<UUID>) async -> Bool,
+        cancel: @escaping @MainActor () -> Void
+    ) {
         self.preview = preview
+        self.error = { error }
+        self.inFlight = { inFlight }
+        self.refresh = refresh
+        self.restore = restore
+        self.cancel = cancel
+        _model = State(initialValue: RestoreCheckpointSheetModel(preview: preview))
+    }
+
+    init(rps: RightPaneState, preview: CheckpointRestorePreview) {
+        self.preview = preview
+        error = { rps.lastCheckpointError }
+        inFlight = { rps.checkpointOperationInFlight != nil }
+        refresh = { await rps.previewCheckpointRestore(id: preview.checkpointID, selectedGroupIDs: $0) }
+        restore = {
+            await rps.restoreCheckpoint(preview: preview, selectedGroupIDs: $0)
+            return rps.checkpointRestorePreview == nil
+        }
+        cancel = { rps.checkpointRestorePreview = nil }
         _model = State(initialValue: RestoreCheckpointSheetModel(preview: preview))
     }
 
@@ -113,7 +113,7 @@ struct RestoreCheckpointSheet: View {
                     .foregroundStyle(.red)
                     .accessibilityIdentifier("checkpoint-restore-blocker")
             }
-            if let error = rps.lastCheckpointError {
+            if let error = error() {
                 Text(error)
                     .font(.callout)
                     .foregroundStyle(.red)
@@ -160,20 +160,20 @@ struct RestoreCheckpointSheet: View {
             .foregroundStyle(.secondary)
             Spacer()
             Button("Refresh Preview") {
+                let selected = model.selectedGroupIDs
                 Task { @MainActor in
-                    await rps.previewCheckpointRestore(id: preview.checkpointID, selectedGroupIDs: model.selectedGroupIDs)
+                    await refresh(selected)
                 }
             }
-            .disabled(rps.checkpointOperationInFlight != nil)
+            .disabled(inFlight())
             Button("Cancel") {
-                rps.checkpointRestorePreview = nil
+                cancel()
                 dismiss()
             }
             Button("Restore Selected Files", role: .destructive) {
                 let selected = model.selectedGroupIDs
                 Task { @MainActor in
-                    await rps.restoreCheckpoint(preview: preview, selectedGroupIDs: selected)
-                    if rps.checkpointRestorePreview == nil {
+                    if await restore(selected) {
                         dismiss()
                     }
                 }
@@ -182,7 +182,7 @@ struct RestoreCheckpointSheet: View {
             .disabled(!RestoreCheckpointSheetModel.canRestore(
                 preview: preview,
                 selectedGroupIDs: model.selectedGroupIDs,
-                inFlight: rps.checkpointOperationInFlight != nil
+                inFlight: inFlight()
             ))
             .accessibilityIdentifier("checkpoint-restore-selected")
         }

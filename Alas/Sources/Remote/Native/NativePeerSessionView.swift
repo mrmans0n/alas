@@ -63,8 +63,15 @@ struct NativePeerSessionView: View {
             leadingRows: leadingRows(transcript),
             trailingRows: queueRows(transcript, contentMaxWidth: contentMaxWidth) + pendingRequestRows(transcript),
             fetchOlder: { _ = client.fetchOlder() },
-            onQuote: { composerActions.quote($0) }
+            onQuote: { composerActions.quote($0) },
+            onRestoreCheckpoint: servesCheckpoints ? { client.requestCheckpointRestore($0) } : nil
         )
+    }
+
+    /// Matches the right pane, which opens the restore for this target only.
+    private var servesCheckpoints: Bool {
+        guard let target = client.hostGitTarget else { return false }
+        return client.hosts?.servesCheckpoints(serverId: target.serverId) == true
     }
 
     private func leadingRows(_ transcript: NativePeerTranscript) -> [NativePeerTranscriptExtraRow] {

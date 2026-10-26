@@ -128,17 +128,23 @@ enum ComputerUseAXActions {
         }
     }
 
-    /// Focuses the element before typing into it. Refuses secure text fields.
+    /// Focuses the element before typing into it. Refuses secure text fields. An element that
+    /// already has focus keeps its caret and selection (`insertText` focuses a document's text
+    /// that way before handing it to keys).
     static func focus(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
     ) async throws {
         try await onQueue(isCancelled) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
+            let kept = focusedElement(of: app).flatMap { CFEqual($0, element) ? selectedRange(of: element) : nil }
             let result = AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
             guard result == .success else {
                 throw mapped(result, app: app)
                     ?? ComputerUseSystemError.actionFailed("\(app.name) did not focus the element (AXError \(result.rawValue)).")
+            }
+            if var kept, let value = AXValueCreate(.cfRange, &kept) {
+                AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
             }
         }
     }
@@ -866,8 +872,8 @@ extension ComputerUseAXActions {
     /// Inserts `text` at the element's caret, replacing its selection. Refuses secure text fields.
     /// Focuses the element first, keeping its selection; see `insert` for chunking and interrupts.
     /// A Chromium or Electron web page's field is neither focused nor written here
-    /// (`ComputerUseTextCheck.outcome`), nor a document's on screen; returns the warning for one
-    /// off screen (`ComputerUseTextCheck.documentRoute`).
+    /// (`ComputerUseTextCheck.outcome`), nor a document's on screen, which is only focused;
+    /// returns the warning for one off screen (`ComputerUseTextCheck.documentRoute`).
     @discardableResult
     static func insertText(
         _ text: String, _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, keysReach: Bool,
@@ -878,8 +884,9 @@ extension ComputerUseAXActions {
             try refuseSecure(element, app: app)
             try settle(ComputerUseTextCheck.outcome(
                 nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app, byRef: true)
-            let warning = try routeDocument(element, app: app, keysReach: keysReach)
+            // Before routing: a document's text typed as keys goes in at the caret kept here.
             focusKeepingSelection(element, app: app)
+            let warning = try routeDocument(element, app: app, keysReach: keysReach)
             return (Retained(element), warning)
         }
         try await insert(text, into: textTarget(element.element), app: app, keysReach: keysReach, interrupt: interrupt)

@@ -213,6 +213,15 @@ struct NativePeerReviewSelection: Equatable {
     let sessionID: String
 }
 
+/// A host worktree's commit, opened in the commit editor over the peer center
+/// pane. `sha` follows the commit as edits rewrite it.
+struct NativePeerCommitEditorSelection: Equatable {
+    let serverId: String
+    let worktree: PeerHostWorktree
+    var sha: String
+    let comparisonMode: AppConfig.Changes.ChangesComparisonMode
+}
+
 struct NativePeerWorktreeGroup: Identifiable, Equatable {
     let id: String
     /// Most recently updated first, history included.

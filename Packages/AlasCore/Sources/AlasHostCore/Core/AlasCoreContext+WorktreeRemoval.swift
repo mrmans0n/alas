@@ -114,7 +114,7 @@ extension AlasCoreContext {
     /// worktree in place with its sessions already stopped.
     @_spi(AppHost) public func removeWorktree(_ request: WorktreeRemovalRequest) async -> WorktreeRemovalResult {
         let worktree = request.worktree
-        if await environment.checkpointRecoveryBlocksRemoval(worktree) {
+        if await environment.checkpointRecoveryBlocksRemoval(worktree, in: self) {
             return .checkpointRecoveryPending
         }
         if !request.force, request.authorizedContentFingerprint == nil {
@@ -340,13 +340,10 @@ extension AlasCoreContext {
 
     /// Whether an interrupted checkpoint restore references the checkout.
     /// An unreadable journal store counts as one.
-    public static func hasPendingCheckpointRecovery(_ worktree: Worktree) async -> Bool {
+    public func hasPendingCheckpointRecovery(_ worktree: Worktree) async -> Bool {
         guard let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
         else { return false }
-        guard let journals = try? await WorktreeCheckpointStore().recoverableJournals(lineageID: lineageID) else {
-            return true
-        }
-        return !journals.isEmpty
+        return (try? await checkpoints.hasRecoverableJournals(lineageID: lineageID)) ?? true
     }
 }
 
@@ -648,21 +645,27 @@ extension AlasCoreContext {
         case .unreadable: return "Workspace ownership could not be verified"
         case .loaded(let loaded): state = loaded
         }
-        let path = worktree.path.standardizedFileURL.path
         let owner = state.checkouts.first { checkout in
             checkout.workspaceID != nil
                 && (checkout.archivedAt == nil || unarchiving[checkout.id] != nil)
-                && checkout.members.contains { member in
-                guard member.projectID == worktree.projectId,
-                      URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
-                else { return false }
-                if let memberLineage = member.gitLineageID, let lineage = worktree.lineageID, memberLineage != lineage {
-                    return false
-                }
-                return !(member.availability == .explicitlyDeleted && member.cleanup?.worktreeRemoved == true)
-            }
+                && Self.checkoutManages(checkout, worktree)
         }
         return owner.map { "Workspace checkout \u{201C}\($0.fallbackWorkspaceName)\u{201D} manages this worktree" }
+    }
+
+    /// Whether one of `checkout`'s members is `worktree`: same project and
+    /// in-app path, no other lineage, and not already deleted and removed.
+    nonisolated static func checkoutManages(_ checkout: WorkspaceCheckout, _ worktree: Worktree) -> Bool {
+        let path = worktree.path.standardizedFileURL.path
+        return checkout.members.contains { member in
+            guard member.projectID == worktree.projectId,
+                  URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
+            else { return false }
+            if let memberLineage = member.gitLineageID, let lineage = worktree.lineageID, memberLineage != lineage {
+                return false
+            }
+            return !(member.availability == .explicitlyDeleted && member.cleanup?.worktreeRemoved == true)
+        }
     }
 }
 

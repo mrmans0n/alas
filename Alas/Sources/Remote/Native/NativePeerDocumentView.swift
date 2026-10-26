@@ -34,6 +34,7 @@ struct NativePeerDocumentView: View {
         case .commitDiff(_, let sha): String(sha.prefix(7))
         case .file: "peer"
         case .stashDiff: "stash"
+        case .checkpointDiff: "checkpoint"
         }
     }
 

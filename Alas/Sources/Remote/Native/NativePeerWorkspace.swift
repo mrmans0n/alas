@@ -20,6 +20,8 @@ struct NativePeerWorkspace: Equatable {
         var commits: [RemoteCommit]
         var truncated: Bool
         var commitsTruncated: Bool
+        /// The host's in-progress cherry-pick/revert/merge/rebase; nil from older hosts.
+        var operation: MergeOperation?
     }
 
     struct CommitFiles: Equatable {
@@ -35,10 +37,13 @@ struct NativePeerWorkspace: Equatable {
         case file(path: String)
         /// Served over the host channel only, as the stash was listed.
         case stashDiff(path: String, stash: HostStashRef)
+        /// How `path` changed since a checkpoint; served over the host channel only.
+        case checkpointDiff(path: String, checkpointID: CheckpointID)
 
         var path: String {
             switch self {
-            case .diff(let path, _), .commitDiff(let path, _), .file(let path), .stashDiff(let path, _): path
+            case .diff(let path, _), .commitDiff(let path, _), .file(let path), .stashDiff(let path, _),
+                 .checkpointDiff(let path, _): path
             }
         }
     }
@@ -183,7 +188,7 @@ struct NativePeerWorkspace: Equatable {
     mutating func apply(_ message: RemoteServerMessage) -> Bool {
         switch message {
         case .changeList(_, let ref, _, let files, let staged, let unstaged, let commits,
-                         let truncated, let commitsTruncated, _):
+                         let truncated, let commitsTruncated, _, let operation):
             changes = .loaded(Changes(
                 comparisonRef: ref,
                 // The branch list has no stage; `.unstaged` only satisfies
@@ -193,7 +198,8 @@ struct NativePeerWorkspace: Equatable {
                 unstaged: unstaged.map { Self.changedFile($0, stage: .unstaged) },
                 commits: commits,
                 truncated: truncated,
-                commitsTruncated: commitsTruncated
+                commitsTruncated: commitsTruncated,
+                operation: operation
             ))
         case .changeListFailed(_, let reason, let message):
             // A failed refresh keeps the list the user is already reading.
@@ -387,7 +393,7 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient,
 
     func status(worktreePath _: URL) async throws -> [ChangedFile] {
         switch await read(.changes(comparisonMode: nil)) {
-        case .changeList(_, _, _, _, let staged, let unstaged, _, let truncated, _, let workingTreeTruncated)?:
+        case .changeList(_, _, _, _, let staged, let unstaged, _, let truncated, _, let workingTreeTruncated, _)?:
             // An older host sends no `workingTreeTruncated`; its `truncated`
             // also covers the branch file list, so a capped branch diff
             // notes a cut-off review that may be whole.

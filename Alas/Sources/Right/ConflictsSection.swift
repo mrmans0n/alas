@@ -10,6 +10,9 @@ struct ConflictsSection: View {
     /// Changes section. Gates the bulk action — disabled with a tooltip
     /// otherwise.
     let hasAgent: Bool
+    /// False where no agent can run the bulk resolve, as on a paired host:
+    /// the button is hidden rather than disabled.
+    var showsBulkResolve: Bool = true
     let onSelect: (ChangedFile) -> Void
     let onUseOurs: (ChangedFile) -> Void
     let onUseTheirs: (ChangedFile) -> Void
@@ -52,7 +55,9 @@ struct ConflictsSection: View {
                 .textCase(.uppercase)
                 .foregroundColor(.secondary)
             Spacer()
-            bulkResolveButton
+            if showsBulkResolve {
+                bulkResolveButton
+            }
         }
         .padding(.horizontal, 10)
         .padding(.top, 6)

@@ -161,6 +161,17 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case stashFiles(worktree: WorktreeRef, stash: HostStashRef)
     /// One file's diff in `stash`, as listed (`host.worktrees.stash.v1`).
     case stashDiff(worktree: WorktreeRef, stash: HostStashRef, path: String)
+    /// A commit as its editor shows it, named by its SHA (`host.worktrees.commitEdit.v1`).
+    case commitDetails(worktree: WorktreeRef, sha: String)
+    /// The worktree's checkpoints, newest first (`host.worktrees.checkpoints.v1`).
+    case listCheckpoints(worktree: WorktreeRef)
+    /// One of them, as listed (`host.worktrees.checkpoints.v1`).
+    case checkpointManifest(worktree: WorktreeRef, id: CheckpointID)
+    /// How `path` changed since checkpoint `id`, as listed (`host.worktrees.checkpoints.v1`).
+    case checkpointDiff(worktree: WorktreeRef, id: CheckpointID, path: String)
+    /// What restoring checkpoint `id` would change, and what blocks it on the
+    /// host; nil `groupIDs` selects every group (`host.worktrees.checkpoints.v1`).
+    case checkpointRestorePreview(worktree: WorktreeRef, id: CheckpointID, groupIDs: Set<UUID>?)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -173,12 +184,68 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     case stash(message: String, includeUntracked: Bool)
     /// Act on a stash as listed (`host.worktrees.stash.v1`).
     case applyStash(HostStashRef), popStash(HostStashRef), dropStash(HostStashRef)
+    /// Leave the in-progress operation of `kind`, the one the client saw
+    /// (`host.worktrees.operations.v1`).
+    case continueOperation(kind: HostOperationKind), skipOperation(kind: HostOperationKind), abortOperation(kind: HostOperationKind)
+    /// Resolve a conflicted path, with or without an operation in progress
+    /// (`host.worktrees.operations.v1`).
+    case useOurs(path: String), useTheirs(path: String), keepDeleted(path: String), markResolved(path: String)
+    /// Apply or undo one of the repository's commits, named by its SHA; a
+    /// conflict leaves the operation in place (`host.worktrees.operations.v1`).
+    case cherryPick(sha: String), revert(sha: String)
+    /// Edit a commit above the fold of `comparisonMode`, nil for the host's,
+    /// replaying the commits above it, as its editor does
+    /// (`host.worktrees.commitEdit.v1`).
+    case editCommit(sha: String, edit: HostCommitEdit, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    /// Take a manual checkpoint named `label`; answers `checkpointManifest`
+    /// (`host.worktrees.checkpoints.v1`).
+    case createCheckpoint(label: String)
+    /// Delete a listed checkpoint (`host.worktrees.checkpoints.v1`).
+    case deleteCheckpoint(id: CheckpointID)
+    /// Restore the groups `groupIDs` of a listed checkpoint, as previewed at
+    /// `fingerprint`, after a recovery checkpoint (`host.worktrees.checkpoints.v1`).
+    case restoreCheckpoint(id: CheckpointID, groupIDs: Set<UUID>, fingerprint: String)
 
     /// The capability beyond host.worktrees.git.v1 a change needs; nil for the original seven.
     public var capability: String? {
         switch self {
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch: nil
         case .stash, .applyStash, .popStash, .dropStash: HostProtocolCapability.worktreesStashV1
+        case .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .cherryPick,
+             .revert:
+            HostProtocolCapability.worktreesOperationsV1
+        case .editCommit: HostProtocolCapability.worktreesCommitEditV1
+        case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint: HostProtocolCapability.worktreesCheckpointsV1
+        }
+    }
+
+    /// The changes that leave or resolve an operation: the rebase gate lets only these through.
+    public var leavesAnOperation: Bool {
+        switch self {
+        case .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved: true
+        default: false
+        }
+    }
+}
+
+/// One edit of a commit, as a paired Mac asks it.
+public enum HostCommitEdit: Codable, Equatable, Sendable {
+    case message(subject: String, body: String)
+    case dropFile(path: String)
+    /// The `index`th hunk of the commit's diff of `path`, which must have `header`.
+    case dropHunk(path: String, index: Int, header: String)
+}
+
+/// The kind of a worktree's in-progress git operation, as a client names it.
+public enum HostOperationKind: String, Codable, Sendable {
+    case merge, rebase, cherryPick, revert
+
+    public init(_ operation: MergeOperation) {
+        switch operation {
+        case .merge: self = .merge
+        case .rebase: self = .rebase
+        case .cherryPick: self = .cherryPick
+        case .revert: self = .revert
         }
     }
 }
@@ -462,6 +529,16 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case stashFiles(files: [GitStashFile])
     /// The answer to `stashDiff`.
     case diff(diff: HostDiff)
+    /// The answer to `commitDetails`, its files capped as a commit's files read is.
+    case commitDetails(details: CommitDetails)
+    /// The answer to an `editCommit` change.
+    case commitEdited(result: CommitEditResult)
+    /// The answer to `listCheckpoints`.
+    case checkpoints(catalog: CheckpointCatalogSnapshot)
+    /// The answer to `checkpointManifest` and a `createCheckpoint` change.
+    case checkpointManifest(manifest: WorktreeCheckpointManifest)
+    /// The answer to `checkpointRestorePreview`.
+    case checkpointRestorePreview(preview: CheckpointRestorePreview)
     case failure(error: HostError)
 }
 

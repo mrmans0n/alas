@@ -312,7 +312,9 @@ extension AlasCoreContext {
                 commits: commits.commits.prefix(100).map(Self.remoteCommit),
                 truncated: capped.truncated || cappedWorkingTree.truncated,
                 commitsTruncated: commits.commits.count > 100,
-                workingTreeTruncated: cappedWorkingTree.truncated)
+                workingTreeTruncated: cappedWorkingTree.truncated,
+                // A failed read leaves the list without an operation rather than failing it.
+                operation: try? await git.mergeState(worktreePath: worktree.path))
         } catch {
             return .failure(reason: .gitFailed, message: error.localizedDescription)
         }

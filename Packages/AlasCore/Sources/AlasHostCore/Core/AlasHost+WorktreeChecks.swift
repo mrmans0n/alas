@@ -137,7 +137,7 @@ extension WorktreesAPI {
         // Claimed before any `await`: the checks below yield to other
         // main-actor work, and an unclaimed gap would admit new sessions.
         let claim = try beginDelete(worktree, caller: caller)
-        guard await !core.environment.checkpointRecoveryBlocksRemoval(worktree) else {
+        guard await !core.environment.checkpointRecoveryBlocksRemoval(worktree, in: core) else {
             releaseClaim(claim, for: worktree)
             throw WorktreeCheckRefusal.checkpointRecovery
         }

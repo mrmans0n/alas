@@ -4,7 +4,7 @@ import Foundation
 /// transcript renders so the peer pane can reuse its cards instead of showing
 /// flattened text.
 enum NativePeerRow: Equatable {
-    case user(String)
+    case user(String, checkpointID: CheckpointID?)
     case agent(String)
     case thought(String)
     case toolCall(ACPMessage.ToolCall)
@@ -16,7 +16,7 @@ enum NativePeerRow: Equatable {
         let text = message.text ?? ""
         switch message.kind {
         case "user":
-            self = .user(text)
+            self = .user(text, checkpointID: message.checkpointId.flatMap(UUID.init(uuidString:)))
         case "agent":
             self = .agent(text)
         case "thought":
@@ -123,7 +123,7 @@ final class NativePeerRowCache {
 
     private func proxy(for row: NativePeerRow, stableId: String) -> ACPMessage {
         switch row {
-        case .user(let text):
+        case .user(let text, _):
             .user(id: UUID(), messageId: nil, text: text, attachments: [])
         case .agent(let text):
             .agent(id: UUID(), messageId: nil, StreamingText(text))

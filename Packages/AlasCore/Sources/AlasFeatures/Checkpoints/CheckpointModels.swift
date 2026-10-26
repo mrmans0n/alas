@@ -66,7 +66,7 @@ public struct CheckpointCoordinationSnapshot: Equatable, Sendable {
     }
 }
 
-public enum CheckpointRestoreBlocker: Int, Hashable, Sendable, CaseIterable {
+public enum CheckpointRestoreBlocker: Int, Codable, Hashable, Sendable, CaseIterable {
     case remoteTarget
     case interruptedRestore
     case lineageMismatch
@@ -80,6 +80,34 @@ public enum CheckpointRestoreBlocker: Int, Hashable, Sendable, CaseIterable {
 
     public static func highestPriority(in blockers: Set<Self>) -> Self? {
         blockers.min { $0.rawValue < $1.rawValue }
+    }
+
+    /// On the wire by case name: the raw value is a priority, which a new
+    /// blocker shifts. A name this side does not know is a corrupt
+    /// checkpoint, which still refuses the restore.
+    public init(from decoder: Decoder) throws {
+        let name = try decoder.singleValueContainer().decode(String.self)
+        self = Self.allCases.first { $0.wireName == name } ?? .corruptCheckpoint
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wireName)
+    }
+
+    private var wireName: String {
+        switch self {
+        case .remoteTarget: "remoteTarget"
+        case .interruptedRestore: "interruptedRestore"
+        case .lineageMismatch: "lineageMismatch"
+        case .changedHEAD: "changedHEAD"
+        case .gitOperation: "gitOperation"
+        case .indexLock: "indexLock"
+        case .otherGitMutation: "otherGitMutation"
+        case .dirtyEditorBuffer: "dirtyEditorBuffer"
+        case .activeSession: "activeSession"
+        case .corruptCheckpoint: "corruptCheckpoint"
+        }
     }
 
     public var description: String {
@@ -98,8 +126,8 @@ public enum CheckpointRestoreBlocker: Int, Hashable, Sendable, CaseIterable {
     }
 }
 
-public struct CheckpointRestoreEffect: Equatable, Sendable {
-    public enum Layer: Equatable, Sendable { case index, worktree }
+public struct CheckpointRestoreEffect: Codable, Equatable, Sendable {
+    public enum Layer: Codable, Equatable, Sendable { case index, worktree }
     public let relativePath: String
     public let layer: Layer
     public let head: CheckpointFileState
@@ -138,7 +166,7 @@ public struct CheckpointRestoreEffect: Equatable, Sendable {
     }
 }
 
-public struct CheckpointRestoreGroup: Identifiable, Equatable, Sendable {
+public struct CheckpointRestoreGroup: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public let primaryPath: String
     public let memberPaths: [String]
@@ -154,7 +182,7 @@ public struct CheckpointRestoreGroup: Identifiable, Equatable, Sendable {
     }
 }
 
-public struct CheckpointRestorePreview: Identifiable, Equatable, Sendable {
+public struct CheckpointRestorePreview: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public let checkpointID: CheckpointID
     public let checkpointLabel: String
@@ -696,4 +724,69 @@ extension JSONDecoder {
         decoder.dateDecodingStrategy = .iso8601
         return decoder
     }
+}
+
+public enum CheckpointRestoreErrorPresentation {
+    public static func message(_ error: Error) -> String {
+        guard let restoreError = error as? CheckpointRestoreError else {
+            return error.localizedDescription
+        }
+        switch restoreError {
+        case let .blocked(blocker):
+            return blocker.description
+        case .stalePreview:
+            return "Refresh the restore preview before trying again."
+        case .emptySelection:
+            return "Select at least one file group to restore."
+        case let .missingPreviewGroup(id):
+            return "The restore preview no longer contains group \(id.uuidString). Refresh the preview."
+        case let .missingCurrentPath(path):
+            return "The current worktree state for \(path) could not be read. Refresh the preview."
+        case let .missingDesiredPath(path):
+            return "The checkpoint state for \(path) could not be read."
+        case .invalidGitOutput:
+            return "Git returned output Alas could not parse."
+        case .invalidJournal:
+            return "The interrupted restore journal is invalid."
+        case .restoreFailedButRecovered:
+            return "Restore failed and the pre-restore state was recovered."
+        case let .recoveryRequired(operationID, paths, phase):
+            return "Restore interrupted in \(CheckpointRecoveryPresentation.phase(phase)) for \(paths.count) paths. Recover operation \(CheckpointRecoveryPresentation.operationSuffix(operationID)) before continuing."
+        }
+    }
+}
+
+public enum CheckpointRecoveryPresentation {
+    public static func phase(_ phase: CheckpointRestoreJournal.Phase) -> String {
+        switch phase {
+        case .prepared: "Prepared"
+        case .applyingFiles: "Applying files"
+        case .installingIndex: "Installing index"
+        case .verifying: "Verifying"
+        case .rollingBack: "Rolling back"
+        case .completed: "Completed"
+        case .recovered: "Recovered"
+        }
+    }
+
+    public static func operationSuffix(_ id: UUID) -> String {
+        String(id.uuidString.suffix(8)).lowercased()
+    }
+
+    public static func affectedPathsSummary(_ paths: [String]) -> String {
+        switch paths.count {
+        case 0:
+            "No paths recorded"
+        case 1:
+            paths[0]
+        default:
+            "\(paths.count) paths"
+        }
+    }
+
+    public static func affectedPathsText(_ paths: [String]) -> String {
+        paths.sorted().joined(separator: "\n")
+    }
+
+    public static let recoverButtonTitle = "Recover pre-restore state"
 }

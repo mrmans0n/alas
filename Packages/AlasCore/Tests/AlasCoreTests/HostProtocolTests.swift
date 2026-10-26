@@ -78,6 +78,20 @@ struct HostProtocolTests {
         HostClientMessage(id: 32, request: .mutateWorktree(
             worktree: ref, branch: "feature", change: .applyStash(HostStashRef(ref: "stash@{1}", sha: "def5678"))
         )),
+        HostClientMessage(id: 33, request: .mutateWorktree(worktree: ref, branch: "feature", change: .continueOperation(kind: .rebase))),
+        HostClientMessage(id: 34, request: .mutateWorktree(worktree: ref, branch: "feature", change: .useOurs(path: "a.txt"))),
+        HostClientMessage(id: 35, request: .mutateWorktree(worktree: ref, branch: "feature", change: .cherryPick(sha: "abc1234"))),
+        HostClientMessage(id: 36, request: .commitDetails(worktree: ref, sha: "abc1234")),
+        HostClientMessage(id: 37, request: .mutateWorktree(worktree: ref, branch: "feature", change: .editCommit(
+            sha: "abc1234", edit: .dropHunk(path: "a.txt", index: 1, header: "@@ -3 +3 @@"), comparisonMode: nil
+        ))),
+        HostClientMessage(id: 38, request: .checkpointRestorePreview(
+            worktree: ref, id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, groupIDs: nil
+        )),
+        HostClientMessage(id: 39, request: .mutateWorktree(worktree: ref, branch: "feature", change: .restoreCheckpoint(
+            id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!,
+            groupIDs: [UUID(uuidString: "7F9619FF-8B86-D011-B42D-00CF4FC964FF")!], fingerprint: "f"
+        ))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -126,6 +140,30 @@ struct HostProtocolTests {
             ])],
             truncated: true, note: "mode changed"
         ))),
+        .response(id: 22, result: .commitDetails(details: CommitDetails(
+            info: CommitInfo(
+                sha: "abc1234", shortSha: "abc1234", author: "Ann", authorInitials: "A", date: Date(timeIntervalSince1970: 0),
+                subject: "add a", rawSubject: "feat: add a", conventionalTag: "feat", filesChanged: 1, insertions: 1, deletions: 0
+            ),
+            body: "", authorEmail: "ann@example.com", parents: ["def5678"],
+            files: [CommitChangedFile(path: "b.txt", originalPath: "a.txt", status: "R", add: 1, del: 0)]
+        ))),
+        .response(id: 23, result: .commitEdited(result: CommitEditResult(currentSha: "fed9876", shaMap: ["abc1234": "fed9876"]))),
+        .response(id: 24, result: .checkpointRestorePreview(preview: CheckpointRestorePreview(
+            id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, checkpointID: UUID(uuidString: "7F9619FF-8B86-D011-B42D-00CF4FC964FF")!,
+            checkpointLabel: "Before", currentFingerprint: "f",
+            groups: [CheckpointRestoreGroup(
+                id: UUID(uuidString: "8F9619FF-8B86-D011-B42D-00CF4FC964FF")!, primaryPath: "b.txt", memberPaths: ["a.txt", "b.txt"],
+                renameSource: "a.txt",
+                effects: [CheckpointRestoreEffect(
+                    relativePath: "a.txt", layer: .worktree, head: .absent,
+                    before: .regular(blob: CheckpointBlobReference(sha256: String(repeating: "a", count: 64), byteCount: 2), executable: false),
+                    after: .absent, removesUntrackedFile: true
+                )]
+            )],
+            blocker: .activeSession, scopeDescription: "This repository only",
+            selectedGroupIDs: [UUID(uuidString: "8F9619FF-8B86-D011-B42D-00CF4FC964FF")!]
+        ))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
         )])),
@@ -155,6 +193,13 @@ struct HostProtocolTests {
     ])
     func serverMessagesRoundTrip(_ message: HostServerMessage) throws {
         #expect(try JSONDecoder().decode(HostServerMessage.self, from: JSONEncoder().encode(message)) == message)
+    }
+
+    /// A restore blocker travels by name, since its raw value is a priority a
+    /// new blocker shifts; a name this side lacks still refuses the restore.
+    @Test func restoreBlockersTravelByName() throws {
+        #expect(String(decoding: try JSONEncoder().encode([CheckpointRestoreBlocker.activeSession]), as: UTF8.self) == #"["activeSession"]"#)
+        #expect(try JSONDecoder().decode([CheckpointRestoreBlocker].self, from: Data(#"["submoduleChanged"]"#.utf8)) == [.corruptCheckpoint])
     }
 
     /// A newer host's review of a kind this Mac can't read is left out, not the whole list.
@@ -200,6 +245,38 @@ struct HostProtocolTests {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: Data(old.utf8)).request == .deleteWorktree(
             worktree: Self.ref, lineageID: "l", branch: "feature", force: true, deleteBranchIfMerged: false, discardUnsavedEdits: nil
         ))
+    }
+
+    /// The changes reply carries the host's in-progress operation; an older
+    /// host sends none, and one this Mac can't read is dropped, not the list.
+    @Test func aChangeListCarriesTheHostsOperation() throws {
+        let op = MergeOperation.rebase(plan: RebasePlan(
+            ontoBranch: "abc", sourceBranch: "main", commits: [.init(sha: "d1", summary: "s", state: .current)]
+        ))
+        func changeList(_ operation: MergeOperation?) -> RemoteServerMessage {
+            .changeList(
+                sessionId: "a", comparisonRef: nil, metricsAvailable: true,
+                files: [RemoteChangedFile(path: "a.txt", status: "M", add: 1, del: 0, conflict: nil, renameFrom: nil)],
+                staged: [], unstaged: [], commits: [], truncated: false, operation: operation
+            )
+        }
+        let data = try JSONEncoder().encode(changeList(op))
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == changeList(op))
+        guard case .changeList(_, _, _, _, _, _, _, _, _, _, let scoped) = changeList(op).replacingSessionId("b") else {
+            Issue.record("expected a changeList")
+            return
+        }
+        #expect(scoped == op)
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let wire = try #require(json["operation"] as? [String: Any])
+        let plan = try #require((wire["rebase"] as? [String: Any])?["plan"] as? [String: Any])
+        #expect((plan["commits"] as? [[String: Any]])?.first?["state"] as? String == "current")
+        for unreadable in [nil, ["bisect": [String: Any]()]] as [Any?] {
+            json["operation"] = unreadable
+            #expect(try JSONDecoder().decode(
+                RemoteServerMessage.self, from: JSONSerialization.data(withJSONObject: json)
+            ) == changeList(nil))
+        }
     }
 
     /// A host without shepherds sends no `shepherd`; a newer one may send one this Mac can't read.

@@ -7,6 +7,10 @@ struct CommitEditorTabView: View {
     let executionTarget: AgentExecutionTarget
     @Bindable var appState: AppState
     var onStartupRecoveryReady: () -> Void = {}
+    /// Nil edits this Mac's worktree, as `CommitEditorGit.local`.
+    var source: CommitEditorGit? = nil
+    /// Shows a close button, for an editor opened over the peer center pane.
+    var onClose: (() -> Void)? = nil
 
     @State private var details: CommitDetails?
     @State private var loadingDetails = true
@@ -16,6 +20,8 @@ struct CommitEditorTabView: View {
     @State private var diff: ParsedDiff = ParsedDiff(hunks: [])
     @State private var displayModel: DiffDisplayModel?
     @State private var displayModelKey: String?
+    /// The diff was cut off by the host: its hunks are not all there to drop.
+    @State private var diffTruncated = false
     @State private var loadingDiff = false
     @State private var activeDiffKey: String?
 
@@ -39,6 +45,14 @@ struct CommitEditorTabView: View {
     @Environment(\.theme) private var theme
     private let git = GitService()
 
+    private var editorGit: CommitEditorGit {
+        source ?? .local(
+            worktreePath: worktreePath, worktreeId: worktreeId, tabId: tabState.id, baseRef: tabState.baseRef, appState: appState
+        )
+    }
+
+    private var generatesMessages: Bool { source?.generatesMessages ?? true }
+
     private var agentAvailability: AgentAvailabilityState {
         appState.agentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
     }
@@ -48,9 +62,6 @@ struct CommitEditorTabView: View {
     }
 
     private static let minPaneWidth: CGFloat = 140
-    private var checkpointLeaseActive: Bool {
-        appState.checkpointFileWritesDisabled(worktreeId: worktreeId)
-    }
 
     private var diffPreferences: DiffPreferenceBindings {
         DiffPreferenceBindings(
@@ -91,7 +102,7 @@ struct CommitEditorTabView: View {
                     subject: $subject,
                     bodyText: $bodyText,
                     aiToolId: appState.bind(\.changes.aiToolId),
-                    title: tabState.title,
+                    title: source == nil ? tabState.title : tabTitle(from: details),
                     busy: busy,
                     error: error,
                     agentAvailability: agentAvailability,
@@ -113,7 +124,9 @@ struct CommitEditorTabView: View {
                         showSavedState: !dirty,
                         handler: saveMessage
                     ),
-                    protectedTrailers: protectedTrailers
+                    protectedTrailers: protectedTrailers,
+                    accessory: onClose.map { AnyView(ToolbarBtn(icon: "x", tooltip: "Back to session", action: $0)) },
+                    generatesMessages: generatesMessages
                 )
                 splitBody(details: details)
             } else if loadingDetails {
@@ -131,6 +144,9 @@ struct CommitEditorTabView: View {
                     AlasButton(title: "Retry", style: .subtle) {
                         Task { await loadDetails() }
                     }
+                    if let onClose {
+                        AlasButton(title: "Close", style: .subtle, action: onClose)
+                    }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -141,9 +157,11 @@ struct CommitEditorTabView: View {
             await loadDetails()
         }
         .task(id: worktreeId) {
+            guard source == nil else { return }
             _ = await appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId)
         }
         .task(id: agentAvailabilityTaskKey) {
+            guard generatesMessages else { return }
             await appState.loadAgentAvailability(worktreePath: worktreePath, executionTarget: executionTarget)
         }
         .task(id: diffTaskKey) {
@@ -192,19 +210,33 @@ struct CommitEditorTabView: View {
             let ratio = max(0.15, min(0.7, appState.config.commitDetailSplitRatio))
             let leftWidth: CGFloat = transientFilesWidth ?? max(Self.minPaneWidth, total * ratio)
             HStack(spacing: 0) {
-                CommitFilesListView(
-                    files: details.files,
-                    selectedPath: $selectedPath,
-                    onDropFile: { pendingDropFile = PendingCommitFileDrop(sha: tabState.currentSha, file: $0) },
-                    dropFileEnabled: canDropFile,
-                    dragPayload: { file in
-                        .commitFile(
-                            worktreePath: worktreePath,
-                            sha: tabState.currentSha,
-                            file: file
-                        )
+                VStack(spacing: 0) {
+                    CommitFilesListView(
+                        files: details.files,
+                        selectedPath: $selectedPath,
+                        onDropFile: { pendingDropFile = PendingCommitFileDrop(sha: tabState.currentSha, file: $0) },
+                        dropFileEnabled: canDropFile,
+                        dragPayload: { file in
+                            // A host's commit is not on this Mac's disk to drag out.
+                            guard source == nil else { return nil }
+                            return .commitFile(
+                                worktreePath: worktreePath,
+                                sha: tabState.currentSha,
+                                file: file
+                            )
+                        }
+                    )
+                    // A host caps the files it sends; `filesChanged` counts them all.
+                    if details.files.count < details.info.filesChanged {
+                        Text("Showing \(details.files.count) of \(details.info.filesChanged) files.")
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.color("fg-dim"))
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(theme.color("bg-1"))
                     }
-                )
+                }
                     .frame(width: leftWidth)
                 DragHandle(
                     axis: .horizontal,
@@ -233,9 +265,20 @@ struct CommitEditorTabView: View {
                        let file = details.files.first(where: { $0.path == path }) {
                         let selectedDiffKey = "\(tabState.currentSha):\(path)"
                         let selectedDisplayModel = displayModelKey == selectedDiffKey ? displayModel : nil
-                        let openAvailable = DiffOpenFileAvailability.isAvailable(
+                        let openAvailable = source == nil && DiffOpenFileAvailability.isAvailable(
                             worktreePath: worktreePath, relativePath: path
                         )
+                        VStack(spacing: 0) {
+                        // A host caps a commit diff; say so before a whole-file drop is decided on it.
+                        if diffTruncated {
+                            Text("The host cut off part of this diff; some lines are not shown.")
+                                .font(.system(size: 11))
+                                .foregroundColor(theme.color("warn"))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(theme.color("bg-1"))
+                        }
                         CommitDiffView(
                             worktreePath: worktreePath,
                             sha: tabState.currentSha,
@@ -254,8 +297,11 @@ struct CommitEditorTabView: View {
                                 ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
                                 : nil,
                             onDropHunk: { pendingDropHunk = PendingCommitHunkDrop(sha: tabState.currentSha, path: path, hunk: $0) },
-                            dropHunkEnabled: { file, hunk in canDropHunk(file: file, hunk: hunk) }
+                            dropHunkEnabled: { file, hunk in canDropHunk(file: file, hunk: hunk) },
+                            // A host's images are not in this Mac's git: they show as a binary-file note.
+                            loadsImageDiff: source == nil
                         )
+                        }
                     } else {
                         Text("Select a file")
                             .foregroundColor(theme.color("fg-dim"))
@@ -275,6 +321,7 @@ struct CommitEditorTabView: View {
         activeDiffKey = nil
         selectedPath = nil
         diff = ParsedDiff(hunks: [])
+        diffTruncated = false
         displayModel = nil
         displayModelKey = nil
         loadingDiff = false
@@ -283,9 +330,7 @@ struct CommitEditorTabView: View {
             if activeDetailsKey == requestedKey { loadingDetails = false }
         }
         do {
-            async let detailsLoad = git.commitDetails(at: worktreePath, sha: tabState.currentSha)
-            async let subjectLoad = git.rawCommitSubject(at: worktreePath, sha: tabState.currentSha)
-            let (loadedDetails, loadedSubject) = try await (detailsLoad, subjectLoad)
+            let (loadedDetails, loadedSubject) = try await editorGit.details(tabState.currentSha)
             guard !Task.isCancelled, activeDetailsKey == requestedKey else { return }
             details = loadedDetails
             selectedPath = loadedDetails.files.first?.path
@@ -307,6 +352,7 @@ struct CommitEditorTabView: View {
         guard let path = selectedPath,
               let file = details?.files.first(where: { $0.path == path }) else {
             diff = ParsedDiff(hunks: [])
+            diffTruncated = false
             displayModel = nil
             displayModelKey = nil
             return
@@ -321,18 +367,14 @@ struct CommitEditorTabView: View {
             if activeDiffKey == requestedKey { loadingDiff = false }
         }
         do {
-            let loaded = try await git.diff(
-                worktreePath: worktreePath,
-                sha: tabState.currentSha,
-                file: path,
-                originalPath: file.originalPath
-            )
+            let (loaded, truncated) = try await editorGit.diff(tabState.currentSha, file)
             guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             let loadedModel = await Task.detached(priority: .userInitiated) {
                 DiffDisplayModelBuilder.build(diff: loaded, filePath: path)
             }.value
             guard !Task.isCancelled, activeDiffKey == requestedKey else { return }
             diff = loaded
+            diffTruncated = truncated
             displayModel = loadedModel
             displayModelKey = requestedKey
         } catch {
@@ -357,7 +399,7 @@ struct CommitEditorTabView: View {
     }
 
     private func canDropHunk(file: CommitChangedFile, hunk: ParsedDiff.Hunk) -> Bool {
-        !busy && !dirty && file.status == "M" && !hunk.lines.isEmpty
+        !busy && !dirty && !diffTruncated && file.status == "M" && !hunk.lines.isEmpty
     }
 
     private func subjectLine(from commit: CommitInfo) -> String {
@@ -409,13 +451,7 @@ struct CommitEditorTabView: View {
 
     private func runEdit(action: CommitEditAction) {
         guard !busy else { return }
-        guard !checkpointLeaseActive else {
-            error = "Recover the interrupted checkpoint restore before editing commits."
-            return
-        }
         let targetSha = tabState.currentSha
-        let tabId = tabState.id
-        let baseRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? tabState.baseRef
 
         busy = true
         error = nil
@@ -425,41 +461,32 @@ struct CommitEditorTabView: View {
                 busy = false
             }
             do {
-                guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else {
-                    error = "Recover the interrupted checkpoint restore before editing commits."
-                    return
+                try await editorGit.whileEditing {
+                    let result = try await editorGit.edit(targetSha, action)
+                    let refreshed: (details: CommitDetails, rawSubject: String)
+                    do {
+                        refreshed = try await editorGit.details(result.currentSha)
+                    } catch {
+                        // The edit landed: follow its sha even though the refresh failed.
+                        await editorGit.didEdit(result, nil)
+                        throw error
+                    }
+                    let (refreshedDetails, refreshedSubject) = refreshed
+
+                    let message = CommitMessage.split(refreshedDetails.body)
+                    details = refreshedDetails
+                    selectedPath = refreshedDetails.files.first?.path
+                    diff = ParsedDiff(hunks: [])
+                    diffTruncated = false
+                    activeDiffKey = nil
+                    subject = refreshedSubject
+                    bodyText = message.body
+                    protectedTrailers = message.protectedTrailers
+                    savedSubject = refreshedSubject
+                    savedBodyText = message.body
+
+                    await editorGit.didEdit(result, tabTitle(from: refreshedDetails))
                 }
-                appState.beginCenterGitMutation(worktreeId: worktreeId)
-                defer { appState.endCenterGitMutation(worktreeId: worktreeId) }
-                let result = try await git.editCommit(
-                    worktreePath: worktreePath,
-                    baseRef: baseRef,
-                    targetSha: targetSha,
-                    action: action
-                )
-                async let detailsLoad = git.commitDetails(at: worktreePath, sha: result.currentSha)
-                async let subjectLoad = git.rawCommitSubject(at: worktreePath, sha: result.currentSha)
-                let (refreshedDetails, refreshedSubject) = try await (detailsLoad, subjectLoad)
-
-                let message = CommitMessage.split(refreshedDetails.body)
-                details = refreshedDetails
-                selectedPath = refreshedDetails.files.first?.path
-                diff = ParsedDiff(hunks: [])
-                activeDiffKey = nil
-                subject = refreshedSubject
-                bodyText = message.body
-                protectedTrailers = message.protectedTrailers
-                savedSubject = refreshedSubject
-                savedBodyText = message.body
-
-                appState.tabs.updateCommitEditorShas(worktreeId: worktreeId, shaMap: result.shaMap)
-                appState.tabs.updateCommitEditor(
-                    worktreeId: worktreeId,
-                    tabId: tabId,
-                    currentSha: result.currentSha,
-                    title: tabTitle(from: refreshedDetails)
-                )
-                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
             } catch {
                 self.error = (error as NSError).localizedDescription
             }
@@ -554,4 +581,105 @@ private struct PendingCommitHunkDrop: Equatable {
     let sha: String
     let path: String
     let hunk: ParsedDiff.Hunk
+}
+
+/// What the commit editor reads and changes: this Mac's git, or a paired host's.
+struct CommitEditorGit {
+    var details: @MainActor (_ sha: String) async throws -> (details: CommitDetails, rawSubject: String)
+    var diff: @MainActor (_ sha: String, _ file: CommitChangedFile) async throws -> (diff: ParsedDiff, truncated: Bool)
+    var edit: @MainActor (_ targetSha: String, _ action: CommitEditAction) async throws -> CommitEditResult
+    /// After an edit lands: the local tab and right-pane bookkeeping, or the peer selection's new sha.
+    /// `title` is nil when the edited commit could not be read back.
+    var didEdit: @MainActor (_ result: CommitEditResult, _ title: String?) async -> Void
+    /// Runs an edit with its refresh: locally behind the checkpoint-lease
+    /// guards and inside the center git mutation; on a peer as it is.
+    var whileEditing: @MainActor (_ body: @MainActor () async throws -> Void) async throws -> Void
+    var generatesMessages: Bool
+
+    /// Today's behaviour: GitService, the checkpoint-lease guards, the center
+    /// git mutation, and the right pane's comparison ref, else `baseRef`.
+    @MainActor static func local(
+        worktreePath: URL, worktreeId: String, tabId: TabID, baseRef: String, appState: AppState
+    ) -> Self {
+        let git = GitService()
+        let leaseRefusal = NativePeerReviewGitClientError(message: "Recover the interrupted checkpoint restore before editing commits.")
+        return CommitEditorGit(
+            details: { sha in
+                async let detailsLoad = git.commitDetails(at: worktreePath, sha: sha)
+                async let subjectLoad = git.rawCommitSubject(at: worktreePath, sha: sha)
+                return try await (detailsLoad, subjectLoad)
+            },
+            diff: { sha, file in
+                let diff = try await git.diff(worktreePath: worktreePath, sha: sha, file: file.path, originalPath: file.originalPath)
+                return (diff, false)
+            },
+            edit: { targetSha, action in
+                let comparisonRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? baseRef
+                return try await git.editCommit(worktreePath: worktreePath, baseRef: comparisonRef, targetSha: targetSha, action: action)
+            },
+            didEdit: { result, title in
+                // Locally an unread edit leaves the tab as it was.
+                guard let title else { return }
+                appState.tabs.updateCommitEditorShas(worktreeId: worktreeId, shaMap: result.shaMap)
+                appState.tabs.updateCommitEditor(worktreeId: worktreeId, tabId: tabId, currentSha: result.currentSha, title: title)
+                await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+            },
+            whileEditing: { body in
+                guard !appState.checkpointFileWritesDisabled(worktreeId: worktreeId) else { throw leaseRefusal }
+                guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else {
+                    throw leaseRefusal
+                }
+                appState.beginCenterGitMutation(worktreeId: worktreeId)
+                defer { appState.endCenterGitMutation(worktreeId: worktreeId) }
+                try await body()
+            },
+            generatesMessages: true
+        )
+    }
+
+    /// A paired host's: it computes the comparison ref and refuses what its
+    /// editor would. A hunk is sent by its index and header, never its content.
+    @MainActor static func peer(
+        _ selection: NativePeerCommitEditorSelection, hosts: NativePeerHosts, onEdited: @escaping @MainActor (CommitEditResult) -> Void
+    ) -> Self {
+        let diff: @MainActor (String, String) async throws -> (diff: ParsedDiff, truncated: Bool) = { sha, path in
+            switch await hosts.read(.commitDiff(sha: sha, path: path), in: selection.worktree, serverId: selection.serverId) {
+            case .commitDiffResult(_, _, _, let hunks, let truncated, let metadataNote)?:
+                return (ParsedDiff(hunks: hunks.map(NativePeerWorkspace.hunk), metadataSummary: metadataNote), truncated)
+            case .commitDiffFailed(_, _, _, .binary, _)?:
+                return (ParsedDiff(hunks: [], isBinary: true, metadataSummary: "Binary files cannot be shown."), false)
+            case .commitDiffFailed(_, _, _, let reason, let message)?:
+                throw NativePeerReviewGitClientError(message: NativePeerWorkspace.describe(reason, message: message))
+            default:
+                throw NativePeerReviewGitClientError(message: NativePeerWorkspace.offlineMessage)
+            }
+        }
+        return CommitEditorGit(
+            details: { sha in
+                let details = try await hosts.commitDetails(sha, in: selection.worktree, serverId: selection.serverId).get()
+                return (details, details.info.rawSubject)
+            },
+            diff: { sha, file in try await diff(sha, file.path) },
+            edit: { targetSha, action in
+                let edit: HostCommitEdit
+                switch action {
+                case .message(let subject, let body):
+                    edit = .message(subject: subject, body: body)
+                case .dropFile(let path):
+                    edit = .dropFile(path: path)
+                case .dropHunk(let path, let hunk):
+                    guard let index = try await diff(targetSha, path).diff.hunks.firstIndex(of: hunk) else {
+                        throw NativePeerReviewGitClientError(message: "This commit changed since it was shown. Refresh and try again.")
+                    }
+                    edit = .dropHunk(path: path, index: index, header: hunk.header)
+                }
+                return try await hosts.editCommit(
+                    targetSha, edit, comparisonMode: selection.comparisonMode, in: selection.worktree, serverId: selection.serverId
+                ).get()
+            },
+            didEdit: { result, _ in onEdited(result) },
+            whileEditing: { body in try await body() },
+            generatesMessages: false
+        )
+    }
 }

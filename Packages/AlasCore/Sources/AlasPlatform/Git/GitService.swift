@@ -174,9 +174,13 @@ extension GitService {
         // for `.unstaged` entries, which must reflect the CURRENT on-disk
         // content of a path regardless of what's staged, matching
         // `diffAgainstHEAD`'s own all-add diff (see the comment there).
+        // `GIT_OPTIONAL_LOCKS=0` does not stop `git diff` refreshing a stale
+        // stat cache, which takes `index.lock` and rewrites the index: a
+        // background read must not, or the user's git or a restore fails.
         let workingTreeNumstatArgs: [String] = head
-            ? ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "HEAD"]
-            : ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
+            ? ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "-z", "HEAD"]
+            : ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "-z",
+               "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]   // canonical empty tree
         let workingTreeNumstat = try await Process.git(workingTreeNumstatArgs, cwd: worktreePath)
         guard workingTreeNumstat.exitCode == 0 else {
             throw ProcessError.nonZeroExit(workingTreeNumstat.exitCode, workingTreeNumstat.stderr)
@@ -189,8 +193,9 @@ extension GitService {
         // draft-commit summary) reported the unstaged edit's line count as
         // if it were already staged.
         let stagedNumstatArgs: [String] = head
-            ? ["-c", "core.quotePath=false", "diff", "--cached", "--numstat", "-z", "HEAD"]
-            : ["-c", "core.quotePath=false", "diff", "--cached", "--numstat", "-z", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
+            ? ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--cached", "--numstat", "-z", "HEAD"]
+            : ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--cached", "--numstat", "-z",
+               "4b825dc642cb6eb9a060e54bf8d69288fbee4904"]
         let stagedNumstat = try await Process.git(stagedNumstatArgs, cwd: worktreePath)
         guard stagedNumstat.exitCode == 0 else {
             throw ProcessError.nonZeroExit(stagedNumstat.exitCode, stagedNumstat.stderr)
@@ -281,7 +286,8 @@ extension GitService {
             entries = try await status(worktreePath: worktreePath)
         }
         let numstat = try await Process.git(
-            ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C"],
+            // As `status`: a read never rewrites the index.
+            ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "-z", "-M", "-C"],
             cwd: worktreePath
         )
         guard numstat.exitCode == 0 else {

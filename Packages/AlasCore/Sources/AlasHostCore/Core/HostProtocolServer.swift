@@ -391,6 +391,20 @@ public final class HostProtocolConnection {
             return .diff(diff: try await host.core.stashDiff(
                 stash, path: path, in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesStashV1)
             ))
+        case .commitDetails(let ref, let sha):
+            return .commitDetails(details: try await host.core.commitDetails(
+                sha, in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesCommitEditV1)
+            ))
+        case .listCheckpoints(let ref):
+            return .checkpoints(catalog: try await host.core.checkpointCatalog(in: try checkpointWorktree(ref)))
+        case .checkpointManifest(let ref, let id):
+            return .checkpointManifest(manifest: try await host.core.checkpointManifest(id, in: try checkpointWorktree(ref)))
+        case .checkpointDiff(let ref, let id, let path):
+            return .diff(diff: try await host.core.checkpointDiff(id, path: path, in: try checkpointWorktree(ref)))
+        case .checkpointRestorePreview(let ref, let id, let groupIDs):
+            return .checkpointRestorePreview(preview: try await host.core.checkpointRestorePreview(
+                id, groupIDs: groupIDs, in: try checkpointWorktree(ref)
+            ))
         }
         return .done
     }
@@ -494,6 +508,11 @@ public final class HostProtocolConnection {
             throw HostError.invalidRequest(reason: "This host does not serve this git action.")
         }
         return try visibleWorktree(ref)
+    }
+
+    /// A visible worktree whose checkpoints this host serves. Reads, outside the gate as `readWorktree` is.
+    private func checkpointWorktree(_ ref: WorktreeRef) throws -> Worktree {
+        try servedWorktree(ref, capability: HostProtocolCapability.worktreesCheckpointsV1)
     }
 
     /// A visible worktree, on a host that serves reviews.

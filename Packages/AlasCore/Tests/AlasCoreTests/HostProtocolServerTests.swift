@@ -629,8 +629,8 @@ struct HostProtocolServerTests {
     }
 
     enum Refusal: CaseIterable {
-        case branchChanged, checkedOutSinceListed, staleDiscard, nothingStaged, tooManyPaths, pendingCheckpoint, appHost, hidden,
-            archivedWhileQueued
+        case branchChanged, checkedOutSinceListed, staleDiscard, staleConflict, conflictedDirectory, nothingStaged, tooManyPaths,
+            pendingCheckpoint, appHost, hidden, archivedWhileQueued
     }
 
     @Test(arguments: Refusal.allCases)
@@ -642,7 +642,7 @@ struct HostProtocolServerTests {
         }
         let fixture = try await RepoFixture(environment: environment)
         defer { fixture.tearDown() }
-        let (repo, ref) = try await fixture.mainWorktree()
+        let (repo, ref) = refusal == .conflictedDirectory ? try await fixture.stopPullOnConflicts() : try await fixture.mainWorktree()
         var branch = "main"
         var change = HostWorktreeChange.stage(paths: ["x"])
         let expected: HostError
@@ -660,6 +660,19 @@ struct HostProtocolServerTests {
         case .staleDiscard:
             change = .discard(paths: ["missing.txt"])
             expected = .failed(message: "These changes are no longer in the worktree.")
+        case .staleConflict:
+            // Not unmerged: taking a side would overwrite the host's edit.
+            try "edited\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+            change = .useTheirs(path: ".alas/scripts/hello.sh")
+            expected = .failed(message: "The conflict on .alas/scripts/hello.sh changed; refresh and try again.")
+        case .conflictedDirectory:
+            // A folder holding a conflict is not one: its merged files keep their edits.
+            let other = repo.appendingPathComponent(".alas/scripts/other.sh")
+            try "staged\n".write(to: other, atomically: true, encoding: .utf8)
+            #expect(try await Process.git(["add", ".alas/scripts/other.sh"], cwd: repo).exitCode == 0)
+            try "edited\n".write(to: other, atomically: true, encoding: .utf8)
+            change = .useTheirs(path: ".alas/scripts")
+            expected = .failed(message: "The conflict on .alas/scripts changed; refresh and try again.")
         case .nothingStaged:
             change = .commit(subject: "Empty", body: "", amend: false)
             expected = .failed(message: "Nothing is staged to commit.")
@@ -688,6 +701,12 @@ struct HostProtocolServerTests {
         }
 
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: expected))
+        if refusal == .staleConflict {
+            #expect(try String(contentsOf: repo.appendingPathComponent(".alas/scripts/hello.sh"), encoding: .utf8) == "edited\n")
+        }
+        if refusal == .conflictedDirectory {
+            #expect(try String(contentsOf: repo.appendingPathComponent(".alas/scripts/other.sh"), encoding: .utf8) == "edited\n")
+        }
     }
 
     /// Paths come from the client: the host acts only inside the worktree,
@@ -749,26 +768,14 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["status", "--porcelain"], cwd: real).stdout == porcelain)
     }
 
-    /// The Mac learns why a pull stopped, and the host is left mid-rebase to
-    /// resolve there: relisted, the worktree is detached, and a commit or push
-    /// on it is refused until the rebase is finished.
-    @Test func pullStoppedOnConflictsSaysToResolveOnTheHost() async throws {
+    /// The Mac learns why a pull stopped, and the host is left mid-rebase:
+    /// relisted, the worktree is detached, and a commit or push on it is
+    /// refused until the rebase is finished. Aborted, it is listed on its
+    /// branch again, so the Mac's next change passes.
+    @Test func pullStoppedOnConflictsLeavesTheRebaseInPlace() async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
-        let (repo, ref) = try await fixture.mainWorktree()
-        let origin = fixture.root.appendingPathComponent("origin")
-        try await GitTemplate.repository(at: origin)
-        for (directory, contents) in [(origin, "theirs\n"), (repo, "ours\n")] {
-            try contents.write(to: directory.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
-            let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
-            #expect(try await Process.git(commit, cwd: directory).exitCode == 0)
-        }
-        for arguments in [["remote", "add", "origin", origin.path], ["fetch", "-q", "origin"], ["branch", "-q", "--set-upstream-to=origin/main"]] {
-            #expect(try await Process.git(arguments, cwd: repo).exitCode == 0)
-        }
-
-        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .pull))
-            == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them on the host.")))
+        let (repo, ref) = try await fixture.stopPullOnConflicts()
         #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
 
         try await fixture.host.worktrees.refresh(projectID: fixture.projectID, caller: .app)
@@ -776,9 +783,124 @@ struct HostProtocolServerTests {
         #expect(branch == "(detached)")
         for change in [HostWorktreeChange.commit(subject: "Mid-rebase", body: "", amend: true), .push(forceWithLease: true)] {
             #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: .failed(
-                message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first."
+                message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first."
             )))
         }
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: .abortOperation(kind: .rebase))) == .done)
+        #expect(fixture.core.projects.worktrees(projectId: fixture.projectID).first?.branch == "main")
+        try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .stage(paths: ["new.txt"]))) == .done)
+    }
+
+    /// Mid-rebase the worktree is still listed on its branch while git is
+    /// detached: the Mac resolves and continues, or aborts, from there.
+    @Test(arguments: [true, false])
+    func aRebaseStoppedOnConflictsIsLeftFromTheMac(continues: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.stopPullOnConflicts()
+        let ours = try await Process.git(["rev-parse", "ORIG_HEAD"], cwd: repo).stdout
+        func mutate(_ change: HostWorktreeChange) async throws -> HostResponse {
+            try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change))
+        }
+
+        if continues {
+            #expect(try await mutate(.useTheirs(path: ".alas/scripts/hello.sh")) == .done)
+            #expect(try await mutate(.continueOperation(kind: .rebase)) == .done)
+            #expect(try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: repo).stdout == "main\n")
+            // A rebase's "theirs" is the commit being replayed.
+            #expect(try String(contentsOf: repo.appendingPathComponent(".alas/scripts/hello.sh"), encoding: .utf8) == "ours\n")
+        } else {
+            #expect(try await mutate(.abortOperation(kind: .rebase)) == .done)
+            #expect(try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout == ours)
+        }
+        #expect(!FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
+        guard case .worktreeRead(.changeList(_, _, _, _, _, _, _, _, _, _, let operation)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .changes(comparisonMode: nil)))
+        else {
+            Issue.record("expected the changes")
+            return
+        }
+        #expect(operation == nil)
+    }
+
+    /// As locally, a conflicting cherry-pick stays in place: the Mac sees it
+    /// in the changes and can leave it.
+    @Test func aConflictingCherryPickLeavesAnOperationTheMacCanSeeAndLeave() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let script = repo.appendingPathComponent(".alas/scripts/hello.sh")
+        for (branch, contents) in [("other", "theirs\n"), ("main", "ours\n")] {
+            let checkout = branch == "other" ? ["checkout", "-q", "-b", "other"] : ["checkout", "-q", "main"]
+            #expect(try await Process.git(checkout, cwd: repo).exitCode == 0)
+            try contents.write(to: script, atomically: true, encoding: .utf8)
+            let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
+            #expect(try await Process.git(commit, cwd: repo).exitCode == 0)
+        }
+        func sha(_ ref: String) async throws -> String {
+            try await Process.git(["rev-parse", ref], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let (theirs, head) = try (await sha("other"), await sha("HEAD"))
+        func mutate(_ change: HostWorktreeChange) async throws -> HostResponse {
+            try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change))
+        }
+        func changes() async throws -> (MergeOperation?, [RemoteChangedFile]) {
+            guard case .worktreeRead(.changeList(_, _, _, let files, let staged, let unstaged, _, _, _, _, let operation)) =
+                try await fixture.request(.readWorktree(worktree: ref, read: .changes(comparisonMode: nil)))
+            else { throw HostError.failed(message: "expected the changes") }
+            return (operation, files + staged + unstaged)
+        }
+
+        #expect(try await mutate(.cherryPick(sha: theirs)) == .done)
+        let (operation, files) = try await changes()
+        #expect(operation == .cherryPick(sha: theirs, summary: "theirs"))
+        #expect(files.contains { $0.conflict != nil })
+
+        #expect(try await mutate(.abortOperation(kind: .cherryPick)) == .done)
+        #expect(try await changes().0 == nil)
+        #expect(try await sha("HEAD") == head)
+        #expect(try await Process.git(["status", "--porcelain"], cwd: repo).stdout == "")
+    }
+
+    /// Only an object ID crosses to git, and only one of this repository's commits.
+    @Test(arguments: [
+        ("HEAD", HostError.invalidRequest(reason: "A commit is named by its SHA.")),
+        ("--abort", .invalidRequest(reason: "A commit is named by its SHA.")),
+        (String(repeating: "a", count: 40), .notFound(what: "commit \(String(repeating: "a", count: 40))")),
+    ])
+    func cherryPickAndRevertTakeOnlyThisRepositorysCommits(_ sha: String, _ error: HostError) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
+
+        for change in [HostWorktreeChange.cherryPick(sha: sha), .revert(sha: sha)] {
+            #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change)) == .failure(error: error))
+        }
+        #expect(try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout == head)
+        #expect(try await GitService().mergeState(worktreePath: repo) == nil)
+    }
+
+    enum DuringRebase: CaseIterable { case stage, commit, wrongKind, outsidePath }
+
+    /// Only a way out of the rebase passes for the branch git left: anything
+    /// else is refused as before, and the rebase stays.
+    @Test(arguments: DuringRebase.allCases)
+    func onlyTheWayOutPassesTheGateDuringARebase(_ change: DuringRebase) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.stopPullOnConflicts()
+        let (sent, expected): (HostWorktreeChange, HostError) = switch change {
+        case .stage: (.stage(paths: ["x"]), .failed(message: "The worktree changed since it was listed."))
+        case .commit: (.commit(subject: "x", body: "", amend: true), .failed(message: "The worktree changed since it was listed."))
+        case .wrongKind: (.continueOperation(kind: .cherryPick), .failed(message: "The operation on the host changed; refresh and try again."))
+        case .outsidePath: (.useOurs(path: "../x"), .invalidRequest(reason: "The path ../x is outside the worktree."))
+        }
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: sent)) == .failure(error: expected))
+        #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
     }
 
     /// A branch with no upstream is pushed as the review pill pushes it,
@@ -900,13 +1022,357 @@ struct HostProtocolServerTests {
             return
         }
         #expect(after.map(HostStashRef.init) == [stash])
-        guard case .worktreeRead(.changeList(_, _, _, let files, let staged, let unstaged, _, _, _, _)) =
+        guard case .worktreeRead(.changeList(_, _, _, let files, let staged, let unstaged, _, _, _, _, _)) =
             try await fixture.request(.readWorktree(worktree: ref, read: .changes(comparisonMode: nil)))
         else {
             Issue.record("expected the changes")
             return
         }
         #expect((files + staged + unstaged).contains { $0.path == ".alas/scripts/hello.sh" && $0.conflict != nil })
+
+        // No operation is in progress, yet the conflict is the Mac's to resolve.
+        #expect(try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .useTheirs(path: ".alas/scripts/hello.sh")
+        )) == .done)
+        #expect(try String(contentsOf: script, encoding: .utf8) == "stashed\n")
+        #expect(try await Process.git(["diff", "--name-only", "--diff-filter=U"], cwd: repo).stdout == "")
+    }
+
+    @Test func aMacCreatesInspectsAndDeletesAHostCheckpoint() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let file = repo.appendingPathComponent("a.txt")
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let manifest = try await fixture.checkpoint("  Before  ", in: ref)
+        #expect(manifest.label == "Before")
+        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(catalog.summaries.map(\.label) == ["Before"])
+        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+        guard case .diff(let diff) = try await fixture.request(.checkpointDiff(worktree: ref, id: manifest.id, path: "a.txt")) else {
+            Issue.record("expected a diff")
+            return
+        }
+        #expect(diff.hunks.count == 1)
+
+        #expect(try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .deleteCheckpoint(id: manifest.id)
+        )) == .done)
+        guard case .checkpoints(let after) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(after.summaries.isEmpty)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .createCheckpoint(label: " ")))
+            == .failure(error: .invalidRequest(reason: "A checkpoint needs a name.")))
+    }
+
+    @Test func aCheckpointRestoreWaitsForTheWorktreesSessions() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let file = repo.appendingPathComponent("a.txt")
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        let manifest = try await fixture.checkpoint("Before", in: ref)
+        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let session = try await fixture.host.sessions.create(.worktree(ref), agentID: "gemini", caller: .app)
+        let core = fixture.core
+        try await eventually { @MainActor in core.sessionManagers[.worktree(worktree.id)]?.runners.isEmpty == false }
+
+        let busy = try await fixture.restorePreview(manifest.id, in: ref)
+        #expect(busy.blocker == .activeSession)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+            id: manifest.id, groupIDs: busy.selectedGroupIDs, fingerprint: busy.currentFingerprint
+        ))) == .failure(error: .failed(message: "Stop active terminal and agent sessions before restoring.")))
+        #expect(try String(contentsOf: file, encoding: .utf8) == "two\n")
+
+        try await fixture.host.sessions.archive(session.id, caller: .app)
+        try await eventually { @MainActor in core.sessionManagers[.worktree(worktree.id)]?.runners.isEmpty != false }
+        let preview = try await fixture.restorePreview(manifest.id, in: ref)
+        #expect(preview.blocker == nil)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+            id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: "stale"
+        ))) == .failure(error: .failed(message: "Refresh the restore preview before trying again.")))
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+            id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: preview.currentFingerprint
+        ))) == .done)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "one\n")
+        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(catalog.summaries.contains { $0.kind == .recovery && $0.label == "Before checkpoint restore" })
+    }
+
+    /// A restore keeps new sessions out of its worktree from the moment it
+    /// counts the writers until it ends, so none starts after the count.
+    @Test func aRestoreHoldsNewSessionsOffItsWorktreeUntilItEnds() async throws {
+        let pause = CheckpointGitPause()
+        let fixture = try await RepoFixture(checkpointGit: PausingCheckpointGit(pause: pause))
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let manifest = try await fixture.checkpoint("Before", in: ref)
+        try "two\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let preview = try await fixture.restorePreview(manifest.id, in: ref)
+
+        pause.armed = true
+        let restore = Task { @MainActor in
+            try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+                id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: preview.currentFingerprint
+            )))
+        }
+        try await eventually { await pause.isHolding }
+        await #expect(throws: SessionRefusal.ownerUnavailable(reason: SessionsAPI.checkpointRestoreReason)) {
+            try await fixture.host.sessions.create(.worktree(ref), agentID: "gemini", caller: .app)
+        }
+
+        pause.release()
+        #expect(try await restore.value == .done)
+        _ = try await fixture.host.sessions.create(.worktree(ref), agentID: "gemini", caller: .app)
+    }
+
+    enum RestoreWriter: CaseIterable {
+        case worktreeSession, memberCheckoutSession, otherCheckoutSession, checkoutSessionWithUnreadableState, run, console
+    }
+
+    /// A restore counts the writers of the worktree and of each Workspace
+    /// checkout that has it as a member, as the app does; another checkout's
+    /// session does not hold it back, and unreadable Workspace state counts them all.
+    @Test(arguments: RestoreWriter.allCases)
+    func checkpointRestoreCountsTheWorktreesWriters(_ writer: RestoreWriter) {
+        let worktree = Worktree(
+            id: "wt", projectId: "p", name: "wt", branch: "b",
+            path: URL(fileURLWithPath: "/srv/repo/wt"), status: .clean, lastActivity: .distantPast
+        )
+        func checkout(memberPath: String) -> WorkspaceCheckout {
+            WorkspaceCheckout(
+                workspaceID: UUID(), fallbackWorkspaceName: "w", executionLocation: .local, branch: "b", rootPath: "/srv/w",
+                members: [WorkspaceCheckoutMember(
+                    workspaceMemberID: UUID(), projectID: "p", fallbackProjectName: "repo",
+                    fallbackRepositoryRoot: "/srv/repo", worktreePath: memberPath
+                )]
+            )
+        }
+        let member = checkout(memberPath: "/srv/repo/wt")
+        let other = checkout(memberPath: "/srv/repo/other")
+        let memberOwner = SessionOwnerID.workspaceCheckout(member.id, .local)
+        let otherOwner = SessionOwnerID.workspaceCheckout(other.id, .local)
+        let sessions: [SessionOwnerID: Int] = switch writer {
+        case .worktreeSession: [.worktree("wt"): 1, .worktree("elsewhere"): 1]
+        case .memberCheckoutSession, .checkoutSessionWithUnreadableState: [memberOwner: 2]
+        case .otherCheckoutSession: [otherOwner: 1]
+        case .run, .console: [:]
+        }
+        let counts = AlasCoreContext.checkpointWriterCounts(
+            for: worktree, checkouts: writer == .checkoutSessionWithUnreadableState ? nil : [member, other],
+            sessions: sessions, runOwnerKeys: writer == .run ? ["wt", "elsewhere"] : ["elsewhere"],
+            hasConsoles: { writer == .console && $0.contains("wt") }
+        )
+        let expected: (sessions: Int, terminals: Int) = switch writer {
+        case .worktreeSession: (1, 0)
+        case .memberCheckoutSession, .checkoutSessionWithUnreadableState: (2, 0)
+        case .otherCheckoutSession: (0, 0)
+        case .run, .console: (0, 1)
+        }
+        #expect(counts == expected)
+    }
+
+    /// As the app does, the host checkpoints a worktree before each prompt and
+    /// the user row carries its id; a failed capture still sends the prompt.
+    @Test(arguments: [false, true])
+    func aHostPromptTakesAnAutomaticCheckpointFirst(captureFails: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let sessions = fixture.host.sessions
+        let session = try await sessions.create(.worktree(ref), agentID: "gemini", caller: .app)
+        let id = session.id
+        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        if captureFails {
+            // A file where the checkpoint store's directory belongs, once the session is past the recovery gate.
+            try FileManager.default.removeItem(at: fixture.root.appendingPathComponent("checkpoints"))
+            try Data().write(to: fixture.root.appendingPathComponent("checkpoints"))
+        }
+        try await sessions.send(id, prompt: "fix it", caller: .app)
+
+        let agent = fixture.agent
+        // The prompt waits for the capture: two full snapshots, about two dozen git processes in turn,
+        // which take well over the default 10 s on a loaded 3-vCPU runner.
+        try await eventually(within: .seconds(60)) { agent.sent.contains { $0.method == "session/prompt" } }
+        let manager = try #require(fixture.core.sessionManagers[.worktree(worktree.id)])
+        let user = try #require(manager.liveSession(for: id)?.transcript.messages.first {
+            if case .user = $0 { return true }
+            return false
+        })
+        guard case .user(_, _, _, let attachments, _, _) = user else {
+            Issue.record("expected a user row")
+            return
+        }
+        let carried = attachments.compactMap(\.checkpointID)
+        #expect(RemoteSessionGateway.toWire(user, index: 0).checkpointId == carried.first?.uuidString)
+        if captureFails {
+            #expect(carried.isEmpty)
+            return
+        }
+        let target = try #require(fixture.core.checkpointTarget(for: worktree))
+        let automatic = try await fixture.core.checkpoints.summaries(target: target).summaries.filter { $0.kind == .automatic }
+        #expect(automatic.map(\.label) == ["Before: fix it"])
+        #expect(carried == automatic.map(\.id))
+    }
+
+    /// A Mac names only checkpoints of the worktree it asks about, and paths inside it.
+    @Test func checkpointRequestsNameOnlyThisWorktreesCheckpoints() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let mine = try await fixture.checkpoint("Mine", in: ref)
+        let otherRepo = fixture.root.appendingPathComponent("other")
+        try await GitTemplate.repository(at: otherRepo)
+        try "one\n".write(to: otherRepo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let otherID = try await fixture.host.projects.add(path: otherRepo, displayName: "other", icon: .default(), caller: .app).id
+        let otherWorktree = try #require(fixture.core.projects.worktrees(projectId: otherID).first)
+        let otherRef = WorktreeRef(projectID: otherID, path: otherWorktree.path.path)
+        let other = try await fixture.checkpoint("Other", in: otherRef)
+
+        let unknown = HostResponse.failure(error: .notFound(what: "checkpoint \(other.id)"))
+        #expect(try await fixture.request(.checkpointManifest(worktree: ref, id: other.id)) == unknown)
+        #expect(try await fixture.request(.checkpointDiff(worktree: ref, id: other.id, path: "a.txt")) == unknown)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .deleteCheckpoint(id: other.id)))
+            == unknown)
+        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: otherRef)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(catalog.summaries.map(\.id) == [other.id])
+        #expect(try await fixture.request(.checkpointDiff(worktree: ref, id: mine.id, path: "../x"))
+            == .failure(error: .invalidRequest(reason: "The path ../x is outside the worktree.")))
+    }
+
+    @Test func aMacRewordsAHostCommit() async throws {
+        let fixture = try await RepoFixture(aheadOfOrigin: true)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let shas = fixture.aheadSHAs
+
+        guard case .commitDetails(let details) = try await fixture.request(.commitDetails(worktree: ref, sha: shas[1])) else {
+            Issue.record("expected the commit's details")
+            return
+        }
+        #expect(details.info.rawSubject == "entry 2")
+        guard case .commitEdited(let result) = try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .editCommit(sha: shas[1], edit: .message(subject: "Reworded", body: ""), comparisonMode: nil)
+        )) else {
+            Issue.record("expected the commit edited")
+            return
+        }
+        #expect(result.currentSha != shas[1])
+        #expect(try await Process.git(["log", "--format=%s", "origin/main..HEAD"], cwd: repo).stdout == "entry 3\nReworded\nentry 1\n")
+    }
+
+    /// The host drops the file, or the hunk at the index the Mac saw, and
+    /// replays the commit above it.
+    @Test(arguments: [true, false])
+    func aMacDropsAFileOrAHunkFromAHostCommit(_ dropsHunk: Bool) async throws {
+        let fixture = try await RepoFixture(aheadOfOrigin: true)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let notes = repo.appendingPathComponent("notes.txt")
+        let lines = (1...20).map { "line \($0)" }
+        for (contents, subject) in [
+            (lines, "Add notes"), (["first"] + lines.dropFirst().dropLast() + ["last"], "Edit notes"),
+        ] {
+            try (contents.joined(separator: "\n") + "\n").write(to: notes, atomically: true, encoding: .utf8)
+            // Dropping notes.txt must leave the edit something to commit.
+            try subject.write(to: repo.appendingPathComponent("other.txt"), atomically: true, encoding: .utf8)
+            #expect(try await Process.git(["add", "notes.txt", "other.txt"], cwd: repo).exitCode == 0)
+            #expect(try await Process.git(["commit", "-q", "-m", subject], cwd: repo).exitCode == 0)
+        }
+        let target = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(try await Process.git(["commit", "-q", "--allow-empty", "-m", "Above"], cwd: repo).exitCode == 0)
+        let hunks = try await GitService().diff(worktreePath: repo, sha: target, file: "notes.txt").hunks
+        try #require(hunks.count == 2)
+        let edit: HostCommitEdit = dropsHunk ? .dropHunk(path: "notes.txt", index: 1, header: hunks[1].header) : .dropFile(path: "notes.txt")
+
+        guard case .commitEdited = try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .editCommit(sha: target, edit: edit, comparisonMode: nil)
+        )) else {
+            Issue.record("expected the commit edited")
+            return
+        }
+        let kept = dropsHunk ? ["first"] + lines.dropFirst() : lines
+        #expect(try String(contentsOf: notes, encoding: .utf8) == kept.joined(separator: "\n") + "\n")
+        #expect(try await Process.git(["log", "--format=%s", "-2"], cwd: repo).stdout == "Above\nEdit notes\n")
+    }
+
+    enum StaleEdit: CaseIterable { case notASHA, belowTheFold, otherHunk, unseenHunk, outsidePath, dirtyTree, renamedFile }
+
+    /// The host edits only a commit above its own fold, named by SHA, and
+    /// drops only a hunk its own parse of that commit still has and the Mac was sent whole.
+    @Test(arguments: StaleEdit.allCases)
+    func commitEditsTakeOnlyWhatTheMacSaw(_ stale: StaleEdit) async throws {
+        let fixture = try await RepoFixture(aheadOfOrigin: true)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let script = ".alas/scripts/hello.sh"
+        if stale == .otherHunk {
+            try "#!/bin/sh\necho hello from run\necho more\n".write(to: repo.appendingPathComponent(script), atomically: true, encoding: .utf8)
+            #expect(try await Process.git(["commit", "-q", "-am", "entry 4"], cwd: repo).exitCode == 0)
+        }
+        // A first hunk over the diff cap: the Mac never saw the hunk after it.
+        var unseenHeader = ""
+        if stale == .unseenHunk {
+            let cap = RemoteWorktreeFileAccess.maxDiffLines
+            let lines = (1...cap + 20).map { "line \($0)" }
+            for (index, contents) in [lines, lines.prefix(cap).map { $0 + " edited" } + lines.dropFirst(cap).dropLast() + ["last"]].enumerated() {
+                try (contents.joined(separator: "\n") + "\n").write(to: repo.appendingPathComponent("big.txt"), atomically: true, encoding: .utf8)
+                #expect(try await Process.git(["add", "big.txt"], cwd: repo).exitCode == 0)
+                #expect(try await Process.git(["commit", "-q", "-m", "entry \(index + 4)"], cwd: repo).exitCode == 0)
+            }
+            let hunks = try await GitService().diff(worktreePath: repo, sha: "HEAD", file: "big.txt").hunks
+            try #require(hunks.count == 2)
+            unseenHeader = hunks[1].header
+        }
+        if stale == .renamedFile {
+            #expect(try await Process.git(["mv", script, "renamed.sh"], cwd: repo).exitCode == 0)
+            #expect(try await Process.git(["commit", "-q", "-m", "entry 4"], cwd: repo).exitCode == 0)
+        }
+        if stale == .dirtyTree {
+            try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        }
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = try await Process.git(["rev-parse", "origin/main"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shas = fixture.aheadSHAs
+        let notAboveFold = try #require(CommitEditError.targetNotAboveFold.errorDescription)
+        let dirty = try #require(CommitEditError.dirtyWorktree.errorDescription)
+        let unsupported = try #require(CommitEditError.unsupportedAction.errorDescription)
+        let (sha, edit, expected): (String, HostCommitEdit, HostError) = switch stale {
+        case .notASHA: ("HEAD~1", .message(subject: "x", body: ""), .invalidRequest(reason: "A commit is named by its SHA."))
+        case .belowTheFold: (base, .message(subject: "x", body: ""), .failed(message: notAboveFold))
+        case .otherHunk:
+            (head, .dropHunk(path: script, index: 0, header: "@@ -9 +9 @@"),
+             .failed(message: "This commit changed since it was shown. Refresh and try again."))
+        case .unseenHunk:
+            (head, .dropHunk(path: "big.txt", index: 1, header: unseenHeader),
+             .failed(message: "This commit changed since it was shown. Refresh and try again."))
+        case .outsidePath: (shas[1], .dropFile(path: "../x"), .invalidRequest(reason: "The path ../x is outside the worktree."))
+        case .dirtyTree: (shas[1], .message(subject: "Reworded", body: ""), .failed(message: dirty))
+        // As locally, a rename is not dropped: it would delete the file.
+        case .renamedFile: (head, .dropFile(path: "renamed.sh"), .failed(message: unsupported))
+        }
+
+        #expect(try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .editCommit(sha: sha, edit: edit, comparisonMode: nil)
+        )) == .failure(error: expected))
+        #expect(try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines) == head)
     }
 
     /// Paired Macs of other versions decode this, so its shape must not drift.
@@ -1593,18 +2059,34 @@ struct HostProtocolServerTests {
         let host: AlasHost
         let connection: HostProtocolConnection
         let client = Client()
+        let agent = ACPMockClient()
         let projectID: String
+        /// With `aheadOfOrigin`, `main`'s three commits `origin/main` lacks, bottom-up.
+        let aheadSHAs: [String]
 
-        init(environment: (any AlasHostEnvironment)? = nil) async throws {
+        init(
+            environment: (any AlasHostEnvironment)? = nil, aheadOfOrigin: Bool = false,
+            checkpointGit: any CheckpointGitRunning = WorktreeStateSnapshotter.live.git
+        ) async throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remove-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let repo = root.appendingPathComponent("repo")
-            try await GitTemplate.repository(at: repo)
+            if aheadOfOrigin {
+                aheadSHAs = try await GitTemplate.repositoryAheadOfOrigin(at: repo)
+            } else {
+                try await GitTemplate.repository(at: repo)
+                aheadSHAs = []
+            }
             projectsFile = root.appendingPathComponent("projects.json")
-            let agent = ACPMockClient()
+            let agent = self.agent
             agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
             agent.script(method: "session/new") { _ in Data(#"{"sessionId":"agent-1"}"#.utf8) }
+            agent.script(method: "session/prompt") { _ in Data("null".utf8) }
             let database = root.appendingPathComponent("sessions.sqlite")
+            // The checkpoint store refuses a root reached through a symlink, as `/var` is.
+            let realRoot = try #require(realpath(root.path, nil))
+            defer { free(realRoot) }
+            let checkpointsRoot = URL(fileURLWithPath: String(cString: realRoot)).appendingPathComponent("checkpoints")
             core = AlasCoreContext(
                 projects: ProjectsManager(persistedProjects: []),
                 projectsFile: projectsFile,
@@ -1624,7 +2106,8 @@ struct HostProtocolServerTests {
                 environment: environment ?? HeadlessHostEnvironment(),
                 orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path),
                 reviewDrafts: ReviewDraftCommentStore(url: root.appendingPathComponent("review-drafts.json")),
-                reviewSessions: ReviewSessionStore(url: root.appendingPathComponent("review-sessions.json"))
+                reviewSessions: ReviewSessionStore(url: root.appendingPathComponent("review-sessions.json")),
+                checkpoints: WorktreeCheckpointService(store: .init(root: checkpointsRoot), snapshotter: .init(git: checkpointGit))
             )
             host = AlasHost(core: core)
             connection = HostProtocolServer(host: host).connect(caller: .localUser(uid: 501), send: client.receive)
@@ -1638,6 +2121,26 @@ struct HostProtocolServerTests {
                 _ = try await Process.git(["config", key, value], cwd: worktree.path)
             }
             return (worktree.path, WorktreeRef(projectID: projectID, path: worktree.path.path))
+        }
+
+        /// The main checkout stopped mid-rebase by a pull whose upstream
+        /// changed hello.sh to "theirs" against a local "ours". The worktree
+        /// stays listed on `main`; nothing relists it.
+        func stopPullOnConflicts() async throws -> (URL, WorktreeRef) {
+            let (repo, ref) = try await mainWorktree()
+            let origin = root.appendingPathComponent("origin")
+            try await GitTemplate.repository(at: origin)
+            for (directory, contents) in [(origin, "theirs\n"), (repo, "ours\n")] {
+                try contents.write(to: directory.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+                let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
+                #expect(try await Process.git(commit, cwd: directory).exitCode == 0)
+            }
+            for arguments in [["remote", "add", "origin", origin.path], ["fetch", "-q", "origin"], ["branch", "-q", "--set-upstream-to=origin/main"]] {
+                #expect(try await Process.git(arguments, cwd: repo).exitCode == 0)
+            }
+            #expect(try await request(.mutateWorktree(worktree: ref, branch: "main", change: .pull))
+                == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them, then continue.")))
+            return (repo, ref)
         }
 
         /// Commits `.alas/hooks/<event>.sh` to the main checkout; returns its trust hash.
@@ -1703,6 +2206,20 @@ struct HostProtocolServerTests {
                 throw HostError.invalidRequest(reason: "no response to \(id)")
             }
             return result
+        }
+
+        /// A manual checkpoint of the listed worktree at `ref`, taken as a Mac takes it.
+        func checkpoint(_ label: String, in ref: WorktreeRef) async throws -> WorktreeCheckpointManifest {
+            let branch = try #require(core.projects.worktrees(projectId: ref.projectID).first { $0.path.path == ref.path }).branch
+            let response = try await request(.mutateWorktree(worktree: ref, branch: branch, change: .createCheckpoint(label: label)))
+            guard case .checkpointManifest(let manifest) = response else { throw HostError.failed(message: "\(response)") }
+            return manifest
+        }
+
+        func restorePreview(_ id: CheckpointID, in ref: WorktreeRef) async throws -> CheckpointRestorePreview {
+            let response = try await request(.checkpointRestorePreview(worktree: ref, id: id, groupIDs: nil))
+            guard case .checkpointRestorePreview(let preview) = response else { throw HostError.failed(message: "\(response)") }
+            return preview
         }
 
         func tearDown() {
@@ -1897,6 +2414,49 @@ struct HostProtocolServerTests {
     }
 }
 
+/// Once armed, holds the next checkpoint git call until `release()`.
+@MainActor private final class CheckpointGitPause {
+    var armed = false
+    var isHolding: Bool { gate != nil }
+    private var gate: CheckedContinuation<Void, Never>?
+
+    func pass() async {
+        guard armed else { return }
+        armed = false
+        await withCheckedContinuation { gate = $0 }
+    }
+
+    func release() {
+        gate?.resume()
+        gate = nil
+    }
+}
+
+/// Real git, held by `pause` before a call.
+private struct PausingCheckpointGit: CheckpointGitRunning {
+    let pause: CheckpointGitPause
+    let git = WorktreeStateSnapshotter.live.git
+
+    func run(_ args: [String], cwd: URL, environment: [String: String]) async throws -> ProcessResult {
+        await pause.pass()
+        return try await git.run(args, cwd: cwd, environment: environment)
+    }
+
+    func runData(_ args: [String], cwd: URL, environment: [String: String]) async throws -> ProcessResultData {
+        await pause.pass()
+        return try await git.runData(args, cwd: cwd, environment: environment)
+    }
+
+    func blobSizes(oids: [String], cwd: URL) async throws -> [String: Int64] { try await git.blobSizes(oids: oids, cwd: cwd) }
+    func blobContents(oids: [String], cwd: URL) async throws -> [String: Data] { try await git.blobContents(oids: oids, cwd: cwd) }
+    func blobReferences(oids: [String], cwd: URL) async throws -> [String: CheckpointBlobReference] {
+        try await git.blobReferences(oids: oids, cwd: cwd)
+    }
+    func writeBlobs(relativePaths: [String], cwd: URL) async throws -> [String] {
+        try await git.writeBlobs(relativePaths: relativePaths, cwd: cwd)
+    }
+}
+
 @MainActor private final class RecordingRunEnvironment: AlasHostEnvironment {
     final class Launcher: RunLauncher {
         var requests: [RunLaunchRequest] = []
@@ -1920,7 +2480,7 @@ struct HostProtocolServerTests {
         self.blocksForCheckpoint = blocksForCheckpoint
     }
     func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { openConsoleIsHidden }
-    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool { blocksForCheckpoint }
+    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree, in core: AlasCoreContext) async -> Bool { blocksForCheckpoint }
 }
 
 /// A host with an approval sheet that approves whatever it is asked.

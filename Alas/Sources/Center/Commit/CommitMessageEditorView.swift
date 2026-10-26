@@ -65,6 +65,8 @@ struct CommitMessageEditorView: View {
     var suggesting: Bool = false
     /// Shown while the fields hold an untouched on-device suggestion.
     var suggestionNote: String? = nil
+    /// False hides the AI split button and the agent availability line.
+    var generatesMessages: Bool = true
 
     @Environment(\.theme) private var theme
     @State private var focused: Field?
@@ -94,7 +96,7 @@ struct CommitMessageEditorView: View {
             if let optionsRow {
                 optionsRow
             }
-            if let message = agentPresentation.message {
+            if generatesMessages, let message = agentPresentation.message {
                 agentAvailabilityMessage(message)
             }
             subjectField
@@ -148,13 +150,15 @@ struct CommitMessageEditorView: View {
             if let accessory {
                 accessory
             }
-            AiSplitButton(
-                availableAgents: agentAvailability.agents.filter(\.supportsTerminal),
-                selectedToolId: $aiToolId,
-                busy: busy,
-                onGenerate: onGenerate
-            )
-            .disabled(editorDisabled || !agentPresentation.canGenerate)
+            if generatesMessages {
+                AiSplitButton(
+                    availableAgents: agentAvailability.agents.filter(\.supportsTerminal),
+                    selectedToolId: $aiToolId,
+                    busy: busy,
+                    onGenerate: onGenerate
+                )
+                .disabled(editorDisabled || !agentPresentation.canGenerate)
+            }
             actionButton(primaryAction, position: .leading)
             if let alternateAction {
                 actionButton(alternateAction, position: .trailing)
