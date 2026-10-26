@@ -213,7 +213,8 @@ final class ComputerUseCoordinator {
     /// attribute, with `AXEnhancedUserInterface`, which is turned off again at the turn's end, and
     /// probes every `webContentPoll` until a web area has content, for at most `contentDeadline`,
     /// setting the attribute again halfway and once the content shows, which then gets a moment
-    /// to fill in. True when it waited.
+    /// to fill in. True when it waited, or when the probe found content the call's read lacked:
+    /// either way the caller reads again.
     private func wakeWebContent(_ window: ComputerUseWindow, shown: ComputerUseAXNode?, context: CallContext) async throws -> Bool {
         let app = window.app
         let process = WokenProcess(pid: app.pid, start: system.processStart(app.pid))
@@ -227,8 +228,10 @@ final class ComputerUseCoordinator {
         // The call's own read can stop in the browser's toolbar; the probe looks for the content.
         var found = try await probeWebContent(window)
         guard due(found) else {
-            if found { wokenWebContent[process] = .complete }
-            return false
+            guard found else { return false }
+            wokenWebContent[process] = .complete
+            // Content that showed since the call's read gets read again with the call's caps.
+            return shown != nil
         }
         // The attribute being asked with, and once one took, the one the wait asks again with.
         var pending = ComputerUseWebContent.manualAccessibility

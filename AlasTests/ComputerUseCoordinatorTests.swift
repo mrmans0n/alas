@@ -196,6 +196,31 @@ struct ComputerUseCoordinatorTests {
         #expect(woken.next() == 3)
     }
 
+    /// Web content that shows between the call's read and the probe is read again for the call,
+    /// with no wake and no wait.
+    @Test func webContentThatShowsAfterTheCallsReadIsReadAgain() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        let woken = Counter()
+        var system = Self.system()
+        system.usesManualAccessibility = { _ in true }
+        system.wakeWebContent = { _, _ in
+            _ = woken.next()
+            return Self.taken
+        }
+        system.axTree = { _, _, _, _ in
+            let filled = reads.next() > 1
+            let content = ComputerUseAXNode(
+                role: filled ? "AXWebArea" : "AXGroup",
+                children: filled ? [ComputerUseAXNode(role: "AXTextField", handle: 2)] : [], handle: 1)
+            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
+        #expect(json.contains("AXTextField"))
+        #expect(woken.next() == 1 && recorder.sleeps.isEmpty)
+    }
+
     /// computer_open_app on an Electron app returns once its front window's web content shows.
     @Test func openingAWebAppWaitsForItsWebContent() async throws {
         let reads = Counter()
