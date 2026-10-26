@@ -169,7 +169,7 @@ extension AlasCoreContext {
             }
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .stash, .applyStash, .popStash, .dropStash,
              .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .cherryPick,
-             .revert, .editCommit:
+             .revert, .merge, .rebase, .editCommit:
             preconditionFailure("not a checkpoint change")
         }
         return .done

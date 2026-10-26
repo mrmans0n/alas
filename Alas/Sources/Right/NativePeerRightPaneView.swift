@@ -51,6 +51,11 @@ struct NativePeerRightPaneView: View {
     @State private var checkpointRestorePreview: CheckpointRestorePreview?
     @State private var checkpointRestoreError: String?
     @State private var pendingCheckpointDeletion: WorktreeCheckpointSummary?
+    /// Whether the branch picker merges into the git target or rebases it, while it shows.
+    @State private var integrateKind: IntegrateKind?
+    @State private var integrateBranch = ""
+    /// The git target's project branches for the picker; nil while the host has not answered.
+    @State private var integrateBranches: NativePeerNewSession.Branches?
 
     var body: some View {
         // Split so each part type-checks in reasonable time.
@@ -108,6 +113,7 @@ struct NativePeerRightPaneView: View {
             pendingStashDrop = nil
             pendingCommitAction = nil
             pendingCheckpointDeletion = nil
+            integrateKind = nil
         }
         .onChange(of: state.config.changes.comparisonMode) { _, _ in
             client.reloadWorkspace()
@@ -276,6 +282,10 @@ struct NativePeerRightPaneView: View {
                     if client.hosts?.servesCheckpoints(serverId: gitTarget.serverId) == true {
                         Button("Create Checkpoint…") { beginCheckpointCreation() }
                     }
+                    if client.hosts?.servesIntegrate(serverId: gitTarget.serverId) == true {
+                        Button("Merge branch into this worktree…") { openIntegratePicker(.merge, on: gitTarget) }
+                        Button("Rebase this worktree onto…") { openIntegratePicker(.rebase, on: gitTarget) }
+                    }
                     Divider()
                     Button("Fetch now") { runGit(.fetch, on: gitTarget) }
                 } label: {
@@ -287,6 +297,12 @@ struct NativePeerRightPaneView: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .help("Branch operations")
+                .popover(isPresented: Binding(
+                    get: { integrateKind != nil },
+                    set: { if !$0 { integrateKind = nil } }
+                ), arrowEdge: .bottom) {
+                    integratePicker(gitTarget)
+                }
             }
             WindowDragHandle()
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -378,6 +394,7 @@ struct NativePeerRightPaneView: View {
             onPopStash: { runStashChange(.popStash(HostStashRef($0)), on: gitTarget) },
             onDropStash: { pendingStashDrop = PendingStashDrop(stash: $0) },
             servesOperations: servesOperations,
+            editsFiles: client.hostFileTarget != nil,
             onContinue: { runGit(.continueOperation(kind: HostOperationKind($0)), on: gitTarget) },
             onSkip: { runGit(.skipOperation(kind: HostOperationKind($0)), on: gitTarget) },
             onAbort: { runGit(.abortOperation(kind: HostOperationKind($0)), on: gitTarget) },
@@ -397,6 +414,54 @@ struct NativePeerRightPaneView: View {
                 }
                 : nil
         )
+    }
+
+    /// The local `BranchOpsMenu` picker, over the host project's branches less the worktree's own.
+    private func integratePicker(_ target: (serverId: String, worktree: PeerHostWorktree)) -> some View {
+        let isMerge = integrateKind == .merge
+        let ownBranch = target.worktree.snapshot.worktree.branch
+        var names: [String] = []
+        var failure: String?
+        switch integrateBranches {
+        case .loaded(let all, _): names = all.filter { $0 != ownBranch }
+        case .failed(let message): failure = message
+        case nil: break
+        }
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(isMerge ? "Merge into current" : "Rebase current onto").font(.system(size: 12, weight: .semibold))
+            BranchPicker(
+                selection: $integrateBranch,
+                branches: names,
+                isLoading: integrateBranches == nil,
+                errorMessage: failure
+            )
+            .frame(width: 280)
+            HStack {
+                Spacer()
+                Button("Cancel") { integrateKind = nil }
+                Button(isMerge ? "Merge" : "Rebase") {
+                    let branch = integrateBranch
+                    guard !branch.isEmpty else { return }
+                    integrateKind = nil
+                    runGit(isMerge ? .merge(branch: branch) : .rebase(onto: branch), on: target)
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(integrateBranch.isEmpty)
+            }
+        }
+        .padding(12)
+    }
+
+    private func openIntegratePicker(_ kind: IntegrateKind, on target: (serverId: String, worktree: PeerHostWorktree)) {
+        integrateBranch = ""
+        integrateBranches = nil
+        integrateKind = kind
+        let key = gitTargetKey
+        client.requestBranches(projectId: target.worktree.snapshot.worktree.projectId, serverId: target.serverId) {
+            // A later open, or another worktree, owns the picker now.
+            guard gitTargetKey == key, integrateKind == kind, integrateBranches == nil else { return }
+            integrateBranches = $0
+        }
     }
 
     /// Runs the confirmed cherry-pick or revert.
@@ -1141,4 +1206,8 @@ struct NativePeerRightPaneView: View {
             state.saveConfig()
         }
     }
+}
+
+private enum IntegrateKind {
+    case merge, rebase
 }

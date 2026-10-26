@@ -47,7 +47,7 @@ extension AlasCoreContext {
         let root = worktree.path
         let git = GitService()
         switch change {
-        case .commit, .push, .pull, .cherryPick, .revert:
+        case .commit, .push, .pull, .cherryPick, .revert, .merge, .rebase:
             if try await git.mergeState(worktreePath: root) != nil {
                 throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first.")
             }
@@ -125,14 +125,7 @@ extension AlasCoreContext {
             case .skipOperation: try Self.throwIfFailed(await git.skipOperation(worktreePath: root, op: operation))
             default: try Self.throwIfFailed(await git.continueOperation(worktreePath: root, op: operation))
             }
-            // A rebase that ended restores its branch, which a listing read
-            // mid-rebase shows as `(detached)`: list it again, as a rename does.
-            let head = try await git.currentBranch(worktreePath: root)
-            if !head.isEmpty, head != worktree.branch {
-                projects.applyHeadUpdates(projectId: worktree.projectId, branchByWorktreePath: [root: head])
-                // Git already moved: a failed save does not fail the change.
-                try? saveProjects()
-            }
+            try await relistBranch(of: worktree)
         // Conflicted paths are resolved as locally, with or without an
         // operation: a conflicting stash pop leaves none.
         case .useOurs(let path):
@@ -156,12 +149,28 @@ extension AlasCoreContext {
             try Self.throwIfFailed(await git.cherryPick(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
         case .revert(let sha):
             try Self.throwIfFailed(await git.revert(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
+        case .merge(let branch):
+            try Self.throwIfFailed(await git.merge(worktreePath: root, branch: Self.listedBranch(branch, of: worktree)))
+        case .rebase(let onto):
+            try Self.throwIfFailed(await git.rebase(worktreePath: root, onto: Self.listedBranch(onto, of: worktree)))
+            try await relistBranch(of: worktree)
         case .editCommit(let sha, let edit, let comparisonMode):
             return .commitEdited(result: try await editCommit(sha, edit: edit, comparisonMode: comparisonMode, at: root))
         case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint:
             return try await applyCheckpointChange(change, to: worktree)
         }
         return .done
+    }
+
+    /// A rebase that ended restores its branch, which a listing read
+    /// mid-rebase shows as `(detached)`: list it again, as a rename does.
+    private func relistBranch(of worktree: Worktree) async throws {
+        let head = try await GitService().currentBranch(worktreePath: worktree.path)
+        if !head.isEmpty, head != worktree.branch {
+            projects.applyHeadUpdates(projectId: worktree.projectId, branchByWorktreePath: [worktree.path: head])
+            // Git already moved: a failed save does not fail the change.
+            try? saveProjects()
+        }
     }
 
     private static func applyStashChange(_ change: HostWorktreeChange, at root: URL) async throws {
@@ -176,8 +185,8 @@ extension AlasCoreContext {
         case .dropStash(let stash):
             try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .continueOperation, .skipOperation, .abortOperation, .useOurs,
-             .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert, .editCommit, .createCheckpoint, .deleteCheckpoint,
-             .restoreCheckpoint:
+             .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert, .merge, .rebase, .editCommit, .createCheckpoint,
+             .deleteCheckpoint, .restoreCheckpoint:
             preconditionFailure("not a stash change")
         }
     }
@@ -296,6 +305,18 @@ extension AlasCoreContext {
         let full = resolved.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
         guard resolved.exitCode == 0, !full.isEmpty else { throw HostError.notFound(what: "commit \(sha)") }
         return full
+    }
+
+    /// `name` as one of the repository's branches other than the worktree's
+    /// own: a client never hands git a rev expression or an option.
+    private static func listedBranch(_ name: String, of worktree: Worktree) async throws -> String {
+        guard try await GitService().branches(at: worktree.path).contains(name) else {
+            throw HostError.failed(message: "\(name) isn't a branch of this repository.")
+        }
+        guard name != worktree.branch else {
+            throw HostError.failed(message: "A worktree can't merge or rebase onto its own branch.")
+        }
+        return name
     }
 
     /// A conflict is left to the next changes read; an error is shown.

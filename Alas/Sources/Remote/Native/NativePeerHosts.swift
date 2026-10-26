@@ -281,6 +281,11 @@ final class NativePeerHosts {
         servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesOperationsV1)
     }
 
+    /// Whether `serverId` merges a branch into its worktrees and rebases them onto one.
+    func servesIntegrate(serverId: String) -> Bool {
+        servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesIntegrateV1)
+    }
+
     /// The repository's stashes as `worktree` lists them. Nil for a refusal or no answer.
     func stashes(in worktree: PeerHostWorktree, serverId: String) async -> [GitStash]? {
         guard servesStash(serverId: serverId), let channel = channels[serverId],
