@@ -286,7 +286,9 @@ struct CommitEditorTabView: View {
                                 ? { appState.openFile(relativePath: path, worktreeId: worktreeId) }
                                 : nil,
                             onDropHunk: { pendingDropHunk = PendingCommitHunkDrop(sha: tabState.currentSha, path: path, hunk: $0) },
-                            dropHunkEnabled: { file, hunk in canDropHunk(file: file, hunk: hunk) }
+                            dropHunkEnabled: { file, hunk in canDropHunk(file: file, hunk: hunk) },
+                            // A host's images are not in this Mac's git: its text diff carries the host's note.
+                            loadsImageDiff: source == nil
                         )
                     } else {
                         Text("Select a file")
@@ -447,22 +449,24 @@ struct CommitEditorTabView: View {
                 busy = false
             }
             do {
-                let result = try await editorGit.edit(targetSha, action)
-                let (refreshedDetails, refreshedSubject) = try await editorGit.details(result.currentSha)
+                try await editorGit.whileEditing {
+                    let result = try await editorGit.edit(targetSha, action)
+                    let (refreshedDetails, refreshedSubject) = try await editorGit.details(result.currentSha)
 
-                let message = CommitMessage.split(refreshedDetails.body)
-                details = refreshedDetails
-                selectedPath = refreshedDetails.files.first?.path
-                diff = ParsedDiff(hunks: [])
-                diffTruncated = false
-                activeDiffKey = nil
-                subject = refreshedSubject
-                bodyText = message.body
-                protectedTrailers = message.protectedTrailers
-                savedSubject = refreshedSubject
-                savedBodyText = message.body
+                    let message = CommitMessage.split(refreshedDetails.body)
+                    details = refreshedDetails
+                    selectedPath = refreshedDetails.files.first?.path
+                    diff = ParsedDiff(hunks: [])
+                    diffTruncated = false
+                    activeDiffKey = nil
+                    subject = refreshedSubject
+                    bodyText = message.body
+                    protectedTrailers = message.protectedTrailers
+                    savedSubject = refreshedSubject
+                    savedBodyText = message.body
 
-                await editorGit.didEdit(result, tabTitle(from: refreshedDetails))
+                    await editorGit.didEdit(result, tabTitle(from: refreshedDetails))
+                }
             } catch {
                 self.error = (error as NSError).localizedDescription
             }
@@ -566,13 +570,10 @@ struct CommitEditorGit {
     var edit: @MainActor (_ targetSha: String, _ action: CommitEditAction) async throws -> CommitEditResult
     /// After an edit lands: the local tab and right-pane bookkeeping, or the peer selection's new sha.
     var didEdit: @MainActor (_ result: CommitEditResult, _ title: String) async -> Void
+    /// Runs an edit with its refresh: locally behind the checkpoint-lease
+    /// guards and inside the center git mutation; on a peer as it is.
+    var whileEditing: @MainActor (_ body: @MainActor () async throws -> Void) async throws -> Void
     var generatesMessages: Bool
-
-    /// A refusal shown as the editor's error.
-    struct Refusal: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
-    }
 
     /// Today's behaviour: GitService, the checkpoint-lease guards, the center
     /// git mutation, and the right pane's comparison ref, else `baseRef`.
@@ -580,7 +581,7 @@ struct CommitEditorGit {
         worktreePath: URL, worktreeId: String, tabId: TabID, baseRef: String, appState: AppState
     ) -> Self {
         let git = GitService()
-        let leaseRefusal = Refusal(message: "Recover the interrupted checkpoint restore before editing commits.")
+        let leaseRefusal = NativePeerReviewGitClientError(message: "Recover the interrupted checkpoint restore before editing commits.")
         return CommitEditorGit(
             details: { sha in
                 async let detailsLoad = git.commitDetails(at: worktreePath, sha: sha)
@@ -592,19 +593,22 @@ struct CommitEditorGit {
                 return (diff, false)
             },
             edit: { targetSha, action in
-                guard !appState.checkpointFileWritesDisabled(worktreeId: worktreeId) else { throw leaseRefusal }
                 let comparisonRef = appState.rightPaneStore.commitEditorComparisonRef(worktreeId: worktreeId) ?? baseRef
-                guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else {
-                    throw leaseRefusal
-                }
-                appState.beginCenterGitMutation(worktreeId: worktreeId)
-                defer { appState.endCenterGitMutation(worktreeId: worktreeId) }
                 return try await git.editCommit(worktreePath: worktreePath, baseRef: comparisonRef, targetSha: targetSha, action: action)
             },
             didEdit: { result, title in
                 appState.tabs.updateCommitEditorShas(worktreeId: worktreeId, shaMap: result.shaMap)
                 appState.tabs.updateCommitEditor(worktreeId: worktreeId, tabId: tabId, currentSha: result.currentSha, title: title)
                 await appState.rightPaneStore.refresh(worktreeId: worktreeId)
+            },
+            whileEditing: { body in
+                guard !appState.checkpointFileWritesDisabled(worktreeId: worktreeId) else { throw leaseRefusal }
+                guard await !appState.checkpointFileWritesDisabledAfterDiscovery(worktreeId: worktreeId) else {
+                    throw leaseRefusal
+                }
+                appState.beginCenterGitMutation(worktreeId: worktreeId)
+                defer { appState.endCenterGitMutation(worktreeId: worktreeId) }
+                try await body()
             },
             generatesMessages: true
         )
@@ -620,9 +624,9 @@ struct CommitEditorGit {
             case .commitDiffResult(_, _, _, let hunks, let truncated, let metadataNote)?:
                 return (ParsedDiff(hunks: hunks.map(NativePeerWorkspace.hunk), metadataSummary: metadataNote), truncated)
             case .commitDiffFailed(_, _, _, let reason, let message)?:
-                throw Refusal(message: NativePeerWorkspace.describe(reason, message: message))
+                throw NativePeerReviewGitClientError(message: NativePeerWorkspace.describe(reason, message: message))
             default:
-                throw Refusal(message: NativePeerWorkspace.offlineMessage)
+                throw NativePeerReviewGitClientError(message: NativePeerWorkspace.offlineMessage)
             }
         }
         return CommitEditorGit(
@@ -640,7 +644,7 @@ struct CommitEditorGit {
                     edit = .dropFile(path: path)
                 case .dropHunk(let path, let hunk):
                     guard let index = try await diff(targetSha, path).diff.hunks.firstIndex(of: hunk) else {
-                        throw Refusal(message: "This commit changed since it was shown. Refresh and try again.")
+                        throw NativePeerReviewGitClientError(message: "This commit changed since it was shown. Refresh and try again.")
                     }
                     edit = .dropHunk(path: path, index: index, header: hunk.header)
                 }
@@ -649,6 +653,7 @@ struct CommitEditorGit {
                 ).get()
             },
             didEdit: { result, _ in onEdited(result) },
+            whileEditing: { body in try await body() },
             generatesMessages: false
         )
     }

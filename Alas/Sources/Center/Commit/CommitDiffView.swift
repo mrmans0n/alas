@@ -17,6 +17,8 @@ struct CommitDiffView: View {
     let onOpenFile: (() -> Void)?
     let onDropHunk: ((ParsedDiff.Hunk) -> Void)?
     let dropHunkEnabled: (CommitChangedFile, ParsedDiff.Hunk) -> Bool
+    /// False shows an image file's text diff instead of loading its images.
+    let loadsImageDiff: Bool
 
     @Environment(\.theme) private var theme
     @StateObject private var copyFeedback = CopyFeedbackState()
@@ -42,7 +44,8 @@ struct CommitDiffView: View {
         showWhitespace: Binding<Bool>,
         onOpenFile: (() -> Void)?,
         onDropHunk: ((ParsedDiff.Hunk) -> Void)? = nil,
-        dropHunkEnabled: @escaping (CommitChangedFile, ParsedDiff.Hunk) -> Bool = { _, _ in false }
+        dropHunkEnabled: @escaping (CommitChangedFile, ParsedDiff.Hunk) -> Bool = { _, _ in false },
+        loadsImageDiff: Bool = true
     ) {
         self.worktreePath = worktreePath
         self.sha = sha
@@ -60,10 +63,11 @@ struct CommitDiffView: View {
         self.onOpenFile = onOpenFile
         self.onDropHunk = onDropHunk
         self.dropHunkEnabled = dropHunkEnabled
+        self.loadsImageDiff = loadsImageDiff
     }
 
     var body: some View {
-        if ImageFileType.isSupported(currentPath: path, originalPath: file.originalPath) {
+        if loadsImageDiff, ImageFileType.isSupported(currentPath: path, originalPath: file.originalPath) {
             imageBody
         } else {
             VStack(alignment: .leading, spacing: 0) {

@@ -316,9 +316,12 @@ final class NativePeerHosts {
             .commitDetails(worktree: Self.ref(worktree), sha: sha),
             served: servesCommitEdit(serverId: serverId), serverId: serverId,
             unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
-            showsInvalidRequest: true
+            showsInvalidRequest: true, notFound: Self.commitGoneMessage
         ) { if case .commitDetails(let details) = $0 { details } else { nil } }
     }
+
+    /// The commit editor's copy for a commit the host no longer has.
+    private static let commitGoneMessage = "This commit is no longer on the host. Refresh and try again."
 
     /// Rewrites commit `sha` above the fold of `comparisonMode`, as the commit editor does.
     func editCommit(
@@ -332,7 +335,8 @@ final class NativePeerHosts {
         // The commits above it are replayed, each a git call on the host.
         return await answer(
             request, served: servesCommitEdit(serverId: serverId), serverId: serverId, timeout: .seconds(120),
-            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage)
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            notFound: Self.commitGoneMessage
         ) { if case .commitEdited(let result) = $0 { result } else { nil } }
     }
 
@@ -434,11 +438,14 @@ final class NativePeerHosts {
     private func answer<Value>(
         _ request: HostRequest, served: Bool, serverId: String, timeout: Duration? = nil,
         unavailable: NativePeerReviewGitClientError = .unavailable, showsInvalidRequest: Bool = false,
-        reply: (HostResponse) -> Value?
+        notFound: String? = nil, reply: (HostResponse) -> Value?
     ) async -> Result<Value, NativePeerReviewGitClientError> {
         guard served, let channel = channels[serverId] else { return .failure(unavailable) }
         let response = await channel.request(request, timeout: timeout)
         if case .failure(let error) = response {
+            if let notFound, case .notFound = error {
+                return .failure(NativePeerReviewGitClientError(message: notFound))
+            }
             if showsInvalidRequest, case .invalidRequest(let reason) = error {
                 return .failure(NativePeerReviewGitClientError(message: reason))
             }
