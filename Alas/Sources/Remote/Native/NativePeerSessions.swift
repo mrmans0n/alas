@@ -155,7 +155,11 @@ final class NativePeerSessions {
     @ObservationIgnored private var tabOpensInFlight: [String: Int] = [:]
     private(set) var workspace = NativePeerWorkspace()
     /// Host files' editor buffers, created as their editor first shows.
-    @ObservationIgnored private var hostFileBuffers: [NativePeerHostFile: EditorBuffer] = [:]
+    @ObservationIgnored private var hostFileBuffers: [NativePeerHostFile: EditorBuffer] = [:] {
+        didSet { hostFileBufferRevision &+= 1 }
+    }
+    /// Observable stand-in for `hostFileBuffers`' membership, which changes while views render.
+    private var hostFileBufferRevision = 0
     /// Why a host refused to follow a file it served: the file opens read-only.
     private var hostFileRefusals: [NativePeerHostFile: String] = [:]
     /// A host review opened over the center pane, as a document is.
@@ -433,6 +437,17 @@ final class NativePeerSessions {
         guard let buffer = hostFileBuffers[file], !buffer.dirty else { return }
         hostFileBuffers[file] = nil
         buffer.close(persistDirtySnapshot: false)
+    }
+
+    /// Whether any host file has edits not saved yet; observes typing, for command enablement.
+    var hasUnsavedHostFiles: Bool {
+        _ = hostFileBufferRevision
+        var result = false
+        for buffer in hostFileBuffers.values {
+            _ = buffer.editGeneration
+            if buffer.dirty { result = true }
+        }
+        return result
     }
 
     /// Host files with edits not saved yet, with their host's name.
