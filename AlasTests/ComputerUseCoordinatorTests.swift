@@ -161,7 +161,8 @@ struct ComputerUseCoordinatorTests {
     }
 
     /// An Electron window that shows only groups at first contact is woken and read again until its
-    /// web area has content; later reads of the app aren't.
+    /// web area has content, also when the call's own read stops at its node budget in the
+    /// browser's toolbar; later reads of the app aren't.
     @Test func aWebWindowReadAsEmptyGroupsIsWokenAndReadAgainOnce() async throws {
         let recorder = Recorder()
         let reads = Counter()
@@ -172,19 +173,23 @@ struct ComputerUseCoordinatorTests {
             _ = woken.next()
             return true
         }
-        // A web area that fills only on the third read.
-        system.axTree = { _, _, _, _ in
+        // A web area that fills only on the third read; a read with the inspect's own small budget
+        // is cut short.
+        let wholeWindow = ComputerUseCoordinator.queryNodeBudget
+        system.axTree = { _, _, budget, _ in
             let read = reads.next()
             let field = ComputerUseAXNode(role: "AXTextField", handle: 2)
             let content = ComputerUseAXNode(role: read > 1 ? "AXWebArea" : "AXGroup", children: read > 2 ? [field] : [], handle: 1)
-            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
+            let cut: ComputerUseReadCut? = budget < wholeWindow ? .nodeBudget : nil
+            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), cut, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
         #expect(json.contains("AXTextField"))
-        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll])
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        #expect(reads.next() == 5)
+        // The call's read, two whole-window reads while waiting, the call's read again; then the second inspect's.
+        #expect(reads.next() == 6)
         #expect(woken.next() == 2)
     }
 
@@ -245,9 +250,10 @@ struct ComputerUseCoordinatorTests {
             recorder.recordEvent("wake:\(attribute)")
             return true
         }
-        // The first inspect's read is cut short; later ones are complete, without a web area.
+        // The first inspect's reads are cut short, its whole-window read too; later ones are
+        // complete, without a web area.
         system.axTree = { _, _, _, _ in
-            let cut: ComputerUseReadCut? = reads.next() == 1 ? .nodeBudget : nil
+            let cut: ComputerUseReadCut? = reads.next() <= 2 ? .nodeBudget : nil
             return (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
                     cut, ComputerUseAXHandles())
         }

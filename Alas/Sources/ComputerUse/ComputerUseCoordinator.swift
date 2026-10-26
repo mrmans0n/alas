@@ -1532,12 +1532,23 @@ final class ComputerUseCoordinator {
         // The deadline counts the reads' time too, and each read gets a short limit; a read cut
         // short ends the wait, since what it left unread may be the content.
         // `reassert`: the attribute the wake set, set once more halfway through the wait.
+        // The wait reads the whole window (`probe`): the call's own node budget or depth can stop
+        // in the browser's toolbar, and a read cut short that way would end the wait at once.
+        let probeDepth = max(maxDepth, ComputerUseCommand.maxDepthLimit)
+        let probeBudget = max(budget, Self.queryNodeBudget)
+        let narrow = probeDepth != maxDepth || probeBudget != budget
+        var probe = tree
+        var probed = false
         func awaitWebContent(reassert attribute: String? = nil) async throws {
             let clock = ContinuousClock()
             let start = clock.now
             var slept = Duration.zero
             var reasserted = attribute == nil
-            while ComputerUseWebContent.keepsWaiting(root: tree.root, cut: tree.cut, waited: max(slept, clock.now - start)) {
+            if narrow, !probed {
+                probe = try await system.axTree(window, probeDepth, probeBudget, min(readLimit, Self.webContentReadLimit))
+                probed = true
+            }
+            while ComputerUseWebContent.keepsWaiting(root: probe.root, cut: probe.cut, waited: max(slept, clock.now - start)) {
                 await sleep(Self.webContentPoll)
                 slept += Self.webContentPoll
                 try checkStillActive(context)
@@ -1546,11 +1557,8 @@ final class ComputerUseCoordinator {
                     _ = await system.wakeWebContent(window.app, attribute)
                     try checkStillActive(context)
                 }
-                tree = try await system.axTree(window, maxDepth, budget, min(readLimit, Self.webContentReadLimit))
-            }
-            // A short read that stopped the wait is read again with the call's own limit.
-            if slept > .zero, tree.cut != nil {
-                tree = try await system.axTree(window, maxDepth, budget, readLimit)
+                probe = try await system.axTree(window, probeDepth, probeBudget, min(readLimit, Self.webContentReadLimit))
+                probed = true
             }
         }
         let process = WokenProcess(pid: window.app.pid, start: system.processStart(window.app.pid))
@@ -1564,7 +1572,7 @@ final class ComputerUseCoordinator {
             // that took the attribute is asked again halfway.
             try await awaitWebContent(reassert: system.usesManualAccessibility(window.app.pid) ? manual : nil)
             // A Chromium browser that still shows none gets what VoiceOver sets, for the turn.
-            if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: tree.root, cut: tree.cut) {
+            if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: probe.root, cut: probe.cut) {
                 if await system.wakeWebContent(window.app, ComputerUseWebContent.enhancedUserInterface) {
                     // A stop, turn end or session end during the set already restored what it found:
                     // this one is turned off at once instead of waiting for a lifecycle hook that ran.
@@ -1578,11 +1586,14 @@ final class ComputerUseCoordinator {
                 }
                 try await awaitWebContent()
             } else if ComputerUseWebContent.chromeBundleIDs.contains(window.app.bundleID ?? ""),
-                      !ComputerUseWebContent.hasWebContent(tree.root) {
+                      !ComputerUseWebContent.hasWebContent(probe.root) {
                 // A read cut short can't tell whether the browser needs AXEnhancedUserInterface:
                 // the try isn't used up, so a complete read later still decides.
                 wokenWebContent.remove(process)
             }
+            // What the agent gets is read with the call's own caps, once the wait is over.
+            // A short read that stopped the wait is read again with the call's own limit too.
+            if probed { tree = narrow || probe.cut != nil ? try await system.axTree(window, maxDepth, budget, readLimit) : probe }
         }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.

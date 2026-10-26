@@ -166,6 +166,12 @@ struct ComputerUseWebContentTests {
     private static let deep = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", childrenUnread: true)])
     /// A web area the app hasn't filled yet.
     private static let hollow = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXWebArea")])
+    /// Chrome's page area before its web tree is built: nested groups down to an empty one, no web area.
+    private static let unbuilt = ComputerUseAXNode(role: "AXWindow", children: [
+        ComputerUseAXNode(role: "AXGroup", children: [
+            ComputerUseAXNode(role: "AXGroup", children: [ComputerUseAXNode(role: "AXGroup")]),
+        ]),
+    ])
 
     /// Only a Chromium or Electron window without a web area, read for the first time, is read again.
     @Test(arguments: [
@@ -220,6 +226,10 @@ struct ComputerUseWebContentTests {
     /// it ends the wait, and never asks for AXEnhancedUserInterface.
     @Test(arguments: [
         (empty, ComputerUseReadCut?.none, Duration.zero, true),
+        // No web area at all waits as an empty one does, until the deadline.
+        (unbuilt, nil, .zero, true),
+        (unbuilt, nil, .milliseconds(1250), true),
+        (unbuilt, nil, .milliseconds(1500), false),
         (hollow, nil, .milliseconds(1250), true),
         (hollow, nil, .milliseconds(1500), false),
         (built, nil, .zero, false),
