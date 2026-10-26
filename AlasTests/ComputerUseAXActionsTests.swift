@@ -46,6 +46,24 @@ struct ComputerUseAXActionsTests {
             try await ComputerUseAXActions.insert("kotlin", into: target, app: app, interrupt: { nil })
         }
     }
+
+    /// A Chrome page's field is never written by AX, since a write the page did get and keys after
+    /// it would type the text twice: it is typed as events, or refused where keys don't reach.
+    @Test(arguments: [true, false])
+    func aWebPageFieldIsNeverWrittenByAX(keysReach: Bool) async throws {
+        let field = FakeTextField()
+        var target = field.target
+        target.inWebArea = true
+        let app = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 101)
+        await #expect {
+            try await ComputerUseAXActions.insert("kotlin", into: target, app: app, keysReach: keysReach, interrupt: { nil })
+        } throws: { error in
+            if keysReach { return error is ComputerUseAXActions.Unsupported }
+            guard case ComputerUseSystemError.actionFailed(let message) = error else { return false }
+            return message == ComputerUseAXActions.offScreenTypeRefusal(app, .refNotTaken)
+        }
+        #expect(field.chunks.isEmpty)
+    }
 }
 
 /// A text field whose app moves the caret once the first chunk went in.

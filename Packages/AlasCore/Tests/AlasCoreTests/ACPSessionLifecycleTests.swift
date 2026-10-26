@@ -34,10 +34,10 @@ struct ACPSessionLifecycleTests {
         #expect(result.stopReason.v1Result == .stopped(.init(rawValue: fields["stopReason"])))
     }
 
-    @Test(arguments: ["{}", #"{"messageId":null}"#, #"{"messageId":true}"#])
-    func acceptanceRequiresAStringMessageID(json: String) {
+    @Test(arguments: ["{}", #"{"messageId":null}"#, #"{"messageId":true}"#, #"{"messageId":"m","_meta":[]}"#])
+    func acceptanceRequiresValidIdentityAndMetadata(json: String) {
         #expect(throws: DecodingError.self) {
-            try JSONDecoder().decode(ACPV2PromptAccepted.self, from: Data(json.utf8))
+            try ACPV2PromptAccepted.decode(from: Data(json.utf8))
         }
     }
 
@@ -153,6 +153,56 @@ struct ACPSessionLifecycleTests {
         #expect(RunScheduleOutcome(result) == schedule)
         #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(
             result: result, lastParentReportAt: 2, turnStartedAt: 1) == .wake)
+    }
+
+    @Test func lifecycleWireInputsKeepOpaqueNumbersAndFailureMessages() throws {
+        let acceptedInput = Data(#"{"messageId":"m","_meta":{"n":1e999},"big":123456789012345678901234567890}"#.utf8)
+        let accepted = try ACPV2PromptAccepted.decode(from: acceptedInput)
+        #expect(accepted.rawValue == (try LSPJSONValue.decode(from: acceptedInput)))
+        #expect(try LSPJSONValue.decode(from: accepted.encodedData()) == accepted.rawValue)
+        let stateInput = Data(#"{"sessionUpdate":"state_update","state":"idle","stopReason":"error","error":{"code":-32000,"message":"Sign in","data":{"n":1e999}},"_meta":{"big":123456789012345678901234567890}}"#.utf8)
+        let update = try ACPV2StateUpdate.decode(from: stateInput)
+        #expect(update.rawValue == (try LSPJSONValue.decode(from: stateInput)))
+        #expect(update.failure?.code == -32000)
+        #expect(update.failure?.data == .object(["n": .number("1e999")]))
+        #expect(update.result == .failed("Sign in"))
+        #expect(try LSPJSONValue.decode(from: update.encodedData()) == update.rawValue)
+        let malformedReason = try ACPV2StateUpdate.decode(from: Data(#"{"sessionUpdate":"state_update","state":"idle","stopReason":{"n":1e999}}"#.utf8))
+        #expect(malformedReason.stopReason.rawValue == .object(["n": .number("1e999")]))
+        #expect(malformedReason.result == .stopped(malformedReason.stopReason))
+    }
+
+    @Test(arguments: [
+        #"{"sessionUpdate":"state_update","state":null}"#,
+        #"{"sessionUpdate":"other","state":"idle"}"#,
+        #"{"sessionUpdate":"state_update","state":"idle","_meta":[]}"#,
+    ])
+    func malformedLifecycleWireContainersAreRejected(json: String) {
+        #expect(throws: DecodingError.self) { try ACPV2StateUpdate.decode(from: Data(json.utf8)) }
+    }
+
+    @Test(arguments: [
+        ("-2147483648", Int32?.some(Int32.min)), ("2147483647", .some(Int32.max)),
+        ("-3.2e4", .some(-32000)), ("-0", .some(0)),
+        ("-2147483649", nil), ("2147483648", nil), ("1.5", nil), ("1e999", nil),
+        ("1.00000000000000000000000000000001", nil), ("1-2", nil), ("00", nil),
+    ])
+    func optionalFailureCodesRequireExactInt32Values(token: String, expected: Int32?) throws {
+        let raw: LSPJSONValue = .object(["sessionUpdate": .string("state_update"), "state": .string("idle"),
+            "stopReason": .string("error"), "error": .object(["code": .number(token), "message": .string("Failure")])])
+        let update = try ACPV2StateUpdate(rawValue: raw)
+        #expect(update.state == .idle)
+        #expect(update.rawValue == raw)
+        #expect(update.failure?.code == expected)
+        #expect(update.result == .failed(expected == nil ? "Agent foreground work failed." : "Failure"))
+    }
+
+    @Test(arguments: ["null", "[]", #"{"code":1}"#, #"{"code":1,"message":7}"#])
+    func malformedOptionalFailureDetailsDoNotHideIdleState(error: String) throws {
+        let update = try ACPV2StateUpdate.decode(from: Data(#"{"sessionUpdate":"state_update","state":"idle","stopReason":"error","error":\#(error)}"#.utf8))
+        #expect(update.state == .idle)
+        #expect(update.failure == nil)
+        #expect(update.result == .failed("Agent foreground work failed."))
     }
 
     private func state(_ value: String, reason: String? = nil) throws -> ACPV2StateUpdate {

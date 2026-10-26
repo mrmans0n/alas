@@ -166,6 +166,12 @@ struct ComputerUseWebContentTests {
     private static let deep = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", childrenUnread: true)])
     /// A web area the app hasn't filled yet.
     private static let hollow = ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXWebArea")])
+    /// Chrome's page area before its web tree is built: nested groups down to an empty one, no web area.
+    private static let unbuilt = ComputerUseAXNode(role: "AXWindow", children: [
+        ComputerUseAXNode(role: "AXGroup", children: [
+            ComputerUseAXNode(role: "AXGroup", children: [ComputerUseAXNode(role: "AXGroup")]),
+        ]),
+    ])
 
     /// Only a Chromium or Electron window without a web area, read for the first time, is read again.
     @Test(arguments: [
@@ -196,6 +202,18 @@ struct ComputerUseWebContentTests {
         #expect(ComputerUseWebContent.needsEnhancedUserInterface(bundleID: bundleID, root: root, cut: nil) == sets)
     }
 
+    /// The wait after the AXManualAccessibility wake sets it once more, from halfway to the deadline.
+    @Test(arguments: [
+        (Duration.zero, false, false),
+        (.milliseconds(500), false, false),
+        (.milliseconds(750), false, true),
+        (.milliseconds(1250), false, true),
+        (.milliseconds(1250), true, false),
+    ])
+    func theManualAccessibilityWakeIsSetAgainHalfwayThroughTheWait(waited: Duration, reasserted: Bool, sets: Bool) {
+        #expect(ComputerUseWebContent.reasserts(waited: waited, reasserted: reasserted) == sets)
+    }
+
     /// Only a setting Alas turned on is turned off again.
     @Test(arguments: [(Bool?(false), true, true), (nil, true, true), (true, true, false), (false, false, false)])
     func onlyWhatAlasTurnedOnIsRestored(before: Bool?, setSucceeded: Bool, restores: Bool) {
@@ -208,6 +226,10 @@ struct ComputerUseWebContentTests {
     /// it ends the wait, and never asks for AXEnhancedUserInterface.
     @Test(arguments: [
         (empty, ComputerUseReadCut?.none, Duration.zero, true),
+        // No web area at all waits as an empty one does, until the deadline.
+        (unbuilt, nil, .zero, true),
+        (unbuilt, nil, .milliseconds(1250), true),
+        (unbuilt, nil, .milliseconds(1500), false),
         (hollow, nil, .milliseconds(1250), true),
         (hollow, nil, .milliseconds(1500), false),
         (built, nil, .zero, false),

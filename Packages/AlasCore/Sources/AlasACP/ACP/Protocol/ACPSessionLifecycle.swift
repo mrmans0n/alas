@@ -33,58 +33,9 @@ public struct ACPStopReason: Equatable, Sendable {
     }
 }
 
-/// V2 response to one exact session/prompt request. It confirms insertion only.
-public struct ACPV2PromptAccepted: Decodable, Equatable, Sendable {
-    public let messageID: String
-    public let rawValue: LSPJSONValue
-
-    private enum CodingKeys: String, CodingKey { case messageId }
-
-    public init(from decoder: Decoder) throws {
-        let fields = try decoder.container(keyedBy: CodingKeys.self)
-        messageID = try fields.decode(String.self, forKey: .messageId)
-        rawValue = try LSPJSONValue(from: decoder)
-    }
-}
-
 public enum ACPForegroundState: Equatable, Sendable {
     case unknown, idle, running, requiresAction
     case unrecognized(String)
-}
-
-/// Kept outside the v1 session/update decoder until v2 ingress is installed.
-public struct ACPV2StateUpdate: Decodable, Equatable, Sendable {
-    public let state: ACPForegroundState
-    public let stopReason: ACPStopReason
-    public let error: JSONRPCError?
-    public let rawValue: LSPJSONValue
-
-    public var result: ACPTurnCompletion.Result {
-        if stopReason.rawValue == .string("error") {
-            return .failed(error?.message ?? "Agent foreground work failed.")
-        }
-        return stopReason.v1Result
-    }
-
-    private enum CodingKeys: String, CodingKey { case sessionUpdate, state, stopReason, error }
-
-    public init(from decoder: Decoder) throws {
-        let fields = try decoder.container(keyedBy: CodingKeys.self)
-        guard try fields.decode(String.self, forKey: .sessionUpdate) == "state_update" else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .sessionUpdate, in: fields, debugDescription: "Expected a v2 state_update")
-        }
-        switch try fields.decode(String.self, forKey: .state) {
-        case "idle": state = .idle
-        case "running": state = .running
-        case "requires_action": state = .requiresAction
-        case let value: state = .unrecognized(value)
-        }
-        stopReason = ACPStopReason(rawValue: fields.contains(.stopReason)
-            ? try fields.decode(LSPJSONValue.self, forKey: .stopReason) : nil)
-        error = try? fields.decode(JSONRPCError.self, forKey: .error)
-        rawValue = try LSPJSONValue(from: decoder)
-    }
 }
 
 /// Decisions only. The owner applies effects behind its transport, lease,
@@ -114,7 +65,7 @@ public struct ACPSessionLifecycle: Sendable {
         case foregroundEnded(ForegroundCompletion)
     }
 
-    public enum StateSource: Sendable { case live, snapshot, setupDefault }
+    public enum StateSource: Equatable, Sendable { case live, snapshot, setupDefault }
 
     public let protocolVersion: ACPProtocolVersion
     public private(set) var foreground: ACPForegroundState = .unknown

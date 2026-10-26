@@ -31,6 +31,7 @@ public struct ACPV2SessionUpdateEnvelope: Equatable, Sendable {
         case plan(PlanUpdate)
         case terminal(TerminalUpdate)
         case terminalOutputChunk(TerminalOutputChunk)
+        case state(ACPV2StateUpdate)
         case unhandled
     }
 
@@ -63,6 +64,7 @@ public struct ACPV2SessionUpdateEnvelope: Equatable, Sendable {
         self.sessionID = sessionID
         self.rawValue = rawValue
         if let message = try Self.message(update, variant: variant) { payload = .message(message) }
+        else if variant == "state_update" { payload = .state(try ACPV2StateUpdate(rawValue: .object(update))) }
         else { payload = try Self.activity(update, variant: variant) }
     }
 

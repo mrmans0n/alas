@@ -205,6 +205,9 @@ struct ComputerUseSystem: Sendable {
     /// an attribute on; true when Alas turned it on, so `restoreWebContent` turns it off again.
     var wakeWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Bool = { _, _ in false }
     var restoreWebContent: @Sendable (ComputerUseAppIdentity, _ attribute: String) async -> Void = { _, _ in }
+    /// When the process started, so a pid the system handed to a new process tells apart from the
+    /// old one; nil when it can't be read.
+    var processStart: @Sendable (Int32) -> TimeInterval? = { _ in nil }
     /// The online displays' frames, CG global, top-left (`ComputerUseAXReader.displayFrames`).
     var displays: @Sendable () -> [CGRect] = { [.infinite] }
     /// The frames of the AXSheets in each app's windows, read for the apps among `pids`, so the
@@ -247,6 +250,7 @@ struct ComputerUseSystem: Sendable {
             accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
             wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0, attribute: $1) },
             restoreWebContent: { await ComputerUseAXReader.restoreWebContent($0, attribute: $1) },
+            processStart: { LiveComputerUseSystem.processStart($0) },
             displays: { LiveComputerUseSystem.displayFrames() },
             sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) }
         )
@@ -256,6 +260,16 @@ struct ComputerUseSystem: Sendable {
 private enum LiveComputerUseSystem {
     /// Same cap as preview_capture.
     static let maxPNGBytes = 8 * 1024 * 1024
+
+    /// The kernel's start time of the process, in seconds since 1970.
+    static func processStart(_ pid: Int32) -> TimeInterval? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0 else { return nil }
+        let start = info.kp_proc.p_un.__p_starttime
+        return TimeInterval(start.tv_sec) + TimeInterval(start.tv_usec) / 1_000_000
+    }
 
     private struct CGWindowEntry {
         var id: UInt32
@@ -605,9 +619,9 @@ extension LiveComputerUseSystem {
         case .type(let text, .element(let handles, let handle), let replace):
             do {
                 if replace {
-                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
+                    try await ComputerUseAXActions.setValue(text, handles, handle, app: app, keysReach: true, interrupt: interrupt)
                 } else {
-                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
+                    try await ComputerUseAXActions.insertText(text, handles, handle, app: app, keysReach: true, interrupt: interrupt)
                 }
                 return ComputerUseDelivered.ax
             } catch is ComputerUseAXActions.Unsupported {
@@ -694,20 +708,23 @@ extension LiveComputerUseSystem {
                 return (true, item.map { ComputerUseDelivered(delivery: .ax, menuItem: $0) })
             case .type(let text, .element(let handles, let handle), let replace):
                 do {
-                    if replace {
-                        try await ComputerUseAXActions.setValue(text, handles, handle, app: app, interrupt: interrupt)
+                    // A document's text gets a warning: the app may not see it as edited.
+                    let warning = if replace {
+                        try await ComputerUseAXActions.setValue(text, handles, handle, app: app, keysReach: false, interrupt: interrupt)
                     } else {
-                        try await ComputerUseAXActions.insertText(text, handles, handle, app: app, interrupt: interrupt)
+                        try await ComputerUseAXActions.insertText(
+                            text, handles, handle, app: app, keysReach: false, interrupt: interrupt)
                     }
-                    return (true, .ax)
+                    return (true, ComputerUseDelivered(delivery: .ax, warning: warning))
                 } catch is ComputerUseAXActions.Unsupported {
                     return (true, nil)
                 }
             case .type(let text, _, let replace):
                 do {
                     // Refuses a secure focused element, as typing does.
-                    try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
-                    return (true, .ax)
+                    let warning = try await ComputerUseAXActions.typeIntoFocused(
+                        text, replace: replace, app: app, keysReach: false, interrupt: interrupt)
+                    return (true, ComputerUseDelivered(delivery: .ax, warning: warning))
                 } catch is ComputerUseAXActions.Unsupported {
                     return (true, nil)
                 }
@@ -721,15 +738,16 @@ extension LiveComputerUseSystem {
             if let delivered { return delivered }
             fallthrough
         case .refuse, .events:
-            if case .type = input { throw ComputerUseSystemError.actionFailed(offScreenTypeRefusal(app)) }
+            if case .type(_, let at, _) = input {
+                let reason: ComputerUseAXActions.OffScreenText = if case .element = at {
+                    .refNotTaken
+                } else {
+                    focused ? .focusedNotTaken : .otherWindowFocused
+                }
+                throw ComputerUseSystemError.actionFailed(ComputerUseAXActions.offScreenTypeRefusal(app, reason))
+            }
             throw ComputerUseSystemError.actionFailed(offScreenKeyRefusal(app))
         }
-    }
-
-    static func offScreenTypeRefusal(_ app: ComputerUseAppIdentity) -> String {
-        "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches it through "
-            + "accessibility, and the element doesn't take it that way (or another of its windows has focus). Use a ref "
-            + "to a text field, or ask the user to bring the window on screen."
     }
 
     static func offScreenKeyRefusal(_ app: ComputerUseAppIdentity) -> String {
@@ -836,7 +854,7 @@ extension LiveComputerUseSystem {
         switch input {
         case .type(let text, nil, let replace):
             do {
-                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, interrupt: interrupt)
+                try await ComputerUseAXActions.typeIntoFocused(text, replace: replace, app: app, keysReach: true, interrupt: interrupt)
                 return .ax
             } catch is ComputerUseAXActions.Unsupported {
                 // Nothing focused takes text this way; type it instead.

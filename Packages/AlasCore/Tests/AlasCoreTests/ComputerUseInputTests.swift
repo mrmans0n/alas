@@ -691,4 +691,86 @@ struct ComputerUseInputTests {
     func aReplaceLandedWhenTheValueIsTheTextOrChanged(text: String, before: String?, after: String?, verdict: Verdict) {
         #expect(ComputerUseTextCheck.replace(with: text, before: before, after: after) == verdict)
     }
+
+    /// A Chromium or Electron web page's field is never written by AX, and its read-back never
+    /// counts: keys, or a refusal off screen. A native field, and a WebKit page's (Safari), keep
+    /// the read-back.
+    @Test(arguments: [
+        // A native field, in any app.
+        (Verdict?.none, false, false, true, ComputerUseTextCheck.Outcome.write),
+        (nil, false, true, false, .write),
+        (.landed, false, true, true, .landed),
+        (.unknown, false, false, false, .landed),
+        (.unchanged, false, false, true, .typeAsKeys),
+        (.unchanged, false, true, false, .refuse),
+        // A Safari page's field.
+        (nil, true, false, true, .write),
+        (nil, true, false, false, .write),
+        (.landed, true, false, true, .landed),
+        (.unchanged, true, false, true, .typeAsKeys),
+        (.unchanged, true, false, false, .refuse),
+        // A Chrome or Electron page's field.
+        (nil, true, true, true, .typeAsKeys),
+        (nil, true, true, false, .refuse),
+        (.landed, true, true, true, .typeAsKeys),
+        (.landed, true, true, false, .refuse),
+        (.unknown, true, true, true, .typeAsKeys),
+    ])
+    func aChromiumWebAreaReadBackNeverCountsAsLanded(
+        readBack: Verdict?, inWebArea: Bool, chromium: Bool, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome
+    ) {
+        #expect(ComputerUseTextCheck.outcome(readBack, inWebArea: inWebArea, chromium: chromium, keysReach: keysReach) == outcome)
+    }
+
+    @Test(arguments: [
+        (String?("com.google.Chrome"), false, true),
+        ("com.tinyspeck.slackmacgap", true, true),
+        ("com.apple.Safari", false, false),
+        (nil, false, false),
+    ])
+    func chromiumMeansAChromeBundleOrAnAppThatTookManualAccessibility(bundleID: String?, manual: Bool, chromium: Bool) {
+        #expect(ComputerUseWebContent.isChromium(bundleID: bundleID, acceptsManualAccessibility: manual) == chromium)
+    }
+
+    /// Text for a document's text area goes as keys, which mark it edited; off screen it is the AX
+    /// write with a warning. Other fields, and terminals and code editors, are as today.
+    @Test(arguments: [
+        // TextEdit's body.
+        (true, true, false, false, true, ComputerUseTextCheck.DocumentRoute.keys),
+        (true, true, false, false, false, .axWarned),
+        // A find bar or inspector field in a document window.
+        (true, false, false, false, true, .asToday),
+        (true, false, false, false, false, .asToday),
+        // A Safari page's text area: its window lists the page as its document.
+        (true, true, true, false, true, .asToday),
+        // No document.
+        (false, true, false, false, true, .asToday),
+        (false, true, false, false, false, .asToday),
+        // A terminal or code editor.
+        (true, true, false, true, true, .asToday),
+        (true, true, false, true, false, .asToday),
+    ])
+    func aDocumentsTextAreaGoesAsKeys(
+        inDocument: Bool, textArea: Bool, inWebArea: Bool, keyCommandApp: Bool, keysReach: Bool,
+        route: ComputerUseTextCheck.DocumentRoute
+    ) {
+        #expect(ComputerUseTextCheck.documentRoute(
+            inDocument: inDocument, textArea: textArea, inWebArea: inWebArea, keyCommandApp: keyCommandApp,
+            keysReach: keysReach) == route)
+    }
+
+    @Test(arguments: [
+        (String?("com.apple.Terminal"), true),
+        ("com.mitchellh.ghostty", true),
+        ("com.todesktop.230313mzl4w4u92", true),
+        ("com.jetbrains.intellij", true),
+        ("io.nlopez.alas.dev", true),
+        ("com.apple.TextEdit", false),
+        ("com.apple.Notes", false),
+        (nil, false),
+    ])
+    func terminalsCodeEditorsAndAlasAreNotTypedAsDocuments(bundleID: String?, skips: Bool) {
+        let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
+        #expect(ComputerUseTextCheck.isKeyCommandApp(app, hostPID: 1) == skips)
+    }
 }
