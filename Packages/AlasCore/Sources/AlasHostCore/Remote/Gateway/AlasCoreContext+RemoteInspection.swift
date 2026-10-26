@@ -767,7 +767,8 @@ extension AlasCoreContext {
             }
         }
 
-        switch await RemoteWorktreeFileAccess.readFileContents(at: url) {
+        let (outcome, version) = await RemoteWorktreeFileAccess.readVersionedFileContents(at: url)
+        switch outcome {
         case .notFound:
             return .failure(reason: .notFound, byteSize: nil, message: nil)
         case .tooLarge(let byteSize):
@@ -775,7 +776,7 @@ extension AlasCoreContext {
         case .binary(let byteSize):
             return .failure(reason: .binary, byteSize: byteSize, message: nil)
         case .text(let text):
-            return .success(text: text, truncated: false)
+            return .success(text: text, truncated: false, version: version)
         }
     }
 

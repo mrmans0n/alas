@@ -1,7 +1,34 @@
+import CryptoKit
 import Foundation
 import Darwin
 import AlasFoundation
 import AlasModel
+
+/// The version of a file's bytes, so an edit can tell whether the file
+/// changed since it was read.
+public struct WorktreeFileVersion: Codable, Hashable, Sendable {
+    /// SHA-256 of the bytes, lowercase hex: two versions differ when this does.
+    public var contentHash: String
+    /// When the bytes were read; never compared on the host.
+    public var modified: Date
+
+    public init(contentHash: String, modified: Date) {
+        self.contentHash = contentHash
+        self.modified = modified
+    }
+
+    public static func contentHash(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// A regular file's bytes and version, read through one no-follow descriptor.
+public enum FileVersionProbe: Equatable, Sendable {
+    /// Absent, a symlink, or not a regular file.
+    case missing
+    case tooLarge(byteSize: Int)
+    case version(WorktreeFileVersion, data: Data)
+}
 
 /// Path validation and payload caps for the remote changes/files surface.
 ///
@@ -234,15 +261,6 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// sniff never needs more than that.
     private static let binarySniffPrefixBytes = 8192
 
-    /// Outcome of `openReadCapped`, the single-descriptor open+fstat+read
-    /// primitive both `readFileContents` and `looksBinaryOnDisk` funnel
-    /// through.
-    private enum RawReadOutcome {
-        case notFound
-        case tooLarge(byteSize: Int)
-        case data(Data)
-    }
-
     /// Opens `url` and, on success, returns a descriptor already `fstat`-
     /// verified as a *regular file* — never a symlink, directory, FIFO, or
     /// other special file. Callers own the returned descriptor and must
@@ -298,12 +316,14 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// descriptor — no re-`stat`, no re-`open` by path — so a concurrent
     /// write growing the file past the cap after `fstat` is still caught by
     /// the read loop's own running total rather than a stale earlier stat.
-    private static func openReadCapped(at url: URL, maxBytes: Int) -> RawReadOutcome {
-        guard let fd = openRegularFileNoFollow(at: url) else { return .notFound }
+    /// The version's hash and mtime come from that same descriptor, so they
+    /// describe exactly the bytes returned.
+    private static func openReadCapped(at url: URL, maxBytes: Int) -> FileVersionProbe {
+        guard let fd = openRegularFileNoFollow(at: url) else { return .missing }
         defer { close(fd) }
 
         var status = stat()
-        guard fstat(fd, &status) == 0 else { return .notFound }
+        guard fstat(fd, &status) == 0 else { return .missing }
         let statedSize = Int(clamping: status.st_size)
         if statedSize > maxBytes {
             return .tooLarge(byteSize: statedSize)
@@ -325,7 +345,11 @@ public enum RemoteWorktreeFileAccess: Sendable {
         if data.count > maxBytes {
             return .tooLarge(byteSize: data.count)
         }
-        return .data(data)
+        // Built the way FileManager builds `.modificationDate`, so the two agree to the bit.
+        let mtime = status.st_mtimespec
+        let modified = Date(timeIntervalSinceReferenceDate: TimeInterval(mtime.tv_sec)
+            - Date.timeIntervalBetween1970AndReferenceDate + TimeInterval(mtime.tv_nsec) / 1_000_000_000)
+        return .version(WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: data), modified: modified), data: data)
     }
 
     /// Reads only the first `maxBytes` of `url` (or fewer if the file is
@@ -351,17 +375,28 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// reading the file directly, so an unbounded read never blocks the UI
     /// thread.
     public static func readFileContents(at url: URL) async -> FileReadOutcome {
+        await readVersionedFileContents(at: url).outcome
+    }
+
+    /// `readFileContents`, plus the version of the bytes read: nil unless `.text`.
+    public static func readVersionedFileContents(at url: URL) async -> (outcome: FileReadOutcome, version: WorktreeFileVersion?) {
         await Task.detached(priority: .userInitiated) {
             switch openReadCapped(at: url, maxBytes: maxFileBytes) {
-            case .notFound: return .notFound
-            case .tooLarge(let byteSize): return .tooLarge(byteSize: byteSize)
-            case .data(let data):
-                guard !GitService.looksBinary(data) else { return .binary(byteSize: data.count) }
-                guard let text = String(data: data, encoding: .utf8) else {
-                    return .binary(byteSize: data.count)
+            case .missing: return (.notFound, nil)
+            case .tooLarge(let byteSize): return (.tooLarge(byteSize: byteSize), nil)
+            case .version(let version, let data):
+                guard !GitService.looksBinary(data), let text = String(data: data, encoding: .utf8) else {
+                    return (.binary(byteSize: data.count), nil)
                 }
-                return .text(text)
+                return (.text(text), version)
             }
+        }.value
+    }
+
+    /// The regular file at `url` as one no-follow open, capped at `maxFileBytes`.
+    public static func probeVersion(at url: URL) async -> FileVersionProbe {
+        await Task.detached(priority: .userInitiated) {
+            openReadCapped(at: url, maxBytes: maxFileBytes)
         }.value
     }
 

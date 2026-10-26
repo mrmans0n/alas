@@ -209,8 +209,8 @@ extension RemoteWorktreeInspecting {
             }
         case .file(let path):
             switch await remoteFileContents(sessionId: id, path: path) {
-            case .success(let text, let truncated):
-                return .fileContents(sessionId: id, path: path, text: text, truncated: truncated)
+            case .success(let text, let truncated, let version):
+                return .fileContents(sessionId: id, path: path, text: text, truncated: truncated, version: version)
             case .failure(let reason, let byteSize, let message):
                 return .fileUnavailable(sessionId: id, path: path, reason: reason, byteSize: byteSize, message: message)
             }

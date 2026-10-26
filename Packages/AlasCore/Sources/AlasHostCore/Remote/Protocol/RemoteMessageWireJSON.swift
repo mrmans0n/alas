@@ -902,6 +902,6 @@ public enum RemoteFileTreeResult: Equatable, Sendable {
 }
 
 public enum RemoteFileContentsResult: Equatable, Sendable {
-    case success(text: String, truncated: Bool)
+    case success(text: String, truncated: Bool, version: WorktreeFileVersion? = nil)
     case failure(reason: RemoteFileAccessReason, byteSize: Int?, message: String?)
 }

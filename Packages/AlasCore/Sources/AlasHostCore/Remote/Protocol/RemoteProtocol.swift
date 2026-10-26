@@ -898,7 +898,8 @@ public enum RemoteServerMessage: Equatable, Sendable {
     case commitDiffFailed(sessionId: String, sha: String, path: String, reason: RemoteFileAccessReason, message: String?)
     case fileTree(sessionId: String, path: String?, nodes: [RemoteFileNode], truncated: Bool)
     case fileTreeFailed(sessionId: String, path: String?, reason: RemoteFileAccessReason, message: String?)
-    case fileContents(sessionId: String, path: String, text: String, truncated: Bool)
+    /// `version` is the read bytes' version; nil from a host that predates it.
+    case fileContents(sessionId: String, path: String, text: String, truncated: Bool, version: WorktreeFileVersion? = nil)
     case fileUnavailable(
         sessionId: String, path: String, reason: RemoteFileAccessReason,
         byteSize: Int?, message: String?)
@@ -927,6 +928,7 @@ extension RemoteServerMessage: Codable {
         case challenge, publicKey, signature
         case visualId
         case hook
+        case version
     }
 
     public init(from decoder: Decoder) throws {
@@ -1164,7 +1166,8 @@ extension RemoteServerMessage: Codable {
                 sessionId: try c.decode(String.self, forKey: .sessionId),
                 path: try c.decode(String.self, forKey: .path),
                 text: try c.decode(String.self, forKey: .text),
-                truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false)
+                truncated: try c.decodeIfPresent(Bool.self, forKey: .truncated) ?? false,
+                version: try? c.decodeIfPresent(WorktreeFileVersion.self, forKey: .version) ?? nil)
         case "mentionCandidates":
             self = .mentionCandidates(
                 sessionId: try c.decode(String.self, forKey: .sessionId),
@@ -1429,12 +1432,13 @@ extension RemoteServerMessage: Codable {
             try c.encodeIfPresent(path, forKey: .path)
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(message, forKey: .message)
-        case .fileContents(let s, let path, let text, let truncated):
+        case .fileContents(let s, let path, let text, let truncated, let version):
             try c.encode("fileContents", forKey: .type)
             try c.encode(s, forKey: .sessionId)
             try c.encode(path, forKey: .path)
             try c.encode(text, forKey: .text)
             try c.encode(truncated, forKey: .truncated)
+            try c.encodeIfPresent(version, forKey: .version)
         case .mentionCandidates(let s, let query, let candidates):
             try c.encode("mentionCandidates", forKey: .type)
             try c.encode(s, forKey: .sessionId)

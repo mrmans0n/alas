@@ -1774,7 +1774,7 @@ struct RemoteAppStateAccessTests {
         state.openNewACPSession(agentID: "test-agent")
         let tab = try #require(acpTabs(in: state).first)
         let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: " secret.env")
-        if case .success(let text, _) = contentsResult {
+        if case .success(let text, _, _) = contentsResult {
             Issue.record("secret content must never be served for a whitespace-padded path, got: \(text)")
         }
         #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
@@ -1830,7 +1830,7 @@ struct RemoteAppStateAccessTests {
 
         let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: "public-env")
         #expect(contentsResult == .failure(reason: .notFound, byteSize: nil, message: nil))
-        if case .success(let text, _) = contentsResult {
+        if case .success(let text, _, _) = contentsResult {
             Issue.record("secret content must never be served through a symlink alias, got: \(text)")
         }
 
@@ -1868,7 +1868,10 @@ struct RemoteAppStateAccessTests {
         let tab = try #require(acpTabs(in: state).first)
 
         let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
-        #expect(contentsResult == .success(text: "hello\n", truncated: false))
+        guard case .success("hello\n", false, _) = contentsResult else {
+            Issue.record("expected the file's contents, got \(contentsResult)")
+            return
+        }
     }
 
     /// Reproduces the race `remoteWorktreeContext` used to lose: a manager's
@@ -1906,7 +1909,10 @@ struct RemoteAppStateAccessTests {
         await manager.refreshRecentNow()
 
         let contentsResult = await state.core.remoteFileContents(sessionId: tab.sessionId, path: "visible.txt")
-        #expect(contentsResult == .success(text: "hello\n", truncated: false))
+        guard case .success("hello\n", false, _) = contentsResult else {
+            Issue.record("expected the file's contents, got \(contentsResult)")
+            return
+        }
     }
 
     /// `AppState.readRemoteWorktreeFileRaw` must go over the (attempted) SSH

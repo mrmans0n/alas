@@ -275,7 +275,7 @@ struct NativePeerWorkspace: Equatable {
                 return true
             }
             documentContent = .failed(Self.describe(reason, message: message))
-        case .fileContents(_, let path, let text, let truncated):
+        case .fileContents(_, let path, let text, let truncated, _):
             guard document == .file(path: path) else { return true }
             documentContent = .loaded(.text(text, truncated: truncated))
         case .fileUnavailable(_, let path, let reason, _, let message):

@@ -113,7 +113,7 @@ extension RemoteServerMessage {
              .fileDiffResult(let id, _, _, _, _, _), .fileDiffFailed(let id, _, _, _, _),
              .commitFiles(let id, _, _, _), .commitFilesFailed(let id, _, _, _),
              .commitDiffResult(let id, _, _, _, _, _), .commitDiffFailed(let id, _, _, _, _),
-             .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _),
+             .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _, _),
              .fileUnavailable(let id, _, _, _, _), .mentionCandidates(let id, _, _):
             return id
         case .sessionConfig(let cfg):
@@ -193,8 +193,8 @@ extension RemoteServerMessage {
             return .fileTree(sessionId: new, path: path, nodes: nodes, truncated: truncated)
         case .fileTreeFailed(_, let path, let reason, let message):
             return .fileTreeFailed(sessionId: new, path: path, reason: reason, message: message)
-        case .fileContents(_, let path, let text, let truncated):
-            return .fileContents(sessionId: new, path: path, text: text, truncated: truncated)
+        case .fileContents(_, let path, let text, let truncated, let version):
+            return .fileContents(sessionId: new, path: path, text: text, truncated: truncated, version: version)
         case .fileUnavailable(_, let path, let reason, let byteSize, let message):
             return .fileUnavailable(sessionId: new, path: path, reason: reason, byteSize: byteSize, message: message)
         case .mentionCandidates(_, let query, let candidates):

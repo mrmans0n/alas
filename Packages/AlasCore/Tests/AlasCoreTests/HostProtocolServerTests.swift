@@ -484,11 +484,19 @@ struct HostProtocolServerTests {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
         let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
-        try "hi\n".write(to: worktree.path.appendingPathComponent("notes.txt"), atomically: true, encoding: .utf8)
+        let notes = worktree.path.appendingPathComponent("notes.txt")
+        try "hi\n".write(to: notes, atomically: true, encoding: .utf8)
         let ref = WorktreeRef(projectID: fixture.projectID, path: worktree.path.path)
 
-        #expect(try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "notes.txt")))
-            == .worktreeRead(reply: .fileContents(sessionId: worktree.id, path: "notes.txt", text: "hi\n", truncated: false)))
+        guard case .worktreeRead(.fileContents(worktree.id, "notes.txt", "hi\n", false, let version?)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "notes.txt")))
+        else {
+            Issue.record("expected the file's contents with its version")
+            return
+        }
+        #expect(version.contentHash == WorktreeFileVersion.contentHash(of: Data("hi\n".utf8)))
+        let modified = try FileManager.default.attributesOfItem(atPath: notes.path)[.modificationDate] as? Date
+        #expect(version.modified == modified)
         guard case .worktreeRead(.fileTree(worktree.id, nil, let nodes, _)) =
             try await fixture.request(.readWorktree(worktree: ref, read: .files(path: nil, comparisonMode: nil)))
         else {

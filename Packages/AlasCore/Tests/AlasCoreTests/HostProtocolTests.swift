@@ -279,6 +279,25 @@ struct HostProtocolTests {
         }
     }
 
+    /// A file read carries its version; an older host sends none, and one this Mac can't read is dropped.
+    @Test func aFileReadCarriesItsVersion() throws {
+        let version = WorktreeFileVersion(contentHash: "ab", modified: Date(timeIntervalSince1970: 7))
+        func contents(_ version: WorktreeFileVersion?) -> RemoteServerMessage {
+            .fileContents(sessionId: "a", path: "p", text: "t", truncated: false, version: version)
+        }
+        let data = try JSONEncoder().encode(contents(version))
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == contents(version))
+        #expect(contents(version).replacingSessionId("b")
+            == .fileContents(sessionId: "b", path: "p", text: "t", truncated: false, version: version))
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        for unreadable in [nil, "garbage", ["contentHash": 1]] as [Any?] {
+            json["version"] = unreadable
+            #expect(try JSONDecoder().decode(
+                RemoteServerMessage.self, from: JSONSerialization.data(withJSONObject: json)
+            ) == contents(nil))
+        }
+    }
+
     /// A host without shepherds sends no `shepherd`; a newer one may send one this Mac can't read.
     @Test(arguments: [nil, ##"{"badge":1,"number":"#7"}"##])
     func aSummaryWithoutAReadableShepherdDecodesWithNone(_ shepherd: String?) throws {
