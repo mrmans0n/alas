@@ -52,7 +52,7 @@ extension AlasCoreContext {
                 throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first.")
             }
         case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash, .continueOperation, .skipOperation,
-             .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved:
+             .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .editCommit:
             break
         }
         switch change {
@@ -147,6 +147,8 @@ extension AlasCoreContext {
             try Self.throwIfFailed(await git.cherryPick(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
         case .revert(let sha):
             try Self.throwIfFailed(await git.revert(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
+        case .editCommit(let sha, let edit, let comparisonMode):
+            return .commitEdited(result: try await editCommit(sha, edit: edit, comparisonMode: comparisonMode, at: root))
         }
         return .done
     }
@@ -163,9 +165,60 @@ extension AlasCoreContext {
         case .dropStash(let stash):
             try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .continueOperation, .skipOperation, .abortOperation, .useOurs,
-             .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert:
+             .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert, .editCommit:
             preconditionFailure("not a stash change")
         }
+    }
+
+    /// As the commit editor edits it, above the fold the Changes list shows
+    /// for `comparisonMode`. The editor refuses a dirty tree, an operation
+    /// in progress and a merge commit in the replay.
+    private func editCommit(
+        _ sha: String, edit: HostCommitEdit, comparisonMode: AppConfig.Changes.ChangesComparisonMode?, at root: URL
+    ) async throws -> CommitEditResult {
+        let git = GitService()
+        let target = try await Self.verifiedCommit(sha, at: root)
+        let configuration = environment.configuration()
+        guard let baseRef = try await git.commitsAhead(
+            at: root, baseBranch: configuration.worktrees.baseBranch,
+            resolution: .forCommits(mode: comparisonMode ?? configuration.changes.comparisonMode, userOverrodeBaseBranch: false)
+        ).comparisonRef else {
+            throw HostError.failed(message: CommitEditError.targetNotAboveFold.errorDescription ?? "")
+        }
+        let changed = HostError.failed(message: "This commit changed since it was shown. Refresh and try again.")
+        let action: CommitEditAction
+        switch edit {
+        case .message(let subject, let body):
+            action = .message(subject: subject, body: body)
+        case .dropFile(let path):
+            try await Self.refuseOutside([path], of: root)
+            guard try await git.commitDetails(at: root, sha: target).files.contains(where: { $0.path == path }) else { throw changed }
+            action = .dropFile(path: path)
+        case .dropHunk(let path, let index, let header):
+            try await Self.refuseOutside([path], of: root)
+            guard let file = try await git.commitDetails(at: root, sha: target).files.first(where: { $0.path == path }) else {
+                throw changed
+            }
+            let hunks = try await git.diff(
+                worktreePath: root, sha: target, file: path, originalPath: file.originalPath,
+                maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes
+            ).hunks
+            // Only a hunk the Mac was sent whole, as `HostDiff` caps it.
+            let shown = RemoteWorktreeFileAccess.truncateHunks(hunks).hunks
+            guard shown.indices.contains(index), shown[index] == hunks[index], hunks[index].header == header else { throw changed }
+            action = .dropHunk(path: path, hunk: hunks[index])
+        }
+        return try await git.editCommit(worktreePath: root, baseRef: baseRef, targetSha: target, action: action)
+    }
+
+    /// A commit as its editor shows it, its files capped as a commit's files read is.
+    func commitDetails(_ sha: String, in worktree: Worktree) async throws -> CommitDetails {
+        let details = try await GitService().commitDetails(at: worktree.path, sha: Self.verifiedCommit(sha, at: worktree.path))
+        let files = details.files.filter { RemoteWorktreeFileAccess.normalizedRelativePath($0.path) != nil }
+        return CommitDetails(
+            info: details.info, body: details.body, authorEmail: details.authorEmail, parents: details.parents,
+            files: Array(files.prefix(RemoteWorktreeFileAccess.maxChangedFiles))
+        )
     }
 
     /// The repository's stashes, as the worktree lists them.

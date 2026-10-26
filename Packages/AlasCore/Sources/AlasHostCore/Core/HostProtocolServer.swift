@@ -391,6 +391,10 @@ public final class HostProtocolConnection {
             return .diff(diff: try await host.core.stashDiff(
                 stash, path: path, in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesStashV1)
             ))
+        case .commitDetails(let ref, let sha):
+            return .commitDetails(details: try await host.core.commitDetails(
+                sha, in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesCommitEditV1)
+            ))
         }
         return .done
     }

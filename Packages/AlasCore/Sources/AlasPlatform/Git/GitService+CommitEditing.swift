@@ -2,7 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 
-public struct CommitEditResult: Equatable, Sendable {
+public struct CommitEditResult: Equatable, Codable, Sendable {
     public let currentSha: String
     public let shaMap: [String: String]
 

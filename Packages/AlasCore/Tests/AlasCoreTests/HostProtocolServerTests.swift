@@ -1032,6 +1032,65 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["diff", "--name-only", "--diff-filter=U"], cwd: repo).stdout == "")
     }
 
+    @Test func aMacRewordsAHostCommit() async throws {
+        let fixture = try await RepoFixture(aheadOfOrigin: true)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let shas = fixture.aheadSHAs
+
+        guard case .commitDetails(let details) = try await fixture.request(.commitDetails(worktree: ref, sha: shas[1])) else {
+            Issue.record("expected the commit's details")
+            return
+        }
+        #expect(details.info.rawSubject == "entry 2")
+        guard case .commitEdited(let result) = try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .editCommit(sha: shas[1], edit: .message(subject: "Reworded", body: ""), comparisonMode: nil)
+        )) else {
+            Issue.record("expected the commit edited")
+            return
+        }
+        #expect(result.currentSha != shas[1])
+        #expect(try await Process.git(["log", "--format=%s", "origin/main..HEAD"], cwd: repo).stdout == "entry 3\nReworded\nentry 1\n")
+    }
+
+    enum StaleEdit: CaseIterable { case notASHA, belowTheFold, otherHunk, outsidePath, dirtyTree }
+
+    /// The host edits only a commit above its own fold, named by SHA, and
+    /// drops only a hunk its own parse of that commit still has.
+    @Test(arguments: StaleEdit.allCases)
+    func commitEditsTakeOnlyWhatTheMacSaw(_ stale: StaleEdit) async throws {
+        let fixture = try await RepoFixture(aheadOfOrigin: true)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let script = ".alas/scripts/hello.sh"
+        if stale == .otherHunk {
+            try "#!/bin/sh\necho hello from run\necho more\n".write(to: repo.appendingPathComponent(script), atomically: true, encoding: .utf8)
+            #expect(try await Process.git(["commit", "-q", "-am", "entry 4"], cwd: repo).exitCode == 0)
+        }
+        if stale == .dirtyTree {
+            try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        }
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = try await Process.git(["rev-parse", "origin/main"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        let shas = fixture.aheadSHAs
+        let notAboveFold = try #require(CommitEditError.targetNotAboveFold.errorDescription)
+        let dirty = try #require(CommitEditError.dirtyWorktree.errorDescription)
+        let (sha, edit, expected): (String, HostCommitEdit, HostError) = switch stale {
+        case .notASHA: ("HEAD~1", .message(subject: "x", body: ""), .invalidRequest(reason: "A commit is named by its SHA."))
+        case .belowTheFold: (base, .message(subject: "x", body: ""), .failed(message: notAboveFold))
+        case .otherHunk:
+            (head, .dropHunk(path: script, index: 0, header: "@@ -9 +9 @@"),
+             .failed(message: "This commit changed since it was shown. Refresh and try again."))
+        case .outsidePath: (shas[1], .dropFile(path: "../x"), .invalidRequest(reason: "The path ../x is outside the worktree."))
+        case .dirtyTree: (shas[1], .message(subject: "Reworded", body: ""), .failed(message: dirty))
+        }
+
+        #expect(try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .editCommit(sha: sha, edit: edit, comparisonMode: nil)
+        )) == .failure(error: expected))
+        #expect(try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines) == head)
+    }
+
     /// Paired Macs of other versions decode this, so its shape must not drift.
     @Test func repoHookConsentKeepsItsWireShape() throws {
         let encoder = JSONEncoder()
@@ -1717,12 +1776,19 @@ struct HostProtocolServerTests {
         let connection: HostProtocolConnection
         let client = Client()
         let projectID: String
+        /// With `aheadOfOrigin`, `main`'s three commits `origin/main` lacks, bottom-up.
+        let aheadSHAs: [String]
 
-        init(environment: (any AlasHostEnvironment)? = nil) async throws {
+        init(environment: (any AlasHostEnvironment)? = nil, aheadOfOrigin: Bool = false) async throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remove-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let repo = root.appendingPathComponent("repo")
-            try await GitTemplate.repository(at: repo)
+            if aheadOfOrigin {
+                aheadSHAs = try await GitTemplate.repositoryAheadOfOrigin(at: repo)
+            } else {
+                try await GitTemplate.repository(at: repo)
+                aheadSHAs = []
+            }
             projectsFile = root.appendingPathComponent("projects.json")
             let agent = ACPMockClient()
             agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }

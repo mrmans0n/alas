@@ -2,7 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 
-public struct CommitDetails: Equatable, Sendable {
+public struct CommitDetails: Equatable, Codable, Sendable {
     public let info: CommitInfo
     public let body: String          // commit message minus the subject line; "" if none
     public let authorEmail: String
@@ -258,7 +258,7 @@ public struct CommitMessage: Sendable {
     }
 }
 
-public struct CommitChangedFile: Identifiable, Equatable, Hashable, Sendable {
+public struct CommitChangedFile: Identifiable, Equatable, Hashable, Codable, Sendable {
     public var id: String { path }
     public let path: String              // for renames, this is the new path
     public let originalPath: String?     // for renames/copies, the original path; nil otherwise

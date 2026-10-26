@@ -2,7 +2,7 @@ import Foundation
 import AlasFoundation
 import AlasModel
 
-public struct CommitInfo: Identifiable, Hashable, Sendable {
+public struct CommitInfo: Identifiable, Hashable, Codable, Sendable {
     public var id: String { sha }
     public let sha: String          // full 40-char
     public let shortSha: String     // 7-char

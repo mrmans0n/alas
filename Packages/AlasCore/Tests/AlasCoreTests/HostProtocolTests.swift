@@ -81,6 +81,10 @@ struct HostProtocolTests {
         HostClientMessage(id: 33, request: .mutateWorktree(worktree: ref, branch: "feature", change: .continueOperation(kind: .rebase))),
         HostClientMessage(id: 34, request: .mutateWorktree(worktree: ref, branch: "feature", change: .useOurs(path: "a.txt"))),
         HostClientMessage(id: 35, request: .mutateWorktree(worktree: ref, branch: "feature", change: .cherryPick(sha: "abc1234"))),
+        HostClientMessage(id: 36, request: .commitDetails(worktree: ref, sha: "abc1234")),
+        HostClientMessage(id: 37, request: .mutateWorktree(worktree: ref, branch: "feature", change: .editCommit(
+            sha: "abc1234", edit: .dropHunk(path: "a.txt", index: 1, header: "@@ -3 +3 @@"), comparisonMode: nil
+        ))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -129,6 +133,15 @@ struct HostProtocolTests {
             ])],
             truncated: true, note: "mode changed"
         ))),
+        .response(id: 22, result: .commitDetails(details: CommitDetails(
+            info: CommitInfo(
+                sha: "abc1234", shortSha: "abc1234", author: "Ann", authorInitials: "A", date: Date(timeIntervalSince1970: 0),
+                subject: "add a", rawSubject: "feat: add a", conventionalTag: "feat", filesChanged: 1, insertions: 1, deletions: 0
+            ),
+            body: "", authorEmail: "ann@example.com", parents: ["def5678"],
+            files: [CommitChangedFile(path: "b.txt", originalPath: "a.txt", status: "R", add: 1, del: 0)]
+        ))),
+        .response(id: 23, result: .commitEdited(result: CommitEditResult(currentSha: "fed9876", shaMap: ["abc1234": "fed9876"]))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
         )])),
