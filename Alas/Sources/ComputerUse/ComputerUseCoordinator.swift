@@ -2,6 +2,7 @@ import AlasCore
 import CoreGraphics
 import Foundation
 import Observation
+import os
 
 /// An approval card: one per (session, app), shared by every call that waits on it.
 struct ComputerUsePendingApproval: Identifiable, Equatable {
@@ -96,9 +97,10 @@ final class ComputerUseCoordinator {
     /// Windows of background apps an input made key, per session and window id: each is handed
     /// back once its action settled, or at the stop, turn end or session end that cut it short.
     @ObservationIgnored private var backgroundKeyed: [String: [UInt32: ComputerUseWindow]] = [:]
-    /// Chromium and Electron processes asked once to build their web content's tree
-    /// (`ComputerUseWebContent`). A relaunched app that got its old pid back is another process.
-    @ObservationIgnored private var wokenWebContent: Set<WokenProcess> = []
+    /// What the first contact of Chromium and Electron processes came to
+    /// (`ComputerUseWebContent.FirstContact`). A relaunched app that got its old pid back is
+    /// another process.
+    @ObservationIgnored private var wokenWebContent: [WokenProcess: ComputerUseWebContent.FirstContact] = [:]
     /// Per session, the apps whose AXEnhancedUserInterface Alas turned on: turned off again at its
     /// stop, turn end or session end.
     @ObservationIgnored private var enhancedUserInterface: [String: [Int32: ComputerUseAppIdentity]] = [:]
@@ -189,26 +191,117 @@ final class ComputerUseCoordinator {
         self.now = now
     }
 
-    /// Reads `window` until its web content shows, for at most `ComputerUseWebContent.openDeadline`
-    /// by the clock, when it is a Chromium or Electron app's; true when it waited.
+    /// A launched Chromium or Electron app's first contact (`wakeWebContent`), when its front
+    /// window shows no web content yet; true when it waited.
     private func awaitWebContent(afterOpening window: ComputerUseWindow, context: CallContext) async throws -> Bool {
+        try await wakeWebContent(window, shown: nil, context: context)
+    }
+
+    /// Whether the window shows a web area with content, as the wait for it looks
+    /// (`ComputerUseSystem.showsWebContent`, else a tree read); a look cut short counts for what
+    /// it found.
+    private func probeWebContent(_ window: ComputerUseWindow) async throws -> Bool {
+        if let shows = system.showsWebContent { return try await shows(window) }
+        return ComputerUseWebContent.hasWebContent(try await system.axTree(
+            window, ComputerUseCommand.maxDepthLimit, ComputerUseWebContent.probeNodes, Self.webContentReadLimit).root)
+    }
+
+    /// A Chromium or Electron app's first contact, when its window (`shown`, as the call read it;
+    /// nil to probe it) has no web content and the process is due a try
+    /// (`ComputerUseWebContent.needsWake`). A probe that finds content ends it there. Otherwise it
+    /// asks for the tree with `AXManualAccessibility`, or, a Chromium browser without that
+    /// attribute, with `AXEnhancedUserInterface`, which is turned off again at the turn's end, and
+    /// probes every `webContentPoll` until a web area has content, for at most `contentDeadline`,
+    /// setting the attribute again halfway and once the content shows, which then gets a moment
+    /// to fill in. True when it waited, or when the probe found content the call's read lacked:
+    /// either way the caller reads again.
+    private func wakeWebContent(_ window: ComputerUseWindow, shown: ComputerUseAXNode?, context: CallContext) async throws -> Bool {
+        let app = window.app
+        let process = WokenProcess(pid: app.pid, start: system.processStart(app.pid))
+        func due(_ showsContent: Bool) -> Bool {
+            ComputerUseWebContent.needsWake(
+                acceptsManualAccessibility: system.usesManualAccessibility(app.pid), bundleID: app.bundleID,
+                wakesAgain: ComputerUseWebContent.wakesAgain(after: wokenWebContent[process], now: now()),
+                showsContent: showsContent)
+        }
+        if let shown, !due(ComputerUseWebContent.hasWebContent(shown)) { return false }
+        // The call's own read can stop in the browser's toolbar; the probe looks for the content.
+        var found = try await probeWebContent(window)
+        guard due(found) else {
+            guard found else { return false }
+            wokenWebContent[process] = .complete
+            // Content that showed since the call's read gets read again with the call's caps.
+            return shown != nil
+        }
+        // The attribute being asked with, and once one took, the one the wait asks again with.
+        var pending = ComputerUseWebContent.manualAccessibility
+        var accepted: String?
+        var asking = true
         let clock = ContinuousClock()
         let start = clock.now
         var slept = Duration.zero
+        var reasserted = false
         while true {
-            let tree = try await system.axTree(
-                window, ComputerUseCommand.maxDepthLimit, Self.queryNodeBudget, Self.webContentReadLimit)
-            // The first read asks the app for its tree, and tells whether it took the ask.
-            let webApp = system.usesManualAccessibility(window.app.pid)
-                || ComputerUseWebContent.chromeBundleIDs.contains(window.app.bundleID ?? "")
-            guard webApp, ComputerUseWebContent.keepsWaiting(
-                root: tree.root, cut: tree.cut, waited: max(slept, clock.now - start),
-                deadline: ComputerUseWebContent.openDeadline)
-            else { return slept > .zero }
+            // A set that failed in a way that may pass (an app still starting) is tried at every
+            // poll, within the deadline; an attribute the app lacks falls back at once.
+            while asking, accepted == nil {
+                let wake = try await setWebContent(pending, of: app, context: context)
+                Self.log.notice("web content wake: pid \(app.pid, privacy: .public) \(app.bundleID ?? "-", privacy: .public) \(pending, privacy: .public) \(String(describing: wake.result), privacy: .public) error \(Int(wake.error ?? 0), privacy: .public) turnedOn \(wake.turnedOn, privacy: .public)")
+                switch ComputerUseWebContent.next(after: wake.result, of: pending, bundleID: app.bundleID) {
+                case .accepted: accepted = pending
+                case .fallBack(let attribute):
+                    pending = attribute
+                    continue
+                case .waitOnly: asking = false
+                case .retry: break
+                }
+                break
+            }
+            let waited = max(slept, clock.now - start)
+            guard ComputerUseWebContent.keepsWaiting(showsContent: found, waited: waited) else { break }
+            if let accepted, ComputerUseWebContent.reasserts(waited: waited, reasserted: reasserted) {
+                reasserted = true
+                _ = try await setWebContent(accepted, of: app, context: context)
+            }
             await sleep(Self.webContentPoll)
             slept += Self.webContentPoll
             try checkStillActive(context)
+            found = try await probeWebContent(window)
         }
+        Self.log.notice("web content wait: pid \(app.pid, privacy: .public) content \(found, privacy: .public) after \((clock.now - start).description, privacy: .public)")
+        if found {
+            // Asked once more as the content shows, and given a moment to fill in.
+            if let accepted { _ = try await setWebContent(accepted, of: app, context: context) }
+            await sleep(ComputerUseWebContent.contentSettle)
+            try checkStillActive(context)
+            wokenWebContent[process] = .complete
+        } else {
+            let attempts = if case .timedOut(let attempts, _) = wokenWebContent[process] { attempts } else { 0 }
+            wokenWebContent[process] = .timedOut(attempts: attempts + 1, at: now())
+        }
+        return true
+    }
+
+    /// Sets a web content attribute, the first time and every time after: never once the call
+    /// was stopped, and an `AXEnhancedUserInterface` Alas turned on is recorded for the turn's
+    /// end, or, the call stopped during the set, turned off again at once.
+    private func setWebContent(
+        _ attribute: String, of app: ComputerUseAppIdentity, context: CallContext
+    ) async throws -> ComputerUseWebContent.Wake {
+        try checkStillActive(context)
+        let wake = await system.wakeWebContent(app, attribute)
+        if wake.turnedOn, attribute == ComputerUseWebContent.enhancedUserInterface {
+            // A stop, turn end or session end during the set already restored what it found:
+            // this one is turned off at once instead of waiting for a lifecycle hook that ran.
+            guard (try? checkStillActive(context)) != nil else {
+                await system.restoreWebContent(app, attribute)
+                try checkStillActive(context)
+                throw CancellationError()
+            }
+            enhancedUserInterface[context.sessionID, default: [:]][app.pid] = app
+        }
+        try checkStillActive(context)
+        return wake
     }
 
     /// The approval card's reason line: one approval covers seeing and operating the app.
@@ -573,7 +666,10 @@ final class ComputerUseCoordinator {
         let stillUsed = Set(enhancedUserInterface.values.flatMap(\.keys))
         let restored = apps.filter { !stillUsed.contains($0.pid) }
         let restoredPIDs = Set(restored.map(\.pid))
-        wokenWebContent = wokenWebContent.filter { !restoredPIDs.contains($0.pid) }
+        // Their next first contact may set it again; a timeout's count carries over (`keepsAfterRestore`).
+        wokenWebContent = wokenWebContent.filter {
+            !restoredPIDs.contains($0.key.pid) || ComputerUseWebContent.keepsAfterRestore($0.value)
+        }
         let system = system
         return Task {
             for app in restored {
@@ -1546,73 +1642,10 @@ final class ComputerUseCoordinator {
         let readLimit = min(timeLimit, ComputerUseAXReader.deadline)
         var tree = try await system.axTree(window, maxDepth, budget, readLimit)
         // A Chromium or Electron window may show only empty groups, or an empty web area, at first
-        // contact: the app is asked for its tree, and the window is read again until its web
-        // content shows, up to a deadline.
-        // The deadline counts the reads' time too, and each read gets a short limit; a read cut
-        // short ends the wait, since what it left unread may be the content.
-        // `reassert`: the attribute the wake set, set once more halfway through the wait.
-        // The wait reads the whole window (`probe`): the call's own node budget or depth can stop
-        // in the browser's toolbar, and a read cut short that way would end the wait at once.
-        let probeDepth = max(maxDepth, ComputerUseCommand.maxDepthLimit)
-        let probeBudget = max(budget, Self.queryNodeBudget)
-        let narrow = probeDepth != maxDepth || probeBudget != budget
-        var probe = tree
-        var probed = false
-        func awaitWebContent(reassert attribute: String? = nil) async throws {
-            let clock = ContinuousClock()
-            let start = clock.now
-            var slept = Duration.zero
-            var reasserted = attribute == nil
-            if narrow, !probed {
-                probe = try await system.axTree(window, probeDepth, probeBudget, min(readLimit, Self.webContentReadLimit))
-                probed = true
-            }
-            while ComputerUseWebContent.keepsWaiting(root: probe.root, cut: probe.cut, waited: max(slept, clock.now - start)) {
-                await sleep(Self.webContentPoll)
-                slept += Self.webContentPoll
-                try checkStillActive(context)
-                if let attribute, ComputerUseWebContent.reasserts(waited: max(slept, clock.now - start), reasserted: reasserted) {
-                    reasserted = true
-                    _ = await system.wakeWebContent(window.app, attribute)
-                    try checkStillActive(context)
-                }
-                probe = try await system.axTree(window, probeDepth, probeBudget, min(readLimit, Self.webContentReadLimit))
-                probed = true
-            }
-        }
-        let process = WokenProcess(pid: window.app.pid, start: system.processStart(window.app.pid))
-        if ComputerUseWebContent.needsWake(
-            acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid), bundleID: window.app.bundleID,
-            alreadyWoken: wokenWebContent.contains(process), root: tree.root, cut: tree.cut) {
-            wokenWebContent.insert(process)
-            let manual = ComputerUseWebContent.manualAccessibility
-            _ = await system.wakeWebContent(window.app, manual)
-            // The wait comes either way: a browser also builds its tree as it is read. Only an app
-            // that took the attribute is asked again halfway.
-            try await awaitWebContent(reassert: system.usesManualAccessibility(window.app.pid) ? manual : nil)
-            // A Chromium browser that still shows none gets what VoiceOver sets, for the turn.
-            if ComputerUseWebContent.needsEnhancedUserInterface(bundleID: window.app.bundleID, root: probe.root, cut: probe.cut) {
-                if await system.wakeWebContent(window.app, ComputerUseWebContent.enhancedUserInterface) {
-                    // A stop, turn end or session end during the set already restored what it found:
-                    // this one is turned off at once instead of waiting for a lifecycle hook that ran.
-                    guard (try? checkStillActive(context)) != nil else {
-                        wokenWebContent.remove(process)
-                        await system.restoreWebContent(window.app, ComputerUseWebContent.enhancedUserInterface)
-                        try checkStillActive(context)
-                        throw CancellationError()
-                    }
-                    enhancedUserInterface[context.sessionID, default: [:]][window.app.pid] = window.app
-                }
-                try await awaitWebContent()
-            } else if ComputerUseWebContent.chromeBundleIDs.contains(window.app.bundleID ?? ""),
-                      !ComputerUseWebContent.hasWebContent(probe.root) {
-                // A read cut short can't tell whether the browser needs AXEnhancedUserInterface:
-                // the try isn't used up, so a complete read later still decides.
-                wokenWebContent.remove(process)
-            }
-            // What the agent gets is read with the call's own caps, once the wait is over.
-            // A short read that stopped the wait is read again with the call's own limit too.
-            if probed { tree = narrow || probe.cut != nil ? try await system.axTree(window, maxDepth, budget, readLimit) : probe }
+        // contact: the app is asked for its tree and waited for, then the window is read again with
+        // the call's own caps.
+        if try await wakeWebContent(window, shown: tree.root, context: context) {
+            tree = try await system.axTree(window, maxDepth, budget, readLimit)
         }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
@@ -1712,8 +1745,10 @@ final class ComputerUseCoordinator {
         return TimeInterval(parts.seconds) + TimeInterval(parts.attoseconds) / 1e18
     }
 
+    private static let log = Logger(subsystem: "io.nlopez.alas", category: "computer-use")
+
     /// Between reads of a web window waiting for its content (`ComputerUseWebContent.keepsWaiting`).
-    static let webContentPoll: Duration = .milliseconds(250)
+    static let webContentPoll: Duration = .milliseconds(100)
     /// The time limit of each read during that wait.
     static let webContentReadLimit: Duration = .milliseconds(500)
 
