@@ -1084,15 +1084,11 @@ struct HostProtocolServerTests {
         let core = fixture.core
         try await eventually { @MainActor in core.sessionManagers[.worktree(worktree.id)]?.runners.isEmpty == false }
 
-        // A passing `index.lock` outranks the session as a blocker, and a
-        // loaded run has shown one: polled until the session is the reason.
-        let refused = HostResponse.failure(error: .failed(message: "Stop active terminal and agent sessions before restoring."))
-        try await eventually { @MainActor in
-            guard let busy = try? await fixture.restorePreview(manifest.id, in: ref), busy.blocker == .activeSession else { return false }
-            return (try? await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
-                id: manifest.id, groupIDs: busy.selectedGroupIDs, fingerprint: busy.currentFingerprint
-            )))) == refused
-        }
+        let busy = try await fixture.restorePreview(manifest.id, in: ref)
+        #expect(busy.blocker == .activeSession)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+            id: manifest.id, groupIDs: busy.selectedGroupIDs, fingerprint: busy.currentFingerprint
+        ))) == .failure(error: .failed(message: "Stop active terminal and agent sessions before restoring.")))
         #expect(try String(contentsOf: file, encoding: .utf8) == "two\n")
 
         try await fixture.host.sessions.archive(session.id, caller: .app)
