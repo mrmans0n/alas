@@ -196,6 +196,24 @@ struct EditorBufferTests {
         #expect(host.reads == 2) // the load and the real change's probe: the touches read nothing
     }
 
+    @Test func aHostChangeHeardWhileASaveIsInFlightIsCheckedOnceTheSaveLands() async throws {
+        let host = FakeHostFile("a\n")
+        let buffer = EditorBuffer(hostWorktreeRoot: URL(fileURLWithPath: "/srv/repo"), relativePath: "a.txt", backend: host.backend)
+        defer { buffer.close(persistDirtySnapshot: false) }
+        try await eventually("host file load") { buffer.storage.string == "a\n" && !buffer.readOnly }
+        buffer.storage.replaceCharacters(in: NSRange(location: 0, length: buffer.storage.length), with: "mine\n")
+        host.duringWrite = {
+            host.onChange?(host.version) // the save's own echo
+            host.set("theirs\n")
+            host.onChange?(host.version)
+            await Task.yield() // the change's check runs while the save is still in flight
+        }
+
+        try await buffer.saveRecordingErrorAwaitingRemote()
+        try await eventually("reload after the save") { buffer.storage.string == "theirs\n" }
+        #expect(!buffer.dirty)
+    }
+
     @Test func remoteFailedLSPOpenRetriesThroughNormalReopen() async throws {
         let root = URL(fileURLWithPath: RemotePath.virtual(host: "retry-host", realPath: tempWorktree().path))
         let file = root.appendingPathComponent("main.swift")
@@ -2418,6 +2436,8 @@ private final class FakeHostFile {
     private(set) var writes: [WorktreeFileVersion?] = []
     /// The follower's handler, once the backend follows the file.
     private(set) var onChange: (@MainActor (WorktreeFileVersion?) -> Void)?
+    /// Runs once a save landed, before it answers.
+    var duringWrite: (@MainActor () async -> Void)?
     private var saves = 0
 
     init(_ text: String) {
@@ -2444,7 +2464,9 @@ private final class FakeHostFile {
                 writes.append(expected)
                 guard expected?.contentHash == version.contentHash else { throw RemoteFileAccessError.saveConflict(.changed) }
                 set(text)
-                return version
+                let saved = version
+                await duringWrite?()
+                return saved
             },
             follow: { [self] _, onChange in
                 self.onChange = onChange

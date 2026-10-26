@@ -207,8 +207,16 @@ extension EditorRemoteBackend {
             write: { path, content, expectedMtime, _ in
                 // Without a baseline (Keep mine, Save anyway) the save lands on the current version.
                 let expected = expectedMtime == nil ? try await files.current(path).version : files.baselines[path]
-                let version = try await write(path, content, expected)
+                files.writing[path, default: 0] += 1
+                let version: WorktreeFileVersion
+                do {
+                    version = try await write(path, content, expected)
+                } catch {
+                    files.wrote(path, version: nil)
+                    throw error
+                }
                 files.baselines[path] = version
+                files.wrote(path, version: version)
                 return version.modified
             },
             watch: { path, observed, check in
@@ -235,9 +243,14 @@ extension EditorRemoteBackend {
         private var follows: [String: Task<@MainActor () -> Void, Never>] = [:]
         /// The reads and watches holding each follow.
         private var holds: [String: Int] = [:]
-        private var watchers: [String: Watcher] = [:]
+        private var watchers: [UUID: (path: String, watcher: Watcher)] = [:]
         /// Files that changed while unwatched: looked at again once watched.
         private var missed: Set<String> = []
+        /// The saves under way on each file.
+        var writing: [String: Int] = [:]
+        /// The last change heard during a file's saves (nil once gone): its check ran while the
+        /// save was in flight and did nothing, so it is checked again once they end.
+        private var heardWhileWriting: [String: WorktreeFileVersion?] = [:]
 
         init(
             fetch: @escaping @MainActor (String) async -> RemoteServerMessage?,
@@ -293,30 +306,47 @@ extension EditorRemoteBackend {
 
         func watch(_ path: String, observed: @escaping @MainActor () -> Void, check: @escaping @MainActor () async -> Void) -> UUID {
             let watcher = Watcher(id: UUID(), observed: observed, check: check)
-            watchers[path] = watcher
+            watchers[watcher.id] = (path, watcher)
             _ = hold(path)
             if missed.remove(path) != nil { notify(watcher) }
             return watcher.id
         }
 
         func unwatch(_ path: String, id: UUID) {
-            guard watchers[path]?.id == id else { return }
-            watchers[path] = nil
+            guard watchers.removeValue(forKey: id) != nil else { return }
             release(path)
         }
 
+        /// Ends a save of `path`, which wrote `version` (nil: it failed). A change heard during the
+        /// saves is checked again unless it was the content written.
+        func wrote(_ path: String, version: WorktreeFileVersion?) {
+            let count = writing[path, default: 1] - 1
+            writing[path] = count > 0 ? count : nil
+            guard count <= 0, let heard = heardWhileWriting.removeValue(forKey: path) else { return }
+            if let heard, let version, heard.contentHash == version.contentHash { return }
+            notifyWatchers(of: path)
+        }
+
         /// A version with the baseline's content, such as this Mac's own save coming back, only refreshes it;
-        /// anything else, nil included (gone, or look again), is a change to check.
+        /// anything else, nil included (gone, or look again), is a change to check. During a save the
+        /// baseline is about to move, so every change is kept for `wrote` to judge.
         private func changed(_ path: String, to version: WorktreeFileVersion?) {
-            if let version, version.contentHash == baselines[path]?.contentHash {
+            if writing[path] != nil {
+                heardWhileWriting[path] = .some(version)
+            } else if let version, version.contentHash == baselines[path]?.contentHash {
                 baselines[path] = version
                 return
             }
-            guard let watcher = watchers[path] else {
+            notifyWatchers(of: path)
+        }
+
+        private func notifyWatchers(of path: String) {
+            let watching = watchers.values.filter { $0.path == path }
+            guard !watching.isEmpty else {
                 missed.insert(path)
                 return
             }
-            notify(watcher)
+            for (_, watcher) in watching { notify(watcher) }
         }
 
         private func notify(_ watcher: Watcher) {
