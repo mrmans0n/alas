@@ -304,7 +304,7 @@ public struct HostProviderReview: Codable, Equatable, Sendable {
 
 /// A stash as a Mac saw it listed: the host acts on it only while `ref`
 /// still names `sha`.
-public struct HostStashRef: Codable, Equatable, Sendable {
+public struct HostStashRef: Codable, Hashable, Sendable {
     public var ref: String
     public var sha: String
 
@@ -339,7 +339,7 @@ public struct HostDiff: Codable, Equatable, Sendable {
             return
         }
         let capped = RemoteWorktreeFileAccess.truncateHunks(diff.hunks)
-        self.init(hunks: capped.hunks.map(AlasCoreContext.remoteDiffHunk), truncated: capped.truncated, note: diff.metadataSummary)
+        self.init(hunks: capped.hunks.map(RemoteDiffHunk.init), truncated: capped.truncated, note: diff.metadataSummary)
     }
 }
 

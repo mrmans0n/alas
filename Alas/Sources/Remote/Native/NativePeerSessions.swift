@@ -1127,7 +1127,7 @@ final class NativePeerSessions {
 
     /// Reads a stash file's diff over the selected worktree's host channel,
     /// whether or not a session is selected: only the host serves stashes.
-    private func readStashDiff(_ document: NativePeerWorkspace.Document, path: String, stash: GitStash) -> Bool {
+    private func readStashDiff(_ document: NativePeerWorkspace.Document, path: String, stash: HostStashRef) -> Bool {
         guard let hosts, let selection = selectedWorktree, let host = selectedWorktreeGroup?.host,
               hosts.servesStash(serverId: selection.serverId)
         else { return false }

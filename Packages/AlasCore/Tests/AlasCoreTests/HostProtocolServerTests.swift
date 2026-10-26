@@ -859,7 +859,7 @@ struct HostProtocolServerTests {
             default: HostStashRef(ref: "--index", sha: stash.sha)
             }
             let changed = HostResponse.failure(error: .failed(message: "This stash changed since it was listed. Refresh and try again."))
-            for change in [HostWorktreeChange.dropStash(seen), .applyStash(seen)] {
+            for change in [HostWorktreeChange.dropStash(seen), .applyStash(seen), .popStash(seen)] {
                 #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change)) == changed)
             }
             #expect(try await fixture.request(.stashFiles(worktree: ref, stash: seen)) == changed)

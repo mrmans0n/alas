@@ -30,7 +30,8 @@ struct NativePeerChangesView: View {
     var git: Git? = nil
 
     @Environment(\.theme) private var theme
-    @State private var collapsedSections: Set<String> = []
+    /// Stashes starts collapsed, as `RightPaneState.stashesExpanded` does locally.
+    @State private var collapsedSections: Set<String> = ["Stashes"]
     @State private var collapsedWorkingTreePaths: Set<String> = []
     @State private var expandedCommits: Set<String> = []
     @State private var collapsedCommitPaths: [String: Set<String>] = [:]
@@ -284,7 +285,7 @@ struct NativePeerChangesView: View {
                             ForEach(loaded) { file in
                                 StashFileRow(
                                     file: file,
-                                    onSelect: { onOpen(.stashDiff(path: file.path, stash: stash)) },
+                                    onSelect: { onOpen(.stashDiff(path: file.path, stash: HostStashRef(stash))) },
                                     dragPayload: { nil }
                                 )
                             }

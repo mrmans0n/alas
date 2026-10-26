@@ -30,6 +30,8 @@ struct NativePeerRightPaneView: View {
     /// Each open stash's files, by ref.
     @State private var stashFiles: [String: NativePeerWorkspace.Load<[GitStashFile]>] = [:]
     @State private var pendingStashDrop: PendingStashDrop?
+    /// Bumped by each stash list read, so only the latest one lands.
+    @State private var stashReadGeneration = 0
     /// The worktree "Stash Changes…" was chosen for, while its sheet shows.
     @State private var stashChangesTarget: (serverId: String, worktree: PeerHostWorktree)?
 
@@ -99,8 +101,12 @@ struct NativePeerRightPaneView: View {
         .onChange(of: liveReviewStatus) { _, status in reviewLoop.showHostSnapshot(status) }
         .task(id: reviewsKey) { await readReviews() }
         .task(id: stashesKey) { await readStashes() }
-        // A pop or apply changes the list as well; a drop is read after it runs.
-        .onChange(of: client.workspace.changes) { _, _ in Task { await readStashes() } }
+        // A pop or apply changes the list as well. A refresh keeps the loaded
+        // changes until the new ones land, so an unchanged list fires nothing:
+        // stash actions and the toolbar's refresh read the stashes themselves.
+        .onChange(of: client.workspace.changes) { _, changes in
+            if case .loaded = changes { Task { await readStashes() } }
+        }
         .alert(
             PendingDiscard.alertTitle(for: pendingDiscard ?? .placeholder),
             isPresented: Binding(
@@ -319,8 +325,10 @@ struct NativePeerRightPaneView: View {
 
     /// The git target's stashes. A refusal or no answer keeps the last list;
     /// an open stash whose ref now names another stash closes, as
-    /// `RightPaneState.reconcileStashCaches` does.
+    /// `RightPaneState.reconcileStashCaches` does. Only the latest read lands.
     private func readStashes() async {
+        stashReadGeneration += 1
+        let generation = stashReadGeneration
         guard stashesKey != nil, let gitTarget, let hosts = client.hosts else {
             stashes = nil
             stashFiles = [:]
@@ -328,11 +336,24 @@ struct NativePeerRightPaneView: View {
         }
         let key = gitTargetKey
         let listed = await hosts.stashes(in: gitTarget.worktree, serverId: gitTarget.serverId)
-        guard !Task.isCancelled, gitTargetKey == key, let listed else { return }
-        let previous = Dictionary(uniqueKeysWithValues: (stashes ?? []).map { ($0.ref, $0.sha) })
+        guard !Task.isCancelled, generation == stashReadGeneration, gitTargetKey == key, let listed else { return }
+        // The host's list is network input: a repeated ref must not trap.
+        let previous = Dictionary((stashes ?? []).map { ($0.ref, $0.sha) }, uniquingKeysWith: { first, _ in first })
         let stable = Set(listed.filter { previous[$0.ref] == $0.sha }.map(\.ref))
         stashFiles = stashFiles.filter { stable.contains($0.key) }
         stashes = listed
+        followOpenStashDiff(listed)
+    }
+
+    /// An open stash diff follows its stash as refs shift after a push, pop
+    /// or drop, and closes once the stash is gone.
+    private func followOpenStashDiff(_ listed: [GitStash]) {
+        guard case .stashDiff(let path, let shown)? = client.workspace.document else { return }
+        if let stash = listed.first(where: { $0.sha == shown.sha }) {
+            if stash.ref != shown.ref { client.open(.stashDiff(path: path, stash: HostStashRef(stash))) }
+        } else {
+            client.closeDocument()
+        }
     }
 
     /// Runs `change` on the host, shows its error in the rail, and reads the

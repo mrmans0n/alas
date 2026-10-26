@@ -234,25 +234,19 @@ final class NativePeerHosts {
 
     /// The error message for `change`; nil once done.
     func mutate(_ change: HostWorktreeChange, in worktree: PeerHostWorktree, serverId: String) async -> String? {
-        switch await self.change(change, in: worktree, serverId: serverId) {
-        case .success: nil
-        case .failure(let error): error.message
-        }
-    }
-
-    /// The reply to `change`, or the error message to show.
-    func change(
-        _ change: HostWorktreeChange, in worktree: PeerHostWorktree, serverId: String
-    ) async -> Result<HostResponse, NativePeerReviewGitClientError> {
         let served = servesGit(serverId: serverId) && change.capability.map { supports(serverId, $0) } != false
         // A pull is a fetch then a rebase, each bounded at 30 s on the host.
         let request = HostRequest.mutateWorktree(
             worktree: Self.ref(worktree), branch: worktree.snapshot.worktree.branch, change: change
         )
-        return await answer(
+        let result = await answer(
             request, served: served, serverId: serverId, timeout: .seconds(120),
             unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage)
-        ) { $0 }
+        ) { if case .done = $0 { () } else { nil } }
+        switch result {
+        case .success: return nil
+        case .failure(let error): return error.message
+        }
     }
 
     /// What the host suggests `worktree`'s commit message from; nil when it cannot say.
@@ -290,16 +284,16 @@ final class NativePeerHosts {
     ) async -> Result<[GitStashFile], NativePeerReviewGitClientError> {
         await answer(
             .stashFiles(worktree: Self.ref(worktree), stash: HostStashRef(stash)),
-            served: servesStash(serverId: serverId), serverId: serverId
+            served: servesStash(serverId: serverId), serverId: serverId, showsInvalidRequest: true
         ) { if case .stashFiles(let files) = $0 { files } else { nil } }
     }
 
     func stashDiff(
-        _ stash: GitStash, path: String, in worktree: PeerHostWorktree, serverId: String
+        _ stash: HostStashRef, path: String, in worktree: PeerHostWorktree, serverId: String
     ) async -> Result<HostDiff, NativePeerReviewGitClientError> {
         await answer(
-            .stashDiff(worktree: Self.ref(worktree), stash: HostStashRef(stash), path: path),
-            served: servesStash(serverId: serverId), serverId: serverId
+            .stashDiff(worktree: Self.ref(worktree), stash: stash, path: path),
+            served: servesStash(serverId: serverId), serverId: serverId, showsInvalidRequest: true
         ) { if case .diff(let diff) = $0 { diff } else { nil } }
     }
 
@@ -396,14 +390,19 @@ final class NativePeerHosts {
     }
 
     /// `request`'s reply as `reply` reads it, or the host's refusal;
-    /// `unavailable` unless `served`.
+    /// `unavailable` unless `served`. `showsInvalidRequest` shows an invalid
+    /// request's reason, for verbs whose reasons are all written for people.
     private func answer<Value>(
         _ request: HostRequest, served: Bool, serverId: String, timeout: Duration? = nil,
-        unavailable: NativePeerReviewGitClientError = .unavailable, reply: (HostResponse) -> Value?
+        unavailable: NativePeerReviewGitClientError = .unavailable, showsInvalidRequest: Bool = false,
+        reply: (HostResponse) -> Value?
     ) async -> Result<Value, NativePeerReviewGitClientError> {
         guard served, let channel = channels[serverId] else { return .failure(unavailable) }
         let response = await channel.request(request, timeout: timeout)
         if case .failure(let error) = response {
+            if showsInvalidRequest, case .invalidRequest(let reason) = error {
+                return .failure(NativePeerReviewGitClientError(message: reason))
+            }
             return .failure(NativePeerReviewGitClientError(message: PeerWorktreeRemoval.message(for: error)))
         }
         if let value = reply(response) { return .success(value) }
