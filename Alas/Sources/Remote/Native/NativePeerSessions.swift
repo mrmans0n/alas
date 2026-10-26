@@ -450,6 +450,13 @@ final class NativePeerSessions {
         return result
     }
 
+    /// Closes the buffers kept only for their unsaved edits once those are saved (Save All).
+    func releaseSavedHiddenHostFileBuffers() {
+        for file in hostFileBuffers.keys where file != hostFileDocument {
+            releaseHostFileBuffer(file)
+        }
+    }
+
     /// Host files with edits not saved yet, with their host's name.
     var unsavedHostFiles: [(file: NativePeerHostFile, hostName: String, buffer: EditorBuffer)] {
         hostFileBuffers.filter { $0.value.dirty }.map { file, buffer in

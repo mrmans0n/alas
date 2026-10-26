@@ -8542,6 +8542,7 @@ final class AppState {
                     failed += 1
                 }
             }
+            nativePeerSessions?.releaseSavedHiddenHostFileBuffers()
             guard failed > 0 else { return }
             showFileActionError(
                 title: "Save All Failed",
