@@ -770,7 +770,8 @@ struct HostProtocolServerTests {
 
     /// The Mac learns why a pull stopped, and the host is left mid-rebase:
     /// relisted, the worktree is detached, and a commit or push on it is
-    /// refused until the rebase is finished.
+    /// refused until the rebase is finished. Aborted, it is listed on its
+    /// branch again, so the Mac's next change passes.
     @Test func pullStoppedOnConflictsLeavesTheRebaseInPlace() async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
@@ -785,6 +786,11 @@ struct HostProtocolServerTests {
                 message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first."
             )))
         }
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: .abortOperation(kind: .rebase))) == .done)
+        #expect(fixture.core.projects.worktrees(projectId: fixture.projectID).first?.branch == "main")
+        try "new\n".write(to: repo.appendingPathComponent("new.txt"), atomically: true, encoding: .utf8)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .stage(paths: ["new.txt"]))) == .done)
     }
 
     /// Mid-rebase the worktree is still listed on its branch while git is

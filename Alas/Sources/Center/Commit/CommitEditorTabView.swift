@@ -268,6 +268,17 @@ struct CommitEditorTabView: View {
                         let openAvailable = source == nil && DiffOpenFileAvailability.isAvailable(
                             worktreePath: worktreePath, relativePath: path
                         )
+                        VStack(spacing: 0) {
+                        // A host caps a commit diff; say so before a whole-file drop is decided on it.
+                        if diffTruncated {
+                            Text("The host cut off part of this diff; some lines are not shown.")
+                                .font(.system(size: 11))
+                                .foregroundColor(theme.color("warn"))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 6)
+                                .background(theme.color("bg-1"))
+                        }
                         CommitDiffView(
                             worktreePath: worktreePath,
                             sha: tabState.currentSha,
@@ -290,6 +301,7 @@ struct CommitEditorTabView: View {
                             // A host's images are not in this Mac's git: they show as a binary-file note.
                             loadsImageDiff: source == nil
                         )
+                        }
                     } else {
                         Text("Select a file")
                             .foregroundColor(theme.color("fg-dim"))
