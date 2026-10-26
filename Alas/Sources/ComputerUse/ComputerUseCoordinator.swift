@@ -249,7 +249,9 @@ final class ComputerUseCoordinator {
                 Self.log.notice("web content wake: pid \(app.pid, privacy: .public) \(app.bundleID ?? "-", privacy: .public) \(pending, privacy: .public) \(String(describing: wake.result), privacy: .public) error \(Int(wake.error ?? 0), privacy: .public) turnedOn \(wake.turnedOn, privacy: .public)")
                 switch ComputerUseWebContent.next(after: wake.result, of: pending, bundleID: app.bundleID) {
                 case .accepted: accepted = pending
-                case .fallBack(let attribute): pending = attribute; continue
+                case .fallBack(let attribute):
+                    pending = attribute
+                    continue
                 case .waitOnly: asking = false
                 case .retry: break
                 }
