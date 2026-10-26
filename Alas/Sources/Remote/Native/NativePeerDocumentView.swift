@@ -191,6 +191,9 @@ struct NativePeerReviewView: View {
     /// Threads with a reply or (un)resolve on its way to the host: a second
     /// click on one is ignored until the first returns.
     @State private var threadsInFlight: Set<String> = []
+    /// Set when re-reading the provider's threads failed: the ones read
+    /// before stay shown, with a note that they may be stale.
+    @State private var providerRefreshFailed = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -199,6 +202,9 @@ struct NativePeerReviewView: View {
             if let providerError, providerConfirmation == nil { note(providerError, color: "del") }
             if let providerWarning, providerConfirmation == nil { note(providerWarning, color: "warn") }
             if readFailed { note(readFailedMessage, color: "del") }
+            if providerRefreshFailed {
+                note("Couldn't refresh this \(providerReview?.remote.kind == .gitlab ? "merge" : "pull") request's threads from the host.")
+            }
             if let reloadError { note(reloadError, color: "del") }
             if case .loaded(_, truncated: true) = diff {
                 note("The host cut off part of this review; some files or lines are not shown.")
@@ -529,10 +535,15 @@ struct NativePeerReviewView: View {
         // ponytail: one provider read per `reviewsChanged`; cache on the host
         // if gh latency bites.
         guard providerReview != nil, review?.summary.record.target.kind == .reviewRequest else { return }
-        if case .success(let pr) = await hosts.providerReview(
+        let refreshed = await hosts.providerReview(
             selection.sessionID, in: selection.worktree, serverId: selection.serverId, withDiff: false
-        ), !Task.isCancelled {
+        )
+        guard !Task.isCancelled else { return }
+        if case .success(let pr) = refreshed {
             providerReview = pr
+            providerRefreshFailed = false
+        } else {
+            providerRefreshFailed = true
         }
     }
 
@@ -563,6 +574,7 @@ struct NativePeerReviewView: View {
             reloadError = nil
             providerError = nil
             providerWarning = nil
+            providerRefreshFailed = false
             return
         } catch ReviewSessionLoaderError.unsupportedTarget {
             message = "Not available from this Mac yet."
