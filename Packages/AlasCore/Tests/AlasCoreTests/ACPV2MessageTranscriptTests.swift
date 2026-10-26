@@ -21,7 +21,7 @@ struct ACPV2MessageTranscriptTests {
         #expect(try LSPJSONValue.decode(from: event.encodedData()) == raw)
     }
 
-    @Test(arguments: ["_future", "state_update", "notice"])
+    @Test(arguments: ["_future", "usage_update", "notice"])
     func unhandledUpdatesStayLossless(variant: String) throws {
         let raw: LSPJSONValue = .object(["sessionId": .string("s"),
             "update": .object(["sessionUpdate": .string(variant), "future": .number("1234567890123456789012345678901234567890")])])

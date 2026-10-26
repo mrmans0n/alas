@@ -203,37 +203,10 @@ extension ACPV2SessionUpdateEnvelope {
         return data
     }
 
-    /// Normalize only a bounded integer view. Decimal/Double can round a long
-    /// fractional token into an integer; the raw envelope must remain exact.
     private static func uint32(_ value: LSPJSONValue) throws -> UInt32 {
-        guard case .number(let token) = value else { throw invalid("expected a uint32 number") }
-        guard (try? LSPJSONValue.decode(from: Data(token.utf8))) == value else {
-            throw invalid("invalid uint32 number token")
+        guard let result = ACPWireInteger.decode(value, as: UInt32.self) else {
+            throw invalid("expected an exact uint32 number")
         }
-        let parts = token.lowercased().split(separator: "e", omittingEmptySubsequences: false)
-        guard parts.count <= 2, let mantissa = parts.first else { throw invalid("invalid uint32") }
-        let decimal = mantissa.split(separator: ".", omittingEmptySubsequences: false)
-        guard decimal.count <= 2 else { throw invalid("invalid uint32") }
-        let negative = mantissa.hasPrefix("-")
-        var digits = String(mantissa.filter { $0 != "." && $0 != "-" })
-        guard !digits.isEmpty, digits.allSatisfy({ $0 >= "0" && $0 <= "9" }) else { throw invalid("invalid uint32") }
-        digits = String(digits.drop(while: { $0 == "0" }))
-        if digits.isEmpty { return 0 }
-        let exponent = parts.count == 2 ? Int(parts[1]) : 0
-        guard !negative, let exponent else { throw invalid("uint32 is out of range") }
-        let fractionCount = decimal.count == 2 ? decimal[1].count : 0
-        let (shift, overflow) = exponent.subtractingReportingOverflow(fractionCount)
-        guard !overflow else { throw invalid("uint32 is out of range") }
-        if shift < 0 {
-            guard shift > -digits.count else { throw invalid("uint32 must be integral") }
-            let drop = -shift
-            guard digits.suffix(drop).allSatisfy({ $0 == "0" }) else { throw invalid("uint32 must be integral") }
-            digits.removeLast(drop)
-        } else {
-            guard digits.count <= 10, shift <= 10 - digits.count else { throw invalid("uint32 is out of range") }
-            digits += String(repeating: "0", count: shift)
-        }
-        guard let result = UInt32(digits) else { throw invalid("uint32 is out of range") }
         return result
     }
 }
