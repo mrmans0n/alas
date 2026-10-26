@@ -5,8 +5,9 @@ import Foundation
 
 /// Synthesized input posted straight to an app's pid, so the system cursor and
 /// the frontmost app are untouched. Mouse events carry their window and the point inside it,
-/// so they reach a window that isn't frontmost; see `ComputerUseSkyLight`. Drags are the exception:
-/// they go system-wide with the app activated and put the cursor back after. Every sequence that
+/// so they reach a window that isn't frontmost; see `ComputerUseSkyLight`. A background drag stays
+/// on that path; a system drag goes system-wide with the app activated and puts the cursor back
+/// after. Every sequence that
 /// presses something releases it before returning or checking for cancellation.
 enum ComputerUseInputPoster {
     /// Unicode text per keyboard event; larger strings are dropped by some apps.
@@ -127,6 +128,81 @@ enum ComputerUseInputPoster {
         }
         await steadyPause(cursorRestoreDelay)
         postSystemWide(restore)
+    }
+
+    enum BackgroundDragOutcome: Equatable {
+        case done
+        /// A native drag-and-drop session started; it follows the hardware cursor, so the drag
+        /// was released at its start and has to go through the foreground.
+        case dragSession
+    }
+
+    /// A drag inside one window of `pid` that leaves the cursor and the frontmost app alone: the
+    /// background click's per-pid route stretched over a gesture. Every event carries the window,
+    /// the point inside it and one gesture id; nothing is posted system-wide. One stamped move
+    /// primes the window's tracking state, then down, `ComputerUseBackgroundDrag.steps` drags and
+    /// the release. Once the app shows a new drag-layer window (a drag-and-drop session), the
+    /// button comes up at the start and the outcome is `.dragSession`. `interrupt`, checked before
+    /// every event, releases at the start and throws what `systemDrag` throws. The button is
+    /// always released.
+    static func backgroundDrag(
+        from start: CGPoint, to end: CGPoint, pid: Int32, windowID: UInt32, windowFrame: CGRect,
+        screenWindows: @Sendable () -> [ComputerUseInputGeometry.ScreenWindow],
+        interrupt: @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> BackgroundDragOutcome {
+        let target = Target(pid: pid, windowID: windowID, windowOrigin: windowFrame.origin)
+        let gesture = Int64.random(in: 1 ... Int64(Int32.max))
+        func event(_ type: CGEventType, at point: CGPoint, clickState: Int) throws -> CGEvent {
+            let event = try mouseEvent(type, at: point, button: .left, clickState: clickState, target: target)
+            event.setIntegerValueField(gestureField, value: gesture)
+            return event
+        }
+        // Build everything first so a failure can't leave the button down.
+        let primer = try event(.mouseMoved, at: start, clickState: 0)
+        let down = try event(.leftMouseDown, at: start, clickState: 1)
+        let drags = try ComputerUseInputGeometry.interpolate(from: start, to: end, steps: ComputerUseBackgroundDrag.steps)
+            .map { try event(.leftMouseDragged, at: $0, clickState: 1) }
+        let upAtStart = try event(.leftMouseUp, at: start, clickState: 1)
+        let up = try event(.leftMouseUp, at: end, clickState: 1)
+        let post = { (event: CGEvent) in ComputerUseSkyLight.post(event, pid: pid) }
+
+        var pressed = false
+        // Whatever ends the drag early, the button comes up where it went down.
+        defer { if pressed { post(upAtStart) } }
+        func checkInterrupt() throws {
+            switch interrupt() {
+            case .cancelled:
+                throw CancellationError()
+            case .userActive:
+                throw pressed ? ComputerUseSystemError.userTookOverDrag : ComputerUseSystemError.userActive
+            case nil:
+                break
+            }
+        }
+
+        try checkInterrupt()
+        post(primer)
+        await steadyPause(ComputerUseBackgroundDrag.stepDelay)
+        try checkInterrupt()
+        let before = Set(screenWindows().map(\.id))
+        post(down)
+        pressed = true
+        await steadyPause(ComputerUseBackgroundDrag.stepDelay)
+        for drag in drags {
+            if ComputerUseBackgroundDrag.startedSession(before: before, now: screenWindows(), sourcePID: pid) {
+                return .dragSession
+            }
+            try checkInterrupt()
+            post(drag)
+            await steadyPause(ComputerUseBackgroundDrag.stepDelay)
+        }
+        if ComputerUseBackgroundDrag.startedSession(before: before, now: screenWindows(), sourcePID: pid) {
+            return .dragSession
+        }
+        try checkInterrupt()
+        post(up)
+        pressed = false
+        return .done
     }
 
     /// A pause that a cancelled task still waits out in full.
@@ -280,6 +356,8 @@ enum ComputerUseInputPoster {
 
     /// The raw window-number field AppKit builds `NSEvent.windowNumber` from; no public name.
     private static let windowNumberField = CGEventField(rawValue: 51)!
+    /// The raw field that groups events into one gesture; no public name.
+    private static let gestureField = CGEventField(rawValue: 58)!
 
     /// Routes the event to the target window at `point` (global) without a screen hit test.
     private static func setWindow(_ event: CGEvent, at point: CGPoint, _ target: Target) {
