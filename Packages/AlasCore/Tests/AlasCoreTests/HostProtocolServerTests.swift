@@ -629,8 +629,8 @@ struct HostProtocolServerTests {
     }
 
     enum Refusal: CaseIterable {
-        case branchChanged, checkedOutSinceListed, staleDiscard, staleConflict, nothingStaged, tooManyPaths, pendingCheckpoint, appHost,
-            hidden, archivedWhileQueued
+        case branchChanged, checkedOutSinceListed, staleDiscard, staleConflict, conflictedDirectory, nothingStaged, tooManyPaths,
+            pendingCheckpoint, appHost, hidden, archivedWhileQueued
     }
 
     @Test(arguments: Refusal.allCases)
@@ -642,7 +642,7 @@ struct HostProtocolServerTests {
         }
         let fixture = try await RepoFixture(environment: environment)
         defer { fixture.tearDown() }
-        let (repo, ref) = try await fixture.mainWorktree()
+        let (repo, ref) = refusal == .conflictedDirectory ? try await fixture.stopPullOnConflicts() : try await fixture.mainWorktree()
         var branch = "main"
         var change = HostWorktreeChange.stage(paths: ["x"])
         let expected: HostError
@@ -665,6 +665,14 @@ struct HostProtocolServerTests {
             try "edited\n".write(to: repo.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
             change = .useTheirs(path: ".alas/scripts/hello.sh")
             expected = .failed(message: "The conflict on .alas/scripts/hello.sh changed; refresh and try again.")
+        case .conflictedDirectory:
+            // A folder holding a conflict is not one: its merged files keep their edits.
+            let other = repo.appendingPathComponent(".alas/scripts/other.sh")
+            try "staged\n".write(to: other, atomically: true, encoding: .utf8)
+            #expect(try await Process.git(["add", ".alas/scripts/other.sh"], cwd: repo).exitCode == 0)
+            try "edited\n".write(to: other, atomically: true, encoding: .utf8)
+            change = .useTheirs(path: ".alas/scripts")
+            expected = .failed(message: "The conflict on .alas/scripts changed; refresh and try again.")
         case .nothingStaged:
             change = .commit(subject: "Empty", body: "", amend: false)
             expected = .failed(message: "Nothing is staged to commit.")
@@ -695,6 +703,9 @@ struct HostProtocolServerTests {
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: expected))
         if refusal == .staleConflict {
             #expect(try String(contentsOf: repo.appendingPathComponent(".alas/scripts/hello.sh"), encoding: .utf8) == "edited\n")
+        }
+        if refusal == .conflictedDirectory {
+            #expect(try String(contentsOf: repo.appendingPathComponent(".alas/scripts/other.sh"), encoding: .utf8) == "edited\n")
         }
     }
 
@@ -757,10 +768,10 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["status", "--porcelain"], cwd: real).stdout == porcelain)
     }
 
-    /// The Mac learns why a pull stopped, and the host is left mid-rebase to
-    /// resolve there: relisted, the worktree is detached, and a commit or push
-    /// on it is refused until the rebase is finished.
-    @Test func pullStoppedOnConflictsSaysToResolveOnTheHost() async throws {
+    /// The Mac learns why a pull stopped, and the host is left mid-rebase:
+    /// relisted, the worktree is detached, and a commit or push on it is
+    /// refused until the rebase is finished.
+    @Test func pullStoppedOnConflictsLeavesTheRebaseInPlace() async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
         let (repo, ref) = try await fixture.stopPullOnConflicts()
@@ -771,7 +782,7 @@ struct HostProtocolServerTests {
         #expect(branch == "(detached)")
         for change in [HostWorktreeChange.commit(subject: "Mid-rebase", body: "", amend: true), .push(forceWithLease: true)] {
             #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: branch, change: change)) == .failure(error: .failed(
-                message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first."
+                message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first."
             )))
         }
     }
@@ -1768,7 +1779,7 @@ struct HostProtocolServerTests {
                 #expect(try await Process.git(arguments, cwd: repo).exitCode == 0)
             }
             #expect(try await request(.mutateWorktree(worktree: ref, branch: "main", change: .pull))
-                == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them on the host.")))
+                == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them, then continue.")))
             return (repo, ref)
         }
 

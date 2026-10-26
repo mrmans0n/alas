@@ -49,7 +49,7 @@ extension AlasCoreContext {
         switch change {
         case .commit, .push, .pull, .cherryPick, .revert:
             if try await git.mergeState(worktreePath: root) != nil {
-                throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first.")
+                throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first.")
             }
         case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash, .continueOperation, .skipOperation,
              .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved:
@@ -96,7 +96,7 @@ extension AlasCoreContext {
             // As locally, a conflict leaves the rebase in place to resolve.
             switch try await git.pull(worktreePath: root) {
             case .clean: break
-            case .conflict: throw HostError.failed(message: "Pull stopped on conflicts; resolve them on the host.")
+            case .conflict: throw HostError.failed(message: "Pull stopped on conflicts; resolve them, then continue.")
             case .error(let message): throw HostError.failed(message: message)
             }
         case .fetch:
@@ -207,10 +207,14 @@ extension AlasCoreContext {
     }
 
     /// Taking a side or deleting a path that is no longer unmerged would
-    /// overwrite or remove the host's work: a stale client is refused.
+    /// overwrite or remove the host's work: a stale client is refused. The
+    /// path itself must be unmerged; a folder holding a conflict is not, and
+    /// taking a side on it would restore every merged file in it.
     private static func refuseUnlessConflicted(_ path: String, at root: URL) async throws {
-        let unmerged = try await Process.git(["ls-files", "-u", "--", path], cwd: root)
-        guard unmerged.exitCode == 0, !unmerged.stdout.isEmpty else {
+        // `<mode> <sha> <stage>\t<path>`, NUL-terminated.
+        let unmerged = try await Process.git(["ls-files", "-u", "-z", "--", path], cwd: root)
+        let paths = unmerged.stdout.split(separator: "\0").compactMap { $0.split(separator: "\t", maxSplits: 1).last }
+        guard unmerged.exitCode == 0, paths.contains(where: { $0 == path }) else {
             throw HostError.failed(message: "The conflict on \(path) changed; refresh and try again.")
         }
     }
