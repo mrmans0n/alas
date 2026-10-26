@@ -426,12 +426,12 @@ struct ReviewSessionTabView: View {
         VStack(spacing: 0) {
             if let providerPublishError, !providerPublishError.isEmpty {
                 providerBanner(providerPublishError, color: "del", identifier: "review-session-provider-error") {
-                    providerPublishError = nil
+                    self.providerPublishError = nil
                 }
             }
             if let providerPublishWarning, !providerPublishWarning.isEmpty {
                 providerBanner(providerPublishWarning, color: "warn", identifier: "review-session-provider-warning") {
-                    providerPublishWarning = nil
+                    self.providerPublishWarning = nil
                 }
             }
             if trackedRevision == nil, let loadError, !loadError.isEmpty {
