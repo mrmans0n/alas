@@ -1714,7 +1714,6 @@
 		F1223F470034FDB46D89897F /* ACPSessionReferenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E1EB687D28C92CCF23436D5 /* ACPSessionReferenceTests.swift */; };
 		F1299CAAD4DBF766CC56CB8F /* OpenSessions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4068B3E83F9A82C2E3F8A6A1 /* OpenSessions.swift */; };
 		F134F6DD4EE36865522FF52A /* AlasMCPHTTPSupervisorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC3201ACD757677A7F42A8AE /* AlasMCPHTTPSupervisorTests.swift */; };
-		F14553F778A1BC8EE08E3AF2 /* WorktreeCheckpointService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90C70716C03252CDE8CCBD01 /* WorktreeCheckpointService.swift */; };
 		F14AA09ADCE2BD0E5B1A1A14 /* SemanticTokensCoalescingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 04E9D151C5EE8C229B889A63 /* SemanticTokensCoalescingTests.swift */; };
 		F15D18CC7D0DDA1433939563 /* ACPSessionManagerBlockerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88C652E66403B2A2BD784A19 /* ACPSessionManagerBlockerTests.swift */; };
 		F18EB035A8972F21D23F3810 /* SearchFooter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 39DFD138FE855D8CFC464847 /* SearchFooter.swift */; };
@@ -2879,7 +2878,6 @@
 		90762AFB51B237B783D4190C /* ACPChatLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPChatLayoutTests.swift; sourceTree = "<group>"; };
 		90A3C6694C4027DE1A26EC59 /* SSHCommandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHCommandTests.swift; sourceTree = "<group>"; };
 		90C6EEE1477262DFA7B30B0C /* DiffReviewBatchLoading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffReviewBatchLoading.swift; sourceTree = "<group>"; };
-		90C70716C03252CDE8CCBD01 /* WorktreeCheckpointService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCheckpointService.swift; sourceTree = "<group>"; };
 		90D74C28EB7B8C3CBC53994D /* MergeAgent.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MergeAgent.swift; sourceTree = "<group>"; };
 		90E25D0520B813E8AC9A7174 /* RemoteTerminalLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteTerminalLaunchTests.swift; sourceTree = "<group>"; };
 		90E9DAE6A3C83B64305D5805 /* EditorCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorCommands.swift; sourceTree = "<group>"; };
@@ -4675,7 +4673,6 @@
 				FAE46B7EB9FF647CE1B2E166 /* App */,
 				3D07C587920AEB3910329603 /* Attention */,
 				5E838E5E31D2C1A333F73943 /* Center */,
-				CAA80357D1234C38D3D2C2C1 /* Checkpoints */,
 				4884B807E1962E6CAE50F20D /* Code */,
 				2BECE0AE6AD8C87F45E90678 /* ComputerUse */,
 				07E359D8B18600D505C1B4C1 /* Diagnostics */,
@@ -6176,14 +6173,6 @@
 				B746CC368DA0E9BE09E7C3A7 /* Install */,
 			);
 			path = LSP;
-			sourceTree = "<group>";
-		};
-		CAA80357D1234C38D3D2C2C1 /* Checkpoints */ = {
-			isa = PBXGroup;
-			children = (
-				90C70716C03252CDE8CCBD01 /* WorktreeCheckpointService.swift */,
-			);
-			path = Checkpoints;
 			sourceTree = "<group>";
 		};
 		CD11051897966EA15D00BC48 /* Integrations */ = {
@@ -7714,7 +7703,6 @@
 				66A08C700A02933B568776A1 /* WorkspaceEditPreview.swift in Sources */,
 				FA38B6D678FC0ABC514645D2 /* WorkspaceEditUndoCoordinator.swift in Sources */,
 				16338139B92FE6EEB861BC7D /* WorkspaceSidebarTree.swift in Sources */,
-				F14553F778A1BC8EE08E3AF2 /* WorktreeCheckpointService.swift in Sources */,
 				2046F27F05CD33F89D4C250B /* WorktreeCleanupModel.swift in Sources */,
 				88A13347D0CB153554F00B24 /* WorktreeCleanupSheet.swift in Sources */,
 				2D63742A552F72DC6BEBF7DC /* WorktreeCreationCompletion.swift in Sources */,

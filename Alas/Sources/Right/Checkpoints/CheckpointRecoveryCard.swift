@@ -1,40 +1,5 @@
 import SwiftUI
 
-enum CheckpointRecoveryPresentation {
-    static func phase(_ phase: CheckpointRestoreJournal.Phase) -> String {
-        switch phase {
-        case .prepared: "Prepared"
-        case .applyingFiles: "Applying files"
-        case .installingIndex: "Installing index"
-        case .verifying: "Verifying"
-        case .rollingBack: "Rolling back"
-        case .completed: "Completed"
-        case .recovered: "Recovered"
-        }
-    }
-
-    static func operationSuffix(_ id: UUID) -> String {
-        String(id.uuidString.suffix(8)).lowercased()
-    }
-
-    static func affectedPathsSummary(_ paths: [String]) -> String {
-        switch paths.count {
-        case 0:
-            "No paths recorded"
-        case 1:
-            paths[0]
-        default:
-            "\(paths.count) paths"
-        }
-    }
-
-    static func affectedPathsText(_ paths: [String]) -> String {
-        paths.sorted().joined(separator: "\n")
-    }
-
-    static let recoverButtonTitle = "Recover pre-restore state"
-}
-
 struct CheckpointRecoveryCard: View {
     let journal: CheckpointRestoreJournal
     let inFlight: Bool

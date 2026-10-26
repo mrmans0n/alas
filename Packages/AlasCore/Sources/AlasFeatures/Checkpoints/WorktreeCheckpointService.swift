@@ -1,8 +1,10 @@
-import AppKit
 import CryptoKit
 import Foundation
+import AlasFoundation
+import AlasModel
+import AlasPlatform
 
-protocol WorktreeCheckpointServicing: Sendable {
+public protocol WorktreeCheckpointServicing: Sendable {
     func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot
     func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal]
     func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary
@@ -18,12 +20,16 @@ protocol WorktreeCheckpointServicing: Sendable {
                                    coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult
 }
 
-struct CheckpointCaptureHooks: Sendable {
-    let afterPayloadStaging: @Sendable (Int) async throws -> Void
-    static let none = Self(afterPayloadStaging: { _ in })
+public struct CheckpointCaptureHooks: Sendable {
+    public let afterPayloadStaging: @Sendable (Int) async throws -> Void
+    public static let none = Self(afterPayloadStaging: { _ in })
+
+    public init(afterPayloadStaging: @escaping @Sendable (Int) async throws -> Void) {
+        self.afterPayloadStaging = afterPayloadStaging
+    }
 }
 
-actor WorktreeCheckpointService: WorktreeCheckpointServicing {
+public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     private static let diffPreviewByteLimit: Int64 = 10 * 1024 * 1024
 
     private struct RestoreAdmission: Sendable {
@@ -42,16 +48,16 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     private let restoreFaultInjector: CheckpointRestoreFaultInjector
     private var cachedCatalogs: [String: CheckpointCatalogSnapshot] = [:]
 
-    init(store: WorktreeCheckpointStore = .init(),
-         snapshotter: WorktreeStateSnapshotter = .live,
-         hooks: CheckpointCaptureHooks = .none, restoreFaultInjector: CheckpointRestoreFaultInjector = .none) {
+    public init(store: WorktreeCheckpointStore = .init(),
+                snapshotter: WorktreeStateSnapshotter = .live,
+                hooks: CheckpointCaptureHooks = .none, restoreFaultInjector: CheckpointRestoreFaultInjector = .none) {
         self.store = store
         self.snapshotter = snapshotter
         self.hooks = hooks
         self.restoreFaultInjector = restoreFaultInjector
     }
 
-    func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
+    public func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         try validateLineage(target)
         _ = try await store.recoverableJournals(lineageID: target.lineageID)
         let catalog = try await store.catalog(lineageID: target.lineageID)
@@ -59,23 +65,23 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         return catalog
     }
 
-    func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
+    public func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
         try validateLineage(target)
         return try await store.recoverableJournals(lineageID: target.lineageID)
     }
 
-    func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
+    public func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
         try await store.load(id: id, lineageID: target.lineageID)
     }
 
-    func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot {
+    public func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot {
         try validateLineage(target)
         let catalog = try await store.delete(id: id, lineageID: target.lineageID)
         cachedCatalogs[target.lineageID] = catalog
         return catalog
     }
 
-    func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID,
+    public func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID,
                         coordination: CheckpointCoordinationSnapshot, selectedGroupIDs: Set<UUID>? = nil) async throws -> CheckpointRestorePreview {
         func blocked(_ blocker: CheckpointRestoreBlocker, label: String = "Checkpoint") -> CheckpointRestorePreview {
             .init(id: UUID(), checkpointID: id, checkpointLabel: label, currentFingerprint: "", groups: [],
@@ -117,7 +123,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         return try .make(manifest: saved, current: current, coordination: coordination, selectedGroupIDs: selectedGroupIDs, blockers: blockers)
     }
 
-    func diffContent(target: CheckpointWorktreeTarget, id: CheckpointID, path: String) async -> CheckpointDiffContent {
+    public func diffContent(target: CheckpointWorktreeTarget, id: CheckpointID, path: String) async -> CheckpointDiffContent {
         do {
             guard !target.path.isRemoteAlasPath else { return .unavailable(CheckpointRestoreBlocker.remoteTarget.description) }
             guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
@@ -156,14 +162,18 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             if ImageFileType.isSupported(relativePath: path),
                before.state.kind != .symlink,
                after.state.kind != .symlink {
-                func side(_ diffSide: CheckpointDiffSide) -> ImageDiffSide {
+                func side(_ diffSide: CheckpointDiffSide) async -> ImageDiffSide {
                     guard diffSide.state.kind != .absent, let data = diffSide.data else { return .missing }
-                    guard let image = NSImage(data: data) else {
+                    let decoded = await Self.decodeImage(data, worktreePath: target.path)
+                    // Keep the checkpoint copy for plain decode failures; LFS keeps its own.
+                    if case .failed(let failure) = decoded, failure.message == "decode" {
                         return .failed(.init(message: "Image could not be decoded."))
                     }
-                    return GitService.imageSide(forDecodedImage: image)
+                    return decoded
                 }
-                return .image(.init(before: side(before), after: side(after), oldPath: nil,
+                let beforeSide = await side(before)
+                let afterSide = await side(after)
+                return .image(.init(before: beforeSide, after: afterSide, oldPath: nil,
                                     kind: before.state.kind == .absent ? .added : after.state.kind == .absent ? .deleted : .modified))
             }
             if before.data == after.data, let metadataSummary = checkpointDiffMetadataSummary(before: before.state, after: after.state) {
@@ -198,6 +208,11 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         } catch {
             return .unavailable("The checkpoint diff could not be loaded.")
         }
+    }
+
+    @MainActor
+    private static func decodeImage(_ data: Data, worktreePath: URL) async -> ImageDiffSide {
+        await ImageDiffDecoding.shared.decode(data, worktreePath)
     }
 
     private func checkpointDiffPayload(_ state: CheckpointFileState, lineageID: String) async throws -> Data? {
@@ -313,7 +328,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         return result.stdout
     }
 
-    func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
+    public func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
         let label = try normalizedLabel(label)
         for number in 1...2 {
             do {
@@ -330,7 +345,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         throw CheckpointCaptureError.unstableWorktree
     }
 
-    func createAutomatic(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
+    public func createAutomatic(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
         let label = try normalizedLabel(label)
         for number in 1...2 {
             do {
@@ -349,7 +364,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     // Restore preflight supplies the selected current states, including clean
     // and absent paths which a dirty-worktree snapshot may not contain.
-    func createRecovery(target: CheckpointWorktreeTarget, current: WorktreeStateSnapshot,
+    public func createRecovery(target: CheckpointWorktreeTarget, current: WorktreeStateSnapshot,
                         selectedPaths: Set<String>, protecting checkpointID: CheckpointID? = nil) async throws -> WorktreeCheckpointSummary {
         guard current.lineageID == target.lineageID else { throw CheckpointSnapshotError.lineageChanged }
         return try await publish(target: target, attempt: .init(snapshot: current, capturedAt: .now),
@@ -357,7 +372,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                                  protecting: checkpointID.map { [$0] } ?? [])
     }
 
-    func prepareRestore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview,
+    public func prepareRestore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview,
                         selectedGroupIDs: Set<UUID>, coordination: CheckpointCoordinationSnapshot,
                         faultInjector: CheckpointRestoreFaultInjector = .none) async throws -> CheckpointRestorePreparation {
         let refreshed = try await restorePreview(target: target, id: preview.checkpointID, coordination: coordination,
@@ -402,7 +417,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         }
     }
 
-    func restore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview, selectedGroupIDs: Set<UUID>,
+    public func restore(target: CheckpointWorktreeTarget, preview: CheckpointRestorePreview, selectedGroupIDs: Set<UUID>,
                  coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult {
         guard !selectedGroupIDs.isEmpty else { throw CheckpointRestoreError.emptySelection }
         let preparation = try await prepareRestore(target: target, preview: preview, selectedGroupIDs: selectedGroupIDs,
@@ -410,7 +425,7 @@ actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         return try await restoreTransaction.apply(preparation)
     }
 
-    func recoverInterruptedRestore(target: CheckpointWorktreeTarget, operationID: UUID,
+    public func recoverInterruptedRestore(target: CheckpointWorktreeTarget, operationID: UUID,
                                    coordination: CheckpointCoordinationSnapshot) async throws -> CheckpointRestoreResult {
         try await restoreTransaction.recover(target: target, operationID: operationID, coordination: coordination)
     }

@@ -1,36 +1,6 @@
 import Observation
 import SwiftUI
 
-enum CheckpointRestoreErrorPresentation {
-    static func message(_ error: Error) -> String {
-        guard let restoreError = error as? CheckpointRestoreError else {
-            return error.localizedDescription
-        }
-        switch restoreError {
-        case let .blocked(blocker):
-            return blocker.description
-        case .stalePreview:
-            return "Refresh the restore preview before trying again."
-        case .emptySelection:
-            return "Select at least one file group to restore."
-        case let .missingPreviewGroup(id):
-            return "The restore preview no longer contains group \(id.uuidString). Refresh the preview."
-        case let .missingCurrentPath(path):
-            return "The current worktree state for \(path) could not be read. Refresh the preview."
-        case let .missingDesiredPath(path):
-            return "The checkpoint state for \(path) could not be read."
-        case .invalidGitOutput:
-            return "Git returned output Alas could not parse."
-        case .invalidJournal:
-            return "The interrupted restore journal is invalid."
-        case .restoreFailedButRecovered:
-            return "Restore failed and the pre-restore state was recovered."
-        case let .recoveryRequired(operationID, paths, phase):
-            return "Restore interrupted in \(CheckpointRecoveryPresentation.phase(phase)) for \(paths.count) paths. Recover operation \(CheckpointRecoveryPresentation.operationSuffix(operationID)) before continuing."
-        }
-    }
-}
-
 @Observable
 final class RestoreCheckpointSheetModel {
     var selectedGroupIDs: Set<UUID>
