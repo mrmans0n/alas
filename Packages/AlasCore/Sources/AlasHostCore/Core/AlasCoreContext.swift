@@ -156,6 +156,9 @@ public final class AlasCoreContext {
     /// holds while the session runs on the transcript it was sent from.
     @ObservationIgnored var noticeAwaitingClears: [String: NoticeAwaitingInput] = [:]
 
+    /// Owner storage keys each checkpoint restore keeps new writers out of,
+    /// by restore: its worktree and the Workspace checkouts that manage it.
+    @ObservationIgnored var checkpointRestoreHolds: [UUID: Set<String>] = [:]
     /// Launches claimed and still starting, by run slot.
     @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]
     /// Set once `AlasHost.shutdown()` begins: nothing new starts after it,
@@ -479,7 +482,10 @@ public final class AlasCoreContext {
                 await self?.captureAutomaticCheckpoint(worktree, prompt: prompt, hasAttachments: hasAttachments)
             }
         }
-        manager.admitsNewWork = { [weak self] in self?.projects.admitsNewWork(worktreeId: worktreeId) ?? false }
+        manager.admitsNewWork = { [weak self] in
+            guard let self else { return false }
+            return projects.admitsNewWork(worktreeId: worktreeId) && !isHeldByCheckpointRestore(owner)
+        }
         sessionManagers[owner] = manager
         return manager
     }
@@ -506,6 +512,7 @@ public final class AlasCoreContext {
             id: owner.storageKey, projectId: "", name: checkout.fallbackWorkspaceName, branch: checkout.branch,
             path: root, status: .clean, lastActivity: Date()
         ))
+        manager.admitsNewWork = { [weak self] in self?.isHeldByCheckpointRestore(owner) == false }
         sessionManagers[owner] = manager
         return manager
     }

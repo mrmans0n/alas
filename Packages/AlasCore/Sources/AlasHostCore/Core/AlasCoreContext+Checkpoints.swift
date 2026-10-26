@@ -37,11 +37,17 @@ extension AlasCoreContext {
     /// the app counts a checkout as a shared session owner, of every Workspace
     /// checkout that manages it. Terminals: their runs, pending run launches,
     /// and host consoles (`hasHostConsoles`). No dirty editors, no other git mutation.
-    func checkpointCoordination(for worktree: Worktree) async -> CheckpointCoordinationSnapshot {
+    /// With `hold`, the owners counted take no new writer until the hold is
+    /// removed: claimed in the same turn as the count, so none slips between.
+    func checkpointCoordination(for worktree: Worktree, holding hold: UUID? = nil) async -> CheckpointCoordinationSnapshot {
         let checkouts: [WorkspaceCheckout]? = switch await workspaceStore.load() {
         case .missing: []
         case .unreadable: nil
         case .loaded(let state): state.checkouts
+        }
+        if let hold {
+            let owners = Self.checkpointWriterOwners(for: worktree, checkouts: checkouts, knownOwners: Array(sessionManagers.keys))
+            checkpointRestoreHolds[hold] = Set(owners.map(\.storageKey))
         }
         let counts = Self.checkpointWriterCounts(
             for: worktree, checkouts: checkouts,
@@ -64,17 +70,31 @@ extension AlasCoreContext {
         for worktree: Worktree, checkouts: [WorkspaceCheckout]?, sessions: [SessionOwnerID: Int],
         runOwnerKeys: [String], hasConsoles: (Set<String>) -> Bool
     ) -> (sessions: Int, terminals: Int) {
-        let checkoutOwners: [SessionOwnerID] = if let checkouts {
-            checkouts.filter { checkoutManages($0, worktree) }.map { .workspaceCheckout($0.id, $0.executionLocation) }
-        } else {
-            sessions.keys.filter { $0.worktreeID == nil }
-        }
-        let owners = [SessionOwnerID.worktree(worktree.id)] + checkoutOwners
+        let owners = checkpointWriterOwners(for: worktree, checkouts: checkouts, knownOwners: Array(sessions.keys))
         let keys = Set(owners.map(\.storageKey))
         return (
             owners.reduce(0) { $0 + (sessions[$1] ?? 0) },
             runOwnerKeys.filter(keys.contains).count + (hasConsoles(keys) ? 1 : 0)
         )
+    }
+
+    /// `worktree` and each checkout that manages it, or, with unreadable
+    /// Workspace state, every checkout among `knownOwners`.
+    nonisolated static func checkpointWriterOwners(
+        for worktree: Worktree, checkouts: [WorkspaceCheckout]?, knownOwners: [SessionOwnerID]
+    ) -> [SessionOwnerID] {
+        let checkoutOwners: [SessionOwnerID] = if let checkouts {
+            checkouts.filter { checkoutManages($0, worktree) }.map { .workspaceCheckout($0.id, $0.executionLocation) }
+        } else {
+            knownOwners.filter { $0.worktreeID == nil }
+        }
+        return [.worktree(worktree.id)] + checkoutOwners
+    }
+
+    /// Whether a running checkpoint restore keeps new sessions, consoles and
+    /// runs out of `owner`.
+    func isHeldByCheckpointRestore(_ owner: SessionOwnerID) -> Bool {
+        checkpointRestoreHolds.values.contains { $0.contains(owner.storageKey) }
     }
 
     /// `id` if the worktree's catalog lists it, else notFound(what: "checkpoint <id>").
@@ -130,7 +150,10 @@ extension AlasCoreContext {
         case .deleteCheckpoint(let id):
             _ = try await checkpoints.delete(target: target, id: listedCheckpoint(id, in: target))
         case .restoreCheckpoint(let id, let groupIDs, let fingerprint):
-            let coordination = await checkpointCoordination(for: worktree)
+            // Held until the restore ends, so no writer starts after the count.
+            let hold = UUID()
+            defer { checkpointRestoreHolds[hold] = nil }
+            let coordination = await checkpointCoordination(for: worktree, holding: hold)
             let preview = try await checkpoints.restorePreview(
                 target: target, id: listedCheckpoint(id, in: target), coordination: coordination, selectedGroupIDs: groupIDs
             )

@@ -1109,6 +1109,34 @@ struct HostProtocolServerTests {
         #expect(catalog.summaries.contains { $0.kind == .recovery && $0.label == "Before checkpoint restore" })
     }
 
+    /// A restore keeps new sessions out of its worktree from the moment it
+    /// counts the writers until it ends, so none starts after the count.
+    @Test func aRestoreHoldsNewSessionsOffItsWorktreeUntilItEnds() async throws {
+        let pause = CheckpointGitPause()
+        let fixture = try await RepoFixture(checkpointGit: PausingCheckpointGit(pause: pause))
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let manifest = try await fixture.checkpoint("Before", in: ref)
+        try "two\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let preview = try await fixture.restorePreview(manifest.id, in: ref)
+
+        pause.armed = true
+        let restore = Task { @MainActor in
+            try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+                id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: preview.currentFingerprint
+            )))
+        }
+        try await eventually { await pause.isHolding }
+        await #expect(throws: SessionRefusal.ownerUnavailable(reason: SessionsAPI.checkpointRestoreReason)) {
+            try await fixture.host.sessions.create(.worktree(ref), agentID: "gemini", caller: .app)
+        }
+
+        pause.release()
+        #expect(try await restore.value == .done)
+        _ = try await fixture.host.sessions.create(.worktree(ref), agentID: "gemini", caller: .app)
+    }
+
     enum RestoreWriter: CaseIterable {
         case worktreeSession, memberCheckoutSession, otherCheckoutSession, checkoutSessionWithUnreadableState, run, console
     }
@@ -2034,7 +2062,10 @@ struct HostProtocolServerTests {
         /// With `aheadOfOrigin`, `main`'s three commits `origin/main` lacks, bottom-up.
         let aheadSHAs: [String]
 
-        init(environment: (any AlasHostEnvironment)? = nil, aheadOfOrigin: Bool = false) async throws {
+        init(
+            environment: (any AlasHostEnvironment)? = nil, aheadOfOrigin: Bool = false,
+            checkpointGit: any CheckpointGitRunning = WorktreeStateSnapshotter.live.git
+        ) async throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remove-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
             let repo = root.appendingPathComponent("repo")
@@ -2074,7 +2105,7 @@ struct HostProtocolServerTests {
                 orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path),
                 reviewDrafts: ReviewDraftCommentStore(url: root.appendingPathComponent("review-drafts.json")),
                 reviewSessions: ReviewSessionStore(url: root.appendingPathComponent("review-sessions.json")),
-                checkpoints: WorktreeCheckpointService(store: .init(root: checkpointsRoot))
+                checkpoints: WorktreeCheckpointService(store: .init(root: checkpointsRoot), snapshotter: .init(git: checkpointGit))
             )
             host = AlasHost(core: core)
             connection = HostProtocolServer(host: host).connect(caller: .localUser(uid: 501), send: client.receive)
@@ -2378,6 +2409,49 @@ struct HostProtocolServerTests {
         func waitFor(_ condition: @escaping @MainActor @Sendable ([HostServerMessage]) -> Bool) async throws {
             try await eventually { await condition(self.messages) }
         }
+    }
+}
+
+/// Once armed, holds the next checkpoint git call until `release()`.
+@MainActor private final class CheckpointGitPause {
+    var armed = false
+    var isHolding: Bool { gate != nil }
+    private var gate: CheckedContinuation<Void, Never>?
+
+    func pass() async {
+        guard armed else { return }
+        armed = false
+        await withCheckedContinuation { gate = $0 }
+    }
+
+    func release() {
+        gate?.resume()
+        gate = nil
+    }
+}
+
+/// Real git, held by `pause` before a call.
+private struct PausingCheckpointGit: CheckpointGitRunning {
+    let pause: CheckpointGitPause
+    let git = WorktreeStateSnapshotter.live.git
+
+    func run(_ args: [String], cwd: URL, environment: [String: String]) async throws -> ProcessResult {
+        await pause.pass()
+        return try await git.run(args, cwd: cwd, environment: environment)
+    }
+
+    func runData(_ args: [String], cwd: URL, environment: [String: String]) async throws -> ProcessResultData {
+        await pause.pass()
+        return try await git.runData(args, cwd: cwd, environment: environment)
+    }
+
+    func blobSizes(oids: [String], cwd: URL) async throws -> [String: Int64] { try await git.blobSizes(oids: oids, cwd: cwd) }
+    func blobContents(oids: [String], cwd: URL) async throws -> [String: Data] { try await git.blobContents(oids: oids, cwd: cwd) }
+    func blobReferences(oids: [String], cwd: URL) async throws -> [String: CheckpointBlobReference] {
+        try await git.blobReferences(oids: oids, cwd: cwd)
+    }
+    func writeBlobs(relativePaths: [String], cwd: URL) async throws -> [String] {
+        try await git.writeBlobs(relativePaths: relativePaths, cwd: cwd)
     }
 }
 

@@ -181,7 +181,7 @@ extension AlasCoreContext {
             return .refused(title: "Run Script Failed", message: "\(script.displayName) is already running.")
         }
         // Refused before a record exists, so the row never flips to Starting.
-        guard projects.admitsNewWork(in: worktree) else {
+        guard projects.admitsNewWork(in: worktree), !isHeldByCheckpointRestore(.worktree(worktree.id)) else {
             return .refused(
                 title: "Run Script Failed",
                 message: "Wait for the current worktree operation to finish before running scripts."
@@ -454,7 +454,9 @@ extension AlasCoreContext {
             throw ProjectCreationError.projectNotFound
         }
         guard project.host == nil else { throw RunService.RunError.remoteProjectUnsupported }
-        guard projects.admitsNewWork(in: worktree) else { throw WorktreeOperationInProgress() }
+        guard projects.admitsNewWork(in: worktree), !isHeldByCheckpointRestore(.worktree(worktree.id)) else {
+            throw WorktreeOperationInProgress()
+        }
         guard runRecords.record(worktreeID: worktree.id, scriptKey: script.key)?.status.isActive != true else {
             throw RunService.RunError.alreadyRunning
         }

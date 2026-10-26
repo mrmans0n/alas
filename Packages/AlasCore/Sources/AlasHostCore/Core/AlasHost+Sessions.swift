@@ -153,6 +153,9 @@ extension SessionsAPI {
         guard await !core.environment.checkpointRecoveryBlocksSessions(owner: manager.owner, in: core) else {
             throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRecoveryReason)
         }
+        guard !core.isHeldByCheckpointRestore(manager.owner) else {
+            throw SessionRefusal.ownerUnavailable(reason: Self.checkpointRestoreReason)
+        }
         if let worktree {
             // Still its project's: it can have moved to another one, with
             // another host and agents, while the recovery check waited.
@@ -456,6 +459,7 @@ extension SessionsAPI {
         guard manager.respondToUserInput(for: sessionID, token: requestID, action: action) else { throw SessionRefusal.notPending }
     }
 
+    static let checkpointRestoreReason = "A checkpoint restore is running on this worktree; try again when it finishes."
     static let checkpointRecoveryReason = "An interrupted checkpoint restore must be recovered first."
 
     /// The Workspace checkout `id`, when it is not archived and nothing is
