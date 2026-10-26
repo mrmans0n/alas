@@ -227,26 +227,32 @@ final class ComputerUseCoordinator {
             if ComputerUseWebContent.hasWebContent(root) { wokenWebContent[process] = .complete }
             return false
         }
-        var attribute = ComputerUseWebContent.manualAccessibility
-        let manual = try await setWebContent(attribute, of: app, context: context)
-        Self.log.notice("web content wake: pid \(app.pid, privacy: .public) \(app.bundleID ?? "-", privacy: .public) AXManualAccessibility \(String(describing: manual.result), privacy: .public)")
-        if manual.result != .set {
-            // An app that refused for now (still starting) is asked again at its next read.
-            guard ComputerUseWebContent.fallsBackToEnhancedUserInterface(after: manual.result, bundleID: app.bundleID)
-            else { return false }
-            attribute = ComputerUseWebContent.enhancedUserInterface
-            let enhanced = try await setWebContent(attribute, of: app, context: context)
-            Self.log.notice("web content wake: pid \(app.pid, privacy: .public) AXEnhancedUserInterface \(String(describing: enhanced.result), privacy: .public) turnedOn \(enhanced.turnedOn, privacy: .public)")
-            guard enhanced.result == .set else { return false }
-        }
+        // The attribute being asked with, and once one took, the one the wait asks again with.
+        var pending = ComputerUseWebContent.manualAccessibility
+        var accepted: String?
         let clock = ContinuousClock()
         let start = clock.now
         var slept = Duration.zero
         var reasserted = false
-        while ComputerUseWebContent.keepsWaiting(root: root, waited: max(slept, clock.now - start)) {
-            if ComputerUseWebContent.reasserts(waited: max(slept, clock.now - start), reasserted: reasserted) {
+        while true {
+            // A set that failed in a way that may pass (an app still starting) is tried at every
+            // poll, within the deadline; an attribute the app lacks falls back at once.
+            while accepted == nil {
+                let wake = try await setWebContent(pending, of: app, context: context)
+                Self.log.notice("web content wake: pid \(app.pid, privacy: .public) \(app.bundleID ?? "-", privacy: .public) \(pending, privacy: .public) \(String(describing: wake.result), privacy: .public) error \(Int(wake.error ?? 0), privacy: .public) turnedOn \(wake.turnedOn, privacy: .public)")
+                switch ComputerUseWebContent.next(after: wake.result, of: pending, bundleID: app.bundleID) {
+                case .accepted: accepted = pending
+                case .fallBack(let attribute): pending = attribute; continue
+                case .giveUp: return false
+                case .retry: break
+                }
+                break
+            }
+            let waited = max(slept, clock.now - start)
+            guard ComputerUseWebContent.keepsWaiting(root: root, waited: waited) else { break }
+            if let accepted, ComputerUseWebContent.reasserts(waited: waited, reasserted: reasserted) {
                 reasserted = true
-                _ = try await setWebContent(attribute, of: app, context: context)
+                _ = try await setWebContent(accepted, of: app, context: context)
             }
             await sleep(Self.webContentPoll)
             slept += Self.webContentPoll
@@ -257,7 +263,7 @@ final class ComputerUseCoordinator {
         Self.log.notice("web content wait: pid \(app.pid, privacy: .public) content \(found, privacy: .public) after \((clock.now - start).description, privacy: .public)")
         if found {
             // Asked once more as the content shows, and given a moment to fill in.
-            _ = try await setWebContent(attribute, of: app, context: context)
+            if let accepted { _ = try await setWebContent(accepted, of: app, context: context) }
             await sleep(ComputerUseWebContent.contentSettle)
             try checkStillActive(context)
             wokenWebContent[process] = .complete

@@ -34,17 +34,46 @@ public enum ComputerUseWebContent {
     public struct Wake: Equatable, Sendable {
         public var result: SetResult
         public var turnedOn: Bool
+        /// The AXError's raw value when the set didn't take.
+        public var error: Int32?
 
-        public init(result: SetResult, turnedOn: Bool) {
+        public init(result: SetResult, turnedOn: Bool, error: Int32? = nil) {
             self.result = result
             self.turnedOn = turnedOn
+            self.error = error
+        }
+    }
+
+    /// What follows a set of `attribute` during a first contact.
+    public enum NextSet: Equatable, Sendable {
+        /// It took: wait for the content, asking again halfway.
+        case accepted
+        /// It failed in a way that may pass (an app still starting): set it again at the next
+        /// poll, within the wait's deadline.
+        case retry
+        /// The app has no such attribute: set this one instead, at once.
+        case fallBack(String)
+        /// Nothing to ask with: no wait.
+        case giveUp
+    }
+
+    /// After a set of `attribute` came to `result`: `manualAccessibility` falls back to
+    /// `enhancedUserInterface` only in a Chromium browser that doesn't have it
+    /// (`fallsBackToEnhancedUserInterface`).
+    public static func next(after result: SetResult, of attribute: String, bundleID: String?) -> NextSet {
+        switch result {
+        case .set: .accepted
+        case .failed: .retry
+        case .unsupported:
+            attribute == manualAccessibility && fallsBackToEnhancedUserInterface(after: .unsupported, bundleID: bundleID)
+                ? .fallBack(enhancedUserInterface) : .giveUp
         }
     }
 
     /// Whether a Chromium browser is asked with `enhancedUserInterface` after `manualAccessibility`:
     /// only when it doesn't have that attribute, as current Chrome doesn't. A failure that may
-    /// pass isn't a reason: the app may just be starting. The attribute is app-wide and slows
-    /// window moves under window managers, so it is undone after.
+    /// pass isn't a reason: the app may just be starting, and is asked again (`next`). The
+    /// attribute is app-wide and slows window moves under window managers, so it is undone after.
     public static func fallsBackToEnhancedUserInterface(after manual: SetResult, bundleID: String?) -> Bool {
         manual == .unsupported && chromeBundleIDs.contains(bundleID ?? "")
     }

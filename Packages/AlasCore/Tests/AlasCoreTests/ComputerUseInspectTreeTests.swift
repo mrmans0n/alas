@@ -206,6 +206,26 @@ struct ComputerUseWebContentTests {
         #expect(ComputerUseWebContent.fallsBackToEnhancedUserInterface(after: manual, bundleID: bundleID) == falls)
     }
 
+    /// A set that failed in a way that may pass (Chrome still starting) is tried again within the
+    /// wait; an attribute the app doesn't have falls back to AXEnhancedUserInterface only in a
+    /// Chromium browser, and only from AXManualAccessibility.
+    @Test(arguments: [
+        (ComputerUseWebContent.SetResult.set, "AXManualAccessibility", String?("com.google.Chrome"),
+         ComputerUseWebContent.NextSet.accepted),
+        (.set, "AXEnhancedUserInterface", "com.google.Chrome", .accepted),
+        (.failed, "AXManualAccessibility", "com.google.Chrome", .retry),
+        (.failed, "AXEnhancedUserInterface", "com.google.Chrome", .retry),
+        (.failed, "AXManualAccessibility", "com.tinyspeck.slackmacgap", .retry),
+        (.unsupported, "AXManualAccessibility", "com.google.Chrome", .fallBack("AXEnhancedUserInterface")),
+        (.unsupported, "AXEnhancedUserInterface", "com.google.Chrome", .giveUp),
+        (.unsupported, "AXManualAccessibility", "com.tinyspeck.slackmacgap", .giveUp),
+    ])
+    func aFailedSetIsTriedAgainAndAMissingAttributeFallsBack(
+        result: ComputerUseWebContent.SetResult, attribute: String, bundleID: String?, next: ComputerUseWebContent.NextSet
+    ) {
+        #expect(ComputerUseWebContent.next(after: result, of: attribute, bundleID: bundleID) == next)
+    }
+
     /// The wait after the wake sets the attribute once more, from halfway to the deadline.
     @Test(arguments: [
         (Duration.zero, false, false),

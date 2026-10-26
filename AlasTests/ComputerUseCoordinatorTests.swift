@@ -243,6 +243,38 @@ struct ComputerUseCoordinatorTests {
         try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
     }
 
+    /// A Chrome still starting fails the AXEnhancedUserInterface set: it is set again at every poll
+    /// until it takes, and the first inspect still gets the web content.
+    @Test func aStartingChromeIsAskedAgainUntilTheSetTakes() async throws {
+        let recorder = Recorder()
+        let attempts = Counter()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window])
+        system.wakeWebContent = { _, attribute in
+            guard attribute == "AXEnhancedUserInterface" else { return .init(result: .unsupported, turnedOn: false) }
+            guard attempts.next() > 3 else {
+                recorder.recordEvent("failed")
+                return .init(result: .failed, turnedOn: false, error: -25204)
+            }
+            recorder.recordEvent("set")
+            return Self.taken
+        }
+        system.axTree = { _, _, _, _ in
+            let web = recorder.events.contains("set")
+            let field = ComputerUseAXNode(role: "AXTextField", handle: 2)
+            let content = ComputerUseAXNode(role: web ? "AXWebArea" : "AXGroup", children: web ? [field] : [], handle: 1)
+            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")))
+        #expect(json.contains("AXWebArea"))
+        // Three failed sets, one a poll; the one that took; once more as the content showed.
+        #expect(recorder.events == ["failed", "failed", "failed", "set", "set"])
+        // A poll after each failed set, and one more for the content to show.
+        #expect(recorder.sleeps == Array(repeating: ComputerUseCoordinator.webContentPoll, count: 4) + [ComputerUseWebContent.contentSettle])
+    }
+
     /// A stop while the wait reads the window leaves AXEnhancedUserInterface off: the halfway set
     /// that would have come next never runs.
     @Test func aStopDuringTheWaitNeverSetsEnhancedUserInterfaceAgain() async throws {

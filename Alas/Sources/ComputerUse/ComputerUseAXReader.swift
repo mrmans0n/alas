@@ -88,15 +88,16 @@ enum ComputerUseAXReader {
                 }
                 let manual = attribute == ComputerUseWebContent.manualAccessibility
                 // Written also when it reads as true already: setting it again is what asks again.
-                let result: ComputerUseWebContent.SetResult =
-                    switch AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue) {
-                    case .success: .set
-                    case .attributeUnsupported: .unsupported
-                    default: .failed
-                    }
+                let error = AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue)
+                let result: ComputerUseWebContent.SetResult = switch error {
+                case .success: .set
+                case .attributeUnsupported: .unsupported
+                default: .failed
+                }
                 if manual, result == .set { manualAccessibilityAccepted.withLock { _ = $0.insert(app.pid) } }
                 continuation.resume(returning: .init(
-                    result: result, turnedOn: ComputerUseWebContent.restores(before: before, setSucceeded: result == .set)))
+                    result: result, turnedOn: ComputerUseWebContent.restores(before: before, setSucceeded: result == .set),
+                    error: result == .set ? nil : error.rawValue))
             }
         }
     }
