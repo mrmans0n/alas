@@ -124,6 +124,14 @@ extension AlasCoreContext {
             case .skipOperation: try Self.throwIfFailed(await git.skipOperation(worktreePath: root, op: operation))
             default: try Self.throwIfFailed(await git.continueOperation(worktreePath: root, op: operation))
             }
+            // A rebase that ended restores its branch, which a listing read
+            // mid-rebase shows as `(detached)`: list it again, as a rename does.
+            let head = try await git.currentBranch(worktreePath: root)
+            if !head.isEmpty, head != worktree.branch {
+                projects.applyHeadUpdates(projectId: worktree.projectId, branchByWorktreePath: [root: head])
+                // Git already moved: a failed save does not fail the change.
+                try? saveProjects()
+            }
         // Conflicted paths are resolved as locally, with or without an
         // operation: a conflicting stash pop leaves none.
         case .useOurs(let path):
