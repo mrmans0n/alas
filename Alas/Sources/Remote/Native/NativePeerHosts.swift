@@ -443,7 +443,8 @@ final class NativePeerHosts {
         guard served, let channel = channels[serverId] else { return .failure(unavailable) }
         let response = await channel.request(request, timeout: timeout)
         if case .failure(let error) = response {
-            if let notFound, case .notFound = error {
+            // Only a missing commit: a missing worktree keeps its own message.
+            if let notFound, case .notFound(let what) = error, what.hasPrefix("commit ") {
                 return .failure(NativePeerReviewGitClientError(message: notFound))
             }
             if showsInvalidRequest, case .invalidRequest(let reason) = error {

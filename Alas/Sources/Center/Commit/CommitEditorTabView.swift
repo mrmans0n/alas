@@ -287,7 +287,7 @@ struct CommitEditorTabView: View {
                                 : nil,
                             onDropHunk: { pendingDropHunk = PendingCommitHunkDrop(sha: tabState.currentSha, path: path, hunk: $0) },
                             dropHunkEnabled: { file, hunk in canDropHunk(file: file, hunk: hunk) },
-                            // A host's images are not in this Mac's git: its text diff carries the host's note.
+                            // A host's images are not in this Mac's git: they show as a binary-file note.
                             loadsImageDiff: source == nil
                         )
                     } else {
@@ -451,7 +451,15 @@ struct CommitEditorTabView: View {
             do {
                 try await editorGit.whileEditing {
                     let result = try await editorGit.edit(targetSha, action)
-                    let (refreshedDetails, refreshedSubject) = try await editorGit.details(result.currentSha)
+                    let refreshed: (details: CommitDetails, rawSubject: String)
+                    do {
+                        refreshed = try await editorGit.details(result.currentSha)
+                    } catch {
+                        // The edit landed: follow its sha even though the refresh failed.
+                        await editorGit.didEdit(result, nil)
+                        throw error
+                    }
+                    let (refreshedDetails, refreshedSubject) = refreshed
 
                     let message = CommitMessage.split(refreshedDetails.body)
                     details = refreshedDetails
@@ -569,7 +577,8 @@ struct CommitEditorGit {
     var diff: @MainActor (_ sha: String, _ file: CommitChangedFile) async throws -> (diff: ParsedDiff, truncated: Bool)
     var edit: @MainActor (_ targetSha: String, _ action: CommitEditAction) async throws -> CommitEditResult
     /// After an edit lands: the local tab and right-pane bookkeeping, or the peer selection's new sha.
-    var didEdit: @MainActor (_ result: CommitEditResult, _ title: String) async -> Void
+    /// `title` is nil when the edited commit could not be read back.
+    var didEdit: @MainActor (_ result: CommitEditResult, _ title: String?) async -> Void
     /// Runs an edit with its refresh: locally behind the checkpoint-lease
     /// guards and inside the center git mutation; on a peer as it is.
     var whileEditing: @MainActor (_ body: @MainActor () async throws -> Void) async throws -> Void
@@ -597,6 +606,8 @@ struct CommitEditorGit {
                 return try await git.editCommit(worktreePath: worktreePath, baseRef: comparisonRef, targetSha: targetSha, action: action)
             },
             didEdit: { result, title in
+                // Locally an unread edit leaves the tab as it was.
+                guard let title else { return }
                 appState.tabs.updateCommitEditorShas(worktreeId: worktreeId, shaMap: result.shaMap)
                 appState.tabs.updateCommitEditor(worktreeId: worktreeId, tabId: tabId, currentSha: result.currentSha, title: title)
                 await appState.rightPaneStore.refresh(worktreeId: worktreeId)
@@ -623,6 +634,8 @@ struct CommitEditorGit {
             switch await hosts.read(.commitDiff(sha: sha, path: path), in: selection.worktree, serverId: selection.serverId) {
             case .commitDiffResult(_, _, _, let hunks, let truncated, let metadataNote)?:
                 return (ParsedDiff(hunks: hunks.map(NativePeerWorkspace.hunk), metadataSummary: metadataNote), truncated)
+            case .commitDiffFailed(_, _, _, .binary, _)?:
+                return (ParsedDiff(hunks: [], isBinary: true, metadataSummary: "Binary files cannot be shown."), false)
             case .commitDiffFailed(_, _, _, let reason, let message)?:
                 throw NativePeerReviewGitClientError(message: NativePeerWorkspace.describe(reason, message: message))
             default:
