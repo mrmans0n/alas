@@ -863,6 +863,25 @@ final class AppState {
         }
     }
 
+    /// The Remote access toggle. Turning it off with unsaved host files asks first; Cancel leaves it on.
+    func setRemoteEnabled(_ enabled: Bool) {
+        guard !enabled, nativePeerSessions?.unsavedHostFiles.isEmpty == false else {
+            applyRemoteEnabled(enabled)
+            return
+        }
+        Task {
+            let reason = "Turning off remote control disconnects paired Macs and discards edits not saved to them."
+            guard await confirmDiscardingUnsavedHostFiles(reason: reason) else { return }
+            applyRemoteEnabled(false)
+        }
+    }
+
+    private func applyRemoteEnabled(_ enabled: Bool) {
+        config.remote.enabled = enabled
+        saveConfig()
+        syncRemoteServer()
+    }
+
     /// Starts or stops the remote server to match `config.remote`. Idempotent;
     /// call at launch and after toggling the config. A bind failure is captured
     /// in `lastRemoteError` rather than thrown — the app must not crash because
@@ -1819,6 +1838,9 @@ final class AppState {
         installStackShepherdEffects()
         installSessionRecap()
         startLocalTextObservers()
+        AlasTerminationCoordinator.shared.confirm = { [weak self] in
+            await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
+        }
         AlasTerminationCoordinator.shared.flush = { [weak self] in
             await self?.shutdownLocalTextFeatures()
             self?.runScheduler.stop()
@@ -8511,11 +8533,20 @@ final class AppState {
                     roots[worktree.id] = roots[worktree.id] ?? worktree.path
                 }
             }
-            let errors = await tabs.saveAllAwaitingRemote(worktreeRoots: roots, allowedWorktreeIDs: Set(roots.keys))
-            guard !errors.isEmpty else { return }
+            var failed = await tabs.saveAllAwaitingRemote(worktreeRoots: roots, allowedWorktreeIDs: Set(roots.keys)).count
+            // Host files live outside the worktree tabs, also once their view closed.
+            for entry in nativePeerSessions?.unsavedHostFiles ?? [] {
+                do {
+                    try await entry.buffer.saveRecordingErrorAwaitingRemote()
+                } catch {
+                    failed += 1
+                }
+            }
+            nativePeerSessions?.releaseSavedHiddenHostFileBuffers()
+            guard failed > 0 else { return }
             showFileActionError(
                 title: "Save All Failed",
-                message: "\(errors.count) file\(errors.count == 1 ? "" : "s") could not be saved."
+                message: "\(failed) file\(failed == 1 ? "" : "s") could not be saved."
             )
         }
     }
@@ -8689,7 +8720,7 @@ final class AppState {
         return name
     }
 
-    private func promptForChildName(title: String, defaultValue: String) -> String? {
+    func promptForChildName(title: String, defaultValue: String) -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.informativeText = "Enter a name."
@@ -9890,6 +9921,44 @@ final class AppState {
     var hasActiveEditorTab: Bool {
         guard case .editor = activeTab else { return false }
         return true
+    }
+
+    var hasOpenPeerHostFile: Bool { nativePeerSessions?.openedHostFile != nil }
+
+    /// Before something that drops unsaved host files (`reason` says what): true once Save All
+    /// saved every one, or for Discard; false for Cancel or a failed save.
+    func confirmDiscardingUnsavedHostFiles(reason: String) async -> Bool {
+        let unsaved = nativePeerSessions?.unsavedHostFiles ?? []
+        guard !unsaved.isEmpty else { return true }
+        let hosts = Set(unsaved.map { $0.hostName })
+        let alert = NSAlert()
+        alert.messageText = "Save changes to files on \(hosts.count == 1 ? hosts.first ?? "" : "paired Macs")?"
+        let files = unsaved.map { hosts.count == 1 ? $0.file.path : "\($0.hostName): \($0.file.path)" }.sorted()
+        alert.informativeText = "\(reason)\n\n" + files.joined(separator: "\n")
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Save All")
+        alert.addButton(withTitle: "Discard").hasDestructiveAction = true
+        alert.addButton(withTitle: "Cancel")
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            for entry in unsaved {
+                do {
+                    try await entry.buffer.saveRecordingErrorAwaitingRemote()
+                } catch {
+                    showFileActionError(
+                        title: "Save Failed",
+                        message: "\(entry.file.path) on \(entry.hostName): \(error.localizedDescription)"
+                    )
+                    return false
+                }
+            }
+            // Edits made while the saves awaited the host are still unsaved: ask again rather than drop them.
+            return await confirmDiscardingUnsavedHostFiles(reason: reason)
+        case .alertSecondButtonReturn:
+            return true
+        default:
+            return false
+        }
     }
 
     var hasActiveCodeEditorTab: Bool {

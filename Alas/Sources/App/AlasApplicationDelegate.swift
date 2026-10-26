@@ -5,6 +5,8 @@ import Darwin
 final class AlasTerminationCoordinator {
     static let shared = AlasTerminationCoordinator()
 
+    /// Asked before `flush`; false cancels the quit.
+    var confirm: (() async -> Bool)?
     var flush: (() async -> Void)?
     var finish: (() -> Void)?
 
@@ -16,12 +18,19 @@ final class AlasApplicationDelegate: NSObject, NSApplicationDelegate {
     private var terminationInProgress = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        AlasTerminationCoordinator.shared.finish?()
         guard !terminationInProgress, let flush = AlasTerminationCoordinator.shared.flush else {
+            AlasTerminationCoordinator.shared.finish?()
             return .terminateNow
         }
         terminationInProgress = true
         Task {
+            if let confirm = AlasTerminationCoordinator.shared.confirm, !(await confirm()) {
+                terminationInProgress = false
+                sender.reply(toApplicationShouldTerminate: false)
+                return
+            }
+            // Only once the quit goes ahead: a cancelled one keeps the launch's marker.
+            AlasTerminationCoordinator.shared.finish?()
             await flush()
             sender.reply(toApplicationShouldTerminate: true)
         }

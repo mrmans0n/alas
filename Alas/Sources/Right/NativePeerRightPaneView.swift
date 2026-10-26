@@ -938,6 +938,11 @@ struct NativePeerRightPaneView: View {
         _ preview: CheckpointRestorePreview, groupIDs: Set<UUID>, on target: (serverId: String, worktree: PeerHostWorktree)
     ) async -> Bool {
         guard let hosts = client.hosts, !checkpointInFlight else { return false }
+        let unsaved = client.unsavedHostFilePaths(serverId: target.serverId, worktreeID: target.worktree.snapshot.worktree.id)
+        if let refusal = NativePeerSessions.restoreRefusal(unsavedPaths: unsaved) {
+            checkpointRestoreError = refusal
+            return false
+        }
         checkpointInFlight = true
         let key = gitTargetKey
         let change = HostWorktreeChange.restoreCheckpoint(
@@ -1013,8 +1018,8 @@ struct NativePeerRightPaneView: View {
                     openPaths: $openPaths,
                     onSelectFile: { client.open(.file(path: $0.path)) },
                     onFileHistory: { _ in },
-                    onCreateFile: { _ in },
-                    onCreateFolder: { _ in },
+                    onCreateFile: { createHostFile(in: $0) },
+                    onCreateFolder: { createHostFolder(in: $0) },
                     shouldAutoLoadChildren: { client.workspace.shouldLoadChildren(path: $0, childrenState: $1) },
                     onLoadChildren: { client.loadFileTreeChildren(path: $0) },
                     showIgnored: false,
@@ -1022,9 +1027,51 @@ struct NativePeerRightPaneView: View {
                     revealTick: 0,
                     onClearReveal: {},
                     bookmarkOpenPaths: $bookmarkOpenPaths,
-                    readOnly: true
+                    readOnly: true,
+                    createsOnPeer: client.hostFileTarget != nil
                 )
             }
+        }
+    }
+
+    /// Asks for a name and makes an empty file in `directory` on the host, then opens it.
+    private func createHostFile(in directory: String) {
+        guard let target = client.hostFileTarget, let hosts = client.hosts,
+              let name = state.promptForChildName(title: "New File", defaultValue: "untitled.txt")
+        else { return }
+        let path = AppState.childPath(name: name, directoryPath: directory)
+        Task {
+            do {
+                _ = try await hosts.writeFile(path, text: "", expected: nil, in: target.worktree, serverId: target.serverId)
+            } catch RemoteFileAccessError.saveConflict {
+                state.showFileActionError(title: "New File Failed", message: "\(path) already exists on the host.")
+                return
+            } catch {
+                state.showFileActionError(title: "New File Failed", message: error.localizedDescription)
+                return
+            }
+            // Another worktree selected meanwhile: opening `path` there would show a different file.
+            guard let current = client.hostFileTarget, current.serverId == target.serverId,
+                  current.worktree.snapshot.worktree.id == target.worktree.snapshot.worktree.id
+            else { return }
+            // A root reload also re-lists every expanded folder; a loaded folder alone won't list again.
+            client.reloadWorkspace()
+            client.open(.file(path: path))
+        }
+    }
+
+    /// Asks for a name and makes a folder in `directory` on the host.
+    private func createHostFolder(in directory: String) {
+        guard let target = client.hostFileTarget, let hosts = client.hosts,
+              let name = state.promptForChildName(title: "New Folder", defaultValue: "New Folder")
+        else { return }
+        let path = AppState.childPath(name: name, directoryPath: directory)
+        Task {
+            if let error = await hosts.createFolder(path, in: target.worktree, serverId: target.serverId) {
+                state.showFileActionError(title: "New Folder Failed", message: error)
+                return
+            }
+            client.reloadWorkspace()
         }
     }
 

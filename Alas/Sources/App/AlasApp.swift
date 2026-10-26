@@ -154,7 +154,7 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasSaveActiveTab, object: nil)
             }
             .keyboardShortcut("s", modifiers: .command)
-            .disabled(!state.hasActiveEditorTab)
+            .disabled(!state.hasActiveEditorTab && !state.hasOpenPeerHostFile)
             Button("Save As…") {
                 NotificationCenter.default.post(name: .alasSaveActiveTabAs, object: nil)
             }
@@ -164,12 +164,12 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasSaveAllTabs, object: nil)
             }
             .keyboardShortcut("s", modifiers: [.command, .option])
-            .disabled(!state.hasAnyDirtyEditorTab)
+            .disabled(!state.hasAnyDirtyEditorTab && state.nativePeerSessions?.hasUnsavedHostFiles != true)
             Divider()
             Button("Revert") {
                 NotificationCenter.default.post(name: .alasRevertActiveTab, object: nil)
             }
-            .disabled(!state.hasActiveEditorTab)
+            .disabled(!state.hasActiveEditorTab && !state.hasOpenPeerHostFile)
             Divider()
             Button("Rename File…") {
                 NotificationCenter.default.post(name: .alasRenameActiveFile, object: nil)
@@ -266,28 +266,28 @@ struct AlasApp: App {
                 NSApp.sendAction(#selector(CodeTextView.splitSelectionIntoLines(_:)), to: nil, from: nil)
             }
             .keyboardShortcut(state.shortcut(for: .splitSelectionIntoLines))
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             Divider()
             Button("Find") {
                 NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.showFind)
             }
             .keyboardShortcut(state.shortcut(for: .findAndReplace))
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             Button("Find and Replace") {
                 NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.showReplace)
             }
             .keyboardShortcut(state.shortcut(for: .replaceInEditor))
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             Button("Find Next") {
                 NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.findNext)
             }
             .keyboardShortcut("g", modifiers: .command)
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             Button("Find Previous") {
                 NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.findPrevious)
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             if AppKitMenuInjection.isAffectedOS {
                 Divider()
                 Button(SystemMenuItems.emojiAndSymbolsTitle) {

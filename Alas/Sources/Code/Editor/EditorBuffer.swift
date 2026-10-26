@@ -31,6 +31,358 @@ struct RemoteConflictCheckCoalescer {
     }
 }
 
+/// How an EditorBuffer reads, saves and watches a file that is not on this Mac's disk.
+struct EditorRemoteBackend {
+    /// The SSH host: its status, LSP, Save As and move. Nil for a paired host's file, which has none of them.
+    let sshHost: String?
+    /// The file's bytes and baseline mtime, checked inside the worktree first.
+    let read: @MainActor (_ relativePath: String) async throws -> RemoteReadResult
+    /// Whether the file moved on. `.modifiedAt` leaves the comparison with the buffer's
+    /// baseline to the buffer, after the await.
+    let probe: @MainActor (_ relativePath: String) async throws -> EditorRemoteProbe
+    /// The file's current mtime, nil once gone: Keep mine's new baseline.
+    let currentMtime: @MainActor (_ relativePath: String) async throws -> Date?
+    /// Throws unless the file to save is inside the worktree. The buffer awaits it before
+    /// reading the baseline it saves against.
+    let verifyContained: @MainActor (_ relativePath: String) async throws -> Void
+    /// Writes `content` if the file is still at `expectedMtime` with `expectedContent`; both nil overwrite.
+    /// Returns the new mtime; a moved file throws `RemoteFileAccessError.saveConflict`.
+    let write: @MainActor (_ relativePath: String, _ content: String, _ expectedMtime: Date?, _ expectedContent: String?) async throws -> Date
+    /// Until the returned watch stops: `observed` runs synchronously on each watcher event,
+    /// then `check` (awaited by timed checks).
+    let watch: @MainActor (_ relativePath: String, _ observed: @escaping @MainActor () -> Void,
+                           _ check: @escaping @MainActor () async -> Void) -> EditorRemoteWatch
+}
+
+enum EditorRemoteProbe: Equatable {
+    case unchanged, changed, deleted
+    /// The file's mtime; it changed if this is later than the buffer's baseline.
+    case modifiedAt(Date)
+}
+
+struct EditorRemoteWatch { let stop: @MainActor () -> Void }
+
+extension EditorRemoteBackend {
+    private static let remoteConflictPollNanos: UInt64 = 15 * 1_000_000_000
+    private static let remoteHelperSafetyNetNanos: UInt64 = 5 * 60 * 1_000_000_000
+
+    /// Today's SSH behaviour, moved verbatim.
+    @MainActor static func ssh(host: String, worktreeRoot: URL) -> Self {
+        Self(
+            sshHost: host,
+            read: { relativePath in
+                let path = worktreeRoot.appendingPathComponent(relativePath).path
+                if let hook = EditorBuffer.remoteReadResultForTesting {
+                    return try await hook(host, path)
+                }
+                try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
+                return try await RemoteFileAccess.read(host: host, path: path)
+            },
+            probe: { relativePath in
+                let path = worktreeRoot.appendingPathComponent(relativePath).path
+                guard let mtime = try await RemoteFileAccess.mtime(host: host, path: path) else { return .deleted }
+                return .modifiedAt(mtime)
+            },
+            currentMtime: { relativePath in
+                try await RemoteFileAccess.mtime(host: host, path: worktreeRoot.appendingPathComponent(relativePath).path)
+            },
+            verifyContained: { relativePath in
+                let path = worktreeRoot.appendingPathComponent(relativePath).path
+                try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
+            },
+            write: { relativePath, content, expectedMtime, expectedContent in
+                try await RemoteFileAccess.write(
+                    host: host,
+                    path: worktreeRoot.appendingPathComponent(relativePath).path,
+                    content: content,
+                    expectedMtime: expectedMtime,
+                    expectedContent: expectedContent
+                )
+            },
+            watch: { relativePath, observed, check in
+                let watch = SSHWatch()
+                watch.start(
+                    host: host,
+                    fileURL: worktreeRoot.appendingPathComponent(relativePath),
+                    observed: observed,
+                    check: check
+                )
+                return EditorRemoteWatch(stop: { watch.stop() })
+            }
+        )
+    }
+
+    /// The helper session plus the adaptive conflict poll. The returned watch's
+    /// `stop` owns it; the poll and session callbacks only hold it weakly.
+    @MainActor
+    private final class SSHWatch {
+        private var pollTask: Task<Void, Never>?
+        private var helperSession: RemoteHelperWatchSession?
+
+        func start(
+            host: String,
+            fileURL: URL,
+            observed: @escaping @MainActor () -> Void,
+            check: @escaping @MainActor () async -> Void
+        ) {
+            let watchedRoot = fileURL.deletingLastPathComponent()
+            let fileWatchMatcher = RemoteHelperFileWatchMatcher(
+                targetURL: fileURL,
+                watchedRootURL: watchedRoot
+            )
+            let session = RemoteHelperWatchSession(
+                host: host,
+                root: watchedRoot.path,
+                kinds: [.files]
+            )
+            session.onEvent = { event in
+                guard event.kind == .files else { return }
+                guard fileWatchMatcher.matches(event: event) else { return }
+                observed()
+                Task { @MainActor in await check() }
+            }
+            session.onAvailabilityChanged = { [weak self] _ in
+                self?.startPolling(check: check)
+            }
+            helperSession = session
+            session.start()
+            startPolling(check: check)
+        }
+
+        private func startPolling(check: @escaping @MainActor () async -> Void) {
+            pollTask?.cancel()
+            pollTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    let interval = self?.helperSession?.isAvailable == true
+                        ? EditorRemoteBackend.remoteHelperSafetyNetNanos
+                        : EditorRemoteBackend.remoteConflictPollNanos
+                    do {
+                        try await Task.sleep(nanoseconds: interval)
+                    } catch {
+                        return
+                    }
+                    guard let self, !Task.isCancelled else { return }
+                    await check()
+                    helperSession?.retryIfNeeded()
+                }
+            }
+        }
+
+        func stop() {
+            pollTask?.cancel()
+            pollTask = nil
+            helperSession?.stop()
+            helperSession = nil
+        }
+    }
+
+    /// A paired host's file. Its closures share the version last read or written (the baseline); the host
+    /// compares content hashes, so a touch is no change. `follow` returns once the host follows the file:
+    /// a read follows first, so no change between the read and the follow is missed.
+    @MainActor static func peer(
+        read: @escaping @MainActor (_ path: String) async -> RemoteServerMessage?,
+        write: @escaping @MainActor (_ path: String, _ text: String, _ expected: WorktreeFileVersion?) async throws -> WorktreeFileVersion,
+        follow: @escaping @MainActor (_ path: String, _ onChange: @escaping @MainActor (WorktreeFileVersion?) -> Void) async -> @MainActor () -> Void
+    ) -> Self {
+        let files = PeerFiles(fetch: read, follow: follow)
+        return Self(
+            sshHost: nil,
+            read: { path in
+                let following = files.hold(path)
+                defer { files.release(path) } // the caller starts watching in the same turn, keeping the follow
+                _ = await following.value
+                let (result, version) = try await files.current(path)
+                if let version {
+                    files.baselines[path] = version
+                    files.conflicted[path] = nil
+                }
+                return result
+            },
+            probe: { path in
+                let (result, version) = try await files.current(path)
+                if case .missing = result {
+                    files.conflicted[path] = .some(nil)
+                    return .deleted
+                }
+                guard let version, version.contentHash == files.baselines[path]?.contentHash else {
+                    files.conflicted[path] = version
+                    return .changed
+                }
+                files.baselines[path] = version
+                return .unchanged
+            },
+            currentMtime: { path in try await files.current(path).version?.modified },
+            verifyContained: { _ in }, // the host checks the path on every write
+            write: { path, content, expectedMtime, _ in
+                // Without a baseline (Keep mine, Save anyway) the save lands on the version the conflict
+                // showed, so a later change is refused rather than overwritten unseen.
+                let expected: WorktreeFileVersion?
+                if expectedMtime != nil {
+                    expected = files.baselines[path]
+                } else if let shown = files.conflicted[path] {
+                    expected = shown
+                } else {
+                    expected = try await files.current(path).version
+                }
+                files.writing[path, default: 0] += 1
+                let version: WorktreeFileVersion
+                do {
+                    version = try await write(path, content, expected)
+                } catch {
+                    files.wrote(path, version: nil)
+                    if case RemoteFileAccessError.saveConflict(let kind) = error {
+                        // The banner this raises shows the file as it is now.
+                        let shown: WorktreeFileVersion? = kind == .deleted ? nil : try? await files.current(path).version
+                        files.conflicted[path] = .some(shown)
+                    }
+                    throw error
+                }
+                files.baselines[path] = version
+                files.conflicted[path] = nil
+                files.wrote(path, version: version)
+                return version.modified
+            },
+            watch: { path, observed, check in
+                let id = files.watch(path, observed: observed, check: check)
+                return EditorRemoteWatch(stop: { files.unwatch(path, id: id) })
+            }
+        )
+    }
+
+    /// The baselines and host follows of one `.peer` backend's files, by path.
+    @MainActor
+    private final class PeerFiles {
+        private struct Watcher {
+            let id: UUID
+            let observed: @MainActor () -> Void
+            let check: @MainActor () async -> Void
+        }
+
+        private let fetch: @MainActor (String) async -> RemoteServerMessage?
+        private let follow: @MainActor (String, @escaping @MainActor (WorktreeFileVersion?) -> Void) async -> @MainActor () -> Void
+        /// The version each file was last read or written at.
+        var baselines: [String: WorktreeFileVersion] = [:]
+        /// The version each file's last conflict showed (nil: gone); Keep mine saves over exactly that.
+        var conflicted: [String: WorktreeFileVersion?] = [:]
+        /// Each followed file's follow, resolving to its stop once the host follows it.
+        private var follows: [String: Task<@MainActor () -> Void, Never>] = [:]
+        /// The reads and watches holding each follow.
+        private var holds: [String: Int] = [:]
+        private var watchers: [UUID: (path: String, watcher: Watcher)] = [:]
+        /// Files that changed while unwatched: looked at again once watched.
+        private var missed: Set<String> = []
+        /// The saves under way on each file.
+        var writing: [String: Int] = [:]
+        /// The last change heard during a file's saves (nil once gone): its check ran while the
+        /// save was in flight and did nothing, so it is checked again once they end.
+        private var heardWhileWriting: [String: WorktreeFileVersion?] = [:]
+
+        init(
+            fetch: @escaping @MainActor (String) async -> RemoteServerMessage?,
+            follow: @escaping @MainActor (String, @escaping @MainActor (WorktreeFileVersion?) -> Void) async -> @MainActor () -> Void
+        ) {
+            self.fetch = fetch
+            self.follow = follow
+        }
+
+        /// The file as the host has it now, and its version when it is editable.
+        func current(_ path: String) async throws -> (result: RemoteReadResult, version: WorktreeFileVersion?) {
+            switch await fetch(path) {
+            case .fileContents(_, _, let text, _, let version?):
+                return (.file(data: Data(text.utf8), mtime: version.modified), version)
+            case .fileContents:
+                return (.unreadable("The host sent no version of this file."), nil)
+            case .fileUnavailable(_, _, .notFound, _, _):
+                return (.missing, nil)
+            case .fileUnavailable(_, _, let reason, _, let message):
+                return (.unreadable(NativePeerWorkspace.describe(reason, message: message)), nil)
+            case nil:
+                throw RemoteFileAccessError.connectionFailed(FederatedSessionsProvider.peerUnavailableMessage)
+            default:
+                return (.unreadable("The host sent an unexpected reply."), nil)
+            }
+        }
+
+        /// Holds `path`'s follow, starting it if none; the task resolves once the host follows the file.
+        func hold(_ path: String) -> Task<@MainActor () -> Void, Never> {
+            holds[path, default: 0] += 1
+            if let following = follows[path] { return following }
+            let follow = follow
+            let following = Task { [weak self] in
+                await follow(path) { version in self?.changed(path, to: version) }
+            }
+            follows[path] = following
+            return following
+        }
+
+        /// A turn later, so a watch restarted in the same turn keeps the follow. Holds `self`: a closed
+        /// buffer frees its backend in the same turn, and the host must still hear the unfollow.
+        func release(_ path: String) {
+            Task {
+                guard let count = holds[path] else { return }
+                guard count <= 1 else {
+                    holds[path] = count - 1
+                    return
+                }
+                holds[path] = nil
+                guard let following = follows.removeValue(forKey: path) else { return }
+                await following.value()
+            }
+        }
+
+        func watch(_ path: String, observed: @escaping @MainActor () -> Void, check: @escaping @MainActor () async -> Void) -> UUID {
+            let watcher = Watcher(id: UUID(), observed: observed, check: check)
+            watchers[watcher.id] = (path, watcher)
+            _ = hold(path)
+            if missed.remove(path) != nil { notify(watcher) }
+            return watcher.id
+        }
+
+        func unwatch(_ path: String, id: UUID) {
+            guard watchers.removeValue(forKey: id) != nil else { return }
+            release(path)
+        }
+
+        /// Ends a save of `path`, which wrote `version` (nil: it failed). A change heard during the
+        /// saves is checked again unless it was the content written.
+        func wrote(_ path: String, version: WorktreeFileVersion?) {
+            let count = writing[path, default: 1] - 1
+            writing[path] = count > 0 ? count : nil
+            guard count <= 0, let heard = heardWhileWriting.removeValue(forKey: path) else { return }
+            if let heard, let version, heard.contentHash == version.contentHash { return }
+            notifyWatchers(of: path)
+        }
+
+        /// A version with the baseline's content, such as this Mac's own save coming back, only refreshes it;
+        /// anything else, nil included (gone, or look again), is a change to check. During a save the
+        /// baseline is about to move, so every change is kept for `wrote` to judge.
+        private func changed(_ path: String, to version: WorktreeFileVersion?) {
+            if writing[path] != nil {
+                heardWhileWriting[path] = .some(version)
+            } else if let version, version.contentHash == baselines[path]?.contentHash {
+                baselines[path] = version
+                return
+            }
+            notifyWatchers(of: path)
+        }
+
+        private func notifyWatchers(of path: String) {
+            let watching = watchers.values.filter { $0.path == path }
+            guard !watching.isEmpty else {
+                missed.insert(path)
+                return
+            }
+            for (_, watcher) in watching { notify(watcher) }
+        }
+
+        private func notify(_ watcher: Watcher) {
+            watcher.observed()
+            let check = watcher.check
+            Task { @MainActor in await check() }
+        }
+    }
+}
+
 struct RemoteHelperFileWatchMatcher {
     private let targetPath: String
     private let targetRelativePath: String?
@@ -299,7 +651,7 @@ final class EditorBuffer {
     func endWorkspaceEditMutation() { workspaceEditMutationInFlight = false }
 
     func refreshWorkspaceEditDiskMetadata(modifiedAt: Date?) {
-        if remoteHost != nil {
+        if remoteBackend != nil {
             if let modifiedAt { originalMtime = modifiedAt }
         } else {
             updateOriginalMtime(from: absoluteFileURL)
@@ -415,18 +767,15 @@ final class EditorBuffer {
     private var watcherFD: Int32 = -1
     private var watcherDeliveryGeneration = 0
     @ObservationIgnored
-    private let remoteHost: String?
+    private let remoteBackend: EditorRemoteBackend?
+    private var remoteHost: String? { remoteBackend?.sshHost }
     var isRemote: Bool { remoteHost != nil }
+    /// A paired host's file: its path names a file on the host, never one this Mac's language servers have open.
+    var isPeerHost: Bool { remoteBackend != nil && remoteHost == nil }
     @ObservationIgnored
-    private var remotePollTask: Task<Void, Never>?
-    @ObservationIgnored
-    private var remoteHelperSession: RemoteHelperWatchSession?
+    private var remoteWatch: EditorRemoteWatch?
     @ObservationIgnored
     private var remoteConflictChecks = RemoteConflictCheckCoalescer()
-    @ObservationIgnored
-    private static let remoteConflictPollNanos: UInt64 = 15 * 1_000_000_000
-    @ObservationIgnored
-    private static let remoteHelperSafetyNetNanos: UInt64 = 5 * 60 * 1_000_000_000
     @ObservationIgnored
     private var remoteLoadGeneration = 0
     @ObservationIgnored
@@ -582,6 +931,11 @@ final class EditorBuffer {
         self.init(worktreeRoot: worktreeRoot, relativePath: relativePath, isExternal: false, store: store, worktreeId: worktreeId, tabId: tabId, restoreEnabled: true, lsp: lsp, loadSynchronously: loadSynchronously, navigationResolvedRoot: navigationResolvedRoot)
     }
 
+    /// A paired host's file: no store, no LSP; `backend` reads, saves and watches it.
+    convenience init(hostWorktreeRoot: URL, relativePath: String, backend: EditorRemoteBackend) {
+        self.init(worktreeRoot: hostWorktreeRoot, relativePath: relativePath, isExternal: false, store: nil, worktreeId: nil, tabId: nil, restoreEnabled: false, lsp: nil, remoteBackend: backend)
+    }
+
     /// External-mode init: loads `absoluteURL` synchronously, marks the buffer
     /// read-only, and skips all save/didChange/file-watcher write paths. The
     /// buffer still re-loads contents when the file changes on disk (passive
@@ -610,17 +964,17 @@ final class EditorBuffer {
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false, navigationResolvedRoot: URL? = nil) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false, navigationResolvedRoot: URL? = nil, remoteBackend: EditorRemoteBackend? = nil) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
         self.externalEditable = externalEditable
-        let remoteHost = RemoteHostRegistry.shared.host(
+        let remoteBackend = remoteBackend ?? RemoteHostRegistry.shared.host(
             forPath: worktreeRoot.appendingPathComponent(relativePath).path
-        )
-        self.remoteHost = remoteHost
-        self.navigationResolvedRoot = remoteHost == nil ? navigationResolvedRoot : nil
-        self.localSaveRoot = remoteHost == nil ? navigationResolvedRoot ?? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
+        ).map { EditorRemoteBackend.ssh(host: $0, worktreeRoot: worktreeRoot) }
+        self.remoteBackend = remoteBackend
+        self.navigationResolvedRoot = remoteBackend == nil ? navigationResolvedRoot : nil
+        self.localSaveRoot = remoteBackend == nil ? navigationResolvedRoot ?? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
         self.storage = NSTextStorage()
         self.store = store
         self.worktreeId = worktreeId
@@ -926,8 +1280,8 @@ final class EditorBuffer {
 
     func revert() {
         invalidateComposition()
-        if let remoteHost {
-            beginRemoteLoad(host: remoteHost, replacingDirty: true)
+        if remoteBackend != nil {
+            beginRemoteLoad(replacingDirty: true)
             discardSnapshot()
             handleEdit(edit: nil)
             return
@@ -940,9 +1294,8 @@ final class EditorBuffer {
 
     func startWatching() {
         stopWatching()
-        if let remoteHost {
-            startRemoteHelperWatching(host: remoteHost)
-            startRemoteConflictPolling()
+        if remoteBackend != nil {
+            startRemoteWatching()
             return
         }
         let path = worktreeRoot.appendingPathComponent(relativePath).path
@@ -985,8 +1338,8 @@ final class EditorBuffer {
     }
 
     func startWatchingIfNeeded() {
-        if remoteHost != nil {
-            guard remoteHelperSession == nil else { return }
+        if remoteBackend != nil {
+            guard remoteWatch == nil else { return }
         } else {
             guard watcherSource == nil else { return }
         }
@@ -997,87 +1350,63 @@ final class EditorBuffer {
         // A canceled source may already have queued a MainActor callback.
         // It belongs to the old inode/path and must not affect a rebound buffer.
         watcherDeliveryGeneration &+= 1
-        remotePollTask?.cancel()
-        remotePollTask = nil
-        remoteHelperSession?.stop()
-        remoteHelperSession = nil
+        remoteWatch?.stop()
+        remoteWatch = nil
         watcherSource?.cancel()
         watcherSource = nil
         watcherFD = -1
         cancelMoveLookup()
     }
 
-    private func startRemoteConflictPolling() {
-        guard let host = remoteHost else { return }
-        remotePollTask?.cancel()
-        remotePollTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                let interval = self?.remoteHelperSession?.isAvailable == true
-                    ? Self.remoteHelperSafetyNetNanos
-                    : Self.remoteConflictPollNanos
-                do {
-                    try await Task.sleep(nanoseconds: interval)
-                } catch {
-                    return
-                }
-                guard let self, !Task.isCancelled else { return }
-                await checkRemoteConflict(host: host)
-                remoteHelperSession?.retryIfNeeded()
-            }
-        }
+    private func startRemoteWatching() {
+        guard let remoteBackend, remoteWatch == nil else { return }
+        remoteWatch = remoteBackend.watch(
+            relativePath,
+            { [weak self] in self?.fileWatchGeneration &+= 1 },
+            { [weak self] in await self?.checkRemoteConflict() }
+        )
     }
 
-    private func startRemoteHelperWatching(host: String) {
-        guard remoteHelperSession == nil else { return }
-        let watchedRoot = absoluteFileURL.deletingLastPathComponent()
-        let fileWatchMatcher = RemoteHelperFileWatchMatcher(
-            targetURL: absoluteFileURL,
-            watchedRootURL: watchedRoot
-        )
-        let session = RemoteHelperWatchSession(
-            host: host,
-            root: watchedRoot.path,
-            kinds: [.files]
-        )
-        session.onEvent = { [weak self] event in
-            guard let self, event.kind == .files else { return }
-            guard fileWatchMatcher.matches(event: event) else { return }
-            self.fileWatchGeneration &+= 1
-            Task { @MainActor in await self.checkRemoteConflict(host: host) }
-        }
-        session.onAvailabilityChanged = { [weak self] _ in
-            self?.startRemoteConflictPolling()
-        }
-        remoteHelperSession = session
-        session.start()
-    }
-
-    private func checkRemoteConflict(host: String) async {
+    private func checkRemoteConflict() async {
         guard remoteConflictChecks.beginOrMarkPending() else { return }
         repeat {
-            await checkRemoteConflictOnce(host: host)
+            await checkRemoteConflictOnce()
         } while remoteConflictChecks.finishCheck()
     }
 
-    private func checkRemoteConflictOnce(host: String) async {
-        guard !remoteSaveInFlight else { return }
+    private func checkRemoteConflictOnce() async {
+        guard !remoteSaveInFlight, let remoteBackend else { return }
         do {
-            guard let mtime = try await RemoteFileAccess.mtime(host: host, path: absoluteFileURL.path) else {
-                if dirty { conflict = .deletedOnDisk }
+            let probe = try await remoteBackend.probe(relativePath)
+            guard probe != .deleted else {
+                if dirty { raiseRemoteConflict(.deletedOnDisk) }
                 return
             }
-            RemoteHostStatusStore.shared.reportSuccess(host: host)
-            guard mtime > originalMtime else { return }
+            if let host = remoteHost { RemoteHostStatusStore.shared.reportSuccess(host: host) }
+            switch probe {
+            case .changed:
+                break
+            case let .modifiedAt(mtime):
+                guard mtime > originalMtime else { return }
+            case .unchanged, .deleted:
+                return
+            }
             if dirty {
-                conflict = .changedOnDisk
+                raiseRemoteConflict(.changedOnDisk)
             } else {
                 reloadAfterExternalChange()
             }
         } catch {
-            if case .connectionFailed = error as? RemoteFileAccessError {
+            if let host = remoteHost, case .connectionFailed = error as? RemoteFileAccessError {
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }
         }
+    }
+
+    /// A host file's new outside change takes back an earlier Keep mine, so a plain save can't overwrite it.
+    private func raiseRemoteConflict(_ newConflict: Conflict) {
+        if isPeerHost { remoteOverwriteAfterConflict = false }
+        conflict = newConflict
     }
 
     private func handleWatcherEvent() {
@@ -1111,7 +1440,7 @@ final class EditorBuffer {
     }
 
     private func startMoveLookupForMissingFile(at missingURL: URL) {
-        guard remoteHost == nil else { return }
+        guard remoteBackend == nil else { return }
         guard moveLookupTask == nil else { return }
         guard let originalIdentity else {
             markDeletedConflictIfNeeded()
@@ -1251,21 +1580,22 @@ final class EditorBuffer {
     }
 
     func resolveConflictKeepingMine() {
-        if let host = remoteHost {
+        if let remoteBackend {
+            let host = remoteHost
             remoteOverwriteAfterConflict = true
             let mtimeProbeGeneration = remoteSaveGeneration
-            let path = absoluteFileURL.path
+            let path = relativePath
             Task { @MainActor [weak self] in
                 do {
-                    if let mtime = try await RemoteFileAccess.mtime(host: host, path: path) {
+                    if let mtime = try await remoteBackend.currentMtime(path) {
                         guard let self,
                               self.remoteSaveGeneration == mtimeProbeGeneration,
                               self.remoteOverwriteAfterConflict else { return }
                         self.originalMtime = mtime
                     }
-                    RemoteHostStatusStore.shared.reportSuccess(host: host)
+                    if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
                 } catch {
-                    if case .connectionFailed = error as? RemoteFileAccessError {
+                    if let host, case .connectionFailed = error as? RemoteFileAccessError {
                         RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
                     }
                 }
@@ -1304,7 +1634,7 @@ final class EditorBuffer {
         case .clean, .ready:
             break
         }
-        if remoteHost != nil {
+        if remoteBackend != nil {
             throw SaveError.remoteSaveRequiresAwait
         }
         try saveLocal()
@@ -1323,8 +1653,8 @@ final class EditorBuffer {
         case .clean, .ready:
             break
         }
-        if let host = remoteHost {
-            try await saveRemote(host: host)
+        if let remoteBackend {
+            try await saveRemote(backend: remoteBackend)
             return
         }
         try saveLocal()
@@ -1412,13 +1742,14 @@ final class EditorBuffer {
 
     /// Remote writes must not block the main actor. Keep the buffer dirty and
     /// its hot-exit snapshot intact until the SSH write is confirmed.
-    private func saveRemote(host: String) async throws {
+    private func saveRemote(backend: EditorRemoteBackend) async throws {
+        let host = remoteHost
         remoteSaveGeneration += 1
         let generation = remoteSaveGeneration
         let canonical = storage.string
         let serialized = lineEnding.normalize(canonical)
         var priorOriginalText = originalText
-        let path = absoluteFileURL.path
+        let path = relativePath
 
         do {
             while remoteSaveInFlight {
@@ -1432,18 +1763,17 @@ final class EditorBuffer {
                 remoteSaveInFlight = false
             }
 
-            try await verifyRemoteFileContained(host: host, path: path)
+            try await backend.verifyContained(path)
             priorOriginalText = originalText
             let baseline = originalMtime
             let shouldOverwriteConflict = remoteOverwriteAfterConflict
             let newMtime: Date
             do {
-                newMtime = try await RemoteFileAccess.write(
-                    host: host,
-                    path: path,
-                    content: serialized,
-                    expectedMtime: shouldOverwriteConflict ? nil : baseline,
-                    expectedContent: shouldOverwriteConflict
+                newMtime = try await backend.write(
+                    path,
+                    serialized,
+                    shouldOverwriteConflict ? nil : baseline,
+                    shouldOverwriteConflict
                         ? nil
                         : lineEnding.normalize(priorOriginalText)
                 )
@@ -1458,7 +1788,7 @@ final class EditorBuffer {
             guard remoteSaveGeneration == generation else {
                 originalText = canonical
                 originalMtime = newMtime
-                RemoteHostStatusStore.shared.reportSuccess(host: host)
+                if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
                 return
             }
             originalText = canonical
@@ -1466,9 +1796,9 @@ final class EditorBuffer {
             remoteOverwriteAfterConflict = false
             discardSnapshot()
             notifyDidSave(url: absoluteFileURL)
-            RemoteHostStatusStore.shared.reportSuccess(host: host)
+            if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
         } catch {
-            if case .connectionFailed = error as? RemoteFileAccessError {
+            if let host, case .connectionFailed = error as? RemoteFileAccessError {
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }
             rollbackRemoteSave(to: priorOriginalText, error: error)
@@ -1511,7 +1841,7 @@ final class EditorBuffer {
         try validateNavigationWriteTrust()
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
-        if remoteHost != nil { throw remotePathOperationError() }
+        if remoteBackend != nil { throw remotePathOperationError() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -1546,7 +1876,7 @@ final class EditorBuffer {
         try validateNavigationWriteTrust()
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
-        if remoteHost != nil { throw remotePathOperationError() }
+        if remoteBackend != nil { throw remotePathOperationError() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -1707,7 +2037,7 @@ final class EditorBuffer {
     }
 
     private func renameItem(at oldURL: URL, to newURL: URL) throws {
-        if remoteHost != nil { throw remotePathOperationError() }
+        if remoteBackend != nil { throw remotePathOperationError() }
         guard oldURL.path != newURL.path else { return }
         if Darwin.rename(oldURL.path, newURL.path) != 0 {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -1990,7 +2320,7 @@ final class EditorBuffer {
     }
 
     func saveConflictKeepingMineAwaitingRemote() async throws {
-        let isRemote = remoteHost != nil
+        let isRemote = remoteBackend != nil
         if isRemote {
             remoteOverwriteAfterConflict = true
         }
@@ -2142,9 +2472,9 @@ final class EditorBuffer {
         lineEnding = snap.lineEnding
         // Keep restored remote drafts dirty until async load/save establishes
         // whether the on-host baseline changed while the app was closed.
-        restoredRemoteSnapshot = remoteHost != nil
+        restoredRemoteSnapshot = remoteBackend != nil
         readOnly = false
-        if remoteHost == nil {
+        if remoteBackend == nil {
             updateOriginalFileIdentityAndPermissions(from: worktreeRoot.appendingPathComponent(snap.relativePath))
         }
     }
@@ -2250,7 +2580,7 @@ final class EditorBuffer {
     /// user's snapshot is "their version" against a moved baseline — show
     /// the conflict banner. Called on first display after restore.
     func checkForConflictOnRestore() {
-        if remoteHost != nil { return }
+        if remoteBackend != nil { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             if dirty { conflict = .deletedOnDisk }
@@ -2282,14 +2612,16 @@ final class EditorBuffer {
         lineEnding = detected
     }
 
-    private func beginRemoteLoad(host: String, replacingDirty: Bool) {
+    private func beginRemoteLoad(replacingDirty: Bool) {
         if compositionOwner != nil {
-            compositionReload = { [weak self] in self?.beginRemoteLoad(host: host, replacingDirty: replacingDirty) }
+            compositionReload = { [weak self] in self?.beginRemoteLoad(replacingDirty: replacingDirty) }
             return
         }
+        guard let remoteBackend else { return }
+        let host = remoteHost
         remoteLoadGeneration &+= 1
         let generation = remoteLoadGeneration
-        let path = absoluteFileURL.path
+        let path = relativePath
         if replacingDirty {
             restoredRemoteSnapshot = false
         }
@@ -2300,15 +2632,10 @@ final class EditorBuffer {
             let result: RemoteReadResult
             do {
                 guard let self, self.remoteLoadGeneration == generation else { return }
-                if let hook = EditorBuffer.remoteReadResultForTesting {
-                    result = try await hook(host, path)
-                } else {
-                    try await self.verifyRemoteFileContained(host: host, path: path)
-                    result = try await RemoteFileAccess.read(host: host, path: path)
-                }
+                result = try await remoteBackend.read(path)
             } catch {
                 guard let self, self.remoteLoadGeneration == generation else { return }
-                if case .connectionFailed = error as? RemoteFileAccessError {
+                if let host, case .connectionFailed = error as? RemoteFileAccessError {
                     RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
                 }
                 if replacingDirty || !self.restoredRemoteSnapshot {
@@ -2319,7 +2646,7 @@ final class EditorBuffer {
             }
 
             guard let self, self.remoteLoadGeneration == generation else { return }
-            RemoteHostStatusStore.shared.reportSuccess(host: host)
+            if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
             switch result {
             case .missing, .directory:
                 if replacingDirty || !self.restoredRemoteSnapshot {
@@ -2463,9 +2790,9 @@ final class EditorBuffer {
             }
             return
         }
-        if let remoteHost {
+        if remoteBackend != nil {
             let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
-            beginRemoteLoad(host: remoteHost, replacingDirty: replacingDirty)
+            beginRemoteLoad(replacingDirty: replacingDirty)
             if let pending = acceptLoadCompletion(generation: generation) {
                 completion(preservePendingEdits ? pending : nil)
             }

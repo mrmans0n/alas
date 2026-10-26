@@ -717,6 +717,65 @@ struct NativePeerSessionsTests {
         #expect(client.workspace.changes == .loading)
     }
 
+    /// A host file is followed once for all its followers, again on each new subscription (which
+    /// released the old one's follows) with a nudge to look again, and unfollowed with its last follower.
+    @Test func aHostFileIsFollowedAgainOnEachSubscriptionUntilItsLastFollowerStops() async throws {
+        var sent: [HostClientMessage] = []
+        let hosts = NativePeerHosts(send: { sent.append($1) }, supports: { _, _ in true })
+        defer { hosts.stop() }
+        let path = URL(fileURLWithPath: "/srv/idle")
+        let idle = Worktree(id: Worktree.makeId(path: path), projectId: "p", name: "idle", branch: "idle",
+                            path: path, status: .clean, lastActivity: .distantPast)
+        let cursor = HostCursor(generation: UUID(), sequence: 0)
+        let ref = WorktreeRef(projectID: "p", path: path.path)
+        let follow = HostRequest.followFile(worktree: ref, path: "a.txt")
+        func requests(_ matches: (HostRequest) -> Bool) -> [HostClientMessage] { sent.filter { matches($0.request) } }
+        /// Answers the `count`th snapshot and subscribe.
+        func subscribe(_ count: Int) async throws {
+            try await eventually("snapshot request") { requests { $0 == .snapshot }.count == count }
+            hosts.receive(serverId: "B", .response(id: requests { $0 == .snapshot }[count - 1].id, result: .snapshot(snapshot: HostSnapshot(
+                cursor: cursor,
+                projects: [ProjectSnapshot(ProjectConfig(id: "p", name: "repo", path: "/srv/repo", color: "blue", addedAt: .distantPast))],
+                worktrees: [WorktreeSnapshot(worktree: idle, operation: nil, isArchived: false)],
+                workspaceCheckouts: [], runs: [], sessions: []
+            ))))
+            func isSubscribe(_ request: HostRequest) -> Bool {
+                if case .subscribeAccepting = request { true } else { false }
+            }
+            try await eventually("subscribe request") { requests(isSubscribe).count == count }
+            hosts.receive(serverId: "B", .response(id: requests(isSubscribe)[count - 1].id, result: .subscribed))
+        }
+        /// Answers the `count`th followFile.
+        func answerFollow(_ count: Int) async throws {
+            try await eventually("followFile") { requests { $0 == follow }.count == count }
+            hosts.receive(serverId: "B", .response(id: requests { $0 == follow }[count - 1].id, result: .done))
+        }
+        hosts.peersChanged(online: ["B"])
+        try await subscribe(1)
+        let worktree = try #require(hosts.worktrees["B"]?.first)
+
+        let heard = Heard()
+        let first = Task { await hosts.followFile("a.txt", in: worktree, serverId: "B") { heard.versions.append($0?.contentHash) } }
+        try await answerFollow(1)
+        let stopFirst = await first.value
+        let stopSecond = await hosts.followFile("a.txt", in: worktree, serverId: "B") { _ in }
+        #expect(requests { $0 == follow }.count == 1)
+
+        let changed = WorktreeFileVersion(contentHash: "h2", modified: .distantPast)
+        hosts.receive(serverId: "B", .events(events: [.fileChanged(worktreeID: idle.id, path: "a.txt", version: changed)], cursor: cursor))
+        #expect(heard.versions == ["h2"])
+
+        hosts.receive(serverId: "B", .events(events: [.resync], cursor: cursor))
+        try await subscribe(2)
+        try await answerFollow(2)
+        try await eventually("look again") { heard.versions == ["h2", nil] }
+
+        stopFirst()
+        stopSecond()
+        try await eventually("unfollowFile") { sent.last?.request == .unfollowFile(worktree: ref, path: "a.txt") }
+        #expect(requests { $0 == follow }.count == 2)
+    }
+
     /// A host serving the host channel without `host.worktrees.lifecycle.v1`
     /// lists its worktrees with no controls and is never sent a lifecycle request.
     @Test(arguments: [false, true])
@@ -2386,4 +2445,10 @@ struct NativePeerSessionsTests {
         links.receive(.sessionList(sessions: [projectRow("new"), projectRow("s")]), from: "B")
         #expect(client.selectedSessionId == destination)
     }
+}
+
+/// What a follower heard, by reference so a follow's handler can append to it.
+@MainActor
+private final class Heard {
+    var versions: [String?] = []
 }

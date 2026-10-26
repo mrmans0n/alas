@@ -37,8 +37,10 @@ struct FilesTabView: View {
     var onCommitBookmarksPaneHeight: () -> Void = {}
     var bookmarksCollapsed: Bool = false
     var onToggleBookmarksCollapsed: () -> Void = {}
-    /// Peer worktrees: read-only menus and no root menu (it only creates).
+    /// Peer worktrees: read-only menus, and no root menu unless `createsOnPeer`.
     var readOnly: Bool = false
+    /// With `readOnly`: read-only menus plus creation; the root menu offers only New File and New Folder.
+    var createsOnPeer: Bool = false
 
     @Environment(\.theme) private var theme
     @State private var dragStartHeight: CGFloat?
@@ -103,7 +105,7 @@ struct FilesTabView: View {
                     }
                     .padding(.vertical, 4)
                 }
-                .contextMenu { if !readOnly { rootContextMenu } }
+                .contextMenu { if !readOnly || createsOnPeer { rootContextMenu } }
                 .onChange(of: revealTick) { _, _ in
                     guard let path = revealPath else { return }
                     proxy.scrollTo("file:\(path)", anchor: .top)
@@ -129,7 +131,8 @@ struct FilesTabView: View {
             onLoadChildren: onLoadChildren,
             onToggleBookmark: onToggleBookmark,
             onRemoveBookmark: onRemoveBookmark,
-            readOnly: readOnly
+            readOnly: readOnly,
+            createsOnPeer: createsOnPeer
         )
     }
 
@@ -185,7 +188,9 @@ struct FilesTabView: View {
         // No `isBookmarked`: this menu targets the worktree root, which is not
         // a bookmarkable path.
         FileContextMenuActions(
-            configuration: .filesTab(target: target),
+            configuration: readOnly
+                ? FileContextMenuConfiguration(target: FileContextMenuTarget(kind: .dir, localURL: nil), actions: [.newFile, .newFolder])
+                : .filesTab(target: target),
             onNewFile: { onCreateFile("") },
             onNewFolder: { onCreateFolder("") },
             onCopyRelativePath: { Clipboard.copy(".") },

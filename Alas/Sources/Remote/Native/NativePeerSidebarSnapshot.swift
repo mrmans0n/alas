@@ -222,6 +222,30 @@ struct NativePeerCommitEditorSelection: Equatable {
     let comparisonMode: AppConfig.Changes.ChangesComparisonMode
 }
 
+/// A host worktree's text file, edited in the editor over the peer center pane.
+/// Equal and hashed by server, worktree id and path only (by hand: `PeerHostWorktree` is only
+/// Equatable), so a refreshed host snapshot neither re-keys the buffer nor re-ids the view.
+struct NativePeerHostFile: Hashable {
+    let serverId: String
+    let worktree: PeerHostWorktree
+    let path: String
+
+    /// Namespaced so a host path that also exists on this Mac never shares a local worktree's stores.
+    var editorWorktreeID: String { "peer:\(serverId):\(worktree.snapshot.worktree.id)" }
+    var tabID: TabID { "peer-file:\(serverId):\(worktree.snapshot.worktree.id):\(path)" }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.serverId == rhs.serverId && lhs.worktree.snapshot.worktree.id == rhs.worktree.snapshot.worktree.id
+            && lhs.path == rhs.path
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(serverId)
+        hasher.combine(worktree.snapshot.worktree.id)
+        hasher.combine(path)
+    }
+}
+
 struct NativePeerWorktreeGroup: Identifiable, Equatable {
     let id: String
     /// Most recently updated first, history included.

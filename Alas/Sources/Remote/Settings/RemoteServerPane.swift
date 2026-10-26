@@ -34,11 +34,7 @@ struct RemoteServerPane: View {
                     ) {
                         AlasToggle(on: Binding(
                             get: { state.config.remote.enabled },
-                            set: {
-                                state.config.remote.enabled = $0
-                                state.saveConfig()
-                                state.syncRemoteServer()
-                            }
+                            set: { state.setRemoteEnabled($0) }
                         ))
                     }
 

@@ -63,6 +63,9 @@ struct NativePeerWorkspace: Equatable {
     private(set) var fileTreeRevision = 0
     private(set) var document: Document?
     private(set) var documentContent: Load<DocumentContent> = .idle
+    /// The open `.file` document's version, when the host would save it. Kept while the same
+    /// document reloads, so an editor open on it stays.
+    private(set) var documentVersion: WorktreeFileVersion?
     private var loadingPaths: Set<String> = []
     private var loadedPaths: Set<String> = []
     private var failedPaths: Set<String> = []
@@ -138,6 +141,7 @@ struct NativePeerWorkspace: Equatable {
     }
 
     mutating func beginDocument(_ document: Document) {
+        if document != self.document { documentVersion = nil }
         self.document = document
         documentContent = .loading
     }
@@ -154,6 +158,7 @@ struct NativePeerWorkspace: Equatable {
 
     mutating func closeDocument() {
         document = nil
+        documentVersion = nil
         documentContent = .idle
     }
 
@@ -275,11 +280,13 @@ struct NativePeerWorkspace: Equatable {
                 return true
             }
             documentContent = .failed(Self.describe(reason, message: message))
-        case .fileContents(_, let path, let text, let truncated, _):
+        case .fileContents(_, let path, let text, let truncated, let version):
             guard document == .file(path: path) else { return true }
             documentContent = .loaded(.text(text, truncated: truncated))
+            documentVersion = version
         case .fileUnavailable(_, let path, let reason, _, let message):
             guard document == .file(path: path) else { return true }
+            documentVersion = nil
             documentContent = .failed(Self.describe(reason, message: message))
         default:
             return false

@@ -50,6 +50,8 @@ final class NativePeerHosts {
     @ObservationIgnored private var gitFollow: GitFollow?
     @ObservationIgnored private var gitFollowSent = false
     @ObservationIgnored private var gitFollowSends = 0
+    /// The host files followed, by peer, worktree and path.
+    @ObservationIgnored private var fileFollows: [FileFollowKey: FileFollow] = [:]
 
     init(
         send: @escaping @MainActor (_ serverId: String, HostClientMessage) -> Void,
@@ -102,6 +104,7 @@ final class NativePeerHosts {
         reviewRevisions = [:]
         subscribed = []
         gitFollowSent = false
+        fileFollows = [:]
         for channel in stopped {
             channel.onChange = nil
             channel.disconnect()
@@ -344,6 +347,134 @@ final class NativePeerHosts {
     /// Whether `serverId` lists, inspects, takes, deletes and restores its worktrees' checkpoints.
     func servesCheckpoints(serverId: String) -> Bool {
         servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesCheckpointsV1)
+    }
+
+    /// Whether `serverId` saves its worktrees' files, makes folders in them and reports their changes.
+    func servesFiles(serverId: String) -> Bool {
+        worktrees[serverId] != nil && channels[serverId]?.isSubscribed == true
+            && supports(serverId, HostProtocolCapability.worktreesFilesV1)
+    }
+
+    /// The version written. A stale version throws RemoteFileAccessError.saveConflict(current == nil ? .deleted : .changed);
+    /// any other refusal throws NativePeerReviewGitClientError with the host's message.
+    func writeFile(
+        _ path: String, text: String, expected: WorktreeFileVersion?, in worktree: PeerHostWorktree, serverId: String
+    ) async throws -> WorktreeFileVersion {
+        guard servesFiles(serverId: serverId), let channel = channels[serverId] else {
+            throw NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage)
+        }
+        switch await channel.request(.writeFile(worktree: Self.ref(worktree), path: path, text: text, expected: expected)) {
+        case .fileWritten(let version):
+            return version
+        case .failure(.fileChanged(let current)):
+            throw RemoteFileAccessError.saveConflict(current == nil ? .deleted : .changed)
+        case .failure(.invalidRequest(let reason)):
+            throw NativePeerReviewGitClientError(message: reason)
+        case .failure(let error):
+            throw NativePeerReviewGitClientError(message: PeerWorktreeRemoval.message(for: error))
+        default:
+            throw NativePeerReviewGitClientError(message: "The host sent an unexpected reply.")
+        }
+    }
+
+    /// The error message; nil once done.
+    func createFolder(_ path: String, in worktree: PeerHostWorktree, serverId: String) async -> String? {
+        let result = await answer(
+            .createFolder(worktree: Self.ref(worktree), path: path), served: servesFiles(serverId: serverId), serverId: serverId,
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            showsInvalidRequest: true
+        ) { if case .done = $0 { () } else { nil } }
+        if case .failure(let error) = result { return error.message }
+        return nil
+    }
+
+    /// Calls `onChange` with each version of `path` the host sends, and with nil after a resubscription
+    /// (look again), until the returned stop runs. Returns once the host follows the file, or could not.
+    /// The first follow of a file sends followFile, the last stop unfollowFile. `onRefused` hears
+    /// why the host refused that follow: it would not save the file.
+    func followFile(
+        _ path: String, in worktree: PeerHostWorktree, serverId: String,
+        onChange: @escaping @MainActor (WorktreeFileVersion?) -> Void,
+        onRefused: @MainActor (String) -> Void = { _ in }
+    ) async -> @MainActor () -> Void {
+        // The host names the file by its normalized path in `fileChanged`.
+        let key = FileFollowKey(
+            serverId: serverId, worktreeID: worktree.snapshot.worktree.id,
+            path: RemoteWorktreeFileAccess.normalizedRelativePath(path) ?? path
+        )
+        let follow = fileFollows[key] ?? FileFollow(worktree: Self.ref(worktree))
+        fileFollows[key] = follow
+        let id = UUID()
+        follow.handlers[id] = onChange
+        sendFileFollow(key, follow, nudge: false)
+        if let refusal = await follow.sent?.value ?? nil { onRefused(refusal) }
+        return { [weak self, weak follow] in
+            guard let self, let follow, follow.handlers.removeValue(forKey: id) != nil, follow.handlers.isEmpty,
+                  fileFollows[key] === follow
+            else { return }
+            fileFollows[key] = nil
+            guard let sent = follow.sent, let channel = channels[serverId] else { return }
+            Task {
+                await sent.value // an unfollow overtaking its follow would leave the file followed
+                // A re-follow since then owns the host's follow (a set, not a count); its stop unfollows.
+                guard self.fileFollows[key] == nil else { return }
+                _ = await channel.request(.unfollowFile(worktree: follow.worktree, path: key.path))
+            }
+        }
+    }
+
+    /// `.peer` over `read`, `writeFile` and `followFile`; `onFollowRefused` as `followFile`'s `onRefused`.
+    func hostFileBackend(
+        in worktree: PeerHostWorktree, serverId: String,
+        onFollowRefused: @escaping @MainActor (String) -> Void = { _ in }
+    ) -> EditorRemoteBackend {
+        .peer(
+            read: { [weak self] path in await self?.read(.file(path: path), in: worktree, serverId: serverId) },
+            write: { [weak self] path, text, expected in
+                guard let self else { throw NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage) }
+                return try await writeFile(path, text: text, expected: expected, in: worktree, serverId: serverId)
+            },
+            follow: { [weak self] path, onChange in
+                await self?.followFile(path, in: worktree, serverId: serverId, onChange: onChange, onRefused: onFollowRefused) ?? {}
+            }
+        )
+    }
+
+    private struct FileFollowKey: Hashable {
+        let serverId: String
+        let worktreeID: String
+        let path: String
+    }
+
+    @MainActor
+    private final class FileFollow {
+        let worktree: WorktreeRef
+        var handlers: [UUID: @MainActor (WorktreeFileVersion?) -> Void] = [:]
+        /// The current subscription's followFile, once sent; answers the host's refusal, if any.
+        var sent: Task<String?, Never>?
+
+        init(worktree: WorktreeRef) {
+            self.worktree = worktree
+        }
+    }
+
+    /// Host-side follows end with the subscription, so each one is sent the follow. After a
+    /// resubscription (`nudge`) the followers look again, since changes in between were not sent.
+    private func sendFileFollow(_ key: FileFollowKey, _ follow: FileFollow, nudge: Bool) {
+        guard follow.sent == nil, servesFiles(serverId: key.serverId), let channel = channels[key.serverId] else { return }
+        let worktree = follow.worktree
+        follow.sent = Task { [weak follow] in
+            let reply = await channel.request(.followFile(worktree: worktree, path: key.path))
+            let refusal: String? = switch reply {
+            case .failure(.invalidRequest(let reason)): reason
+            case .failure(let error): PeerWorktreeRemoval.message(for: error)
+            default: nil
+            }
+            if nudge, let handlers = follow?.handlers.values {
+                for handler in handlers { handler(nil) }
+            }
+            return refusal
+        }
     }
 
     /// The copy for a checkpoint the host no longer lists.
@@ -596,11 +727,20 @@ final class NativePeerHosts {
             }
             if !channel.isSubscribed, gitFollow?.serverId == serverId { gitFollowSent = false }
             sendGitFollow()
+            for (key, follow) in fileFollows where key.serverId == serverId {
+                if !channel.isSubscribed { follow.sent = nil }
+                sendFileFollow(key, follow, nudge: true)
+            }
             onChange?()
             if runsChanged { onRunsChanged?(serverId) }
         }
         channel.onNotice = { [notice] in notice(serverId, $0) }
         channel.onWorktreeNotice = { [worktreeNotice] in worktreeNotice(serverId, $0) }
+        channel.onFileChanged = { [weak self] worktreeID, path, version in
+            let key = FileFollowKey(serverId: serverId, worktreeID: worktreeID, path: path)
+            guard let handlers = self?.fileFollows[key]?.handlers.values else { return }
+            for handler in handlers { handler(version) }
+        }
         channels[serverId] = channel
         return channel
     }

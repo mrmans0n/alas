@@ -2525,6 +2525,16 @@ final class TabsManager {
         return buffer
     }
 
+    /// Serves `buffer` for `tabId` from `buffer(worktreeId:tabId:…)`, as the editor views ask; no key, store or LSP.
+    func adoptBuffer(_ buffer: EditorBuffer, tabId: TabID) {
+        tabBuffers[tabId] = buffer
+    }
+
+    func releaseAdoptedBuffer(tabId: TabID) {
+        guard bufferKeys[tabId] == nil else { return }
+        tabBuffers[tabId] = nil
+    }
+
     private func reattachWorkspaceUndo(_ buffer: EditorBuffer, worktreeId: String) {
         let document = EditorDocumentID(host: buffer.workspaceEditHost, worktreeID: worktreeId,
                                         uri: buffer.worktreeRoot.appendingPathComponent(buffer.relativePath).lspURI)

@@ -439,6 +439,9 @@ struct RootView: View {
             )
             // An edit moves it to the rewritten commit: a fresh editor reads it.
             .id("\(editor.serverId)/\(worktree.id)/\(editor.sha)")
+        } else if let file = client.openedHostFile {
+            NativePeerHostFileView(file: file, client: client, state: state)
+                .id(file)
         } else if client.canReadWorkspace, let document = client.workspace.document {
             // A session's document, or one of a selected idle worktree read
             // over its host's channel.
@@ -447,6 +450,7 @@ struct RootView: View {
                 content: client.workspace.documentContent,
                 codeFontFamily: state.config.code.fontFamily,
                 codeFontSize: CGFloat(state.config.code.fontSize),
+                readOnlyNote: client.hostFileReadOnlyNote,
                 onClose: { client.closeDocument() }
             )
             .id(document)
@@ -1311,7 +1315,9 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let h = g
             .onReceive(NotificationCenter.default.publisher(for: .alasSaveActiveTab)) { _ in
-                if let wt = selectedWorktree() {
+                if state.hasOpenPeerHostFile {
+                    state.nativePeerSessions?.saveOpenedHostFile()
+                } else if let wt = selectedWorktree() {
                     state.saveActiveTab(worktreeId: wt.id)
                 }
             }
@@ -1327,7 +1333,9 @@ private struct RootBaseHandlers: ViewModifier {
             }
         let k = j
             .onReceive(NotificationCenter.default.publisher(for: .alasRevertActiveTab)) { _ in
-                if let wt = selectedWorktree() {
+                if state.hasOpenPeerHostFile {
+                    state.nativePeerSessions?.revertOpenedHostFile()
+                } else if let wt = selectedWorktree() {
                     state.revertActiveTab(worktreeId: wt.id)
                 }
             }
