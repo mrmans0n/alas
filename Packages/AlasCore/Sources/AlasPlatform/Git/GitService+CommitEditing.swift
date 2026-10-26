@@ -144,6 +144,13 @@ extension GitService {
                 throw CommitEditError.unsupportedAction
             }
         }
+        // Dropping a rename, copy or type change would delete the file, not undo the change.
+        if case .dropFile(let path) = action {
+            let details = try await commitDetails(at: worktreePath, sha: targetSha)
+            guard let status = details.files.first(where: { $0.path == path })?.status, ["A", "M", "D"].contains(status) else {
+                throw CommitEditError.unsupportedAction
+            }
+        }
 
         let anchor = try await firstParent(of: targetSha, cwd: worktreePath) ?? baseRef
         let backupBranch = "alas-edit-backup-\(UUID().uuidString)"

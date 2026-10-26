@@ -205,7 +205,9 @@ extension AlasCoreContext {
             ).hunks
             // Only a hunk the Mac was sent whole, as `HostDiff` caps it.
             let shown = RemoteWorktreeFileAccess.truncateHunks(hunks).hunks
-            guard shown.indices.contains(index), shown[index] == hunks[index], hunks[index].header == header else { throw changed }
+            guard shown.indices.contains(index), shown[index] == hunks[index], hunks[index].header == header,
+                  !hunks[index].lines.isEmpty
+            else { throw changed }
             action = .dropHunk(path: path, hunk: hunks[index])
         }
         return try await git.editCommit(worktreePath: root, baseRef: baseRef, targetSha: target, action: action)
