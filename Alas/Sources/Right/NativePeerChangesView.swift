@@ -84,6 +84,7 @@ struct NativePeerChangesView: View {
                                 conflicts: conflicts,
                                 bulkInFlight: false,
                                 hasAgent: false,
+                                showsBulkResolve: false,
                                 onSelect: { onOpen(.diff(path: $0.path, stage: .unstaged)) },
                                 onUseOurs: git.onUseOurs,
                                 onUseTheirs: git.onUseTheirs,
