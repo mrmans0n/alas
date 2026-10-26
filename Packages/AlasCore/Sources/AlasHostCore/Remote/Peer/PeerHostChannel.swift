@@ -74,7 +74,7 @@ public final class PeerHostChannel {
             case .reviewsChanged(let worktreeID):
                 reviewRevisions[worktreeID, default: 0] += 1
             case .transcript, .pendingRequest, .pendingRequestResolved,
-                 .sessionState, .notice, .worktreeNotice, .resync:
+                 .sessionState, .notice, .worktreeNotice, .fileChanged, .resync:
                 break
             }
         }

@@ -92,6 +92,13 @@ struct HostProtocolTests {
             id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!,
             groupIDs: [UUID(uuidString: "7F9619FF-8B86-D011-B42D-00CF4FC964FF")!], fingerprint: "f"
         ))),
+        HostClientMessage(id: 40, request: .writeFile(
+            worktree: ref, path: "a.txt", text: "hi\r\n",
+            expected: WorktreeFileVersion(contentHash: "abc", modified: Date(timeIntervalSince1970: 1_800_000_000.25))
+        )),
+        HostClientMessage(id: 41, request: .writeFile(worktree: ref, path: "new.txt", text: "", expected: nil)),
+        HostClientMessage(id: 42, request: .createFolder(worktree: ref, path: "docs")),
+        HostClientMessage(id: 43, request: .followFile(worktree: ref, path: "docs/a.txt")),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -164,6 +171,8 @@ struct HostProtocolTests {
             blocker: .activeSession, scopeDescription: "This repository only",
             selectedGroupIDs: [UUID(uuidString: "8F9619FF-8B86-D011-B42D-00CF4FC964FF")!]
         ))),
+        .response(id: 25, result: .fileWritten(version: WorktreeFileVersion(contentHash: "abc", modified: Date(timeIntervalSince1970: 0)))),
+        .response(id: 26, result: .failure(error: .fileChanged(current: nil))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
         )])),
@@ -173,6 +182,7 @@ struct HostProtocolTests {
             .sessionChanged(session),
             .sessionRemoved(owner: .worktree(worktree.id), id: "s"),
             .runRemoved(id: "r"),
+            .fileChanged(worktreeID: worktree.id, path: "a.txt", version: nil),
             .worktreeNotice(HostWorktreeNotice(id: UUID(), worktreeID: worktree.id, title: "t", body: "b", reviewSessionID: "s")),
             .transcript(owner: .worktree("w"), id: "s", delta: HostTranscriptDelta(
                 revision: TranscriptRevision(epoch: 1, version: 5), reset: true,
@@ -276,6 +286,25 @@ struct HostProtocolTests {
             #expect(try JSONDecoder().decode(
                 RemoteServerMessage.self, from: JSONSerialization.data(withJSONObject: json)
             ) == changeList(nil))
+        }
+    }
+
+    /// A file read carries its version; an older host sends none, and one this Mac can't read is dropped.
+    @Test func aFileReadCarriesItsVersion() throws {
+        let version = WorktreeFileVersion(contentHash: "ab", modified: Date(timeIntervalSince1970: 7))
+        func contents(_ version: WorktreeFileVersion?) -> RemoteServerMessage {
+            .fileContents(sessionId: "a", path: "p", text: "t", truncated: false, version: version)
+        }
+        let data = try JSONEncoder().encode(contents(version))
+        #expect(try JSONDecoder().decode(RemoteServerMessage.self, from: data) == contents(version))
+        #expect(contents(version).replacingSessionId("b")
+            == .fileContents(sessionId: "b", path: "p", text: "t", truncated: false, version: version))
+        var json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        for unreadable in [nil, "garbage", ["contentHash": 1]] as [Any?] {
+            json["version"] = unreadable
+            #expect(try JSONDecoder().decode(
+                RemoteServerMessage.self, from: JSONSerialization.data(withJSONObject: json)
+            ) == contents(nil))
         }
     }
 

@@ -1,7 +1,34 @@
+import CryptoKit
 import Foundation
 import Darwin
 import AlasFoundation
 import AlasModel
+
+/// The version of a file's bytes, so an edit can tell whether the file
+/// changed since it was read.
+public struct WorktreeFileVersion: Codable, Hashable, Sendable {
+    /// SHA-256 of the bytes, lowercase hex: two versions differ when this does.
+    public var contentHash: String
+    /// When the bytes were read; never compared on the host.
+    public var modified: Date
+
+    public init(contentHash: String, modified: Date) {
+        self.contentHash = contentHash
+        self.modified = modified
+    }
+
+    public static func contentHash(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+/// A regular file's bytes and version, read through one no-follow descriptor.
+public enum FileVersionProbe: Equatable, Sendable {
+    /// Absent, a symlink, or not a regular file.
+    case missing
+    case tooLarge(byteSize: Int)
+    case version(WorktreeFileVersion, data: Data)
+}
 
 /// Path validation and payload caps for the remote changes/files surface.
 ///
@@ -234,15 +261,6 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// sniff never needs more than that.
     private static let binarySniffPrefixBytes = 8192
 
-    /// Outcome of `openReadCapped`, the single-descriptor open+fstat+read
-    /// primitive both `readFileContents` and `looksBinaryOnDisk` funnel
-    /// through.
-    private enum RawReadOutcome {
-        case notFound
-        case tooLarge(byteSize: Int)
-        case data(Data)
-    }
-
     /// Opens `url` and, on success, returns a descriptor already `fstat`-
     /// verified as a *regular file* — never a symlink, directory, FIFO, or
     /// other special file. Callers own the returned descriptor and must
@@ -279,10 +297,19 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// completely would require a hand-rolled `openat`-per-component walk;
     /// not implemented here as disproportionate to the residual risk.
     private static func openRegularFileNoFollow(at url: URL) -> Int32? {
-        let fd = url.withUnsafeFileSystemRepresentation { representation -> Int32 in
+        regularFile(url.withUnsafeFileSystemRepresentation { representation -> Int32 in
             guard let representation else { return -1 }
             return open(representation, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC)
-        }
+        })
+    }
+
+    /// `openRegularFileNoFollow`, for `name` in the held `folder`.
+    private static func openRegularFileNoFollow(_ name: String, in folder: Int32) -> Int32? {
+        regularFile(openat(folder, name, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC))
+    }
+
+    /// `fd` when it is open on a regular file; otherwise closes it.
+    private static func regularFile(_ fd: Int32) -> Int32? {
         guard fd >= 0 else { return nil }
         var status = stat()
         guard fstat(fd, &status) == 0, (status.st_mode & S_IFMT) == S_IFREG else {
@@ -292,18 +319,20 @@ public enum RemoteWorktreeFileAccess: Sendable {
         return fd
     }
 
-    /// Reads the ENTIRE contents of `url` via a single open/fstat/read
+    /// Reads the ENTIRE contents of `fd`'s file (closing it) via one open/fstat/read
     /// sequence (see `openRegularFileNoFollow`), capped at `maxBytes`. The
     /// size check and the read both happen against the SAME already-opened
     /// descriptor — no re-`stat`, no re-`open` by path — so a concurrent
     /// write growing the file past the cap after `fstat` is still caught by
     /// the read loop's own running total rather than a stale earlier stat.
-    private static func openReadCapped(at url: URL, maxBytes: Int) -> RawReadOutcome {
-        guard let fd = openRegularFileNoFollow(at: url) else { return .notFound }
+    /// The version's hash and mtime come from that same descriptor, so they
+    /// describe exactly the bytes returned.
+    private static func readCapped(_ fd: Int32?, maxBytes: Int) -> FileVersionProbe {
+        guard let fd else { return .missing }
         defer { close(fd) }
 
         var status = stat()
-        guard fstat(fd, &status) == 0 else { return .notFound }
+        guard fstat(fd, &status) == 0 else { return .missing }
         let statedSize = Int(clamping: status.st_size)
         if statedSize > maxBytes {
             return .tooLarge(byteSize: statedSize)
@@ -325,7 +354,14 @@ public enum RemoteWorktreeFileAccess: Sendable {
         if data.count > maxBytes {
             return .tooLarge(byteSize: data.count)
         }
-        return .data(data)
+        return .version(WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: data), modified: modified(status)), data: data)
+    }
+
+    /// Built the way FileManager builds `.modificationDate`, so the two agree to the bit.
+    private static func modified(_ status: stat) -> Date {
+        let mtime = status.st_mtimespec
+        return Date(timeIntervalSinceReferenceDate: TimeInterval(mtime.tv_sec)
+            - Date.timeIntervalBetween1970AndReferenceDate + TimeInterval(mtime.tv_nsec) / 1_000_000_000)
     }
 
     /// Reads only the first `maxBytes` of `url` (or fewer if the file is
@@ -345,23 +381,87 @@ public enum RemoteWorktreeFileAccess: Sendable {
     }
 
     /// Stats, caps, reads, and UTF-8-decodes `url` entirely off the caller's
-    /// actor, via a single open/fstat/read sequence (`openReadCapped`) so no
+    /// actor, via a single open/fstat/read sequence (`readCapped`) so no
     /// path is ever re-resolved between the size check and the actual read.
     /// Callers on `@MainActor` (`AppState`) must `await` this rather than
     /// reading the file directly, so an unbounded read never blocks the UI
     /// thread.
     public static func readFileContents(at url: URL) async -> FileReadOutcome {
+        await readVersionedFileContents(at: url).outcome
+    }
+
+    /// `readFileContents`, plus the version of the bytes read: nil unless `.text`.
+    public static func readVersionedFileContents(at url: URL) async -> (outcome: FileReadOutcome, version: WorktreeFileVersion?) {
         await Task.detached(priority: .userInitiated) {
-            switch openReadCapped(at: url, maxBytes: maxFileBytes) {
-            case .notFound: return .notFound
-            case .tooLarge(let byteSize): return .tooLarge(byteSize: byteSize)
-            case .data(let data):
-                guard !GitService.looksBinary(data) else { return .binary(byteSize: data.count) }
-                guard let text = String(data: data, encoding: .utf8) else {
-                    return .binary(byteSize: data.count)
+            switch readCapped(openRegularFileNoFollow(at: url), maxBytes: maxFileBytes) {
+            case .missing: return (.notFound, nil)
+            case .tooLarge(let byteSize): return (.tooLarge(byteSize: byteSize), nil)
+            case .version(let version, let data):
+                guard !GitService.looksBinary(data), let text = String(data: data, encoding: .utf8) else {
+                    return (.binary(byteSize: data.count), nil)
                 }
-                return .text(text)
+                return (.text(text), version)
             }
+        }.value
+    }
+
+    /// The regular file at `url` as one no-follow open, capped at `maxFileBytes`.
+    public static func probeVersion(at url: URL) async -> FileVersionProbe {
+        await Task.detached(priority: .userInitiated) {
+            readCapped(openRegularFileNoFollow(at: url), maxBytes: maxFileBytes)
+        }.value
+    }
+
+    /// `probeVersion`, for `name` in the held `folder`.
+    public static func probeVersion(_ name: String, in folder: FileHandle) async -> FileVersionProbe {
+        await Task.detached(priority: .userInitiated) {
+            readCapped(openRegularFileNoFollow(name, in: folder.fileDescriptor), maxBytes: maxFileBytes)
+        }.value
+    }
+
+    /// Writes `data` to a temp file beside `name` in the held `folder`, fsyncs it, sets the permission bits
+    /// `name` had (0644 for a new file), and renames it over `name`, fsyncing the folder after. Every step is
+    /// relative to `folder`, so a folder on the way swapped for a symlink since it was opened changes nothing.
+    /// With `creating`, the rename throws `EEXIST` rather than replace anything; so does anything but a regular
+    /// file at `name`. Returns the version written. The temp file never outlives a failure.
+    public static func replaceAtomically(_ name: String, in folder: FileHandle, with data: Data, creating: Bool = false) async throws -> WorktreeFileVersion {
+        try await Task.detached(priority: .userInitiated) {
+            func failure() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            let directory = folder.fileDescriptor
+            // Bounded, so a long name still leaves room for the suffix.
+            let temp = ".\(String(decoding: name.utf8.prefix(64), as: UTF8.self)).alas-\(UUID().uuidString)"
+            var existing = stat()
+            let mode: mode_t
+            if fstatat(directory, name, &existing, AT_SYMLINK_NOFOLLOW) == 0 {
+                guard existing.st_mode & S_IFMT == S_IFREG else { throw POSIXError(.EEXIST) }
+                // Permission bits only: never setuid, setgid or sticky.
+                mode = existing.st_mode & 0o777
+            } else {
+                mode = 0o644
+            }
+            let fd = openat(directory, temp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            guard fd >= 0 else { throw failure() }
+            var renamed = false
+            defer { if !renamed { unlinkat(directory, temp, 0) } }
+            let written: Result<stat, POSIXError> = data.withUnsafeBytes { bytes in
+                defer { close(fd) }
+                var offset = 0
+                while offset < bytes.count {
+                    let count = write(fd, bytes.baseAddress! + offset, bytes.count - offset)
+                    if count < 0, errno == EINTR { continue }
+                    guard count > 0 else { return .failure(failure()) }
+                    offset += count
+                }
+                var status = stat()
+                guard fchmod(fd, mode) == 0, fsync(fd) == 0, fstat(fd, &status) == 0 else { return .failure(failure()) }
+                return .success(status)
+            }
+            let status = try written.get()
+            guard renameatx_np(directory, temp, directory, name, creating ? UInt32(RENAME_EXCL) : 0) == 0 else { throw failure() }
+            renamed = true
+            // The rename is durable once its folder is.
+            fsync(directory)
+            return WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: data), modified: modified(status))
         }.value
     }
 

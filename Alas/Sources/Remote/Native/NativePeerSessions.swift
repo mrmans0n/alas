@@ -1575,7 +1575,7 @@ final class NativePeerSessions {
             .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:)))
         case .commitDiffResult(_, let sha, let path, _, _, _), .commitDiffFailed(_, let sha, let path, _, _):
             .commitDiff(path: path, sha: sha)
-        case .fileContents(_, let path, _, _), .fileUnavailable(_, let path, _, _, _):
+        case .fileContents(_, let path, _, _, _), .fileUnavailable(_, let path, _, _, _):
             .file(path: path)
         default: nil
         }

@@ -172,6 +172,15 @@ public enum HostRequest: Codable, Equatable, Sendable {
     /// What restoring checkpoint `id` would change, and what blocks it on the
     /// host; nil `groupIDs` selects every group (`host.worktrees.checkpoints.v1`).
     case checkpointRestorePreview(worktree: WorktreeRef, id: CheckpointID, groupIDs: Set<UUID>?)
+    /// Replaces `path`'s text if the file is still at `expected`; nil `expected` creates it, refusing if anything is there
+    /// (`host.worktrees.files.v1`).
+    case writeFile(worktree: WorktreeRef, path: String, text: String, expected: WorktreeFileVersion?)
+    /// Makes folder `path` in a folder that exists (`host.worktrees.files.v1`).
+    case createFolder(worktree: WorktreeRef, path: String)
+    /// Sends `fileChanged` for `path` on the connection's subscription while it
+    /// follows the file (`host.worktrees.files.v1`).
+    case followFile(worktree: WorktreeRef, path: String)
+    case unfollowFile(worktree: WorktreeRef, path: String)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -539,6 +548,8 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case checkpointManifest(manifest: WorktreeCheckpointManifest)
     /// The answer to `checkpointRestorePreview`.
     case checkpointRestorePreview(preview: CheckpointRestorePreview)
+    /// The answer to `writeFile`: the version now on disk.
+    case fileWritten(version: WorktreeFileVersion)
     case failure(error: HostError)
 }
 
@@ -562,4 +573,6 @@ public enum HostError: Error, Codable, Equatable, Sendable {
     case workspace(error: WorkspaceAutomationError)
     case session(refusal: SessionRefusal)
     case failed(message: String)
+    /// The file is no longer at the version the client named: `current`, or nil when it is gone.
+    case fileChanged(current: WorktreeFileVersion?)
 }

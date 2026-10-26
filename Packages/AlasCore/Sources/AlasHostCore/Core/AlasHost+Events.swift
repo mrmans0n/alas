@@ -59,6 +59,10 @@ public enum HostEvent: Codable, Equatable, Sendable {
     /// A worktree's review comments or review sessions changed. Sent over the
     /// host protocol only to clients that accept `reviewsChanged`.
     case reviewsChanged(worktreeID: String)
+    /// A followed file's content changed: its new version, or nil once it is
+    /// gone (or no longer a regular file within the cap). Sent over the host
+    /// protocol only to clients that accept `fileChanged`.
+    case fileChanged(worktreeID: String, path: String, version: WorktreeFileVersion?)
     /// Changes were missed: read a new snapshot and subscribe after its cursor.
     case resync
 
@@ -91,6 +95,7 @@ public enum HostEvent: Codable, Equatable, Sendable {
         case .worktreeNotice(let notice): .notice(notice.id)
         case .reviewStatus(let worktreeID, _): .reviewStatus(worktreeID)
         case .reviewsChanged(let worktreeID): .reviews(worktreeID)
+        case .fileChanged(let worktreeID, let path, _): .file(worktreeID: worktreeID, path: path)
         case .resync: .resync
         }
     }
@@ -148,6 +153,7 @@ enum HostEventKey: Hashable {
     case notice(UUID)
     case reviewStatus(String)
     case reviews(String)
+    case file(worktreeID: String, path: String)
     case resync
 }
 
@@ -170,6 +176,10 @@ public final class HostSubscription {
     private var followed: [String: FollowedSession] = [:]
     private let reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void)
     private var followedWorktrees: Set<String> = []
+    private let fileFollows: HostEventLog.FileFollows
+    private var followedFiles: Set<HostEventKey> = []
+    /// Bounds the watches one client holds on the host.
+    static let maxFollowedFiles = 64
     private var wakeScheduled = false
     /// The log position the pending events reach.
     private var pendingThrough: HostCursor
@@ -182,9 +192,11 @@ public final class HostSubscription {
         pendingLimit: Int,
         liveSession: @escaping (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)? = { _ in nil },
         reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void) = ({ _ in }, { _ in }),
+        fileFollows: HostEventLog.FileFollows = ({ _, _ in }, { _, _ in }),
         onCancel: @escaping (HostSubscription) -> Void
     ) {
         self.reviewFollows = reviewFollows
+        self.fileFollows = fileFollows
         self.cursor = cursor
         pendingThrough = cursor
         self.pendingLimit = pendingLimit
@@ -245,8 +257,27 @@ public final class HostSubscription {
         worktreeIDs.forEach(followWorktree)
     }
 
-    /// Stops the subscription and releases every followed session and
-    /// worktree; a pending `next()` returns nil.
+    /// Sends `fileChanged` for `path` in `worktree` while this subscription
+    /// follows it, watching the file with every other follower. Returns once
+    /// the file's current version is known, so any later change is sent.
+    /// `path` must already be one the host would edit.
+    public func followFile(_ worktree: Worktree, path: String) async throws {
+        let file = HostEventKey.file(worktreeID: worktree.id, path: path)
+        guard !isCancelled, !followedFiles.contains(file) else { return }
+        guard followedFiles.count < Self.maxFollowedFiles else {
+            throw HostError.invalidRequest(reason: "A client follows at most \(Self.maxFollowedFiles) files.")
+        }
+        followedFiles.insert(file)
+        await fileFollows.follow(worktree, path)
+    }
+
+    public func unfollowFile(worktreeID: String, path: String) {
+        guard followedFiles.remove(.file(worktreeID: worktreeID, path: path)) != nil else { return }
+        fileFollows.unfollow(worktreeID, path)
+    }
+
+    /// Stops the subscription and releases every followed session, worktree
+    /// and file; a pending `next()` returns nil.
     public func cancel() {
         guard !isCancelled else { return }
         isCancelled = true
@@ -256,6 +287,7 @@ public final class HostSubscription {
         followed.removeAll()
         followedWorktrees.forEach(reviewFollows.unfollow)
         followedWorktrees.removeAll()
+        releaseFollowedFiles()
         wake()
         onCancel(self)
     }
@@ -263,6 +295,14 @@ public final class HostSubscription {
     isolated deinit {
         followed.values.forEach { $0.release() }
         followedWorktrees.forEach(reviewFollows.unfollow)
+        releaseFollowedFiles()
+    }
+
+    private func releaseFollowedFiles() {
+        for case .file(let worktreeID, let path) in followedFiles {
+            fileFollows.unfollow(worktreeID, path)
+        }
+        followedFiles.removeAll()
     }
 
     /// Transcript signals fire before the change is stored, so the reader
@@ -283,11 +323,20 @@ public final class HostSubscription {
     }
 
     func receive(_ events: [HostEvent], through position: HostCursor) {
-        guard !isCancelled, !events.isEmpty else { return }
-        // A removed worktree has no review status to keep refreshing.
+        guard !isCancelled else { return }
+        // A removed worktree has no review status or files to keep watching.
         for case .worktreeRemoved(_, let worktreeID) in events {
             unfollowWorktree(worktreeID)
+            for case .file(worktreeID, let path) in followedFiles {
+                unfollowFile(worktreeID: worktreeID, path: path)
+            }
         }
+        // Only the files this subscription follows.
+        let events = events.filter { event in
+            guard case .fileChanged = event else { return true }
+            return followedFiles.contains(event.key)
+        }
+        guard !events.isEmpty else { return }
         pendingThrough = position
         if pending[.resync] == nil {
             for event in events {
@@ -330,6 +379,9 @@ final class HostEventLog {
     var liveSession: (String) -> (SessionOwnerID, ACPSession, ACPSessionManager)? = { _ in nil }
     /// Counts a subscription's follow of a worktree's review status.
     var reviewFollows: (follow: (String) -> Void, unfollow: (String) -> Void) = ({ _ in }, { _ in })
+    typealias FileFollows = (follow: @MainActor (Worktree, String) async -> Void, unfollow: (_ worktreeID: String, _ path: String) -> Void)
+    /// Counts a subscription's follow of a file.
+    var fileFollows: FileFollows = ({ _, _ in }, { _, _ in })
 
     init(retention: Int = 1024, pendingLimit: Int = 512) {
         self.retention = retention
@@ -356,7 +408,8 @@ final class HostEventLog {
     /// cursor is not one of this log's.
     func subscribe(after: HostCursor) -> HostSubscription {
         let subscription = HostSubscription(
-            after: after, pendingLimit: pendingLimit, liveSession: liveSession, reviewFollows: reviewFollows
+            after: after, pendingLimit: pendingLimit, liveSession: liveSession, reviewFollows: reviewFollows,
+            fileFollows: fileFollows
         ) { [weak self] in
             self?.subscriptions.removeValue(forKey: ObjectIdentifier($0))
         }
@@ -384,7 +437,9 @@ private struct WeakSubscription {
 /// for writes, and publishes what changed since it last looked.
 @MainActor
 final class HostEventSource {
-    let log = HostEventLog()
+    let log: HostEventLog
+    /// Watches the files subscriptions follow.
+    let fileWatcher: HostFileWatcher
     private let core: AlasCoreContext
     private var projects: [String: ProjectSnapshot] = [:]
     private var worktrees: [HostEventKey: WorktreeSnapshot] = [:]
@@ -407,6 +462,10 @@ final class HostEventSource {
 
     init(core: AlasCoreContext) {
         self.core = core
+        let log = HostEventLog()
+        self.log = log
+        let fileWatcher = HostFileWatcher { log.publish($0) }
+        self.fileWatcher = fileWatcher
         // The baseline: what exists now is not a change.
         projects = Self.byID(ProjectsAPI(core: core).list())
         worktrees = Self.keyed(WorktreesAPI(core: core).list(includingArchived: true))
@@ -422,6 +481,10 @@ final class HostEventSource {
         log.reviewFollows = (
             follow: { [weak core] in core?.followReviewStatus($0) },
             unfollow: { [weak core] in core?.unfollowReviewStatus($0) }
+        )
+        log.fileFollows = (
+            follow: { [weak fileWatcher] in await fileWatcher?.follow($0, path: $1) },
+            unfollow: { [weak fileWatcher] in fileWatcher?.unfollow(worktreeID: $0, path: $1) }
         )
         core.reviewStatusDidRefresh = { [weak self] in self?.publishReviewStatus($0) }
         observeInMemoryState()
@@ -595,6 +658,7 @@ extension HostEvent {
         case .worktreeNotice: "worktreeNotice"
         case .reviewStatus: "reviewStatus"
         case .reviewsChanged: "reviewsChanged"
+        case .fileChanged: "fileChanged"
         default: nil
         }
     }

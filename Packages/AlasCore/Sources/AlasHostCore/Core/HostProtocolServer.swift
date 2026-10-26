@@ -316,6 +316,18 @@ public final class HostProtocolConnection {
             try subscribed().followWorktree(id)
         case .unfollowWorktree(let id):
             try subscribed().unfollowWorktree(id)
+        case .followFile(let ref, let path):
+            let listed = try fileWorktree(ref)
+            _ = try subscribed()
+            // The paths a Mac may edit, and no others: a follow watches the file.
+            _ = try await host.core.writableURL(path, in: listed)
+            try await subscribed().followFile(listed, path: RemoteWorktreeFileAccess.normalizedRelativePath(path) ?? path)
+        case .unfollowFile(let ref, let path):
+            try subscribed().unfollowFile(
+                // A worktree no longer listed was unfollowed with its removal.
+                worktreeID: (try? worktree(ref))?.id ?? Worktree.makeId(path: URL(fileURLWithPath: ref.path)),
+                path: RemoteWorktreeFileAccess.normalizedRelativePath(path) ?? path
+            )
         case .capabilities:
             return .capabilities(capabilities: host.servedCapabilities)
         case .runOutput(let runID, let projectID):
@@ -405,6 +417,14 @@ public final class HostProtocolConnection {
             return .checkpointRestorePreview(preview: try await host.core.checkpointRestorePreview(
                 id, groupIDs: groupIDs, in: try checkpointWorktree(ref)
             ))
+        case .writeFile(let ref, let path, let text, let expected):
+            let listed = try fileWorktree(ref)
+            caller.log("worktrees.files", path)
+            return .fileWritten(version: try await host.core.writeListedFile(path, text: text, expected: expected, in: listed))
+        case .createFolder(let ref, let path):
+            let listed = try fileWorktree(ref)
+            caller.log("worktrees.files", path)
+            try await host.core.createListedFolder(path, in: listed)
         }
         return .done
     }
@@ -508,6 +528,18 @@ public final class HostProtocolConnection {
             throw HostError.invalidRequest(reason: "This host does not serve this git action.")
         }
         return try visibleWorktree(ref)
+    }
+
+    /// A visible worktree whose files this host edits, under the project's gate. Never a remote project's.
+    private func fileWorktree(_ ref: WorktreeRef) throws -> Worktree {
+        guard host.servedCapabilities.contains(HostProtocolCapability.worktreesFilesV1) else {
+            throw HostError.invalidRequest(reason: "This host does not serve file editing.")
+        }
+        let listed = try visibleWorktree(ref)
+        guard !listed.path.isRemoteAlasPath else {
+            throw HostError.invalidRequest(reason: "The host does not edit files of remote projects.")
+        }
+        return listed
     }
 
     /// A visible worktree whose checkpoints this host serves. Reads, outside the gate as `readWorktree` is.
