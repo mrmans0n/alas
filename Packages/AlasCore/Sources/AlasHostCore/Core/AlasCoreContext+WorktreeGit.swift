@@ -27,7 +27,14 @@ extension AlasCoreContext {
             // A headless host watches no HEAD, so the listing can lag a
             // checkout made on the host: git has the last word.
             let head = try await GitService().currentBranch(worktreePath: listed.path)
-            guard (head.isEmpty ? "(detached)" : head) == branch else { throw changed }
+            if (head.isEmpty ? "(detached)" : head) != branch {
+                // Mid-rebase git is detached while the listing still names the
+                // branch being rebased: only a way out of that rebase passes.
+                guard change.leavesAnOperation, head.isEmpty,
+                      case .rebase(let plan)? = try await GitService().mergeState(worktreePath: listed.path),
+                      plan.sourceBranch == branch
+                else { throw changed }
+            }
             guard isWorktreeIdle(listed) else { throw WorktreeBusyError() }
             if await environment.checkpointRecoveryBlocksRemoval(listed) {
                 throw HostError.failed(message: "A checkpoint restore is pending on the host; finish it there first.")
@@ -44,7 +51,8 @@ extension AlasCoreContext {
             if try await git.mergeState(worktreePath: root) != nil {
                 throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first.")
             }
-        case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash:
+        case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash, .continueOperation, .skipOperation,
+             .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved:
             break
         }
         switch change {
@@ -106,6 +114,32 @@ extension AlasCoreContext {
             // They name no client paths, and git's own `:/` pathspec, which
             // cleans stashed untracked files, must not be taken literally.
             try await Process.$gitLiteralPathspecs.withValue(false) { try await Self.applyStashChange(change, at: root) }
+        case .continueOperation(let kind), .skipOperation(let kind), .abortOperation(let kind):
+            // Only the operation the client saw: a conflict it led to shows in the next changes read.
+            guard let operation = try await git.mergeState(worktreePath: root), HostOperationKind(operation) == kind else {
+                throw HostError.failed(message: "The operation on the host changed; refresh and try again.")
+            }
+            switch change {
+            case .abortOperation: try await git.abortOperation(worktreePath: root, op: operation)
+            case .skipOperation: try Self.throwIfFailed(await git.skipOperation(worktreePath: root, op: operation))
+            default: try Self.throwIfFailed(await git.continueOperation(worktreePath: root, op: operation))
+            }
+        // Conflicted paths are resolved as locally, with or without an
+        // operation: a conflicting stash pop leaves none.
+        case .useOurs(let path):
+            try await Self.refuseOutside([path], of: root)
+            try await git.useOurs(worktreePath: root, relativePath: path)
+            try await git.markResolved(worktreePath: root, relativePath: path)
+        case .useTheirs(let path):
+            try await Self.refuseOutside([path], of: root)
+            try await git.useTheirs(worktreePath: root, relativePath: path)
+            try await git.markResolved(worktreePath: root, relativePath: path)
+        case .keepDeleted(let path):
+            try await Self.refuseOutside([path], of: root)
+            try await git.keepDeleted(worktreePath: root, relativePath: path)
+        case .markResolved(let path):
+            try await Self.refuseOutside([path], of: root)
+            try await git.markResolved(worktreePath: root, relativePath: path)
         }
         return .done
     }
@@ -121,7 +155,8 @@ extension AlasCoreContext {
             try throwIfFailed(await git.popStash(worktreePath: root, stash: listedStash(stash, at: root)))
         case .dropStash(let stash):
             try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
-        case .stage, .unstage, .discard, .commit, .push, .pull, .fetch:
+        case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .continueOperation, .skipOperation, .abortOperation, .useOurs,
+             .useTheirs, .keepDeleted, .markResolved:
             preconditionFailure("not a stash change")
         }
     }
@@ -161,6 +196,11 @@ extension AlasCoreContext {
         case .clean: break
         case .conflict(let message), .error(let message): throw HostError.failed(message: message)
         }
+    }
+
+    /// A conflict is left to the next changes read; an error is shown.
+    private static func throwIfFailed(_ result: MergeResult) throws {
+        if case .error(let message) = result { throw HostError.failed(message: message) }
     }
 
     /// Client paths name files inside the worktree: never an empty path or

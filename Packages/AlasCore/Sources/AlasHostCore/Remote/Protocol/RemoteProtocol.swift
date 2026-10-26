@@ -1503,6 +1503,10 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve `listStashes`, `stashFiles`, `stashDiff` and the
     /// stash changes of `mutateWorktree`: only a headless host.
     public static let worktreesStashV1 = "host.worktrees.stash.v1"
+    /// Hosts that serve the operation and conflict changes of
+    /// `mutateWorktree`: continue, skip, abort, use ours, use theirs, keep
+    /// deleted and mark resolved. Only a headless host.
+    public static let worktreesOperationsV1 = "host.worktrees.operations.v1"
     /// Hosts whose `createWorktreeSession` takes `repoHook`, answering
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
     /// must approve first.
@@ -1513,7 +1517,7 @@ public enum HostProtocolCapability: Sendable {
         worktreesRenameBranchV1, repoHooksApprovalV1,
     ]
     /// What only a headless host serves.
-    public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1]
+    public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

@@ -755,20 +755,7 @@ struct HostProtocolServerTests {
     @Test func pullStoppedOnConflictsSaysToResolveOnTheHost() async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
-        let (repo, ref) = try await fixture.mainWorktree()
-        let origin = fixture.root.appendingPathComponent("origin")
-        try await GitTemplate.repository(at: origin)
-        for (directory, contents) in [(origin, "theirs\n"), (repo, "ours\n")] {
-            try contents.write(to: directory.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
-            let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
-            #expect(try await Process.git(commit, cwd: directory).exitCode == 0)
-        }
-        for arguments in [["remote", "add", "origin", origin.path], ["fetch", "-q", "origin"], ["branch", "-q", "--set-upstream-to=origin/main"]] {
-            #expect(try await Process.git(arguments, cwd: repo).exitCode == 0)
-        }
-
-        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .pull))
-            == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them on the host.")))
+        let (repo, ref) = try await fixture.stopPullOnConflicts()
         #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
 
         try await fixture.host.worktrees.refresh(projectID: fixture.projectID, caller: .app)
@@ -779,6 +766,58 @@ struct HostProtocolServerTests {
                 message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first."
             )))
         }
+    }
+
+    /// Mid-rebase the worktree is still listed on its branch while git is
+    /// detached: the Mac resolves and continues, or aborts, from there.
+    @Test(arguments: [true, false])
+    func aRebaseStoppedOnConflictsIsLeftFromTheMac(continues: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.stopPullOnConflicts()
+        let ours = try await Process.git(["rev-parse", "ORIG_HEAD"], cwd: repo).stdout
+        func mutate(_ change: HostWorktreeChange) async throws -> HostResponse {
+            try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change))
+        }
+
+        if continues {
+            #expect(try await mutate(.useTheirs(path: ".alas/scripts/hello.sh")) == .done)
+            #expect(try await mutate(.continueOperation(kind: .rebase)) == .done)
+            #expect(try await Process.git(["rev-parse", "--abbrev-ref", "HEAD"], cwd: repo).stdout == "main\n")
+            // A rebase's "theirs" is the commit being replayed.
+            #expect(try String(contentsOf: repo.appendingPathComponent(".alas/scripts/hello.sh"), encoding: .utf8) == "ours\n")
+        } else {
+            #expect(try await mutate(.abortOperation(kind: .rebase)) == .done)
+            #expect(try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout == ours)
+        }
+        #expect(!FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
+        guard case .worktreeRead(.changeList(_, _, _, _, _, _, _, _, _, _, let operation)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .changes(comparisonMode: nil)))
+        else {
+            Issue.record("expected the changes")
+            return
+        }
+        #expect(operation == nil)
+    }
+
+    enum DuringRebase: CaseIterable { case stage, commit, wrongKind, outsidePath }
+
+    /// Only a way out of the rebase passes for the branch git left: anything
+    /// else is refused as before, and the rebase stays.
+    @Test(arguments: DuringRebase.allCases)
+    func onlyTheWayOutPassesTheGateDuringARebase(_ change: DuringRebase) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.stopPullOnConflicts()
+        let (sent, expected): (HostWorktreeChange, HostError) = switch change {
+        case .stage: (.stage(paths: ["x"]), .failed(message: "The worktree changed since it was listed."))
+        case .commit: (.commit(subject: "x", body: "", amend: true), .failed(message: "The worktree changed since it was listed."))
+        case .wrongKind: (.continueOperation(kind: .cherryPick), .failed(message: "The operation on the host changed; refresh and try again."))
+        case .outsidePath: (.useOurs(path: "../x"), .invalidRequest(reason: "The path ../x is outside the worktree."))
+        }
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: sent)) == .failure(error: expected))
+        #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
     }
 
     /// A branch with no upstream is pushed as the review pill pushes it,
@@ -903,6 +942,13 @@ struct HostProtocolServerTests {
             return
         }
         #expect((files + staged + unstaged).contains { $0.path == ".alas/scripts/hello.sh" && $0.conflict != nil })
+
+        // No operation is in progress, yet the conflict is the Mac's to resolve.
+        #expect(try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .useTheirs(path: ".alas/scripts/hello.sh")
+        )) == .done)
+        #expect(try String(contentsOf: script, encoding: .utf8) == "stashed\n")
+        #expect(try await Process.git(["diff", "--name-only", "--diff-filter=U"], cwd: repo).stdout == "")
     }
 
     /// Paired Macs of other versions decode this, so its shape must not drift.
@@ -1634,6 +1680,26 @@ struct HostProtocolServerTests {
                 _ = try await Process.git(["config", key, value], cwd: worktree.path)
             }
             return (worktree.path, WorktreeRef(projectID: projectID, path: worktree.path.path))
+        }
+
+        /// The main checkout stopped mid-rebase by a pull whose upstream
+        /// changed hello.sh to "theirs" against a local "ours". The worktree
+        /// stays listed on `main`; nothing relists it.
+        func stopPullOnConflicts() async throws -> (URL, WorktreeRef) {
+            let (repo, ref) = try await mainWorktree()
+            let origin = root.appendingPathComponent("origin")
+            try await GitTemplate.repository(at: origin)
+            for (directory, contents) in [(origin, "theirs\n"), (repo, "ours\n")] {
+                try contents.write(to: directory.appendingPathComponent(".alas/scripts/hello.sh"), atomically: true, encoding: .utf8)
+                let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
+                #expect(try await Process.git(commit, cwd: directory).exitCode == 0)
+            }
+            for arguments in [["remote", "add", "origin", origin.path], ["fetch", "-q", "origin"], ["branch", "-q", "--set-upstream-to=origin/main"]] {
+                #expect(try await Process.git(arguments, cwd: repo).exitCode == 0)
+            }
+            #expect(try await request(.mutateWorktree(worktree: ref, branch: "main", change: .pull))
+                == .failure(error: .failed(message: "Pull stopped on conflicts; resolve them on the host.")))
+            return (repo, ref)
         }
 
         /// Commits `.alas/hooks/<event>.sh` to the main checkout; returns its trust hash.
