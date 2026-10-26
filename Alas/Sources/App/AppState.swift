@@ -9943,7 +9943,8 @@ final class AppState {
                     return false
                 }
             }
-            return true
+            // Edits made while the saves awaited the host are still unsaved: ask again rather than drop them.
+            return await confirmDiscardingUnsavedHostFiles(reason: reason)
         case .alertSecondButtonReturn:
             return true
         default:
