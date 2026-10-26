@@ -24,10 +24,23 @@ public struct ACPV2SessionUpdateEnvelope: Equatable, Sendable {
         public let metadata: MetadataPatch
     }
 
+    public enum Payload: Equatable, Sendable {
+        case message(Message)
+        case toolCall(ToolCallUpdate)
+        case toolContentChunk(ToolContentChunk)
+        case plan(PlanUpdate)
+        case terminal(TerminalUpdate)
+        case terminalOutputChunk(TerminalOutputChunk)
+        case unhandled
+    }
+
     public let sessionID: String
     public let rawValue: LSPJSONValue
-    /// Nil means an unhandled variant, whose complete payload remains in rawValue.
-    public let message: Message?
+    public let payload: Payload
+    /// Compatible message-only view; other payloads remain available above.
+    public var message: Message? {
+        if case .message(let message) = payload { message } else { nil }
+    }
 
     public static func decode(from data: Data) throws -> Self {
         try Self(rawValue: LSPJSONValue.decode(from: data))
@@ -49,7 +62,8 @@ public struct ACPV2SessionUpdateEnvelope: Equatable, Sendable {
         _ = try Self.metadata(params["_meta"])
         self.sessionID = sessionID
         self.rawValue = rawValue
-        message = try Self.message(update, variant: variant)
+        if let message = try Self.message(update, variant: variant) { payload = .message(message) }
+        else { payload = try Self.activity(update, variant: variant) }
     }
 
     private static func message(_ fields: [String: LSPJSONValue], variant: String) throws -> Message? {
@@ -90,7 +104,7 @@ public struct ACPV2SessionUpdateEnvelope: Equatable, Sendable {
         }
     }
 
-    private static func metadata(_ value: LSPJSONValue?) throws -> MetadataPatch {
+    static func metadata(_ value: LSPJSONValue?) throws -> MetadataPatch {
         switch value {
         case nil: return .unchanged
         case .null: return .clear
@@ -99,7 +113,7 @@ public struct ACPV2SessionUpdateEnvelope: Equatable, Sendable {
         }
     }
 
-    private static func invalid(_ reason: String) -> DecodingError {
+    static func invalid(_ reason: String) -> DecodingError {
         .dataCorrupted(.init(codingPath: [], debugDescription: "Invalid v2 session/update: \(reason)"))
     }
 }
