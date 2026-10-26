@@ -227,7 +227,7 @@ extension AlasCoreContext {
             add: commit.insertions, del: commit.deletions)
     }
 
-    private static func remoteDiffHunk(_ hunk: ParsedDiff.Hunk) -> RemoteDiffHunk {
+    nonisolated static func remoteDiffHunk(_ hunk: ParsedDiff.Hunk) -> RemoteDiffHunk {
         RemoteDiffHunk(
             header: hunk.header,
             oldStart: hunk.oldStart,

@@ -345,7 +345,9 @@ public final class HostProtocolConnection {
             return .worktreeRead(reply: await host.core.remoteRead(read, in: listed, replyingAs: listed.id))
         case .mutateWorktree(let ref, let branch, let change):
             // The branch the client saw is checked under the project's gate.
-            try await host.worktrees.mutate(try gitWorktree(ref), branch: branch, change: change, caller: caller)
+            let listed = try gitWorktree(ref)
+            if let capability = change.capability { _ = try servedWorktree(ref, capability: capability) }
+            return try await host.worktrees.mutate(listed, branch: branch, change: change, caller: caller)
         case .commitMessageInput(let ref):
             let listed = try gitWorktree(ref)
             let ticketTitle = host.core.projects.issueAttachment(projectId: listed.projectId, worktreeId: listed.id)?.title
@@ -377,6 +379,17 @@ public final class HostProtocolConnection {
         case .publishReview(let ref, let sessionID, let publish):
             return .reviewPublished(result: try await host.reviews.publish(
                 publish, sessionID: sessionID, in: try providerReviewWorktree(ref), caller: caller
+            ))
+        case .listStashes(let ref):
+            // Reads, outside the gate as `readWorktree` is.
+            return .stashes(stashes: try await host.core.stashes(in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesStashV1)))
+        case .stashFiles(let ref, let stash):
+            return .stashFiles(files: try await host.core.stashFiles(
+                stash, in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesStashV1)
+            ))
+        case .stashDiff(let ref, let stash, let path):
+            return .diff(diff: try await host.core.stashDiff(
+                stash, path: path, in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesStashV1)
             ))
         }
         return .done
@@ -471,6 +484,14 @@ public final class HostProtocolConnection {
     private func gitWorktree(_ ref: WorktreeRef) throws -> Worktree {
         guard host.servedCapabilities.contains(HostProtocolCapability.worktreesGitV1) else {
             throw HostError.invalidRequest(reason: "This host does not serve git actions.")
+        }
+        return try visibleWorktree(ref)
+    }
+
+    /// A visible worktree, on a host that serves `capability`.
+    private func servedWorktree(_ ref: WorktreeRef, capability: String) throws -> Worktree {
+        guard host.servedCapabilities.contains(capability) else {
+            throw HostError.invalidRequest(reason: "This host does not serve this git action.")
         }
         return try visibleWorktree(ref)
     }
