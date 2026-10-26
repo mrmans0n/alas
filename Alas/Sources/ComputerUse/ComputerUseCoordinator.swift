@@ -985,7 +985,7 @@ final class ComputerUseCoordinator {
         var window = window
         var toWindow = toWindow
         var input = try input(for: command, in: window, toWindow: toWindow, context: context)
-        let direct = Self.deliversDirect(command)
+        let direct = Self.deliversDirect(command, input: input, in: window, toWindow: toWindow, displays: system.displays())
         // What the window looked like, so an input the app ignored doesn't pass for one that worked.
         // Read first, so the takeover wait and the ref re-check are the last steps before the input.
         var target: (ComputerUseAXHandles, Int)?
@@ -1207,10 +1207,25 @@ final class ComputerUseCoordinator {
         payload["warning"] = [warning, hint].compactMap { $0 }.joined(separator: " ")
     }
 
-    /// Drags always go with the app brought to the front, so the direct takeover rule applies to
-    /// them: refused while the user is active, rather than waited out.
-    static func deliversDirect(_ command: ComputerUseCommand) -> Bool {
-        command.delivery == .direct || command.action == .drag
+    /// A drag between two on-screen points goes inside the app in the background, under a
+    /// background click's takeover rule. One in a parked window goes with the app brought to the
+    /// front, so the direct takeover rule applies to it: refused while the user is active, rather
+    /// than waited out. A ref's point counts as on screen with its window.
+    static func deliversDirect(
+        _ command: ComputerUseCommand, input: ComputerUseInput, in window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?, displays: [CGRect]
+    ) -> Bool {
+        if command.delivery == .direct { return true }
+        guard case .drag(let from, let to, _) = input else { return false }
+        func onScreen(_ target: ComputerUseInputTarget, in window: ComputerUseWindow) -> Bool {
+            switch target {
+            case .point(let point): ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays)
+            case .element: ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays)
+            }
+        }
+        let route = ComputerUseBackgroundDrag.route(
+            startOnScreen: onScreen(from, in: window), endOnScreen: onScreen(to, in: toWindow ?? window), direct: false)
+        return route == .foreground
     }
 
     /// An AX press may only focus an element in an app that builds its tree on request (Electron):
@@ -1273,11 +1288,14 @@ final class ComputerUseCoordinator {
                 let start = clock.now
                 var slept = Duration.zero
                 // A drop into another window may show there first: the start window, which the result
-                // lists, is read until it shows the drop too (a moved file leaves it).
+                // lists, is read until it shows the drop too (a moved file leaves it), or until the
+                // drag image is gone (a copy leaves it as it was).
                 // Once a read showed the drop, a later one that shows nothing new doesn't undo it.
                 var dropped = verdict.warning == nil
-                while !dropped || (end != nil && !verdict.startChanged), slept < Self.dragConfirmDeadline,
-                      clock.now - start < Self.dragConfirmDeadline {
+                while ComputerUseBackgroundDrag.keepsPolling(
+                    dropped: dropped, startChanged: verdict.startChanged, crossWindow: end != nil,
+                    sessionActive: system.dragSessionActive(window.app.pid), waited: max(slept, clock.now - start),
+                    deadline: Self.dragConfirmDeadline) {
                     await sleep(Self.dragConfirmPoll)
                     slept += Self.dragConfirmPoll
                     try checkStillActive(context)

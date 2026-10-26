@@ -804,8 +804,9 @@ struct ComputerUseCoordinatorTests {
         // Navigation keys and typing can legitimately change nothing a read shows: no retry hint.
         (.key, .background, .none, Warnings.noChange),
         (.type, .background, .none, Warnings.noChange),
-        // A drag that changed nothing always says so, even when a read was cut short. Drags go
-        // with the app activated, so there is no direct way left to suggest.
+        // A drag that changed nothing always says so, even when a read was cut short. One that
+        // stayed in the background suggests the foreground drag; it is never retried on its own.
+        (.drag, .background, .none, Warnings.drag + #" Retry with delivery: "direct"."#),
         (.drag, .activation, .none, Warnings.drag),
         (.drag, .activation, .truncatedAfter, Warnings.drag),
         (.drag, .activation, .elements, nil),
@@ -1100,6 +1101,8 @@ struct ComputerUseCoordinatorTests {
             recorder.record(input)
             return .activation
         }
+        // A move's drag image stays up until the move lands.
+        system.dragSessionActive = { _ in true }
         // The activation and the mouse-down move focus and selection at once, before the start
         // window shows the drop.
         if drop == .sourceLate {
@@ -1145,29 +1148,142 @@ struct ComputerUseCoordinatorTests {
         }
     }
 
-    /// A drag always goes with the app in front, so like direct delivery it waits for a user who
-    /// is active in any app, then gives up.
-    @Test(arguments: [(60.0, true), (0.5, false)])
-    func dragsAlwaysGoDirect(idleSeconds: TimeInterval, delivers: Bool) async throws {
+    enum TierHold { case drag, sessionEnd }
+
+    /// `perform` with drags going through the real tiers (`ComputerUseDragTiers`): the in-app drag
+    /// records "background" and ends with `outcome`; a drag session's image shows for
+    /// `sessionLooks` looks; the foreground drag records "foreground". The tiers' sleeps go to
+    /// `tierSleeps`. `holding` waits on window 1 of `gate`, in the in-app drag or in the wait for
+    /// the session to end, then the in-app drag throws a Stop as the poster does.
+    nonisolated private static func tiered(
+        _ outcome: ComputerUseInputPoster.BackgroundDragOutcome, recorder: Recorder, tierSleeps: Recorder = Recorder(),
+        sessionLooks: Int = 0, holding: TierHold? = nil, gate: TreeGate? = nil
+    ) -> @Sendable (ComputerUseInput, ComputerUseWindow, Bool, @escaping @Sendable () -> ComputerUseInputInterrupt?)
+        async throws -> ComputerUseDelivered {
+        { input, _, direct, interrupt in
+            recorder.record(input)
+            recorder.recordCheck(direct)
+            let looks = Counter()
+            return try await ComputerUseDragTiers.deliver(
+                direct: direct,
+                background: {
+                    recorder.recordEvent("background")
+                    if holding == .drag { await gate?.enter(1) }
+                    if interrupt() == .cancelled { throw CancellationError() }
+                    return outcome
+                },
+                sessionActive: { looks.next() <= sessionLooks },
+                foreground: {
+                    recorder.recordEvent("foreground")
+                    return .activation
+                },
+                isCancelled: { interrupt() == .cancelled },
+                sleep: {
+                    tierSleeps.recordSleep($0)
+                    if holding == .sessionEnd { await gate?.enter(1) }
+                })
+        }
+    }
+
+    /// Between two on-screen points a drag stays inside the app in the background, so like a
+    /// background click it goes while the user works in another app.
+    @Test func aDragThatStaysInTheAppIsDeliveredInTheBackground() async throws {
         let recorder = Recorder()
-        let directs = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.secondsSinceUserInput = { 0.5 }
+        system.perform = Self.tiered(.done, recorder: recorder)
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        #expect(try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s"))).contains(#""delivery":"background""#))
+        #expect(recorder.checks == [false] && recorder.events == ["background"])
+    }
+
+    /// A drag that started a drag and drop session was released where it began; the foreground
+    /// drag runs once the session's image is gone.
+    @Test func aDragThatStartsADragSessionFallsBackToTheForeground() async throws {
+        let recorder = Recorder()
+        let tierSleeps = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.perform = Self.tiered(.dragSession, recorder: recorder, tierSleeps: tierSleeps, sessionLooks: 2)
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        #expect(try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s"))).contains(#""delivery":"activation""#))
+        #expect(recorder.events == ["background", "foreground"] && recorder.inputs.count == 1)
+        #expect(tierSleeps.sleeps == [ComputerUseBackgroundDrag.sessionPoll, ComputerUseBackgroundDrag.sessionPoll])
+    }
+
+    /// A Stop in the in-app drag, or while its drag session ends, never brings the app forward.
+    @Test(arguments: [TierHold.drag, .sessionEnd])
+    func aStopDuringABackgroundDragNeverFallsBack(_ holding: TierHold) async throws {
+        let recorder = Recorder()
+        let gate = TreeGate()
+        var system = Self.system(recorder: recorder)
+        system.perform = Self.tiered(.dragSession, recorder: recorder, sessionLooks: 100, holding: holding, gate: gate)
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        let call = Task { await f.coordinator.perform(drag, sessionID: "s") }
+        try await eventually("dragging") { gate.entered == [1] }
+        await f.coordinator.stop(sessionID: "s")
+        gate.open(1)
+        #expect(await call.value == .error(ComputerUseCoordinator.Message.stopped))
+        #expect(recorder.events == ["background"])
+    }
+
+    enum ForegroundDrag { case offScreen, direct }
+
+    /// A drag in a parked window, or asked for as direct, goes with the app brought to the front
+    /// as it always did: like direct delivery it waits for a user active in any app, then gives up.
+    @Test(arguments: [
+        (ForegroundDrag.offScreen, 60.0, true), (.direct, 60.0, true), (.offScreen, 0.5, false),
+    ])
+    func anOffScreenDragStaysOnTheForegroundPath(_ reason: ForegroundDrag, idleSeconds: TimeInterval, delivers: Bool) async throws {
+        let recorder = Recorder()
         var system = Self.system(recorder: recorder)
         system.secondsSinceUserInput = { idleSeconds }
-        system.perform = { input, _, direct, _ in
-            recorder.record(input)
-            directs.recordCheck(direct)
-            return .activation
-        }
+        // Window 1 spans (0, 0)-(400, 300): parked off the only display.
+        if reason == .offScreen { system.displays = { [CGRect(x: 1000, y: 0, width: 800, height: 600)] } }
+        system.perform = Self.tiered(.done, recorder: recorder)
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let response = await f.coordinator.perform(.init(action: .drag, windowID: 1, ref: "e2", toRef: "e1"), sessionID: "s")
+        let drag = ComputerUseCommand(
+            action: .drag, windowID: 1, ref: "e2", toRef: "e1", delivery: reason == .direct ? .direct : .background)
+        let response = await f.coordinator.perform(drag, sessionID: "s")
         if delivers {
             #expect(try #require(Self.text(response)).contains(#""delivery":"activation""#))
-            #expect(directs.checks == [true])
+            #expect(recorder.checks == [true] && recorder.events == ["foreground"])
         } else {
             #expect(response == .error("computer_user_active: You're using the Mac right now. Try again in a moment."))
             #expect(recorder.inputs.isEmpty && recorder.sleeps.reduce(.zero, +) == .seconds(10))
         }
+    }
+
+    /// A copy drag into another window leaves the start window as it was: the re-reads end once
+    /// the drag image is gone, not at the deadline.
+    @Test func aCopyDragEndsWhenTheDragImageIsGone() async throws {
+        let recorder = Recorder()
+        let endReads = Counter()
+        let looks = Counter()
+        var windows = Self.windows
+        windows[5] = ComputerUseWindow(windowID: 5, title: "Other", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: Self.notes)
+        var system = Self.system(windows: windows, recorder: recorder)
+        let saveTree = Self.saveTree
+        // The end window shows the copy from the read after the drop on.
+        system.axTree = { window, _, _, _ in
+            var tree = saveTree
+            if window.windowID == 5, endReads.next() >= 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
+            return (tree, nil, ComputerUseAXHandles())
+        }
+        system.dragSessionActive = { _ in looks.next() <= 2 }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
+        let json = try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s")))
+        #expect(!json.contains(#""warning""#))
+        #expect(recorder.sleeps.filter { $0 == ComputerUseCoordinator.dragConfirmPoll }.count == 2)
     }
 
     /// A drag that grabbed the window itself moved it: that is a failure, not a drop.

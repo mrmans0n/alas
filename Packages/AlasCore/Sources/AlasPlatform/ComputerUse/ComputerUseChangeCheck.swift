@@ -49,8 +49,8 @@ public enum ComputerUseChangeCheck {
     /// The warning for an action whose window looks the same after it, else nil. Without both
     /// complete element lists the check can't tell, so it doesn't warn, except after a drag: a
     /// cut-short read is how a drag that did nothing looked like one that worked. The retry hint
-    /// is only for clicks and scrolls that went as events: a key or typed text can legitimately
-    /// change nothing a read shows, and an activation (every drag) already was the direct way.
+    /// is only for clicks, scrolls and drags that went as events: a key or typed text can
+    /// legitimately change nothing a read shows, and an activation already was the direct way.
     public static func warning(
         before: ComputerUseWindowFingerprint?, after: ComputerUseWindowFingerprint?, kind: Kind, deliveredAsEvents: Bool
     ) -> String? {
@@ -61,7 +61,7 @@ public enum ComputerUseChangeCheck {
                 after.elementsHash = nil
             }
             guard before == after else { return nil }
-            return dragWarning
+            return deliveredAsEvents ? dragWarning + retryDirectHint : dragWarning
         }
         guard before.elementsHash != nil, after.elementsHash != nil, before == after else { return nil }
         let hint = deliveredAsEvents && (kind == .click || kind == .scroll)

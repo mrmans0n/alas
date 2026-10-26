@@ -219,6 +219,9 @@ struct ComputerUseSystem: Sendable {
     /// The frames of the AXSheets in each app's windows, read for the apps among `pids`, so the
     /// windows backing them stay out of listings (`ComputerUseInputGeometry.isSheetBacking`).
     var sheetFrames: @Sendable (_ pids: [Int32]) async -> [Int32: [CGRect]] = { _ in [:] }
+    /// Whether the app shows a drag and drop session's image (`ComputerUseBackgroundDrag.sessionActive`),
+    /// read from the window list.
+    var dragSessionActive: @Sendable (Int32) -> Bool = { _ in false }
 
     /// Whether a system password prompt is showing in the app, or may be: one app alone is probed
     /// first, so an unchecked one is the probe not getting to it, and counts as showing.
@@ -262,8 +265,48 @@ struct ComputerUseSystem: Sendable {
             },
             processStart: { LiveComputerUseSystem.processStart($0) },
             displays: { LiveComputerUseSystem.displayFrames() },
-            sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) }
+            sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) },
+            dragSessionActive: { LiveComputerUseSystem.dragSessionActive(pid: $0) }
         )
+    }
+}
+
+/// A drag's two tiers: inside the app in the background, and the drag with the app brought to the
+/// front once the first started a native drag and drop session, which macOS tracks with the
+/// hardware pointer.
+enum ComputerUseDragTiers {
+    /// The longest the fallback waits for a released session's drag image to go, as long as the
+    /// coordinator's copy-drag deadline.
+    static let sessionEndDeadline: Duration = .milliseconds(1500)
+
+    /// `background` drags inside the app and releases the button itself, at the start point when a
+    /// session started; nil when the drag can't stay in the background. A Stop or a takeover it
+    /// throws ends the drag: the foreground drag never runs after one. `direct` goes to the
+    /// foreground drag at once.
+    static func deliver(
+        direct: Bool,
+        background: () async throws -> ComputerUseInputPoster.BackgroundDragOutcome?,
+        sessionActive: () -> Bool,
+        foreground: () async throws -> ComputerUseDelivered,
+        isCancelled: () -> Bool,
+        sleep: (Duration) async -> Void
+    ) async throws -> ComputerUseDelivered {
+        if direct { return try await foreground() }
+        switch try await background() {
+        case .done: return .background
+        case nil: return try await foreground()
+        case .dragSession:
+            // A drag image still showing would follow the foreground drag's cursor from where it is.
+            let began = ContinuousClock.now
+            var waited = Duration.zero
+            while sessionActive(), waited < sessionEndDeadline, ContinuousClock.now - began < sessionEndDeadline {
+                if isCancelled() { throw CancellationError() }
+                await sleep(ComputerUseBackgroundDrag.sessionPoll)
+                waited += ComputerUseBackgroundDrag.sessionPoll
+            }
+            if isCancelled() { throw CancellationError() }
+            return try await foreground()
+        }
     }
 }
 
@@ -500,6 +543,11 @@ extension LiveComputerUseSystem {
     /// How long a background delivery waits for the app to report the window as its key window.
     static let keyConfirmWait: Duration = .milliseconds(200)
 
+    /// Whether the app shows a drag session's image. The window list only: no AX message to any app.
+    static func dragSessionActive(pid: Int32) -> Bool {
+        ComputerUseBackgroundDrag.sessionActive(screenWindows(), sourcePID: pid)
+    }
+
     /// Delivery order: an AX action on the element; else events posted to the window once it is
     /// its app's key window, without activating the app (`background`); else, when that window
     /// can't be made key, the app is activated around the events as `direct` does.
@@ -549,11 +597,22 @@ extension LiveComputerUseSystem {
             // Events at a point off screen reach nothing: reporting them delivered would be wrong.
             if routed.offScreen { throw ComputerUseSystemError.actionFailed(offScreenRefusal(window.app)) }
         }
-        // Drags always go with the app in front; the coordinator applies the direct takeover rule to them.
+        // A drag goes inside the app in the background, and with the app in front when it can't
+        // or when it started a drag and drop session; the coordinator applies the direct takeover
+        // rule to the drags it sees go in front.
         if direct || input.isDrag {
             // Raising the window moves the app's key window too; not while another input holds it.
             return try await keyLocks.run(window.app.pid) {
-                try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
+                guard case .drag(let from, let to, let toWindow) = input else {
+                    return try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
+                }
+                return try await ComputerUseDragTiers.deliver(
+                    direct: direct,
+                    background: { try await dragInBackground(from: from, to: to, in: window, toWindow: toWindow, interrupt: interrupt) },
+                    sessionActive: { dragSessionActive(pid: window.app.pid) },
+                    foreground: { try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt) },
+                    isCancelled: isCancelled,
+                    sleep: { try? await Task.sleep(for: $0) })
             }
         }
         let app = window.app
@@ -962,6 +1021,62 @@ extension LiveComputerUseSystem {
         _ = ComputerUseSkyLight.defocus(pid: pid, windowID: window.windowID)
     }
 
+    /// The in-app drag: posted to the window without activating the app or moving the cursor.
+    /// Nil when it can't stay in the background: without SkyLight the events would go to the key
+    /// window, and a point off every display reaches nothing there. The takeover rule is a
+    /// background click's, checked before the points resolve and between the drag's events.
+    private static func dragInBackground(
+        from: ComputerUseInputTarget, to: ComputerUseInputTarget, in window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?, interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseInputPoster.BackgroundDragOutcome? {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        guard ComputerUseSkyLight.isAvailable else { return nil }
+        if isCancelled() { throw CancellationError() }
+        if interrupt() == .userActive { throw ComputerUseSystemError.userActive }
+        // Events routed to the window reach it under other windows: only hidden points refuse.
+        let dropWindow = toWindow ?? window
+        guard let start = try await dragPoint(from, shown: window, now: window, isDrop: false, isCancelled: isCancelled)
+        else { throw ComputerUseSystemError.actionFailed(dragStartHiddenRefusal) }
+        guard let end = try await dragPoint(to, shown: dropWindow, now: dropWindow, isDrop: true, isCancelled: isCancelled)
+        else { throw ComputerUseSystemError.actionFailed(dropHiddenRefusal) }
+        let displays = displayFrames()
+        let route = ComputerUseBackgroundDrag.route(
+            startOnScreen: ComputerUseInputGeometry.pointIsOnScreen(start, displays: displays),
+            endOnScreen: ComputerUseInputGeometry.pointIsOnScreen(end, displays: displays), direct: false)
+        guard route == .background else { return nil }
+        if isCancelled() { throw CancellationError() }
+        return try await ComputerUseInputPoster.backgroundDrag(
+            from: start, to: end, pid: window.app.pid, windowID: window.windowID, windowFrame: window.frame,
+            screenWindows: { screenWindows() }, interrupt: interrupt)
+    }
+
+    static let dragStartHiddenRefusal = "The drag's start element is scrolled out of view or hidden."
+    static let dropHiddenRefusal = "The drop element is scrolled out of view or hidden."
+
+    /// Where an end of a drag is in `now`, the window `shown` as the agent saw it; nil while its
+    /// element doesn't show. A ref's point is on the part of it its scroll area shows: an element
+    /// scrolled under another part of the window (a sidebar) would get the press instead.
+    private static func dragPoint(
+        _ target: ComputerUseInputTarget, shown: ComputerUseWindow, now: ComputerUseWindow, isDrop: Bool,
+        isCancelled: @escaping @Sendable () -> Bool
+    ) async throws -> CGPoint? {
+        switch target {
+        case .element(let handles, let handle):
+            do {
+                return try await ComputerUseAXActions.visibleCenter(
+                    handles, handle, within: now.frame, app: now.app, requireOwnCenter: false, isCancelled: isCancelled)
+            } catch ComputerUseSystemError.staleElement where isDrop {
+                throw ComputerUseSystemError.staleDropElement
+            }
+        case .point(let point):
+            let point = CGPoint(x: point.x - shown.frame.minX + now.frame.minX, y: point.y - shown.frame.minY + now.frame.minY)
+            guard now.frame.contains(point) else {
+                throw isDrop ? ComputerUseSystemError.dropOutOfBounds : ComputerUseSystemError.outOfBounds
+            }
+            return point
+        }
+    }
+
     /// Activates the app around the events; one direct action at a time.
     private static func activated(
         _ input: ComputerUseInput, in window: ComputerUseWindow, ignoring: @escaping @Sendable () -> Set<UInt32>,
@@ -1081,8 +1196,9 @@ extension LiveComputerUseSystem {
             try checkCancelled()
             try ComputerUseInputPoster.scroll(at: location, dx: dx, dy: dy, target: target)
         case .drag(let from, let to, let toWindow):
-            // Only with the app activated, and posted system-wide: a file drag's session follows
-            // the cursor. Telling the user's input from these events needs the input tap.
+            // The foreground drag: only with the app activated, and posted system-wide, since a file
+            // drag's session follows the cursor. Telling the user's input from these events needs
+            // the input tap. The in-app drag is `dragInBackground`.
             precondition(!background, "Drags only go with the app activated")
             guard ComputerUseUserInput.isWatching else {
                 throw ComputerUseSystemError.actionFailed(
@@ -1094,35 +1210,10 @@ extension LiveComputerUseSystem {
             func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
                 await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
             }
-            func moved(_ point: CGPoint, from shown: ComputerUseWindow, to now: ComputerUseWindow) -> CGPoint {
-                CGPoint(x: point.x - shown.frame.minX + now.frame.minX, y: point.y - shown.frame.minY + now.frame.minY)
-            }
             let sourceShown = window
             let dropShown = toWindow ?? window
             var startWindow = window
             var dropWindow = dropShown
-            /// Where an end of the drag is now; nil while its element doesn't show.
-            func resolve(
-                _ target: ComputerUseInputTarget, shown: ComputerUseWindow, now: ComputerUseWindow, isDrop: Bool
-            ) async throws -> CGPoint? {
-                switch target {
-                case .element(let handles, let handle):
-                    do {
-                        // A ref's point is on the part of it its scroll area shows: an element scrolled
-                        // under another part of the window (a sidebar) would get the press instead.
-                        return try await ComputerUseAXActions.visibleCenter(
-                            handles, handle, within: now.frame, app: now.app, requireOwnCenter: false, isCancelled: isCancelled)
-                    } catch ComputerUseSystemError.staleElement where isDrop {
-                        throw ComputerUseSystemError.staleDropElement
-                    }
-                case .point(let point):
-                    let point = moved(point, from: shown, to: now)
-                    guard now.frame.contains(point) else {
-                        throw isDrop ? ComputerUseSystemError.dropOutOfBounds : ComputerUseSystemError.outOfBounds
-                    }
-                    return point
-                }
-            }
             func state(_ point: CGPoint?, own: UInt32, other: UInt32, displays: [CGRect]) -> ComputerUseTakeover.DragPointState {
                 guard let point else { return .hidden }
                 if !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) { return .offScreen }
@@ -1150,8 +1241,9 @@ extension LiveComputerUseSystem {
                     try checkCancelled()
                     startWindow = await current(sourceShown)
                     dropWindow = await current(dropShown)
-                    let startPoint = try await resolve(from, shown: sourceShown, now: startWindow, isDrop: false)
-                    let endPoint = try await resolve(to, shown: dropShown, now: dropWindow, isDrop: true)
+                    let startPoint = try await dragPoint(
+                        from, shown: sourceShown, now: startWindow, isDrop: false, isCancelled: isCancelled)
+                    let endPoint = try await dragPoint(to, shown: dropShown, now: dropWindow, isDrop: true, isCancelled: isCancelled)
                     let displays = displayFrames()
                     let step = ComputerUseTakeover.dragStep(
                         idleSeconds: secondsSinceUserInput(), activated: true,
@@ -1170,10 +1262,8 @@ extension LiveComputerUseSystem {
                         raisedDrop = true
                         // The raise takes a moment to show; judging the overlap sooner would refuse early.
                         try? await Task.sleep(for: dragRaiseSettle)
-                    case .hidden(.start):
-                        throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.")
-                    case .hidden(.end):
-                        throw ComputerUseSystemError.actionFailed("The drop element is scrolled out of view or hidden.")
+                    case .hidden(.start): throw ComputerUseSystemError.actionFailed(dragStartHiddenRefusal)
+                    case .hidden(.end): throw ComputerUseSystemError.actionFailed(dropHiddenRefusal)
                     case .offScreen: throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
                     case .overlap: throw ComputerUseSystemError.actionFailed(dragOverlapRefusal)
                     case .covered(.start):
