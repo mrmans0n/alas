@@ -1493,6 +1493,9 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve `listReviews`, `readReview` and `mutateReview`:
     /// only a headless host.
     public static let reviewsV1 = "host.reviews.v1"
+    /// Hosts that serve `readProviderReview`, `openProviderReview`,
+    /// `mutateReviewThread` and `publishReview`: only a headless host.
+    public static let reviewsProviderV1 = "host.reviews.provider.v1"
     /// Hosts whose `createWorktreeSession` takes `repoHook`, answering
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
     /// must approve first.

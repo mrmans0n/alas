@@ -228,25 +228,12 @@ struct ReviewSessionLoader: @unchecked Sendable {
                 try await git.localChangesReviewSnapshot(worktreePath: path)
             },
             reviewRequest: { target in
-                guard case .reviewRequest(let providerKind, let host, let repositorySlug, let number, _) = target.payload,
-                      let provider = providerRegistry.provider(for: providerKind),
-                      let separatorIndex = repositorySlug.lastIndex(of: "/")
+                guard case .reviewRequest(_, _, _, let number, _) = target.payload,
+                      let remote = target.providerRemote,
+                      let provider = providerRegistry.provider(for: remote.kind)
                 else {
                     throw ReviewSessionLoaderError.unsupportedTarget
                 }
-                let owner = String(repositorySlug[..<separatorIndex])
-                let repository = String(repositorySlug[repositorySlug.index(after: separatorIndex)...])
-                guard !owner.isEmpty, !repository.isEmpty else {
-                    throw ReviewSessionLoaderError.unsupportedTarget
-                }
-                let remote = CodeHostRemote(
-                    kind: providerKind,
-                    host: host,
-                    owner: owner,
-                    repository: repository,
-                    remoteName: "origin",
-                    webURL: target.providerURL ?? URL(string: "https://\(host)/\(repositorySlug)")!
-                )
                 let request = try await provider.reviewRequest(remote: remote, number: number, cwd: target.repositoryPath)
                 let loadedSession = try await ReviewRequestDiffLoader(provider: provider).load(
                     remote: remote,

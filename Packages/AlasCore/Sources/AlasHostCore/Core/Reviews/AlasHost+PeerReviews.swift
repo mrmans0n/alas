@@ -71,6 +71,16 @@ extension ReviewsAPI {
         if session != localChanges, try !list(in: worktree).contains(where: { $0.sessionID == sessionID }) {
             throw HostError.notFound(what: "review \(sessionID)")
         }
+        // A publish marks its drafts with what the provider got, so their
+        // text can't change under it.
+        switch mutation {
+        case .edit, .delete:
+            guard !core.publishingReviews.contains(sessionID) else {
+                throw HostError.invalidRequest(reason: "This review is being published. Try again when it finishes.")
+            }
+        case .add, .resolve, .dismiss:
+            break
+        }
         let store = core.reviewDrafts
         func existing(_ commentID: String, whenActive: Bool = true) throws -> ReviewDraftComment {
             guard let comment = try store.find(commentID: commentID), comment.sessionID.rawValue == sessionID else {
@@ -136,7 +146,7 @@ extension ReviewsAPI {
         case .image:
             throw HostError.invalidRequest(reason: "Only file and line comments can be added from a paired Mac.")
         }
-        guard [.localChanges, .commit, .trackedCommit, .commitRange, .branch].contains(session.sourceKind) else {
+        guard [.localChanges, .commit, .trackedCommit, .commitRange, .branch, .reviewRequest].contains(session.sourceKind) else {
             throw HostError.invalidRequest(reason: "Not available from this Mac yet.")
         }
         for text in [body, path, fileID.namespace, originalPath ?? ""] { try Self.checkSize(text) }
@@ -157,7 +167,7 @@ extension ReviewsAPI {
     }
 
     /// Bounds what a Mac stores in the host's review drafts.
-    private static func checkSize(_ text: String) throws {
+    static func checkSize(_ text: String) throws {
         guard text.utf8.count <= 64 * 1024 else {
             throw HostError.invalidRequest(reason: "This review comment is too long.")
         }

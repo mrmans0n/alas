@@ -944,6 +944,249 @@ struct HostProtocolServerTests {
 
         #expect(try await fixture.request(.listReviews(worktree: ref))
             == .failure(error: .invalidRequest(reason: "This host does not serve reviews.")))
+        #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: "x", withDiff: false))
+            == .failure(error: .invalidRequest(reason: "This host does not serve pull request reviews.")))
+    }
+
+    /// A Mac opens a worktree's pull request review, reusing the open one,
+    /// and reads it from the provider as the host's user.
+    @Test func aMacOpensAndReadsAPullRequestReview() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        provider.threads = [ReviewThread(
+            id: "t1", path: "a.txt", line: 1, startLine: nil, originalLine: nil, diffHunk: nil, isResolved: false,
+            isOutdated: false, isFileLevel: false, comments: [], viewerCanResolve: true, viewerCanReply: true, url: nil
+        )]
+        provider.diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+        let sessionID = try await fixture.openPullRequestReview(provider)
+
+        for _ in 0..<2 {
+            guard case .review(let review) = try await fixture.request(.openProviderReview(worktree: ref, number: 7)) else {
+                Issue.record("expected the review")
+                return
+            }
+            #expect(review.summary.sessionID == sessionID)
+            #expect(review.summary.record.target.kind == .reviewRequest)
+        }
+        #expect(try fixture.core.reviewSessions.list(worktreeID: worktree.id).count == 1)
+
+        for withDiff in [true, false] {
+            guard case .providerReview(let review) = try await fixture.request(
+                .readProviderReview(worktree: ref, sessionID: sessionID, withDiff: withDiff)
+            ) else {
+                Issue.record("expected the provider review")
+                return
+            }
+            #expect(review.request.number == 7)
+            #expect(review.request.threads.map(\.id) == ["t1"])
+            #expect(review.account == "octocat")
+            #expect(review.diff == (withDiff ? provider.diff : nil))
+            #expect(!review.diffTruncated)
+        }
+
+        fixture.host.reviews.openLocalChanges(in: worktree)
+        let localChanges = ReviewDraftSessionID.localChanges(worktreeID: worktree.id, worktreePath: worktree.path, scope: .all)
+        #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: localChanges.rawValue, withDiff: false))
+            == .failure(error: .invalidRequest(reason: "This review has no pull or merge request.")))
+        provider.readError = CodeHostProviderError.unauthenticated("github.com")
+        #expect(try await fixture.request(.readProviderReview(worktree: ref, sessionID: sessionID, withDiff: false))
+            == .failure(error: .failed(message: "Authentication is required for github.com.")))
+    }
+
+    /// A Mac acts only on the threads of the review's own pull request, and
+    /// the host tells subscribers the reviews changed.
+    @Test func threadActionsActOnlyOnTheirPullRequestsThreads() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        provider.threads = [ReviewThread(
+            id: "t1", path: "a.txt", line: 1, startLine: nil, originalLine: nil, diffHunk: nil, isResolved: false,
+            isOutdated: false, isFileLevel: false, comments: [], viewerCanResolve: true, viewerCanReply: true, url: nil
+        )]
+        let sessionID = try await fixture.openPullRequestReview(provider)
+        let subscription = fixture.host.subscribe()
+
+        guard case .reviewThreadMutated = try await fixture.request(
+            .mutateReviewThread(worktree: ref, sessionID: sessionID, threadID: "t1", kind: .resolve, body: nil)
+        ) else {
+            Issue.record("expected the mutated thread")
+            return
+        }
+        #expect(provider.threadMutations.map { [$0.thread.providerThreadID, $0.kind.rawValue, $0.cwd.path] }
+            == [["t1", "resolve", worktree.path.path]])
+        #expect(await fixture.events(of: subscription).contains(.reviewsChanged(worktreeID: worktree.id)))
+
+        #expect(try await fixture.request(.mutateReviewThread(
+            worktree: ref, sessionID: sessionID, threadID: "t9", kind: .reply, body: "Hi"
+        )) == .failure(error: .notFound(what: "review thread t9")))
+        guard case .success(let commit) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+            Issue.record("expected the commit review")
+            return
+        }
+        #expect(try await fixture.request(.mutateReviewThread(
+            worktree: ref, sessionID: commit.record.target.draftSessionID.rawValue, threadID: "t1", kind: .resolve, body: nil
+        )) == .failure(error: .invalidRequest(reason: "This review has no pull or merge request.")))
+        let foreign = ReviewDraftSessionID.localChanges(worktreeID: "other", worktreePath: repo, scope: .all).rawValue
+        #expect(try await fixture.request(.mutateReviewThread(
+            worktree: ref, sessionID: foreign, threadID: "t1", kind: .resolve, body: nil
+        )) == .failure(error: .notFound(what: "review \(foreign)")))
+        #expect(provider.threadMutations.count == 1)
+    }
+
+    /// Saves draft `id` on line `line` of a.txt in review `session`.
+    private static func saveDraft(_ id: String, line: Int, in session: ReviewDraftSessionID, to fixture: RepoFixture) throws {
+        try fixture.core.reviewDrafts.save(ReviewDraftComment(
+            id: id, sessionID: session, fileID: DiffReviewFileID(namespace: "github-pr", path: "a.txt"), path: "a.txt",
+            side: .new, startLine: line, bodyMarkdown: "Why \(id)?", state: .active, createdAt: .distantPast, updatedAt: .distantPast
+        ))
+    }
+
+    /// A worktree's commit review, with draft "theirs" on it.
+    private static func commitReviewWithADraft(_ fixture: RepoFixture, worktree: Worktree) async throws -> ReviewDraftSessionID {
+        guard case .success(let commit) = await fixture.host.reviews.open("HEAD", in: worktree, caller: .app) else {
+            throw HostError.failed(message: "expected the commit review")
+        }
+        try saveDraft("theirs", line: 1, in: commit.record.target.draftSessionID, to: fixture)
+        return commit.record.target.draftSessionID
+    }
+
+    /// A Mac publishes only its review's own drafts, at the head it showed,
+    /// and each draft keeps what became of it.
+    @Test func publishPostsTheSessionsDraftsAtTheHeadTheMacShowed() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        let rawSession = try await fixture.openPullRequestReview(provider)
+        let session = try #require(ReviewDraftSessionID(rawValue: rawSession))
+        try Self.saveDraft("a", line: 1, in: session, to: fixture)
+        try Self.saveDraft("b", line: 2, in: session, to: fixture)
+        let commit = try await Self.commitReviewWithADraft(fixture, worktree: worktree)
+        let theirs = try fixture.core.reviewDrafts.load(sessionID: commit)
+        let result = ProviderReviewPublishResult(
+            published: [ProviderReviewPublishedComment(localDraftID: "a", providerThreadID: "t1", providerCommentID: "c1", providerURL: nil)],
+            failed: [ProviderReviewFailedComment(localDraftID: "b", message: "outdated")],
+            refreshedRequest: ShepherdFixtures.request(), warnings: ["GitHub dropped the approval."]
+        )
+        provider.publishResult = result
+        let subscription = fixture.host.subscribe()
+
+        #expect(try await fixture.request(.publishReview(
+            worktree: ref, sessionID: rawSession,
+            publish: HostReviewPublish(decision: .comment, body: "", draftIDs: nil, headSHA: "aaaaaaa")
+        )) == .reviewPublished(result: result))
+        #expect(provider.publishes.count == 1)
+        #expect(provider.publishes.first?.reviewRequest.headSHA == "aaaaaaa")
+        #expect(provider.publishes.first?.comments.map(\.localDraftID) == ["a", "b"])
+        let stored = try fixture.core.reviewDrafts.load(sessionID: session)
+        #expect(stored.first { $0.id == "a" }?.providerPublish?.threadID == "t1")
+        let b = try #require(stored.first { $0.id == "b" })
+        #expect(b.providerError?.message == "outdated")
+        #expect(b.state == .active)
+        #expect(try fixture.core.reviewDrafts.load(sessionID: commit) == theirs)
+        #expect(await fixture.events(of: subscription).contains(.reviewsChanged(worktreeID: worktree.id)))
+    }
+
+    /// A publish with nothing of its own review to post never reaches the provider.
+    @Test(arguments: [
+        (["theirs"], "aaaaaaa", "The selected draft is no longer publishable."),
+        (nil, "aaaaaaa", "There are no publishable draft comments for a comment review."),
+        (nil, "HEAD; rm", "The head commit must be a commit SHA."),
+    ] as [([String]?, String, String)])
+    func publishRefusalsReachNoProvider(draftIDs: [String]?, headSHA: String, reason: String) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (_, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        let rawSession = try await fixture.openPullRequestReview(provider)
+        _ = try await Self.commitReviewWithADraft(fixture, worktree: worktree)
+
+        #expect(try await fixture.request(.publishReview(
+            worktree: ref, sessionID: rawSession,
+            publish: HostReviewPublish(decision: .comment, body: "", draftIDs: draftIDs, headSHA: headSHA)
+        )) == .failure(error: .invalidRequest(reason: reason)))
+        #expect(provider.publishes.isEmpty)
+    }
+
+    /// A second publish of a review is refused while the first runs, so no
+    /// draft posts twice.
+    @Test func aReviewPublishesOnceWhileAPublishIsInFlight() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        _ = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let provider = FakeReviewProvider(kind: .github)
+        provider.holdsPublish = true
+        let rawSession = try await fixture.openPullRequestReview(provider)
+        try Self.saveDraft("a", line: 1, in: try #require(ReviewDraftSessionID(rawValue: rawSession)), to: fixture)
+        func publish(_ draftIDs: [String]?) async throws -> ProviderReviewPublishResult {
+            try await fixture.host.reviews.publish(
+                HostReviewPublish(decision: .comment, body: "", draftIDs: draftIDs, headSHA: "aaaaaaa"),
+                sessionID: rawSession, in: worktree, caller: .app
+            )
+        }
+
+        let first = Task { try await publish(nil) }
+        try await eventually { await MainActor.run { provider.releasePublish != nil } }
+        await #expect(throws: HostError.invalidRequest(reason: "This review is already being published.")) {
+            try await publish(["a"])
+        }
+        // An edit would be marked published with the body the provider never got.
+        for mutation in [HostReviewMutation.edit(commentID: "a", body: "later"), .delete(commentID: "a")] {
+            await #expect(throws: HostError.invalidRequest(reason: "This review is being published. Try again when it finishes.")) {
+                try await fixture.host.reviews.mutate(mutation, sessionID: rawSession, in: worktree, caller: .app)
+            }
+        }
+        provider.releasePublish?.resume()
+        #expect(try await first.value.published.map(\.localDraftID) == ["a"])
+        await #expect(throws: HostError.invalidRequest(reason: "The selected draft is no longer publishable.")) {
+            try await publish(["a"])
+        }
+        #expect(provider.publishes.count == 1)
+    }
+
+    /// Comments on a renamed file of a pull or merge request keep the path it
+    /// had before where the provider publishes against it, and a Mac files
+    /// them on the review's own files.
+    @Test(arguments: [CodeHostKind.github, .gitlab])
+    func commentsOnAPullRequestReviewKeepTheirOriginalPath(_ kind: CodeHostKind) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        try "b\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let provider = FakeReviewProvider(kind: kind)
+        provider.diff = "diff --git a/old.txt b/a.txt\nsimilarity index 50%\nrename from old.txt\nrename to a.txt\n"
+            + "--- a/old.txt\n+++ b/a.txt\n@@ -1 +1 @@\n-a\n+b\n"
+        let rawSession = try await fixture.openPullRequestReview(provider)
+        let session = try #require(ReviewDraftSessionID(rawValue: rawSession))
+
+        _ = await fixture.host.reviews.addComment(
+            origin: worktree, path: "a.txt", startLine: 1, endLine: nil, side: nil, body: "Why?",
+            sessionID: rawSession, projectWorktrees: [worktree]
+        )
+        #expect(try fixture.core.reviewDrafts.load(sessionID: session).map(\.originalPath)
+            == [kind == .gitlab ? "old.txt" : nil])
+
+        let namespace = kind == .github ? "github-pr" : "gitlab-mr"
+        func add(_ namespace: String) async throws -> HostResponse {
+            try await fixture.request(.mutateReview(worktree: ref, sessionID: rawSession, mutation: .add(
+                fileID: DiffReviewFileID(namespace: namespace, path: "a.txt"), path: "a.txt", originalPath: "old.txt",
+                anchor: .line(side: .new, startLine: 1, endLine: nil, selectedText: nil), body: "From the Mac"
+            )))
+        }
+        #expect(try await add(namespace) == .done)
+        #expect(try await add("commit") == .failure(error: .invalidRequest(reason: "this review has no commit files")))
+        let mac = try fixture.core.reviewDrafts.load(sessionID: session).filter { $0.bodyMarkdown == "From the Mac" }
+        #expect(mac.map(\.fileID.namespace) == [namespace])
+        #expect(mac.map(\.effectiveAuthor) == [.user])
     }
 
     /// Local changes are listed, never saved, once an agent comments on them;
@@ -1308,16 +1551,35 @@ struct HostProtocolServerTests {
                 caller: .remotePeer(deviceID: "d"))
         }
 
+        /// The events `subscription` has received so far.
+        func events(of subscription: HostSubscription) async -> [HostEvent] {
+            let marker = HostEvent.worktreeNotice(HostWorktreeNotice(id: UUID(), worktreeID: "", title: nil, body: ""))
+            host.noteAttention([marker])
+            var events: [HostEvent] = []
+            while let batch = await subscription.next() {
+                events += batch
+                if events.contains(marker) { break }
+            }
+            return events.filter { $0 != marker }
+        }
+
         /// The worktree notices `subscription` has received so far.
         func worktreeNotices(of subscription: HostSubscription) async -> [HostWorktreeNotice] {
-            let marker = HostWorktreeNotice(id: UUID(), worktreeID: "", title: nil, body: "")
-            host.noteAttention([.worktreeNotice(marker)])
-            var notices: [HostWorktreeNotice] = []
-            while let batch = await subscription.next() {
-                notices += batch.compactMap { if case .worktreeNotice(let notice) = $0 { notice } else { nil } }
-                if notices.contains(marker) { break }
+            await events(of: subscription).compactMap { if case .worktreeNotice(let notice) = $0 { notice } else { nil } }
+        }
+
+        /// Adds an `origin` of `provider`'s kind, installs `provider` for it,
+        /// and opens PR/MR 7 as an agent would; returns the session id.
+        func openPullRequestReview(_ provider: FakeReviewProvider) async throws -> String {
+            let (repo, _) = try await mainWorktree()
+            let host = provider.kind == .github ? "github.com" : "gitlab.com"
+            _ = try await Process.git(["remote", "add", "origin", "https://\(host)/acme/app.git"], cwd: repo)
+            core.codeHostProviders = CodeHostProviderRegistry(providers: [provider.kind: provider])
+            let worktree = try #require(core.projects.worktrees(projectId: projectID).first)
+            switch await self.host.reviews.open("7", in: worktree, caller: .app) {
+            case .success(let opened): return opened.record.target.draftSessionID.rawValue
+            case .failure(let failure): throw HostError.failed(message: failure.message)
             }
-            return notices.filter { $0 != marker }
         }
 
         func request(_ request: HostRequest) async throws -> HostResponse {
@@ -1415,6 +1677,73 @@ struct HostProtocolServerTests {
             ))
             server = HostProtocolServer(host: host)
         }
+    }
+
+    /// A code host serving PR/MR `number` with `threads` and `diff`, as
+    /// `login`. Its mutating methods run on the main actor, where the tests read them.
+    final class FakeReviewProvider: CodeHostProvider, @unchecked Sendable {
+        let kind: CodeHostKind
+        var headSHA = "bbb"
+        var threads: [ReviewThread] = []
+        var diff = ""
+        var login: String? = "octocat"
+        /// Thrown by `reviewRequest`.
+        var readError: (any Error)?
+        var threadMutations: [ProviderThreadMutation] = []
+        /// What `publishReview` answers; nil publishes every comment.
+        var publishResult: ProviderReviewPublishResult?
+        /// The next `publishReview` waits for `releasePublish` to be resumed.
+        var holdsPublish = false
+        var releasePublish: CheckedContinuation<Void, Never>?
+        var publishes: [ProviderReviewPublishRequest] = []
+
+        init(kind: CodeHostKind) { self.kind = kind }
+
+        var capabilities: CodeHostProviderCapabilities { .githubCLI }
+        func reviewRequest(remote: CodeHostRemote, number: Int, cwd: URL) async throws -> ReviewRequest {
+            if let readError { throw readError }
+            return ReviewRequest(
+                remote: remote, number: number, title: "Fix", url: remote.reviewRequestURL(number: number), state: .open,
+                isDraft: false, headRefName: "feature", baseRefName: "main", headSHA: headSHA, reviewDecision: .unknown,
+                mergeState: .unknown, checks: [], threads: threads
+            )
+        }
+        func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+        @MainActor func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
+            threadMutations.append(mutation)
+            return ProviderThreadMutationResult(refreshedRequest: mutation.reviewRequest, providerURL: nil)
+        }
+        @MainActor func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
+            publishes.append(request)
+            if holdsPublish {
+                holdsPublish = false
+                await withCheckedContinuation { releasePublish = $0 }
+            }
+            return publishResult ?? ProviderReviewPublishResult(
+                published: request.comments.map {
+                    ProviderReviewPublishedComment(localDraftID: $0.localDraftID, providerThreadID: nil, providerCommentID: nil, providerURL: nil)
+                },
+                failed: [], refreshedRequest: request.reviewRequest, warnings: []
+            )
+        }
+        func viewerLogin(remote: CodeHostRemote, cwd: URL) async -> String? { login }
+        func isAvailable(cwd: URL) async -> Bool { true }
+        func isAuthenticated(remote: CodeHostRemote, cwd: URL) async -> Bool { true }
+        func currentReviewRequest(
+            remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String, cwd: URL
+        ) async throws -> ReviewRequest? {
+            nil
+        }
+        func createReviewRequest(
+            remote: CodeHostRemote, branch: String, headOwner: String?, baseBranch: String,
+            title: String, body: String, isDraft: Bool, cwd: URL
+        ) async throws -> URL {
+            throw CodeHostProviderError.unsupportedProvider(kind)
+        }
+        func checks(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewCheck] { [] }
+        func rerunFailedChecks(
+            remote: CodeHostRemote, branch: String, headSHA: String, request: ReviewRequest?, cwd: URL
+        ) async throws {}
     }
 
     /// What a transport would write, in order. Can hold the first event batch
