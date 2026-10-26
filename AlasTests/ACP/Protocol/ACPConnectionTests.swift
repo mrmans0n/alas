@@ -1,9 +1,27 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import Alas
 
 @Suite("ACPConnection")
 struct ACPConnectionTests {
+    @Test func initializeRejectsAnIncompatibleUpdateModeBeforeHandoff() async throws {
+        let handoffs = Mutex(0)
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in
+            handoffs.withLock { $0 += 1 }
+            return .frame(Data(#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1}}"#.utf8))
+        })
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        let connection = ACPConnection(client: client)
+        await #expect(throws: ACPProtocolNegotiationError.self) {
+            try await connection.initialize()
+        }
+        #expect(handoffs.withLock { $0 } == 0)
+        #expect(connection.negotiatedProtocolVersion == nil)
+        await client.shutdown()
+    }
+
     @Test("initialize advertises neutral goal and task metadata")
     func neutralInitializationMetadata() async throws {
         let mock = ACPMockClient()

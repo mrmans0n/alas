@@ -12,8 +12,10 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
     private(set) var terminateCount = 0
     var deferWriteCompletions = false
     private var pendingWriteCompletions: [@Sendable () -> Void] = []
+    private let responseForRequest: (@Sendable (Data) -> JSONRPCStdioTransport.Incoming?)?
 
-    init() {
+    init(responseForRequest: (@Sendable (Data) -> JSONRPCStdioTransport.Incoming?)? = nil) {
+        self.responseForRequest = responseForRequest
         var c: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation!
         self.incoming = AsyncStream { c = $0 }
         self.cont = c
@@ -25,6 +27,7 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
 
     func send(_ data: Data) throws {
         sentFrames.append(data)
+        if let response = responseForRequest?(data) { cont.yield(response) }
     }
 
     func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
@@ -66,8 +69,8 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
         cont.yield(.frame(frame, onConsumed: onConsumed))
     }
 
-    func send(exitStatus: Int32) {
+    func send(exitStatus: Int32, finish: Bool = true) {
         cont.yield(.exited(exitStatus))
-        cont.finish()
+        if finish { cont.finish() }
     }
 }

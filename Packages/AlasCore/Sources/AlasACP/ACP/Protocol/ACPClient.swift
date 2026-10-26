@@ -73,10 +73,16 @@ public protocol ACPClient: AnyObject {
     /// where awaiting a reply would suspend the caller indefinitely.
     func notify(_ request: ACPRequest) async throws
 
-    /// Streaming `session/update` notifications.
+    /// Immutable decoder mode for this connection's session updates.
+    var sessionUpdateProtocolVersion: ACPProtocolVersion { get }
+
+    /// Raw v2 updates, with explicit caller-owned durable consumption.
+    var incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery> { get }
+
+    /// Streaming v1 `session/update` notifications.
     var incomingUpdates: AsyncStream<ACPSessionUpdateParams> { get }
     /// Monotonic count of `session/update` notifications yielded to
-    /// `incomingUpdates`. Runners use this as a drain target when an RPC
+    /// the active update stream. Runners use this as a drain target when an RPC
     /// response races ahead of already-yielded update notifications.
     var yieldedUpdateCount: Int { get }
 
@@ -145,6 +151,12 @@ public protocol ACPRequestHandoffPreparing: ACPClient {
 }
 
 extension ACPClient {
+    public var sessionUpdateProtocolVersion: ACPProtocolVersion { .v1 }
+
+    public var incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery> {
+        AsyncStream { $0.finish() }
+    }
+
     public var providesDurableOperationKeyDeduplication: Bool { false }
 
     public var advertisesTerminalCapability: Bool { true }
