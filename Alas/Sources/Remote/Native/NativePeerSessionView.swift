@@ -63,8 +63,14 @@ struct NativePeerSessionView: View {
             leadingRows: leadingRows(transcript),
             trailingRows: queueRows(transcript, contentMaxWidth: contentMaxWidth) + pendingRequestRows(transcript),
             fetchOlder: { _ = client.fetchOlder() },
-            onQuote: { composerActions.quote($0) }
+            onQuote: { composerActions.quote($0) },
+            onRestoreCheckpoint: servesCheckpoints ? { client.requestCheckpointRestore($0) } : nil
         )
+    }
+
+    private var servesCheckpoints: Bool {
+        guard let serverId = client.selectedPeer?.serverId else { return false }
+        return client.hosts?.servesCheckpoints(serverId: serverId) == true
     }
 
     private func leadingRows(_ transcript: NativePeerTranscript) -> [NativePeerTranscriptExtraRow] {

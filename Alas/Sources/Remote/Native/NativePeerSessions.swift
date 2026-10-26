@@ -158,6 +158,8 @@ final class NativePeerSessions {
     private(set) var openedReview: NativePeerReviewSelection?
     /// A host commit opened in the commit editor over the center pane.
     private(set) var openedCommitEditor: NativePeerCommitEditorSelection?
+    /// A checkpoint the transcript asked to restore, until the right pane takes it.
+    private(set) var pendingCheckpointRestore: CheckpointID?
     /// The selected row's worktree summary when changes were last requested.
     /// Peers re-send it with every session list, so a change here is the
     /// cue that the agent touched the worktree.
@@ -597,6 +599,7 @@ final class NativePeerSessions {
         selectedWorktree = nil
         openedReview = nil
         openedCommitEditor = nil
+        pendingCheckpointRestore = nil
         selectedWorktreeTabs = []
         consoles?.clearSelection()
         if let selectedSessionId, let pendingPrompt {
@@ -1187,6 +1190,15 @@ final class NativePeerSessions {
 
     func closeCommitEditor() {
         openedCommitEditor = nil
+    }
+
+    func requestCheckpointRestore(_ id: CheckpointID) {
+        pendingCheckpointRestore = id
+    }
+
+    func takeCheckpointRestore() -> CheckpointID? {
+        defer { pendingCheckpointRestore = nil }
+        return pendingCheckpointRestore
     }
 
     @discardableResult

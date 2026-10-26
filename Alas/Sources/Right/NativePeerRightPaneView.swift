@@ -706,6 +706,13 @@ struct NativePeerRightPaneView: View {
     private func checkpointPrompts(_ content: some View) -> some View {
         content
         .task(id: checkpointsKey) { await readCheckpoints() }
+        // "Restore files to before this request" in the peer transcript.
+        .onChange(of: client.pendingCheckpointRestore) { _, requested in
+            guard requested != nil, let id = client.takeCheckpointRestore(), let gitTarget,
+                  client.hosts?.servesCheckpoints(serverId: gitTarget.serverId) == true
+            else { return }
+            openCheckpointRestore(id, on: gitTarget)
+        }
         .sheet(isPresented: $creatingCheckpoint) {
             if let gitTarget {
                 CreateCheckpointSheet(error: checkpointCreateError, disabled: checkpointInFlight) { label in

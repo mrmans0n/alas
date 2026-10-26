@@ -29,6 +29,8 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
     let trailingRows: [NativePeerTranscriptExtraRow]
     let fetchOlder: () -> Void
     var onQuote: (String) -> Void = { _ in }
+    /// Opens the restore preview for a user row's checkpoint; nil hides the action.
+    var onRestoreCheckpoint: ((CheckpointID) -> Void)? = nil
 
     @Environment(\.theme) private var theme
     @Environment(\.openURL) private var openURL
@@ -250,6 +252,7 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
             let inGroup: Bool
             let isPlanActive: Bool
             let typography: ACPChatTypography
+            let offersRestore: Bool
         }
 
         private func messageSpec(
@@ -266,7 +269,8 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                 id: stableId,
                 equalityToken: Self.token(
                     MessageTokenInputs(
-                        row: tokenRow, inGroup: inGroup, isPlanActive: isPlanActive, typography: host.typography),
+                        row: tokenRow, inGroup: inGroup, isPlanActive: isPlanActive, typography: host.typography,
+                        offersRestore: host.onRestoreCheckpoint != nil),
                     host: host
                 ),
                 build: {
@@ -274,7 +278,8 @@ struct NativePeerTranscriptScroller: NSViewRepresentable {
                         let content = NativePeerRowView(
                             row: row, stableId: stableId, rowCache: rowCache,
                             contentMaxWidth: host.contentMaxWidth, typography: host.typography,
-                            isPlanActive: isPlanActive, onQuote: host.onQuote
+                            isPlanActive: isPlanActive, onQuote: host.onQuote,
+                            onRestoreCheckpoint: host.onRestoreCheckpoint
                         )
                         if inGroup {
                             ACPToolCallGroupMemberRow { content }
@@ -492,10 +497,11 @@ private struct NativePeerRowView: View {
     let typography: ACPChatTypography
     let isPlanActive: Bool
     var onQuote: (String) -> Void = { _ in }
+    var onRestoreCheckpoint: ((CheckpointID) -> Void)? = nil
 
     var body: some View {
         switch row {
-        case .user(let text):
+        case .user(let text, let checkpointID):
             HStack {
                 Spacer(minLength: 40)
                 ACPMarkdownText(raw: text, typography: typography)
@@ -503,7 +509,7 @@ private struct NativePeerRowView: View {
                     .frame(maxWidth: contentMaxWidth * 0.75, alignment: .trailing)
             }
             .frame(maxWidth: .infinity)
-            .contextMenu { messageMenu(text) }
+            .contextMenu { messageMenu(text, checkpointID: checkpointID) }
         case .agent(let text):
             ACPMarkdownText(
                 raw: text,
@@ -527,7 +533,12 @@ private struct NativePeerRowView: View {
         }
     }
     @ViewBuilder
-    private func messageMenu(_ text: String) -> some View {
+    private func messageMenu(_ text: String, checkpointID: CheckpointID? = nil) -> some View {
+        // Ordered as ACPMessageActionsMenu.make orders the local row's menu.
+        if let checkpointID, let onRestoreCheckpoint {
+            Button("Restore files to before this request") { onRestoreCheckpoint(checkpointID) }
+            Divider()
+        }
         Button("Copy") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(text, forType: .string)
