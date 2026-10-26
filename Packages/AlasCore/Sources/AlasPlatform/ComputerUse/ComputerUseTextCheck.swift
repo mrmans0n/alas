@@ -59,13 +59,29 @@ public enum ComputerUseTextCheck {
 
     /// After text went in by AX: for an element in a window with a document (`inDocument`, an
     /// `AXDocument` on the window), or a multi-line text area (`multiLine`) outside a web page,
-    /// which an untitled document's text is. Single-line fields are left alone. Never keys into a
-    /// secure field.
+    /// which an untitled document's text may be, except in a terminal or code editor
+    /// (`keyCommandApp`, `isKeyCommandApp`), where a letter can be a command. Single-line fields
+    /// are left alone. Never keys into a secure field.
     public static func documentNudge(
-        inDocument: Bool, multiLine: Bool, inWebArea: Bool, secure: Bool, keysReach: Bool
+        inDocument: Bool, multiLine: Bool, inWebArea: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool
     ) -> DocumentNudge {
-        guard !secure, inDocument || (multiLine && !inWebArea) else { return .none }
+        guard !secure, !keyCommandApp, inDocument || (multiLine && !inWebArea) else { return .none }
         return keysReach ? .keys : .warn
+    }
+
+    /// Terminals and code editors, where a typed letter can run a command (a vim-style normal
+    /// mode) rather than edit text.
+    public static let keyCommandBundleIDs: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
+        "net.kovidgoyal.kitty", "io.alacritty", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92",
+        "dev.zed.Zed", "com.sublimetext.4", "com.apple.dt.Xcode", "org.vim.MacVim",
+    ]
+
+    /// A terminal or code editor (`keyCommandBundleIDs`, any JetBrains IDE), or any Alas build.
+    public static func isKeyCommandApp(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {
+        if ComputerUseBlocklist.isAlas(app, hostPID: hostPID) { return true }
+        guard let bundleID = app.bundleID else { return false }
+        return keyCommandBundleIDs.contains(bundleID) || bundleID.hasPrefix("com.jetbrains.")
     }
 
     /// What the nudge's keys came to, from the whole value right after the AX write (`before`),

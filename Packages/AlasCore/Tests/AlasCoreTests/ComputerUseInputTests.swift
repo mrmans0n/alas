@@ -736,23 +736,42 @@ struct ComputerUseInputTests {
     /// where keys don't reach: a window with a document, or an untitled one's text area. Never for
     /// a secure field, a single-line field, or a web page's text area outside a document.
     @Test(arguments: [
-        (true, false, false, false, true, ComputerUseTextCheck.DocumentNudge.keys),
-        (true, false, false, false, false, .warn),
+        (true, false, false, false, false, true, ComputerUseTextCheck.DocumentNudge.keys),
+        (true, false, false, false, false, false, .warn),
         // An untitled document's text area.
-        (false, true, false, false, true, .keys),
-        (false, true, false, false, false, .warn),
+        (false, true, false, false, false, true, .keys),
+        (false, true, false, false, false, false, .warn),
         // A single-line field outside a document.
-        (false, false, false, false, true, .none),
-        (false, true, true, false, true, .none),
-        (true, true, false, true, true, .none),
-        (false, true, false, true, false, .none),
+        (false, false, false, false, false, true, .none),
+        (false, true, true, false, false, true, .none),
+        (true, true, false, true, false, true, .none),
+        (false, true, false, true, false, false, .none),
+        // A terminal's or code editor's text area, document or not.
+        (false, true, false, false, true, true, .none),
+        (true, true, false, false, true, false, .none),
     ])
     func aDocumentIsMarkedEditedAfterAnAXWrite(
-        inDocument: Bool, multiLine: Bool, inWebArea: Bool, secure: Bool, keysReach: Bool,
+        inDocument: Bool, multiLine: Bool, inWebArea: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool,
         nudge: ComputerUseTextCheck.DocumentNudge
     ) {
         #expect(ComputerUseTextCheck.documentNudge(
-            inDocument: inDocument, multiLine: multiLine, inWebArea: inWebArea, secure: secure, keysReach: keysReach) == nudge)
+            inDocument: inDocument, multiLine: multiLine, inWebArea: inWebArea, secure: secure,
+            keyCommandApp: keyCommandApp, keysReach: keysReach) == nudge)
+    }
+
+    @Test(arguments: [
+        (String?("com.apple.Terminal"), true),
+        ("com.mitchellh.ghostty", true),
+        ("com.todesktop.230313mzl4w4u92", true),
+        ("com.jetbrains.intellij", true),
+        ("io.nlopez.alas.dev", true),
+        ("com.apple.TextEdit", false),
+        ("com.apple.Notes", false),
+        (nil, false),
+    ])
+    func terminalsCodeEditorsAndAlasGetNoLetterNudge(bundleID: String?, skips: Bool) {
+        let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
+        #expect(ComputerUseTextCheck.isKeyCommandApp(app, hostPID: 1) == skips)
     }
 
     /// The key edit counts only when the letter showed and the whole value settled back to what

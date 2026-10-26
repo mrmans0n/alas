@@ -917,11 +917,21 @@ extension ComputerUseAXActions {
     ) async throws -> ComputerUseTextCheck.DocumentNudge {
         try await onQueue(isCancelled) {
             guard let element = try written(target, app: app) else { return .none }
-            let inDocument = elementAttribute(element, kAXWindowAttribute).flatMap { string(of: $0, kAXDocumentAttribute) } != nil
+            // An untitled document's window may still list the attribute, without a value.
+            let inDocument = elementAttribute(element, kAXWindowAttribute).map {
+                string(of: $0, kAXDocumentAttribute) != nil || attributeNames(of: $0).contains(kAXDocumentAttribute)
+            } ?? false
             return ComputerUseTextCheck.documentNudge(
                 inDocument: inDocument, multiLine: string(of: element, kAXRoleAttribute) == kAXTextAreaRole,
-                inWebArea: isInWebArea(element), secure: isSecure(element), keysReach: keysReach)
+                inWebArea: isInWebArea(element), secure: isSecure(element),
+                keyCommandApp: ComputerUseTextCheck.isKeyCommandApp(app, hostPID: getpid()), keysReach: keysReach)
         }
+    }
+
+    private static func attributeNames(of element: AXUIElement) -> [String] {
+        var names: CFArray?
+        guard AXUIElementCopyAttributeNames(element, &names) == .success else { return [] }
+        return (names as? [String]) ?? []
     }
 
     /// Readies the element for a net-zero key edit: focused, with the caret collapsed at the end of
