@@ -345,11 +345,14 @@ public enum RemoteWorktreeFileAccess: Sendable {
         if data.count > maxBytes {
             return .tooLarge(byteSize: data.count)
         }
-        // Built the way FileManager builds `.modificationDate`, so the two agree to the bit.
+        return .version(WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: data), modified: modified(status)), data: data)
+    }
+
+    /// Built the way FileManager builds `.modificationDate`, so the two agree to the bit.
+    private static func modified(_ status: stat) -> Date {
         let mtime = status.st_mtimespec
-        let modified = Date(timeIntervalSinceReferenceDate: TimeInterval(mtime.tv_sec)
+        return Date(timeIntervalSinceReferenceDate: TimeInterval(mtime.tv_sec)
             - Date.timeIntervalBetween1970AndReferenceDate + TimeInterval(mtime.tv_nsec) / 1_000_000_000)
-        return .version(WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: data), modified: modified), data: data)
     }
 
     /// Reads only the first `maxBytes` of `url` (or fewer if the file is
@@ -397,6 +400,40 @@ public enum RemoteWorktreeFileAccess: Sendable {
     public static func probeVersion(at url: URL) async -> FileVersionProbe {
         await Task.detached(priority: .userInitiated) {
             openReadCapped(at: url, maxBytes: maxFileBytes)
+        }.value
+    }
+
+    /// Writes `data` to a temp file beside `url`, fsyncs it, sets the mode `url` had (0644 for a new
+    /// file), and renames it over `url`. Returns the version written. The temp file never outlives a failure.
+    public static func replaceAtomically(_ url: URL, with data: Data) async throws -> WorktreeFileVersion {
+        try await Task.detached(priority: .userInitiated) {
+            func failure() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+            // Bounded, so a long name still leaves room for the suffix.
+            let name = String(decoding: url.lastPathComponent.utf8.prefix(64), as: UTF8.self)
+            let temp = url.deletingLastPathComponent().appendingPathComponent(".\(name).alas-\(UUID().uuidString)")
+            var existing = stat()
+            let mode = lstat(url.path, &existing) == 0 ? existing.st_mode & 0o7777 : 0o644
+            let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
+            guard fd >= 0 else { throw failure() }
+            var renamed = false
+            defer { if !renamed { unlink(temp.path) } }
+            let written: Result<stat, POSIXError> = data.withUnsafeBytes { bytes in
+                defer { close(fd) }
+                var offset = 0
+                while offset < bytes.count {
+                    let count = write(fd, bytes.baseAddress! + offset, bytes.count - offset)
+                    if count < 0, errno == EINTR { continue }
+                    guard count > 0 else { return .failure(failure()) }
+                    offset += count
+                }
+                var status = stat()
+                guard fchmod(fd, mode) == 0, fsync(fd) == 0, fstat(fd, &status) == 0 else { return .failure(failure()) }
+                return .success(status)
+            }
+            let status = try written.get()
+            guard rename(temp.path, url.path) == 0 else { throw failure() }
+            renamed = true
+            return WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: data), modified: modified(status))
         }.value
     }
 

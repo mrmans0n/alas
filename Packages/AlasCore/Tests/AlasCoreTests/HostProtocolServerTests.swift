@@ -911,6 +911,247 @@ struct HostProtocolServerTests {
         #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
     }
 
+    /// A Mac saves against the version it read: its bytes land as sent, with
+    /// the file's mode, and a new file or folder only where nothing is.
+    @Test func aMacSavesAHostFileAgainstTheVersionItRead() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let scripts = repo.appendingPathComponent(".alas/scripts")
+        let hello = scripts.appendingPathComponent("hello.sh")
+        try Data("old\r\n".utf8).write(to: hello)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hello.path)
+        let path = ".alas/scripts/hello.sh"
+        func write(_ path: String, _ text: String, expected: WorktreeFileVersion?) async throws -> HostResponse {
+            try await fixture.request(.writeFile(worktree: ref, path: path, text: text, expected: expected))
+        }
+        func mode(_ url: URL) throws -> Int? { try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int }
+
+        guard case .fileWritten(let written) = try await write(path, "new\r\n", expected: try await fixture.fileVersion(path, in: ref)) else {
+            Issue.record("expected the save to land")
+            return
+        }
+        #expect(written.contentHash == WorktreeFileVersion.contentHash(of: Data("new\r\n".utf8)))
+        #expect(try Data(contentsOf: hello) == Data("new\r\n".utf8))
+        #expect(try mode(hello) == 0o755)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: scripts.path).allSatisfy { !$0.hasPrefix(".hello.sh.alas-") })
+        guard case .fileWritten = try await write(path, "newer\n", expected: written) else {
+            Issue.record("expected a save against the version written to land")
+            return
+        }
+
+        let created = repo.appendingPathComponent("new.txt")
+        guard case .fileWritten = try await write("new.txt", "", expected: nil) else {
+            Issue.record("expected the file created")
+            return
+        }
+        #expect(try Data(contentsOf: created).isEmpty)
+        #expect(try mode(created) == 0o644)
+        guard case .failure(.fileChanged(let existing?)) = try await write("new.txt", "", expected: nil) else {
+            Issue.record("expected a second create refused")
+            return
+        }
+        #expect(existing.contentHash == WorktreeFileVersion.contentHash(of: Data()))
+
+        #expect(try await fixture.request(.createFolder(worktree: ref, path: "docs")) == .done)
+        var isDirectory: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs").path, isDirectory: &isDirectory))
+        #expect(isDirectory.boolValue)
+        #expect(try await fixture.request(.createFolder(worktree: ref, path: "docs"))
+            == .failure(error: .failed(message: "docs already exists on the host.")))
+        #expect(try await write("gone/x.txt", "", expected: nil)
+            == .failure(error: .failed(message: "The folder holding gone/x.txt is no longer on the host.")))
+    }
+
+    enum OutsideChange: CaseIterable { case edited, deleted, touched }
+
+    /// The bytes decide a conflict: a save over a file edited or deleted since
+    /// it was read is refused and leaves it be; one only touched lands.
+    @Test(arguments: OutsideChange.allCases)
+    func aSaveIsCheckedAgainstTheFilesContentNotItsTimestamp(_ change: OutsideChange) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let notes = repo.appendingPathComponent("notes.txt")
+        try Data("a\n".utf8).write(to: notes)
+        let read = try await fixture.fileVersion("notes.txt", in: ref)
+        switch change {
+        case .edited: try Data("theirs\n".utf8).write(to: notes)
+        case .deleted: try FileManager.default.removeItem(at: notes)
+        case .touched:
+            try FileManager.default.setAttributes([.modificationDate: read.modified.addingTimeInterval(60)], ofItemAtPath: notes.path)
+        }
+
+        let response = try await fixture.request(.writeFile(worktree: ref, path: "notes.txt", text: "mine\n", expected: read))
+        let onDisk = (try? Data(contentsOf: notes)).map { String(decoding: $0, as: UTF8.self) }
+        switch change {
+        case .edited:
+            guard case .failure(.fileChanged(let current?)) = response else {
+                Issue.record("expected the save refused, got \(response)")
+                return
+            }
+            #expect(current.contentHash == WorktreeFileVersion.contentHash(of: Data("theirs\n".utf8)))
+            #expect(onDisk == "theirs\n")
+        case .deleted:
+            #expect(response == .failure(error: .fileChanged(current: nil)))
+            #expect(onDisk == nil)
+        case .touched:
+            guard case .fileWritten = response else {
+                Issue.record("expected the save to land, got \(response)")
+                return
+            }
+            #expect(onDisk == "mine\n")
+        }
+    }
+
+    enum UnwritablePath: CaseIterable {
+        case parentDirectory, absolute, nul, dotGit, dotGitCase, symlinkFinal, symlinkParentOutside, symlinkParentInside, directory, ignored
+    }
+
+    /// Paths come from the client: a save lands only on a regular file inside
+    /// the worktree, reached through no symlink, never in `.git` or on a file
+    /// git ignores, and touches nothing it refuses.
+    @Test(arguments: UnwritablePath.allCases)
+    func fileWritesStayOnRegularFilesInsideTheWorktree(_ shape: UnwritablePath) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let outside = fixture.root.appendingPathComponent("outside")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        let inside = outside.appendingPathComponent("inside.txt")
+        try Data("keep\n".utf8).write(to: inside)
+        let config = repo.appendingPathComponent(".git/config")
+        let hello = repo.appendingPathComponent(".alas/scripts/hello.sh")
+        let (configBytes, helloBytes) = (try Data(contentsOf: config), try Data(contentsOf: hello))
+        let path: String
+        switch shape {
+        case .parentDirectory: path = "../outside/inside.txt"
+        case .absolute: path = inside.path
+        case .nul: path = "notes\0.txt"
+        case .dotGit: path = ".git/config"
+        case .dotGitCase: path = ".GIT/config"
+        case .symlinkFinal:
+            path = "alias.txt"
+            try FileManager.default.createSymbolicLink(at: repo.appendingPathComponent(path), withDestinationURL: inside)
+        case .symlinkParentOutside:
+            path = "out/inside.txt"
+            try FileManager.default.createSymbolicLink(at: repo.appendingPathComponent("out"), withDestinationURL: outside)
+        case .symlinkParentInside:
+            path = "scripts/hello.sh"
+            try FileManager.default.createSymbolicLink(
+                at: repo.appendingPathComponent("scripts"), withDestinationURL: repo.appendingPathComponent(".alas/scripts")
+            )
+        case .directory: path = ".alas"
+        case .ignored:
+            path = "debug.log"
+            try Data("*.log\n".utf8).write(to: repo.appendingPathComponent(".gitignore"))
+            try Data("a\n".utf8).write(to: repo.appendingPathComponent(path))
+        }
+
+        #expect(try await fixture.request(.writeFile(worktree: ref, path: path, text: "x", expected: nil))
+            == .failure(error: .invalidRequest(reason: "The host does not edit \(path).")))
+        #expect(try Data(contentsOf: inside) == Data("keep\n".utf8))
+        #expect(try Data(contentsOf: config) == configBytes)
+        #expect(try Data(contentsOf: hello) == helloBytes)
+        if shape == .ignored {
+            #expect(try Data(contentsOf: repo.appendingPathComponent(path)) == Data("a\n".utf8))
+        }
+    }
+
+    /// A folder has no ignore rules, and its tree lists every file: what a
+    /// Mac can read there it can save.
+    @Test(arguments: [false, true])
+    func ignoredFilesAreEditedOnlyInFolderProjects(folder: Bool) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (root, ref): (URL, WorktreeRef)
+        if folder {
+            root = fixture.root.appendingPathComponent("plain")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            let id = try await fixture.host.projects.add(path: root, displayName: "plain", icon: .default(), kind: .folder, caller: .app).id
+            let worktree = try #require(fixture.core.projects.worktrees(projectId: id).first)
+            ref = WorktreeRef(projectID: id, path: worktree.path.path)
+        } else {
+            (root, ref) = try await fixture.mainWorktree()
+        }
+        try Data("*.log\n".utf8).write(to: root.appendingPathComponent(".gitignore"))
+        let log = root.appendingPathComponent("debug.log")
+        try Data("a\n".utf8).write(to: log)
+
+        let read = try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "debug.log")))
+        if folder {
+            guard case .worktreeRead(.fileContents(_, _, _, _, let version?)) = read,
+                  case .fileWritten = try await fixture.request(.writeFile(worktree: ref, path: "debug.log", text: "b\n", expected: version))
+            else {
+                Issue.record("expected the ignored file read and saved in a folder")
+                return
+            }
+            #expect(try Data(contentsOf: log) == Data("b\n".utf8))
+        } else {
+            guard case .worktreeRead(.fileUnavailable(_, "debug.log", .pathRejected, _, _)) = read else {
+                Issue.record("expected the ignored file unread, got \(read)")
+                return
+            }
+            #expect(try await fixture.request(.writeFile(worktree: ref, path: "debug.log", text: "b\n", expected: nil))
+                == .failure(error: .invalidRequest(reason: "The host does not edit debug.log.")))
+            #expect(try Data(contentsOf: log) == Data("a\n".utf8))
+        }
+    }
+
+    enum WriteGate: CaseIterable { case restoreHold, pendingRecovery, overCap, appHost }
+
+    /// A save waits for nothing: refused while a restore holds the worktree or
+    /// waits to finish, past the read cap, and on a host that edits no files.
+    @Test(arguments: WriteGate.allCases)
+    func fileWritesAreRefusedWhileTheWorktreeIsHeld(_ gate: WriteGate) async throws {
+        let environment: RecordingRunEnvironment? = switch gate {
+        case .pendingRecovery: RecordingRunEnvironment(servesWorktreeGit: true, blocksForCheckpoint: true)
+        case .appHost: RecordingRunEnvironment()
+        case .restoreHold, .overCap: nil
+        }
+        let fixture = try await RepoFixture(environment: environment)
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let notes = repo.appendingPathComponent("notes.txt")
+        try Data("a\n".utf8).write(to: notes)
+        let read = try await fixture.fileVersion("notes.txt", in: ref)
+        var text = "b\n"
+        let expected: HostError
+        switch gate {
+        case .restoreHold:
+            let id = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first).id
+            fixture.core.checkpointRestoreHolds[UUID()] = [SessionOwnerID.worktree(id).storageKey]
+            expected = .failed(message: "A checkpoint restore is running on the host; save again once it finishes.")
+        case .pendingRecovery:
+            expected = .failed(message: "A checkpoint restore is pending on the host; finish it there first.")
+        case .overCap:
+            text = String(repeating: "a", count: RemoteWorktreeFileAccess.maxFileBytes + 1)
+            expected = .invalidRequest(reason: "The host edits files up to 512 KB.")
+        case .appHost:
+            expected = .invalidRequest(reason: "This host does not serve file editing.")
+        }
+
+        #expect(try await fixture.request(.writeFile(worktree: ref, path: "notes.txt", text: text, expected: read)) == .failure(error: expected))
+        #expect(try Data(contentsOf: notes) == Data("a\n".utf8))
+    }
+
+    /// A save needs no branch: mid-rebase, with git detached and the listing
+    /// still on the branch, a conflicted file is resolved by hand.
+    @Test func aFileIsSavedMidRebaseWhileTheListingLags() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.stopPullOnConflicts()
+        let path = ".alas/scripts/hello.sh"
+        let read = try await fixture.fileVersion(path, in: ref)
+
+        guard case .fileWritten = try await fixture.request(.writeFile(worktree: ref, path: path, text: "resolved\n", expected: read)) else {
+            Issue.record("expected the save to land")
+            return
+        }
+        #expect(try Data(contentsOf: repo.appendingPathComponent(path)) == Data("resolved\n".utf8))
+        #expect(FileManager.default.fileExists(atPath: repo.appendingPathComponent(".git/rebase-merge").path))
+    }
+
     /// A branch with no upstream is pushed as the review pill pushes it,
     /// setting the upstream it then tracks.
     @Test func pushPublishesTheBranchAndTracksIt() async throws {
@@ -2205,6 +2446,15 @@ struct HostProtocolServerTests {
             case .success(let opened): return opened.record.target.draftSessionID.rawValue
             case .failure(let failure): throw HostError.failed(message: failure.message)
             }
+        }
+
+        /// The version a Mac reads `path` at.
+        func fileVersion(_ path: String, in ref: WorktreeRef) async throws -> WorktreeFileVersion {
+            let response = try await request(.readWorktree(worktree: ref, read: .file(path: path)))
+            guard case .worktreeRead(.fileContents(_, _, _, _, let version?)) = response else {
+                throw HostError.failed(message: "\(response)")
+            }
+            return version
         }
 
         func request(_ request: HostRequest) async throws -> HostResponse {

@@ -92,6 +92,12 @@ struct HostProtocolTests {
             id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!,
             groupIDs: [UUID(uuidString: "7F9619FF-8B86-D011-B42D-00CF4FC964FF")!], fingerprint: "f"
         ))),
+        HostClientMessage(id: 40, request: .writeFile(
+            worktree: ref, path: "a.txt", text: "hi\r\n",
+            expected: WorktreeFileVersion(contentHash: "abc", modified: Date(timeIntervalSince1970: 1_800_000_000.25))
+        )),
+        HostClientMessage(id: 41, request: .writeFile(worktree: ref, path: "new.txt", text: "", expected: nil)),
+        HostClientMessage(id: 42, request: .createFolder(worktree: ref, path: "docs")),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -164,6 +170,8 @@ struct HostProtocolTests {
             blocker: .activeSession, scopeDescription: "This repository only",
             selectedGroupIDs: [UUID(uuidString: "8F9619FF-8B86-D011-B42D-00CF4FC964FF")!]
         ))),
+        .response(id: 25, result: .fileWritten(version: WorktreeFileVersion(contentHash: "abc", modified: Date(timeIntervalSince1970: 0)))),
+        .response(id: 26, result: .failure(error: .fileChanged(current: nil))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
         )])),

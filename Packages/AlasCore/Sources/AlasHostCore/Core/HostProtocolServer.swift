@@ -405,6 +405,14 @@ public final class HostProtocolConnection {
             return .checkpointRestorePreview(preview: try await host.core.checkpointRestorePreview(
                 id, groupIDs: groupIDs, in: try checkpointWorktree(ref)
             ))
+        case .writeFile(let ref, let path, let text, let expected):
+            let listed = try fileWorktree(ref)
+            caller.log("worktrees.files", path)
+            return .fileWritten(version: try await host.core.writeListedFile(path, text: text, expected: expected, in: listed))
+        case .createFolder(let ref, let path):
+            let listed = try fileWorktree(ref)
+            caller.log("worktrees.files", path)
+            try await host.core.createListedFolder(path, in: listed)
         }
         return .done
     }
@@ -506,6 +514,14 @@ public final class HostProtocolConnection {
     private func servedWorktree(_ ref: WorktreeRef, capability: String) throws -> Worktree {
         guard host.servedCapabilities.contains(capability) else {
             throw HostError.invalidRequest(reason: "This host does not serve this git action.")
+        }
+        return try visibleWorktree(ref)
+    }
+
+    /// A visible worktree whose files this host edits, under the project's gate.
+    private func fileWorktree(_ ref: WorktreeRef) throws -> Worktree {
+        guard host.servedCapabilities.contains(HostProtocolCapability.worktreesFilesV1) else {
+            throw HostError.invalidRequest(reason: "This host does not serve file editing.")
         }
         return try visibleWorktree(ref)
     }
