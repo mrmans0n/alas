@@ -56,7 +56,7 @@ enum ComputerUseAXActions {
         try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
-            return try setValueChecked(text, element, app: app, keysReach: keysReach)
+            return try setValueChecked(text, element, app: app, keysReach: keysReach, byRef: true)
         }
     }
 
@@ -877,7 +877,7 @@ extension ComputerUseAXActions {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
             try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app)
+                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app, byRef: true)
             let warning = try routeDocument(element, app: app, keysReach: keysReach)
             focusKeepingSelection(element, app: app)
             return (Retained(element), warning)
@@ -898,18 +898,18 @@ extension ComputerUseAXActions {
             guard let element = focusedElement(of: app) else { throw Unsupported(error: .noValue) }
             try refuseSecure(element, app: app)
             guard replace else { return (Retained(element), nil) }
-            return (nil, try setValueChecked(text, element, app: app, keysReach: keysReach))
+            return (nil, try setValueChecked(text, element, app: app, keysReach: keysReach, byRef: false))
         }
         guard let element else { return warning }
         let (inWebArea, documentWarning) = try await onQueue(interrupt: interrupt) {
             let inWebArea = isWebTextEntry(element.element)
             // A Chromium web field goes as keys first, whatever its window.
             try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app)
+                nil, inWebArea: inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app, byRef: false)
             return (inWebArea, try routeDocument(element.element, app: app, keysReach: keysReach))
         }
         try await insert(
-            text, into: textTarget(element.element, inWebArea: inWebArea), app: app, keysReach: keysReach,
+            text, into: textTarget(element.element, inWebArea: inWebArea), app: app, keysReach: keysReach, byRef: false,
             interrupt: interrupt)
         return documentWarning
     }
@@ -960,19 +960,39 @@ extension ComputerUseAXActions {
     }
 
     /// Goes on for `.write` and `.landed`; `Unsupported` for `.typeAsKeys`, so the text is typed
-    /// as events; the off-screen refusal for `.refuse`.
-    private static func settle(_ outcome: ComputerUseTextCheck.Outcome, app: ComputerUseAppIdentity) throws {
+    /// as events; the off-screen refusal for `.refuse`, for the field the ref named (`byRef`) or
+    /// the focused one.
+    private static func settle(_ outcome: ComputerUseTextCheck.Outcome, app: ComputerUseAppIdentity, byRef: Bool) throws {
         switch outcome {
         case .write, .landed: return
         case .typeAsKeys: throw Unsupported(error: .attributeUnsupported)
-        case .refuse: throw ComputerUseSystemError.actionFailed(offScreenTypeRefusal(app))
+        case .refuse: throw ComputerUseSystemError.actionFailed(offScreenTypeRefusal(app, byRef ? .refNotTaken : .focusedNotTaken))
         }
     }
 
-    static func offScreenTypeRefusal(_ app: ComputerUseAppIdentity) -> String {
-        "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches it through "
-            + "accessibility, and the element doesn't take it that way (or another of its windows has focus). Use a ref "
-            + "to a text field, or ask the user to bring the window on screen."
+    /// Why text can't reach a window off screen, where only accessibility reaches it.
+    enum OffScreenText {
+        /// The field the ref named doesn't take text through accessibility.
+        case refNotTaken
+        /// Without a ref, the focused element doesn't.
+        case focusedNotTaken
+        /// Without a ref, another of the app's windows has focus, so the text would go there.
+        case otherWindowFocused
+    }
+
+    static func offScreenTypeRefusal(_ app: ComputerUseAppIdentity, _ reason: OffScreenText) -> String {
+        let offScreen = "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches "
+            + "it through accessibility"
+        return switch reason {
+        case .refNotTaken:
+            offScreen + ", and the field doesn't take text through accessibility; ask the user to bring the window on screen."
+        case .focusedNotTaken:
+            offScreen + ", and its focused element doesn't take it that way. Use a ref to a text field, or ask the user "
+                + "to bring the window on screen."
+        case .otherWindowFocused:
+            offScreen + ", and another of its windows has focus, so text without a ref would go there. Use a ref to a "
+                + "text field in this window, or ask the user to bring the window on screen."
+        }
     }
 
     /// An element carried from one block on the AX queue to the next; only messaged there.
@@ -1278,7 +1298,7 @@ extension ComputerUseAXActions {
     /// one): the user or the app moving the caret in between stops the input rather than splitting
     /// the text across two places. Without a readable selection the chunks go wherever the caret is.
     static func insert(
-        _ text: String, into target: TextTarget, app: ComputerUseAppIdentity, keysReach: Bool = true,
+        _ text: String, into target: TextTarget, app: ComputerUseAppIdentity, keysReach: Bool = true, byRef: Bool = true,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
         let total = text.count
@@ -1304,7 +1324,7 @@ extension ComputerUseAXActions {
                 var valueBefore: String?
                 if typedSoFar == 0 {
                     try settle(ComputerUseTextCheck.outcome(
-                        nil, inWebArea: target.inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app)
+                        nil, inWebArea: target.inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app, byRef: byRef)
                     guard target.canSetSelectedText() else { throw Unsupported(error: .attributeUnsupported) }
                     countBefore = target.characterCount()
                     selection = target.selectedRange()
@@ -1341,7 +1361,9 @@ extension ComputerUseAXActions {
                     if landed == .unknown, selection?.length == 0, let countBefore, target.characterCount() == countBefore {
                         landed = .unchanged
                     }
-                    try settle(ComputerUseTextCheck.outcome(landed, inWebArea: false, chromium: false, keysReach: keysReach), app: app)
+                    try settle(
+                        ComputerUseTextCheck.outcome(landed, inWebArea: false, chromium: false, keysReach: keysReach),
+                        app: app, byRef: byRef)
                 }
                 return startLocation
             }
@@ -1405,17 +1427,18 @@ extension ComputerUseAXActions {
     /// page's field from being written at all, and `documentRoute`, a document's text area on screen).
     /// Returns the warning for a document's written off screen. Call on the AX queue.
     private static func setValueChecked(
-        _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool
+        _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool, byRef: Bool
     ) throws -> String? {
         try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app)
+                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app, byRef: byRef)
         let warning = try routeDocument(element, app: app, keysReach: keysReach)
         let before = isLong(element) ? nil : textValue(of: element)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)
         guard result == .success else { throw failure(result, app: app) }
         guard let before else { return warning }
         let landed = awaitLanded { ComputerUseTextCheck.replace(with: text, before: before, after: textValue(of: element)) }
-        try settle(ComputerUseTextCheck.outcome(landed, inWebArea: false, chromium: false, keysReach: keysReach), app: app)
+        try settle(
+            ComputerUseTextCheck.outcome(landed, inWebArea: false, chromium: false, keysReach: keysReach), app: app, byRef: byRef)
         return warning
     }
 

@@ -60,7 +60,7 @@ struct ComputerUseAXActionsTests {
         } throws: { error in
             if keysReach { return error is ComputerUseAXActions.Unsupported }
             guard case ComputerUseSystemError.actionFailed(let message) = error else { return false }
-            return message == ComputerUseAXActions.offScreenTypeRefusal(app)
+            return message == ComputerUseAXActions.offScreenTypeRefusal(app, .refNotTaken)
         }
         #expect(field.chunks.isEmpty)
     }

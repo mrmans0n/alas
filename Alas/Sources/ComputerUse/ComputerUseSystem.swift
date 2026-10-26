@@ -738,7 +738,14 @@ extension LiveComputerUseSystem {
             if let delivered { return delivered }
             fallthrough
         case .refuse, .events:
-            if case .type = input { throw ComputerUseSystemError.actionFailed(ComputerUseAXActions.offScreenTypeRefusal(app)) }
+            if case .type(_, let at, _) = input {
+                let reason: ComputerUseAXActions.OffScreenText = if case .element = at {
+                    .refNotTaken
+                } else {
+                    focused ? .focusedNotTaken : .otherWindowFocused
+                }
+                throw ComputerUseSystemError.actionFailed(ComputerUseAXActions.offScreenTypeRefusal(app, reason))
+            }
             throw ComputerUseSystemError.actionFailed(offScreenKeyRefusal(app))
         }
     }
