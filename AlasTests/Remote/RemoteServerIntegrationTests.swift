@@ -850,7 +850,7 @@ struct RemoteServerIntegrationTests {
         second.cancel(with: .goingAway, reason: nil)
     }
 
-    @Test func updateAccessPolicyAppliesToOpenConnectionsAndNewRequests() async throws {
+    @Test func updatePoliciesAppliesToOpenConnectionsAndNewRequests() async throws {
         let pairing = RemotePairingService(store: InMemoryDeviceStore())
         let (server, port) = try await startServer(pairing: pairing)
         defer { server.stop() }
@@ -861,9 +861,10 @@ struct RemoteServerIntegrationTests {
         defer { conn.cancel() }
 
         try await send("GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n", on: conn)
-        try await Task.sleep(nanoseconds: 20_000_000)
+        // Accepted before the refresh, so the refresh reaches an open socket.
+        try await eventually("the server accepts the socket") { server.unauthenticatedConnectionCount == 1 }
 
-        server.updateAccessPolicy(RemoteAccessPolicy(allowedHosts: ["evil.example"]))
+        server.updatePolicies(access: RemoteAccessPolicy(allowedHosts: ["evil.example"]), origin: .loopback)
 
         // The socket stays open, so a request already written is answered,
         // and under the new rules.

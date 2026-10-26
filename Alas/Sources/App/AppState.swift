@@ -844,8 +844,10 @@ final class AppState {
     func refreshRemoteAccessState() {
         let interfaces = makeRemoteInterfaces()
         remoteAdvertisedAddresses = makeRemoteAdvertisedAddresses(port: remotePort, interfaces: interfaces)
-        remoteServer?.updateAccessPolicy(makeRemoteAccessPolicy(interfaces: interfaces))
-        remoteServer?.updateOriginPolicy(makeRemoteOriginPolicy(interfaces: interfaces))
+        remoteServer?.updatePolicies(
+            access: makeRemoteAccessPolicy(interfaces: interfaces),
+            origin: makeRemoteOriginPolicy(interfaces: interfaces)
+        )
         syncPairingApprovalState()
     }
 

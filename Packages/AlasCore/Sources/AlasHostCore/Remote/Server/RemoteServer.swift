@@ -235,25 +235,23 @@ public final class RemoteServer {
         return counts
     }
 
-    public func updateAccessPolicy(_ policy: RemoteAccessPolicy) {
-        accessPolicy = policy
-        refreshUnauthenticatedPolicies()
-    }
-
-    public func updateOriginPolicy(_ policy: RemoteOriginPolicy) {
-        originPolicy = policy
-        refreshUnauthenticatedPolicies()
-    }
-
-    /// Unauthenticated sockets hold a copy of the policies; hand them the
-    /// new ones so a request not yet checked cannot run under stale rules.
-    /// Not by closing them: the refresh can land just after a client wrote
-    /// its request (Tailscale's status, read as the host starts, races the
-    /// first `/pair`), and closing would drop that request.
-    private func refreshUnauthenticatedPolicies() {
+    /// Replaces both policies at once. Unauthenticated sockets hold a copy
+    /// of them; each gets the new pair in one step, so a request not yet
+    /// checked meets neither stale nor half-updated rules. Not by closing
+    /// them: the refresh can land just after a client wrote its request
+    /// (Tailscale's status, read as the host starts, races the first
+    /// `/pair`), and closing would drop that request.
+    public func updatePolicies(access: RemoteAccessPolicy, origin: RemoteOriginPolicy) {
+        accessPolicy = access
+        originPolicy = origin
         for (oid, conn) in connections where connectionDevice[oid] == nil {
-            conn.updatePolicies(access: accessPolicy, origin: originPolicy)
+            conn.updatePolicies(access: access, origin: origin)
         }
+    }
+
+    /// Open sockets that have not authenticated as a device.
+    @_spi(Testing) public var unauthenticatedConnectionCount: Int {
+        connections.keys.filter { connectionDevice[$0] == nil }.count
     }
 
     private func accept(_ nwConn: NWConnection) {
