@@ -68,6 +68,8 @@ public final class AlasCoreContext {
     @ObservationIgnored private let localTextOverride: (any LocalTextGenerating)?
     /// Durable Workspace definitions and checkouts.
     @ObservationIgnored public let workspaceStore: WorkspaceStore
+    /// The worktrees' checkpoints, which a paired Mac lists and restores.
+    @ObservationIgnored public let checkpoints: WorktreeCheckpointService
     /// What the host adds to lifecycles: the app's terminals, prompts and
     /// refresh, or nothing when headless.
     @ObservationIgnored public let environment: any AlasHostEnvironment
@@ -204,7 +206,8 @@ public final class AlasCoreContext {
         orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence(),
         reviewDrafts: ReviewDraftCommentStore = ReviewDraftCommentStore(),
         reviewSessions: ReviewSessionStore = ReviewSessionStore(),
-        usageHistory: UsageHistoryStore? = nil
+        usageHistory: UsageHistoryStore? = nil,
+        checkpoints: WorktreeCheckpointService = .init()
     ) {
         self.projects = projects
         self.runs = runs
@@ -227,6 +230,7 @@ public final class AlasCoreContext {
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
+        self.checkpoints = checkpoints
         self.environment = environment
         self.runHostGrace = runHostGrace
         self.store = store

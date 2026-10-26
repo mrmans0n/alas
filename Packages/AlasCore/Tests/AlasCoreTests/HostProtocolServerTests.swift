@@ -1038,6 +1038,106 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["diff", "--name-only", "--diff-filter=U"], cwd: repo).stdout == "")
     }
 
+    @Test func aMacCreatesInspectsAndDeletesAHostCheckpoint() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let file = repo.appendingPathComponent("a.txt")
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+
+        let manifest = try await fixture.checkpoint("  Before  ", in: ref)
+        #expect(manifest.label == "Before")
+        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(catalog.summaries.map(\.label) == ["Before"])
+        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+        guard case .diff(let diff) = try await fixture.request(.checkpointDiff(worktree: ref, id: manifest.id, path: "a.txt")) else {
+            Issue.record("expected a diff")
+            return
+        }
+        #expect(diff.hunks.count == 1)
+
+        #expect(try await fixture.request(.mutateWorktree(
+            worktree: ref, branch: "main", change: .deleteCheckpoint(id: manifest.id)
+        )) == .done)
+        guard case .checkpoints(let after) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(after.summaries.isEmpty)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .createCheckpoint(label: " ")))
+            == .failure(error: .invalidRequest(reason: "A checkpoint needs a name.")))
+    }
+
+    @Test func aCheckpointRestoreWaitsForTheWorktreesSessions() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let file = repo.appendingPathComponent("a.txt")
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        let manifest = try await fixture.checkpoint("Before", in: ref)
+        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let session = try await fixture.host.sessions.create(.worktree(ref), agentID: "gemini", caller: .app)
+        let core = fixture.core
+        try await eventually { @MainActor in core.sessionManagers[.worktree(worktree.id)]?.runners.isEmpty == false }
+
+        let busy = try await fixture.restorePreview(manifest.id, in: ref)
+        #expect(busy.blocker == .activeSession)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+            id: manifest.id, groupIDs: busy.selectedGroupIDs, fingerprint: busy.currentFingerprint
+        ))) == .failure(error: .failed(message: "Stop active terminal and agent sessions before restoring.")))
+        #expect(try String(contentsOf: file, encoding: .utf8) == "two\n")
+
+        try await fixture.host.sessions.archive(session.id, caller: .app)
+        try await eventually { @MainActor in core.sessionManagers[.worktree(worktree.id)]?.runners.isEmpty != false }
+        let preview = try await fixture.restorePreview(manifest.id, in: ref)
+        #expect(preview.blocker == nil)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+            id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: "stale"
+        ))) == .failure(error: .failed(message: "Refresh the restore preview before trying again.")))
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+            id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: preview.currentFingerprint
+        ))) == .done)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "one\n")
+        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(catalog.summaries.contains { $0.kind == .recovery && $0.label == "Before checkpoint restore" })
+    }
+
+    /// A Mac names only checkpoints of the worktree it asks about, and paths inside it.
+    @Test func checkpointRequestsNameOnlyThisWorktreesCheckpoints() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let mine = try await fixture.checkpoint("Mine", in: ref)
+        let otherRepo = fixture.root.appendingPathComponent("other")
+        try await GitTemplate.repository(at: otherRepo)
+        try "one\n".write(to: otherRepo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let otherID = try await fixture.host.projects.add(path: otherRepo, displayName: "other", icon: .default(), caller: .app).id
+        let otherWorktree = try #require(fixture.core.projects.worktrees(projectId: otherID).first)
+        let otherRef = WorktreeRef(projectID: otherID, path: otherWorktree.path.path)
+        let other = try await fixture.checkpoint("Other", in: otherRef)
+
+        let unknown = HostResponse.failure(error: .notFound(what: "checkpoint \(other.id)"))
+        #expect(try await fixture.request(.checkpointManifest(worktree: ref, id: other.id)) == unknown)
+        #expect(try await fixture.request(.checkpointDiff(worktree: ref, id: other.id, path: "a.txt")) == unknown)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .deleteCheckpoint(id: other.id)))
+            == unknown)
+        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: otherRef)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(catalog.summaries.map(\.id) == [other.id])
+        #expect(try await fixture.request(.checkpointDiff(worktree: ref, id: mine.id, path: "../x"))
+            == .failure(error: .invalidRequest(reason: "The path ../x is outside the worktree.")))
+    }
+
     @Test func aMacRewordsAHostCommit() async throws {
         let fixture = try await RepoFixture(aheadOfOrigin: true)
         defer { fixture.tearDown() }
@@ -1859,6 +1959,10 @@ struct HostProtocolServerTests {
             agent.script(method: "initialize") { _ in Data(#"{"protocolVersion":1,"sessionCapabilities":{}}"#.utf8) }
             agent.script(method: "session/new") { _ in Data(#"{"sessionId":"agent-1"}"#.utf8) }
             let database = root.appendingPathComponent("sessions.sqlite")
+            // The checkpoint store refuses a root reached through a symlink, as `/var` is.
+            let realRoot = try #require(realpath(root.path, nil))
+            defer { free(realRoot) }
+            let checkpointsRoot = URL(fileURLWithPath: String(cString: realRoot)).appendingPathComponent("checkpoints")
             core = AlasCoreContext(
                 projects: ProjectsManager(persistedProjects: []),
                 projectsFile: projectsFile,
@@ -1878,7 +1982,8 @@ struct HostProtocolServerTests {
                 environment: environment ?? HeadlessHostEnvironment(),
                 orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path),
                 reviewDrafts: ReviewDraftCommentStore(url: root.appendingPathComponent("review-drafts.json")),
-                reviewSessions: ReviewSessionStore(url: root.appendingPathComponent("review-sessions.json"))
+                reviewSessions: ReviewSessionStore(url: root.appendingPathComponent("review-sessions.json")),
+                checkpoints: WorktreeCheckpointService(store: .init(root: checkpointsRoot))
             )
             host = AlasHost(core: core)
             connection = HostProtocolServer(host: host).connect(caller: .localUser(uid: 501), send: client.receive)
@@ -1977,6 +2082,20 @@ struct HostProtocolServerTests {
                 throw HostError.invalidRequest(reason: "no response to \(id)")
             }
             return result
+        }
+
+        /// A manual checkpoint of the listed worktree at `ref`, taken as a Mac takes it.
+        func checkpoint(_ label: String, in ref: WorktreeRef) async throws -> WorktreeCheckpointManifest {
+            let branch = try #require(core.projects.worktrees(projectId: ref.projectID).first { $0.path.path == ref.path }).branch
+            let response = try await request(.mutateWorktree(worktree: ref, branch: branch, change: .createCheckpoint(label: label)))
+            guard case .checkpointManifest(let manifest) = response else { throw HostError.failed(message: "\(response)") }
+            return manifest
+        }
+
+        func restorePreview(_ id: CheckpointID, in ref: WorktreeRef) async throws -> CheckpointRestorePreview {
+            let response = try await request(.checkpointRestorePreview(worktree: ref, id: id, groupIDs: nil))
+            guard case .checkpointRestorePreview(let preview) = response else { throw HostError.failed(message: "\(response)") }
+            return preview
         }
 
         func tearDown() {

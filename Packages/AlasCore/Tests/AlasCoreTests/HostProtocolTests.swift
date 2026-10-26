@@ -85,6 +85,13 @@ struct HostProtocolTests {
         HostClientMessage(id: 37, request: .mutateWorktree(worktree: ref, branch: "feature", change: .editCommit(
             sha: "abc1234", edit: .dropHunk(path: "a.txt", index: 1, header: "@@ -3 +3 @@"), comparisonMode: nil
         ))),
+        HostClientMessage(id: 38, request: .checkpointRestorePreview(
+            worktree: ref, id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, groupIDs: nil
+        )),
+        HostClientMessage(id: 39, request: .mutateWorktree(worktree: ref, branch: "feature", change: .restoreCheckpoint(
+            id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!,
+            groupIDs: [UUID(uuidString: "7F9619FF-8B86-D011-B42D-00CF4FC964FF")!], fingerprint: "f"
+        ))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)
@@ -142,6 +149,21 @@ struct HostProtocolTests {
             files: [CommitChangedFile(path: "b.txt", originalPath: "a.txt", status: "R", add: 1, del: 0)]
         ))),
         .response(id: 23, result: .commitEdited(result: CommitEditResult(currentSha: "fed9876", shaMap: ["abc1234": "fed9876"]))),
+        .response(id: 24, result: .checkpointRestorePreview(preview: CheckpointRestorePreview(
+            id: UUID(uuidString: "6F9619FF-8B86-D011-B42D-00CF4FC964FF")!, checkpointID: UUID(uuidString: "7F9619FF-8B86-D011-B42D-00CF4FC964FF")!,
+            checkpointLabel: "Before", currentFingerprint: "f",
+            groups: [CheckpointRestoreGroup(
+                id: UUID(uuidString: "8F9619FF-8B86-D011-B42D-00CF4FC964FF")!, primaryPath: "b.txt", memberPaths: ["a.txt", "b.txt"],
+                renameSource: "a.txt",
+                effects: [CheckpointRestoreEffect(
+                    relativePath: "a.txt", layer: .worktree, head: .absent,
+                    before: .regular(blob: CheckpointBlobReference(sha256: String(repeating: "a", count: 64), byteCount: 2), executable: false),
+                    after: .absent, removesUntrackedFile: true
+                )]
+            )],
+            blocker: .activeSession, scopeDescription: "This repository only",
+            selectedGroupIDs: [UUID(uuidString: "8F9619FF-8B86-D011-B42D-00CF4FC964FF")!]
+        ))),
         .response(id: 14, result: .runScripts(scripts: [HostRunScript(
             scope: .repo, fileName: "dev.sh", name: "Dev", cwd: "web", target: RunExecutionTarget(host: nil, workingDirectory: "/srv/feature/web")
         )])),
