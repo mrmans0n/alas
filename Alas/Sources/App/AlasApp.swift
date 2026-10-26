@@ -266,28 +266,28 @@ struct AlasApp: App {
                 NSApp.sendAction(#selector(CodeTextView.splitSelectionIntoLines(_:)), to: nil, from: nil)
             }
             .keyboardShortcut(state.shortcut(for: .splitSelectionIntoLines))
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             Divider()
             Button("Find") {
                 NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.showFind)
             }
             .keyboardShortcut(state.shortcut(for: .findAndReplace))
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             Button("Find and Replace") {
                 NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.showReplace)
             }
             .keyboardShortcut(state.shortcut(for: .replaceInEditor))
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             Button("Find Next") {
                 NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.findNext)
             }
             .keyboardShortcut("g", modifiers: .command)
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             Button("Find Previous") {
                 NotificationCenter.default.post(name: .alasShowFindReplace, object: EditorFindRequest.findPrevious)
             }
             .keyboardShortcut("g", modifiers: [.command, .shift])
-            .disabled(!state.hasActiveCodeEditorTab)
+            .disabled(!state.hasActiveCodeEditorTab && !state.hasOpenPeerHostFile)
             if AppKitMenuInjection.isAffectedOS {
                 Divider()
                 Button(SystemMenuItems.emojiAndSymbolsTitle) {
