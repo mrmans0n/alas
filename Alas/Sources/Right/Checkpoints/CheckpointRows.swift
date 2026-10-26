@@ -269,7 +269,8 @@ struct CheckpointCard: View {
                 .foregroundColor(theme.color("del"))
                 .fixedSize(horizontal: false, vertical: true)
         } else if let manifest {
-            let pathIndex = Dictionary(uniqueKeysWithValues: manifest.paths.map { ($0.relativePath, $0) })
+            // A host's manifest is network input: a repeated path must not trap.
+            let pathIndex = Dictionary(manifest.paths.map { ($0.relativePath, $0) }, uniquingKeysWith: { first, _ in first })
             let cap = CheckpointPresentation.maxInlineFileGroups
             let total = manifest.groups.count
             let pageStart = total == 0 ? 0 : min(fileListPageIndex * cap, total - 1)

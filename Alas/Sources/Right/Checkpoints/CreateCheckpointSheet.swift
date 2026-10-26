@@ -29,11 +29,29 @@ final class CreateCheckpointSheetModel {
     }
 }
 
+/// Takes a checkpoint named by the user: this Mac's worktree through
+/// `RightPaneState`, a paired host's through closures.
 struct CreateCheckpointSheet: View {
-    @Bindable var rps: RightPaneState
+    /// Read in `body`, so a `RightPaneState` source stays observed.
+    private let error: @MainActor () -> String?
+    private let disabled: @MainActor () -> Bool
+    /// The captured checkpoint; nil when it failed, `error` then saying why.
+    private let create: @MainActor (String) async -> WorktreeCheckpointManifest?
     @State private var model = CreateCheckpointSheetModel()
     @State private var capturedManifest: WorktreeCheckpointManifest?
     @Environment(\.dismiss) private var dismiss
+
+    init(error: String?, disabled: Bool, create: @escaping @MainActor (String) async -> WorktreeCheckpointManifest?) {
+        self.error = { error }
+        self.disabled = { disabled }
+        self.create = create
+    }
+
+    init(rps: RightPaneState) {
+        error = { rps.lastCheckpointError }
+        disabled = { rps.checkpointMutationsDisabled }
+        create = { await rps.createCheckpoint(label: $0) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -49,7 +67,7 @@ struct CreateCheckpointSheet: View {
                 Text("This captures the Git index and on-disk files. \(model.unsavedBuffersMessage)")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                if let error = rps.lastCheckpointError {
+                if let error = error() {
                     Text(error).foregroundStyle(.red)
                 }
             }
@@ -60,7 +78,7 @@ struct CreateCheckpointSheet: View {
                     if capturedManifest != nil { dismiss() } else { create() }
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(capturedManifest == nil && (!model.canSubmit || rps.checkpointMutationsDisabled))
+                .disabled(capturedManifest == nil && (!model.canSubmit || disabled()))
                 .accessibilityIdentifier("create-checkpoint")
             }
         }
@@ -83,7 +101,7 @@ struct CreateCheckpointSheet: View {
     private func create() {
         let label = model.label.trimmingCharacters(in: .whitespacesAndNewlines)
         Task { @MainActor in
-            capturedManifest = await rps.createCheckpoint(label: label)
+            capturedManifest = await create(label)
         }
     }
 }
