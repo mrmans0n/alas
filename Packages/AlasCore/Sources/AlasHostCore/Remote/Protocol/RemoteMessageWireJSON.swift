@@ -34,7 +34,7 @@ public struct RemoteWireMessage: Codable, Equatable, Sendable {
             count += 10 + Self.escapedTransportByteCount(json)
         }
         if isHidden != nil { count += 17 }
-        if checkpointId != nil { count += 16 + 36 }
+        if let checkpointId { count += 18 + Self.escapedTransportByteCount(checkpointId) }
         return count
     }
 

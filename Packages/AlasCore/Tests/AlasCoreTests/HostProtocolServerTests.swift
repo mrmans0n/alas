@@ -1182,7 +1182,10 @@ struct HostProtocolServerTests {
             if case .user = $0 { return true }
             return false
         })
-        guard case .user(_, _, _, let attachments, _, _) = user else { return }
+        guard case .user(_, _, _, let attachments, _, _) = user else {
+            Issue.record("expected a user row")
+            return
+        }
         let carried = attachments.compactMap(\.checkpointID)
         #expect(RemoteSessionGateway.toWire(user, index: 0).checkpointId == carried.first?.uuidString)
         if captureFails {
