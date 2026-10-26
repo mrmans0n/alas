@@ -37,10 +37,14 @@ struct EditorRemoteBackend {
     let sshHost: String?
     /// The file's bytes and baseline mtime, checked inside the worktree first.
     let read: @MainActor (_ relativePath: String) async throws -> RemoteReadResult
-    /// Whether the file moved on from the buffer's baseline `mtime`.
-    let probe: @MainActor (_ relativePath: String, _ baseline: Date) async throws -> EditorRemoteProbe
+    /// Whether the file moved on. `.modifiedAt` leaves the comparison with the buffer's
+    /// baseline to the buffer, after the await.
+    let probe: @MainActor (_ relativePath: String) async throws -> EditorRemoteProbe
     /// The file's current mtime, nil once gone: Keep mine's new baseline.
     let currentMtime: @MainActor (_ relativePath: String) async throws -> Date?
+    /// Throws unless the file to save is inside the worktree. The buffer awaits it before
+    /// reading the baseline it saves against.
+    let verifyContained: @MainActor (_ relativePath: String) async throws -> Void
     /// Writes `content` if the file is still at `expectedMtime` with `expectedContent`; both nil overwrite.
     /// Returns the new mtime; a moved file throws `RemoteFileAccessError.saveConflict`.
     let write: @MainActor (_ relativePath: String, _ content: String, _ expectedMtime: Date?, _ expectedContent: String?) async throws -> Date
@@ -50,7 +54,11 @@ struct EditorRemoteBackend {
                            _ check: @escaping @MainActor () async -> Void) -> EditorRemoteWatch
 }
 
-enum EditorRemoteProbe: Equatable { case unchanged, changed, deleted }
+enum EditorRemoteProbe: Equatable {
+    case unchanged, changed, deleted
+    /// The file's mtime; it changed if this is later than the buffer's baseline.
+    case modifiedAt(Date)
+}
 
 struct EditorRemoteWatch { let stop: @MainActor () -> Void }
 
@@ -70,20 +78,22 @@ extension EditorRemoteBackend {
                 try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
                 return try await RemoteFileAccess.read(host: host, path: path)
             },
-            probe: { relativePath, baseline in
+            probe: { relativePath in
                 let path = worktreeRoot.appendingPathComponent(relativePath).path
                 guard let mtime = try await RemoteFileAccess.mtime(host: host, path: path) else { return .deleted }
-                return mtime > baseline ? .changed : .unchanged
+                return .modifiedAt(mtime)
             },
             currentMtime: { relativePath in
                 try await RemoteFileAccess.mtime(host: host, path: worktreeRoot.appendingPathComponent(relativePath).path)
             },
-            write: { relativePath, content, expectedMtime, expectedContent in
+            verifyContained: { relativePath in
                 let path = worktreeRoot.appendingPathComponent(relativePath).path
                 try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
-                return try await RemoteFileAccess.write(
+            },
+            write: { relativePath, content, expectedMtime, expectedContent in
+                try await RemoteFileAccess.write(
                     host: host,
-                    path: path,
+                    path: worktreeRoot.appendingPathComponent(relativePath).path,
                     content: content,
                     expectedMtime: expectedMtime,
                     expectedContent: expectedContent
@@ -1154,13 +1164,20 @@ final class EditorBuffer {
     private func checkRemoteConflictOnce() async {
         guard !remoteSaveInFlight, let remoteBackend else { return }
         do {
-            let probe = try await remoteBackend.probe(relativePath, originalMtime)
+            let probe = try await remoteBackend.probe(relativePath)
             guard probe != .deleted else {
                 if dirty { conflict = .deletedOnDisk }
                 return
             }
             if let host = remoteHost { RemoteHostStatusStore.shared.reportSuccess(host: host) }
-            guard probe == .changed else { return }
+            switch probe {
+            case .changed:
+                break
+            case let .modifiedAt(mtime):
+                guard mtime > originalMtime else { return }
+            case .unchanged, .deleted:
+                return
+            }
             if dirty {
                 conflict = .changedOnDisk
             } else {
@@ -1527,6 +1544,7 @@ final class EditorBuffer {
                 remoteSaveInFlight = false
             }
 
+            try await backend.verifyContained(path)
             priorOriginalText = originalText
             let baseline = originalMtime
             let shouldOverwriteConflict = remoteOverwriteAfterConflict
