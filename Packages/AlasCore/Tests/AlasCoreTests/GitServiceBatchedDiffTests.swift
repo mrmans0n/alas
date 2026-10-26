@@ -32,10 +32,10 @@ struct GitServiceBatchedDiffTests {
         #expect(slices["tab\there"]?.hasSuffix("+T") == true)
     }
 
-    /// A background status read never rewrites the index: a stale stat
-    /// cache (any fresh copy has one) would otherwise have `git diff` take
-    /// `index.lock`, failing the user's own git or a checkpoint restore.
-    @Test func statusLeavesTheIndexUntouched() async throws {
+    /// A background status or branch-comparison read never rewrites the
+    /// index: a stale stat cache (any fresh copy has one) would otherwise have
+    /// `git diff` take `index.lock`, failing the user's own git or a checkpoint restore.
+    @Test func backgroundReadsLeaveTheIndexUntouched() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-status-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
@@ -45,6 +45,7 @@ struct GitServiceBatchedDiffTests {
         let before = try Data(contentsOf: index)
 
         _ = try await GitService().status(worktreePath: repo)
+        _ = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: "HEAD")
 
         #expect(try Data(contentsOf: index) == before)
     }
