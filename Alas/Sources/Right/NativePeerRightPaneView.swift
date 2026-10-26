@@ -1052,7 +1052,7 @@ struct NativePeerRightPaneView: View {
             }
             // Another worktree selected meanwhile: opening `path` there would show a different file.
             guard let current = client.hostFileTarget, current.serverId == target.serverId,
-                  current.worktree == target.worktree
+                  current.worktree.snapshot.worktree.id == target.worktree.snapshot.worktree.id
             else { return }
             // A root reload also re-lists every expanded folder; a loaded folder alone won't list again.
             client.reloadWorkspace()
