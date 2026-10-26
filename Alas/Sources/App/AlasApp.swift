@@ -164,7 +164,7 @@ struct AlasApp: App {
                 NotificationCenter.default.post(name: .alasSaveAllTabs, object: nil)
             }
             .keyboardShortcut("s", modifiers: [.command, .option])
-            .disabled(!state.hasAnyDirtyEditorTab)
+            .disabled(!state.hasAnyDirtyEditorTab && state.nativePeerSessions?.unsavedHostFiles.isEmpty != false)
             Divider()
             Button("Revert") {
                 NotificationCenter.default.post(name: .alasRevertActiveTab, object: nil)

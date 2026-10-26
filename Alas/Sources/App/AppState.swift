@@ -8533,11 +8533,19 @@ final class AppState {
                     roots[worktree.id] = roots[worktree.id] ?? worktree.path
                 }
             }
-            let errors = await tabs.saveAllAwaitingRemote(worktreeRoots: roots, allowedWorktreeIDs: Set(roots.keys))
-            guard !errors.isEmpty else { return }
+            var failed = await tabs.saveAllAwaitingRemote(worktreeRoots: roots, allowedWorktreeIDs: Set(roots.keys)).count
+            // Host files live outside the worktree tabs, also once their view closed.
+            for entry in nativePeerSessions?.unsavedHostFiles ?? [] {
+                do {
+                    try await entry.buffer.saveRecordingErrorAwaitingRemote()
+                } catch {
+                    failed += 1
+                }
+            }
+            guard failed > 0 else { return }
             showFileActionError(
                 title: "Save All Failed",
-                message: "\(errors.count) file\(errors.count == 1 ? "" : "s") could not be saved."
+                message: "\(failed) file\(failed == 1 ? "" : "s") could not be saved."
             )
         }
     }
