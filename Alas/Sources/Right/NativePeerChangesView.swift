@@ -21,6 +21,8 @@ struct NativePeerChangesView: View {
         let onDropStash: (GitStash) -> Void
         /// False hides the operation card, the conflicts section and the commit actions.
         let servesOperations: Bool
+        /// Whether a conflicted file opens for editing rather than as its diff.
+        let editsFiles: Bool
         let onContinue: (MergeOperation) -> Void
         let onSkip: (MergeOperation) -> Void
         let onAbort: (MergeOperation) -> Void
@@ -85,7 +87,7 @@ struct NativePeerChangesView: View {
                                 bulkInFlight: false,
                                 hasAgent: false,
                                 showsBulkResolve: false,
-                                onSelect: { onOpen(.diff(path: $0.path, stage: .unstaged)) },
+                                onSelect: { onOpen(git.editsFiles ? .file(path: $0.path) : .diff(path: $0.path, stage: .unstaged)) },
                                 onUseOurs: git.onUseOurs,
                                 onUseTheirs: git.onUseTheirs,
                                 onKeepDeleted: git.onKeepDeleted,

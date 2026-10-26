@@ -1066,6 +1066,26 @@ final class NativePeerSessions {
         newSession = nil
     }
 
+    /// Asks `serverId` for a project's branches, as the new-session sheet does.
+    /// No reply comes if the peer drops before answering.
+    func requestBranches(
+        projectId: String, serverId: String, reply: @escaping @MainActor (NativePeerNewSession.Branches) -> Void
+    ) {
+        let sent = downstream.map { downstream in
+            federation.request(.listBranches(projectId: projectId), toPeer: serverId, from: downstream) { message in
+                switch message {
+                case .branchList(let id, let names, let preferredBase) where id == projectId:
+                    reply(.loaded(names: names, preferredBase: preferredBase))
+                case .branchListFailed(let id, let failure) where id == projectId:
+                    reply(.failed(failure))
+                default:
+                    break
+                }
+            }
+        } ?? false
+        if !sent { reply(.failed(Self.peerUnavailableMessage)) }
+    }
+
     /// The selected worktree, when it belongs to the sheet's peer.
     var newSessionDefaultWorktreeId: String? {
         guard let request = newSession, let selectedWorktree, selectedWorktree.serverId == request.serverId
