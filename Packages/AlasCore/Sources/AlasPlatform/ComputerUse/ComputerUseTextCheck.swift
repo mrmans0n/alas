@@ -46,7 +46,7 @@ public enum ComputerUseTextCheck {
     /// (TextEdit, any NSDocument one) doesn't mark the document edited, so it neither autosaves
     /// the text nor keeps it on save, and an untitled one closes without asking.
     public enum DocumentNudge: Equatable, Sendable {
-        /// Not a document window, already marked edited, or a secure field: nothing.
+        /// Not a document window, or a secure field: nothing.
         case none
         /// A letter and a backspace as key events at the caret: a net-zero edit the document
         /// registers. A letter, not a space, so nothing ends a word: no autocorrection, text
@@ -58,14 +58,13 @@ public enum ComputerUseTextCheck {
     }
 
     /// After text went in by AX: only for an element in a document window (`inDocument`: the window
-    /// lists `AXDocument`, with a value or, untitled, without), whose close button doesn't already
-    /// read as edited (`edited`, its `AXEdited`; nil when unreadable). Never in a terminal or code
-    /// editor (`keyCommandApp`, `isKeyCommandApp`), where a letter can be a command, nor into a
-    /// secure field.
+    /// lists `AXDocument`, with a value or, untitled, without). The close button's `AXEdited` isn't
+    /// asked: it stays false in TextEdit even after typed edits. Never in a terminal or code editor
+    /// (`keyCommandApp`, `isKeyCommandApp`), where a letter can be a command, nor into a secure field.
     public static func documentNudge(
-        inDocument: Bool, edited: Bool?, secure: Bool, keyCommandApp: Bool, keysReach: Bool
+        inDocument: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool
     ) -> DocumentNudge {
-        guard inDocument, edited != true, !secure, !keyCommandApp else { return .none }
+        guard inDocument, !secure, !keyCommandApp else { return .none }
         return keysReach ? .keys : .warn
     }
 
@@ -85,21 +84,20 @@ public enum ComputerUseTextCheck {
     }
 
     /// What the nudge's keys came to, from the whole value right after the AX write (`before`),
-    /// whether the letter showed (`sawLetter`), the value once it settled (`after`, nil when
-    /// unreadable), and the close button's `AXEdited` after the wait for it (`edited`, nil when
-    /// unreadable, which leaves the letter showing as the evidence).
+    /// whether the letter showed (`sawLetter`), and the value once it settled (`after`, nil when
+    /// unreadable).
     public enum KeyEditCheck: Equatable, Sendable {
-        /// The text is as written and the document reads as edited.
+        /// The letter went in and came out again: the document registered an edit.
         case marked
-        /// The text is as written and the document doesn't read as edited.
+        /// The letter never showed and the text is as written: nothing registered.
         case notMarked
         /// The text isn't as written: it is put back with the AX write.
         case restore
     }
 
-    public static func keyEditCheck(before: String, sawLetter: Bool, after: String?, edited: Bool?) -> KeyEditCheck {
+    public static func keyEditCheck(before: String, sawLetter: Bool, after: String?) -> KeyEditCheck {
         guard after == before else { return .restore }
-        return (edited ?? sawLetter) ? .marked : .notMarked
+        return sawLetter ? .marked : .notMarked
     }
 
     /// Said next to the result when a document's edit couldn't be marked (`DocumentNudge.warn`, or

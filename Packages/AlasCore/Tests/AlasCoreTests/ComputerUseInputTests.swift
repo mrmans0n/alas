@@ -732,29 +732,23 @@ struct ComputerUseInputTests {
         #expect(ComputerUseWebContent.isChromium(bundleID: bundleID, acceptsManualAccessibility: manual) == chromium)
     }
 
-    /// Text written by AX into a document window not yet marked edited is followed by a net-zero
-    /// key edit, or a warning where keys don't reach. Never outside a document window, for one
-    /// already edited, a secure field, or a terminal or code editor.
+    /// Text written by AX into a document window is followed by a net-zero key edit, or a warning
+    /// where keys don't reach. Never outside a document window, for a secure field, or in a
+    /// terminal or code editor.
     @Test(arguments: [
-        (true, Bool?(false), false, false, true, ComputerUseTextCheck.DocumentNudge.keys),
-        (true, false, false, false, false, .warn),
-        // AXEdited unreadable: as before it was read.
-        (true, nil, false, false, true, .keys),
-        // Already marked edited.
-        (true, true, false, false, true, .none),
-        (true, true, false, false, false, .none),
+        (true, false, false, true, ComputerUseTextCheck.DocumentNudge.keys),
+        (true, false, false, false, .warn),
         // No document: a plain text area or field.
-        (false, false, false, false, true, .none),
-        (false, nil, false, false, false, .none),
-        (true, false, true, false, true, .none),
-        (true, false, false, true, true, .none),
+        (false, false, false, true, .none),
+        (false, false, false, false, .none),
+        (true, true, false, true, .none),
+        (true, false, true, true, .none),
     ])
     func aDocumentIsMarkedEditedAfterAnAXWrite(
-        inDocument: Bool, edited: Bool?, secure: Bool, keyCommandApp: Bool, keysReach: Bool,
-        nudge: ComputerUseTextCheck.DocumentNudge
+        inDocument: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool, nudge: ComputerUseTextCheck.DocumentNudge
     ) {
         #expect(ComputerUseTextCheck.documentNudge(
-            inDocument: inDocument, edited: edited, secure: secure, keyCommandApp: keyCommandApp, keysReach: keysReach) == nudge)
+            inDocument: inDocument, secure: secure, keyCommandApp: keyCommandApp, keysReach: keysReach) == nudge)
     }
 
     @Test(arguments: [
@@ -772,22 +766,17 @@ struct ComputerUseInputTests {
         #expect(ComputerUseTextCheck.isKeyCommandApp(app, hostPID: 1) == skips)
     }
 
-    /// The key edit counts when the whole value settled back to what was written and the close
-    /// button reads as edited (or, unreadable, the letter showed); any other value is put back.
+    /// The key edit counts only when the letter showed and the whole value settled back to what
+    /// was written; any other value is put back.
     @Test(arguments: [
-        ("teh cat", true, String?("teh cat"), Bool?(true), ComputerUseTextCheck.KeyEditCheck.marked),
-        ("teh cat", true, "teh cat", false, .notMarked),
-        ("teh cat", false, "teh cat", true, .marked),
-        ("teh cat", true, "teh cat", nil, .marked),
-        ("teh cat", false, "teh cat", nil, .notMarked),
+        ("teh cat", true, String?("teh cat"), ComputerUseTextCheck.KeyEditCheck.marked),
+        ("teh cat", false, "teh cat", .notMarked),
         // An autocorrection that kept the length.
-        ("teh cat", true, "the cat", true, .restore),
-        ("teh cat", false, "teh cata", nil, .restore),
-        ("teh cat", true, nil, true, .restore),
+        ("teh cat", true, "the cat", .restore),
+        ("teh cat", false, "teh cata", .restore),
+        ("teh cat", true, nil, .restore),
     ])
-    func aKeyEditThatChangedTheTextIsPutBack(
-        before: String, sawLetter: Bool, after: String?, edited: Bool?, check: ComputerUseTextCheck.KeyEditCheck
-    ) {
-        #expect(ComputerUseTextCheck.keyEditCheck(before: before, sawLetter: sawLetter, after: after, edited: edited) == check)
+    func aKeyEditThatChangedTheTextIsPutBack(before: String, sawLetter: Bool, after: String?, check: ComputerUseTextCheck.KeyEditCheck) {
+        #expect(ComputerUseTextCheck.keyEditCheck(before: before, sawLetter: sawLetter, after: after) == check)
     }
 }

@@ -910,8 +910,8 @@ extension ComputerUseAXActions {
         }
     }
 
-    /// After text went in by AX: whether it is in a document window the write didn't mark edited
-    /// (`ComputerUseTextCheck.documentNudge`). Only reads.
+    /// After text went in by AX: whether it is in a document window, which the write didn't mark
+    /// edited (`ComputerUseTextCheck.documentNudge`). Only reads.
     static func documentNudge(
         after target: ComputerUseInputTarget?, app: ComputerUseAppIdentity, keysReach: Bool, isCancelled: @escaping IsCancelled
     ) async throws -> ComputerUseTextCheck.DocumentNudge {
@@ -921,29 +921,8 @@ extension ComputerUseAXActions {
             // An untitled document's window lists the attribute, without a value.
             let inDocument = window.map { attributeNames(of: $0).contains(kAXDocumentAttribute) } ?? false
             return ComputerUseTextCheck.documentNudge(
-                inDocument: inDocument, edited: window.flatMap(edited), secure: isSecure(element),
+                inDocument: inDocument, secure: isSecure(element),
                 keyCommandApp: ComputerUseTextCheck.isKeyCommandApp(app, hostPID: getpid()), keysReach: keysReach)
-        }
-    }
-
-    /// The window's close button's `AXEdited`: whether the document shows unsaved changes.
-    private static func edited(_ window: AXUIElement) -> Bool? {
-        elementAttribute(window, kAXCloseButtonAttribute).flatMap { bool(of: $0, "AXEdited") }
-    }
-
-    /// The close button's `AXEdited` of the element's window, read every `keyEditPoll` until true,
-    /// for up to `keyEditWait`; nil when it can't be read.
-    static func awaitEdited(
-        after target: ComputerUseInputTarget?, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
-    ) async -> Bool? {
-        let deadline = ContinuousClock.now + keyEditWait
-        while true {
-            let read = try? await onQueue(isCancelled) { () -> Bool? in
-                try written(target, app: app).flatMap { elementAttribute($0, kAXWindowAttribute) }.flatMap(Self.edited)
-            }
-            guard let state = read ?? nil else { return nil }
-            if state || ContinuousClock.now >= deadline { return state }
-            try? await Task.sleep(for: keyEditPoll)
         }
     }
 
