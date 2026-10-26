@@ -161,7 +161,8 @@ struct ComputerUseCoordinatorTests {
     }
 
     /// An Electron window that shows only groups at first contact is woken and read again until its
-    /// web area has content; later reads of the app aren't.
+    /// web area has content, also when the call's own read stops at its node budget in the
+    /// browser's toolbar; later reads of the app aren't.
     @Test func aWebWindowReadAsEmptyGroupsIsWokenAndReadAgainOnce() async throws {
         let recorder = Recorder()
         let reads = Counter()
@@ -172,19 +173,23 @@ struct ComputerUseCoordinatorTests {
             _ = woken.next()
             return true
         }
-        // A web area that fills only on the third read.
-        system.axTree = { _, _, _, _ in
+        // A web area that fills only on the third read; a read with the inspect's own small budget
+        // is cut short.
+        let wholeWindow = ComputerUseCoordinator.queryNodeBudget
+        system.axTree = { _, _, budget, _ in
             let read = reads.next()
             let field = ComputerUseAXNode(role: "AXTextField", handle: 2)
             let content = ComputerUseAXNode(role: read > 1 ? "AXWebArea" : "AXGroup", children: read > 2 ? [field] : [], handle: 1)
-            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), nil, ComputerUseAXHandles())
+            let cut: ComputerUseReadCut? = budget < wholeWindow ? .nodeBudget : nil
+            return (ComputerUseAXNode(role: "AXWindow", children: [content], handle: 0), cut, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
         #expect(json.contains("AXTextField"))
-        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll])
+        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        #expect(reads.next() == 5)
+        // The call's read, two whole-window reads while waiting, the call's read again; then the second inspect's.
+        #expect(reads.next() == 6)
         #expect(woken.next() == 2)
     }
 
@@ -205,14 +210,14 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll])
     }
 
-    /// A Chromium browser still showing no web area after AXManualAccessibility gets
-    /// AXEnhancedUserInterface, which the turn's end turns off again.
+    /// A Chromium browser still showing no web area after AXManualAccessibility, set again halfway
+    /// through the wait, gets AXEnhancedUserInterface, which the turn's end turns off again.
     @Test func chromeGetsEnhancedUserInterfaceOnlyAsASecondTryAndUntilTheTurnEnds() async throws {
         let recorder = Recorder()
-        let reads = Counter()
         let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
         let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
         var system = Self.system(windows: [5: window])
+        system.usesManualAccessibility = { _ in true }
         system.wakeWebContent = { _, attribute in
             recorder.recordEvent("wake:\(attribute)")
             return attribute == "AXEnhancedUserInterface"
@@ -228,14 +233,13 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
         let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")))
         #expect(json.contains("AXWebArea"))
-        // No AXManualAccessibility for a Chromium browser: the wait comes first.
-        #expect(recorder.events == ["wake:AXEnhancedUserInterface"])
+        #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXManualAccessibility", "wake:AXEnhancedUserInterface"])
         f.coordinator.turnEnded(sessionID: "s")
         try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
     }
 
     /// A read cut short can't tell whether Chrome needs AXEnhancedUserInterface, so it doesn't use
-    /// up the try: the next complete read still sets it.
+    /// up the try: the next complete read still sets it, after the wait.
     @Test func chromeReadCutShortLeavesEnhancedUserInterfaceToALaterCompleteRead() async throws {
         let recorder = Recorder()
         let reads = Counter()
@@ -246,17 +250,45 @@ struct ComputerUseCoordinatorTests {
             recorder.recordEvent("wake:\(attribute)")
             return true
         }
-        // The first inspect's read is cut short; later ones are complete, without a web area.
+        // The first inspect's reads are cut short, its whole-window read too; later ones are
+        // complete, without a web area.
         system.axTree = { _, _, _, _ in
-            let cut: ComputerUseReadCut? = reads.next() == 1 ? .nodeBudget : nil
+            let cut: ComputerUseReadCut? = reads.next() <= 2 ? .nodeBudget : nil
             return (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
                     cut, ComputerUseAXHandles())
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
-        #expect(recorder.events.isEmpty)
+        #expect(recorder.events == ["wake:AXManualAccessibility"])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s")
-        #expect(recorder.events == ["wake:AXEnhancedUserInterface"])
+        #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXManualAccessibility", "wake:AXEnhancedUserInterface"])
+        // The wait after AXManualAccessibility, then the one after AXEnhancedUserInterface.
+        #expect(Double(recorder.sleeps.count) == 2 * (ComputerUseWebContent.contentDeadline / ComputerUseCoordinator.webContentPoll))
+    }
+
+    /// The woken state is per process: a relaunched app that got its old pid back is woken again.
+    @Test func aRelaunchedAppWithItsOldPidIsWokenAgain() async throws {
+        let woken = Counter()
+        let relaunch = Recorder()
+        var system = Self.system()
+        system.usesManualAccessibility = { _ in true }
+        system.processStart = { _ in relaunch.events.isEmpty ? 1 : 2 }
+        system.wakeWebContent = { _, _ in
+            _ = woken.next()
+            return false
+        }
+        system.axTree = { _, _, _, _ in
+            (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
+             nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        // The wake and its halfway set, once.
+        #expect(woken.next() == 3)
+        relaunch.recordEvent("relaunched")
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        #expect(woken.next() == 6)
     }
 
     /// A session end while AXEnhancedUserInterface is being set finds nothing to restore yet, so
@@ -285,6 +317,32 @@ struct ComputerUseCoordinatorTests {
         gate.recordEvent("open")
         _ = await call.value
         #expect(recorder.events == ["wake:AXEnhancedUserInterface", "restore:AXEnhancedUserInterface"])
+    }
+
+    /// A ref whose element reads otherwise straight after an inspect (a search field the page
+    /// turned into a combo box) is looked for once in the window: the very same element is used,
+    /// as it reads now; a lookalike in its place leaves the ref stale.
+    @Test(arguments: [(1, true), (7, false)])
+    func aRefThatChangedIsKeptOnlyWhenItIsTheSameElement(handleNow: Int, proceeds: Bool) async throws {
+        let recorder = Recorder()
+        let inspected = Recorder()
+        var system = Self.system(recorder: recorder)
+        // The field now reads as a combo box, so the ref's check fails.
+        system.elementMatches = { _, _, role, _ in role == "AXComboBox" }
+        system.axTree = { _, _, _, _ in
+            let field = inspected.events.isEmpty
+                ? ComputerUseAXNode(role: "AXSearchField", title: "Search", handle: 1)
+                : ComputerUseAXNode(role: "AXComboBox", title: "Search", handle: handleNow)
+            return (ComputerUseAXNode(role: "AXWindow", children: [field], handle: 0), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        inspected.recordEvent("inspected")
+        let result = await f.coordinator.perform(.init(action: .type, windowID: 1, ref: "e2", text: "rome"), sessionID: "s")
+        #expect(recorder.inputs.isEmpty == !proceeds)
+        if !proceeds {
+            #expect(result == .error("computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."))
+        }
     }
 
     /// A frame an app reports as NaN can't be written as JSON, and writing it would end the app:

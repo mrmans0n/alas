@@ -13,6 +13,77 @@ public enum ComputerUseTextCheck {
         case unknown
     }
 
+    /// What typing by AX comes to.
+    public enum Outcome: Equatable, Sendable {
+        /// Write the text by AX, then decide on its read-back.
+        case write
+        /// The text went in.
+        case landed
+        /// Type the text as key events instead.
+        case typeAsKeys
+        /// Keys don't reach the window either (it is off screen): refuse.
+        case refuse
+    }
+
+    /// Asked before the write (`readBack` nil) and after it, with its verdict. A text-entry element
+    /// inside a web page (`inWebArea`, an `AXWebArea` ancestor) of a Chromium or Electron app
+    /// (`chromium`, `ComputerUseWebContent.isChromium`) is never written by AX: its AX value can
+    /// show the text while the page never got it, so a read-back there proves nothing, and keys
+    /// after a write that did reach the page would type it twice. It gets key events, or a refusal
+    /// where they don't reach the window (`keysReach`). Anywhere else, WebKit's web pages included,
+    /// a value read back unchanged gets the same, and any other verdict counts as landed.
+    public static func outcome(_ readBack: Verdict?, inWebArea: Bool, chromium: Bool, keysReach: Bool) -> Outcome {
+        let instead: Outcome = keysReach ? .typeAsKeys : .refuse
+        if inWebArea, chromium { return instead }
+        switch readBack {
+        case nil: return .write
+        case .landed, .unknown: return .landed
+        case .unchanged: return instead
+        }
+    }
+
+    /// How text gets into a document, which an AX write puts in without the app's edit model: a
+    /// document app (TextEdit, any NSDocument one) then doesn't mark it edited, so it neither
+    /// autosaves the text nor keeps it on save, and an untitled one closes without asking.
+    public enum DocumentRoute: Equatable, Sendable {
+        /// Not a document's text area, or in a terminal or code editor: as any other field.
+        case asToday
+        /// Key events on the typing path, which mark the document edited as a person's typing does.
+        case keys
+        /// Keys don't reach the window (it is off screen): the AX write, with `documentWarning`.
+        case axWarned
+    }
+
+    /// For text typed into a document's text area: an `AXTextArea` (`textArea`) outside a web page
+    /// (`inWebArea`) in a window that lists `AXDocument` (`inDocument`, with a value or, untitled,
+    /// without). Anything else there (a find bar, an inspector field, a Safari page's field) and a
+    /// terminal or code editor (`keyCommandApp`, `isKeyCommandApp`) are left as today. Secure
+    /// fields are refused before this.
+    public static func documentRoute(
+        inDocument: Bool, textArea: Bool, inWebArea: Bool, keyCommandApp: Bool, keysReach: Bool
+    ) -> DocumentRoute {
+        guard inDocument, textArea, !inWebArea, !keyCommandApp else { return .asToday }
+        return keysReach ? .keys : .axWarned
+    }
+
+    /// Terminals and code editors, whose windows are left to the AX write as before.
+    public static let keyCommandBundleIDs: Set<String> = [
+        "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
+        "net.kovidgoyal.kitty", "io.alacritty", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92",
+        "dev.zed.Zed", "com.sublimetext.4", "com.apple.dt.Xcode", "org.vim.MacVim",
+    ]
+
+    /// A terminal or code editor (`keyCommandBundleIDs`, any JetBrains IDE), or any Alas build.
+    public static func isKeyCommandApp(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {
+        if ComputerUseBlocklist.isAlas(app, hostPID: hostPID) { return true }
+        guard let bundleID = app.bundleID else { return false }
+        return keyCommandBundleIDs.contains(bundleID) || bundleID.hasPrefix("com.jetbrains.")
+    }
+
+    /// Said next to a document's text written through AX (`DocumentRoute.axWarned`).
+    public static let documentWarning =
+        "Typed through Accessibility; the app may not treat the document as edited — ask the user to save."
+
     /// An insert of `inserted` over `selection` (UTF-16 location and length, nil when unreadable).
     public static func insert(
         _ inserted: String, before: String?, selection: (location: Int, length: Int)?, after: String?
