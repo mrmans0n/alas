@@ -324,6 +324,9 @@ public final class ACPConnection: @unchecked Sendable {
     public func initialize(brokerOperationKey: String? = nil) async throws -> ACPInitializeOutcome {
         codexHooksReviewToken = nil
         negotiatedCodexHooks = false
+        guard client.sessionUpdateProtocolVersion == protocolSelection.requestedVersion else {
+            throw ACPProtocolNegotiationError.sessionSupportUnavailable(version: client.sessionUpdateProtocolVersion.rawValue)
+        }
         let meta = ACPClientCapabilitiesMeta(
             terminalAuth: true,
             parameterizedModelPicker: true,
@@ -348,6 +351,9 @@ public final class ACPConnection: @unchecked Sendable {
             supportedVersions: protocolSelection.supportedVersions)
         guard case .v1(let result) = decoded else {
             throw ACPProtocolNegotiationError.sessionSupportUnavailable(version: 2)
+        }
+        guard client.sessionUpdateProtocolVersion == .v1 else {
+            throw ACPProtocolNegotiationError.sessionSupportUnavailable(version: 1)
         }
         protocolStateLock.withLock { selectedProtocolVersion = .v1 }
         Self.protocolLogger.info(

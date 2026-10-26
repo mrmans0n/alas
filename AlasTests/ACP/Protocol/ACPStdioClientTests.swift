@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import Alas
 
@@ -241,6 +242,217 @@ struct ACPStdioClientTests {
         connection.acknowledgeDurableSessionResponses()
         #expect(consumed.get() == true)
         await connection.shutdown()
+    }
+
+    @Test func v2FramesReachTheOwnerInOrderWithoutV1Normalization() async throws {
+        let transport = FakeJSONRPCTransport()
+        defer { transport.terminate() }
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        let frames = [
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"tool_call_update","toolCallId":"t","rawInput":{"n":1e999}}}}"#,
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message","messageId":"a"}}}"#,
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"state_update","state":"running"}}}"#,
+            #"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"subagent_update","sessionId":"child","state":{"state":"running"}}}}"#,
+            #"{"jsonrpc":"2.0","method":"session/update","id":1e999,"params":null}"#,
+        ].map { Data($0.utf8) }
+        let consumed = Mutex(Array(repeating: 0, count: frames.count))
+        for (index, frame) in frames.enumerated() {
+            transport.send(frame: frame) { consumed.withLock { $0[index] += 1 } }
+        }
+        let received = await boundedResult {
+            var iterator = client.incomingV2Updates.makeAsyncIterator()
+            var deliveries: [ACPV2SessionUpdateDelivery] = []
+            for _ in frames {
+                guard let delivery = await iterator.next() else { break }
+                deliveries.append(delivery)
+            }
+            return deliveries
+        }
+        let deliveries = try #require(received)
+        #expect(deliveries.count == frames.count)
+        #expect(client.yieldedUpdateCount == frames.count)
+        #expect(await boundedResult {
+            var iterator = client.incomingUpdates.makeAsyncIterator()
+            return await iterator.next() == nil
+        } == true)
+        let context = ACPV2MessageTranscript.Context(sessionID: "s", connectionID: client.updateConnectionID)
+        var owner = ACPV2SessionState(context: context)
+        for (index, delivery) in deliveries.enumerated() {
+            #expect(delivery.frame == frames[index])
+            #expect(delivery.connectionID == context.connectionID)
+            if index == 4 {
+                #expect(throws: DecodingError.self) { try delivery.decode() }
+            } else {
+                _ = try owner.apply(delivery.decode(), source: .live, context: context)
+            }
+        }
+        #expect(owner.order == [.toolCall("t"), .message(.init(kind: .agent, messageID: "a"))])
+        #expect(owner.activity.toolCall(id: "t")?.rawInput == .object(["n": .number("1e999")]))
+        #expect(owner.lifecycle.foreground == .running)
+        #expect(consumed.withLock { $0 } == [0, 0, 0, 0, 0])
+        deliveries.first?.acknowledgeDurableConsumption()
+        #expect(consumed.withLock { $0 } == [1, 0, 0, 0, 0])
+        await client.shutdown()
+    }
+
+    @Test(arguments: [
+        #"{"jsonrpc":"2.0","method":"session/update","params":null,"x":0,"x":1}"#,
+        #"{"jsonrpc":"2.0","method":"session/update","id":1e999,"params":null,"x":"#
+            + String(repeating: "[", count: 129) + "0" + String(repeating: "]", count: 129) + "}",
+    ])
+    func v2ParserRejectionsRemainRawAndUnconsumedBeforeAndAfterExit(frame: String) async throws {
+        let transport = FakeJSONRPCTransport()
+        defer { transport.terminate() }
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        let bytes = Data(frame.utf8)
+        let consumed = Mutex(0)
+        let barrier = AsyncStream<Void>.makeStream()
+        transport.send(frame: bytes) { consumed.withLock { $0 += 1 } }
+        transport.send(frame: Data(#"{"method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
+        #expect(await boundedResult {
+            var iterator = barrier.stream.makeAsyncIterator()
+            return await iterator.next() != nil
+        } == true)
+        #expect(client.yieldedUpdateCount == 1)
+        #expect(consumed.withLock { $0 } == 0)
+        let received = await boundedResult {
+            var iterator = client.incomingV2Updates.makeAsyncIterator()
+            return await iterator.next()
+        }
+        let result = try #require(received)
+        let delivery = try #require(result)
+        #expect(delivery.frame == bytes)
+        #expect(throws: (any Error).self) { try delivery.decode() }
+        transport.send(exitStatus: 0, finish: false)
+        transport.send(frame: bytes) { consumed.withLock { $0 += 1 } }
+        transport.send(frame: Data(#"{"method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
+        #expect(await boundedResult {
+            var iterator = barrier.stream.makeAsyncIterator()
+            return await iterator.next() != nil
+        } == true)
+        #expect(client.yieldedUpdateCount == 1)
+        #expect(consumed.withLock { $0 } == 0)
+        await client.shutdown()
+    }
+
+    @Test func defaultV1FanOutRetainsItsLastUpdateConsumptionBoundary() async throws {
+        let transport = FakeJSONRPCTransport()
+        defer { transport.terminate() }
+        let client = ACPStdioClient(transport: transport)
+        try client.start()
+        let consumed = Mutex(0)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"root","update":{"sessionUpdate":"subagent_update","sessionId":"child","state":{"state":"running"}}}}"#.utf8)) { consumed.withLock { $0 += 1 } }
+        let received = await boundedResult {
+            var iterator = client.incomingUpdates.makeAsyncIterator()
+            var updates: [ACPSessionUpdateParams] = []
+            for _ in 0..<2 {
+                if let update = await iterator.next() { updates.append(update) }
+            }
+            return updates
+        }
+        let updates = try #require(received)
+        #expect(updates.count == 2)
+        #expect(client.yieldedUpdateCount == 2)
+        #expect(updates.first?.durableConsumptionAcknowledgement == nil)
+        #expect(consumed.withLock { $0 } == 0)
+        updates.last?.durableConsumptionAcknowledgement?()
+        #expect(consumed.withLock { $0 } == 1)
+        #expect(await boundedResult {
+            var iterator = client.incomingV2Updates.makeAsyncIterator()
+            return await iterator.next() == nil
+        } == true)
+        await client.shutdown()
+    }
+
+    @Test(arguments: [#"{"n":1e999,"big":123456789012345678901234567890}"#, "[1e999,1.00e2]", "1e999", "true", #""text""#, "null"])
+    func successfulResultsKeepExactValuesAndDeferredConsumption(result: String) async throws {
+        let consumed = Mutex(0)
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in
+            .frame(Data("{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":\(result)}".utf8), onConsumed: { consumed.withLock { $0 += 1 } })
+        })
+        let client = ACPStdioClient(transport: transport)
+        try client.start()
+        let request = Task { try await client.send(ACPRequest(method: "test")) }
+        let outcome = await boundedResult { await request.result }
+        await client.shutdown()
+        let response = try #require(outcome).get()
+        #expect(try LSPJSONValue.decode(from: response.body) == LSPJSONValue.decode(from: Data(result.utf8)))
+        #expect(consumed.withLock { $0 } == 0)
+        response.acknowledgeDurableConsumption()
+        #expect(consumed.withLock { $0 } == 1)
+    }
+
+    @Test(arguments: ["{}", #"{"error":{"code":-32601,"message":"No method"},"result":null}"#])
+    func resultExtractionRetainsMissingResultAndErrorSemantics(fields: String) async throws {
+        let suffix = String(fields.dropFirst().dropLast())
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in
+            .frame(Data("{\"jsonrpc\":\"2.0\",\"id\":1\(suffix.isEmpty ? "" : "," + suffix)}".utf8))
+        })
+        let client = ACPStdioClient(transport: transport)
+        try client.start()
+        let request = Task { try await client.send(ACPRequest(method: "test")) }
+        let outcome = await boundedResult { await request.result }
+        await client.shutdown()
+        let completed = try #require(outcome)
+        do {
+            _ = try completed.get()
+            Issue.record("Expected a response error")
+        } catch ACPClientError.jsonrpc(let error) {
+            #expect(fields != "{}")
+            #expect(error.code == -32601)
+        } catch ACPClientError.decoding {
+            #expect(fields == "{}")
+        } catch {
+            Issue.record("Unexpected error: \(error)")
+        }
+    }
+
+    @Test(arguments: [false, true])
+    func v2TerminationFinishesWithoutConsumingOutstandingOrLateFrames(exit: Bool) async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.emitExitOnTerminate = false
+        defer { transport.terminate() }
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        let frame = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"s","update":{"sessionUpdate":"agent_message","messageId":"m"}}}"#.utf8)
+        let consumed = Mutex(0), late = Mutex(0)
+        transport.send(frame: frame) { consumed.withLock { $0 += 1 } }
+        let received = await boundedResult {
+            var iterator = client.incomingV2Updates.makeAsyncIterator()
+            return await iterator.next()
+        }
+        let result = try #require(received)
+        let delivery = try #require(result)
+        if exit {
+            let barrier = AsyncStream<Void>.makeStream()
+            transport.send(exitStatus: 0, finish: false)
+            transport.send(frame: frame) { late.withLock { $0 += 1 } }
+            transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
+            #expect(await boundedResult {
+                var iterator = barrier.stream.makeAsyncIterator()
+                return await iterator.next() != nil
+            } == true)
+        } else {
+            await client.shutdown()
+            transport.send(frame: frame) { late.withLock { $0 += 1 } }
+        }
+        #expect(await boundedResult {
+            var iterator = client.incomingV2Updates.makeAsyncIterator()
+            return await iterator.next() == nil
+        } == true)
+        #expect(client.yieldedUpdateCount == 1)
+        #expect(consumed.withLock { $0 } == 0)
+        #expect(late.withLock { $0 } == 0)
+        let replacement = ACPStdioClient(transport: FakeJSONRPCTransport(), sessionUpdateProtocolVersion: .v2)
+        #expect(replacement.updateConnectionID != delivery.connectionID)
+        let old = ACPV2MessageTranscript.Context(sessionID: "s", connectionID: delivery.connectionID)
+        var owner = ACPV2SessionState(context: .init(sessionID: "s", connectionID: replacement.updateConnectionID))
+        #expect(try owner.apply(delivery.decode(), source: .live, context: old).disposition == .staleContext)
+        delivery.acknowledgeDurableConsumption()
+        #expect(consumed.withLock { $0 } == 1)
+        await client.shutdown()
     }
 
     private final class ResultBox<T>: @unchecked Sendable {

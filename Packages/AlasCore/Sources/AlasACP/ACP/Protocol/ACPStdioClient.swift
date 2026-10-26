@@ -7,6 +7,7 @@ import AlasCode
 
 public final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
+    private let v2UpdatesCont: AsyncStream<ACPV2SessionUpdateDelivery>.Continuation
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
     private let cancelRequestsCont: AsyncStream<JSONRPCID>.Continuation
@@ -20,6 +21,9 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let authStatusCont: AsyncStream<ACPAuthStatusEvent>.Continuation
     private let sessionListChangesCont: AsyncStream<ACPSessionListChanges>.Continuation
 
+    public let sessionUpdateProtocolVersion: ACPProtocolVersion
+    public let updateConnectionID = UUID()
+    public let incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery>
     public let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     public var yieldedUpdateCount: Int {
         stateLock.lock()
@@ -47,7 +51,9 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private var didDrainPending = false
     private var dispatchTask: Task<Void, Never>?
 
-    public init(executable: URL, arguments: [String], environment: [String: String]?) throws {
+    public init(executable: URL, arguments: [String], environment: [String: String]?,
+                sessionUpdateProtocolVersion: ACPProtocolVersion = .v1) throws {
+        self.sessionUpdateProtocolVersion = sessionUpdateProtocolVersion
         self.transport = JSONRPCStdioTransport(
             executable: executable,
             arguments: arguments,
@@ -63,6 +69,12 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var uC: AsyncStream<ACPSessionUpdateParams>.Continuation!
         self.incomingUpdates = AsyncStream { uC = $0 }
         self.updatesCont = uC
+
+        let v2 = AsyncStream<ACPV2SessionUpdateDelivery>.makeStream()
+        self.incomingV2Updates = v2.stream
+        self.v2UpdatesCont = v2.continuation
+        if sessionUpdateProtocolVersion == .v1 { v2.continuation.finish() }
+        else { uC.finish() }
 
         var pC: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         self.permissionRequests = AsyncStream { pC = $0 }
@@ -111,12 +123,19 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
 
     /// Accepts a pre-built transport directly, skipping the local
     /// subprocess setup (remote channels and tests).
-    public init(transport: JSONRPCStdioTransporting) {
+    public init(transport: JSONRPCStdioTransporting, sessionUpdateProtocolVersion: ACPProtocolVersion = .v1) {
+        self.sessionUpdateProtocolVersion = sessionUpdateProtocolVersion
         self.transport = transport
 
         var uC: AsyncStream<ACPSessionUpdateParams>.Continuation!
         self.incomingUpdates = AsyncStream { uC = $0 }
         self.updatesCont = uC
+
+        let v2 = AsyncStream<ACPV2SessionUpdateDelivery>.makeStream()
+        self.incomingV2Updates = v2.stream
+        self.v2UpdatesCont = v2.continuation
+        if sessionUpdateProtocolVersion == .v1 { v2.continuation.finish() }
+        else { uC.finish() }
 
         var pC: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation!
         self.permissionRequests = AsyncStream { pC = $0 }
@@ -211,7 +230,35 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         }
     }
 
+    private struct MethodHead: Decodable {
+        let method: String?
+    }
+
+    private static func isSessionUpdateFrame(_ data: Data) -> Bool {
+        if case .object(let fields) = try? LSPJSONValue.decode(from: data) {
+            return fields["method"] == .string("session/update")
+        }
+        // Duplicate keys or excessive nesting can reject the exact envelope
+        // while its method remains readable. Identify only the method here;
+        // retain the original frame for explicit decode failure by the owner.
+        return (try? JSONDecoder().decode(MethodHead.self, from: data))?.method == "session/update"
+    }
+
     private func handleFrame(_ data: Data, onConsumed: (@Sendable () -> Void)?) {
+        // Recognize v2 updates before generic ID decoding. Even an invalid
+        // notification ID or params belongs to the consumer's explicit decode.
+        if sessionUpdateProtocolVersion == .v2, Self.isSessionUpdateFrame(data) {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            guard !didDrainPending else { return }
+            _yieldedUpdateCount += 1
+            v2UpdatesCont.yield(.init(
+                frame: data,
+                connectionID: updateConnectionID,
+                durableConsumptionAcknowledgement: onConsumed
+            ))
+            return
+        }
         var acknowledgeAfterDispatch = true
         defer {
             if acknowledgeAfterDispatch {
@@ -243,6 +290,10 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         guard let method = head.method else { return }
         switch method {
         case "session/update":
+            guard sessionUpdateProtocolVersion == .v1 else {
+                acknowledgeAfterDispatch = false
+                return
+            }
             // One frame is usually one update; the revised subagent form can
             // normalize to several, and the durable acknowledgement belongs
             // to the LAST one, as for OpenCode's child updates below.
@@ -262,6 +313,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 }
             }
         case ACPOpenCodeChildUpdate.method:
+            guard sessionUpdateProtocolVersion == .v1 else { break }
             // One notification normalizes to several standard updates; the
             // durable acknowledgement belongs to the LAST one, so the frame
             // is only acked once the whole batch has been applied.
@@ -443,10 +495,9 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
 
     /// Extracts the raw JSON bytes of the `result` field from a full envelope.
     private static func extractResultBytes(from envelope: Data) -> Data? {
-        guard let obj = try? JSONSerialization.jsonObject(with: envelope) as? [String: Any],
-              let result = obj["result"]
-        else { return nil }
-        return try? JSONSerialization.data(withJSONObject: result, options: [.fragmentsAllowed])
+        guard case .object(let fields) = try? LSPJSONValue.decode(from: envelope),
+              let result = fields["result"] else { return nil }
+        return try? result.encodedData()
     }
 
     // MARK: - Outbound
@@ -686,6 +737,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
             return
         }
         didDrainPending = true
+        v2UpdatesCont.finish()
         let snapshot = pending
         pending.removeAll()
         stateLock.unlock()
