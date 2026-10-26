@@ -1050,6 +1050,10 @@ struct NativePeerRightPaneView: View {
                 state.showFileActionError(title: "New File Failed", message: error.localizedDescription)
                 return
             }
+            // Another worktree selected meanwhile: opening `path` there would show a different file.
+            guard let current = client.hostFileTarget, current.serverId == target.serverId,
+                  current.worktree == target.worktree
+            else { return }
             // A root reload also re-lists every expanded folder; a loaded folder alone won't list again.
             client.reloadWorkspace()
             client.open(.file(path: path))
