@@ -36,7 +36,7 @@ extension AlasCoreContext {
                 else { throw changed }
             }
             guard isWorktreeIdle(listed) else { throw WorktreeBusyError() }
-            if await environment.checkpointRecoveryBlocksRemoval(listed) {
+            if await environment.checkpointRecoveryBlocksRemoval(listed, in: self) {
                 throw HostError.failed(message: "A checkpoint restore is pending on the host; finish it there first.")
             }
             return try await Process.$gitLiteralPathspecs.withValue(true) { try await apply(change, to: listed) }
@@ -52,7 +52,8 @@ extension AlasCoreContext {
                 throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress; finish or abort it first.")
             }
         case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash, .continueOperation, .skipOperation,
-             .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .editCommit:
+             .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .editCommit, .createCheckpoint, .deleteCheckpoint,
+             .restoreCheckpoint:
             break
         }
         switch change {
@@ -157,6 +158,8 @@ extension AlasCoreContext {
             try Self.throwIfFailed(await git.revert(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
         case .editCommit(let sha, let edit, let comparisonMode):
             return .commitEdited(result: try await editCommit(sha, edit: edit, comparisonMode: comparisonMode, at: root))
+        case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint:
+            return try await applyCheckpointChange(change, to: worktree)
         }
         return .done
     }
@@ -173,7 +176,8 @@ extension AlasCoreContext {
         case .dropStash(let stash):
             try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .continueOperation, .skipOperation, .abortOperation, .useOurs,
-             .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert, .editCommit:
+             .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert, .editCommit, .createCheckpoint, .deleteCheckpoint,
+             .restoreCheckpoint:
             preconditionFailure("not a stash change")
         }
     }
@@ -305,7 +309,7 @@ extension AlasCoreContext {
     /// so a tracked symlink stays usable; a folder that is gone is judged by
     /// its nearest ancestor on disk.
     /// Off the main actor: it touches the disk once per path.
-    nonisolated private static func refuseOutside(_ paths: [String], of root: URL) async throws {
+    nonisolated static func refuseOutside(_ paths: [String], of root: URL) async throws {
         guard paths.count <= maxPaths else {
             throw HostError.invalidRequest(reason: "One request can name at most \(maxPaths) paths.")
         }

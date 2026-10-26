@@ -163,6 +163,15 @@ public enum HostRequest: Codable, Equatable, Sendable {
     case stashDiff(worktree: WorktreeRef, stash: HostStashRef, path: String)
     /// A commit as its editor shows it, named by its SHA (`host.worktrees.commitEdit.v1`).
     case commitDetails(worktree: WorktreeRef, sha: String)
+    /// The worktree's checkpoints, newest first (`host.worktrees.checkpoints.v1`).
+    case listCheckpoints(worktree: WorktreeRef)
+    /// One of them, as listed (`host.worktrees.checkpoints.v1`).
+    case checkpointManifest(worktree: WorktreeRef, id: CheckpointID)
+    /// How `path` changed since checkpoint `id`, as listed (`host.worktrees.checkpoints.v1`).
+    case checkpointDiff(worktree: WorktreeRef, id: CheckpointID, path: String)
+    /// What restoring checkpoint `id` would change, and what blocks it on the
+    /// host; nil `groupIDs` selects every group (`host.worktrees.checkpoints.v1`).
+    case checkpointRestorePreview(worktree: WorktreeRef, id: CheckpointID, groupIDs: Set<UUID>?)
 }
 
 /// One git action on a worktree. Paths are relative to the worktree, as its
@@ -188,6 +197,14 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     /// replaying the commits above it, as its editor does
     /// (`host.worktrees.commitEdit.v1`).
     case editCommit(sha: String, edit: HostCommitEdit, comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    /// Take a manual checkpoint named `label`; answers `checkpointManifest`
+    /// (`host.worktrees.checkpoints.v1`).
+    case createCheckpoint(label: String)
+    /// Delete a listed checkpoint (`host.worktrees.checkpoints.v1`).
+    case deleteCheckpoint(id: CheckpointID)
+    /// Restore the groups `groupIDs` of a listed checkpoint, as previewed at
+    /// `fingerprint`, after a recovery checkpoint (`host.worktrees.checkpoints.v1`).
+    case restoreCheckpoint(id: CheckpointID, groupIDs: Set<UUID>, fingerprint: String)
 
     /// The capability beyond host.worktrees.git.v1 a change needs; nil for the original seven.
     public var capability: String? {
@@ -198,6 +215,7 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
              .revert:
             HostProtocolCapability.worktreesOperationsV1
         case .editCommit: HostProtocolCapability.worktreesCommitEditV1
+        case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint: HostProtocolCapability.worktreesCheckpointsV1
         }
     }
 
@@ -515,6 +533,12 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case commitDetails(details: CommitDetails)
     /// The answer to an `editCommit` change.
     case commitEdited(result: CommitEditResult)
+    /// The answer to `listCheckpoints`.
+    case checkpoints(catalog: CheckpointCatalogSnapshot)
+    /// The answer to `checkpointManifest` and a `createCheckpoint` change.
+    case checkpointManifest(manifest: WorktreeCheckpointManifest)
+    /// The answer to `checkpointRestorePreview`.
+    case checkpointRestorePreview(preview: CheckpointRestorePreview)
     case failure(error: HostError)
 }
 

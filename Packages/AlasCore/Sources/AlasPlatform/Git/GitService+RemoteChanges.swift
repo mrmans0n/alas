@@ -18,7 +18,10 @@ extension GitService {
         }
         let head = try await git(["rev-parse", "--verify", "--quiet", "HEAD"])
         let base = head.exitCode == 0 ? "HEAD" : "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
-        let numstat = try await git(["diff", "--no-ext-diff", "--numstat", "-z", base, "--"])
+        // `GIT_OPTIONAL_LOCKS=0` does not stop `git diff` refreshing a stale
+        // stat cache, which takes `index.lock` and rewrites the index: a
+        // background read must not, or the user's git or a restore fails.
+        let numstat = try await git(["-c", "diff.autoRefreshIndex=false", "diff", "--no-ext-diff", "--numstat", "-z", base, "--"])
         guard numstat.exitCode == 0 else {
             throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
         }
@@ -63,8 +66,10 @@ extension GitService {
         // tab/newline-containing) filenames intact instead of git's default
         // octal-escaped, quoted rendering — mirrors `stagedChangedFiles`,
         // whose NUL-token parsers this reuses.
+        // As `status`: a read never rewrites the index.
         let numstat = try await Process.git(
-            ["-c", "core.quotePath=false", "diff", "--numstat", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
+            ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "-z", "-M", "-C", ref, "--"],
+            cwd: worktreePath)
         // Unlike the guard at the top of this function, `ref` here is
         // already resolved and non-empty — this is NOT the "no base to
         // compare against" case, so a failure (a dropped SSH connection, a
@@ -78,7 +83,8 @@ extension GitService {
         let counts = GitService.parseNumstatZOutput(numstat.stdout)
 
         let nameStatus = try await Process.git(
-            ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
+            ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"],
+            cwd: worktreePath)
         // A dropped SSH connection (or any other fatal exit) between the
         // numstat call above and this one must propagate, not be parsed as
         // an empty (and so misleadingly valid) name-status list: that would
@@ -100,7 +106,10 @@ extension GitService {
         var files: [ChangedFile] = []
         var seen = Set<String>()
         let parsedNameStatus = GitService.parseNameStatusZOutput(nameStatus.stdout)
-        for path in parsedNameStatus.ordered {
+        // Without an index refresh, name-status lists a file whose stat info
+        // is stale but whose content is not as `M`; numstat leaves it out
+        // and keeps real changes, mode-only and pure renames included.
+        for path in parsedNameStatus.ordered where counts.add[path] != nil {
             guard seen.insert(path).inserted else { continue }
             let letter = parsedNameStatus.status[path] ?? "M"
             let renameFrom = parsedNameStatus.original[path]
@@ -154,8 +163,8 @@ extension GitService {
     }
 
     /// Badge-only variant of `changedFilesAgainstRef`: just `path` + status
-    /// letter (+ rename source), skipping the `numstat` call AND
-    /// per-untracked-file line counting entirely.
+    /// letter (+ rename source), skipping the line counts (its `numstat`
+    /// only filters stat-only entries) AND per-untracked-file line counting.
     ///
     /// `remoteFileTree` only needs a badge letter per path (the Files tab's
     /// `RemoteFileNode` has no add/del or conflict fields at all) — unlike
@@ -187,15 +196,24 @@ extension GitService {
         }
 
         let nameStatus = try await Process.git(
-            ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"], cwd: worktreePath)
+            ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--name-status", "-z", "-M", "-C", ref, "--"],
+            cwd: worktreePath)
         guard nameStatus.exitCode == 0 else {
             throw ProcessError.nonZeroExit(nameStatus.exitCode, nameStatus.stderr)
         }
+        // Only to drop stat-only entries, as in `changedFilesAgainstRef`.
+        let numstat = try await Process.git(
+            ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "-z", "-M", "-C", ref, "--"],
+            cwd: worktreePath)
+        guard numstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
+        }
+        let changed = GitService.parseNumstatZOutput(numstat.stdout).add
 
         var files: [ChangedFile] = []
         var seen = Set<String>()
         let parsedNameStatus = GitService.parseNameStatusZOutput(nameStatus.stdout)
-        for path in parsedNameStatus.ordered {
+        for path in parsedNameStatus.ordered where changed[path] != nil {
             guard seen.insert(path).inserted else { continue }
             let letter = parsedNameStatus.status[path] ?? "M"
             files.append(ChangedFile(
@@ -266,7 +284,7 @@ extension GitService {
             // unquoted in the `diff --git a/<old> b/<new>` header, which
             // `sliceDiffForFile` below matches on as a raw string.
             let result = try await Process.gitCapped(
-                ["--literal-pathspecs", "-c", "core.quotePath=false",
+                ["--literal-pathspecs", "-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false",
                  "diff", "--no-color", "-M", "-C", ref, "--", file, originalPath], cwd: worktreePath,
                 maxOutputBytes: maxOutputBytes)
             // A fatal exit (>= 2, e.g. a dropped SSH connection) must propagate
@@ -338,7 +356,8 @@ extension GitService {
         // `--literal-pathspecs` stops `file` from being interpreted as a
         // glob pathspec (see comment above).
         let result = try await Process.gitCapped(
-            ["--literal-pathspecs", "diff", "--no-color", "-M", "-C", ref, "--", file], cwd: worktreePath,
+            ["--literal-pathspecs", "-c", "diff.autoRefreshIndex=false", "diff", "--no-color", "-M", "-C", ref, "--", file],
+            cwd: worktreePath,
             maxOutputBytes: maxOutputBytes)
         // A fatal exit here (e.g. an SSH connection dropping after the
         // preceding probes succeeded) must propagate rather than turn into a
@@ -372,7 +391,8 @@ extension GitService {
     /// `/dev/null`) instead of a proper diff against its copy source.
     private func renameSource(worktreePath: URL, ref: String, file: String) async throws -> String? {
         let result = try await Process.git(
-            ["-c", "core.quotePath=false", "diff", "--name-status", "-z", "-M", "-C", ref], cwd: worktreePath)
+            ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--name-status", "-z", "-M", "-C", ref],
+            cwd: worktreePath)
         guard result.exitCode == 0 else { return nil }
         let parsed = GitService.parseNameStatusZOutput(result.stdout)
         guard let status = parsed.status[file], status.hasPrefix("R") || status.hasPrefix("C") else { return nil }

@@ -68,6 +68,8 @@ public final class AlasCoreContext {
     @ObservationIgnored private let localTextOverride: (any LocalTextGenerating)?
     /// Durable Workspace definitions and checkouts.
     @ObservationIgnored public let workspaceStore: WorkspaceStore
+    /// The worktrees' checkpoints, which a paired Mac lists and restores.
+    @ObservationIgnored public let checkpoints: WorktreeCheckpointService
     /// What the host adds to lifecycles: the app's terminals, prompts and
     /// refresh, or nothing when headless.
     @ObservationIgnored public let environment: any AlasHostEnvironment
@@ -154,6 +156,9 @@ public final class AlasCoreContext {
     /// holds while the session runs on the transcript it was sent from.
     @ObservationIgnored var noticeAwaitingClears: [String: NoticeAwaitingInput] = [:]
 
+    /// Owner storage keys each checkpoint restore keeps new writers out of,
+    /// by restore: its worktree and the Workspace checkouts that manage it.
+    @ObservationIgnored var checkpointRestoreHolds: [UUID: Set<String>] = [:]
     /// Launches claimed and still starting, by run slot.
     @ObservationIgnored var pendingRunLaunches: [RunSlotKey: PendingRunLaunch] = [:]
     /// Set once `AlasHost.shutdown()` begins: nothing new starts after it,
@@ -204,7 +209,8 @@ public final class AlasCoreContext {
         orchestrationPersistence: ACPOrchestrationPersistence = ACPOrchestrationPersistence(),
         reviewDrafts: ReviewDraftCommentStore = ReviewDraftCommentStore(),
         reviewSessions: ReviewSessionStore = ReviewSessionStore(),
-        usageHistory: UsageHistoryStore? = nil
+        usageHistory: UsageHistoryStore? = nil,
+        checkpoints: WorktreeCheckpointService = .init()
     ) {
         self.projects = projects
         self.runs = runs
@@ -227,6 +233,7 @@ public final class AlasCoreContext {
         self.localTextModelStore = localTextModelStore
         self.localTextOverride = localText
         self.workspaceStore = workspaceStore
+        self.checkpoints = checkpoints
         self.environment = environment
         self.runHostGrace = runHostGrace
         self.store = store
@@ -470,7 +477,15 @@ public final class AlasCoreContext {
         if let manager = sessionManagers[owner] { return manager }
         let manager = makeSessionManager(owner, worktree)
         let worktreeId = worktree.id
-        manager.admitsNewWork = { [weak self] in self?.projects.admitsNewWork(worktreeId: worktreeId) ?? false }
+        if environment.servesWorktreeGit, manager.onCheckpointCapture == nil {
+            manager.onCheckpointCapture = { [weak self] prompt, hasAttachments in
+                await self?.captureAutomaticCheckpoint(worktree, prompt: prompt, hasAttachments: hasAttachments)
+            }
+        }
+        manager.admitsNewWork = { [weak self] in
+            guard let self else { return false }
+            return projects.admitsNewWork(worktreeId: worktreeId) && !isHeldByCheckpointRestore(owner)
+        }
         sessionManagers[owner] = manager
         return manager
     }
@@ -497,6 +512,7 @@ public final class AlasCoreContext {
             id: owner.storageKey, projectId: "", name: checkout.fallbackWorkspaceName, branch: checkout.branch,
             path: root, status: .clean, lastActivity: Date()
         ))
+        manager.admitsNewWork = { [weak self] in self?.isHeldByCheckpointRestore(owner) == false }
         sessionManagers[owner] = manager
         return manager
     }

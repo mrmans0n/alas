@@ -24,7 +24,7 @@ public protocol AlasHostEnvironment: AnyObject {
     func quiesceWorktree(_ worktree: Worktree, refusingUnsavedEdits: Bool, in core: AlasCoreContext) async throws
     /// Whether an interrupted checkpoint restore must be recovered before the
     /// worktree can be removed.
-    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool
+    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree, in core: AlasCoreContext) async -> Bool
     /// Starts background cleanup of a removed worktree's staged files.
     func launchWorktreeCleanup(_ ticket: WorktreeTrashCleanupTicket) throws
     /// Re-reads a project's worktrees after a creation or removal. Returns
@@ -127,8 +127,8 @@ extension AlasHostEnvironment {
         await core.disposeSessionManager(owner: .worktree(worktree.id))
     }
 
-    public func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool {
-        await AlasCoreContext.hasPendingCheckpointRecovery(worktree)
+    public func checkpointRecoveryBlocksRemoval(_ worktree: Worktree, in core: AlasCoreContext) async -> Bool {
+        await core.hasPendingCheckpointRecovery(worktree)
     }
 
     public func launchWorktreeCleanup(_ ticket: WorktreeTrashCleanupTicket) throws {
@@ -227,7 +227,7 @@ extension AlasHostEnvironment {
         guard let worktree = core.projects.worktreesByProject.values.lazy.flatMap({ $0 }).first(where: { $0.id == worktreeID }) else {
             return true
         }
-        return await AlasCoreContext.hasPendingCheckpointRecovery(worktree)
+        return await core.hasPendingCheckpointRecovery(worktree)
     }
 
     public func admitsAgent(_ agentID: String, remoteHost: String?) -> Bool {

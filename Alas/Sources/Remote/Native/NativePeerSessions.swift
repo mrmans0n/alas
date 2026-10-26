@@ -158,6 +158,8 @@ final class NativePeerSessions {
     private(set) var openedReview: NativePeerReviewSelection?
     /// A host commit opened in the commit editor over the center pane.
     private(set) var openedCommitEditor: NativePeerCommitEditorSelection?
+    /// A checkpoint the transcript asked to restore, until the right pane takes it.
+    private(set) var pendingCheckpointRestore: CheckpointID?
     /// The selected row's worktree summary when changes were last requested.
     /// Peers re-send it with every session list, so a change here is the
     /// cue that the agent touched the worktree.
@@ -362,6 +364,15 @@ final class NativePeerSessions {
     /// The worktree Changes and Files show.
     var workspaceWorktreePath: String? {
         (selectedRow?.worktree ?? selectedWorktreeGroup?.worktree)?.path
+    }
+
+    /// The selected worktree on a host that serves its git actions. A folder
+    /// project or an archived worktree has none.
+    var hostGitTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard let selectedWorktree, let group = selectedWorktreeGroup, !group.isFolder, let host = group.host,
+              !host.snapshot.isArchived, hosts?.servesGit(serverId: selectedWorktree.serverId) == true
+        else { return nil }
+        return (selectedWorktree.serverId, host)
     }
 
     /// The selected tab-less worktree, read over its host's channel.
@@ -597,6 +608,7 @@ final class NativePeerSessions {
         selectedWorktree = nil
         openedReview = nil
         openedCommitEditor = nil
+        pendingCheckpointRestore = nil
         selectedWorktreeTabs = []
         consoles?.clearSelection()
         if let selectedSessionId, let pendingPrompt {
@@ -1117,8 +1129,8 @@ final class NativePeerSessions {
             routeWorkspaceRead(.commitDiff(sha: sha, path: path)) { .commitFileDiff(sessionId: $0, sha: sha, path: path) }
         case .file(let path):
             routeWorkspaceRead(.file(path: path)) { .readFile(sessionId: $0, path: path) }
-        case .stashDiff(let path, let stash):
-            readStashDiff(document, path: path, stash: stash)
+        case .stashDiff, .checkpointDiff:
+            readHostDiff(document)
         }
         if !sent {
             documentRequestsInFlight.remove(document)
@@ -1132,15 +1144,24 @@ final class NativePeerSessions {
         workspace.closeDocument()
     }
 
-    /// Reads a stash file's diff over the selected worktree's host channel,
-    /// whether or not a session is selected: only the host serves stashes.
-    private func readStashDiff(_ document: NativePeerWorkspace.Document, path: String, stash: HostStashRef) -> Bool {
-        guard let hosts, let selection = selectedWorktree, let host = selectedWorktreeGroup?.host,
-              hosts.servesStash(serverId: selection.serverId)
-        else { return false }
+    /// Reads a stash or checkpoint file's diff over the selected worktree's
+    /// host channel, whether or not a session is selected: only the host
+    /// serves stashes and checkpoints.
+    private func readHostDiff(_ document: NativePeerWorkspace.Document) -> Bool {
+        guard let hosts, let selection = selectedWorktree, let host = selectedWorktreeGroup?.host else { return false }
+        let serverId = selection.serverId
+        let read: @MainActor () async -> Result<HostDiff, NativePeerReviewGitClientError>
+        switch document {
+        case .stashDiff(let path, let stash) where hosts.servesStash(serverId: serverId):
+            read = { await hosts.stashDiff(stash, path: path, in: host, serverId: serverId) }
+        case .checkpointDiff(let path, let id) where hosts.servesCheckpoints(serverId: serverId):
+            read = { await hosts.checkpointDiff(id, path: path, in: host, serverId: serverId) }
+        default:
+            return false
+        }
         let epoch = workspaceEpoch
         Task { [weak self] in
-            let result = await hosts.stashDiff(stash, path: path, in: host, serverId: selection.serverId)
+            let result = await read()
             guard let self, workspaceEpoch == epoch else { return }
             documentRequestsInFlight.remove(document)
             workspace.finishDocument(document, with: result)
@@ -1178,6 +1199,15 @@ final class NativePeerSessions {
 
     func closeCommitEditor() {
         openedCommitEditor = nil
+    }
+
+    func requestCheckpointRestore(_ id: CheckpointID) {
+        pendingCheckpointRestore = id
+    }
+
+    func takeCheckpointRestore() -> CheckpointID? {
+        defer { pendingCheckpointRestore = nil }
+        return pendingCheckpointRestore
     }
 
     @discardableResult

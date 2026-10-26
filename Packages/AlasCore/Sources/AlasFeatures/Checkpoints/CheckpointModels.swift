@@ -66,7 +66,7 @@ public struct CheckpointCoordinationSnapshot: Equatable, Sendable {
     }
 }
 
-public enum CheckpointRestoreBlocker: Int, Hashable, Sendable, CaseIterable {
+public enum CheckpointRestoreBlocker: Int, Codable, Hashable, Sendable, CaseIterable {
     case remoteTarget
     case interruptedRestore
     case lineageMismatch
@@ -80,6 +80,34 @@ public enum CheckpointRestoreBlocker: Int, Hashable, Sendable, CaseIterable {
 
     public static func highestPriority(in blockers: Set<Self>) -> Self? {
         blockers.min { $0.rawValue < $1.rawValue }
+    }
+
+    /// On the wire by case name: the raw value is a priority, which a new
+    /// blocker shifts. A name this side does not know is a corrupt
+    /// checkpoint, which still refuses the restore.
+    public init(from decoder: Decoder) throws {
+        let name = try decoder.singleValueContainer().decode(String.self)
+        self = Self.allCases.first { $0.wireName == name } ?? .corruptCheckpoint
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wireName)
+    }
+
+    private var wireName: String {
+        switch self {
+        case .remoteTarget: "remoteTarget"
+        case .interruptedRestore: "interruptedRestore"
+        case .lineageMismatch: "lineageMismatch"
+        case .changedHEAD: "changedHEAD"
+        case .gitOperation: "gitOperation"
+        case .indexLock: "indexLock"
+        case .otherGitMutation: "otherGitMutation"
+        case .dirtyEditorBuffer: "dirtyEditorBuffer"
+        case .activeSession: "activeSession"
+        case .corruptCheckpoint: "corruptCheckpoint"
+        }
     }
 
     public var description: String {
@@ -98,8 +126,8 @@ public enum CheckpointRestoreBlocker: Int, Hashable, Sendable, CaseIterable {
     }
 }
 
-public struct CheckpointRestoreEffect: Equatable, Sendable {
-    public enum Layer: Equatable, Sendable { case index, worktree }
+public struct CheckpointRestoreEffect: Codable, Equatable, Sendable {
+    public enum Layer: Codable, Equatable, Sendable { case index, worktree }
     public let relativePath: String
     public let layer: Layer
     public let head: CheckpointFileState
@@ -138,7 +166,7 @@ public struct CheckpointRestoreEffect: Equatable, Sendable {
     }
 }
 
-public struct CheckpointRestoreGroup: Identifiable, Equatable, Sendable {
+public struct CheckpointRestoreGroup: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public let primaryPath: String
     public let memberPaths: [String]
@@ -154,7 +182,7 @@ public struct CheckpointRestoreGroup: Identifiable, Equatable, Sendable {
     }
 }
 
-public struct CheckpointRestorePreview: Identifiable, Equatable, Sendable {
+public struct CheckpointRestorePreview: Codable, Identifiable, Equatable, Sendable {
     public let id: UUID
     public let checkpointID: CheckpointID
     public let checkpointLabel: String

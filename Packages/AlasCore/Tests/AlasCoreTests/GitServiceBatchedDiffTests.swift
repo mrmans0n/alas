@@ -32,6 +32,32 @@ struct GitServiceBatchedDiffTests {
         #expect(slices["tab\there"]?.hasSuffix("+T") == true)
     }
 
+    /// A background status or branch-comparison read never rewrites the
+    /// index: a stale stat cache (any fresh copy has one) would otherwise have
+    /// `git diff` take `index.lock`, failing the user's own git or a checkpoint restore.
+    @Test func backgroundReadsLeaveTheIndexUntouched() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-status-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = root.appendingPathComponent("repo")
+        try await GitTemplate.repository(at: repo)
+        let index = repo.appendingPathComponent(".git/index")
+        let before = try Data(contentsOf: index)
+
+        let service = GitService()
+        _ = try await service.status(worktreePath: repo)
+        // The copy's stale stat info is not a change.
+        #expect(try await service.changedFilesAgainstRef(worktreePath: repo, ref: "HEAD").isEmpty)
+        #expect(try await service.changedFileBadges(worktreePath: repo, ref: "HEAD").isEmpty)
+
+        #expect(try Data(contentsOf: index) == before)
+
+        // A mode-only change still is.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: repo.appendingPathComponent(".alas/scripts/hello.sh").path)
+        #expect(try await service.changedFilesAgainstRef(worktreePath: repo, ref: "HEAD").map(\.path) == [".alas/scripts/hello.sh"])
+        #expect(try await service.changedFileBadges(worktreePath: repo, ref: "HEAD").map(\.path) == [".alas/scripts/hello.sh"])
+    }
+
     @Test func treeDiffsByFileMatchesPerFileRangeDiffs() async throws {
         let repo = try await makeRepository()
         defer { try? FileManager.default.removeItem(at: repo.deletingLastPathComponent()) }

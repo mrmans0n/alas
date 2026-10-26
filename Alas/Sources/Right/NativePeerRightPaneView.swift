@@ -36,10 +36,25 @@ struct NativePeerRightPaneView: View {
     @State private var stashChangesTarget: (serverId: String, worktree: PeerHostWorktree)?
     /// The commit chosen to cherry-pick (`.cherryPick`) or revert (`.revert`), while its confirmation shows.
     @State private var pendingCommitAction: (kind: HostOperationKind, commit: RemoteCommit)?
+    /// The git target's checkpoints, as the host lists them; nil while it serves none.
+    @State private var checkpoints: CheckpointCatalogSnapshot?
+    @State private var checkpointsExpanded = true
+    /// Each expanded checkpoint's manifest, and the page of its files shown, by id.
+    @State private var checkpointManifests: [CheckpointID: NativePeerWorkspace.Load<WorktreeCheckpointManifest>] = [:]
+    @State private var checkpointPages: [CheckpointID: Int] = [:]
+    /// Bumped by each checkpoint list read, so only the latest one lands.
+    @State private var checkpointReadGeneration = 0
+    /// While a checkpoint is taken, previewed or restored.
+    @State private var checkpointInFlight = false
+    @State private var creatingCheckpoint = false
+    @State private var checkpointCreateError: String?
+    @State private var checkpointRestorePreview: CheckpointRestorePreview?
+    @State private var checkpointRestoreError: String?
+    @State private var pendingCheckpointDeletion: WorktreeCheckpointSummary?
 
     var body: some View {
         // Split so each part type-checks in reasonable time.
-        prompts(commitPrompts(changePrompts(content)))
+        checkpointPrompts(prompts(commitPrompts(changePrompts(content))))
     }
 
     @ViewBuilder
@@ -92,6 +107,7 @@ struct NativePeerRightPaneView: View {
             pendingDiscard = nil
             pendingStashDrop = nil
             pendingCommitAction = nil
+            pendingCheckpointDeletion = nil
         }
         .onChange(of: state.config.changes.comparisonMode) { _, _ in
             client.reloadWorkspace()
@@ -102,6 +118,11 @@ struct NativePeerRightPaneView: View {
             reviews = []
             stashes = nil
             stashFiles = [:]
+            checkpoints = nil
+            checkpointManifests = [:]
+            checkpointPages = [:]
+            creatingCheckpoint = false
+            checkpointRestorePreview = nil
             client.hosts?.followGit(gitTarget?.worktree, serverId: gitTarget?.serverId)
         }
         .onDisappear { client.hosts?.followGit(nil, serverId: nil) }
@@ -114,7 +135,10 @@ struct NativePeerRightPaneView: View {
         // changes until the new ones land, so an unchanged list fires nothing:
         // stash actions and the toolbar's refresh read the stashes themselves.
         .onChange(of: client.workspace.changes) { _, changes in
-            if case .loaded = changes { Task { await readStashes() } }
+            if case .loaded = changes {
+                Task { await readStashes() }
+                Task { await readCheckpoints() }
+            }
         }
     }
 
@@ -249,6 +273,9 @@ struct NativePeerRightPaneView: View {
                     // Here as well as in the Working tree header, so a message-only amend
                     // is reachable with nothing staged or changed.
                     Button("Commit…") { commitTarget = gitTarget }
+                    if client.hosts?.servesCheckpoints(serverId: gitTarget.serverId) == true {
+                        Button("Create Checkpoint…") { beginCheckpointCreation() }
+                    }
                     Divider()
                     Button("Fetch now") { runGit(.fetch, on: gitTarget) }
                 } label: {
@@ -268,6 +295,7 @@ struct NativePeerRightPaneView: View {
                 runRefreshGeneration += 1
                 Task { await readReviewStatus() }
                 Task { await readStashes() }
+                Task { await readCheckpoints() }
             }
         }
         .padding(.leading, 10)
@@ -316,6 +344,9 @@ struct NativePeerRightPaneView: View {
                 // Outside the changes view, so they show with no changes too.
                 if let gitTarget, reviewsKey != nil {
                     reviewsSection(gitTarget)
+                }
+                if let gitTarget, let catalog = checkpoints, !catalog.summaries.isEmpty {
+                    checkpointsSection(gitTarget, catalog: catalog)
                 }
                 if let gitTarget, reviewLoop.snapshot != nil {
                     ReviewLoopDrawer(
@@ -671,6 +702,263 @@ struct NativePeerRightPaneView: View {
         )
     }
 
+    /// The checkpoint list's reads, its create and restore sheets, and the delete confirmation.
+    private func checkpointPrompts(_ content: some View) -> some View {
+        content
+        .task(id: checkpointsKey) { await readCheckpoints() }
+        // "Restore files to before this request" in the peer transcript.
+        .onChange(of: client.pendingCheckpointRestore) { _, requested in
+            guard requested != nil, let id = client.takeCheckpointRestore() else { return }
+            openTranscriptCheckpointRestore(id)
+        }
+        .sheet(isPresented: $creatingCheckpoint) {
+            if let gitTarget {
+                CreateCheckpointSheet(error: checkpointCreateError, disabled: checkpointInFlight) { label in
+                    await createCheckpoint(label: label, on: gitTarget)
+                }
+            }
+        }
+        .sheet(item: $checkpointRestorePreview) { preview in
+            if let gitTarget {
+                RestoreCheckpointSheet(
+                    preview: preview,
+                    error: checkpointRestoreError,
+                    inFlight: checkpointInFlight,
+                    refresh: { await previewCheckpointRestore(preview.checkpointID, groupIDs: $0, on: gitTarget) },
+                    restore: { await restoreCheckpoint(preview, groupIDs: $0, on: gitTarget) },
+                    cancel: { checkpointRestorePreview = nil }
+                )
+            }
+        }
+        // The local copy: RightPaneView's checkpoint deletion dialog.
+        .alert(
+            "Delete checkpoint \(pendingCheckpointDeletion?.label ?? "")?",
+            isPresented: Binding(
+                get: { pendingCheckpointDeletion != nil },
+                set: { if !$0 { pendingCheckpointDeletion = nil } }
+            ),
+            presenting: pendingCheckpointDeletion,
+            actions: { checkpoint in
+                Button("Delete", role: .destructive) {
+                    pendingCheckpointDeletion = nil
+                    if let gitTarget { runCheckpointChange(.deleteCheckpoint(id: checkpoint.id), on: gitTarget) }
+                }
+                Button("Cancel", role: .cancel) { pendingCheckpointDeletion = nil }
+            },
+            message: { _ in
+                Text("This removes the checkpoint only. Your worktree is unchanged.")
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func checkpointsSection(
+        _ target: (serverId: String, worktree: PeerHostWorktree), catalog: CheckpointCatalogSnapshot
+    ) -> some View {
+        SectionHeader(
+            role: .checkpoints,
+            title: "Checkpoints",
+            count: catalog.summaries.count,
+            expanded: checkpointsExpanded,
+            onToggle: { checkpointsExpanded.toggle() }
+        ) {
+            Button {
+                beginCheckpointCreation()
+            } label: {
+                Icon(name: "plus", size: 11, color: theme.color("fg-muted"))
+                    .frame(width: 22, height: 20)
+            }
+            .buttonStyle(.borderless)
+            .disabled(checkpointInFlight)
+            .accessibilityLabel("Create checkpoint")
+        }
+        if checkpointsExpanded {
+            // Bounded, as the reviews are.
+            ScrollView {
+                VStack(spacing: 0) {
+                    ForEach(catalog.summaries) { checkpointCard($0, on: target) }
+                    CheckpointFooterRow(storageUsage: catalog.byteCount)
+                }
+            }
+            .frame(maxHeight: 240)
+        }
+    }
+
+    private func checkpointCard(
+        _ checkpoint: WorktreeCheckpointSummary, on target: (serverId: String, worktree: PeerHostWorktree)
+    ) -> some View {
+        let load = checkpointManifests[checkpoint.id]
+        var manifest: WorktreeCheckpointManifest?
+        var manifestError: String?
+        if case .loaded(let loaded)? = load { manifest = loaded }
+        if case .failed(let message)? = load { manifestError = message }
+        let page = checkpointPages[checkpoint.id] ?? 0
+        return CheckpointCard(
+            checkpoint: checkpoint,
+            expanded: load != nil,
+            manifest: manifest,
+            manifestLoading: load == .loading,
+            manifestError: manifestError,
+            mutationsDisabled: checkpointInFlight,
+            blockedReason: nil,
+            fileListPageIndex: page,
+            onToggle: { toggleCheckpoint(checkpoint.id, on: target) },
+            onPreviousFilePage: { checkpointPages[checkpoint.id] = max(0, page - 1) },
+            onNextFilePage: { checkpointPages[checkpoint.id] = page + 1 },
+            onRestore: { openCheckpointRestore(checkpoint.id, on: target) },
+            onDelete: { pendingCheckpointDeletion = checkpoint },
+            onInspect: { client.open(.checkpointDiff(path: $0.primaryPath, checkpointID: checkpoint.id)) }
+        )
+    }
+
+    /// Changes when the git target's checkpoints should be listed again: a new
+    /// target, the host serving checkpoints, or a reconnect.
+    private var checkpointsKey: String? {
+        guard let gitTarget, let gitTargetKey, let hosts = client.hosts,
+              hosts.servesCheckpoints(serverId: gitTarget.serverId)
+        else { return nil }
+        return "\(gitTargetKey)#\(hosts.subscriptions[gitTarget.serverId] ?? 0)"
+    }
+
+    /// The git target's checkpoints. A refusal or no answer keeps the last
+    /// list; an open checkpoint diff closes once its checkpoint is gone. Only
+    /// the latest read lands.
+    private func readCheckpoints() async {
+        checkpointReadGeneration += 1
+        let generation = checkpointReadGeneration
+        guard checkpointsKey != nil, let gitTarget, let hosts = client.hosts else {
+            checkpoints = nil
+            checkpointManifests = [:]
+            checkpointPages = [:]
+            return
+        }
+        let key = gitTargetKey
+        let listed = await hosts.checkpoints(in: gitTarget.worktree, serverId: gitTarget.serverId)
+        guard !Task.isCancelled, generation == checkpointReadGeneration, gitTargetKey == key, let listed else { return }
+        let ids = Set(listed.summaries.map(\.id))
+        checkpointManifests = checkpointManifests.filter { ids.contains($0.key) }
+        checkpointPages = checkpointPages.filter { ids.contains($0.key) }
+        checkpoints = listed
+        if case .checkpointDiff(_, let shown)? = client.workspace.document, !ids.contains(shown) {
+            client.closeDocument()
+        }
+    }
+
+    /// Opens or closes checkpoint `id`'s files; an open checkpoint is read on the host.
+    private func toggleCheckpoint(_ id: CheckpointID, on target: (serverId: String, worktree: PeerHostWorktree)) {
+        guard checkpointManifests.removeValue(forKey: id) == nil, let hosts = client.hosts else { return }
+        checkpointManifests[id] = .loading
+        let key = gitTargetKey
+        Task { @MainActor in
+            let result = await hosts.checkpointManifest(id, in: target.worktree, serverId: target.serverId)
+            // Closed since it was asked for.
+            guard gitTargetKey == key, checkpointManifests[id] != nil else { return }
+            let load: NativePeerWorkspace.Load<WorktreeCheckpointManifest> = switch result {
+            case .success(let manifest): .loaded(manifest)
+            case .failure(let error): .failed(error.message)
+            }
+            checkpointManifests[id] = load
+        }
+    }
+
+    private func beginCheckpointCreation() {
+        checkpointCreateError = nil
+        creatingCheckpoint = true
+    }
+
+    /// The new checkpoint, listed again; nil with `checkpointCreateError` set when it failed.
+    private func createCheckpoint(
+        label: String, on target: (serverId: String, worktree: PeerHostWorktree)
+    ) async -> WorktreeCheckpointManifest? {
+        guard let hosts = client.hosts, !checkpointInFlight else { return nil }
+        checkpointInFlight = true
+        checkpointCreateError = nil
+        let key = gitTargetKey
+        let result = await hosts.createCheckpoint(label: label, in: target.worktree, serverId: target.serverId)
+        checkpointInFlight = false
+        // The selection moved on: the answer belongs to another worktree.
+        guard gitTargetKey == key else { return nil }
+        Task { await readCheckpoints() }
+        switch result {
+        case .success(let manifest):
+            return manifest
+        case .failure(let error):
+            checkpointCreateError = error.message
+            return nil
+        }
+    }
+
+    /// The transcript's restore: shows Changes, where the sheet's context and
+    /// any refusal are visible, then opens the restore as the card does.
+    private func openTranscriptCheckpointRestore(_ id: CheckpointID) {
+        guard let gitTarget, client.hosts?.servesCheckpoints(serverId: gitTarget.serverId) == true else { return }
+        let tabs = self.tabs
+        // Not `resolve`: it collapses the pane when Changes is already shown.
+        handle(collapsed ? .expand(.changes) : .select(.changes), tabs: tabs)
+        guard !checkpointInFlight else {
+            gitError = "A checkpoint action is already running."
+            return
+        }
+        openCheckpointRestore(id, on: gitTarget)
+    }
+
+    /// Reads what restoring checkpoint `id` would change and shows it in the restore sheet.
+    private func openCheckpointRestore(_ id: CheckpointID, on target: (serverId: String, worktree: PeerHostWorktree)) {
+        gitError = nil
+        checkpointRestoreError = nil
+        let key = gitTargetKey
+        Task { @MainActor in
+            await previewCheckpointRestore(id, groupIDs: nil, on: target)
+            // Before the sheet shows, its error lands in the rail.
+            if gitTargetKey == key, checkpointRestorePreview == nil { gitError = checkpointRestoreError }
+        }
+    }
+
+    /// Reads the restore preview again for `groupIDs`; a failure shows in the restore sheet.
+    private func previewCheckpointRestore(
+        _ id: CheckpointID, groupIDs: Set<UUID>?, on target: (serverId: String, worktree: PeerHostWorktree)
+    ) async {
+        guard let hosts = client.hosts, !checkpointInFlight else { return }
+        checkpointInFlight = true
+        let key = gitTargetKey
+        let result = await hosts.checkpointRestorePreview(id, groupIDs: groupIDs, in: target.worktree, serverId: target.serverId)
+        checkpointInFlight = false
+        guard gitTargetKey == key else { return }
+        switch result {
+        case .success(let preview):
+            checkpointRestoreError = nil
+            checkpointRestorePreview = preview
+        case .failure(let error):
+            checkpointRestoreError = error.message
+        }
+    }
+
+    /// Restores `groupIDs` as `preview` showed them; true once restored.
+    private func restoreCheckpoint(
+        _ preview: CheckpointRestorePreview, groupIDs: Set<UUID>, on target: (serverId: String, worktree: PeerHostWorktree)
+    ) async -> Bool {
+        guard let hosts = client.hosts, !checkpointInFlight else { return false }
+        checkpointInFlight = true
+        let key = gitTargetKey
+        let change = HostWorktreeChange.restoreCheckpoint(
+            id: preview.checkpointID, groupIDs: groupIDs, fingerprint: preview.currentFingerprint
+        )
+        let error = await hosts.mutate(change, in: target.worktree, serverId: target.serverId)
+        checkpointInFlight = false
+        guard gitTargetKey == key else { return false }
+        client.reloadWorkspace()
+        // The restore took a recovery checkpoint first.
+        Task { await readCheckpoints() }
+        checkpointRestoreError = error
+        if error == nil { checkpointRestorePreview = nil }
+        return error == nil
+    }
+
+    /// Runs a checkpoint `change`, then lists the checkpoints again.
+    private func runCheckpointChange(_ change: HostWorktreeChange, on target: (serverId: String, worktree: PeerHostWorktree)) {
+        runGit(change, on: target) { Task { await readCheckpoints() } }
+    }
+
     private var agentTab: some View {
         let canOpen = client.selectedWorktree.map { client.canOpenSessionTabs(serverId: $0.serverId) } ?? false
         return VStack(spacing: 0) {
@@ -751,12 +1039,7 @@ struct NativePeerRightPaneView: View {
     }
 
     /// The selected worktree on a host that serves its git actions.
-    private var gitTarget: (serverId: String, worktree: PeerHostWorktree)? {
-        guard !isFolder, let selection = client.selectedWorktree, let host = client.selectedWorktreeGroup?.host,
-              !host.snapshot.isArchived, client.hosts?.servesGit(serverId: selection.serverId) == true
-        else { return nil }
-        return (selection.serverId, host)
-    }
+    private var gitTarget: (serverId: String, worktree: PeerHostWorktree)? { client.hostGitTarget }
 
     private var gitTargetKey: String? {
         gitTarget.map { "\($0.serverId)/\($0.worktree.snapshot.worktree.id)" }

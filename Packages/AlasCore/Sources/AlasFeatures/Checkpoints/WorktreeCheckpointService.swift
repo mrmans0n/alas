@@ -70,6 +70,11 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         return try await store.recoverableJournals(lineageID: target.lineageID)
     }
 
+    /// Whether a restore of `lineageID` was interrupted and awaits recovery.
+    public func hasRecoverableJournals(lineageID: String) async throws -> Bool {
+        try await !store.recoverableJournals(lineageID: lineageID).isEmpty
+    }
+
     public func manifest(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> WorktreeCheckpointManifest {
         try await store.load(id: id, lineageID: target.lineageID)
     }

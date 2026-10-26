@@ -296,13 +296,14 @@ public final class HostConsoles {
     }
 
     /// The worktree a shell may run in now: listed, visible, local, and not
-    /// claimed by a lifecycle operation.
+    /// claimed by a lifecycle operation or held by a checkpoint restore.
     private func admittedWorktree(_ worktreeId: String) throws -> Worktree {
         guard let (project, worktree) = core.projectAndWorktree(withWorktreeId: worktreeId),
               !core.projects.isWorktreeHidden(projectId: project.id, path: worktree.path)
         else { throw PeerConsoleOpenError.worktreeUnavailable }
         guard project.host == nil else { throw PeerConsoleOpenError.sshProject }
-        guard core.projects.admitsNewWork(in: worktree) else { throw PeerConsoleOpenError.worktreeBusy }
+        guard core.projects.admitsNewWork(in: worktree), !core.isHeldByCheckpointRestore(.worktree(worktree.id))
+        else { throw PeerConsoleOpenError.worktreeBusy }
         return worktree
     }
 

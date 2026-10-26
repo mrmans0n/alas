@@ -124,7 +124,7 @@ struct HostSocketServerTests {
 /// not depend on the checkpoints this machine's profile holds.
 @MainActor
 private final class NoCheckpointsEnvironment: AlasHostEnvironment {
-    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool { false }
+    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree, in core: AlasCoreContext) async -> Bool { false }
 }
 
 /// A host protocol client over a Unix socket: requests by id, and the events

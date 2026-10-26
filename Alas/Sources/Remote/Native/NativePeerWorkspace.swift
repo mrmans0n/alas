@@ -37,10 +37,13 @@ struct NativePeerWorkspace: Equatable {
         case file(path: String)
         /// Served over the host channel only, as the stash was listed.
         case stashDiff(path: String, stash: HostStashRef)
+        /// How `path` changed since a checkpoint; served over the host channel only.
+        case checkpointDiff(path: String, checkpointID: CheckpointID)
 
         var path: String {
             switch self {
-            case .diff(let path, _), .commitDiff(let path, _), .file(let path), .stashDiff(let path, _): path
+            case .diff(let path, _), .commitDiff(let path, _), .file(let path), .stashDiff(let path, _),
+                 .checkpointDiff(let path, _): path
             }
         }
     }

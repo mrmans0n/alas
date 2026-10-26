@@ -241,7 +241,8 @@ final class NativePeerHosts {
         )
         let result = await answer(
             request, served: served, serverId: serverId, timeout: .seconds(120),
-            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage)
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            notFound: Self.checkpointGone
         ) { if case .done = $0 { () } else { nil } }
         switch result {
         case .success: return nil
@@ -316,12 +317,12 @@ final class NativePeerHosts {
             .commitDetails(worktree: Self.ref(worktree), sha: sha),
             served: servesCommitEdit(serverId: serverId), serverId: serverId,
             unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
-            showsInvalidRequest: true, notFound: Self.commitGoneMessage
+            showsInvalidRequest: true, notFound: Self.commitGone
         ) { if case .commitDetails(let details) = $0 { details } else { nil } }
     }
 
     /// The commit editor's copy for a commit the host no longer has.
-    private static let commitGoneMessage = "This commit is no longer on the host. Refresh and try again."
+    private static let commitGone = (what: "commit ", message: "This commit is no longer on the host. Refresh and try again.")
 
     /// Rewrites commit `sha` above the fold of `comparisonMode`, as the commit editor does.
     func editCommit(
@@ -336,8 +337,73 @@ final class NativePeerHosts {
         return await answer(
             request, served: servesCommitEdit(serverId: serverId), serverId: serverId, timeout: .seconds(120),
             unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
-            notFound: Self.commitGoneMessage
+            notFound: Self.commitGone
         ) { if case .commitEdited(let result) = $0 { result } else { nil } }
+    }
+
+    /// Whether `serverId` lists, inspects, takes, deletes and restores its worktrees' checkpoints.
+    func servesCheckpoints(serverId: String) -> Bool {
+        servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesCheckpointsV1)
+    }
+
+    /// The copy for a checkpoint the host no longer lists.
+    private static let checkpointGone = (what: "checkpoint ", message: "This checkpoint is no longer on the host. Refresh and try again.")
+
+    /// `worktree`'s checkpoints, newest first. Nil for a refusal or no answer.
+    func checkpoints(in worktree: PeerHostWorktree, serverId: String) async -> CheckpointCatalogSnapshot? {
+        guard servesCheckpoints(serverId: serverId), let channel = channels[serverId],
+              case .checkpoints(let catalog) = await channel.request(.listCheckpoints(worktree: Self.ref(worktree)))
+        else { return nil }
+        return catalog
+    }
+
+    func checkpointManifest(
+        _ id: CheckpointID, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<WorktreeCheckpointManifest, NativePeerReviewGitClientError> {
+        await answer(
+            .checkpointManifest(worktree: Self.ref(worktree), id: id),
+            served: servesCheckpoints(serverId: serverId), serverId: serverId,
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            notFound: Self.checkpointGone
+        ) { if case .checkpointManifest(let manifest) = $0 { manifest } else { nil } }
+    }
+
+    func checkpointDiff(
+        _ id: CheckpointID, path: String, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<HostDiff, NativePeerReviewGitClientError> {
+        await answer(
+            .checkpointDiff(worktree: Self.ref(worktree), id: id, path: path),
+            served: servesCheckpoints(serverId: serverId), serverId: serverId,
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            showsInvalidRequest: true, notFound: Self.checkpointGone
+        ) { if case .diff(let diff) = $0 { diff } else { nil } }
+    }
+
+    /// What restoring `groupIDs` of checkpoint `id` would change; nil `groupIDs` selects every group.
+    func checkpointRestorePreview(
+        _ id: CheckpointID, groupIDs: Set<UUID>?, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<CheckpointRestorePreview, NativePeerReviewGitClientError> {
+        await answer(
+            .checkpointRestorePreview(worktree: Self.ref(worktree), id: id, groupIDs: groupIDs),
+            served: servesCheckpoints(serverId: serverId), serverId: serverId,
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            notFound: Self.checkpointGone
+        ) { if case .checkpointRestorePreview(let preview) = $0 { preview } else { nil } }
+    }
+
+    /// Takes a manual checkpoint named `label`. Deleting and restoring one go through `mutate`.
+    func createCheckpoint(
+        label: String, in worktree: PeerHostWorktree, serverId: String
+    ) async -> Result<WorktreeCheckpointManifest, NativePeerReviewGitClientError> {
+        let request = HostRequest.mutateWorktree(
+            worktree: Self.ref(worktree), branch: worktree.snapshot.worktree.branch, change: .createCheckpoint(label: label)
+        )
+        // Capturing reads every changed file on the host.
+        return await answer(
+            request, served: servesCheckpoints(serverId: serverId), serverId: serverId, timeout: .seconds(120),
+            unavailable: NativePeerReviewGitClientError(message: FederatedSessionsProvider.peerUnavailableMessage),
+            showsInvalidRequest: true
+        ) { if case .checkpointManifest(let manifest) = $0 { manifest } else { nil } }
     }
 
     /// Whether `serverId` lists, reads and changes its worktrees' draft reviews.
@@ -438,14 +504,14 @@ final class NativePeerHosts {
     private func answer<Value>(
         _ request: HostRequest, served: Bool, serverId: String, timeout: Duration? = nil,
         unavailable: NativePeerReviewGitClientError = .unavailable, showsInvalidRequest: Bool = false,
-        notFound: String? = nil, reply: (HostResponse) -> Value?
+        notFound: (what: String, message: String)? = nil, reply: (HostResponse) -> Value?
     ) async -> Result<Value, NativePeerReviewGitClientError> {
         guard served, let channel = channels[serverId] else { return .failure(unavailable) }
         let response = await channel.request(request, timeout: timeout)
         if case .failure(let error) = response {
-            // Only a missing commit: a missing worktree keeps its own message.
-            if let notFound, case .notFound(let what) = error, what.hasPrefix("commit ") {
-                return .failure(NativePeerReviewGitClientError(message: notFound))
+            // Only the missing item: a missing worktree keeps its own message.
+            if let notFound, case .notFound(let what) = error, what.hasPrefix(notFound.what) {
+                return .failure(NativePeerReviewGitClientError(message: notFound.message))
             }
             if showsInvalidRequest, case .invalidRequest(let reason) = error {
                 return .failure(NativePeerReviewGitClientError(message: reason))
