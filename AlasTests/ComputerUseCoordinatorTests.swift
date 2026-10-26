@@ -319,6 +319,32 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.events == ["wake:AXEnhancedUserInterface", "restore:AXEnhancedUserInterface"])
     }
 
+    /// A ref whose element reads otherwise straight after an inspect (a search field the page
+    /// turned into a combo box) is looked for once in the window: the very same element is used,
+    /// as it reads now; a lookalike in its place leaves the ref stale.
+    @Test(arguments: [(1, true), (7, false)])
+    func aRefThatChangedIsKeptOnlyWhenItIsTheSameElement(handleNow: Int, proceeds: Bool) async throws {
+        let recorder = Recorder()
+        let inspected = Recorder()
+        var system = Self.system(recorder: recorder)
+        // The field now reads as a combo box, so the ref's check fails.
+        system.elementMatches = { _, _, role, _ in role == "AXComboBox" }
+        system.axTree = { _, _, _, _ in
+            let field = inspected.events.isEmpty
+                ? ComputerUseAXNode(role: "AXSearchField", title: "Search", handle: 1)
+                : ComputerUseAXNode(role: "AXComboBox", title: "Search", handle: handleNow)
+            return (ComputerUseAXNode(role: "AXWindow", children: [field], handle: 0), nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
+        inspected.recordEvent("inspected")
+        let result = await f.coordinator.perform(.init(action: .type, windowID: 1, ref: "e2", text: "rome"), sessionID: "s")
+        #expect(recorder.inputs.isEmpty == !proceeds)
+        if !proceeds {
+            #expect(result == .error("computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."))
+        }
+    }
+
     /// A frame an app reports as NaN can't be written as JSON, and writing it would end the app:
     /// it reads as zeros.
     @Test func aNaNFrameFromTheAppReadsAsZeros() async throws {

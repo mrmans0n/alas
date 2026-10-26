@@ -915,6 +915,8 @@ final class ComputerUseCoordinator {
         }
         try checkStillActive(context)
         try await recheckRefs(of: command, in: window, toWindow: toWindow, context: context)
+        // The re-check may have taken how the element reads now.
+        if let ref = command.ref, let element = snapshot(of: window, context: context)?.refs[ref] { targetRef = element }
         // The prompt may have come up during the takeover wait.
         if await system.credentialPrompt(window.app.pid) { throw Refusal(Message.credentialPrompt(window.app)) }
         try checkStillActive(context)
@@ -1342,14 +1344,31 @@ final class ComputerUseCoordinator {
 
     /// An element behind a ref must still read as what the agent was shown.
     /// `toRef` is in `toWindow`'s snapshot when the drag drops into another window.
+    /// One that reads otherwise now (a page turned a search field into a combo box for its
+    /// suggestions) is looked for once in the window as it is: the very same element there is
+    /// still the one the agent was shown, and the ref takes how it reads now. A lookalike never is.
     private func recheckRefs(
         of command: ComputerUseCommand, in window: ComputerUseWindow, toWindow: ComputerUseWindow?, context: CallContext
     ) async throws {
         for (ref, window) in [(command.ref, window), (command.toRef, toWindow ?? window)] {
             guard let ref else { continue }
-            guard let snapshot = snapshot(of: window, context: context), let element = snapshot.refs[ref],
-                  await system.elementMatches(snapshot.handles, element.handle, element.role, element.title)
+            guard let snapshot = snapshot(of: window, context: context), let element = snapshot.refs[ref]
             else { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
+            if await system.elementMatches(snapshot.handles, element.handle, element.role, element.title) { continue }
+            let tree = try await system.axTree(
+                window, ComputerUseCommand.maxDepthLimit, Self.queryNodeBudget, ComputerUseAXReader.deadline)
+            try checkStillActive(context)
+            func same(_ node: ComputerUseAXNode) -> ComputerUseAXNode? {
+                if let handle = node.handle, system.sameElement(snapshot.handles, element.handle, tree.handles, handle) {
+                    return node
+                }
+                return node.children.lazy.compactMap(same).first
+            }
+            guard let now = same(tree.root) else { throw Refusal(Message.stale(ref, windowID: window.windowID)) }
+            updateSnapshot(of: window, context: context) {
+                $0.refs[ref]?.role = now.role
+                $0.refs[ref]?.title = now.title
+            }
         }
     }
 
