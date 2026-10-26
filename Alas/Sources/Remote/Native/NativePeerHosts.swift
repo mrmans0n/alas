@@ -181,6 +181,32 @@ final class NativePeerHosts {
         }
     }
 
+    /// Whether `serverId` archives its sessions.
+    func canArchiveSessions(serverId: String) -> Bool {
+        channels[serverId] != nil && supports(serverId, HostProtocolCapability.sessionsV1)
+    }
+
+    /// Archives host session `sessionID`. The host's next session list then
+    /// drops its tab; only a refusal is shown here.
+    func archiveSession(_ sessionID: String, serverId: String) {
+        guard canArchiveSessions(serverId: serverId), let channel = channels[serverId] else { return }
+        let showError = showError
+        Task {
+            switch await channel.request(.archiveSession(sessionID: sessionID)) {
+            case .done:
+                break
+            case .failure(.session(.notWriter)):
+                showError("Archive Failed", "Another device is driving this session.")
+            case .failure(.session(.notFound)):
+                showError("Archive Failed", "The host no longer lists this session.")
+            case .failure(let error):
+                showError("Archive Failed", PeerWorktreeRemoval.message(for: error))
+            default:
+                showError("Archive Failed", "The host sent an unexpected reply.")
+            }
+        }
+    }
+
     /// Whether `worktree`'s branch can be renamed, on a host that serves it.
     func canRenameBranch(_ worktree: PeerHostWorktree, serverId: String) -> Bool {
         channels[serverId] != nil && supports(serverId, HostProtocolCapability.worktreesRenameBranchV1)

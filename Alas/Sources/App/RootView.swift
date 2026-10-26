@@ -386,7 +386,8 @@ struct RootView: View {
                         },
                         onRenameSession: { state.renamePeerSessionTab($0) },
                         onCopySessionMarkdown: { state.copyPeerSessionMarkdown($0) },
-                        onSaveSessionMarkdown: { state.exportPeerSessionMarkdown($0) }
+                        onSaveSessionMarkdown: { state.exportPeerSessionMarkdown($0) },
+                        onArchiveSession: { state.archivePeerSession($0) }
                     )
                 }
                 peerCenterContent(client)

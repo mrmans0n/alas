@@ -8970,6 +8970,23 @@ final class AppState {
         client.renameSession(session.id, title: title)
     }
 
+    /// Archives a peer session on its host after asking: it stops the agent
+    /// and hides the session, and nothing on this Mac brings it back.
+    func archivePeerSession(_ session: RemoteSessionSummary) {
+        guard let client = nativePeerSessions, let hosts = client.hosts,
+              let id = RemoteFederatedSessionID.parse(session.id, peers: Set(client.snapshot.groups.map(\.serverId))),
+              hosts.canArchiveSessions(serverId: id.serverId) else { return }
+        let peerName = client.snapshot.groups.first { $0.serverId == id.serverId }?.name ?? "the host"
+        let alert = NSAlert()
+        alert.messageText = "Archive “\(session.title)”?"
+        alert.informativeText = "This stops the session on \(peerName) and removes it from the list."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Archive")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        hosts.archiveSession(id.sessionId, serverId: id.serverId)
+    }
+
     /// Copy and Save Session as Markdown for a peer session, whose
     /// transcript is only here while its tab is selected.
     func copyPeerSessionMarkdown(_ session: RemoteSessionSummary) {
