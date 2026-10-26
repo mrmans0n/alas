@@ -106,7 +106,10 @@ extension GitService {
         var files: [ChangedFile] = []
         var seen = Set<String>()
         let parsedNameStatus = GitService.parseNameStatusZOutput(nameStatus.stdout)
-        for path in parsedNameStatus.ordered {
+        // Without an index refresh, name-status lists a file whose stat info
+        // is stale but whose content is not as `M`; numstat leaves it out
+        // and keeps real changes, mode-only and pure renames included.
+        for path in parsedNameStatus.ordered where counts.add[path] != nil {
             guard seen.insert(path).inserted else { continue }
             let letter = parsedNameStatus.status[path] ?? "M"
             let renameFrom = parsedNameStatus.original[path]
@@ -160,8 +163,8 @@ extension GitService {
     }
 
     /// Badge-only variant of `changedFilesAgainstRef`: just `path` + status
-    /// letter (+ rename source), skipping the `numstat` call AND
-    /// per-untracked-file line counting entirely.
+    /// letter (+ rename source), skipping the line counts (its `numstat`
+    /// only filters stat-only entries) AND per-untracked-file line counting.
     ///
     /// `remoteFileTree` only needs a badge letter per path (the Files tab's
     /// `RemoteFileNode` has no add/del or conflict fields at all) — unlike
@@ -198,11 +201,19 @@ extension GitService {
         guard nameStatus.exitCode == 0 else {
             throw ProcessError.nonZeroExit(nameStatus.exitCode, nameStatus.stderr)
         }
+        // Only to drop stat-only entries, as in `changedFilesAgainstRef`.
+        let numstat = try await Process.git(
+            ["-c", "core.quotePath=false", "-c", "diff.autoRefreshIndex=false", "diff", "--numstat", "-z", "-M", "-C", ref, "--"],
+            cwd: worktreePath)
+        guard numstat.exitCode == 0 else {
+            throw ProcessError.nonZeroExit(numstat.exitCode, numstat.stderr)
+        }
+        let changed = GitService.parseNumstatZOutput(numstat.stdout).add
 
         var files: [ChangedFile] = []
         var seen = Set<String>()
         let parsedNameStatus = GitService.parseNameStatusZOutput(nameStatus.stdout)
-        for path in parsedNameStatus.ordered {
+        for path in parsedNameStatus.ordered where changed[path] != nil {
             guard seen.insert(path).inserted else { continue }
             let letter = parsedNameStatus.status[path] ?? "M"
             files.append(ChangedFile(

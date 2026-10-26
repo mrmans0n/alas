@@ -44,10 +44,18 @@ struct GitServiceBatchedDiffTests {
         let index = repo.appendingPathComponent(".git/index")
         let before = try Data(contentsOf: index)
 
-        _ = try await GitService().status(worktreePath: repo)
-        _ = try await GitService().changedFilesAgainstRef(worktreePath: repo, ref: "HEAD")
+        let service = GitService()
+        _ = try await service.status(worktreePath: repo)
+        // The copy's stale stat info is not a change.
+        #expect(try await service.changedFilesAgainstRef(worktreePath: repo, ref: "HEAD").isEmpty)
+        #expect(try await service.changedFileBadges(worktreePath: repo, ref: "HEAD").isEmpty)
 
         #expect(try Data(contentsOf: index) == before)
+
+        // A mode-only change still is.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: repo.appendingPathComponent(".alas/scripts/hello.sh").path)
+        #expect(try await service.changedFilesAgainstRef(worktreePath: repo, ref: "HEAD").map(\.path) == [".alas/scripts/hello.sh"])
+        #expect(try await service.changedFileBadges(worktreePath: repo, ref: "HEAD").map(\.path) == [".alas/scripts/hello.sh"])
     }
 
     @Test func treeDiffsByFileMatchesPerFileRangeDiffs() async throws {
