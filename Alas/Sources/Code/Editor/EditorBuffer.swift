@@ -31,6 +31,142 @@ struct RemoteConflictCheckCoalescer {
     }
 }
 
+/// How an EditorBuffer reads, saves and watches a file that is not on this Mac's disk.
+struct EditorRemoteBackend {
+    /// The SSH host: its status, LSP, Save As and move. Nil for a paired host's file, which has none of them.
+    let sshHost: String?
+    /// The file's bytes and baseline mtime, checked inside the worktree first.
+    let read: @MainActor (_ relativePath: String) async throws -> RemoteReadResult
+    /// Whether the file moved on from the buffer's baseline `mtime`.
+    let probe: @MainActor (_ relativePath: String, _ baseline: Date) async throws -> EditorRemoteProbe
+    /// The file's current mtime, nil once gone: Keep mine's new baseline.
+    let currentMtime: @MainActor (_ relativePath: String) async throws -> Date?
+    /// Writes `content` if the file is still at `expectedMtime` with `expectedContent`; both nil overwrite.
+    /// Returns the new mtime; a moved file throws `RemoteFileAccessError.saveConflict`.
+    let write: @MainActor (_ relativePath: String, _ content: String, _ expectedMtime: Date?, _ expectedContent: String?) async throws -> Date
+    /// Until the returned watch stops: `observed` runs synchronously on each watcher event,
+    /// then `check` (awaited by timed checks).
+    let watch: @MainActor (_ relativePath: String, _ observed: @escaping @MainActor () -> Void,
+                           _ check: @escaping @MainActor () async -> Void) -> EditorRemoteWatch
+}
+
+enum EditorRemoteProbe: Equatable { case unchanged, changed, deleted }
+
+struct EditorRemoteWatch { let stop: @MainActor () -> Void }
+
+extension EditorRemoteBackend {
+    private static let remoteConflictPollNanos: UInt64 = 15 * 1_000_000_000
+    private static let remoteHelperSafetyNetNanos: UInt64 = 5 * 60 * 1_000_000_000
+
+    /// Today's SSH behaviour, moved verbatim.
+    @MainActor static func ssh(host: String, worktreeRoot: URL) -> Self {
+        Self(
+            sshHost: host,
+            read: { relativePath in
+                let path = worktreeRoot.appendingPathComponent(relativePath).path
+                if let hook = EditorBuffer.remoteReadResultForTesting {
+                    return try await hook(host, path)
+                }
+                try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
+                return try await RemoteFileAccess.read(host: host, path: path)
+            },
+            probe: { relativePath, baseline in
+                let path = worktreeRoot.appendingPathComponent(relativePath).path
+                guard let mtime = try await RemoteFileAccess.mtime(host: host, path: path) else { return .deleted }
+                return mtime > baseline ? .changed : .unchanged
+            },
+            currentMtime: { relativePath in
+                try await RemoteFileAccess.mtime(host: host, path: worktreeRoot.appendingPathComponent(relativePath).path)
+            },
+            write: { relativePath, content, expectedMtime, expectedContent in
+                let path = worktreeRoot.appendingPathComponent(relativePath).path
+                try await RemotePathContainment.verifyRemoteContainment(host: host, path: path, worktreeRoot: worktreeRoot.path)
+                return try await RemoteFileAccess.write(
+                    host: host,
+                    path: path,
+                    content: content,
+                    expectedMtime: expectedMtime,
+                    expectedContent: expectedContent
+                )
+            },
+            watch: { relativePath, observed, check in
+                let watch = SSHWatch()
+                watch.start(
+                    host: host,
+                    fileURL: worktreeRoot.appendingPathComponent(relativePath),
+                    observed: observed,
+                    check: check
+                )
+                return EditorRemoteWatch(stop: { watch.stop() })
+            }
+        )
+    }
+
+    /// The helper session plus the adaptive conflict poll. The returned watch's
+    /// `stop` owns it; the poll and session callbacks only hold it weakly.
+    @MainActor
+    private final class SSHWatch {
+        private var pollTask: Task<Void, Never>?
+        private var helperSession: RemoteHelperWatchSession?
+
+        func start(
+            host: String,
+            fileURL: URL,
+            observed: @escaping @MainActor () -> Void,
+            check: @escaping @MainActor () async -> Void
+        ) {
+            let watchedRoot = fileURL.deletingLastPathComponent()
+            let fileWatchMatcher = RemoteHelperFileWatchMatcher(
+                targetURL: fileURL,
+                watchedRootURL: watchedRoot
+            )
+            let session = RemoteHelperWatchSession(
+                host: host,
+                root: watchedRoot.path,
+                kinds: [.files]
+            )
+            session.onEvent = { event in
+                guard event.kind == .files else { return }
+                guard fileWatchMatcher.matches(event: event) else { return }
+                observed()
+                Task { @MainActor in await check() }
+            }
+            session.onAvailabilityChanged = { [weak self] _ in
+                self?.startPolling(check: check)
+            }
+            helperSession = session
+            session.start()
+            startPolling(check: check)
+        }
+
+        private func startPolling(check: @escaping @MainActor () async -> Void) {
+            pollTask?.cancel()
+            pollTask = Task { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    let interval = self?.helperSession?.isAvailable == true
+                        ? EditorRemoteBackend.remoteHelperSafetyNetNanos
+                        : EditorRemoteBackend.remoteConflictPollNanos
+                    do {
+                        try await Task.sleep(nanoseconds: interval)
+                    } catch {
+                        return
+                    }
+                    guard let self, !Task.isCancelled else { return }
+                    await check()
+                    helperSession?.retryIfNeeded()
+                }
+            }
+        }
+
+        func stop() {
+            pollTask?.cancel()
+            pollTask = nil
+            helperSession?.stop()
+            helperSession = nil
+        }
+    }
+}
+
 struct RemoteHelperFileWatchMatcher {
     private let targetPath: String
     private let targetRelativePath: String?
@@ -299,7 +435,7 @@ final class EditorBuffer {
     func endWorkspaceEditMutation() { workspaceEditMutationInFlight = false }
 
     func refreshWorkspaceEditDiskMetadata(modifiedAt: Date?) {
-        if remoteHost != nil {
+        if remoteBackend != nil {
             if let modifiedAt { originalMtime = modifiedAt }
         } else {
             updateOriginalMtime(from: absoluteFileURL)
@@ -415,18 +551,13 @@ final class EditorBuffer {
     private var watcherFD: Int32 = -1
     private var watcherDeliveryGeneration = 0
     @ObservationIgnored
-    private let remoteHost: String?
+    private let remoteBackend: EditorRemoteBackend?
+    private var remoteHost: String? { remoteBackend?.sshHost }
     var isRemote: Bool { remoteHost != nil }
     @ObservationIgnored
-    private var remotePollTask: Task<Void, Never>?
-    @ObservationIgnored
-    private var remoteHelperSession: RemoteHelperWatchSession?
+    private var remoteWatch: EditorRemoteWatch?
     @ObservationIgnored
     private var remoteConflictChecks = RemoteConflictCheckCoalescer()
-    @ObservationIgnored
-    private static let remoteConflictPollNanos: UInt64 = 15 * 1_000_000_000
-    @ObservationIgnored
-    private static let remoteHelperSafetyNetNanos: UInt64 = 5 * 60 * 1_000_000_000
     @ObservationIgnored
     private var remoteLoadGeneration = 0
     @ObservationIgnored
@@ -610,17 +741,17 @@ final class EditorBuffer {
         )
     }
 
-    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false, navigationResolvedRoot: URL? = nil) {
+    private init(worktreeRoot: URL, relativePath: String, isExternal: Bool, store: EditorBufferStore?, worktreeId: String?, tabId: String?, restoreEnabled: Bool, lsp: WorkspaceLSPManager?, loadSynchronously: Bool = false, checkConflictOnRestore: Bool = false, externalEditable: Bool = false, navigationResolvedRoot: URL? = nil, remoteBackend: EditorRemoteBackend? = nil) {
         self.worktreeRoot = worktreeRoot
         self.relativePath = relativePath
         self.isExternal = isExternal
         self.externalEditable = externalEditable
-        let remoteHost = RemoteHostRegistry.shared.host(
+        let remoteBackend = remoteBackend ?? RemoteHostRegistry.shared.host(
             forPath: worktreeRoot.appendingPathComponent(relativePath).path
-        )
-        self.remoteHost = remoteHost
-        self.navigationResolvedRoot = remoteHost == nil ? navigationResolvedRoot : nil
-        self.localSaveRoot = remoteHost == nil ? navigationResolvedRoot ?? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
+        ).map { EditorRemoteBackend.ssh(host: $0, worktreeRoot: worktreeRoot) }
+        self.remoteBackend = remoteBackend
+        self.navigationResolvedRoot = remoteBackend == nil ? navigationResolvedRoot : nil
+        self.localSaveRoot = remoteBackend == nil ? navigationResolvedRoot ?? worktreeRoot.resolvingSymlinksInPath().standardizedFileURL : nil
         self.storage = NSTextStorage()
         self.store = store
         self.worktreeId = worktreeId
@@ -926,8 +1057,8 @@ final class EditorBuffer {
 
     func revert() {
         invalidateComposition()
-        if let remoteHost {
-            beginRemoteLoad(host: remoteHost, replacingDirty: true)
+        if remoteBackend != nil {
+            beginRemoteLoad(replacingDirty: true)
             discardSnapshot()
             handleEdit(edit: nil)
             return
@@ -940,9 +1071,8 @@ final class EditorBuffer {
 
     func startWatching() {
         stopWatching()
-        if let remoteHost {
-            startRemoteHelperWatching(host: remoteHost)
-            startRemoteConflictPolling()
+        if remoteBackend != nil {
+            startRemoteWatching()
             return
         }
         let path = worktreeRoot.appendingPathComponent(relativePath).path
@@ -985,8 +1115,8 @@ final class EditorBuffer {
     }
 
     func startWatchingIfNeeded() {
-        if remoteHost != nil {
-            guard remoteHelperSession == nil else { return }
+        if remoteBackend != nil {
+            guard remoteWatch == nil else { return }
         } else {
             guard watcherSource == nil else { return }
         }
@@ -997,84 +1127,47 @@ final class EditorBuffer {
         // A canceled source may already have queued a MainActor callback.
         // It belongs to the old inode/path and must not affect a rebound buffer.
         watcherDeliveryGeneration &+= 1
-        remotePollTask?.cancel()
-        remotePollTask = nil
-        remoteHelperSession?.stop()
-        remoteHelperSession = nil
+        remoteWatch?.stop()
+        remoteWatch = nil
         watcherSource?.cancel()
         watcherSource = nil
         watcherFD = -1
         cancelMoveLookup()
     }
 
-    private func startRemoteConflictPolling() {
-        guard let host = remoteHost else { return }
-        remotePollTask?.cancel()
-        remotePollTask = Task { @MainActor [weak self] in
-            while !Task.isCancelled {
-                let interval = self?.remoteHelperSession?.isAvailable == true
-                    ? Self.remoteHelperSafetyNetNanos
-                    : Self.remoteConflictPollNanos
-                do {
-                    try await Task.sleep(nanoseconds: interval)
-                } catch {
-                    return
-                }
-                guard let self, !Task.isCancelled else { return }
-                await checkRemoteConflict(host: host)
-                remoteHelperSession?.retryIfNeeded()
-            }
-        }
+    private func startRemoteWatching() {
+        guard let remoteBackend, remoteWatch == nil else { return }
+        remoteWatch = remoteBackend.watch(
+            relativePath,
+            { [weak self] in self?.fileWatchGeneration &+= 1 },
+            { [weak self] in await self?.checkRemoteConflict() }
+        )
     }
 
-    private func startRemoteHelperWatching(host: String) {
-        guard remoteHelperSession == nil else { return }
-        let watchedRoot = absoluteFileURL.deletingLastPathComponent()
-        let fileWatchMatcher = RemoteHelperFileWatchMatcher(
-            targetURL: absoluteFileURL,
-            watchedRootURL: watchedRoot
-        )
-        let session = RemoteHelperWatchSession(
-            host: host,
-            root: watchedRoot.path,
-            kinds: [.files]
-        )
-        session.onEvent = { [weak self] event in
-            guard let self, event.kind == .files else { return }
-            guard fileWatchMatcher.matches(event: event) else { return }
-            self.fileWatchGeneration &+= 1
-            Task { @MainActor in await self.checkRemoteConflict(host: host) }
-        }
-        session.onAvailabilityChanged = { [weak self] _ in
-            self?.startRemoteConflictPolling()
-        }
-        remoteHelperSession = session
-        session.start()
-    }
-
-    private func checkRemoteConflict(host: String) async {
+    private func checkRemoteConflict() async {
         guard remoteConflictChecks.beginOrMarkPending() else { return }
         repeat {
-            await checkRemoteConflictOnce(host: host)
+            await checkRemoteConflictOnce()
         } while remoteConflictChecks.finishCheck()
     }
 
-    private func checkRemoteConflictOnce(host: String) async {
-        guard !remoteSaveInFlight else { return }
+    private func checkRemoteConflictOnce() async {
+        guard !remoteSaveInFlight, let remoteBackend else { return }
         do {
-            guard let mtime = try await RemoteFileAccess.mtime(host: host, path: absoluteFileURL.path) else {
+            let probe = try await remoteBackend.probe(relativePath, originalMtime)
+            guard probe != .deleted else {
                 if dirty { conflict = .deletedOnDisk }
                 return
             }
-            RemoteHostStatusStore.shared.reportSuccess(host: host)
-            guard mtime > originalMtime else { return }
+            if let host = remoteHost { RemoteHostStatusStore.shared.reportSuccess(host: host) }
+            guard probe == .changed else { return }
             if dirty {
                 conflict = .changedOnDisk
             } else {
                 reloadAfterExternalChange()
             }
         } catch {
-            if case .connectionFailed = error as? RemoteFileAccessError {
+            if let host = remoteHost, case .connectionFailed = error as? RemoteFileAccessError {
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }
         }
@@ -1111,7 +1204,7 @@ final class EditorBuffer {
     }
 
     private func startMoveLookupForMissingFile(at missingURL: URL) {
-        guard remoteHost == nil else { return }
+        guard remoteBackend == nil else { return }
         guard moveLookupTask == nil else { return }
         guard let originalIdentity else {
             markDeletedConflictIfNeeded()
@@ -1251,21 +1344,22 @@ final class EditorBuffer {
     }
 
     func resolveConflictKeepingMine() {
-        if let host = remoteHost {
+        if let remoteBackend {
+            let host = remoteHost
             remoteOverwriteAfterConflict = true
             let mtimeProbeGeneration = remoteSaveGeneration
-            let path = absoluteFileURL.path
+            let path = relativePath
             Task { @MainActor [weak self] in
                 do {
-                    if let mtime = try await RemoteFileAccess.mtime(host: host, path: path) {
+                    if let mtime = try await remoteBackend.currentMtime(path) {
                         guard let self,
                               self.remoteSaveGeneration == mtimeProbeGeneration,
                               self.remoteOverwriteAfterConflict else { return }
                         self.originalMtime = mtime
                     }
-                    RemoteHostStatusStore.shared.reportSuccess(host: host)
+                    if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
                 } catch {
-                    if case .connectionFailed = error as? RemoteFileAccessError {
+                    if let host, case .connectionFailed = error as? RemoteFileAccessError {
                         RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
                     }
                 }
@@ -1304,7 +1398,7 @@ final class EditorBuffer {
         case .clean, .ready:
             break
         }
-        if remoteHost != nil {
+        if remoteBackend != nil {
             throw SaveError.remoteSaveRequiresAwait
         }
         try saveLocal()
@@ -1323,8 +1417,8 @@ final class EditorBuffer {
         case .clean, .ready:
             break
         }
-        if let host = remoteHost {
-            try await saveRemote(host: host)
+        if let remoteBackend {
+            try await saveRemote(backend: remoteBackend)
             return
         }
         try saveLocal()
@@ -1412,13 +1506,14 @@ final class EditorBuffer {
 
     /// Remote writes must not block the main actor. Keep the buffer dirty and
     /// its hot-exit snapshot intact until the SSH write is confirmed.
-    private func saveRemote(host: String) async throws {
+    private func saveRemote(backend: EditorRemoteBackend) async throws {
+        let host = remoteHost
         remoteSaveGeneration += 1
         let generation = remoteSaveGeneration
         let canonical = storage.string
         let serialized = lineEnding.normalize(canonical)
         var priorOriginalText = originalText
-        let path = absoluteFileURL.path
+        let path = relativePath
 
         do {
             while remoteSaveInFlight {
@@ -1432,18 +1527,16 @@ final class EditorBuffer {
                 remoteSaveInFlight = false
             }
 
-            try await verifyRemoteFileContained(host: host, path: path)
             priorOriginalText = originalText
             let baseline = originalMtime
             let shouldOverwriteConflict = remoteOverwriteAfterConflict
             let newMtime: Date
             do {
-                newMtime = try await RemoteFileAccess.write(
-                    host: host,
-                    path: path,
-                    content: serialized,
-                    expectedMtime: shouldOverwriteConflict ? nil : baseline,
-                    expectedContent: shouldOverwriteConflict
+                newMtime = try await backend.write(
+                    path,
+                    serialized,
+                    shouldOverwriteConflict ? nil : baseline,
+                    shouldOverwriteConflict
                         ? nil
                         : lineEnding.normalize(priorOriginalText)
                 )
@@ -1458,7 +1551,7 @@ final class EditorBuffer {
             guard remoteSaveGeneration == generation else {
                 originalText = canonical
                 originalMtime = newMtime
-                RemoteHostStatusStore.shared.reportSuccess(host: host)
+                if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
                 return
             }
             originalText = canonical
@@ -1466,9 +1559,9 @@ final class EditorBuffer {
             remoteOverwriteAfterConflict = false
             discardSnapshot()
             notifyDidSave(url: absoluteFileURL)
-            RemoteHostStatusStore.shared.reportSuccess(host: host)
+            if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
         } catch {
-            if case .connectionFailed = error as? RemoteFileAccessError {
+            if let host, case .connectionFailed = error as? RemoteFileAccessError {
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }
             rollbackRemoteSave(to: priorOriginalText, error: error)
@@ -1511,7 +1604,7 @@ final class EditorBuffer {
         try validateNavigationWriteTrust()
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
-        if remoteHost != nil { throw remotePathOperationError() }
+        if remoteBackend != nil { throw remotePathOperationError() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -1546,7 +1639,7 @@ final class EditorBuffer {
         try validateNavigationWriteTrust()
         guard !readOnly else { return }
         guard !isLoading else { throw SaveError.loadPending }
-        if remoteHost != nil { throw remotePathOperationError() }
+        if remoteBackend != nil { throw remotePathOperationError() }
         guard shouldFollowPathChange?(relativePath, newRelativePath) ?? true else {
             throw CocoaError(.fileWriteFileExists)
         }
@@ -1707,7 +1800,7 @@ final class EditorBuffer {
     }
 
     private func renameItem(at oldURL: URL, to newURL: URL) throws {
-        if remoteHost != nil { throw remotePathOperationError() }
+        if remoteBackend != nil { throw remotePathOperationError() }
         guard oldURL.path != newURL.path else { return }
         if Darwin.rename(oldURL.path, newURL.path) != 0 {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
@@ -1990,7 +2083,7 @@ final class EditorBuffer {
     }
 
     func saveConflictKeepingMineAwaitingRemote() async throws {
-        let isRemote = remoteHost != nil
+        let isRemote = remoteBackend != nil
         if isRemote {
             remoteOverwriteAfterConflict = true
         }
@@ -2142,9 +2235,9 @@ final class EditorBuffer {
         lineEnding = snap.lineEnding
         // Keep restored remote drafts dirty until async load/save establishes
         // whether the on-host baseline changed while the app was closed.
-        restoredRemoteSnapshot = remoteHost != nil
+        restoredRemoteSnapshot = remoteBackend != nil
         readOnly = false
-        if remoteHost == nil {
+        if remoteBackend == nil {
             updateOriginalFileIdentityAndPermissions(from: worktreeRoot.appendingPathComponent(snap.relativePath))
         }
     }
@@ -2250,7 +2343,7 @@ final class EditorBuffer {
     /// user's snapshot is "their version" against a moved baseline — show
     /// the conflict banner. Called on first display after restore.
     func checkForConflictOnRestore() {
-        if remoteHost != nil { return }
+        if remoteBackend != nil { return }
         let url = worktreeRoot.appendingPathComponent(relativePath)
         guard FileManager.default.fileExists(atPath: url.path) else {
             if dirty { conflict = .deletedOnDisk }
@@ -2282,14 +2375,16 @@ final class EditorBuffer {
         lineEnding = detected
     }
 
-    private func beginRemoteLoad(host: String, replacingDirty: Bool) {
+    private func beginRemoteLoad(replacingDirty: Bool) {
         if compositionOwner != nil {
-            compositionReload = { [weak self] in self?.beginRemoteLoad(host: host, replacingDirty: replacingDirty) }
+            compositionReload = { [weak self] in self?.beginRemoteLoad(replacingDirty: replacingDirty) }
             return
         }
+        guard let remoteBackend else { return }
+        let host = remoteHost
         remoteLoadGeneration &+= 1
         let generation = remoteLoadGeneration
-        let path = absoluteFileURL.path
+        let path = relativePath
         if replacingDirty {
             restoredRemoteSnapshot = false
         }
@@ -2300,15 +2395,10 @@ final class EditorBuffer {
             let result: RemoteReadResult
             do {
                 guard let self, self.remoteLoadGeneration == generation else { return }
-                if let hook = EditorBuffer.remoteReadResultForTesting {
-                    result = try await hook(host, path)
-                } else {
-                    try await self.verifyRemoteFileContained(host: host, path: path)
-                    result = try await RemoteFileAccess.read(host: host, path: path)
-                }
+                result = try await remoteBackend.read(path)
             } catch {
                 guard let self, self.remoteLoadGeneration == generation else { return }
-                if case .connectionFailed = error as? RemoteFileAccessError {
+                if let host, case .connectionFailed = error as? RemoteFileAccessError {
                     RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
                 }
                 if replacingDirty || !self.restoredRemoteSnapshot {
@@ -2319,7 +2409,7 @@ final class EditorBuffer {
             }
 
             guard let self, self.remoteLoadGeneration == generation else { return }
-            RemoteHostStatusStore.shared.reportSuccess(host: host)
+            if let host { RemoteHostStatusStore.shared.reportSuccess(host: host) }
             switch result {
             case .missing, .directory:
                 if replacingDirty || !self.restoredRemoteSnapshot {
@@ -2463,9 +2553,9 @@ final class EditorBuffer {
             }
             return
         }
-        if let remoteHost {
+        if remoteBackend != nil {
             let generation = beginAsyncLoad(hasPendingSnapshot: hasPendingSnapshot)
-            beginRemoteLoad(host: remoteHost, replacingDirty: replacingDirty)
+            beginRemoteLoad(replacingDirty: replacingDirty)
             if let pending = acceptLoadCompletion(generation: generation) {
                 completion(preservePendingEdits ? pending : nil)
             }
