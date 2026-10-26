@@ -166,7 +166,8 @@ struct CommitDiffView: View {
                 .foregroundColor(theme.color("del"))
                 .padding()
         } else if diff.hunks.isEmpty {
-            Text("No changes for \(path)")
+            // A rename, copy or mode change, or a host's image or binary note.
+            Text(diff.metadataSummary ?? "No changes for \(path)")
                 .foregroundColor(theme.color("fg-dim"))
                 .padding()
         } else if let displayModel {
