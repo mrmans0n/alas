@@ -930,6 +930,10 @@ struct HostProtocolServerTests {
             return
         }
         #expect(diff.hunks.count == 1)
+        // The host reads it bounded: past the cap, git's output is cut and reported.
+        let listed = try #require(await GitService().stashes(worktreePath: repo).first)
+        let file = try #require(await GitService().stashFiles(worktreePath: repo, stash: listed).first)
+        #expect(try await GitService().stashDiff(worktreePath: repo, stash: listed, file: file, maxOutputBytes: 8).truncated)
 
         let popped = try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .popStash(stash)))
         #expect(popped == .done)

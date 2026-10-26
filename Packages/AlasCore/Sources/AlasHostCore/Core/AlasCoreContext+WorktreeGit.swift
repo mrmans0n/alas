@@ -183,10 +183,11 @@ extension AlasCoreContext {
         guard let file = try await git.stashFiles(worktreePath: worktree.path, stash: listed).first(where: { $0.path == path }) else {
             throw HostError.invalidRequest(reason: "The stash has no file \(path).")
         }
-        let diff = try await Process.$gitLiteralPathspecs.withValue(true) {
-            try await git.stashDiff(worktreePath: worktree.path, stash: listed, file: file)
-        }
-        return HostDiff(diff)
+        let read = try await git.stashDiff(worktreePath: worktree.path, stash: listed, file: file,
+                                           maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+        var diff = HostDiff(read.diff)
+        diff.truncated = diff.truncated || read.truncated
+        return diff
     }
 
     /// The entry of `git stash list` equal to `stash`, else "This stash changed since it was listed. Refresh and try again."

@@ -184,25 +184,39 @@ extension GitService {
     }
 
     public func stashDiff(worktreePath: URL, stash: GitStash, file: GitStashFile) async throws -> ParsedDiff {
+        try await stashDiff(worktreePath: worktreePath, stash: stash, file: file, maxOutputBytes: .max).diff
+    }
+
+    /// A bounded read, as `diff(worktreePath:sha:file:originalPath:maxOutputBytes:)`;
+    /// `truncated` is whether git's output was cut at `maxOutputBytes`.
+    public func stashDiff(
+        worktreePath: URL, stash: GitStash, file: GitStashFile, maxOutputBytes: Int
+    ) async throws -> (diff: ParsedDiff, truncated: Bool) {
+        let bounded = maxOutputBytes != .max
+        // Bounded peer reads take paths literally and only inspect blobs, without invoking drivers.
+        let prefix = bounded ? ["--literal-pathspecs"] : []
+        let drivers = bounded ? ["--no-ext-diff", "--no-textconv"] : ["--no-ext-diff"]
         let pathspecs = [file.oldPath, file.path].compactMap(\.self)
         let stashRevision = stash.sha
-        var result = try await Process.git(
-            ["diff", "--no-ext-diff", "--no-color", "--find-renames", "--find-copies", "\(stashRevision)^1", stashRevision, "--"] + pathspecs,
-            cwd: worktreePath
+        var result = try await Process.gitCapped(
+            prefix + ["diff"] + drivers + ["--no-color", "--find-renames", "--find-copies", "\(stashRevision)^1", stashRevision, "--"] + pathspecs,
+            cwd: worktreePath, maxOutputBytes: maxOutputBytes
         )
         if result.exitCode == 0, result.stdout.isEmpty {
-            result = try await Process.git(
-                ["show", "--format=", "--no-ext-diff", "--no-color", "\(stashRevision)^3", "--", file.path],
-                cwd: worktreePath
+            result = try await Process.gitCapped(
+                prefix + ["show", "--format="] + drivers + ["--no-color", "\(stashRevision)^3", "--", file.path],
+                cwd: worktreePath, maxOutputBytes: maxOutputBytes
             )
         }
-        guard result.exitCode == 0 else {
+        guard result.stdoutTruncated || result.exitCode == 0 else {
             throw GitStashError.stderr(result.stderr, fallback: "Could not load stash diff.")
         }
 
-        return await Task.detached(priority: .userInitiated) {
-            DiffParser.parse(result.stdout)
+        let stdout = result.stdout
+        let diff = await Task.detached(priority: .userInitiated) {
+            DiffParser.parse(stdout)
         }.value
+        return (diff, result.stdoutTruncated)
     }
 
     public func applyStash(worktreePath: URL, stash: GitStash) async throws -> StashOperationResult {
