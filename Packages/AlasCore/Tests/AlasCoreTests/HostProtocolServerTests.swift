@@ -956,7 +956,8 @@ struct HostProtocolServerTests {
         #expect(existing.contentHash == WorktreeFileVersion.contentHash(of: Data()))
         // A file that appears after the probe is not replaced by a create either.
         await #expect(throws: POSIXError(.EEXIST)) {
-            try await RemoteWorktreeFileAccess.replaceAtomically(created, with: Data("x".utf8), creating: true)
+            let (folder, name) = try AlasCoreContext.writableFolder("new.txt", in: repo)
+            return try await RemoteWorktreeFileAccess.replaceAtomically(name, in: folder, with: Data("x".utf8), creating: true)
         }
         #expect(try Data(contentsOf: created).isEmpty)
         #expect(try FileManager.default.contentsOfDirectory(atPath: repo.path).allSatisfy { !$0.hasPrefix(".new.txt.alas-") })
@@ -1016,7 +1017,7 @@ struct HostProtocolServerTests {
 
     enum UnwritablePath: CaseIterable {
         case parentDirectory, absolute, nul, dotGit, dotGitCase, symlinkFinal, symlinkParentOutside, symlinkParentInside, directory, ignored,
-            colonPrefixed, nestedWorktree
+            colonPrefixed, nestedWorktree, parentSwappedAfterTheCheck
     }
 
     /// Paths come from the client: a save lands only on a regular file inside
@@ -1067,6 +1068,14 @@ struct HostProtocolServerTests {
             // Its own gate guards it, not this one's.
             path = "nested/wt/a.txt"
             #expect(try await Process.git(["worktree", "add", "-q", "-b", "nested", "nested/wt"], cwd: repo).exitCode == 0)
+        case .parentSwappedAfterTheCheck:
+            path = "dir/new.txt"
+            let dir = repo.appendingPathComponent("dir")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            fixture.core.beforeFileChange = {
+                try? FileManager.default.removeItem(at: dir)
+                try FileManager.default.createSymbolicLink(at: dir, withDestinationURL: outside)
+            }
         }
 
         let response = try await fixture.request(.writeFile(worktree: ref, path: path, text: "x", expected: nil))
@@ -1079,6 +1088,15 @@ struct HostProtocolServerTests {
         }
         if shape == .nestedWorktree {
             #expect(!FileManager.default.fileExists(atPath: repo.appendingPathComponent(path).path))
+        }
+        if shape == .parentSwappedAfterTheCheck {
+            // Real again for the check, swapped again before the folder is made.
+            let dir = repo.appendingPathComponent("dir")
+            try FileManager.default.removeItem(at: dir)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            #expect(try await fixture.request(.createFolder(worktree: ref, path: "dir/made"))
+                == .failure(error: .invalidRequest(reason: "The host does not edit dir/made.")))
+            #expect(try FileManager.default.contentsOfDirectory(atPath: outside.path) == ["inside.txt"])
         }
         // A read never hands out a version a save would refuse.
         if shape == .nestedWorktree { try Data("a\n".utf8).write(to: repo.appendingPathComponent(path)) }

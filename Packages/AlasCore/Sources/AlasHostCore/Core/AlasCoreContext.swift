@@ -55,6 +55,8 @@ public final class AlasCoreContext {
     /// keeps their project from being removed. The app's terminals don't
     /// block removal, so it leaves this nil.
     @ObservationIgnored @_spi(AppHost) public var hasHostConsoles: (@MainActor (_ worktreeIDs: Set<String>) -> Bool)?
+    /// Runs between a host file change's checks and the change, so a test can swap a folder in that window.
+    @ObservationIgnored var beforeFileChange: (@MainActor () throws -> Void)?
 
     /// The on-device text model's files and state.
     @ObservationIgnored public let localTextModelStore: LocalTextModelStore
