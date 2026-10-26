@@ -732,17 +732,40 @@ struct ComputerUseInputTests {
         #expect(ComputerUseWebContent.isChromium(bundleID: bundleID, acceptsManualAccessibility: manual) == chromium)
     }
 
-    /// Text written by AX into a document window is followed by a net-zero key edit, or a warning
-    /// where keys don't reach; never for a secure field, nor outside a document.
+    /// Text written by AX into a document's text is followed by a net-zero key edit, or a warning
+    /// where keys don't reach: a window with a document, or an untitled one's text area. Never for
+    /// a secure field, a single-line field, or a web page's text area outside a document.
     @Test(arguments: [
-        (true, false, true, ComputerUseTextCheck.DocumentNudge.keys),
-        (true, false, false, .warn),
-        (true, true, true, .none),
-        (true, true, false, .none),
-        (false, false, true, .none),
-        (false, false, false, .none),
+        (true, false, false, false, true, ComputerUseTextCheck.DocumentNudge.keys),
+        (true, false, false, false, false, .warn),
+        // An untitled document's text area.
+        (false, true, false, false, true, .keys),
+        (false, true, false, false, false, .warn),
+        // A single-line field outside a document.
+        (false, false, false, false, true, .none),
+        (false, true, true, false, true, .none),
+        (true, true, false, true, true, .none),
+        (false, true, false, true, false, .none),
     ])
-    func aDocumentIsMarkedEditedAfterAnAXWrite(inDocument: Bool, secure: Bool, keysReach: Bool, nudge: ComputerUseTextCheck.DocumentNudge) {
-        #expect(ComputerUseTextCheck.documentNudge(inDocument: inDocument, secure: secure, keysReach: keysReach) == nudge)
+    func aDocumentIsMarkedEditedAfterAnAXWrite(
+        inDocument: Bool, multiLine: Bool, inWebArea: Bool, secure: Bool, keysReach: Bool,
+        nudge: ComputerUseTextCheck.DocumentNudge
+    ) {
+        #expect(ComputerUseTextCheck.documentNudge(
+            inDocument: inDocument, multiLine: multiLine, inWebArea: inWebArea, secure: secure, keysReach: keysReach) == nudge)
+    }
+
+    /// The key edit counts only when the letter showed and the whole value settled back to what
+    /// was written; any other value is put back.
+    @Test(arguments: [
+        ("teh cat", true, String?("teh cat"), ComputerUseTextCheck.KeyEditCheck.marked),
+        ("teh cat", false, "teh cat", .notMarked),
+        // An autocorrection that kept the length.
+        ("teh cat", true, "the cat", .restore),
+        ("teh cat", false, "teh cata", .restore),
+        ("teh cat", true, nil, .restore),
+    ])
+    func aKeyEditThatChangedTheTextIsPutBack(before: String, sawLetter: Bool, after: String?, check: ComputerUseTextCheck.KeyEditCheck) {
+        #expect(ComputerUseTextCheck.keyEditCheck(before: before, sawLetter: sawLetter, after: after) == check)
     }
 }

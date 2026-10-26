@@ -846,9 +846,11 @@ extension LiveComputerUseSystem {
         case keyFirst
     }
 
-    /// After text went in by AX into a document window: a space and a backspace as key events, so
-    /// the app marks the document edited (`ComputerUseTextCheck.documentNudge`), or the warning
-    /// where they can't go, or moved the text. Never throws: the text is in either way.
+    /// After text went in by AX into a document's text: a letter and a backspace as key events at
+    /// the caret, so the app marks the document edited (`ComputerUseTextCheck.documentNudge`), or
+    /// the warning where they can't go. The whole value is checked against the one written after
+    /// each key, and put back by AX when the keys changed it (`ComputerUseTextCheck.keyEditCheck`).
+    /// Never throws: the text is in either way.
     private static func documentEdited(
         _ delivered: ComputerUseDelivered, by input: ComputerUseInput, in window: ComputerUseWindow, keys: EditKeys,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
@@ -861,41 +863,55 @@ extension LiveComputerUseSystem {
             after: at, app: app, keysReach: keys != .none, isCancelled: isCancelled), nudge != .none
         else { return delivered }
         var delivered = delivered
-        /// The edit, with the window key; true once the text reads as before it.
-        let edit: @Sendable () async -> Bool = {
+        /// The edit, with the window key; the warning to give, nil once the document is marked.
+        let edit: @Sendable () async -> String? = {
+            let notMarked = ComputerUseTextCheck.documentNotMarkedWarning
             guard nudge == .keys,
                   let before = try? await ComputerUseAXActions.prepareKeyEdit(
                       after: at, app: app, caretToEnd: replace, isCancelled: isCancelled),
                   interrupt() == nil,
-                  (try? ComputerUseInputPoster.postKey(CGKeyCode(kVK_Space), flags: [], pid: app.pid)) != nil,
-                  (try? ComputerUseInputPoster.postKey(CGKeyCode(kVK_Delete), flags: [], pid: app.pid)) != nil
-            else { return false }
-            return (try? await ComputerUseAXActions.awaitFieldText(before, after: at, app: app, isCancelled: isCancelled)) == true
+                  (try? ComputerUseInputPoster.postKey(CGKeyCode(kVK_ANSI_A), flags: [], pid: app.pid)) != nil
+            else { return notMarked }
+            // The backspace goes only once the letter shows: without it, it would take a written character.
+            let letter = await ComputerUseAXActions.awaitFieldValue(
+                after: at, app: app, stable: false, isCancelled: isCancelled) { $0 != nil && $0 != before }
+            var sawLetter = false
+            if letter.held, (try? ComputerUseInputPoster.postKey(CGKeyCode(kVK_Delete), flags: [], pid: app.pid)) != nil {
+                sawLetter = true
+            }
+            let settled = await ComputerUseAXActions.awaitFieldValue(
+                after: at, app: app, stable: true, isCancelled: isCancelled) { $0 == before }
+            switch ComputerUseTextCheck.keyEditCheck(before: before, sawLetter: sawLetter, after: settled.value) {
+            case .marked: return nil
+            case .notMarked: return notMarked
+            case .restore:
+                return await ComputerUseAXActions.restoreValue(before, after: at, app: app, isCancelled: isCancelled)
+                    ? ComputerUseTextCheck.documentRestoredWarning : ComputerUseTextCheck.documentNotRestoredWarning
+            }
         }
-        let marked: Bool
+        let warning: String?
         switch keys {
-        case .none: marked = false
-        case .keyWindow: marked = await edit()
+        case .none: warning = ComputerUseTextCheck.documentNotMarkedWarning
+        case .keyWindow: warning = await edit()
         case .keyFirst:
-            let result = try? await keyLocks.run(app.pid) { () -> (Bool, Bool) in
+            let result = try? await keyLocks.run(app.pid) { () -> (String?, Bool) in
                 var keying = KeyAttempt()
                 do {
                     try await makeKeyInBackground(window, &keying, interrupt: interrupt)
-                    let marked = keying.confirmed ? await edit() : false
+                    let warning = keying.confirmed ? await edit() : ComputerUseTextCheck.documentNotMarkedWarning
                     await keying.restoreUserKeyWindow(window)
-                    return (marked, keying.keyedInBackground)
+                    return (warning, keying.keyedInBackground)
                 } catch {
                     await keying.restoreUserKeyWindow(window)
                     if keying.keyedInBackground { defocusIfInBackground(window) }
-                    return (false, false)
+                    return (ComputerUseTextCheck.documentNotMarkedWarning, false)
                 }
             }
-            marked = result?.0 ?? false
+            warning = result.map { $0.0 } ?? ComputerUseTextCheck.documentNotMarkedWarning
             delivered.keyedInBackground = delivered.keyedInBackground || result?.1 == true
         }
-        if !marked {
-            delivered.warning = [delivered.warning, ComputerUseTextCheck.documentNotMarkedWarning]
-                .compactMap { $0 }.joined(separator: " ")
+        if let warning {
+            delivered.warning = [delivered.warning, warning].compactMap { $0 }.joined(separator: " ")
         }
         return delivered
     }

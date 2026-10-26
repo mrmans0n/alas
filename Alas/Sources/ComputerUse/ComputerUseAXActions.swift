@@ -910,68 +910,78 @@ extension ComputerUseAXActions {
         }
     }
 
-    /// After text went in by AX: whether its element's window has a document, which the write
-    /// didn't mark edited (`ComputerUseTextCheck.documentNudge`). Only reads.
+    /// After text went in by AX: whether it is a document's text, which the write didn't mark
+    /// edited (`ComputerUseTextCheck.documentNudge`). Only reads.
     static func documentNudge(
         after target: ComputerUseInputTarget?, app: ComputerUseAppIdentity, keysReach: Bool, isCancelled: @escaping IsCancelled
     ) async throws -> ComputerUseTextCheck.DocumentNudge {
         try await onQueue(isCancelled) {
             guard let element = try written(target, app: app) else { return .none }
             let inDocument = elementAttribute(element, kAXWindowAttribute).flatMap { string(of: $0, kAXDocumentAttribute) } != nil
-            return ComputerUseTextCheck.documentNudge(inDocument: inDocument, secure: isSecure(element), keysReach: keysReach)
+            return ComputerUseTextCheck.documentNudge(
+                inDocument: inDocument, multiLine: string(of: element, kAXRoleAttribute) == kAXTextAreaRole,
+                inWebArea: isInWebArea(element), secure: isSecure(element), keysReach: keysReach)
         }
     }
 
-    /// The text of a field, as far as a check that a key edit left it as it was can read it.
-    struct FieldText: Equatable, Sendable {
-        var count: Int?
-        /// Nil when long or unreadable.
-        var value: String?
-    }
-
     /// Readies the element for a net-zero key edit: focused, with the caret collapsed at the end of
-    /// its selection, or of its value after a replace (`caretToEnd`). Returns its text then; nil
-    /// when the app's focus didn't move to it, so keys would land elsewhere.
+    /// the text just written (its selection's end, or the value's after a replace, `caretToEnd`).
+    /// Returns its whole value then; nil when the app's focus didn't move to it, so keys would land
+    /// elsewhere, or when the value can't be read in full to check the edit against.
     static func prepareKeyEdit(
         after target: ComputerUseInputTarget?, app: ComputerUseAppIdentity, caretToEnd: Bool,
         isCancelled: @escaping IsCancelled
-    ) async throws -> FieldText? {
+    ) async throws -> String? {
         try await onQueue(isCancelled) {
             guard let element = try written(target, app: app) else { return nil }
             focusKeepingSelection(element, app: app)
             guard let focused = focusedElement(of: app), CFEqual(focused, element), !isSecure(focused) else { return nil }
             let count = number(of: element, kAXNumberOfCharactersAttribute)
+            guard (count ?? 0) <= valueCheckCharacters else { return nil }
             let caret: Int? = if caretToEnd { count } else { selectedRange(of: element).map { $0.location + $0.length } }
             if var range = caret.map({ CFRange(location: $0, length: 0) }), let value = AXValueCreate(.cfRange, &range) {
                 AXUIElementSetAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, value)
             }
-            // A selection still there would be replaced by the edit's space.
+            // A selection still there would be replaced by the edit's letter.
             guard let selection = selectedRange(of: element), selection.length == 0 else { return nil }
-            return fieldText(element)
+            return textValue(of: element)
         }
     }
 
-    /// The element's text now, read again until it is `expected` for up to `keyEditWait`.
-    static func awaitFieldText(
-        _ expected: FieldText, after target: ComputerUseInputTarget?, app: ComputerUseAppIdentity,
-        isCancelled: @escaping IsCancelled
-    ) async throws -> Bool {
+    /// The element's whole value, read every `keyEditPoll` until `done` holds of it, for up to
+    /// `keyEditWait`; with `stable`, it must still hold one poll later. Returns the last read
+    /// (nil when unreadable) and whether `done` held.
+    static func awaitFieldValue(
+        after target: ComputerUseInputTarget?, app: ComputerUseAppIdentity, stable: Bool,
+        isCancelled: @escaping IsCancelled, until done: @escaping @Sendable (String?) -> Bool
+    ) async -> (value: String?, held: Bool) {
         let deadline = ContinuousClock.now + keyEditWait
+        var value: String?
+        var heldBefore = false
         while true {
             try? await Task.sleep(for: keyEditPoll)
-            let now = try await onQueue(isCancelled) { try written(target, app: app).map(fieldText) }
-            if now == expected { return true }
-            if ContinuousClock.now >= deadline { return false }
+            value = try? await onQueue(isCancelled) { try written(target, app: app).flatMap(textValue) }
+            let held = done(value)
+            if held, !stable || heldBefore { return (value, true) }
+            heldBefore = held
+            if ContinuousClock.now >= deadline { return (value, held) }
         }
+    }
+
+    /// Puts the value written by AX back after keys changed it; true when it reads back so.
+    static func restoreValue(
+        _ value: String, after target: ComputerUseInputTarget?, app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled
+    ) async -> Bool {
+        (try? await onQueue(isCancelled) { () -> Bool in
+            guard let element = try written(target, app: app), !isSecure(element),
+                  AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFString) == .success
+            else { return false }
+            return textValue(of: element) == value
+        }) == true
     }
 
     static let keyEditWait: Duration = .milliseconds(500)
     static let keyEditPoll: Duration = .milliseconds(50)
-
-    private static func fieldText(_ element: AXUIElement) -> FieldText {
-        let count = number(of: element, kAXNumberOfCharactersAttribute)
-        return FieldText(count: count, value: (count ?? 0) <= valueCheckCharacters ? textValue(of: element) : nil)
-    }
 
     /// Whether a web page's AX read-back is untrusted in the app (`ComputerUseTextCheck.outcome`).
     private static func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
