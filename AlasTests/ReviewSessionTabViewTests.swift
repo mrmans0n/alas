@@ -452,7 +452,7 @@ struct ReviewSessionTabViewTests {
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "provider-review-publish-confirm", in: host))
 
         let deadline = Date().addingTimeInterval(1)
-        while subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) == nil, Date() < deadline {
+        while subview(withAccessibilityIdentifier: "review-session-provider-warning", in: host) == nil, Date() < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
             pumpMainRunLoop(seconds: 0.01)
             host.layoutSubtreeIfNeeded()
@@ -460,7 +460,7 @@ struct ReviewSessionTabViewTests {
 
         let description = recursiveDescription(host)
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) == nil)
-        #expect(subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) != nil)
+        #expect(subview(withAccessibilityIdentifier: "review-session-provider-warning", in: host) != nil)
         #expect(description.contains("approval was not submitted"))
     }
 
@@ -563,8 +563,10 @@ struct ReviewSessionTabViewTests {
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) == nil)
         #expect(pressAccessibilityElement(withAccessibilityIdentifier: "diff-review-inline-feedback-action-resolve-thread-1", in: host))
 
+        // A failure is an error; a change that went through with a warning is not.
+        let banner = mutationFails ? "review-session-provider-error" : "review-session-provider-warning"
         let deadline = Date().addingTimeInterval(1)
-        while subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) == nil, Date() < deadline {
+        while subview(withAccessibilityIdentifier: banner, in: host) == nil, Date() < deadline {
             try await Task.sleep(nanoseconds: 10_000_000)
             pumpMainRunLoop(seconds: 0.01)
             host.layoutSubtreeIfNeeded()
@@ -572,7 +574,7 @@ struct ReviewSessionTabViewTests {
 
         let description = recursiveDescription(host)
         #expect(subview(withAccessibilityIdentifier: "provider-review-publish-confirmation", in: host) == nil)
-        #expect(subview(withAccessibilityIdentifier: "review-session-provider-error", in: host) != nil)
+        #expect(subview(withAccessibilityIdentifier: banner, in: host) != nil)
         #expect(description.contains(mutationFails ? "resolve failed" : "could not refresh the PR"))
     }
 

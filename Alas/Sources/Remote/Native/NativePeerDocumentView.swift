@@ -476,6 +476,7 @@ struct NativePeerReviewView: View {
             providerWarning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
         case .failure(let error):
             providerError = error.message
+            providerWarning = nil
         }
     }
 
