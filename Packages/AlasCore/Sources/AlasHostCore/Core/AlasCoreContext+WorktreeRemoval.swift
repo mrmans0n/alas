@@ -645,21 +645,27 @@ extension AlasCoreContext {
         case .unreadable: return "Workspace ownership could not be verified"
         case .loaded(let loaded): state = loaded
         }
-        let path = worktree.path.standardizedFileURL.path
         let owner = state.checkouts.first { checkout in
             checkout.workspaceID != nil
                 && (checkout.archivedAt == nil || unarchiving[checkout.id] != nil)
-                && checkout.members.contains { member in
-                guard member.projectID == worktree.projectId,
-                      URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
-                else { return false }
-                if let memberLineage = member.gitLineageID, let lineage = worktree.lineageID, memberLineage != lineage {
-                    return false
-                }
-                return !(member.availability == .explicitlyDeleted && member.cleanup?.worktreeRemoved == true)
-            }
+                && Self.checkoutManages(checkout, worktree)
         }
         return owner.map { "Workspace checkout \u{201C}\($0.fallbackWorkspaceName)\u{201D} manages this worktree" }
+    }
+
+    /// Whether one of `checkout`'s members is `worktree`: same project and
+    /// in-app path, no other lineage, and not already deleted and removed.
+    nonisolated static func checkoutManages(_ checkout: WorkspaceCheckout, _ worktree: Worktree) -> Bool {
+        let path = worktree.path.standardizedFileURL.path
+        return checkout.members.contains { member in
+            guard member.projectID == worktree.projectId,
+                  URL(fileURLWithPath: checkout.inAppWorktreePath(member.worktreePath)).standardizedFileURL.path == path
+            else { return false }
+            if let memberLineage = member.gitLineageID, let lineage = worktree.lineageID, memberLineage != lineage {
+                return false
+            }
+            return !(member.availability == .explicitlyDeleted && member.cleanup?.worktreeRemoved == true)
+        }
     }
 }
 

@@ -1109,6 +1109,52 @@ struct HostProtocolServerTests {
         #expect(catalog.summaries.contains { $0.kind == .recovery && $0.label == "Before checkpoint restore" })
     }
 
+    enum RestoreWriter: CaseIterable {
+        case worktreeSession, memberCheckoutSession, otherCheckoutSession, checkoutSessionWithUnreadableState, run, console
+    }
+
+    /// A restore counts the writers of the worktree and of each Workspace
+    /// checkout that has it as a member, as the app does; another checkout's
+    /// session does not hold it back, and unreadable Workspace state counts them all.
+    @Test(arguments: RestoreWriter.allCases)
+    func checkpointRestoreCountsTheWorktreesWriters(_ writer: RestoreWriter) {
+        let worktree = Worktree(
+            id: "wt", projectId: "p", name: "wt", branch: "b",
+            path: URL(fileURLWithPath: "/srv/repo/wt"), status: .clean, lastActivity: .distantPast
+        )
+        func checkout(memberPath: String) -> WorkspaceCheckout {
+            WorkspaceCheckout(
+                workspaceID: UUID(), fallbackWorkspaceName: "w", executionLocation: .local, branch: "b", rootPath: "/srv/w",
+                members: [WorkspaceCheckoutMember(
+                    workspaceMemberID: UUID(), projectID: "p", fallbackProjectName: "repo",
+                    fallbackRepositoryRoot: "/srv/repo", worktreePath: memberPath
+                )]
+            )
+        }
+        let member = checkout(memberPath: "/srv/repo/wt")
+        let other = checkout(memberPath: "/srv/repo/other")
+        let memberOwner = SessionOwnerID.workspaceCheckout(member.id, .local)
+        let otherOwner = SessionOwnerID.workspaceCheckout(other.id, .local)
+        let sessions: [SessionOwnerID: Int] = switch writer {
+        case .worktreeSession: [.worktree("wt"): 1, .worktree("elsewhere"): 1]
+        case .memberCheckoutSession, .checkoutSessionWithUnreadableState: [memberOwner: 2]
+        case .otherCheckoutSession: [otherOwner: 1]
+        case .run, .console: [:]
+        }
+        let counts = AlasCoreContext.checkpointWriterCounts(
+            for: worktree, checkouts: writer == .checkoutSessionWithUnreadableState ? nil : [member, other],
+            sessions: sessions, runOwnerKeys: writer == .run ? ["wt", "elsewhere"] : ["elsewhere"],
+            hasConsoles: { writer == .console && $0.contains("wt") }
+        )
+        let expected: (sessions: Int, terminals: Int) = switch writer {
+        case .worktreeSession: (1, 0)
+        case .memberCheckoutSession, .checkoutSessionWithUnreadableState: (2, 0)
+        case .otherCheckoutSession: (0, 0)
+        case .run, .console: (0, 1)
+        }
+        #expect(counts == expected)
+    }
+
     /// As the app does, the host checkpoints a worktree before each prompt and
     /// the user row carries its id; a failed capture still sends the prompt.
     @Test(arguments: [false, true])

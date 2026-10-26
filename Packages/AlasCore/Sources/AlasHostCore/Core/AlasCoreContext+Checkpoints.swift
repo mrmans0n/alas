@@ -33,18 +33,47 @@ extension AlasCoreContext {
         }
     }
 
-    /// Sessions: the worktree manager's runners plus a starting one. Terminals: its runs, pending
-    /// run launches, and host consoles (`hasHostConsoles`). No dirty editors, no other git mutation.
-    func checkpointCoordination(for worktree: Worktree) -> CheckpointCoordinationSnapshot {
-        let manager = sessionManagers[.worktree(worktree.id)]
-        let sessions = (manager?.runners.count ?? 0) + (manager?.hasStartingSession == true ? 1 : 0)
-        let terminals = processRuns.values.filter { $0.worktreeID == worktree.id }.count
-            + pendingRunLaunches.keys.filter { $0.worktreeID == worktree.id }.count
-            + (hasHostConsoles?([worktree.id]) == true ? 1 : 0)
+    /// Sessions: runners plus a starting one of the worktree's manager and, as
+    /// the app counts a checkout as a shared session owner, of every Workspace
+    /// checkout that manages it. Terminals: their runs, pending run launches,
+    /// and host consoles (`hasHostConsoles`). No dirty editors, no other git mutation.
+    func checkpointCoordination(for worktree: Worktree) async -> CheckpointCoordinationSnapshot {
+        let checkouts: [WorkspaceCheckout]? = switch await workspaceStore.load() {
+        case .missing: []
+        case .unreadable: nil
+        case .loaded(let state): state.checkouts
+        }
+        let counts = Self.checkpointWriterCounts(
+            for: worktree, checkouts: checkouts,
+            sessions: sessionManagers.mapValues { $0.runners.count + ($0.hasStartingSession ? 1 : 0) },
+            runOwnerKeys: processRuns.values.map(\.worktreeID) + pendingRunLaunches.keys.map(\.worktreeID),
+            hasConsoles: { self.hasHostConsoles?($0) == true }
+        )
         let repositoryName = projects.projects.first { $0.id == worktree.projectId }?.name ?? worktree.name
         return CheckpointCoordinationSnapshot(
-            dirtyEditorPaths: [], activeTerminalCount: terminals, activeACPCount: sessions, otherGitMutationActive: false,
+            dirtyEditorPaths: [], activeTerminalCount: counts.terminals, activeACPCount: counts.sessions, otherGitMutationActive: false,
             scopeDescription: CheckpointCoordinationSnapshot.scopeDescription(repositoryName: repositoryName, workspaceName: nil)
+        )
+    }
+
+    /// The restore writers of `worktree`'s owners: itself and each checkout that
+    /// manages it (`checkoutManages`), or every checkout when the Workspace state
+    /// is unreadable (`checkouts` nil). `sessions` counts writers per owner;
+    /// `runOwnerKeys` holds one owner storage key per run or pending launch.
+    nonisolated static func checkpointWriterCounts(
+        for worktree: Worktree, checkouts: [WorkspaceCheckout]?, sessions: [SessionOwnerID: Int],
+        runOwnerKeys: [String], hasConsoles: (Set<String>) -> Bool
+    ) -> (sessions: Int, terminals: Int) {
+        let checkoutOwners: [SessionOwnerID] = if let checkouts {
+            checkouts.filter { checkoutManages($0, worktree) }.map { .workspaceCheckout($0.id, $0.executionLocation) }
+        } else {
+            sessions.keys.filter { $0.worktreeID == nil }
+        }
+        let owners = [SessionOwnerID.worktree(worktree.id)] + checkoutOwners
+        let keys = Set(owners.map(\.storageKey))
+        return (
+            owners.reduce(0) { $0 + (sessions[$1] ?? 0) },
+            runOwnerKeys.filter(keys.contains).count + (hasConsoles(keys) ? 1 : 0)
         )
     }
 
@@ -82,7 +111,7 @@ extension AlasCoreContext {
     func checkpointRestorePreview(_ id: CheckpointID, groupIDs: Set<UUID>?, in worktree: Worktree) async throws -> CheckpointRestorePreview {
         let target = try requireCheckpointTarget(for: worktree)
         return try await checkpoints.restorePreview(
-            target: target, id: listedCheckpoint(id, in: target), coordination: checkpointCoordination(for: worktree),
+            target: target, id: listedCheckpoint(id, in: target), coordination: await checkpointCoordination(for: worktree),
             selectedGroupIDs: groupIDs
         )
     }
@@ -101,7 +130,7 @@ extension AlasCoreContext {
         case .deleteCheckpoint(let id):
             _ = try await checkpoints.delete(target: target, id: listedCheckpoint(id, in: target))
         case .restoreCheckpoint(let id, let groupIDs, let fingerprint):
-            let coordination = checkpointCoordination(for: worktree)
+            let coordination = await checkpointCoordination(for: worktree)
             let preview = try await checkpoints.restorePreview(
                 target: target, id: listedCheckpoint(id, in: target), coordination: coordination, selectedGroupIDs: groupIDs
             )
