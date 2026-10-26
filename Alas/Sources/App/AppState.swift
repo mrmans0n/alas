@@ -14732,7 +14732,7 @@ class AppHostEnvironment: AlasHostEnvironment {
         }
     }
 
-    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool {
+    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree, in core: AlasCoreContext) async -> Bool {
         await app?.checkpointWorktreeRemovalDisabledAfterDiscovery(worktree) ?? true
     }
 

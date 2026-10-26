@@ -195,6 +195,13 @@ struct HostProtocolTests {
         #expect(try JSONDecoder().decode(HostServerMessage.self, from: JSONEncoder().encode(message)) == message)
     }
 
+    /// A restore blocker travels by name, since its raw value is a priority a
+    /// new blocker shifts; a name this side lacks still refuses the restore.
+    @Test func restoreBlockersTravelByName() throws {
+        #expect(String(decoding: try JSONEncoder().encode([CheckpointRestoreBlocker.activeSession]), as: UTF8.self) == #"["activeSession"]"#)
+        #expect(try JSONDecoder().decode([CheckpointRestoreBlocker].self, from: Data(#"["submoduleChanged"]"#.utf8)) == [.corruptCheckpoint])
+    }
+
     /// A newer host's review of a kind this Mac can't read is left out, not the whole list.
     @Test func aReviewListDecodesWithoutTheReviewsThisMacCannotRead() throws {
         let message = HostServerMessage.response(id: 1, result: .reviews(reviews: [Self.review.summary, Self.review.summary]))

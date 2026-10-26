@@ -114,7 +114,7 @@ extension AlasCoreContext {
     /// worktree in place with its sessions already stopped.
     @_spi(AppHost) public func removeWorktree(_ request: WorktreeRemovalRequest) async -> WorktreeRemovalResult {
         let worktree = request.worktree
-        if await environment.checkpointRecoveryBlocksRemoval(worktree) {
+        if await environment.checkpointRecoveryBlocksRemoval(worktree, in: self) {
             return .checkpointRecoveryPending
         }
         if !request.force, request.authorizedContentFingerprint == nil {
@@ -340,13 +340,10 @@ extension AlasCoreContext {
 
     /// Whether an interrupted checkpoint restore references the checkout.
     /// An unreadable journal store counts as one.
-    public static func hasPendingCheckpointRecovery(_ worktree: Worktree) async -> Bool {
+    public func hasPendingCheckpointRecovery(_ worktree: Worktree) async -> Bool {
         guard let lineageID = worktree.lineageID ?? WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path)
         else { return false }
-        guard let journals = try? await WorktreeCheckpointStore().recoverableJournals(lineageID: lineageID) else {
-            return true
-        }
-        return !journals.isEmpty
+        return (try? await checkpoints.hasRecoverableJournals(lineageID: lineageID)) ?? true
     }
 }
 

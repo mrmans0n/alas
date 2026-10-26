@@ -1084,11 +1084,15 @@ struct HostProtocolServerTests {
         let core = fixture.core
         try await eventually { @MainActor in core.sessionManagers[.worktree(worktree.id)]?.runners.isEmpty == false }
 
-        let busy = try await fixture.restorePreview(manifest.id, in: ref)
-        #expect(busy.blocker == .activeSession)
-        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
-            id: manifest.id, groupIDs: busy.selectedGroupIDs, fingerprint: busy.currentFingerprint
-        ))) == .failure(error: .failed(message: "Stop active terminal and agent sessions before restoring.")))
+        // A passing `index.lock` outranks the session as a blocker, and a
+        // loaded run has shown one: polled until the session is the reason.
+        let refused = HostResponse.failure(error: .failed(message: "Stop active terminal and agent sessions before restoring."))
+        try await eventually { @MainActor in
+            guard let busy = try? await fixture.restorePreview(manifest.id, in: ref), busy.blocker == .activeSession else { return false }
+            return (try? await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+                id: manifest.id, groupIDs: busy.selectedGroupIDs, fingerprint: busy.currentFingerprint
+            )))) == refused
+        }
         #expect(try String(contentsOf: file, encoding: .utf8) == "two\n")
 
         try await fixture.host.sessions.archive(session.id, caller: .app)
@@ -2313,7 +2317,7 @@ struct HostProtocolServerTests {
         self.blocksForCheckpoint = blocksForCheckpoint
     }
     func runConsoleIsHidden(scriptKey: String, worktreeID: String) -> Bool? { openConsoleIsHidden }
-    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree) async -> Bool { blocksForCheckpoint }
+    func checkpointRecoveryBlocksRemoval(_ worktree: Worktree, in core: AlasCoreContext) async -> Bool { blocksForCheckpoint }
 }
 
 /// A host with an approval sheet that approves whatever it is asked.

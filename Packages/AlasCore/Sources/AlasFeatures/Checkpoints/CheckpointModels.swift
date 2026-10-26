@@ -82,6 +82,34 @@ public enum CheckpointRestoreBlocker: Int, Codable, Hashable, Sendable, CaseIter
         blockers.min { $0.rawValue < $1.rawValue }
     }
 
+    /// On the wire by case name: the raw value is a priority, which a new
+    /// blocker shifts. A name this side does not know is a corrupt
+    /// checkpoint, which still refuses the restore.
+    public init(from decoder: Decoder) throws {
+        let name = try decoder.singleValueContainer().decode(String.self)
+        self = Self.allCases.first { $0.wireName == name } ?? .corruptCheckpoint
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(wireName)
+    }
+
+    private var wireName: String {
+        switch self {
+        case .remoteTarget: "remoteTarget"
+        case .interruptedRestore: "interruptedRestore"
+        case .lineageMismatch: "lineageMismatch"
+        case .changedHEAD: "changedHEAD"
+        case .gitOperation: "gitOperation"
+        case .indexLock: "indexLock"
+        case .otherGitMutation: "otherGitMutation"
+        case .dirtyEditorBuffer: "dirtyEditorBuffer"
+        case .activeSession: "activeSession"
+        case .corruptCheckpoint: "corruptCheckpoint"
+        }
+    }
+
     public var description: String {
         switch self {
         case .remoteTarget: "Checkpoints are not available for remote worktrees yet."

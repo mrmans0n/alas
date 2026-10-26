@@ -265,7 +265,7 @@ extension AlasCoreContext {
         actionState: GGStackActionState
     ) async throws {
         guard let worktree = projectAndWorktree(withWorktreeId: worktreeID)?.worktree else { throw GGMutationError.staleConfirmation }
-        if await Self.hasPendingCheckpointRecovery(worktree) { throw GGMutationError.staleConfirmation }
+        if await hasPendingCheckpointRecovery(worktree) { throw GGMutationError.staleConfirmation }
         let gg = GGService()
         let git = GitService()
         let path = worktree.path

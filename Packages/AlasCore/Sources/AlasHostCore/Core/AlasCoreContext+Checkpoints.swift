@@ -49,7 +49,7 @@ extension AlasCoreContext {
         return try await checkpoints.manifest(target: target, id: listedCheckpoint(id, in: target))
     }
 
-    /// The service bounds what it reads; an image is not decoded for a Mac.
+    /// The service bounds what it reads; an image it decoded is answered as a note, its pixels never sent.
     func checkpointDiff(_ id: CheckpointID, path: String, in worktree: Worktree) async throws -> HostDiff {
         let target = try requireCheckpointTarget(for: worktree)
         try await Self.refuseOutside([path], of: worktree.path)
@@ -98,7 +98,9 @@ extension AlasCoreContext {
             } catch {
                 throw HostError.failed(message: CheckpointRestoreErrorPresentation.message(error))
             }
-        default:
+        case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .stash, .applyStash, .popStash, .dropStash,
+             .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .cherryPick,
+             .revert, .editCommit:
             preconditionFailure("not a checkpoint change")
         }
         return .done
