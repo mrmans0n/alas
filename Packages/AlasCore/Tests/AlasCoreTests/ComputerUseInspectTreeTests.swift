@@ -255,4 +255,14 @@ struct ComputerUseWebContentTests {
     func aTimedOutFirstContactIsRetriedAfterAWhileAFewTimes(last: ComputerUseWebContent.FirstContact?, after: Double, wakes: Bool) {
         #expect(ComputerUseWebContent.wakesAgain(after: last, now: Date(timeIntervalSince1970: after)) == wakes)
     }
+
+    /// The turn's end forgets a success, so the next turn may ask again, but not a timeout's tries.
+    @Test(arguments: [
+        (ComputerUseWebContent.FirstContact.complete, false),
+        (.timedOut(attempts: 1, at: Date(timeIntervalSince1970: 0)), true),
+        (.timedOut(attempts: 3, at: Date(timeIntervalSince1970: 0)), true),
+    ])
+    func aTimeoutsTriesOutlastTheTurn(contact: ComputerUseWebContent.FirstContact, kept: Bool) {
+        #expect(ComputerUseWebContent.keepsAfterRestore(contact) == kept)
+    }
 }

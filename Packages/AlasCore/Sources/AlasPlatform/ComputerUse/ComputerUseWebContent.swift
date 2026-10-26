@@ -53,6 +53,11 @@ public enum ComputerUseWebContent {
     /// web tree seconds after a fresh launch.
     public static let contentDeadline: Duration = .seconds(4)
 
+    /// How deep and how wide the wait's read of the window looks for a web area with content: the
+    /// page's web area sits a few levels under the browser's toolbar.
+    public static let probeDepth = 10
+    public static let probeNodes = 400
+
     /// Once the web content shows, how long it is left to fill in before the window is read.
     public static let contentSettle: Duration = .milliseconds(500)
 
@@ -89,6 +94,13 @@ public enum ComputerUseWebContent {
         case .complete: false
         case .timedOut(let attempts, let at): attempts < firstContactAttempts && now.timeIntervalSince(at) >= firstContactRetry
         }
+    }
+
+    /// Whether a process's first contact is kept when the turn's end turns its
+    /// `enhancedUserInterface` off again: a timeout is, so its count of tries carries over; a
+    /// success isn't, so the next turn's first contact may ask again (once a probe finds no content).
+    public static func keepsAfterRestore(_ contact: FirstContact) -> Bool {
+        if case .timedOut = contact { true } else { false }
     }
 
     /// Whether Alas turned an attribute on, and so turns it off again at stop, turn end and

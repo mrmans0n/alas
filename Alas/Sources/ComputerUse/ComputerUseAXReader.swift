@@ -20,8 +20,6 @@ enum ComputerUseAXReader {
 
     /// Pids already asked to expose their tree; one ask per process is enough.
     private static let manualAccessibilityPIDs = Mutex<Set<pid_t>>([])
-    /// Pids that accepted the ask and haven't been read since: their tree may still be building.
-    private static let buildingTreePIDs = Mutex<Set<pid_t>>([])
     /// Pids that accepted the ask: Chromium and Electron apps, kept for the process's life.
     private static let manualAccessibilityAccepted = Mutex<Set<pid_t>>([])
 
@@ -29,13 +27,6 @@ enum ComputerUseAXReader {
     static func acceptsManualAccessibility(_ pid: pid_t) -> Bool {
         manualAccessibilityAccepted.withLock { $0.contains(pid) }
     }
-
-    /// How long the first read after the ask waits for the tree to show more than groups.
-    static let treeBuildWait: Duration = .seconds(1)
-    static let treeBuildPoll: Duration = .milliseconds(100)
-    /// How deep and how wide one check of a building tree looks.
-    static let treeBuildProbeDepth = 6
-    static let treeBuildProbeNodes = 300
 
     /// Whether an AX message may go to `pid`: never to this process. Its AppKit accessibility
     /// handlers would run on the calling thread, the AX queue, and assert off the main thread.
@@ -63,63 +54,26 @@ enum ComputerUseAXReader {
         return application(pid)
     }
 
-    /// The app element, with the messaging timeout set. The first time a pid is seen, asks it to
-    /// build its Accessibility tree (`AXManualAccessibility`): Chromium and Electron apps expose
-    /// little more than nested groups until asked. Other apps refuse the attribute; that's fine.
+    /// The app element, with the messaging timeout set. The first time a pid is seen, sets
+    /// `AXManualAccessibility`, which only Chromium and Electron apps take: it tells them apart
+    /// (`acceptsManualAccessibility`) and starts their tree. Waiting for it, asking again and the
+    /// fallback are the first contact's (`ComputerUseCoordinator`, `ComputerUseWebContent`).
     /// Call on `queue`.
     static func application(_ pid: pid_t) -> AXUIElement {
         let application = AXUIElementCreateApplication(pid)
         AXUIElementSetMessagingTimeout(application, messagingTimeout)
         if manualAccessibilityPIDs.withLock({ $0.insert(pid).inserted }),
            AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success {
-            buildingTreePIDs.withLock { _ = $0.insert(pid) }
             manualAccessibilityAccepted.withLock { _ = $0.insert(pid) }
         }
         return application
     }
 
-    /// An app that just accepted `AXManualAccessibility` builds its tree asynchronously: until it
-    /// has, the window reads as nested groups. Before the first read of such an app, checks every
-    /// `treeBuildPoll` until the window has an element other than a group within
-    /// `treeBuildProbeDepth` levels, for at most `treeBuildWait` overall and as much AX-queue time.
-    /// A pid already asked and not building costs nothing: no hop to the AX queue. The waits
-    /// happen off the queue, so actions and other reads go on meanwhile.
-    private static func awaitTreeBuild(_ window: ComputerUseWindow, cancel: CancelFlag) async {
-        let pid = window.app.pid
-        guard mayMessage(pid) else { return }
-        let asked = manualAccessibilityPIDs.withLock { $0.contains(pid) }
-        if asked, !buildingTreePIDs.withLock({ $0.contains(pid) }) { return }
-        let deadline = ContinuousClock.now + treeBuildWait
-        var queueTime = Duration.zero
-        while true {
-            let budget = treeBuildWait - queueTime
-            let (built, spent) = await withCheckedContinuation { (continuation: CheckedContinuation<(Bool, Duration), Never>) in
-                queue.async {
-                    let start = ContinuousClock.now
-                    // The first sight of a pid asks it here.
-                    let application = application(pid)
-                    guard buildingTreePIDs.withLock({ $0.contains(pid) }), !cancel.isSet else {
-                        return continuation.resume(returning: (true, ContinuousClock.now - start))
-                    }
-                    let probe = Walk(
-                        budget: treeBuildProbeNodes, maxDepth: treeBuildProbeDepth,
-                        deadline: min(deadline, start + budget), isCancelled: { cancel.isSet })
-                    let built = probe.hasMoreThanGroups(window, application: application)
-                    continuation.resume(returning: (built, ContinuousClock.now - start))
-                }
-            }
-            queueTime += spent
-            if built || cancel.isSet || ContinuousClock.now >= deadline || queueTime >= treeBuildWait { break }
-            try? await Task.sleep(for: treeBuildPoll)
-        }
-        buildingTreePIDs.withLock { _ = $0.remove(pid) }
-    }
-
-    /// Asks a Chromium or Electron app to build its web content's tree: `attribute` is set to true
-    /// unless it already reads as true. `AXManualAccessibility` is set either way, since setting it
-    /// again is what asks again, and an app that takes it counts as accepting it
-    /// (`acceptsManualAccessibility`). Returns how the set went and whether Alas turned it on
-    /// (`ComputerUseWebContent.restores`), so it can be turned off again.
+    /// Asks a Chromium or Electron app to build its web content's tree: `attribute` is set to true,
+    /// also when it already reads as true. An app that takes `AXManualAccessibility` counts as
+    /// accepting it (`acceptsManualAccessibility`). Returns how the set went and whether Alas
+    /// turned it on (`ComputerUseWebContent.restores`, from the value before), so it can be turned
+    /// off again.
     static func wakeWebContent(_ app: ComputerUseAppIdentity, attribute: String) async -> ComputerUseWebContent.Wake {
         await withCheckedContinuation { continuation in
             queue.async {
@@ -133,16 +87,13 @@ enum ComputerUseAXReader {
                     before = CFBooleanGetValue((value as! CFBoolean))
                 }
                 let manual = attribute == ComputerUseWebContent.manualAccessibility
-                let result: ComputerUseWebContent.SetResult
-                if before == true, !manual {
-                    result = .set
-                } else {
-                    result = switch AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue) {
+                // Written also when it reads as true already: setting it again is what asks again.
+                let result: ComputerUseWebContent.SetResult =
+                    switch AXUIElementSetAttributeValue(element, attribute as CFString, kCFBooleanTrue) {
                     case .success: .set
                     case .attributeUnsupported: .unsupported
                     default: .failed
                     }
-                }
                 if manual, result == .set { manualAccessibilityAccepted.withLock { _ = $0.insert(app.pid) } }
                 continuation.resume(returning: .init(
                     result: result, turnedOn: ComputerUseWebContent.restores(before: before, setSucceeded: result == .set)))
@@ -178,7 +129,6 @@ enum ComputerUseAXReader {
         -> (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles) {
         let cancel = CancelFlag()
         return try await withTaskCancellationHandler {
-            await awaitTreeBuild(window, cancel: cancel)
             return try await withCheckedThrowingContinuation { continuation in
                 queue.async {
                     // A call cancelled while queued behind another walk makes no AX request.
@@ -302,41 +252,6 @@ enum ComputerUseAXReader {
                 appNotResponding: appStalled || skippedUnanswered, timedOut: ContinuousClock.now >= deadline,
                 budgetSpent: cutOff)
             return (root, cut, ComputerUseAXHandles(elements))
-        }
-
-        /// Whether the window has a descendant other than an `AXGroup` within `maxDepth` levels and
-        /// `budget` nodes. Every element is checked against the deadline and cancellation, and no
-        /// AX message may wait past the deadline.
-        func hasMoreThanGroups(_ window: ComputerUseWindow, application: AXUIElement) -> Bool {
-            func limitWait(_ element: AXUIElement) {
-                let remaining = deadline - ContinuousClock.now
-                let seconds = Float(remaining.components.seconds) + Float(remaining.components.attoseconds) / 1e18
-                AXUIElementSetMessagingTimeout(element, max(0.01, min(ComputerUseAXReader.messagingTimeout, seconds)))
-            }
-            limitWait(application)
-            guard let windowsRef = attribute(application, kAXWindowsAttribute), let axWindows = windowsRef as? [AXUIElement],
-                  let root = ComputerUseAXReader.axWindow(
-                      axWindows, for: window, frame: { frame(of: $0) }, title: { string(of: $0, kAXTitleAttribute) },
-                      shouldStop: { isHalted })
-            else { return false }
-            limitWait(root)
-            var level = childElements(of: root)
-            for _ in 0 ..< maxDepth {
-                var next: [AXUIElement] = []
-                for element in level {
-                    count += 1
-                    guard count <= budget, !isHalted else { return false }
-                    limitWait(element)
-                    // A halted walk reads nothing; an unreadable role proves nothing.
-                    let role = string(of: element, kAXRoleAttribute)
-                    if isHalted { return false }
-                    if let role, role != kAXGroupRole { return true }
-                    next += childElements(of: element)
-                }
-                guard !next.isEmpty else { return false }
-                level = next
-            }
-            return false
         }
 
         private func notResponding(_ window: ComputerUseWindow) -> ComputerUseSystemError {

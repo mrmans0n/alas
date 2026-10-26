@@ -211,7 +211,9 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         #expect(Self.text(await f.coordinator.perform(.init(action: .openApp, name: "Notes"), sessionID: "s")) != nil)
         #expect(reads.next() == 4)
-        #expect(recorder.sleeps == [ComputerUseCoordinator.webContentPoll, ComputerUseWebContent.contentSettle])
+        #expect(recorder.sleeps == [
+            ComputerUseCoordinator.webContentPoll, ComputerUseCoordinator.webContentPoll, ComputerUseWebContent.contentSettle,
+        ])
     }
 
     /// A Chromium browser without AXManualAccessibility (current Chrome) gets AXEnhancedUserInterface
@@ -239,6 +241,41 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.events == ["wake:AXManualAccessibility", "wake:AXEnhancedUserInterface", "wake:AXEnhancedUserInterface"])
         f.coordinator.turnEnded(sessionID: "s")
         try await eventually("restored") { recorder.events.last == "restore:AXEnhancedUserInterface" }
+    }
+
+    /// A stop while the wait reads the window leaves AXEnhancedUserInterface off: the halfway set
+    /// that would have come next never runs.
+    @Test func aStopDuringTheWaitNeverSetsEnhancedUserInterfaceAgain() async throws {
+        let recorder = Recorder()
+        let gate = Recorder()
+        let reads = Counter()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window])
+        system.wakeWebContent = { _, attribute in
+            guard attribute == "AXEnhancedUserInterface" else { return .init(result: .unsupported, turnedOn: false) }
+            recorder.recordEvent("wake:\(attribute)")
+            return Self.taken
+        }
+        system.restoreWebContent = { _, attribute in recorder.recordEvent("restore:\(attribute)") }
+        // The probe read after the wait's first half is held until the session has ended.
+        let halfway = Int(ComputerUseWebContent.contentDeadline / 2 / ComputerUseCoordinator.webContentPoll)
+        system.axTree = { _, _, budget, _ in
+            if budget == ComputerUseWebContent.probeNodes, reads.next() == halfway + 1 {
+                recorder.recordEvent("held")
+                _ = try? await eventually("the session end", { !gate.events.isEmpty })
+            }
+            return (ComputerUseAXNode(role: "AXWindow", children: [ComputerUseAXNode(role: "AXGroup", handle: 1)], handle: 0),
+                    nil, ComputerUseAXHandles())
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        let call = Task { await f.coordinator.perform(.init(action: .inspect, windowID: 5), sessionID: "s") }
+        try await eventually("read held") { recorder.events.contains("held") }
+        f.coordinator.sessionEnded(sessionID: "s")
+        gate.recordEvent("open")
+        _ = await call.value
+        try await eventually("restored") { recorder.events.contains("restore:AXEnhancedUserInterface") }
+        #expect(recorder.events == ["wake:AXEnhancedUserInterface", "held", "restore:AXEnhancedUserInterface"])
     }
 
     /// A browser that took AXManualAccessibility gets no AXEnhancedUserInterface. Its wait, set again
