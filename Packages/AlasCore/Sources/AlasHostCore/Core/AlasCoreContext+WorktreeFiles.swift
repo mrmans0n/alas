@@ -40,16 +40,24 @@ extension AlasCoreContext {
         guard data.count <= RemoteWorktreeFileAccess.maxFileBytes else { throw overCap }
         return try await changeListedFiles(in: worktree) { [self] listed in
             let url = try await writableURL(path, in: listed)
-            // ponytail: the probe-then-rename window is the same race local saves have; an `O_EXCL` lock file would
-            // close it if it ever bites.
-            switch await RemoteWorktreeFileAccess.probeVersion(at: url) {
-            case .tooLarge: throw overCap
-            case .missing:
-                if expected != nil { throw HostError.fileChanged(current: nil) }
-            case .version(let current, _):
-                if current.contentHash != expected?.contentHash { throw HostError.fileChanged(current: current) }
+            func refuseIfChanged() async throws {
+                switch await RemoteWorktreeFileAccess.probeVersion(at: url) {
+                case .tooLarge: throw overCap
+                case .missing:
+                    if expected != nil { throw HostError.fileChanged(current: nil) }
+                case .version(let current, _):
+                    if current.contentHash != expected?.contentHash { throw HostError.fileChanged(current: current) }
+                }
             }
-            return try await RemoteWorktreeFileAccess.replaceAtomically(url, with: data)
+            try await refuseIfChanged()
+            // ponytail: replacing, the probe-then-rename window is the same race local saves have; an `O_EXCL`
+            // lock file would close it if it ever bites. Creating, the rename itself refuses a file that appeared.
+            do {
+                return try await RemoteWorktreeFileAccess.replaceAtomically(url, with: data, creating: expected == nil)
+            } catch POSIXError.EEXIST where expected == nil {
+                try await refuseIfChanged()
+                throw HostError.fileChanged(current: nil)
+            }
         }
     }
 
@@ -67,8 +75,9 @@ extension AlasCoreContext {
     }
 
     /// `path` in `worktree` under the real root, else invalidRequest("The host does not edit <path>."):
-    /// no NUL, `..`, `.` or `.git` in any case, no symlink at any component, the last a regular file
-    /// (a folder with `folder`) or absent, and not ignored by git. The folder holding it must exist.
+    /// no NUL, `..`, `.` or `.git` in any case, no symlink at any component, no nested worktree or
+    /// repository on the way, the last a regular file (or a folder, with `folder`) or absent, and not
+    /// ignored by git. The folder holding it must exist.
     func writableURL(_ path: String, in worktree: Worktree, folder: Bool = false) async throws -> URL {
         let refused = HostError.invalidRequest(reason: "The host does not edit \(path).")
         // Checked as a string first: nothing a bad path names is ever touched.
@@ -89,7 +98,10 @@ extension AlasCoreContext {
                 if isLast { break }
                 throw Self.parentGone(path)
             }
-            guard status.st_mode & S_IFMT == (isLast && !folder ? S_IFREG : S_IFDIR) else { throw refused }
+            let type = status.st_mode & S_IFMT
+            guard isLast ? type == S_IFREG || (folder && type == S_IFDIR) : type == S_IFDIR else { throw refused }
+            // A nested worktree or repository answers to its own gate.
+            if !isLast, lstat(url.appendingPathComponent(".git").path, &status) == 0 { throw refused }
         }
         // A folder has no ignore rules, and its tree lists every file.
         if !isFolderWorktree(worktree) {

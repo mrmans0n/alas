@@ -1220,8 +1220,10 @@ extension GitService {
     /// force-added-tracked-file exemption above, extended to a ref instead
     /// of just the current index.
     public func isPathIgnored(worktreePath: URL, path: String, comparisonRef: String? = nil) async throws -> Bool {
+        // `./` keeps a leading `:` a name: as pathspec magic (`:/x`, `:(top)x`)
+        // it would check a different path than the one asked about.
         let result = try await Process.git(
-            ["check-ignore", "-q", "--", path],
+            ["check-ignore", "-q", "--", path.hasPrefix("/") ? path : "./" + path],
             cwd: worktreePath
         )
         switch result.exitCode {

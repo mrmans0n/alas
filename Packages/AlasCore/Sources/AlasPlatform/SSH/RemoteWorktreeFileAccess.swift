@@ -403,16 +403,19 @@ public enum RemoteWorktreeFileAccess: Sendable {
         }.value
     }
 
-    /// Writes `data` to a temp file beside `url`, fsyncs it, sets the mode `url` had (0644 for a new
-    /// file), and renames it over `url`. Returns the version written. The temp file never outlives a failure.
-    public static func replaceAtomically(_ url: URL, with data: Data) async throws -> WorktreeFileVersion {
+    /// Writes `data` to a temp file beside `url`, fsyncs it, sets the permission bits `url` had (0644 for a
+    /// new file), and renames it over `url`, fsyncing the folder after. With `creating`, the rename throws
+    /// `EEXIST` rather than replace anything. Returns the version written. The temp file never outlives a failure.
+    public static func replaceAtomically(_ url: URL, with data: Data, creating: Bool = false) async throws -> WorktreeFileVersion {
         try await Task.detached(priority: .userInitiated) {
             func failure() -> POSIXError { POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
             // Bounded, so a long name still leaves room for the suffix.
             let name = String(decoding: url.lastPathComponent.utf8.prefix(64), as: UTF8.self)
-            let temp = url.deletingLastPathComponent().appendingPathComponent(".\(name).alas-\(UUID().uuidString)")
+            let directory = url.deletingLastPathComponent()
+            let temp = directory.appendingPathComponent(".\(name).alas-\(UUID().uuidString)")
             var existing = stat()
-            let mode = lstat(url.path, &existing) == 0 ? existing.st_mode & 0o7777 : 0o644
+            // Permission bits only: never setuid, setgid or sticky.
+            let mode = lstat(url.path, &existing) == 0 ? existing.st_mode & 0o777 : 0o644
             let fd = open(temp.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o600)
             guard fd >= 0 else { throw failure() }
             var renamed = false
@@ -431,8 +434,14 @@ public enum RemoteWorktreeFileAccess: Sendable {
                 return .success(status)
             }
             let status = try written.get()
-            guard rename(temp.path, url.path) == 0 else { throw failure() }
+            guard renamex_np(temp.path, url.path, creating ? UInt32(RENAME_EXCL) : 0) == 0 else { throw failure() }
             renamed = true
+            // The rename is durable once its folder is.
+            let folder = open(directory.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            if folder >= 0 {
+                fsync(folder)
+                close(folder)
+            }
             return WorktreeFileVersion(contentHash: WorktreeFileVersion.contentHash(of: data), modified: modified(status))
         }.value
     }

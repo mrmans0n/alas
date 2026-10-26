@@ -952,6 +952,12 @@ struct HostProtocolServerTests {
             return
         }
         #expect(existing.contentHash == WorktreeFileVersion.contentHash(of: Data()))
+        // A file that appears after the probe is not replaced by a create either.
+        await #expect(throws: POSIXError(.EEXIST)) {
+            try await RemoteWorktreeFileAccess.replaceAtomically(created, with: Data("x".utf8), creating: true)
+        }
+        #expect(try Data(contentsOf: created).isEmpty)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: repo.path).allSatisfy { !$0.hasPrefix(".new.txt.alas-") })
 
         #expect(try await fixture.request(.createFolder(worktree: ref, path: "docs")) == .done)
         var isDirectory: ObjCBool = false
@@ -959,6 +965,8 @@ struct HostProtocolServerTests {
         #expect(isDirectory.boolValue)
         #expect(try await fixture.request(.createFolder(worktree: ref, path: "docs"))
             == .failure(error: .failed(message: "docs already exists on the host.")))
+        #expect(try await fixture.request(.createFolder(worktree: ref, path: "new.txt"))
+            == .failure(error: .failed(message: "new.txt already exists on the host.")))
         #expect(try await write("gone/x.txt", "", expected: nil)
             == .failure(error: .failed(message: "The folder holding gone/x.txt is no longer on the host.")))
     }
@@ -1005,7 +1013,8 @@ struct HostProtocolServerTests {
     }
 
     enum UnwritablePath: CaseIterable {
-        case parentDirectory, absolute, nul, dotGit, dotGitCase, symlinkFinal, symlinkParentOutside, symlinkParentInside, directory, ignored
+        case parentDirectory, absolute, nul, dotGit, dotGitCase, symlinkFinal, symlinkParentOutside, symlinkParentInside, directory, ignored,
+            colonPrefixed, nestedWorktree
     }
 
     /// Paths come from the client: a save lands only on a regular file inside
@@ -1046,56 +1055,52 @@ struct HostProtocolServerTests {
             path = "debug.log"
             try Data("*.log\n".utf8).write(to: repo.appendingPathComponent(".gitignore"))
             try Data("a\n".utf8).write(to: repo.appendingPathComponent(path))
+        case .colonPrefixed:
+            // Pathspec magic would check `x.env` at the top instead.
+            path = ":/x.env"
+            try FileManager.default.createDirectory(at: repo.appendingPathComponent(":"), withIntermediateDirectories: true)
+            try Data(":/\n".utf8).write(to: repo.appendingPathComponent(".gitignore"))
+            try Data("a\n".utf8).write(to: repo.appendingPathComponent(path))
+        case .nestedWorktree:
+            // Its own gate guards it, not this one's.
+            path = "nested/wt/a.txt"
+            #expect(try await Process.git(["worktree", "add", "-q", "-b", "nested", "nested/wt"], cwd: repo).exitCode == 0)
         }
 
-        #expect(try await fixture.request(.writeFile(worktree: ref, path: path, text: "x", expected: nil))
-            == .failure(error: .invalidRequest(reason: "The host does not edit \(path).")))
+        let response = try await fixture.request(.writeFile(worktree: ref, path: path, text: "x", expected: nil))
+        #expect(response == .failure(error: .invalidRequest(reason: "The host does not edit \(path).")))
         #expect(try Data(contentsOf: inside) == Data("keep\n".utf8))
         #expect(try Data(contentsOf: config) == configBytes)
         #expect(try Data(contentsOf: hello) == helloBytes)
-        if shape == .ignored {
+        if shape == .ignored || shape == .colonPrefixed {
             #expect(try Data(contentsOf: repo.appendingPathComponent(path)) == Data("a\n".utf8))
+        }
+        if shape == .nestedWorktree {
+            #expect(!FileManager.default.fileExists(atPath: repo.appendingPathComponent(path).path))
         }
     }
 
     /// A folder has no ignore rules, and its tree lists every file: what a
-    /// Mac can read there it can save.
-    @Test(arguments: [false, true])
-    func ignoredFilesAreEditedOnlyInFolderProjects(folder: Bool) async throws {
+    /// Mac can read there it can save. In a git project the same file is
+    /// refused (`fileWritesStayOnRegularFilesInsideTheWorktree`).
+    @Test func ignoredFilesAreEditedInFolderProjects() async throws {
         let fixture = try await RepoFixture()
         defer { fixture.tearDown() }
-        let (root, ref): (URL, WorktreeRef)
-        if folder {
-            root = fixture.root.appendingPathComponent("plain")
-            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-            let id = try await fixture.host.projects.add(path: root, displayName: "plain", icon: .default(), kind: .folder, caller: .app).id
-            let worktree = try #require(fixture.core.projects.worktrees(projectId: id).first)
-            ref = WorktreeRef(projectID: id, path: worktree.path.path)
-        } else {
-            (root, ref) = try await fixture.mainWorktree()
-        }
+        let root = fixture.root.appendingPathComponent("plain")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let id = try await fixture.host.projects.add(path: root, displayName: "plain", icon: .default(), kind: .folder, caller: .app).id
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: id).first)
+        let ref = WorktreeRef(projectID: id, path: worktree.path.path)
         try Data("*.log\n".utf8).write(to: root.appendingPathComponent(".gitignore"))
         let log = root.appendingPathComponent("debug.log")
         try Data("a\n".utf8).write(to: log)
 
-        let read = try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "debug.log")))
-        if folder {
-            guard case .worktreeRead(.fileContents(_, _, _, _, let version?)) = read,
-                  case .fileWritten = try await fixture.request(.writeFile(worktree: ref, path: "debug.log", text: "b\n", expected: version))
-            else {
-                Issue.record("expected the ignored file read and saved in a folder")
-                return
-            }
-            #expect(try Data(contentsOf: log) == Data("b\n".utf8))
-        } else {
-            guard case .worktreeRead(.fileUnavailable(_, "debug.log", .pathRejected, _, _)) = read else {
-                Issue.record("expected the ignored file unread, got \(read)")
-                return
-            }
-            #expect(try await fixture.request(.writeFile(worktree: ref, path: "debug.log", text: "b\n", expected: nil))
-                == .failure(error: .invalidRequest(reason: "The host does not edit debug.log.")))
-            #expect(try Data(contentsOf: log) == Data("a\n".utf8))
+        let version = try await fixture.fileVersion("debug.log", in: ref)
+        guard case .fileWritten = try await fixture.request(.writeFile(worktree: ref, path: "debug.log", text: "b\n", expected: version)) else {
+            Issue.record("expected the ignored file saved in a folder")
+            return
         }
+        #expect(try Data(contentsOf: log) == Data("b\n".utf8))
     }
 
     enum WriteGate: CaseIterable { case restoreHold, pendingRecovery, overCap, appHost }
