@@ -179,13 +179,17 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     /// Resolve a conflicted path, with or without an operation in progress
     /// (`host.worktrees.operations.v1`).
     case useOurs(path: String), useTheirs(path: String), keepDeleted(path: String), markResolved(path: String)
+    /// Apply or undo one of the repository's commits, named by its SHA; a
+    /// conflict leaves the operation in place (`host.worktrees.operations.v1`).
+    case cherryPick(sha: String), revert(sha: String)
 
     /// The capability beyond host.worktrees.git.v1 a change needs; nil for the original seven.
     public var capability: String? {
         switch self {
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch: nil
         case .stash, .applyStash, .popStash, .dropStash: HostProtocolCapability.worktreesStashV1
-        case .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved:
+        case .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .cherryPick,
+             .revert:
             HostProtocolCapability.worktreesOperationsV1
         }
     }

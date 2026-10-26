@@ -47,7 +47,7 @@ extension AlasCoreContext {
         let root = worktree.path
         let git = GitService()
         switch change {
-        case .commit, .push, .pull:
+        case .commit, .push, .pull, .cherryPick, .revert:
             if try await git.mergeState(worktreePath: root) != nil {
                 throw HostError.failed(message: "A rebase, merge, cherry-pick or revert is in progress on the host; finish it there first.")
             }
@@ -143,6 +143,10 @@ extension AlasCoreContext {
         case .markResolved(let path):
             try await Self.refuseOutside([path], of: root)
             try await git.markResolved(worktreePath: root, relativePath: path)
+        case .cherryPick(let sha):
+            try Self.throwIfFailed(await git.cherryPick(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
+        case .revert(let sha):
+            try Self.throwIfFailed(await git.revert(worktreePath: root, sha: Self.verifiedCommit(sha, at: root)))
         }
         return .done
     }
@@ -159,7 +163,7 @@ extension AlasCoreContext {
         case .dropStash(let stash):
             try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .continueOperation, .skipOperation, .abortOperation, .useOurs,
-             .useTheirs, .keepDeleted, .markResolved:
+             .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert:
             preconditionFailure("not a stash change")
         }
     }
@@ -208,6 +212,18 @@ extension AlasCoreContext {
         guard unmerged.exitCode == 0, !unmerged.stdout.isEmpty else {
             throw HostError.failed(message: "The conflict on \(path) changed; refresh and try again.")
         }
+    }
+
+    /// `sha` as a full commit SHA of this repository: a client never hands
+    /// git a rev expression or an option.
+    static func verifiedCommit(_ sha: String, at root: URL) async throws -> String {
+        guard RemoteWorktreeFileAccess.isCommitSHA(sha) else {
+            throw HostError.invalidRequest(reason: "A commit is named by its SHA.")
+        }
+        let resolved = try await Process.git(["rev-parse", "--verify", "--quiet", "\(sha)^{commit}"], cwd: root)
+        let full = resolved.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard resolved.exitCode == 0, !full.isEmpty else { throw HostError.notFound(what: "commit \(sha)") }
+        return full
     }
 
     /// A conflict is left to the next changes read; an error is shown.

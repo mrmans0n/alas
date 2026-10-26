@@ -80,6 +80,7 @@ struct HostProtocolTests {
         )),
         HostClientMessage(id: 33, request: .mutateWorktree(worktree: ref, branch: "feature", change: .continueOperation(kind: .rebase))),
         HostClientMessage(id: 34, request: .mutateWorktree(worktree: ref, branch: "feature", change: .useOurs(path: "a.txt"))),
+        HostClientMessage(id: 35, request: .mutateWorktree(worktree: ref, branch: "feature", change: .cherryPick(sha: "abc1234"))),
     ])
     func clientMessagesRoundTrip(_ message: HostClientMessage) throws {
         #expect(try JSONDecoder().decode(HostClientMessage.self, from: JSONEncoder().encode(message)) == message)

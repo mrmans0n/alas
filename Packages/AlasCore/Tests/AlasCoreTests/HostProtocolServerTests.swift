@@ -808,6 +808,64 @@ struct HostProtocolServerTests {
         #expect(operation == nil)
     }
 
+    /// As locally, a conflicting cherry-pick stays in place: the Mac sees it
+    /// in the changes and can leave it.
+    @Test func aConflictingCherryPickLeavesAnOperationTheMacCanSeeAndLeave() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let script = repo.appendingPathComponent(".alas/scripts/hello.sh")
+        for (branch, contents) in [("other", "theirs\n"), ("main", "ours\n")] {
+            let checkout = branch == "other" ? ["checkout", "-q", "-b", "other"] : ["checkout", "-q", "main"]
+            #expect(try await Process.git(checkout, cwd: repo).exitCode == 0)
+            try contents.write(to: script, atomically: true, encoding: .utf8)
+            let commit = ["-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-q", "-am", contents]
+            #expect(try await Process.git(commit, cwd: repo).exitCode == 0)
+        }
+        func sha(_ ref: String) async throws -> String {
+            try await Process.git(["rev-parse", ref], cwd: repo).stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        let (theirs, head) = try (await sha("other"), await sha("HEAD"))
+        func mutate(_ change: HostWorktreeChange) async throws -> HostResponse {
+            try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change))
+        }
+        func changes() async throws -> (MergeOperation?, [RemoteChangedFile]) {
+            guard case .worktreeRead(.changeList(_, _, _, let files, let staged, let unstaged, _, _, _, _, let operation)) =
+                try await fixture.request(.readWorktree(worktree: ref, read: .changes(comparisonMode: nil)))
+            else { throw HostError.failed(message: "expected the changes") }
+            return (operation, files + staged + unstaged)
+        }
+
+        #expect(try await mutate(.cherryPick(sha: theirs)) == .done)
+        let (operation, files) = try await changes()
+        #expect(operation == .cherryPick(sha: theirs, summary: "theirs"))
+        #expect(files.contains { $0.conflict != nil })
+
+        #expect(try await mutate(.abortOperation(kind: .cherryPick)) == .done)
+        #expect(try await changes().0 == nil)
+        #expect(try await sha("HEAD") == head)
+        #expect(try await Process.git(["status", "--porcelain"], cwd: repo).stdout == "")
+    }
+
+    /// Only an object ID crosses to git, and only one of this repository's commits.
+    @Test(arguments: [
+        ("HEAD", HostError.invalidRequest(reason: "A commit is named by its SHA.")),
+        ("--abort", .invalidRequest(reason: "A commit is named by its SHA.")),
+        (String(repeating: "a", count: 40), .notFound(what: "commit \(String(repeating: "a", count: 40))")),
+    ])
+    func cherryPickAndRevertTakeOnlyThisRepositorysCommits(_ sha: String, _ error: HostError) async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let head = try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout
+
+        for change in [HostWorktreeChange.cherryPick(sha: sha), .revert(sha: sha)] {
+            #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: change)) == .failure(error: error))
+        }
+        #expect(try await Process.git(["rev-parse", "HEAD"], cwd: repo).stdout == head)
+        #expect(try await GitService().mergeState(worktreePath: repo) == nil)
+    }
+
     enum DuringRebase: CaseIterable { case stage, commit, wrongKind, outsidePath }
 
     /// Only a way out of the rebase passes for the branch git left: anything
