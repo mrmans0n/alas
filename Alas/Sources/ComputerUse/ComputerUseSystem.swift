@@ -846,10 +846,11 @@ extension LiveComputerUseSystem {
         case keyFirst
     }
 
-    /// After text went in by AX into a document's text: a letter and a backspace as key events at
-    /// the caret, so the app marks the document edited (`ComputerUseTextCheck.documentNudge`), or
-    /// the warning where they can't go. The whole value is checked against the one written after
-    /// each key, and put back by AX when the keys changed it (`ComputerUseTextCheck.keyEditCheck`).
+    /// After text went in by AX into a document window not yet marked edited: a letter and a
+    /// backspace as key events at the caret, so the app marks the document edited
+    /// (`ComputerUseTextCheck.documentNudge`), or the warning where they can't go. The whole value
+    /// is checked against the one written after each key, and put back by AX when the keys changed
+    /// it; the close button's `AXEdited` then tells whether it took (`ComputerUseTextCheck.keyEditCheck`).
     /// Never throws: the text is in either way.
     private static func documentEdited(
         _ delivered: ComputerUseDelivered, by input: ComputerUseInput, in window: ComputerUseWindow, keys: EditKeys,
@@ -881,7 +882,10 @@ extension LiveComputerUseSystem {
             }
             let settled = await ComputerUseAXActions.awaitFieldValue(
                 after: at, app: app, stable: true, isCancelled: isCancelled) { $0 == before }
-            switch ComputerUseTextCheck.keyEditCheck(before: before, sawLetter: sawLetter, after: settled.value) {
+            // The close button's edited mark is the evidence; only text left as written is waited on for it.
+            let edited = settled.value == before
+                ? await ComputerUseAXActions.awaitEdited(after: at, app: app, isCancelled: isCancelled) : nil
+            switch ComputerUseTextCheck.keyEditCheck(before: before, sawLetter: sawLetter, after: settled.value, edited: edited) {
             case .marked: return nil
             case .notMarked: return notMarked
             case .restore:
