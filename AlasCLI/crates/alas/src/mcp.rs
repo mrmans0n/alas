@@ -756,7 +756,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_drag",
-            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. Drags stay inside the app in the background when they can (sliders, canvases, splitters); a drag that starts a file-style drag and drop briefly brings the app to the front and moves the real cursor, and is refused while the user is typing or using the mouse. A drag that goes to the front needs its drop point visible: when another window covers it, the drag is cancelled in place with an error. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
+            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. Drags stay inside the app in the background when they can (sliders, canvases, splitters); a drag that starts a file-style drag and drop briefly brings the app to the front and moves the real cursor, and is refused while the user is typing or using the mouse. Drags in a window that's off screen or on another space, and drags with delivery \"direct\", also go to the front. A drag that goes to the front needs its drop point visible: when another window covers it, the drag is cancelled in place with an error. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
@@ -766,7 +766,8 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "to_window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "Another window of the same app to drop into, a window_id from computer_apps. Default: window_id." },
                     "to_ref": computer_ref_property("The element to drop on."),
                     "to_x": computer_pixel_property("End pixels from the left edge of the latest screenshot. Use with to_y, instead of to_ref."),
-                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref.")
+                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref."),
+                    "delivery": computer_delivery_property()
                 }),
                 &[]
             )
@@ -1479,6 +1480,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "to_ref",
                     "to_x",
                     "to_y",
+                    "delivery",
                     "query",
                     "limit",
                     "max_depth",
@@ -1491,8 +1493,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 to_window_id: optional_bounded_u64(args, "to_window_id", 0, u32::MAX.into())?
                     .map(|value| value as u32),
                 to: computer_target(args, "to_ref", "to_x", "to_y")?,
-                // Always delivered with the app in front; the flag would only repeat that.
-                direct: false,
+                direct: computer_direct(args)?,
                 post: computer_post(args)?,
                 call_id: None,
             }))
@@ -4274,6 +4275,19 @@ mod tests {
                     to_window_id: Some(9),
                     to: element("e4"),
                     direct: false,
+                    post: post.clone(),
+                    call_id: None,
+                },
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "delivery": "direct" }),
+                ComputerCommand::Drag {
+                    window_id: 7,
+                    from: element("e1"),
+                    to_window_id: None,
+                    to: element("e2"),
+                    direct: true,
                     post,
                     call_id: None,
                 },
@@ -4420,10 +4434,6 @@ mod tests {
             (
                 "computer_drag",
                 json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "to_x": 1, "to_y": 1 }),
-            ),
-            (
-                "computer_drag",
-                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "delivery": "direct" }),
             ),
             ("computer_open_app", json!({})),
             (
