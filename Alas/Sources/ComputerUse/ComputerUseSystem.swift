@@ -606,13 +606,28 @@ extension LiveComputerUseSystem {
                 guard case .drag(let from, let to, let toWindow) = input else {
                     return try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
                 }
-                return try await ComputerUseDragTiers.deliver(
-                    direct: direct,
-                    background: { try await dragInBackground(from: from, to: to, in: window, toWindow: toWindow, interrupt: interrupt) },
-                    sessionActive: { dragSessionActive(pid: window.app.pid) },
-                    foreground: { try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt) },
-                    isCancelled: isCancelled,
-                    sleep: { try? await Task.sleep(for: $0) })
+                // The in-app drag makes the window key first, as a background click does; it is
+                // handed back the same way, also after a fallback to the foreground drag.
+                var keying = KeyAttempt()
+                do {
+                    var delivered = try await ComputerUseDragTiers.deliver(
+                        direct: direct,
+                        background: {
+                            try await dragInBackground(
+                                from: from, to: to, in: window, toWindow: toWindow, keying: &keying, interrupt: interrupt)
+                        },
+                        sessionActive: { dragSessionActive(pid: window.app.pid) },
+                        foreground: { try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt) },
+                        isCancelled: isCancelled,
+                        sleep: { try? await Task.sleep(for: $0) })
+                    await keying.restoreUserKeyWindow(window)
+                    delivered.keyedInBackground = keying.keyedInBackground
+                    return delivered
+                } catch {
+                    await keying.restoreUserKeyWindow(window)
+                    if keying.keyedInBackground { defocusIfInBackground(window) }
+                    throw error
+                }
             }
         }
         let app = window.app
@@ -1027,7 +1042,8 @@ extension LiveComputerUseSystem {
     /// background click's, checked before the points resolve and between the drag's events.
     private static func dragInBackground(
         from: ComputerUseInputTarget, to: ComputerUseInputTarget, in window: ComputerUseWindow,
-        toWindow: ComputerUseWindow?, interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+        toWindow: ComputerUseWindow?, keying: inout KeyAttempt,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseInputPoster.BackgroundDragOutcome? {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
         guard ComputerUseSkyLight.isAvailable else { return nil }
@@ -1044,7 +1060,9 @@ extension LiveComputerUseSystem {
             startOnScreen: ComputerUseInputGeometry.pointIsOnScreen(start, displays: displays),
             endOnScreen: ComputerUseInputGeometry.pointIsOnScreen(end, displays: displays), direct: false)
         guard route == .background else { return nil }
-        if isCancelled() { throw CancellationError() }
+        // Like a background click: some views take a press only in their app's key window.
+        try await makeKeyInBackground(window, &keying, interrupt: interrupt)
+        // The drag checks for a Stop and the takeover rule again before its first event.
         return try await ComputerUseInputPoster.backgroundDrag(
             from: start, to: end, pid: window.app.pid, windowID: window.windowID, windowFrame: window.frame,
             screenWindows: { screenWindows() }, interrupt: interrupt)
