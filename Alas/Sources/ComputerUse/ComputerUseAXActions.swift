@@ -916,7 +916,8 @@ extension ComputerUseAXActions {
 
     /// `ComputerUseTextCheck.documentRoute` for text into the element: `Unsupported` for keys, so
     /// the typing path types it and the document registers the edit; the warning to give when the
-    /// AX write goes on into a document off screen. Call on the AX queue.
+    /// AX write goes on into a document off screen. Secure fields were refused before. Call on the
+    /// AX queue.
     private static func routeDocument(
         _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool
     ) throws -> String? {
@@ -925,12 +926,12 @@ extension ComputerUseAXActions {
             attributeNames(of: $0).contains(kAXDocumentAttribute)
         } ?? false
         switch ComputerUseTextCheck.documentRoute(
-            inDocument: inDocument, secure: isSecure(element),
+            inDocument: inDocument, textArea: string(of: element, kAXRoleAttribute) == kAXTextAreaRole,
+            inWebArea: inDocument && isInWebArea(element),
             keyCommandApp: ComputerUseTextCheck.isKeyCommandApp(app, hostPID: getpid()), keysReach: keysReach) {
         case .asToday: return nil
         case .keys: throw Unsupported(error: .attributeUnsupported)
         case .axWarned: return ComputerUseTextCheck.documentWarning
-        case .refuse: throw secureRefusal
         }
     }
 
@@ -1401,7 +1402,7 @@ extension ComputerUseAXActions {
 
     /// Sets the element's whole value and reads it back; `Unsupported` when it stayed as it was,
     /// so events can type the text instead (`ComputerUseTextCheck.outcome`, which also keeps a web
-    /// page's field from being written at all, and `documentRoute`, a document's on screen).
+    /// page's field from being written at all, and `documentRoute`, a document's text area on screen).
     /// Returns the warning for a document's written off screen. Call on the AX queue.
     private static func setValueChecked(
         _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool

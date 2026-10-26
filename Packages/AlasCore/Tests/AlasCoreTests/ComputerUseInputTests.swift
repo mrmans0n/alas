@@ -732,23 +732,31 @@ struct ComputerUseInputTests {
         #expect(ComputerUseWebContent.isChromium(bundleID: bundleID, acceptsManualAccessibility: manual) == chromium)
     }
 
-    /// Text for a document window goes as keys, which mark it edited; off screen it is the AX
+    /// Text for a document's text area goes as keys, which mark it edited; off screen it is the AX
     /// write with a warning. Other fields, and terminals and code editors, are as today.
     @Test(arguments: [
-        (true, false, false, true, ComputerUseTextCheck.DocumentRoute.keys),
-        (true, false, false, false, .axWarned),
-        (false, false, false, true, .asToday),
-        (false, false, false, false, .asToday),
-        (true, true, false, true, .refuse),
-        (false, true, false, false, .refuse),
-        (true, false, true, true, .asToday),
-        (true, false, true, false, .asToday),
+        // TextEdit's body.
+        (true, true, false, false, true, ComputerUseTextCheck.DocumentRoute.keys),
+        (true, true, false, false, false, .axWarned),
+        // A find bar or inspector field in a document window.
+        (true, false, false, false, true, .asToday),
+        (true, false, false, false, false, .asToday),
+        // A Safari page's text area: its window lists the page as its document.
+        (true, true, true, false, true, .asToday),
+        // No document.
+        (false, true, false, false, true, .asToday),
+        (false, true, false, false, false, .asToday),
+        // A terminal or code editor.
+        (true, true, false, true, true, .asToday),
+        (true, true, false, true, false, .asToday),
     ])
-    func documentTextGoesAsKeys(
-        inDocument: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool, route: ComputerUseTextCheck.DocumentRoute
+    func aDocumentsTextAreaGoesAsKeys(
+        inDocument: Bool, textArea: Bool, inWebArea: Bool, keyCommandApp: Bool, keysReach: Bool,
+        route: ComputerUseTextCheck.DocumentRoute
     ) {
         #expect(ComputerUseTextCheck.documentRoute(
-            inDocument: inDocument, secure: secure, keyCommandApp: keyCommandApp, keysReach: keysReach) == route)
+            inDocument: inDocument, textArea: textArea, inWebArea: inWebArea, keyCommandApp: keyCommandApp,
+            keysReach: keysReach) == route)
     }
 
     @Test(arguments: [

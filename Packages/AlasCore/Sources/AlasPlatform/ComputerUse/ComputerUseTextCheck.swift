@@ -46,22 +46,23 @@ public enum ComputerUseTextCheck {
     /// document app (TextEdit, any NSDocument one) then doesn't mark it edited, so it neither
     /// autosaves the text nor keeps it on save, and an untitled one closes without asking.
     public enum DocumentRoute: Equatable, Sendable {
-        /// Not a document window, or a terminal or code editor: as any other field.
+        /// Not a document's text area, or in a terminal or code editor: as any other field.
         case asToday
         /// Key events on the typing path, which mark the document edited as a person's typing does.
         case keys
         /// Keys don't reach the window (it is off screen): the AX write, with `documentWarning`.
         case axWarned
-        /// A secure field.
-        case refuse
     }
 
-    /// For text typed into an element of a document window (`inDocument`: the window lists
-    /// `AXDocument`, with a value or, untitled, without). A terminal or code editor
-    /// (`keyCommandApp`, `isKeyCommandApp`) is left as today.
-    public static func documentRoute(inDocument: Bool, secure: Bool, keyCommandApp: Bool, keysReach: Bool) -> DocumentRoute {
-        if secure { return .refuse }
-        guard inDocument, !keyCommandApp else { return .asToday }
+    /// For text typed into a document's text area: an `AXTextArea` (`textArea`) outside a web page
+    /// (`inWebArea`) in a window that lists `AXDocument` (`inDocument`, with a value or, untitled,
+    /// without). Anything else there (a find bar, an inspector field, a Safari page's field) and a
+    /// terminal or code editor (`keyCommandApp`, `isKeyCommandApp`) are left as today. Secure
+    /// fields are refused before this.
+    public static func documentRoute(
+        inDocument: Bool, textArea: Bool, inWebArea: Bool, keyCommandApp: Bool, keysReach: Bool
+    ) -> DocumentRoute {
+        guard inDocument, textArea, !inWebArea, !keyCommandApp else { return .asToday }
         return keysReach ? .keys : .axWarned
     }
 
