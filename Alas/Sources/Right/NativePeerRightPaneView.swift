@@ -38,6 +38,12 @@ struct NativePeerRightPaneView: View {
     @State private var pendingCommitAction: (kind: HostOperationKind, commit: RemoteCommit)?
 
     var body: some View {
+        // Split so each part type-checks in reasonable time.
+        prompts(commitPrompts(changePrompts(content)))
+    }
+
+    @ViewBuilder
+    private var content: some View {
         let tabs = self.tabs
         let override = state.config.sidebarChromeOverride(forThemeId: state.themeStore.current.id)
         ZStack {
@@ -110,6 +116,11 @@ struct NativePeerRightPaneView: View {
         .onChange(of: client.workspace.changes) { _, changes in
             if case .loaded = changes { Task { await readStashes() } }
         }
+    }
+
+    /// The discard and stash-drop confirmations.
+    private func changePrompts(_ content: some View) -> some View {
+        content
         .alert(
             PendingDiscard.alertTitle(for: pendingDiscard ?? .placeholder),
             isPresented: Binding(
@@ -146,6 +157,11 @@ struct NativePeerRightPaneView: View {
                 Text(PendingStashDrop.alertMessage(for: pending))
             }
         )
+    }
+
+    /// The cherry-pick and revert confirmations.
+    private func commitPrompts(_ content: some View) -> some View {
+        content
         // The local copy: RightPaneView's cherry-pick alert and CommitRow's revert dialog.
         .alert(
             "Cherry-pick commit?",
@@ -180,6 +196,11 @@ struct NativePeerRightPaneView: View {
                 Text("Create a new commit that reverses this commit.")
             }
         )
+    }
+
+    /// The commit and stash sheets.
+    private func prompts(_ content: some View) -> some View {
+        content
         .sheet(isPresented: Binding(
             get: { commitTarget != nil },
             set: { if !$0 { commitTarget = nil } }
