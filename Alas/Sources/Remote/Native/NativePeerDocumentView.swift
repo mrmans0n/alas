@@ -183,15 +183,18 @@ struct NativePeerReviewView: View {
     @State private var providerDecision = ProviderReviewDecision.comment
     @State private var providerSummaryBody = ""
     @State private var isProviderPublishing = false
-    /// Thread and publish errors and warnings, shown as a note and in the
-    /// confirmation.
+    /// Thread and publish failures, shown as a note and in the confirmation.
     @State private var providerError: String?
+    /// What a thread change or publish that went through could not finish,
+    /// such as one draft that failed to post: a note, not a failure.
+    @State private var providerWarning: String?
 
     var body: some View {
         VStack(spacing: 0) {
             header
             if let failedMutation { failedMutationNote(failedMutation) }
             if let providerError, providerConfirmation == nil { note(providerError, color: "del") }
+            if let providerWarning, providerConfirmation == nil { note(providerWarning, color: "warn") }
             if readFailed { note(readFailedMessage, color: "del") }
             if let reloadError { note(reloadError, color: "del") }
             if case .loaded(_, truncated: true) = diff {
@@ -365,9 +368,11 @@ struct NativePeerReviewView: View {
             switch result {
             case .success(let mutated):
                 providerReview?.request = mutated.refreshedRequest
-                providerError = mutated.warnings.isEmpty ? nil : mutated.warnings.joined(separator: "\n")
+                providerError = nil
+                providerWarning = mutated.warnings.isEmpty ? nil : mutated.warnings.joined(separator: "\n")
             case .failure(let error):
                 providerError = error.message
+                providerWarning = nil
             }
         }
     }
@@ -454,7 +459,8 @@ struct NativePeerReviewView: View {
         case .success(let result):
             providerReview?.request = result.refreshedRequest
             providerConfirmation = nil
-            providerError = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
+            providerError = nil
+            providerWarning = result.warnings.isEmpty ? nil : result.warnings.joined(separator: "\n")
         case .failure(let error):
             providerError = error.message
         }
@@ -549,6 +555,7 @@ struct NativePeerReviewView: View {
             providerReview = pr
             reloadError = nil
             providerError = nil
+            providerWarning = nil
             return
         } catch ReviewSessionLoaderError.unsupportedTarget {
             message = "Not available from this Mac yet."
