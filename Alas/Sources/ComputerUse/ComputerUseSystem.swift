@@ -545,6 +545,9 @@ private enum LiveComputerUseSystem {
 extension LiveComputerUseSystem {
     /// How long a direct delivery waits for the target to come to the front.
     static let activationWait: Duration = .milliseconds(500)
+    /// How long an activation request may go unanswered before WindowServer is asked directly:
+    /// macOS ignores one from Alas while another app is frontmost. Answered ones land in ~15 ms.
+    static let activationFallbackWait: Duration = .milliseconds(150)
     /// Lets the target handle direct input before the previous app returns to the front.
     static let activationSettle: Duration = .milliseconds(100)
     /// The longest a paste waits for the target to read the text before the pasteboard is restored.
@@ -1429,8 +1432,10 @@ extension LiveComputerUseSystem {
         // Only to hand the front back afterwards.
         let previousPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
         await MainActor.run { _ = NSRunningApplication(processIdentifier: app.pid)?.activate() }
-        let deadline = ContinuousClock.now + activationWait
+        let asked = ContinuousClock.now
+        let deadline = asked + activationWait
         var frontmost = false
+        var askedWindowServer = false
         while true {
             // A cancelled task's sleep returns at once, so the loop would spin until the deadline.
             if isCancelled() || Task.isCancelled {
@@ -1439,6 +1444,11 @@ extension LiveComputerUseSystem {
             }
             frontmost = await isFrontmost(app.pid)
             guard !frontmost, ContinuousClock.now < deadline else { break }
+            // Cooperative activation drops the request while Alas isn't the front app.
+            if !askedWindowServer, ContinuousClock.now - asked >= activationFallbackWait {
+                askedWindowServer = true
+                _ = ComputerUseSkyLight.setFrontProcess(pid: app.pid)
+            }
             try? await Task.sleep(for: .milliseconds(25))
         }
         guard frontmost else {
@@ -1473,17 +1483,35 @@ extension LiveComputerUseSystem {
         return await MainActor.run { NSRunningApplication(processIdentifier: pid)?.isActive ?? false }
     }
 
-    /// True when the previous app was asked to the front again.
+    /// True when the previous app came back to the front. Asked the way `withActivation` asks:
+    /// AppKit first, then WindowServer when the request goes unanswered.
     @discardableResult
     private static func restoreActivation(_ previousPID: Int32?, from pid: Int32) async -> Bool {
         guard let previousPID else { return false }
         // Once the user picked another app, the front is theirs to keep.
         guard await isFrontmost(pid) else { return false }
-        return await MainActor.run {
+        let asked = await MainActor.run {
             guard let previous = NSRunningApplication(processIdentifier: previousPID) else { return false }
             // The target is active now; asking on its behalf passes cooperative activation.
             if let current = NSRunningApplication(processIdentifier: pid), previous.activate(from: current) { return true }
             return previous.activate()
+        }
+        if asked, await becomesFrontmost(previousPID) { return true }
+        // Still the target in front: the request was dropped, not overtaken by the user's pick.
+        guard await isFrontmost(pid), NSRunningApplication(processIdentifier: previousPID) != nil,
+              ComputerUseSkyLight.setFrontProcess(pid: previousPID)
+        else { return false }
+        return await becomesFrontmost(previousPID)
+    }
+
+    /// Whether `pid` is the front process within `activationFallbackWait`.
+    private static func becomesFrontmost(_ pid: Int32) async -> Bool {
+        let deadline = ContinuousClock.now + activationFallbackWait
+        while true {
+            if await isFrontmost(pid) { return true }
+            guard ContinuousClock.now < deadline else { return false }
+            // Restores also run in cancelled tasks, whose sleep would return at once.
+            await ComputerUseInputPoster.steadyPause(.milliseconds(25))
         }
     }
 
