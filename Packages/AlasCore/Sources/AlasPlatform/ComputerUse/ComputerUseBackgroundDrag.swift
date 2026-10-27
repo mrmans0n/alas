@@ -17,6 +17,8 @@ public enum ComputerUseBackgroundDrag {
     /// How long after a foreground drop the windows are still read with the drag image gone: a
     /// moved item's source window refreshes a moment after the drop.
     public static let sourceSettle = Duration.milliseconds(500)
+    /// How long a drag's re-reads may go on for a window read without its web content.
+    public static let webContentDeadline = Duration.seconds(3)
 
     /// A drag goes in the background only between two on-screen points of one window, and not
     /// when the caller asked for the direct (foreground) drag. The front takes the drags the
@@ -79,11 +81,14 @@ public enum ComputerUseBackgroundDrag {
     /// waited: activation, the raise and the press flash a selection that shows as a change
     /// before the app moves what was dropped, and a moved item's source window refreshes a moment
     /// after the drop. A background drag stays in one window (`route`), so it stops once the
-    /// drop shows.
+    /// drop shows. Once a read came back without its web content (`webContentMissing`: Chrome
+    /// rebuilds its tree a couple of seconds after input), the deadline stretches to
+    /// `webContentDeadline`.
     public static func keepsPolling(
-        dropped: Bool, sessionActive: Bool, foreground: Bool, settled: Bool, waited: Duration, deadline: Duration
+        dropped: Bool, sessionActive: Bool, foreground: Bool, settled: Bool, webContentMissing: Bool,
+        waited: Duration, deadline: Duration
     ) -> Bool {
-        guard waited < deadline else { return false }
+        guard waited < (webContentMissing ? max(deadline, webContentDeadline) : deadline) else { return false }
         guard dropped else { return true }
         return foreground && (sessionActive || !settled || waited < sourceSettle)
     }

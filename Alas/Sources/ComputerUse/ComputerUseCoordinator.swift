@@ -1217,6 +1217,13 @@ final class ComputerUseCoordinator {
         var endAfter: ComputerUseWindowFingerprint?
     }
 
+    /// Said after a drag whose drop window (the start window, for a drag inside one) shows
+    /// another title than before it: an item it hovered over may have opened.
+    static func titleChangeNote(before: String?, after: String?) -> String? {
+        guard let before, let after, !before.isEmpty, !after.isEmpty, before != after else { return nil }
+        return "\"\(before)\" now shows \"\(after)\"; the app may have opened a folder while the drag hovered over it."
+    }
+
     private static func joined(_ warnings: String?...) -> String? {
         let present = warnings.compactMap { $0 }
         return present.isEmpty ? nil : present.joined(separator: " ")
@@ -1329,6 +1336,7 @@ final class ComputerUseCoordinator {
             var verdict = try await check(
                 read, of: window, after: delivered, of: command, target: target, before: before, end: end,
                 context: context, payload: &payload)
+            var titleNote: String?
             if command.action == .drag {
                 // Finder and others show a drop a moment later: a drag that seems to have changed
                 // nothing is read again until it shows, or the deadline passes. Slow reads count too.
@@ -1343,6 +1351,15 @@ final class ComputerUseCoordinator {
                 // lists) refreshes. A background drag stays in one window.
                 let foreground = delivered.delivery == .activation
                 var previous: Settled?
+                // Chrome rebuilds a web tree a couple of seconds after input: once a read of either
+                // window came back without it, the re-reads get longer.
+                var webContentMissing = false
+                func noteWebContent() {
+                    let cut = ComputerUseReadCut.webContentMissing.rawValue
+                    let dropCut = (payload["to_window"] as? [String: Any])?["truncated_by"] as? String
+                    if read.truncatedBy == cut || dropCut == cut { webContentMissing = true }
+                }
+                noteWebContent()
                 func settled() -> Bool {
                     guard let previous else { return false }
                     // A drop window read cut short, or not read, can't show the app is done either.
@@ -1352,7 +1369,8 @@ final class ComputerUseCoordinator {
                 }
                 while ComputerUseBackgroundDrag.keepsPolling(
                     dropped: dropped, sessionActive: system.dragSessionActive(window.app.pid), foreground: foreground,
-                    settled: settled(), waited: max(slept, clock.now - start), deadline: Self.dragConfirmDeadline) {
+                    settled: settled(), webContentMissing: webContentMissing, waited: max(slept, clock.now - start),
+                    deadline: Self.dragConfirmDeadline) {
                     await sleep(Self.dragConfirmPoll)
                     slept += Self.dragConfirmPoll
                     try checkStillActive(context)
@@ -1374,11 +1392,18 @@ final class ComputerUseCoordinator {
                         read, of: window, after: delivered, of: command, target: target, before: before, end: end,
                         context: context, payload: &payload)
                     if verdict.warning == nil { dropped = true } else if dropped { verdict.warning = nil }
+                    noteWebContent()
+                }
+                // A drag that hovered over a folder may have opened it (Finder's spring-loading).
+                titleNote = if let end {
+                    Self.titleChangeNote(before: end.before?.windowTitle, after: verdict.endAfter?.windowTitle)
+                } else {
+                    Self.titleChangeNote(before: before.windowTitle, after: verdict.after?.windowTitle)
                 }
             }
             Self.report(
-                depthLimited: read.depthLimited, warning: Self.joined(delivered.warning, verdict.warning), for: command,
-                into: &payload)
+                depthLimited: read.depthLimited, warning: Self.joined(delivered.warning, verdict.warning, titleNote),
+                for: command, into: &payload)
             return verdict
         } catch is CancellationError {
             throw CancellationError()

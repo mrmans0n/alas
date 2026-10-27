@@ -891,29 +891,33 @@ struct ComputerUseInputTests {
                 before: alreadyListed ? [9] : [], now: [window], sourcePID: 7) == started)
     }
 
-    /// Columns: dropped, session active, foreground, last two reads settled, waited ms, keeps
-    /// polling. The deadline is 1500 ms.
+    /// Columns: dropped, session active, foreground, last two reads settled, a read lacked its web
+    /// content, waited ms, keeps polling. The deadline is 1500 ms.
     @Test(arguments: [
         // A background drag stays in one window: it stops once the drop shows.
-        (true, true, false, false, 100, false),
-        (false, false, false, false, 100, true),
-        (false, false, false, false, 1500, false),
+        (true, true, false, false, false, 100, false),
+        (false, false, false, false, false, 100, true),
+        (false, false, false, false, false, 1500, false),
         // In the foreground, a drop that showed (the selection flash) is read until two reads
         // agree past the settle, with the drag image gone.
-        (true, false, true, false, 600, true),
-        (true, false, true, true, 250, true),
-        (true, false, true, true, 500, false),
-        (true, true, true, true, 600, true),
-        (true, false, true, false, 1500, false),
-        (false, false, true, true, 600, true),
-    ] as [(Bool, Bool, Bool, Bool, Int, Bool)])
+        (true, false, true, false, false, 600, true),
+        (true, false, true, true, false, 250, true),
+        (true, false, true, true, false, 500, false),
+        (true, true, true, true, false, 600, true),
+        (true, false, true, false, false, 1500, false),
+        (false, false, true, true, false, 600, true),
+        // A web tree Chrome is rebuilding gets 3 s.
+        (false, false, true, false, true, 2500, true),
+        (false, false, true, false, true, 3000, false),
+    ] as [(Bool, Bool, Bool, Bool, Bool, Int, Bool)])
     func aDropIsAwaitedWhileItMaySettle(
-        dropped: Bool, sessionActive: Bool, foreground: Bool, settled: Bool, waitedMs: Int, polls: Bool
+        dropped: Bool, sessionActive: Bool, foreground: Bool, settled: Bool, webContentMissing: Bool, waitedMs: Int,
+        polls: Bool
     ) {
         #expect(
             ComputerUseBackgroundDrag.keepsPolling(
                 dropped: dropped, sessionActive: sessionActive, foreground: foreground, settled: settled,
-                waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
+                webContentMissing: webContentMissing, waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
             ) == polls)
     }
 
