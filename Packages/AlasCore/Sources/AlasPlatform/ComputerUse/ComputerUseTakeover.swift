@@ -142,16 +142,6 @@ public enum ComputerUseTakeover {
         return secureInputKeyIdle.map { min(monitored, $0) } ?? monitored
     }
 
-    /// Whether an event the input monitor sees is the user's own. Alas's posts (`isAlasPosted`, its
-    /// marker) never are. Hardware events carry source pid 0; a pointer move another process posted
-    /// (a window manager centring the cursor on the focused window, as AeroSpace does on every
-    /// focus change) isn't the user's. Keys, clicks, drags and scrolls count from any source: a
-    /// remote-control user's are theirs.
-    public static func countsAsUserInput(type: CGEventType, sourcePID: Int64, isAlasPosted: Bool) -> Bool {
-        if isAlasPosted { return false }
-        return type != .mouseMoved || sourcePID == 0
-    }
-
     /// Whether the user took over a drag under way since `dragBegan`: any input of theirs since
     /// then, or the input monitor no longer running (`lastUserInput` nil), since the HID idle
     /// time counts the drag's own events and can't tell the user's from them.
@@ -180,5 +170,29 @@ public enum ComputerUseEventRoute: Equatable, Sendable {
         if skyLightAvailable, keyConfirmed { return .background }
         // The coordinator already waited for an idle user; one who is back now isn't waited out again.
         return idleSeconds < ComputerUseTakeover.idleThreshold ? .refuse : .activation
+    }
+}
+
+/// Tells the user's input from what other processes post, for the input monitor. Alas's posts
+/// (its marker) never count. Hardware events carry source pid 0. A single pointer move another
+/// process posts (a window manager centring the cursor on the focused window, as AeroSpace does on
+/// every focus change) isn't the user's; a stream of them is (Universal Control, Sidecar, Screen
+/// Sharing, assistive pointers), from its second move on. Keys, clicks, drags and scrolls count from
+/// any source: a remote-control user's are theirs. Used on one thread, the monitor's.
+public struct ComputerUsePostedMoves: Sendable {
+    /// A posted move counts when the same process posted another this soon before it.
+    public static let followWindow: TimeInterval = 0.1
+
+    private var lastMove: (pid: Int64, at: TimeInterval)?
+
+    public init() {}
+
+    /// Whether the event seen at `now` (seconds, any monotonic clock) is the user's.
+    public mutating func countsAsUserInput(type: CGEventType, sourcePID: Int64, isAlasPosted: Bool, now: TimeInterval) -> Bool {
+        if isAlasPosted { return false }
+        guard type == .mouseMoved, sourcePID != 0 else { return true }
+        defer { lastMove = (sourcePID, now) }
+        guard let lastMove, lastMove.pid == sourcePID else { return false }
+        return now - lastMove.at <= Self.followWindow
     }
 }

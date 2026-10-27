@@ -533,19 +533,24 @@ struct ComputerUseInputTests {
                 lastUserInput: lastUserInput, dragBegan: 100, secureInputKeyAt: secureInputKeyAt) == tookOver)
     }
 
-    /// Another process's pointer moves (a window manager centring the cursor) aren't the user's;
-    /// anything else of theirs is, from any source; Alas's own never are.
+    /// Another process's single pointer move (a window manager centring the cursor) isn't the
+    /// user's, a stream of them is; anything else of theirs is, from any source; Alas's own never are.
+    /// Each row: events (type, source pid, Alas's, seconds) and whether each counts.
     @Test(arguments: [
-        (CGEventType.mouseMoved, Int64(0), false, true),
-        (.mouseMoved, 4242, false, false),
-        (.keyDown, 4242, false, true),
-        (.leftMouseDown, 4242, false, true),
-        (.leftMouseDragged, 4242, false, true),
-        (.scrollWheel, 4242, false, true),
-        (.leftMouseDragged, 0, true, false),
-    ] as [(CGEventType, Int64, Bool, Bool)])
-    func onlyTheUsersOwnPointerMovesCountAsInput(type: CGEventType, sourcePID: Int64, alasPosted: Bool, counts: Bool) {
-        #expect(ComputerUseTakeover.countsAsUserInput(type: type, sourcePID: sourcePID, isAlasPosted: alasPosted) == counts)
+        ([(CGEventType.mouseMoved, Int64(0), false, 0.0)], [true]),
+        ([(.mouseMoved, 4242, false, 0)], [false]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 4242, false, 0.05)], [false, true]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 4242, false, 0.15)], [false, false]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 7, false, 0.05)], [false, false]),
+        ([(.mouseMoved, 4242, true, 0), (.mouseMoved, 4242, false, 0.05)], [false, false]),
+        ([(.keyDown, 4242, false, 0), (.leftMouseDown, 4242, false, 0), (.leftMouseDragged, 4242, false, 0),
+          (.scrollWheel, 4242, false, 0)], [true, true, true, true]),
+        ([(.leftMouseDragged, 0, true, 0)], [false]),
+    ] as [([(CGEventType, Int64, Bool, TimeInterval)], [Bool])])
+    func onlyTheUsersOwnPointerMovesCountAsInput(events: [(CGEventType, Int64, Bool, TimeInterval)], counts: [Bool]) {
+        var moves = ComputerUsePostedMoves()
+        let seen = events.map { moves.countsAsUserInput(type: $0.0, sourcePID: $0.1, isAlasPosted: $0.2, now: $0.3) }
+        #expect(seen == counts)
     }
 
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.

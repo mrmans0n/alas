@@ -332,10 +332,10 @@ enum ComputerUseInputPoster {
             .intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty
     }
 
-    /// The pause over the drop before the release: under half of Finder's spring-loading delay
-    /// while spring-loaded folders are on, but at least `minimumDropHover`, so a folder under the drop point doesn't open.
-    /// Read on every drag, since the user can change it any time; missing keys are macOS's
-    /// defaults, on with 0.5 s.
+    /// The pause over the drop before the release, at most `systemDragHover`. While spring-loaded
+    /// folders are on it is half their delay, so a folder under the drop point doesn't open, but at
+    /// least `minimumDropHover`, so the drag session catches up over the drop. Read on every drag,
+    /// since the user can change it any time; missing keys are macOS's defaults, on with 0.5 s.
     private static func dropHover() -> Duration {
         func value(_ key: String) -> NSNumber? {
             CFPreferencesCopyAppValue(key as CFString, kCFPreferencesAnyApplication) as? NSNumber

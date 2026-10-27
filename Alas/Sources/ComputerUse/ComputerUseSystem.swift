@@ -1725,7 +1725,7 @@ private actor ComputerUseSerialLock {
 /// The user's physical input to any app, Alas included, from a listen-only event tap at the HID
 /// level. Events Alas posts to a pid never pass through it. The drags Alas posts system-wide do,
 /// and carry `postedEventMarker`, which the tap skips; so does every other event Alas posts, and
-/// pointer moves other processes post (`ComputerUseTakeover.countsAsUserInput`). The tap runs on its own thread and run loop, never the main thread, and only stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
+/// a single pointer move another process posts (`ComputerUsePostedMoves`). The tap runs on its own thread and run loop, never the main thread, and only stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
 /// in a trusted process; until it runs the takeover check falls back to the HID idle time.
 enum ComputerUseUserInput {
     /// "ALAS", in every event Alas posts (`kCGEventSourceUserData`).
@@ -1742,6 +1742,8 @@ enum ComputerUseUserInput {
     private static let attemptInterval: UInt64 = 5_000_000_000
     /// Written and read on the tap thread only: before the tap is enabled, and by its callback.
     private nonisolated(unsafe) static var tap: CFMachPort?
+    /// Read and written by the tap's callback only, on the tap thread.
+    private nonisolated(unsafe) static var postedMoves = ComputerUsePostedMoves()
     /// macOS's Input Monitoring prompt was asked for once in this process.
     private static let listenAccessRequested = Atomic<Bool>(false)
     private static let log = Logger(subsystem: "io.nlopez.alas", category: "computer-use")
@@ -1836,9 +1838,9 @@ enum ComputerUseUserInput {
                 log.info("Computer use input tap re-enabled after macOS disabled it")
             }
         default:
-            guard ComputerUseTakeover.countsAsUserInput(
+            guard postedMoves.countsAsUserInput(
                 type: type, sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID),
-                isAlasPosted: event.getIntegerValueField(.eventSourceUserData) == postedEventMarker)
+                isAlasPosted: event.getIntegerValueField(.eventSourceUserData) == postedEventMarker, now: now())
             else { return }
             lastInputNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .relaxed)
         }

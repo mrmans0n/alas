@@ -1394,8 +1394,12 @@ final class ComputerUseCoordinator {
                     if verdict.warning == nil { dropped = true } else if dropped { verdict.warning = nil }
                     noteWebContent()
                 }
-                // A drag that hovered over a folder may have opened it (Finder's spring-loading).
-                titleNote = if let end {
+                // A front drag that hovered over a folder may have opened it (Finder's spring-loading).
+                // A background drag is posted to the app, never system-wide, so it can't; its title
+                // changes are the drag's own (a document now edited).
+                titleNote = if !foreground {
+                    nil
+                } else if let end {
                     Self.titleChangeNote(before: end.before?.windowTitle, after: verdict.endAfter?.windowTitle)
                 } else {
                     Self.titleChangeNote(before: before.windowTitle, after: verdict.after?.windowTitle)
