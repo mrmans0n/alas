@@ -106,6 +106,10 @@ enum ComputerUseInputPoster {
                     throw ComputerUseSystemError.userActive
                 }
                 await cancelInPlace()
+                // Stopping takes the user's input too (a click on the badge, the Stop shortcut),
+                // which the tap may see before the Stop lands: a Stop by then is a Stop, and the
+                // cursor goes back.
+                if interrupt() == .cancelled { throw CancellationError() }
                 throw ComputerUseSystemError.userTookOverDrag
             case nil:
                 break
