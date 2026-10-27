@@ -337,7 +337,7 @@ struct ComputerUseInputTests {
 
     /// A drag whose window differs only in focus or selection (the activation or the press
     /// selected what it grabbed) did nothing it can show, however it went; a foreground one isn't
-    /// retried directly.
+    /// retried directly, nor one over a cut-short read.
     /// Columns: elements, focus-free elements, focus and target state after (before: 1, 1, A, 1), as events.
     @Test(arguments: [
         (Optional(1), Optional(1), "A", Optional(1), true, Optional(Self.dragNoEffect)),
@@ -348,6 +348,7 @@ struct ComputerUseInputTests {
         (2, 2, "B", 1, false, nil),
         (nil, nil, "B", 2, true, nil),
         (nil, nil, "A", 1, false, ComputerUseChangeCheck.dragWarning),
+        (nil, nil, "A", 1, true, ComputerUseChangeCheck.dragWarning),
     ] as [(Int?, Int?, String, Int?, Bool, String?)])
     func aDragThatOnlyMovedFocusOrSelectionWarns(
         elements: Int?, content: Int?, focus: String, target: Int?, asEvents: Bool, warning: String?

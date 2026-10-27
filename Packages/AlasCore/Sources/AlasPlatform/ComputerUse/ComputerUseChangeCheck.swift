@@ -59,13 +59,16 @@ public enum ComputerUseChangeCheck {
     /// moved only focus and selection (the activation or the press selected the item it grabbed,
     /// and nothing was dropped) warns too, however it went. The retry hint is only for clicks, scrolls and drags that
     /// went as events: a key or typed text can legitimately change nothing a read shows, and an
-    /// activation already was the direct way.
+    /// activation already was the direct way. A drag gets it only over two complete reads: a
+    /// cut-short read can't tell a drag that did nothing from one that worked, and repeating one
+    /// that worked does it twice.
     public static func warning(
         before: ComputerUseWindowFingerprint?, after: ComputerUseWindowFingerprint?, kind: Kind, deliveredAsEvents: Bool
     ) -> String? {
         guard var before, var after else { return nil }
         if kind == .drag {
-            let warning = deliveredAsEvents ? dragWarning + retryDirectHint : dragWarning
+            let complete = before.elementsHash != nil && after.elementsHash != nil
+            let warning = deliveredAsEvents && complete ? dragWarning + retryDirectHint : dragWarning
             if onlyFocusOrSelectionMoved(before, after) { return warning }
             if before.elementsHash == nil || after.elementsHash == nil {
                 before.elementsHash = nil
