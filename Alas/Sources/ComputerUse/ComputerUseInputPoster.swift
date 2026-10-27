@@ -104,16 +104,12 @@ enum ComputerUseInputPoster {
                 if pressed { await cancelInPlace() } else { releaseKeys() }
                 throw CancellationError()
             case .userActive:
-                guard pressed else {
-                    releaseKeys()
-                    throw ComputerUseSystemError.userActive
-                }
-                await cancelInPlace()
                 // Stopping takes the user's input too (a click on the badge, the Stop shortcut),
-                // which the tap may see before the Stop lands: a Stop by then is a Stop, and the
-                // cursor goes back.
-                if interrupt() == .cancelled { throw CancellationError() }
-                throw ComputerUseSystemError.userTookOverDrag
+                // which the tap sees before the Stop lands: released first, a Stop that follows
+                // within `stopGrace` is a Stop, and the cursor goes back.
+                if pressed { await cancelInPlace() } else { releaseKeys() }
+                if await stopFollows(interrupt) { throw CancellationError() }
+                throw pressed ? ComputerUseSystemError.userTookOverDrag : ComputerUseSystemError.userActive
             case nil:
                 break
             }
@@ -251,6 +247,20 @@ enum ComputerUseInputPoster {
         post(up)
         pressed = false
         return .done
+    }
+
+    /// How long a drag's takeover waits for the Stop that the user's input may have been.
+    private static let stopGrace: Duration = .milliseconds(500)
+    private static let stopGracePoll: Duration = .milliseconds(50)
+
+    /// Whether `interrupt` turns into a Stop within `stopGrace`, polled every `stopGracePoll`.
+    private static func stopFollows(_ interrupt: () -> ComputerUseInputInterrupt?) async -> Bool {
+        let deadline = ContinuousClock.now + stopGrace
+        while true {
+            if interrupt() == .cancelled { return true }
+            guard ContinuousClock.now < deadline else { return false }
+            await steadyPause(stopGracePoll)
+        }
     }
 
     /// A pause that a cancelled task still waits out in full.
