@@ -2,8 +2,52 @@ use crate::acp_broker::{
     ACPBrokerSnapshot, AdapterRPCOutcome, BrokerGeneration, BrokerId, EventCursor,
     JSONRPCErrorObject, OperationKey,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
+
+/// Opaque source bytes for a future broker boundary. Successful decoding
+/// validates only this wrapper, not its contents as JSON or ACP data.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AcpRawJSONPayload {
+    bytes: Vec<u8>,
+}
+
+impl AcpRawJSONPayload {
+    const FORMAT: &'static str = "alas.acp.raw-json.v1";
+
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self { bytes }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+}
+
+impl Serialize for AcpRawJSONPayload {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        (Self::FORMAT, STANDARD.encode(&self.bytes)).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for AcpRawJSONPayload {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let (format, encoded) = <(String, String)>::deserialize(deserializer)?;
+        if format != Self::FORMAT {
+            return Err(serde::de::Error::custom(
+                "unsupported raw broker payload format",
+            ));
+        }
+        let bytes = STANDARD
+            .decode(&encoded)
+            .map_err(serde::de::Error::custom)?;
+        if STANDARD.encode(&bytes) != encoded {
+            return Err(serde::de::Error::custom("expected canonical padded base64"));
+        }
+        Ok(Self::new(bytes))
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

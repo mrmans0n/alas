@@ -1,0 +1,187 @@
+{
+  "valid": [
+    {
+      "name": "exact-json",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "IAp7Im4iOjFlOTk5LCJiaWciOjEyMzQ1Njc4OTAxMjM0NTY3ODkwMTIzNDU2Nzg5MCwic2NhbGVkIjoxLjAwZTIsInVua25vd24iOnsidGV4dCI6ImNhZsOpIOmbqiIsInZhbHVlcyI6W251bGwsdHJ1ZV19fQo="
+      ],
+      "sourceUTF8": " \n{\"n\":1e999,\"big\":123456789012345678901234567890,\"scaled\":1.00e2,\"unknown\":{\"text\":\"café 雪\",\"values\":[null,true]}}\n"
+    },
+    {
+      "name": "malformed-json",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "eyJ1bmZpbmlzaGVkIjo="
+      ],
+      "sourceUTF8": "{\"unfinished\":"
+    },
+    {
+      "name": "duplicate-keys",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "eyJ4IjowLCJ4IjoxfQ=="
+      ],
+      "sourceUTF8": "{\"x\":0,\"x\":1}"
+    },
+    {
+      "name": "marker-array",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "WyJhbGFzLmFjcC5yYXctanNvbi52MSIsIllRPT0iXQ=="
+      ],
+      "sourceUTF8": "[\"alas.acp.raw-json.v1\",\"YQ==\"]"
+    },
+    {
+      "name": "invalid-utf8",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "AP/AgAo="
+      ],
+      "sourceBytes": [
+        0,
+        255,
+        192,
+        128,
+        10
+      ]
+    },
+    {
+      "name": "empty-evidence",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        ""
+      ],
+      "sourceBytes": []
+    }
+  ],
+  "invalid": [
+    {
+      "name": "object",
+      "wire": {
+        "format": "alas.acp.raw-json.v1",
+        "data": "YQ=="
+      }
+    },
+    {
+      "name": "null",
+      "wire": null
+    },
+    {
+      "name": "missing-both",
+      "wire": []
+    },
+    {
+      "name": "missing-data",
+      "wire": [
+        "alas.acp.raw-json.v1"
+      ]
+    },
+    {
+      "name": "extra-element",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "YQ==",
+        "ignored"
+      ]
+    },
+    {
+      "name": "unknown-format",
+      "wire": [
+        "alas.acp.raw-json.v2",
+        "YQ=="
+      ]
+    },
+    {
+      "name": "null-format",
+      "wire": [
+        null,
+        "YQ=="
+      ]
+    },
+    {
+      "name": "numeric-format",
+      "wire": [
+        1,
+        "YQ=="
+      ]
+    },
+    {
+      "name": "null-data",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        null
+      ]
+    },
+    {
+      "name": "numeric-data",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        1
+      ]
+    },
+    {
+      "name": "array-data",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        []
+      ]
+    },
+    {
+      "name": "unpadded",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "YQ"
+      ]
+    },
+    {
+      "name": "extra-padding",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "YQ==="
+      ]
+    },
+    {
+      "name": "pad-bits-one-byte",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "YR=="
+      ]
+    },
+    {
+      "name": "pad-bits-two-bytes",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "YWJ="
+      ]
+    },
+    {
+      "name": "newline",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "YQ==\n"
+      ]
+    },
+    {
+      "name": "space",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "Y Q=="
+      ]
+    },
+    {
+      "name": "url-alphabet",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "_w=="
+      ]
+    },
+    {
+      "name": "invalid-alphabet",
+      "wire": [
+        "alas.acp.raw-json.v1",
+        "!!!!"
+      ]
+    }
+  ]
+}
