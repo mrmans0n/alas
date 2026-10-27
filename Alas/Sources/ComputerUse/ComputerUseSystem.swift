@@ -1717,8 +1717,8 @@ private actor ComputerUseSerialLock {
 
 /// The user's physical input to any app, Alas included, from a listen-only event tap at the HID
 /// level. Events Alas posts to a pid never pass through it. The drags Alas posts system-wide do,
-/// and carry `postedEventMarker`, which the tap skips; so does every other event Alas posts. The
-/// tap runs on its own thread and run loop, never the main thread, and only stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
+/// and carry `postedEventMarker`, which the tap skips; so does every other event Alas posts, and
+/// pointer moves other processes post (`ComputerUseTakeover.countsAsUserInput`). The tap runs on its own thread and run loop, never the main thread, and only stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
 /// in a trusted process; until it runs the takeover check falls back to the HID idle time.
 enum ComputerUseUserInput {
     /// "ALAS", in every event Alas posts (`kCGEventSourceUserData`).
@@ -1829,7 +1829,10 @@ enum ComputerUseUserInput {
                 log.info("Computer use input tap re-enabled after macOS disabled it")
             }
         default:
-            guard event.getIntegerValueField(.eventSourceUserData) != postedEventMarker else { return }
+            guard ComputerUseTakeover.countsAsUserInput(
+                type: type, sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID),
+                isAlasPosted: event.getIntegerValueField(.eventSourceUserData) == postedEventMarker)
+            else { return }
             lastInputNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .relaxed)
         }
     }

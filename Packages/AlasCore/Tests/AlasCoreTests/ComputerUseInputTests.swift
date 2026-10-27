@@ -532,6 +532,21 @@ struct ComputerUseInputTests {
                 lastUserInput: lastUserInput, dragBegan: 100, secureInputKeyAt: secureInputKeyAt) == tookOver)
     }
 
+    /// Another process's pointer moves (a window manager centring the cursor) aren't the user's;
+    /// anything else of theirs is, from any source; Alas's own never are.
+    @Test(arguments: [
+        (CGEventType.mouseMoved, Int64(0), false, true),
+        (.mouseMoved, 4242, false, false),
+        (.keyDown, 4242, false, true),
+        (.leftMouseDown, 4242, false, true),
+        (.leftMouseDragged, 4242, false, true),
+        (.scrollWheel, 4242, false, true),
+        (.leftMouseDragged, 0, true, false),
+    ] as [(CGEventType, Int64, Bool, Bool)])
+    func onlyTheUsersOwnPointerMovesCountAsInput(type: CGEventType, sourcePID: Int64, alasPosted: Bool, counts: Bool) {
+        #expect(ComputerUseTakeover.countsAsUserInput(type: type, sourcePID: sourcePID, isAlasPosted: alasPosted) == counts)
+    }
+
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.
     @Test(arguments: [
         (true, true, 0.5, ComputerUseEventRoute.background),

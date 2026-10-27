@@ -142,6 +142,16 @@ public enum ComputerUseTakeover {
         return secureInputKeyIdle.map { min(monitored, $0) } ?? monitored
     }
 
+    /// Whether an event the input monitor sees is the user's own. Alas's posts (`isAlasPosted`, its
+    /// marker) never are. Hardware events carry source pid 0; a pointer move another process posted
+    /// (a window manager centring the cursor on the focused window, as AeroSpace does on every
+    /// focus change) isn't the user's. Keys, clicks, drags and scrolls count from any source: a
+    /// remote-control user's are theirs.
+    public static func countsAsUserInput(type: CGEventType, sourcePID: Int64, isAlasPosted: Bool) -> Bool {
+        if isAlasPosted { return false }
+        return type != .mouseMoved || sourcePID == 0
+    }
+
     /// Whether the user took over a drag under way since `dragBegan`: any input of theirs since
     /// then, or the input monitor no longer running (`lastUserInput` nil), since the HID idle
     /// time counts the drag's own events and can't tell the user's from them.
