@@ -35,17 +35,18 @@ struct AgentHookSocketServerCLITests {
         return (dir, { try? FileManager.default.removeItem(atPath: dir) })
     }
 
-    private static func sendToSocket(path: String, payload: String) async throws -> String {
+    /// `leaves`: the client closes the connection right after its request, without reading the reply.
+    private static func sendToSocket(path: String, payload: String, leaves: Bool = false) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 continuation.resume(with: Result {
-                    try sendToSocketDirect(path: path, payload: payload)
+                    try sendToSocketDirect(path: path, payload: payload, leaves: leaves)
                 })
             }
         }
     }
 
-    private static func sendToSocketDirect(path: String, payload: String) throws -> String {
+    private static func sendToSocketDirect(path: String, payload: String, leaves: Bool = false) throws -> String {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw POSIXError(.EIO) }
         defer { close(fd) }
@@ -82,6 +83,7 @@ struct AgentHookSocketServerCLITests {
         guard connectResult == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
 
         try writeAll(fd: fd, data: Data(payload.utf8))
+        if leaves { return "" }
         shutdown(fd, SHUT_WR)
         return try readAll(fd: fd)
     }
@@ -393,6 +395,41 @@ struct AgentHookSocketServerCLITests {
 
         #expect(object["lines"] as? [String] == ["cancelled"])
         #expect(commands.count == 2)
+    }
+
+    /// A computer call ends with its client: one that closes the connection before the reply is
+    /// cancelled. A client that only half-closed after its request still gets the reply.
+    @Test(arguments: [true, false])
+    func aComputerCallEndsWithItsClient(leaves: Bool) async throws {
+        let (dir, cleanup) = tmpSocketDir()
+        defer { cleanup() }
+        let path = "\(dir)/test.sock"
+        let server = AgentHookSocketServer(socketPath: path)
+        defer { server.shutdown() }
+
+        final class Outcome: @unchecked Sendable {
+            private let lock = NSLock()
+            private var cancelled: Bool?
+            func set(_ value: Bool) { lock.withLock { cancelled = value } }
+            var value: Bool? { lock.withLock { cancelled } }
+        }
+        let outcome = Outcome()
+        server.onCLIRequest = { _ in
+            // Long enough for several looks at the connection.
+            let deadline = ContinuousClock.now + .milliseconds(500)
+            while !Task.isCancelled, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            outcome.set(Task.isCancelled)
+            return .ok
+        }
+
+        let json = #"{"v":1,"kind":"cli","command":"computer_apps","session_id":"s1"}"#
+        let response = try await Self.sendToSocket(path: path, payload: json, leaves: leaves)
+        try await eventually("the call ended") { outcome.value != nil }
+
+        #expect(outcome.value == leaves)
+        if !leaves { #expect(try responseObject(response)["ok"] as? Bool == true) }
     }
 
     @Test func multiMegabyteCLIResponseIsWrittenIntact() async throws {
