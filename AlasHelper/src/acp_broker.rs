@@ -1,3 +1,4 @@
+use crate::acp_broker_protocol::{AcpRawJSONPayload, BrokerWireContext};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -84,6 +85,9 @@ pub struct JSONRPCErrorObject {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdapterRPCOutcome {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_frame: Option<AcpRawJSONPayload>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -93,6 +97,7 @@ pub struct AdapterRPCOutcome {
 impl AdapterRPCOutcome {
     pub fn result(result: Value) -> Self {
         Self {
+            raw_frame: None,
             result: Some(result),
             error: None,
         }
@@ -100,6 +105,7 @@ impl AdapterRPCOutcome {
 
     pub fn error(error: JSONRPCErrorObject) -> Self {
         Self {
+            raw_frame: None,
             result: None,
             error: Some(error),
         }
@@ -109,6 +115,7 @@ impl AdapterRPCOutcome {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum BrokerTurnState {
+    Unknown,
     Idle,
     Sending,
     Streaming,
@@ -133,6 +140,9 @@ pub enum PendingClientRequestKind {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ACPBrokerMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_context: Option<BrokerWireContext>,
+
     pub broker_id: BrokerId,
     pub generation: BrokerGeneration,
     pub alas_session_id: String,
@@ -155,6 +165,11 @@ pub struct OperationStart {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PendingClientRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_frame: Option<AcpRawJSONPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_cursor: Option<EventCursor>,
+
     pub request_id: String,
     pub adapter_request_id: Value,
     pub kind: PendingClientRequestKind,
@@ -175,6 +190,9 @@ pub struct BrokerEvent {
     tag = "type"
 )]
 pub enum BrokerEventKind {
+    RawFrame {
+        frame: AcpRawJSONPayload,
+    },
     Initialized {
         result: Value,
     },
@@ -211,6 +229,11 @@ pub enum BrokerEventKind {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ACPBrokerSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initialize_raw_response: Option<AcpRawJSONPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_session_raw_response: Option<AcpRawJSONPayload>,
+
     pub metadata: ACPBrokerMetadata,
     pub initialize_result: Option<Value>,
     pub remote_session_result: Option<Value>,
@@ -236,6 +259,9 @@ pub struct ACPBrokerSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationSnapshot {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_cursor: Option<EventCursor>,
+
     pub operation_key: OperationKey,
     pub adapter_request_id: AdapterRequestId,
     pub method: String,
@@ -337,6 +363,8 @@ struct OperationRecord {
 #[derive(Clone, Debug)]
 pub struct ACPBrokerState {
     metadata: ACPBrokerMetadata,
+    initialize_raw_response: Option<AcpRawJSONPayload>,
+    remote_session_raw_response: Option<AcpRawJSONPayload>,
     initialize_result: Option<Value>,
     remote_session_result: Option<Value>,
     next_event_cursor: EventCursor,
@@ -352,14 +380,21 @@ pub struct ACPBrokerState {
 
 impl ACPBrokerState {
     pub fn new(metadata: ACPBrokerMetadata) -> Self {
+        let raw = metadata.wire_context == Some(BrokerWireContext::RawV2);
         Self {
+            initialize_raw_response: None,
+            remote_session_raw_response: None,
             metadata,
             initialize_result: None,
             remote_session_result: None,
             next_event_cursor: EventCursor(1),
             acknowledged_cursor: EventCursor(0),
             next_adapter_request_id: 1,
-            turn_state: BrokerTurnState::Idle,
+            turn_state: if raw {
+                BrokerTurnState::Unknown
+            } else {
+                BrokerTurnState::Idle
+            },
             journal: Vec::new(),
             operations: HashMap::new(),
             pending_requests: HashMap::new(),
@@ -504,8 +539,66 @@ impl ACPBrokerState {
     }
 
     pub fn set_turn_state(&mut self, state: BrokerTurnState) -> Result<EventCursor, BrokerError> {
+        if self.metadata.wire_context == Some(BrokerWireContext::RawV2) {
+            return Ok(self.journal_tail());
+        }
         self.turn_state = state;
         Ok(self.push_event(BrokerEventKind::TurnStateChanged { state }))
+    }
+
+    pub fn complete_raw_operation(
+        &mut self,
+        key: &OperationKey,
+        method: &str,
+        frame: AcpRawJSONPayload,
+        error: Option<JSONRPCErrorObject>,
+    ) -> Result<AdapterRPCOutcome, BrokerError> {
+        let success = error.is_none();
+        let outcome = AdapterRPCOutcome {
+            raw_frame: Some(frame.clone()),
+            result: None,
+            error,
+        };
+        let outcome = self.complete_operation(key, outcome)?;
+        if success {
+            if method == "initialize" {
+                self.initialize_raw_response.get_or_insert(frame);
+            } else if matches!(method, "session/new" | "session/load" | "session/resume") {
+                self.remote_session_raw_response.get_or_insert(frame);
+            }
+        }
+        Ok(outcome)
+    }
+
+    pub fn add_raw_frame(&mut self, frame: AcpRawJSONPayload) -> EventCursor {
+        self.push_event(BrokerEventKind::RawFrame { frame })
+    }
+
+    pub fn add_raw_pending_request(
+        &mut self,
+        request_id: impl Into<String>,
+        adapter_request_id: Value,
+        kind: PendingClientRequestKind,
+        frame: AcpRawJSONPayload,
+    ) -> Result<EventCursor, BrokerError> {
+        let request_id = request_id.into();
+        if self.pending_requests.contains_key(&request_id) {
+            return Err(BrokerError::new(
+                BrokerErrorKind::PendingRequestAlreadyExists,
+                "pending request already exists",
+            ));
+        }
+        self.resolved_requests.remove(&request_id);
+        let request = PendingClientRequest {
+            raw_frame: Some(frame),
+            origin_cursor: Some(self.next_event_cursor),
+            request_id: request_id.clone(),
+            adapter_request_id,
+            kind,
+            payload: Value::Null,
+        };
+        self.pending_requests.insert(request_id, request.clone());
+        Ok(self.push_event(BrokerEventKind::PendingRequest { request }))
     }
 
     pub fn add_adapter_notification(
@@ -536,6 +629,8 @@ impl ACPBrokerState {
         self.resolved_requests.remove(&request_id);
 
         let request = PendingClientRequest {
+            raw_frame: None,
+            origin_cursor: None,
             request_id: request_id.clone(),
             adapter_request_id,
             kind,
@@ -690,6 +785,11 @@ impl ACPBrokerState {
             .operations
             .values()
             .map(|record| OperationSnapshot {
+                completed_cursor: if self.metadata.wire_context == Some(BrokerWireContext::RawV2) {
+                    record.completed_cursor
+                } else {
+                    None
+                },
                 operation_key: record.key.clone(),
                 adapter_request_id: record.adapter_request_id,
                 method: record.fingerprint.method.clone(),
@@ -700,6 +800,8 @@ impl ACPBrokerState {
         operations.sort_by(|lhs, rhs| lhs.operation_key.as_str().cmp(rhs.operation_key.as_str()));
 
         ACPBrokerSnapshot {
+            initialize_raw_response: self.initialize_raw_response.clone(),
+            remote_session_raw_response: self.remote_session_raw_response.clone(),
             metadata: self.metadata.clone(),
             initialize_result: self.initialize_result.clone(),
             remote_session_result: self.remote_session_result.clone(),

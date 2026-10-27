@@ -4,7 +4,7 @@ use crate::acp_broker::{
 };
 use crate::acp_broker_protocol::{
     AcpAckParams, AcpAttachParams, AcpCloseParams, AcpDetachParams, AcpNotifyParams, AcpOpenParams,
-    AcpOpenResult, AcpRespondParams, AcpSendParams,
+    AcpOpenResult, AcpRawJSONPayload, AcpRespondParams, AcpSendParams, BrokerWireContext,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -162,6 +162,8 @@ impl AcpBrokerProcessError {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BrokerLaunch {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    wire_context: Option<BrokerWireContext>,
     broker_id: BrokerId,
     session_id: String,
     command: String,
@@ -410,6 +412,21 @@ fn dispatch_control_request(
     method: &str,
     params: Option<Value>,
 ) -> Result<Value, AcpBrokerProcessError> {
+    if let Some(method) = method.strip_prefix("acp/raw/") {
+        return raw_control_request(method, params);
+    }
+    if method.starts_with("acp/") {
+        if let Some(value) = params.as_ref().and_then(|params| params.get("wireContext")) {
+            let context: BrokerWireContext = serde_json::from_value(value.clone())
+                .map_err(|_| broker_error(-32076, "unsupported legacy wire context"))?;
+            if context != BrokerWireContext::LegacyV1 {
+                return Err(broker_error(
+                    -32076,
+                    "legacy namespace requires legacy-v1 context",
+                ));
+            }
+        }
+    }
     match method {
         "acp/open" => acp_open(params),
         "acp/attach" => acp_attach(params),
@@ -445,6 +462,7 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
     let _ = std::fs::remove_file(&launch_path);
 
     let metadata = ACPBrokerMetadata {
+        wire_context: launch.wire_context,
         broker_id: launch.broker_id.clone(),
         generation: BrokerGeneration::new(current_nanos()),
         alas_session_id: launch.session_id.clone(),
@@ -517,10 +535,81 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
     serve_broker_ipc(runtime, dir)
 }
 
+fn require_raw_context(params: Option<&Value>) -> Result<(), AcpBrokerProcessError> {
+    let value = params
+        .and_then(|value| value.get("wireContext"))
+        .ok_or_else(|| broker_error(-32076, "raw wire context required"))?;
+    let context: BrokerWireContext = serde_json::from_value(value.clone())
+        .map_err(|_| broker_error(-32076, "unsupported raw wire context"))?;
+    if context != BrokerWireContext::RawV2 {
+        return Err(broker_error(-32076, "raw-v2 context required"));
+    }
+    Ok(())
+}
+
+fn validate_stored_context(
+    dir: &Path,
+    context: BrokerWireContext,
+) -> Result<(), AcpBrokerProcessError> {
+    if dir.join("metadata.json").exists() {
+        let metadata = read_broker_metadata(dir)
+            .ok_or_else(|| broker_error(-32076, "unreadable broker context"))?;
+        if metadata.wire_context.unwrap_or_default() != context {
+            return Err(broker_error(-32076, "broker wire context mismatch"));
+        }
+    }
+    Ok(())
+}
+
+fn raw_control_request(
+    method: &str,
+    params: Option<Value>,
+) -> Result<Value, AcpBrokerProcessError> {
+    require_raw_context(params.as_ref())?;
+    if method == "list" {
+        return acp_list_mode(BrokerWireContext::RawV2);
+    }
+    if method == "open" {
+        let expected = params
+            .as_ref()
+            .and_then(|value| value.get("expectedGeneration"))
+            .map(|value| serde_json::from_value(value.clone()))
+            .transpose()
+            .map_err(|_| broker_error(-32602, "invalid expected generation"))?;
+        return acp_open_mode(params, BrokerWireContext::RawV2, expected);
+    }
+    if method == "close" {
+        return acp_close_mode(params, BrokerWireContext::RawV2);
+    }
+    if !matches!(
+        method,
+        "attach" | "send" | "notify" | "respond" | "ack" | "detach"
+    ) {
+        return Err(broker_error(-32601, "unknown raw broker method"));
+    }
+    let id = params
+        .as_ref()
+        .and_then(|value| value.get("brokerId"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| broker_error(-32602, "broker ID required"))?;
+    let dir = broker_dir(id)?;
+    validate_stored_context(&dir, BrokerWireContext::RawV2)?;
+    send_ipc(&dir, &format!("raw/{method}"), params.unwrap())
+}
+
 fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
+    acp_open_mode(params, BrokerWireContext::LegacyV1, None)
+}
+
+fn acp_open_mode(
+    params: Option<Value>,
+    context: BrokerWireContext,
+    expected: Option<BrokerGeneration>,
+) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpOpenParams = decode(params)?;
     validate_broker_id(params.broker_id.as_str())?;
     let dir = broker_dir(params.broker_id.as_str())?;
+    validate_stored_context(&dir, context)?;
 
     // Deliberately not created here: try_adopt_running_broker only reads
     // pid.json (broker_is_running reports "not running", not an error,
@@ -529,8 +618,17 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     // raced a concurrent acp_close's now-also-lock-protected removal —
     // create_dir_all would win, then set_restrictive_dir_permissions would
     // fail with ENOENT once the close's removal landed in between the two.
-    if let Some(adopted) = try_adopt_running_broker(&dir, &params)? {
+    if let Some(adopted) = try_adopt_running_broker(&dir, &params, context, expected)? {
         return Ok(adopted);
+    }
+
+    if context == BrokerWireContext::RawV2
+        && (expected.is_some() || dir.join("metadata.json").exists())
+    {
+        return Err(broker_error(
+            -32076,
+            "raw broker observation lost; use a deliberate fresh broker identity",
+        ));
     }
 
     // Nothing usable is running. Spawning a replacement and having it
@@ -561,6 +659,7 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     // (now-unlinked) old one. `broker_root()` is never removed, so a lock
     // there survives every `dir` removal in between.
     let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
+    validate_stored_context(&dir, context)?;
 
     // Create (or recreate) `dir` now that this call actually needs to write
     // into it, entirely under the lock: acp_close takes this same lock
@@ -573,12 +672,22 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
 
     // Someone else may have spawned a replacement while this call waited
     // for the lock above.
-    if let Some(adopted) = try_adopt_running_broker(&dir, &params)? {
+    if let Some(adopted) = try_adopt_running_broker(&dir, &params, context, expected)? {
         return Ok(adopted);
     }
 
     let env = decode_env(params.env)?;
+    if context == BrokerWireContext::RawV2
+        && (expected.is_some() || dir.join("metadata.json").exists())
+    {
+        return Err(broker_error(-32076, "raw broker generation unavailable"));
+    }
     let launch = BrokerLaunch {
+        wire_context: if context == BrokerWireContext::RawV2 {
+            Some(context)
+        } else {
+            None
+        },
         broker_id: params.broker_id,
         session_id: params.session_id,
         command: params.command,
@@ -604,19 +713,32 @@ fn acp_open(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
 fn try_adopt_running_broker(
     dir: &Path,
     params: &AcpOpenParams,
+    context: BrokerWireContext,
+    expected: Option<BrokerGeneration>,
 ) -> Result<Option<Value>, AcpBrokerProcessError> {
     if !broker_is_running(dir) {
         return Ok(None);
     }
     match send_ipc_with_retry(dir, "snapshot", json!({}), Duration::from_secs(2)) {
         Ok(result) => {
-            let snapshot: ACPBrokerSnapshot = serde_json::from_value(result.clone())
-                .map_err(|error| broker_error(-32072, format!("snapshot decode failed: {error}")))?;
+            let snapshot: ACPBrokerSnapshot =
+                serde_json::from_value(result.clone()).map_err(|error| {
+                    broker_error(-32072, format!("snapshot decode failed: {error}"))
+                })?;
+            if snapshot.metadata.wire_context.unwrap_or_default() != context {
+                return Err(broker_error(-32076, "broker wire context mismatch"));
+            }
+            if expected.is_some_and(|generation| generation != snapshot.metadata.generation) {
+                return Err(broker_error(-32075, "broker generation mismatch"));
+            }
             if result
                 .get("adapterExited")
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
             {
+                if context == BrokerWireContext::RawV2 {
+                    return Err(broker_error(-32076, "raw adapter observation lost"));
+                }
                 let _ = send_ipc(
                     dir,
                     "close",
@@ -731,12 +853,20 @@ fn acp_ack(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
 
 fn acp_detach(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpDetachParams = decode(params)?;
-    let _ = broker_dir(params.broker_id.as_str())?;
+    let dir = broker_dir(params.broker_id.as_str())?;
+    validate_stored_context(&dir, BrokerWireContext::LegacyV1)?;
     Ok(json!({ "ok": true }))
 }
 
 fn acp_close(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
-    let params: AcpCloseParams = decode(params)?;
+    acp_close_mode(params, BrokerWireContext::LegacyV1)
+}
+
+fn acp_close_mode(
+    params: Option<Value>,
+    context: BrokerWireContext,
+) -> Result<Value, AcpBrokerProcessError> {
+    let params: AcpCloseParams = decode(params.clone())?;
     let dir = broker_dir(params.broker_id.as_str())?;
     // Coordinate with acp_open's own use of this same lock (see there),
     // across the *whole* close decision — not just remove_broker_dir. A
@@ -752,11 +882,25 @@ fn acp_close(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     // with a "successful" open for a broker whose directory is already
     // gone, and its own supervisor orphaned.
     let _open_lock = acquire_broker_open_lock(params.broker_id.as_str())?;
+    validate_stored_context(&dir, context)?;
+    if let Some(metadata) = read_broker_metadata(&dir) {
+        if metadata.generation != params.generation {
+            return Err(broker_error(-32075, "broker generation mismatch"));
+        }
+    }
     if broker_is_running(&dir) {
         send_ipc(
             &dir,
-            "close",
-            serde_json::to_value(&params).expect("close params serialize"),
+            if context == BrokerWireContext::RawV2 {
+                "raw/close"
+            } else {
+                "close"
+            },
+            if context == BrokerWireContext::RawV2 {
+                json!({"brokerId":params.broker_id,"generation":params.generation,"wireContext":context})
+            } else {
+                serde_json::to_value(&params).expect("close params serialize")
+            },
         )?;
     }
     remove_broker_dir(&dir)?;
@@ -764,6 +908,10 @@ fn acp_close(params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
 }
 
 fn acp_list() -> Result<Value, AcpBrokerProcessError> {
+    acp_list_mode(BrokerWireContext::LegacyV1)
+}
+
+fn acp_list_mode(context: BrokerWireContext) -> Result<Value, AcpBrokerProcessError> {
     let root = broker_root()?;
     let mut brokers = Vec::new();
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -771,7 +919,11 @@ fn acp_list() -> Result<Value, AcpBrokerProcessError> {
     };
     for entry in entries.flatten() {
         let dir = entry.path();
-        if !dir.is_dir() || !broker_is_running(&dir) {
+        if !dir.is_dir()
+            || !broker_is_running(&dir)
+            || read_broker_metadata(&dir)
+                .is_none_or(|meta| meta.wire_context.unwrap_or_default() != context)
+        {
             continue;
         }
         // The ordinary budget, deliberately. A shorter one was tempting here
@@ -1723,8 +1875,22 @@ impl Drop for WriteWatch {
 
 fn handle_ipc_request(
     runtime: &Runtime,
-    request: BrokerIpcRequest,
+    mut request: BrokerIpcRequest,
 ) -> Result<Value, AcpBrokerProcessError> {
+    if let Some(method) = request.method.strip_prefix("raw/") {
+        require_raw_context(request.params.as_ref())?;
+        if lock_runtime(runtime).broker.metadata().wire_context != Some(BrokerWireContext::RawV2) {
+            return Err(broker_error(-32076, "broker wire context mismatch"));
+        }
+        request.method = method.to_owned();
+    } else if request.method != "snapshot"
+        && lock_runtime(runtime).broker.metadata().wire_context == Some(BrokerWireContext::RawV2)
+    {
+        return Err(broker_error(
+            -32076,
+            "raw broker requires raw RPC namespace",
+        ));
+    }
     match request.method.as_str() {
         "snapshot" => Ok(broker_snapshot(runtime)),
         "attach" => broker_attach(runtime, request.params),
@@ -1733,6 +1899,11 @@ fn handle_ipc_request(
         "respond" => broker_respond(runtime, request.params),
         "ack" => broker_ack(runtime, request.params),
         "close" => broker_close(runtime, request.params),
+        "detach" => {
+            let params: AcpDetachParams = decode(request.params)?;
+            ensure_generation(&lock_runtime(runtime), params.generation)?;
+            Ok(json!({"ok":true}))
+        }
         _ => Err(broker_error(
             -32601,
             format!("broker method not found: {}", request.method),
@@ -1814,7 +1985,9 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
                     method: params.method.clone(),
                 },
             );
-            if params.method == "session/prompt" {
+            if state.broker.metadata().wire_context == Some(BrokerWireContext::RawV2) {
+                // Foreground activity is deliberately unmanaged in raw transport mode.
+            } else if params.method == "session/prompt" {
                 state.steering_turn = None;
                 let _ = state.broker.set_turn_state(BrokerTurnState::Sending);
             } else if params.method == "_session/steering" {
@@ -1917,8 +2090,33 @@ fn broker_close(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBr
 
 fn spawn_stdout_reader(runtime: Runtime, stdout: std::process::ChildStdout) {
     std::thread::spawn(move || {
-        for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-            handle_adapter_stdout_line(&runtime, &line);
+        if lock_runtime(&runtime).broker.metadata().wire_context == Some(BrokerWireContext::RawV2) {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut frame = Vec::new();
+                match reader.read_until(b'\n', &mut frame) {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        if frame.last() == Some(&b'\n') {
+                            frame.pop();
+                        }
+                        handle_raw_adapter_frame(&runtime, frame);
+                    }
+                }
+            }
+            let mut state = lock_runtime(&runtime);
+            complete_pending_operations(
+                &mut state,
+                "adapter stdout closed before a response was observed",
+            );
+            state
+                .broker
+                .add_adapter_notification("adapter/stdoutClosed", Value::Null);
+            runtime.state.1.notify_all();
+        } else {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                handle_adapter_stdout_line(&runtime, &line);
+            }
         }
     });
 }
@@ -1943,18 +2141,28 @@ fn spawn_waiter(runtime: Runtime, mut child: std::process::Child) {
         if !state.closing {
             let _ = state.broker.set_turn_state(BrokerTurnState::Ambiguous);
             complete_pending_operations_after_adapter_exit(&mut state);
-            state
-                .broker
-                .add_adapter_notification("adapter/exit", json!({ "unexpected": true }));
+            if state.broker.metadata().wire_context != Some(BrokerWireContext::RawV2) {
+                state
+                    .broker
+                    .add_adapter_notification("adapter/exit", json!({ "unexpected": true }));
+            }
         }
         condvar.notify_all();
     });
 }
 
 fn complete_pending_operations_after_adapter_exit(state: &mut RuntimeState) {
+    // Raw stdout owns final response routing. wait() may win the race with its reader.
+    if state.broker.metadata().wire_context == Some(BrokerWireContext::RawV2) {
+        return;
+    }
+    complete_pending_operations(state, "adapter exited before completing request");
+}
+
+fn complete_pending_operations(state: &mut RuntimeState, message: &str) {
     let outcome = AdapterRPCOutcome::error(JSONRPCErrorObject {
         code: -32074,
-        message: "adapter exited before completing request".to_string(),
+        message: message.to_string(),
         data: None,
     });
     let pending: Vec<_> = state
@@ -1967,6 +2175,118 @@ fn complete_pending_operations_after_adapter_exit(state: &mut RuntimeState) {
             .broker
             .complete_operation(&pending.operation_key, outcome.clone());
     }
+}
+
+fn present_raw<'de, D: serde::Deserializer<'de>>(
+    decoder: D,
+) -> Result<Option<Box<serde_json::value::RawValue>>, D::Error> {
+    Box::<serde_json::value::RawValue>::deserialize(decoder).map(Some)
+}
+
+#[derive(Deserialize)]
+struct RawAdapterHeader {
+    jsonrpc: Option<String>,
+    #[serde(default, deserialize_with = "present_raw")]
+    method: Option<Box<serde_json::value::RawValue>>,
+    #[serde(default, deserialize_with = "present_raw")]
+    id: Option<Box<serde_json::value::RawValue>>,
+    #[serde(default, deserialize_with = "present_raw")]
+    result: Option<Box<serde_json::value::RawValue>>,
+    #[serde(default, deserialize_with = "present_raw")]
+    error: Option<Box<serde_json::value::RawValue>>,
+}
+
+fn raw_error_projection(raw: &serde_json::value::RawValue) -> Option<JSONRPCErrorObject> {
+    #[derive(Deserialize)]
+    struct ErrorHeader {
+        code: i64,
+        message: String,
+        #[serde(default, deserialize_with = "present_raw")]
+        data: Option<Box<serde_json::value::RawValue>>,
+    }
+    #[derive(Deserialize)]
+    struct Kind {
+        kind: Option<String>,
+    }
+    let error: ErrorHeader = serde_json::from_str(raw.get()).ok()?;
+    let kind = error
+        .data
+        .as_ref()
+        .and_then(|data| serde_json::from_str::<Kind>(data.get()).ok())
+        .and_then(|kind| kind.kind);
+    Some(JSONRPCErrorObject {
+        code: error.code,
+        message: error.message,
+        data: kind.map(|kind| json!({"kind":kind})),
+    })
+}
+
+fn handle_raw_adapter_frame(runtime: &Runtime, bytes: Vec<u8>) {
+    route_raw_adapter_frame(&mut lock_runtime(runtime), bytes);
+    runtime.state.1.notify_all();
+}
+
+fn route_raw_adapter_frame(state: &mut RuntimeState, bytes: Vec<u8>) {
+    let header = serde_json::from_slice::<RawAdapterHeader>(&bytes).ok();
+    let frame = AcpRawJSONPayload::new(bytes);
+    if let Some(header) = header.filter(|header| header.jsonrpc.as_deref() == Some("2.0")) {
+        if header.method.is_none() && header.result.is_some() != header.error.is_some() {
+            let id = header
+                .id
+                .as_ref()
+                .and_then(|id| serde_json::from_str::<u64>(id.get()).ok());
+            let projection = header
+                .error
+                .as_ref()
+                .map(|error| raw_error_projection(error));
+            if let Some(id) = id.filter(|_| projection.as_ref().is_none_or(Option::is_some)) {
+                if let Some(pending) = state.pending_methods.remove(&id) {
+                    let result = state.broker.complete_raw_operation(
+                        &pending.operation_key,
+                        &pending.method,
+                        frame.clone(),
+                        projection.flatten(),
+                    );
+                    if result.is_ok() {
+                        return;
+                    }
+                }
+            }
+        } else if let (Some(method), Some(id), None, None) = (
+            header
+                .method
+                .as_ref()
+                .and_then(|method| serde_json::from_str::<String>(method.get()).ok()),
+            header.id,
+            header.result,
+            header.error,
+        ) {
+            // session/update carrying an ID is invalid notification evidence,
+            // not a client request to be normalized or answered.
+            if method != "session/update" {
+                let id: Option<Value> = serde_json::from_str::<String>(id.get())
+                    .ok()
+                    .map(Value::String)
+                    .or_else(|| {
+                        serde_json::from_str::<u64>(id.get())
+                            .ok()
+                            .filter(|id| *id <= i64::MAX as u64)
+                            .map(Value::from)
+                    });
+                if let Some(id) = id {
+                    let key = request_id_key(&id);
+                    if state
+                        .broker
+                        .add_raw_pending_request(key, id, pending_kind(&method), frame.clone())
+                        .is_ok()
+                    {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    state.broker.add_raw_frame(frame);
 }
 
 fn handle_adapter_stdout_line(runtime: &Runtime, line: &str) {
@@ -2165,6 +2485,13 @@ fn request_id_key(id: &Value) -> String {
 
 fn apply_outcome_fields(response: &mut Value, outcome: AdapterRPCOutcome) {
     if let Some(object) = response.as_object_mut() {
+        if let Some(frame) = outcome.raw_frame {
+            object.insert("rawFrame".to_owned(), json!(frame));
+            if let Some(error) = outcome.error {
+                object.insert("error".to_owned(), json!(error));
+            }
+            return;
+        }
         match (outcome.result, outcome.error) {
             (Some(result), None) => {
                 object.insert("result".to_string(), result);
@@ -2898,9 +3225,83 @@ mod tests {
         assert_eq!(turn.turn_state(), BrokerTurnState::Completed);
     }
 
+    #[test]
+    fn legacy_namespace_rejects_explicit_raw_context_before_open_validation() {
+        let error = handle_control_request("acp/open", Some(json!({
+            "wireContext": {"acpVersion":2,"payloadFormat":"alas.acp.raw-json.v1"},
+            "brokerId":"bad/id", "sessionId":"s", "command":"fixture", "args":[], "cwd":"/tmp", "env":{}
+        }))).unwrap_err();
+        assert_eq!(error.code, -32076);
+    }
+
+    #[test]
+    fn malformed_raw_response_methods_never_settle_or_cache_an_operation() {
+        for source in [
+            r#"{"jsonrpc":"2.0","method":null,"id":1,"result":{}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"id":1,"result":{}}"#,
+            r#"{"jsonrpc":"2.0","method":"test/request","id":1,"result":{}}"#,
+        ] {
+            let mut state = steering_runtime_state();
+            let mut metadata = state.broker.metadata().clone();
+            metadata.wire_context = Some(BrokerWireContext::RawV2);
+            state.broker = ACPBrokerState::new(metadata);
+            let key = OperationKey::new("malformed");
+            let op = state
+                .broker
+                .begin_operation(key.clone(), "initialize", json!({}))
+                .unwrap();
+            state.pending_methods.insert(
+                op.adapter_request_id.value(),
+                PendingOperation {
+                    operation_key: key,
+                    method: "initialize".into(),
+                },
+            );
+            route_raw_adapter_frame(&mut state, source.as_bytes().to_vec());
+            assert_eq!(state.pending_methods.len(), 1, "{source}");
+            let snapshot = state.broker.snapshot();
+            assert!(snapshot.initialize_raw_response.is_none(), "{source}");
+            assert!(snapshot.pending_requests.is_empty(), "{source}");
+            assert!(
+                matches!(&state.broker.replay_after_ack().last().unwrap().kind,
+                crate::acp_broker::BrokerEventKind::RawFrame { frame } if frame.bytes() == source.as_bytes())
+            );
+        }
+    }
+
+    #[test]
+    fn raw_exit_keeps_pending_operations_until_stdout_has_been_drained() {
+        let mut state = steering_runtime_state();
+        let mut metadata = state.broker.metadata().clone();
+        metadata.wire_context = Some(BrokerWireContext::RawV2);
+        state.broker = ACPBrokerState::new(metadata);
+        let key = OperationKey::new("last-response");
+        let op = state
+            .broker
+            .begin_operation(key.clone(), "initialize", json!({}))
+            .unwrap();
+        state.pending_methods.insert(
+            op.adapter_request_id.value(),
+            PendingOperation {
+                operation_key: key.clone(),
+                method: "initialize".into(),
+            },
+        );
+        complete_pending_operations_after_adapter_exit(&mut state);
+        assert_eq!(state.pending_methods.len(), 1);
+        let frame =
+            AcpRawJSONPayload::new(br#"{"jsonrpc":"2.0","id":1,"result":{"n":1e999}}"#.to_vec());
+        state
+            .broker
+            .complete_raw_operation(&key, "initialize", frame.clone(), None)
+            .unwrap();
+        assert_eq!(state.broker.snapshot().initialize_raw_response, Some(frame));
+    }
+
     fn steering_runtime_state() -> RuntimeState {
         RuntimeState {
             broker: ACPBrokerState::new(ACPBrokerMetadata {
+                wire_context: None,
                 broker_id: BrokerId::new("steering"),
                 generation: BrokerGeneration::new(1),
                 alas_session_id: "root".to_string(),
@@ -3196,6 +3597,7 @@ mod tests {
     fn a_framing_marker_is_only_trusted_for_the_live_broker() {
         fn write_metadata(dir: &Path, generation: u64) {
             let metadata = ACPBrokerMetadata {
+                wire_context: None,
                 broker_id: BrokerId::new("marker-broker"),
                 generation: BrokerGeneration::new(generation),
                 alas_session_id: "marker-session".to_string(),

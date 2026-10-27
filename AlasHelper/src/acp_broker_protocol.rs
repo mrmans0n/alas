@@ -6,6 +6,49 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum BrokerWireContext {
+    #[default]
+    LegacyV1,
+    RawV2,
+}
+
+impl Serialize for BrokerWireContext {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut object = serializer.serialize_struct("BrokerWireContext", 2)?;
+        object.serialize_field("acpVersion", &(if *self == Self::RawV2 { 2 } else { 1 }))?;
+        object.serialize_field(
+            "payloadFormat",
+            if *self == Self::RawV2 {
+                "alas.acp.raw-json.v1"
+            } else {
+                "structured"
+            },
+        )?;
+        object.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for BrokerWireContext {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Context {
+            acp_version: u32,
+            payload_format: String,
+        }
+        let context = Context::deserialize(deserializer)?;
+        match (context.acp_version, context.payload_format.as_str()) {
+            (1, "structured") => Ok(Self::LegacyV1),
+            (2, "alas.acp.raw-json.v1") => Ok(Self::RawV2),
+            _ => Err(serde::de::Error::custom(
+                "unsupported ACP broker wire context",
+            )),
+        }
+    }
+}
+
 /// Opaque source bytes for a future broker boundary. Successful decoding
 /// validates only this wrapper, not its contents as JSON or ACP data.
 #[derive(Clone, Debug, Eq, PartialEq)]

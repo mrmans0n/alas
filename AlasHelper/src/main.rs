@@ -264,6 +264,7 @@ fn capabilities() -> Value {
         "proc": true
         ,
         "acp": true,
+        "acpRawFrames": 1,
         "sessionCoordination": 1,
         "visualMCPRelay": 1,
         "remoteMCPTools": 1

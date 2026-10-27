@@ -6,11 +6,13 @@ import AlasCode
 /// application do not prove durability; only the owner may consume the handle.
 public struct ACPV2SessionUpdateDelivery: Sendable {
     public let frame: Data
+    public let brokerProvenance: ACPBrokerFrameProvenance?
     public let connectionID: UUID
     private let consumption: Consumption
 
-    public init(frame: Data, connectionID: UUID,
+    public init(frame: Data, connectionID: UUID, brokerProvenance: ACPBrokerFrameProvenance? = nil,
         durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
+        self.brokerProvenance = brokerProvenance
         self.frame = frame
         self.connectionID = connectionID
         self.consumption = Consumption(durableConsumptionAcknowledgement)
