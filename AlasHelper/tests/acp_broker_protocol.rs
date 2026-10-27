@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 
 fn metadata() -> ACPBrokerMetadata {
     ACPBrokerMetadata {
+        wire_context: None,
         broker_id: BrokerId::new("session-local-1"),
         generation: BrokerGeneration::new(7),
         alas_session_id: "alas-session-1".to_string(),
@@ -843,4 +844,65 @@ fn raw_payload_rejects_malformed_wrappers() {
             fixture["name"]
         );
     }
+}
+
+#[test]
+fn raw_context_and_state_preserve_source_caches_and_pending_origin() {
+    use alas_helper::acp_broker_protocol::BrokerWireContext;
+    let mut meta = metadata();
+    meta.wire_context = Some(BrokerWireContext::RawV2);
+    let mut state = ACPBrokerState::new(meta);
+    let key = OperationKey::new("raw-initialize");
+    state
+        .begin_operation(key.clone(), "initialize", json!({}))
+        .unwrap();
+    let frame = AcpRawJSONPayload::new(
+        br#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":2,"n":1e999}}"#.to_vec(),
+    );
+    state
+        .complete_raw_operation(&key, "initialize", frame.clone(), None)
+        .unwrap();
+    let request = AcpRawJSONPayload::new(
+        br#"{"jsonrpc":"2.0","id":"p","method":"test/unknown","params":{"n":1e999}}"#.to_vec(),
+    );
+    let cursor = state
+        .add_raw_pending_request(
+            "p",
+            json!("p"),
+            PendingClientRequestKind::Terminal,
+            request.clone(),
+        )
+        .unwrap();
+    let snapshot = state.snapshot();
+    assert_eq!(snapshot.initialize_raw_response, Some(frame));
+    assert_eq!(snapshot.pending_requests[0].raw_frame, Some(request));
+    assert_eq!(snapshot.pending_requests[0].origin_cursor, Some(cursor));
+    assert_eq!(
+        serde_json::from_value::<ACPBrokerSnapshot>(serde_json::to_value(snapshot).unwrap())
+            .unwrap()
+            .metadata
+            .wire_context,
+        Some(BrokerWireContext::RawV2)
+    );
+    assert_eq!(state.snapshot().turn_state, BrokerTurnState::Unknown);
+}
+
+#[test]
+fn raw_replay_budget_counts_encoded_wrapper_and_makes_oversized_progress() {
+    use alas_helper::acp_broker_protocol::BrokerWireContext;
+    let mut meta = metadata();
+    meta.wire_context = Some(BrokerWireContext::RawV2);
+    let mut state = ACPBrokerState::new(meta);
+    state.add_raw_frame(AcpRawJSONPayload::new(vec![255; 300]));
+    state.add_raw_frame(AcpRawJSONPayload::new(vec![0; 300]));
+    let all = state.replay_after(EventCursor::new(0)).unwrap();
+    let encoded_size = serde_json::to_vec(&all[0]).unwrap().len();
+    assert!(encoded_size > 400);
+    let page = state
+        .replay_batch_after(EventCursor::new(0), Some(encoded_size))
+        .unwrap();
+    assert_eq!(page.len(), 1);
+    let oversized = state.replay_batch_after(page[0].cursor, Some(1)).unwrap();
+    assert_eq!(oversized.len(), 1);
+    assert_eq!(oversized[0].cursor, all[1].cursor);
 }

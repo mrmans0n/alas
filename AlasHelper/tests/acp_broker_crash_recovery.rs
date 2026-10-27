@@ -1939,3 +1939,136 @@ done
         .expect("chmod fake adapter");
     assert!(status.success());
 }
+
+#[test]
+fn raw_transport_preserves_capture_caches_pending_requests_and_refuses_replacement() {
+    use alas_helper::acp_broker_protocol::AcpRawJSONPayload;
+    let fixture = Fixture::new("raw-transport");
+    let update = " {\"jsonrpc\":\"2.0\",\"method\":\"session/update\",\"params\":{\"sessionId\":\"s\",\"update\":{\"sessionUpdate\":\"agent_message\",\"messageId\":\"a\",\"n\":1e999}}} ";
+    let pending = r#"{"jsonrpc":"2.0","id":"p","method":"test/unknown","params":{"n":1e999}}"#;
+    let initialized = " {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":2,\"n\":1e999,\"big\":123456789012345678901234567890,\"text\":\"雪\"}} \r";
+    let session = r#"{"jsonrpc":"2.0","id":2,"result":{"sessionId":"s","n":1.00e2}}"#;
+    let final_frame = r#"{"jsonrpc":"2.0","method":"test/final","params":{"n":1e999}}"#;
+    let script = format!(
+        r#"#!/bin/sh
+while IFS= read -r line; do
+ case "$line" in
+ *'"method":"initialize"'*)
+  printf '%s\n' '{update}' '{pending}'
+  printf '\377\000\n'
+  printf '%s\n' '{initialized}' ;;
+ *'"method":"session/new"'*) printf '%s\n' '{session}' ;;
+ *'"method":"test/exit"'*) printf '%s' '{final_frame}'; exit 0 ;;
+ esac
+done
+"#
+    );
+    std::fs::write(&fixture.adapter, script).unwrap();
+    let context = json!({"acpVersion":2,"payloadFormat":"alas.acp.raw-json.v1"});
+    let mut helper = Helper::start(&fixture.home);
+    let mut params = fixture.open_params("raw", 0);
+    params["wireContext"] = context.clone();
+    let opened = helper.request("acp/raw/open", params.clone());
+    let generation = opened["snapshot"]["metadata"]["generation"].clone();
+    let base = json!({"brokerId":"raw","generation":generation,"wireContext":context});
+    // Collect all observations before assertions so the fixture is closed even on a regression.
+    let mut outcomes = Vec::new();
+    for (key, method) in [("i", "initialize"), ("s", "session/new")] {
+        let deadline = poll_deadline();
+        let outcome = loop {
+            let mut request = base.clone();
+            request["operationKey"] = json!(key);
+            request["method"] = json!(method);
+            request["params"] = json!({});
+            let value = helper.raw_request("acp/raw/send", request);
+            if value["result"]["rawFrame"].is_array() || std::time::Instant::now() >= deadline {
+                break value;
+            }
+            std::thread::yield_now();
+        };
+        outcomes.push(outcome);
+    }
+    let adopted = helper.raw_request("acp/raw/open", params.clone());
+    let legacy_open = helper.raw_request("acp/open", fixture.open_params("raw", 0));
+    let legacy_list = helper.raw_request("acp/list", json!({}));
+    let mut attach = base.clone();
+    attach["acknowledgedCursor"] = json!(0);
+    let replay = helper.raw_request("acp/raw/attach", attach.clone());
+    let mut wrong = base.clone();
+    wrong["generation"] = json!(1);
+    wrong["cursor"] = json!(999);
+    let rejected_ack = helper.raw_request("acp/raw/ack", wrong);
+    let mut notify = base.clone();
+    notify["method"] = json!("test/exit");
+    notify["params"] = json!({});
+    helper.request("acp/raw/notify", notify);
+    let deadline = poll_deadline();
+    let final_replay = loop {
+        let replay = helper.raw_request("acp/raw/attach", attach.clone());
+        let found = replay["result"]["events"].as_array().is_some_and(|events| {
+            events.iter().any(|event| {
+                serde_json::from_value::<AcpRawJSONPayload>(event["kind"]["frame"].clone())
+                    .ok()
+                    .is_some_and(|frame| frame.bytes() == final_frame.as_bytes())
+            })
+        });
+        if found || std::time::Instant::now() >= deadline {
+            break replay;
+        }
+        std::thread::yield_now();
+    };
+    params["expectedGeneration"] = generation.clone();
+    let lost = loop {
+        let value = helper.raw_request("acp/raw/open", params.clone());
+        if value.get("error").is_some() || std::time::Instant::now() >= deadline {
+            break value;
+        }
+        std::thread::yield_now();
+    };
+    let closed = helper.raw_request("acp/raw/close", base);
+    assert_eq!(closed["result"]["ok"], true);
+    assert!(legacy_open.get("error").is_some());
+    assert_eq!(legacy_list["result"]["brokers"], json!([]));
+    assert!(rejected_ack.get("error").is_some());
+    assert!(lost.get("error").is_some());
+    assert_eq!(
+        adopted["result"]["snapshot"]["metadata"]["generation"],
+        generation
+    );
+    for (outcome, expected) in outcomes
+        .iter()
+        .zip([initialized.as_bytes(), session.as_bytes()])
+    {
+        let frame: AcpRawJSONPayload =
+            serde_json::from_value(outcome["result"]["rawFrame"].clone()).unwrap();
+        assert_eq!(frame.bytes(), expected);
+    }
+    let snapshot = &replay["result"]["snapshot"];
+    assert_eq!(snapshot["turnState"], "unknown");
+    let init: AcpRawJSONPayload =
+        serde_json::from_value(snapshot["initializeRawResponse"].clone()).unwrap();
+    assert_eq!(init.bytes(), initialized.as_bytes());
+    let request = &snapshot["pendingRequests"][0];
+    let frame: AcpRawJSONPayload = serde_json::from_value(request["rawFrame"].clone()).unwrap();
+    assert_eq!(frame.bytes(), pending.as_bytes());
+    assert!(request["originCursor"].as_u64().is_some());
+    let frames: Vec<_> = final_replay["result"]["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| {
+            serde_json::from_value::<AcpRawJSONPayload>(event["kind"]["frame"].clone()).ok()
+        })
+        .collect();
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.bytes() == update.as_bytes())
+    );
+    assert!(frames.iter().any(|frame| frame.bytes() == [255, 0]));
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.bytes() == final_frame.as_bytes())
+    );
+}

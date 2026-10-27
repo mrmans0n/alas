@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -22,11 +23,13 @@ public struct ACPBrokerDurableState: Equatable, Sendable {
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
     public let acknowledgedCursor: ACPBrokerEventCursor
+    public let wireContext: ACPBrokerWireContext
 
-    public init(brokerId: ACPBrokerID, generation: ACPBrokerGeneration, acknowledgedCursor: ACPBrokerEventCursor) {
+    public init(brokerId: ACPBrokerID, generation: ACPBrokerGeneration, acknowledgedCursor: ACPBrokerEventCursor, wireContext: ACPBrokerWireContext = .legacyV1) {
         self.brokerId = brokerId
         self.generation = generation
         self.acknowledgedCursor = acknowledgedCursor
+        self.wireContext = wireContext
     }
 }
 
@@ -85,6 +88,19 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     }
 
     public let providesDurableOperationKeyDeduplication = true
+
+    private let rawTransport: ACPRawBrokerTransport?
+    public let sessionUpdateProtocolVersion: ACPProtocolVersion
+    public let incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery>
+    public let incomingRawFrames: AsyncStream<ACPBrokerRawFrameDelivery>
+
+    /// Explicitly pulls a bounded replay page; raw frame consumption remains caller-owned.
+    public func replayRawBrokerEvents() async throws { try await rawTransport?.replay() }
+
+    public func respondToRawRequest(id: ACPBrokerJSONValue, result: ACPBrokerJSONValue? = nil, error: JSONRPCError? = nil) async throws {
+        guard let rawTransport else { throw ACPClientError.notRunning }
+        try await rawTransport.respond(id: id, result: result, error: error)
+    }
 
     private let service: ACPBrokerServicing
     private let brokerId: ACPBrokerID
@@ -171,6 +187,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     private var isDrainingDurableStates = false
 
     public var currentBrokerGeneration: ACPBrokerGeneration? {
+        if let raw = rawTransport { return raw.summary.withLock { $0.generation } }
         stateLock.lock()
         defer { stateLock.unlock() }
         return generation
@@ -191,12 +208,14 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     public static let defaultBackgroundPollIdleIntervalNanoseconds: UInt64 = 2_000_000_000
 
     public var yieldedUpdateCount: Int {
+        if let raw = rawTransport { return raw.summary.withLock { $0.count } }
         stateLock.lock()
         defer { stateLock.unlock() }
         return _yieldedUpdateCount
     }
 
     public var currentTurnState: ACPBrokerTurnState {
+        if let raw = rawTransport { return .unknown("unknown") }
         stateLock.lock()
         defer { stateLock.unlock() }
         return turnState
@@ -208,6 +227,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     /// server — are still the original ones and won't announce themselves
     /// again.
     public var adoptedRunningAgent: Bool {
+        if let raw = rawTransport { return raw.summary.withLock { $0.adopted } }
         stateLock.lock()
         defer { stateLock.unlock() }
         return _adoptedRunningAgent
@@ -217,6 +237,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     /// `session/new|load|resume` are answered from its snapshot and never
     /// reach the adapter — nor does the MCP configuration they carry.
     public var servesRemoteSessionFromSnapshot: Bool {
+        if let raw = rawTransport { return raw.summary.withLock { $0.sessionCached } }
         stateLock.lock()
         defer { stateLock.unlock() }
         return remoteSessionResult != nil
@@ -237,8 +258,24 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
         backgroundPollIdleIntervalNanoseconds: UInt64 = ACPBrokerClient.defaultBackgroundPollIdleIntervalNanoseconds,
         onDurableStateChanged: (@Sendable (ACPBrokerDurableState) -> Void)? = nil,
         onTurnStateChanged: (@Sendable (ACPBrokerTurnState) -> Void)? = nil,
-        onEventDispatchedForTesting: (@Sendable (ACPBrokerEventCursor) -> Void)? = nil
+        onEventDispatchedForTesting: (@Sendable (ACPBrokerEventCursor) -> Void)? = nil,
+        wireContext: ACPBrokerWireContext = .legacyV1
     ) {
+        sessionUpdateProtocolVersion = wireContext == .rawV2 ? .v2 : .v1
+        if wireContext == .rawV2 {
+            var params = ACPBrokerOpenParams(brokerId: brokerId, sessionId: sessionId, command: command, args: args, cwd: cwd, env: env)
+            params.wireContext = .rawV2
+            params.expectedGeneration = initialBrokerGeneration
+            let raw = ACPRawBrokerTransport(service: service, params: params, prefix: operationKeyPrefix,
+                acknowledged: initialAcknowledgedCursor, pollInterval: backgroundPollIdleIntervalNanoseconds, durable: onDurableStateChanged)
+            rawTransport = raw
+            incomingV2Updates = raw.updates
+            incomingRawFrames = raw.frames
+        } else {
+            rawTransport = nil
+            incomingV2Updates = AsyncStream { $0.finish() }
+            incomingRawFrames = AsyncStream { $0.finish() }
+        }
         self.service = service
         self.brokerId = brokerId
         self.sessionId = sessionId
@@ -294,6 +331,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
         var a: AsyncStream<ACPAuthStatusEvent>.Continuation!
         authStatusUpdates = AsyncStream { a = $0 }
         authStatusCont = a
+        if wireContext == .rawV2 { finishStreams() }
     }
 
     /// Pre-registers operationKeys the caller still expects a result for,
@@ -316,6 +354,11 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     /// operation for is inert — `dispatch()` only consults this set when it
     /// sees a matching `.operationCompleted` event.
     public func preRegisterAwaitedOperationKeys(_ operationKeys: some Sequence<String>) {
+        if let raw = rawTransport {
+            let keys = operationKeys.map(ACPBrokerOperationKey.init(rawValue:))
+            raw.summary.withLock { $0.registered.formUnion(keys) }
+            return
+        }
         stateLock.lock()
         for key in operationKeys {
             let operationKey = ACPBrokerOperationKey(rawValue: key)
@@ -329,6 +372,15 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
         forPreRegisteredOperationKey operationKey: String
     ) -> ACPBrokerReplayedOperationCompletion? {
         let key = ACPBrokerOperationKey(rawValue: operationKey)
+        if let raw = rawTransport {
+            guard let (outcome, cursor) = raw.summary.withLock({ state in
+                state.registered.contains(key) ? state.outcomes[key] : nil
+            }), let cursor, outcome.error.flatMap({ ACPCodexHookReviewError.classify($0) }) == nil else { return nil }
+            return ACPBrokerReplayedOperationCompletion(outcome: outcome, acknowledgement: {
+                raw.summary.withLock { ACPRawBrokerTransport.consume(cursor, state: &$0) }
+                Task { try? await raw.replay() }
+            })
+        }
         stateLock.lock()
         guard let completion = preRegisteredOperationCompletions[key] else {
             stateLock.unlock()
@@ -346,6 +398,14 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     public func terminalOutcome(
         forPreRegisteredOperationKey operationKey: String
     ) -> ACPBrokerRPCOutcome? {
+        if let raw = rawTransport {
+            return raw.summary.withLock { state in
+                let key = ACPBrokerOperationKey(rawValue: operationKey)
+                guard state.registered.contains(key), let (outcome, _) = state.outcomes[key],
+                      outcome.error.flatMap({ ACPCodexHookReviewError.classify($0) }) == nil else { return nil }
+                return outcome
+            }
+        }
         let key = ACPBrokerOperationKey(rawValue: operationKey)
         stateLock.lock()
         defer { stateLock.unlock() }
@@ -355,6 +415,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
 
     @discardableResult
     public func start() async throws -> ACPBrokerOpenResult {
+        if let raw = rawTransport { return try await raw.start() }
         let openParams = ACPBrokerOpenParams(
             brokerId: brokerId,
             sessionId: sessionId,
@@ -364,6 +425,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             env: env
         )
         var opened = try await service.open(openParams)
+        try validateLegacyContext(opened.snapshot)
         try await checkTermination(afterOpening: opened)
         if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
             // Best-effort, like the close in shutdown() below: closing a
@@ -386,6 +448,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
             try await checkTermination(afterOpening: opened)
             resetAcknowledgedCursor()
             opened = try await service.open(openParams)
+            try validateLegacyContext(opened.snapshot)
             try await checkTermination(afterOpening: opened)
             if opened.adopted, opened.snapshot.cursorTodosByToolCallId == nil {
                 // The close above may never have reached the broker at all,
@@ -433,6 +496,10 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
         beforeRequestHandoff: @Sendable (ACPBrokerGeneration?) async throws -> Void,
         onRequestHandoff: @Sendable () throws -> Void
     ) async throws -> ACPResponse {
+        if let raw = rawTransport {
+            return try await raw.send(method: request.method, params: ACPBrokerJSONValue(encodable: request.params),
+                operationKey: request.brokerOperationKey, before: beforeRequestHandoff, handoff: onRequestHandoff)
+        }
         if let replayed = cachedResponse(for: request.method) {
             try await beforeRequestHandoff(currentBrokerGeneration)
             try onRequestHandoff()
@@ -546,6 +613,10 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     }
 
     public func notify(_ request: ACPRequest) async throws {
+        if let raw = rawTransport {
+            try await raw.notify(method: request.method, params: ACPBrokerJSONValue(encodable: request.params))
+            return
+        }
         let generation = try currentGeneration()
         _ = try await service.notify(ACPBrokerNotifyParams(
             brokerId: brokerId,
@@ -595,6 +666,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     }
 
     public func shutdown() async {
+        if let raw = rawTransport { await raw.stop(close: true)
+        return }
         // Mark terminated BEFORE anything else, not after: the background
         // poller's `service.attach()` call goes through `RemoteHelperClient`,
         // which waits on the helper's stdio pipe with no read timeout. If
@@ -613,6 +686,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     }
 
     public func detach() async {
+        if let raw = rawTransport { await raw.stop(close: false)
+        return }
         markTerminated(request: .detach)
         cancelBackgroundPolling()
         if let generation = try? currentGeneration() {
@@ -679,6 +754,12 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     }
 
     @discardableResult
+    private func validateLegacyContext(_ snapshot: ACPBrokerSnapshot) throws {
+        guard snapshot.metadata.wireContext == nil || snapshot.metadata.wireContext == .legacyV1 else {
+            throw ACPClientError.decoding("Legacy broker received a raw wire context")
+        }
+    }
+
     private func attachAndReplay() async throws -> ACPBrokerSnapshot {
         let generation = try currentGeneration()
         while true {
@@ -700,6 +781,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
                 if let snapshot = attached.snapshot { return snapshot }
                 throw CancellationError()
             }
+            if let snapshot = attached.snapshot { try validateLegacyContext(snapshot) }
             if let snapshot = attached.snapshot, !setSnapshot(snapshot) { return snapshot }
             // Each page supplies lightweight IDs, so resolved requests can
             // be filtered without repeating the full pending payloads.
