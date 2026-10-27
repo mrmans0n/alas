@@ -1470,10 +1470,12 @@ final class ComputerUseCoordinator {
         let focus = await system.focusState(window)
         var targetHash: Int?
         if let target { targetHash = await system.elementState(target.0, target.1) }
+        let complete = read.flatMap { $0.truncated ? nil : $0.elements }
         return ComputerUseWindowFingerprint(
             focus: focus, windowTitle: window.title,
-            elementsHash: read.flatMap { $0.truncated ? nil : ComputerUseChangeCheck.elementsHash($0.elements) },
-            targetHash: targetHash)
+            elementsHash: complete.map { ComputerUseChangeCheck.elementsHash($0) },
+            targetHash: targetHash,
+            contentHash: complete.map { ComputerUseChangeCheck.elementsHash($0, focus: false) })
     }
 
     /// The window as it is now; gone or now another app's → `windowNotFound`.

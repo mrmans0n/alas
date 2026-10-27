@@ -351,6 +351,40 @@ struct ComputerUseInputTests {
             after: .init(focus: focusMoved ? moved : focus, windowTitle: "Docs", elementsHash: after, targetHash: nil)) == changed)
     }
 
+    /// A drag delivered as events whose window differs only in focus or selection (the press
+    /// selected what it grabbed) did nothing it can show; a foreground one isn't retried directly.
+    /// Columns: elements, focus-free elements, focus and target state after (before: 1, 1, A, 1), as events.
+    @Test(arguments: [
+        (Optional(1), Optional(1), "A", Optional(1), true, Optional(Self.dragNoEffect)),
+        (2, 1, "B", 2, true, Self.dragNoEffect),
+        (2, 1, "B", 2, false, nil),
+        (2, 2, "A", 1, true, nil),
+        (nil, nil, "B", 2, true, nil),
+        (nil, nil, "A", 1, false, ComputerUseChangeCheck.dragWarning),
+    ] as [(Int?, Int?, String, Int?, Bool, String?)])
+    func aDragThatOnlyMovedFocusOrSelectionWarns(
+        elements: Int?, content: Int?, focus: String, target: Int?, asEvents: Bool, warning: String?
+    ) {
+        let before = ComputerUseWindowFingerprint(
+            focus: .init(role: "A"), windowTitle: "Docs", elementsHash: 1, targetHash: 1, contentHash: 1)
+        let after = ComputerUseWindowFingerprint(
+            focus: .init(role: focus), windowTitle: "Docs", elementsHash: elements, targetHash: target, contentHash: content)
+        #expect(ComputerUseChangeCheck.warning(before: before, after: after, kind: .drag, deliveredAsEvents: asEvents) == warning)
+    }
+
+    private static let dragNoEffect = ComputerUseChangeCheck.dragWarning + ComputerUseChangeCheck.retryDirectHint
+
+    @Test func theFocusFreeHashIgnoresOnlyFocus() {
+        let row = ComputerUseInspectElement(ref: "e1", depth: 1, role: "AXRow")
+        var focused = row
+        focused.isFocused = true
+        var renamed = row
+        renamed.title = "b.txt"
+        #expect(ComputerUseChangeCheck.elementsHash([row], focus: false) == ComputerUseChangeCheck.elementsHash([focused], focus: false))
+        #expect(ComputerUseChangeCheck.elementsHash([row]) != ComputerUseChangeCheck.elementsHash([focused]))
+        #expect(ComputerUseChangeCheck.elementsHash([row], focus: false) != ComputerUseChangeCheck.elementsHash([renamed], focus: false))
+    }
+
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)
