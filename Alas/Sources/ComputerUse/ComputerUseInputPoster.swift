@@ -137,7 +137,7 @@ enum ComputerUseInputPoster {
             for move in moves {
                 try await checkInterrupt()
                 postSystemWide(move)
-                await steadyPause(systemDragStepDelay)
+                await steadyPause(dragStepDelay(systemDragStepDelay))
             }
             await steadyPause(systemDragHover)
             try await checkInterrupt()
@@ -229,7 +229,7 @@ enum ComputerUseInputPoster {
                 return .dragSession
             }
             post(drag)
-            await steadyPause(ComputerUseBackgroundDrag.stepDelay)
+            await steadyPause(dragStepDelay(ComputerUseBackgroundDrag.stepDelay))
         }
         try checkInterrupt()
         // One last look: a drag image can come up a moment after the last move.
@@ -304,6 +304,25 @@ enum ComputerUseInputPoster {
         !CGEventSource.flagsState(.hidSystemState)
             .intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty
     }
+
+    /// A drag's pause between moves. Debug builds take `ALAS_COMPUTER_DRAG_STEP_MS` (1...1000)
+    /// instead, so a drag lasts long enough to press Stop in the middle.
+    private static func dragStepDelay(_ standard: Duration) -> Duration {
+        #if DEBUG
+        debugDragStepDelay ?? standard
+        #else
+        standard
+        #endif
+    }
+
+    #if DEBUG
+    private static let debugDragStepDelay: Duration? = {
+        guard let text = ProcessInfo.processInfo.environment["ALAS_COMPUTER_DRAG_STEP_MS"],
+              let milliseconds = Int(text.trimmingCharacters(in: .whitespaces))
+        else { return nil }
+        return .milliseconds(min(max(milliseconds, 1), 1000))
+    }()
+    #endif
 
     /// Into the HID stream, where WindowServer routes it like the user's own input; marked as Alas's.
     private static func postSystemWide(_ event: CGEvent) {
