@@ -63,7 +63,9 @@ enum ComputerUseInputPoster {
     /// goes back where it was, except when the user took over, since their hand is on it.
     /// `modifiers` go down as key events right before the press and come up right after the
     /// button, on every path; every mouse event carries exactly them, so a key the user holds
-    /// doesn't ride along. A drag key the user already holds refuses the drag before anything moves.
+    /// doesn't ride along. A cancel lets the keys go before the button and releases with no
+    /// flags, so an Option drag stopped in place can't drop a copy at the start. A drag key the
+    /// user already holds refuses the drag before anything moves.
     /// Pauses don't shorten under cancellation, so a Stop can't turn into an early drop.
     static func systemDrag(
         from start: CGPoint, to end: CGPoint, modifiers: Set<ComputerUseKeyChord.Modifier>,
@@ -82,7 +84,8 @@ enum ComputerUseInputPoster {
             + ComputerUseInputGeometry.interpolate(from: start, to: end, steps: systemDragSteps)
         let moves = try points.map { try systemMouseEvent(.leftMouseDragged, at: $0, clickState: 1, flags: held) }
         let back = try systemMouseEvent(.leftMouseDragged, at: start, clickState: 1, flags: held)
-        let upAtStart = try systemMouseEvent(.leftMouseUp, at: start, clickState: 1, flags: held)
+        // A cancel's release: the keys are already up, so it carries none.
+        let upAtStart = try systemMouseEvent(.leftMouseUp, at: start, clickState: 1, flags: [])
         let up = try systemMouseEvent(.leftMouseUp, at: end, clickState: 1, flags: held)
         var pressed = false
         var keysAreDown = false
@@ -115,12 +118,13 @@ enum ComputerUseInputPoster {
                 break
             }
         }
-        /// Settles back at the start before the release, so the button comes up where the drag began.
+        /// Settles back at the start before the release, so the button comes up where the drag
+        /// began. The keys come up first: a release with Option still down drops a copy.
         func cancelInPlace() async {
             postSystemWide(back)
             await steadyPause(systemDragCancelSettle)
-            postSystemWide(upAtStart)
             releaseKeys()
+            postSystemWide(upAtStart)
         }
         // Nothing has moved yet: an active user keeps their cursor where it is.
         try await checkInterrupt()
@@ -178,7 +182,8 @@ enum ComputerUseInputPoster {
     /// button comes up at the start and the outcome is `.dragSession`. `interrupt`, checked before
     /// every event, releases at the start and throws what `systemDrag` throws. The button is
     /// always released. `modifiers` ride on every event's flags, as a chord's do: no key events,
-    /// so none can stay down, and none of the user's keys show in them.
+    /// so none can stay down, and none of the user's keys show in them. The release at the start
+    /// (a cancel, a takeover, a drag session) carries no flags, so it can't drop a copy there.
     static func backgroundDrag(
         from start: CGPoint, to end: CGPoint, modifiers: Set<ComputerUseKeyChord.Modifier>,
         pid: Int32, windowID: UInt32, windowFrame: CGRect,
@@ -190,10 +195,12 @@ enum ComputerUseInputPoster {
         let target = Target(pid: pid, windowID: windowID, windowOrigin: windowFrame.origin)
         let gesture = Int64.random(in: 1 ... Int64(Int32.max))
         let held = flags(for: modifiers)
-        func event(_ type: CGEventType, at point: CGPoint, clickState: Int) throws -> CGEvent {
+        func event(
+            _ type: CGEventType, at point: CGPoint, clickState: Int, flags: CGEventFlags? = nil
+        ) throws -> CGEvent {
             let event = try mouseEvent(type, at: point, button: .left, clickState: clickState, target: target)
             event.setIntegerValueField(gestureField, value: gesture)
-            event.flags = held
+            event.flags = flags ?? held
             return event
         }
         // Build everything first so a failure can't leave the button down.
@@ -201,7 +208,7 @@ enum ComputerUseInputPoster {
         let down = try event(.leftMouseDown, at: start, clickState: 1)
         let drags = try ComputerUseInputGeometry.interpolate(from: start, to: end, steps: ComputerUseBackgroundDrag.steps)
             .map { try event(.leftMouseDragged, at: $0, clickState: 1) }
-        let upAtStart = try event(.leftMouseUp, at: start, clickState: 1)
+        let upAtStart = try event(.leftMouseUp, at: start, clickState: 1, flags: [])
         let up = try event(.leftMouseUp, at: end, clickState: 1)
         let post = { (event: CGEvent) in ComputerUseSkyLight.post(event, pid: pid) }
 
