@@ -84,15 +84,18 @@ actor ACPRawBrokerTransport {
     private var requestedClose: Bool?
     private var started = false
     private var replayTask: Task<Void, Error>?
+    private var replaySequence: UInt64 = 0
     private var acknowledging = false
     private var poll: Task<Void, Never>?
     private var operationIndex = 0
     private let pollInterval: UInt64
     private let durable: (@Sendable (ACPBrokerDurableState) -> Void)?
+    private let onReplayJoinedForTesting: (@Sendable () -> Void)?
 
     init(service: ACPBrokerServicing, params: ACPBrokerOpenParams, prefix: String,
          acknowledged: ACPBrokerEventCursor, pollInterval: UInt64,
-         durable: (@Sendable (ACPBrokerDurableState) -> Void)?) {
+         durable: (@Sendable (ACPBrokerDurableState) -> Void)?,
+         onReplayJoinedForTesting: (@Sendable () -> Void)? = nil) {
         self.service = service
         openParams = params
         self.prefix = prefix
@@ -100,6 +103,7 @@ actor ACPRawBrokerTransport {
         replayCursor = acknowledged
         self.pollInterval = pollInterval
         self.durable = durable
+        self.onReplayJoinedForTesting = onReplayJoinedForTesting
         let u = AsyncStream<ACPV2SessionUpdateDelivery>.makeStream()
         updates = u.stream
         updatesCont = u.continuation
@@ -180,12 +184,28 @@ actor ACPRawBrokerTransport {
         }
     }
 
-    func replay() async throws {
-        if let task = replayTask { try await task.value
-        return }
+    func replay(requireFresh: Bool = false) async throws {
+        if let task = replayTask {
+            let joinedSequence = replaySequence
+            onReplayJoinedForTesting?()
+            try await task.value
+            guard requireFresh else { return }
+            // A terminal response cannot use a page captured before it arrived
+            // as evidence that its completion provenance is missing.
+            if replaySequence != joinedSequence {
+                try await replay()
+                return
+            }
+            replayTask = nil
+        }
+        replaySequence &+= 1
+        let sequence = replaySequence
         let task = Task { try await self.performReplay() }
         replayTask = task
-        defer { replayTask = nil }
+        defer {
+            // The older poll's waiter may resume after a fresh replay starts.
+            if replaySequence == sequence { replayTask = nil }
+        }
         try await task.value
     }
 
@@ -333,7 +353,7 @@ actor ACPRawBrokerTransport {
         while !terminated {
             let result = try await service.send(request)
             guard !terminated else { throw CancellationError() }
-            try await replay()
+            try await replay(requireFresh: result.pending != true)
             if result.pending == true { try await Task.sleep(for: .milliseconds(50))
             continue }
             guard result.result == nil, let frame = result.rawFrame else {

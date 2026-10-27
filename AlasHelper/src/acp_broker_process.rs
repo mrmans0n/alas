@@ -2267,12 +2267,7 @@ fn route_raw_adapter_frame(state: &mut RuntimeState, bytes: Vec<u8>) {
                 let id: Option<Value> = serde_json::from_str::<String>(id.get())
                     .ok()
                     .map(Value::String)
-                    .or_else(|| {
-                        serde_json::from_str::<u64>(id.get())
-                            .ok()
-                            .filter(|id| *id <= i64::MAX as u64)
-                            .map(Value::from)
-                    });
+                    .or_else(|| serde_json::from_str::<i64>(id.get()).ok().map(Value::from));
                 if let Some(id) = id {
                     let key = request_id_key(&id);
                     if state
@@ -3232,6 +3227,37 @@ mod tests {
             "brokerId":"bad/id", "sessionId":"s", "command":"fixture", "args":[], "cwd":"/tmp", "env":{}
         }))).unwrap_err();
         assert_eq!(error.code, -32076);
+    }
+
+    #[test]
+    fn raw_adapter_requests_preserve_signed_ids_through_snapshot_and_resolution() {
+        for id in [i64::MIN, -1, 0, i64::MAX] {
+            let mut state = steering_runtime_state();
+            let mut metadata = state.broker.metadata().clone();
+            metadata.wire_context = Some(BrokerWireContext::RawV2);
+            state.broker = ACPBrokerState::new(metadata);
+            let source = format!(
+                r#"{{"jsonrpc":"2.0","id":{id},"method":"session/request_permission","params":{{}}}}"#
+            );
+            route_raw_adapter_frame(&mut state, source.as_bytes().to_vec());
+            let snapshot = state.broker.snapshot();
+            assert_eq!(snapshot.pending_requests.len(), 1, "{id}");
+            let pending = &snapshot.pending_requests[0];
+            assert_eq!(pending.adapter_request_id, json!(id));
+            assert_eq!(
+                pending.raw_frame.as_ref().unwrap().bytes(),
+                source.as_bytes()
+            );
+            assert!(pending.origin_cursor.is_some());
+            state
+                .broker
+                .respond_to_pending_request(
+                    &request_id_key(&json!(id)),
+                    AdapterRPCOutcome::result(json!({})),
+                )
+                .unwrap();
+            assert!(state.broker.snapshot().pending_requests.is_empty());
+        }
     }
 
     #[test]

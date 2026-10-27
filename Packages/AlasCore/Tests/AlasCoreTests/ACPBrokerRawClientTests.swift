@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import AlasCore
+@testable import AlasACP
 
 struct ACPBrokerRawClientTests {
     @Test func rawReplayRequiresExplicitOrderedConsumptionAndFencesDetachedCallbacks() async throws {
@@ -259,6 +260,42 @@ struct ACPBrokerRawClientTests {
         await client.detach()
     }
 
+    @Test(arguments: [false, true])
+    func terminalResponseReplaysBeyondAnOlderInFlightPoll(isError: Bool) async throws {
+        let service = RawBrokerFixture(isError: isError)
+        let joined = AsyncStream<Void>.makeStream()
+        var params = ACPBrokerOpenParams(brokerId: .init(rawValue: "raw"), sessionId: "s", command: "fixture", args: [], cwd: "/tmp", env: [:])
+        params.wireContext = .rawV2
+        let transport = ACPRawBrokerTransport(service: service, params: params, prefix: "test",
+            acknowledged: .init(rawValue: 0), pollInterval: 60_000_000_000, durable: nil,
+            onReplayJoinedForTesting: { joined.continuation.yield(()) })
+        _ = try await transport.start()
+        await service.holdNextAttach()
+        let poll = Task { try await transport.replay() }
+        await service.waitForHeldAttach()
+        let sending = Task {
+            try await transport.send(method: "session/prompt", params: .null, operationKey: "key", before: { _ in }, handoff: {})
+        }
+        var joins = joined.stream.makeAsyncIterator()
+        _ = await joins.next()
+        await service.releaseHeldAttach()
+        try await poll.value
+        do {
+            let response = try await sending.value
+            #expect(!isError)
+            #expect(response.body == Data("null".utf8))
+        } catch let error as ACPBrokerRawRPCError {
+            #expect(isError)
+            #expect(error.frame.bytes == RawBrokerFixture.error)
+            #expect(ACPCodexHookReviewError.classify(error) == .required)
+        } catch {
+            await transport.stop(close: false)
+            throw error
+        }
+        #expect(await service.acks.isEmpty)
+        await transport.stop(close: false)
+    }
+
     private func makeClient(_ service: RawBrokerFixture, context: ACPBrokerWireContext = .rawV2) -> ACPBrokerClient {
         ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
             command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",
@@ -269,6 +306,13 @@ struct ACPBrokerRawClientTests {
 private actor RawBrokerFixture: ACPBrokerServicing {
     static let first = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"opaque":1e999}}"#.utf8)
     static let error = Data(#"{"jsonrpc":"2.0","id":9,"error":{"code":-32044,"message":"rejected","data":{"kind":"codex_hook_review_required","opaque":1e999}}}"#.utf8)
+    private var shouldHoldAttach = false
+    private let capturedAttach = AsyncStream<Void>.makeStream()
+    private let releaseAttach = AsyncStream<Void>.makeStream()
+    func holdNextAttach() { shouldHoldAttach = true }
+    func waitForHeldAttach() async { var events = capturedAttach.stream.makeAsyncIterator()
+    _ = await events.next() }
+    func releaseHeldAttach() { releaseAttach.continuation.yield(()) }
     let replaceHookDuringSend: Bool
     let rawBytes: Data
     let cached: Bool
@@ -337,7 +381,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         #expect(params.wireContext == .rawV2 || params.wireContext == nil)
         return .init(snapshot: snapshot(), adopted: true)
     }
-    func attach(_ params: ACPBrokerAttachParams) -> ACPBrokerAttachResult {
+    func attach(_ params: ACPBrokerAttachParams) async -> ACPBrokerAttachResult {
         var events = (1...2).map { ACPBrokerEvent(cursor: .init(rawValue: UInt64($0)), kind: .rawFrame(.init(bytes: rawBytes))) }
             .filter { $0.cursor > (params.replayAfterCursor ?? params.acknowledgedCursor) }
         if pending, let index = events.firstIndex(where: { $0.cursor.rawValue == 1 }) {
@@ -346,7 +390,14 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         if let outcome, (params.replayAfterCursor?.rawValue ?? 0) < completionCursor {
             events.append(.init(cursor: .init(rawValue: completionCursor), kind: .operationCompleted(operationKey: .init(rawValue: "key"), outcome: outcome)))
         }
-        return .init(snapshot: snapshot(), events: events)
+        let result = ACPBrokerAttachResult(snapshot: snapshot(), events: events)
+        if shouldHoldAttach {
+            shouldHoldAttach = false
+            capturedAttach.continuation.yield(())
+            var release = releaseAttach.stream.makeAsyncIterator()
+            _ = await release.next()
+        }
+        return result
     }
     func send(_ params: ACPBrokerSendParams) throws -> ACPBrokerSendResult {
         var value = ACPBrokerRPCOutcome(result: nil, error: isError ? JSONRPCError(code: -32044, message: "rejected", data: AnyCodable(["kind": "codex_hook_review_required"])) : nil)
