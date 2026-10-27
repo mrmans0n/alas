@@ -621,7 +621,11 @@ extension LiveComputerUseSystem {
                                 from: from, to: to, in: window, toWindow: toWindow, keying: &keying, interrupt: interrupt)
                         },
                         sessionActive: { dragSessionActive(pid: window.app.pid) },
-                        foreground: { try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt) },
+                        foreground: {
+                            try await refuseDragBeforeActivation(
+                                from: from, to: to, in: window, toWindow: toWindow, isCancelled: isCancelled)
+                            return try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
+                        },
                         isCancelled: isCancelled,
                         sleep: { try? await Task.sleep(for: $0) })
                     await keying.restoreUserKeyWindow(window)
@@ -1080,6 +1084,31 @@ extension LiveComputerUseSystem {
             screenWindows: { screenWindows() }, interrupt: interrupt)
     }
 
+    /// What `ComputerUseTakeover.dragRefusalBeforeActivation` refuses, from the windows as they
+    /// are now: nothing comes to the front for a drag that can't go once it is there. A parked
+    /// window and other windows' coverage are judged after the activation.
+    private static func refuseDragBeforeActivation(
+        from: ComputerUseInputTarget, to: ComputerUseInputTarget, in window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?, isCancelled: @escaping @Sendable () -> Bool
+    ) async throws {
+        func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
+            await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
+        }
+        let dropShown = toWindow ?? window
+        let (source, drop) = (await current(window), await current(dropShown))
+        let start = try await dragPoint(from, shown: window, now: source, isDrop: false, isCancelled: isCancelled)
+        let end = try await dragPoint(to, shown: dropShown, now: drop, isDrop: true, isCancelled: isCancelled)
+        switch ComputerUseTakeover.dragRefusalBeforeActivation(
+            start: start, end: end, sourceFrame: source.frame, dropFrame: drop.frame,
+            sameWindow: drop.windowID == source.windowID, displays: displayFrames()) {
+        case .hidden(.start): throw ComputerUseSystemError.actionFailed(dragStartHiddenRefusal)
+        case .hidden(.end): throw ComputerUseSystemError.actionFailed(dropHiddenRefusal)
+        case .offScreen: throw ComputerUseSystemError.actionFailed(offScreenRefusal(window.app))
+        case .overlap: throw ComputerUseSystemError.actionFailed(dragOverlapRefusal)
+        default: break
+        }
+    }
+
     static let dragStartHiddenRefusal = "The drag's start element is scrolled out of view or hidden."
     static let dropHiddenRefusal = "The drop element is scrolled out of view or hidden."
 
@@ -1390,11 +1419,24 @@ extension LiveComputerUseSystem {
         do {
             try await body()
         } catch {
-            await restoreActivation(previousPID, from: app.pid)
-            throw error
+            let putBack = await restoreActivation(previousPID, from: app.pid)
+            // A refusal after the app came forward says so: the user saw it come and go.
+            switch error {
+            case ComputerUseSystemError.actionFailed(let reason):
+                throw ComputerUseSystemError.actionFailed(reason + broughtForwardNote(app, putBack: putBack))
+            case ComputerUseSystemError.notActiveWindow(let reason):
+                throw ComputerUseSystemError.notActiveWindow(reason + broughtForwardNote(app, putBack: putBack))
+            default:
+                throw error
+            }
         }
         try? await Task.sleep(for: activationSettle)
         await restoreActivation(previousPID, from: app.pid)
+    }
+
+    /// Appended to a refusal that came after the app was activated for it.
+    static func broughtForwardNote(_ app: ComputerUseAppIdentity, putBack: Bool) -> String {
+        putBack ? " \(app.name) was brought to the front for this and put back." : " \(app.name) was brought to the front for this."
     }
 
     /// Whether `pid` is WindowServer's front process. `frontmostApplication` follows it only
@@ -1404,15 +1446,17 @@ extension LiveComputerUseSystem {
         return await MainActor.run { NSRunningApplication(processIdentifier: pid)?.isActive ?? false }
     }
 
-    private static func restoreActivation(_ previousPID: Int32?, from pid: Int32) async {
-        guard let previousPID else { return }
+    /// True when the previous app was asked to the front again.
+    @discardableResult
+    private static func restoreActivation(_ previousPID: Int32?, from pid: Int32) async -> Bool {
+        guard let previousPID else { return false }
         // Once the user picked another app, the front is theirs to keep.
-        guard await isFrontmost(pid) else { return }
-        await MainActor.run {
-            guard let previous = NSRunningApplication(processIdentifier: previousPID) else { return }
+        guard await isFrontmost(pid) else { return false }
+        return await MainActor.run {
+            guard let previous = NSRunningApplication(processIdentifier: previousPID) else { return false }
             // The target is active now; asking on its behalf passes cooperative activation.
-            if let current = NSRunningApplication(processIdentifier: pid), previous.activate(from: current) { return }
-            _ = previous.activate()
+            if let current = NSRunningApplication(processIdentifier: pid), previous.activate(from: current) { return true }
+            return previous.activate()
         }
     }
 

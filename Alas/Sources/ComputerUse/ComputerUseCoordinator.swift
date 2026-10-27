@@ -1141,12 +1141,20 @@ final class ComputerUseCoordinator {
     }
 
     /// Delivers the input, mapping its failures to the tool errors that name the ref and window.
+    /// An input that brought its app to the front reports `activation`, whatever tier it went by.
     private func deliver(
         _ input: ComputerUseInput, of command: ComputerUseCommand, to window: ComputerUseWindow,
         toWindow: ComputerUseWindow?, direct: Bool, context: CallContext
     ) async throws -> ComputerUseDelivered {
         do {
-            return try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
+            let frontmostBefore = system.isFrontmost(window.app.pid)
+            var delivered = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
+            if ComputerUseTakeover.broughtForward(
+                activated: delivered.delivery == .activation, frontmostBefore: frontmostBefore,
+                frontmostAfter: system.isFrontmost(window.app.pid)) {
+                delivered.delivery = .activation
+            }
+            return delivered
         } catch ComputerUseSystemError.staleElement {
             guard let ref = command.ref else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
             throw Refusal(Message.stale(ref, windowID: window.windowID))

@@ -428,6 +428,40 @@ struct ComputerUseInputTests {
     typealias State = ComputerUseTakeover.DragPointState
     typealias Step = ComputerUseTakeover.DragStep
 
+    /// Windows A and B on the display at (0, 0, 1000, 800); P is parked off it. Two windows stacked
+    /// at one frame (AeroSpace's accordion) overlap; a parked window waits for the activation.
+    @Test(arguments: [
+        ("A", "A", Optional(CGPoint(x: 20, y: 20)), Optional(CGPoint(x: 80, y: 80)), Optional<Step>.none),
+        ("A", "B", CGPoint(x: 20, y: 20), CGPoint(x: 520, y: 20), nil),
+        ("A", "A2", CGPoint(x: 20, y: 20), CGPoint(x: 80, y: 80), .overlap),
+        ("A", "A", nil, CGPoint(x: 80, y: 80), .hidden(.start)),
+        ("A", "B", CGPoint(x: 20, y: 20), nil, .hidden(.end)),
+        ("W", "W", CGPoint(x: 20, y: 20), CGPoint(x: 1100, y: 20), .offScreen),
+        ("P", "P", nil, CGPoint(x: 3020, y: 20), nil),
+        ("P", "P2", CGPoint(x: 3020, y: 20), CGPoint(x: 3080, y: 20), nil),
+    ] as [(String, String, CGPoint?, CGPoint?, Step?)])
+    func aFrontDragIsRefusedBeforeActivationOnlyForWhatActivationCantChange(
+        source: String, drop: String, start: CGPoint?, end: CGPoint?, step: Step?
+    ) {
+        let frames = [
+            "A": CGRect(x: 0, y: 0, width: 400, height: 300), "A2": CGRect(x: 0, y: 0, width: 400, height: 300),
+            "B": CGRect(x: 500, y: 0, width: 400, height: 300), "W": CGRect(x: 0, y: 0, width: 1200, height: 300),
+            "P": CGRect(x: 3000, y: 0, width: 400, height: 300), "P2": CGRect(x: 3000, y: 0, width: 400, height: 300),
+        ]
+        #expect(ComputerUseTakeover.dragRefusalBeforeActivation(
+            start: start, end: end, sourceFrame: frames[source]!, dropFrame: frames[drop]!, sameWindow: source == drop,
+            displays: [CGRect(x: 0, y: 0, width: 1000, height: 800)]) == step)
+    }
+
+    /// Columns: activated by the system, frontmost before, frontmost after.
+    @Test(arguments: [
+        (true, true, true, true), (true, false, false, true), (false, false, true, true),
+        (false, true, true, false), (false, false, false, false), (false, true, false, false),
+    ])
+    func anInputThatBroughtItsAppForwardCountsAsAnActivation(activated: Bool, before: Bool, after: Bool, forward: Bool) {
+        #expect(ComputerUseTakeover.broughtForward(activated: activated, frontmostBefore: before, frontmostAfter: after) == forward)
+    }
+
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
         let windows = [
