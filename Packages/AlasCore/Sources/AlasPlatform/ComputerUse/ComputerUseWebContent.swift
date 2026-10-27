@@ -189,14 +189,18 @@ public enum ComputerUseWebContent {
     }
 
     /// Whether a read of a Chromium or Electron window (`chromium`) may have come back without
-    /// the web content it has: nothing cut it short (`cut`, which explains a missing page on its
-    /// own), and it shows no web area with content (`showsContent`). Chrome tears a window's web
+    /// the web content it has: an earlier read of the same window showed some (`showedContent`;
+    /// a Chrome bubble, popup or Task Manager, about:blank and an Electron native panel never do),
+    /// nothing cut this one short (`cut`, which explains a missing page on its own), and it shows
+    /// no web area with content (`showsContent`). Chrome tears a window's web
     /// tree down after input that comes with no Accessibility reads, and builds it again a couple
     /// of seconds after the next read, so a read right after a drag finds the toolbar only. The
     /// caller then looks past the read's depth limit (`probeNodes`); if that finds no content
     /// either, the read is cut by `ComputerUseReadCut.webContentMissing`.
-    public static func mayLackContent(chromium: Bool, showsContent: Bool, cut: ComputerUseReadCut?) -> Bool {
-        chromium && !showsContent && cut == nil
+    public static func mayLackContent(
+        chromium: Bool, showedContent: Bool, showsContent: Bool, cut: ComputerUseReadCut?
+    ) -> Bool {
+        chromium && showedContent && !showsContent && cut == nil
     }
 
     /// A web area with something in it.

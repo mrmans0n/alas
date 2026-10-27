@@ -1011,10 +1011,6 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { _ in true }
-        var saveTree = Self.saveTree
-        // Its web content is built already.
-        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXGroup")]))
-        system.axTree = { [saveTree] _, _, _, _ in (saveTree, nil, ComputerUseAXHandles()) }
         system.perform = { input, _, _, _ in
             recorder.record(input)
             if case .pointerClick = input { return .background }
@@ -1512,10 +1508,6 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { _ in true }
-        var saveTree = Self.saveTree
-        // Its web content is built already.
-        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXGroup")]))
-        system.axTree = { [saveTree] _, _, _, _ in (saveTree, nil, ComputerUseAXHandles()) }
         system.isFrontmost = { $0 == 101 }
         // Idle until the first press, active from then on.
         let presses = Recorder()

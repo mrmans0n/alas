@@ -123,6 +123,9 @@ final class ComputerUseCoordinator {
         var refs: [String: ElementRef] = [:]
         var handles = ComputerUseAXHandles()
         var lastScreenshot: (frame: CGRect, scale: CGFloat)?
+        /// A read of the window showed web content, a recorded one or not (the read before an
+        /// input counts): a later read without it lacks it (`ComputerUseWebContent.mayLackContent`).
+        var showedWebContent = false
     }
 
     /// An element as read: an action re-checks it before using the handle, since an app may
@@ -1721,10 +1724,15 @@ final class ComputerUseCoordinator {
         if try await wakeWebContent(window, shown: tree.root, context: context) {
             tree = try await system.axTree(window, maxDepth, budget, readLimit)
         }
-        // A web window read without its web content is cut short, not empty: Chrome drops the web
-        // tree after input and builds it again after a read, so a read right after a drag lists
-        // only the toolbar, and a query over it finds nothing.
-        let cut = try await webContentMissing(tree, of: window) ? .webContentMissing : tree.cut
+        // A web window read without the web content it showed before is cut short, not empty:
+        // Chrome drops the web tree after input and builds it again after a read, so a read right
+        // after a drag lists only the toolbar, and a query over it finds nothing.
+        let showsContent = ComputerUseWebContent.hasWebContent(tree.root)
+        let cut = try await webContentMissing(tree, showsContent: showsContent, of: window, context: context)
+            ? .webContentMissing : tree.cut
+        if showsContent, snapshot(of: window, context: context)?.showedWebContent != true {
+            updateSnapshot(of: window, context: context) { $0.showedWebContent = true }
+        }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
@@ -1752,17 +1760,19 @@ final class ComputerUseCoordinator {
         return read
     }
 
-    /// Whether a read of a Chromium or Electron window lacks the web content it has
+    /// Whether a read of a Chromium or Electron window lacks the web content it showed before
     /// (`ComputerUseWebContent.mayLackContent`), and a look past the read's depth limit finds
-    /// none either.
+    /// none either. A window that never showed any (a bubble, a popup, a native panel,
+    /// about:blank) has none to lack.
     private func webContentMissing(
         _ tree: (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles),
-        of window: ComputerUseWindow
+        showsContent: Bool, of window: ComputerUseWindow, context: CallContext
     ) async throws -> Bool {
         let chromium = ComputerUseWebContent.isChromium(
             bundleID: window.app.bundleID, acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid))
         guard ComputerUseWebContent.mayLackContent(
-            chromium: chromium, showsContent: ComputerUseWebContent.hasWebContent(tree.root), cut: tree.cut)
+            chromium: chromium, showedContent: snapshot(of: window, context: context)?.showedWebContent == true,
+            showsContent: showsContent, cut: tree.cut)
         else { return false }
         // A look that failed can't show the content is there.
         do {

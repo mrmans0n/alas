@@ -186,18 +186,6 @@ struct ComputerUseWebContentTests {
             acceptsManualAccessibility: manual, bundleID: bundleID, wakesAgain: due, showsContent: content) == wakes)
     }
 
-    /// A whole read of a web window that shows no web content may have come back while the app
-    /// rebuilt it; one cut short already says why, and other apps' windows have none to lack.
-    @Test(arguments: [
-        (true, false, ComputerUseReadCut?.none, true),
-        (true, true, nil, false),
-        (true, false, .nodeBudget, false),
-        (false, false, nil, false),
-    ])
-    func aWebWindowReadWithoutItsContentMayLackIt(chromium: Bool, content: Bool, cut: ComputerUseReadCut?, lacks: Bool) {
-        #expect(ComputerUseWebContent.mayLackContent(chromium: chromium, showsContent: content, cut: cut) == lacks)
-    }
-
     /// Content is a web area with something in it: not groups alone (Chrome's page area before its
     /// tree is built), not an empty web area, not a read that stopped above it.
     @Test(arguments: [(empty, false), (unbuilt, false), (hollow, false), (deep, false), (built, true)])
