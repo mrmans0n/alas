@@ -50,6 +50,7 @@ enum ComputerUseInputPoster {
     /// Lets table views and Chromium arm their drag tracking before the first drag event.
     private static let backgroundDragDownHold: Duration = .milliseconds(30)
     private static let systemDragHover: Duration = .milliseconds(300)
+    private static let minimumDropHover: Duration = .milliseconds(100)
     /// The final approach to the drop: these last moves keep the standard pace under the debug
     /// step override, so the drag doesn't linger over what it passes on the way in.
     private static let systemDragFinalSteps = 3
@@ -257,8 +258,9 @@ enum ComputerUseInputPoster {
     private static let stopGrace: Duration = .milliseconds(500)
     private static let stopGracePoll: Duration = .milliseconds(50)
 
-    /// Whether `interrupt` turns into a Stop within `stopGrace`, polled every `stopGracePoll`.
-    private static func stopFollows(_ interrupt: () -> ComputerUseInputInterrupt?) async -> Bool {
+    /// Whether `interrupt` turns into a Stop within `stopGrace`, polled every `stopGracePoll`:
+    /// a takeover seen just before a Stop may have been the Stop's own click or shortcut.
+    static func stopFollows(_ interrupt: () -> ComputerUseInputInterrupt?) async -> Bool {
         let deadline = ContinuousClock.now + stopGrace
         while true {
             if interrupt() == .cancelled { return true }
@@ -331,7 +333,7 @@ enum ComputerUseInputPoster {
     }
 
     /// The pause over the drop before the release: under half of Finder's spring-loading delay
-    /// while spring-loaded folders are on, so a folder under the drop point doesn't open.
+    /// while spring-loaded folders are on, but at least `minimumDropHover`, so a folder under the drop point doesn't open.
     /// Read on every drag, since the user can change it any time; missing keys are macOS's
     /// defaults, on with 0.5 s.
     private static func dropHover() -> Duration {
@@ -340,7 +342,8 @@ enum ComputerUseInputPoster {
         }
         guard value("com.apple.springing.enabled")?.boolValue ?? true else { return systemDragHover }
         let delay = value("com.apple.springing.delay")?.doubleValue ?? 0.5
-        return min(systemDragHover, .milliseconds(Int(min(max(0, delay), 1) * 500)))
+        // A floor, so Finder's drag session still catches up over the drop with a short delay.
+        return max(minimumDropHover, min(systemDragHover, .milliseconds(Int(min(max(0, delay), 1) * 500))))
     }
 
     /// A drag's pause between moves. Debug builds take `ALAS_COMPUTER_DRAG_STEP_MS` (1...1000)

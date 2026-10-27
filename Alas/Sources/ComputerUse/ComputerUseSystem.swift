@@ -1176,7 +1176,11 @@ extension LiveComputerUseSystem {
             // The takeover rule once more, right before the app comes to the front: the wait for an
             // idle user ended before the ref re-check and the lock waits. As the fallback route
             // does, a user who is back now isn't waited out again.
-            if secondsSinceUserInput() < ComputerUseTakeover.idleThreshold { throw ComputerUseSystemError.userActive }
+            if secondsSinceUserInput() < ComputerUseTakeover.idleThreshold {
+                // The input may have been a Stop's click or shortcut, which lands a moment later.
+                if await ComputerUseInputPoster.stopFollows(interrupt) { throw CancellationError() }
+                throw ComputerUseSystemError.userActive
+            }
             try await withActivation(of: window.app, isCancelled: isCancelled) {
                 try await postEvents(input, in: window, paste: true, background: false, ignoring: ignoring, interrupt: interrupt)
             }
@@ -1338,7 +1342,10 @@ extension LiveComputerUseSystem {
                     case .drag, .activate:
                         if let startPoint, let endPoint { (start, end) = (startPoint, endPoint) }
                         return
-                    case .userActive: throw ComputerUseSystemError.userActive
+                    case .userActive:
+                        // The input may have been a Stop's click or shortcut, which lands a moment later.
+                        if await ComputerUseInputPoster.stopFollows(interrupt) { throw CancellationError() }
+                        throw ComputerUseSystemError.userActive
                     case .raiseSource:
                         await raiseSource()
                     case .raiseDrop:
