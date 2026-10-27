@@ -365,6 +365,51 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.events.count == 4)
     }
 
+    /// Chrome drops a window's web tree after input and builds it again a moment after a read: a
+    /// read without it, past the first contact, is cut short rather than empty, so a query over it
+    /// can't read as "not there", and the drag's re-reads go on until the content is back.
+    @Test(arguments: [false, true])
+    func aWebWindowReadWithoutItsContentIsCutShort(contentReturns: Bool) async throws {
+        let recorder = Recorder()
+        let readsAfterInput = Counter()
+        let chrome = ComputerUseAppIdentity(name: "Google Chrome", bundleID: "com.google.Chrome", pid: 105)
+        let window = ComputerUseWindow(windowID: 5, title: "Tab", frame: CGRect(x: 0, y: 0, width: 800, height: 600), app: chrome)
+        var system = Self.system(windows: [5: window], recorder: recorder)
+        system.wakeWebContent = { _, _ in
+            recorder.recordEvent("wake")
+            return Self.taken
+        }
+        // Content from the first contact's wake on, gone after the drag; with `contentReturns`,
+        // back from the third tree read after it: the settle's read and its look find none, the
+        // first re-read does.
+        system.axTree = { _, _, _, _ in
+            var shows = recorder.events.contains("wake")
+            if !recorder.inputs.isEmpty { shows = contentReturns && readsAfterInput.next() >= 3 }
+            let slider = ComputerUseAXNode(role: "AXSlider", handle: 2)
+            let area = ComputerUseAXNode(role: shows ? "AXWebArea" : "AXGroup", children: shows ? [slider] : [], handle: 1)
+            return (ComputerUseAXNode(role: "AXWindow", children: [area], handle: 0), nil, ComputerUseAXHandles())
+        }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            return .activation
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [chrome])
+        _ = await f.coordinator.perform(.init(action: .inspect, windowID: 5, query: "slider"), sessionID: "s")
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 5, query: "slider", x: 100, y: 100, toX: 700, toY: 100)
+        let json = try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        if contentReturns {
+            #expect(payload["truncated"] as? Bool == false && (payload["elements"] as? [Any])?.count == 1)
+        } else {
+            #expect(payload["truncated"] as? Bool == true)
+            #expect(payload["truncated_by"] as? String == "web_content_missing")
+        }
+        // The first contact's wake and its set as the content showed: a window that had its
+        // content isn't woken again.
+        #expect(recorder.events.filter { $0 == "wake" }.count == 2)
+    }
+
     /// The woken state is per process: a relaunched app that got its old pid back is woken again.
     @Test func aRelaunchedAppWithItsOldPidIsWokenAgain() async throws {
         let woken = Counter()
@@ -966,6 +1011,10 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { _ in true }
+        var saveTree = Self.saveTree
+        // Its web content is built already.
+        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXGroup")]))
+        system.axTree = { [saveTree] _, _, _, _ in (saveTree, nil, ComputerUseAXHandles()) }
         system.perform = { input, _, _, _ in
             recorder.record(input)
             if case .pointerClick = input { return .background }
@@ -1463,6 +1512,10 @@ struct ComputerUseCoordinatorTests {
         let recorder = Recorder()
         var system = Self.system(recorder: recorder)
         system.usesManualAccessibility = { _ in true }
+        var saveTree = Self.saveTree
+        // Its web content is built already.
+        saveTree.children.append(ComputerUseAXNode(role: "AXWebArea", children: [ComputerUseAXNode(role: "AXGroup")]))
+        system.axTree = { [saveTree] _, _, _, _ in (saveTree, nil, ComputerUseAXHandles()) }
         system.isFrontmost = { $0 == 101 }
         // Idle until the first press, active from then on.
         let presses = Recorder()

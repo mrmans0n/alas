@@ -101,6 +101,9 @@ public enum ComputerUseReadCut: String, Sendable, Equatable {
     case timeLimit = "time_limit"
     /// The app stopped answering, or left elements unanswered.
     case appNotResponding = "app_not_responding"
+    /// A Chromium or Electron window read without its web content, which the app was rebuilding
+    /// (`ComputerUseWebContent.mayLackContent`).
+    case webContentMissing = "web_content_missing"
 
     /// Elements in a row the app may leave unanswered (an AX message that timed out) before the
     /// read stops: one slow element, a source editor's whole text, doesn't end the walk.

@@ -1719,6 +1719,10 @@ final class ComputerUseCoordinator {
         if try await wakeWebContent(window, shown: tree.root, context: context) {
             tree = try await system.axTree(window, maxDepth, budget, readLimit)
         }
+        // A web window read without its web content is cut short, not empty: Chrome drops the web
+        // tree after input and builds it again after a read, so a read right after a drag lists
+        // only the toolbar, and a query over it finds nothing.
+        let cut = try await webContentMissing(tree, of: window) ? .webContentMissing : tree.cut
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
@@ -1738,12 +1742,34 @@ final class ComputerUseCoordinator {
         }
         collect(tree.root, above: [], depth: 0, rowAbove: false)
         let read = ElementRead(
-            truncated: flat.truncated || tree.cut != nil,
-            truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: tree.cut),
+            truncated: flat.truncated || cut != nil,
+            truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: cut),
             depthLimited: flat.depthLimited, elements: flat.elements,
             handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
+    }
+
+    /// Whether a read of a Chromium or Electron window lacks the web content it has
+    /// (`ComputerUseWebContent.mayLackContent`), and a look past the read's depth limit finds
+    /// none either.
+    private func webContentMissing(
+        _ tree: (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles),
+        of window: ComputerUseWindow
+    ) async throws -> Bool {
+        let chromium = ComputerUseWebContent.isChromium(
+            bundleID: window.app.bundleID, acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid))
+        guard ComputerUseWebContent.mayLackContent(
+            chromium: chromium, showsContent: ComputerUseWebContent.hasWebContent(tree.root), cut: tree.cut)
+        else { return false }
+        // A look that failed can't show the content is there.
+        do {
+            return try await !probeWebContent(window)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return true
+        }
     }
 
     private func record(refs read: ElementRead, of window: ComputerUseWindow, context: CallContext) {
