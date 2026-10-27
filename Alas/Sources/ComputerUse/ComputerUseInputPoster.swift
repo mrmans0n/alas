@@ -50,6 +50,9 @@ enum ComputerUseInputPoster {
     /// Lets table views and Chromium arm their drag tracking before the first drag event.
     private static let backgroundDragDownHold: Duration = .milliseconds(30)
     private static let systemDragHover: Duration = .milliseconds(300)
+    /// The final approach to the drop: these last moves keep the standard pace under the debug
+    /// step override, so the drag doesn't linger over what it passes on the way in.
+    private static let systemDragFinalSteps = 3
     /// Back at the start before a cancelled drag's release, for the trailing drag session to follow.
     private static let systemDragCancelSettle: Duration = .milliseconds(100)
     private static let cursorRestoreDelay: Duration = .milliseconds(100)
@@ -138,12 +141,13 @@ enum ComputerUseInputPoster {
             postSystemWide(down)
             pressed = true
             await steadyPause(systemDragDownHold)
-            for move in moves {
+            for (index, move) in moves.enumerated() {
                 try await checkInterrupt()
                 postSystemWide(move)
-                await steadyPause(dragStepDelay(systemDragStepDelay))
+                let approaching = index >= moves.count - systemDragFinalSteps
+                await steadyPause(approaching ? systemDragStepDelay : dragStepDelay(systemDragStepDelay))
             }
-            await steadyPause(systemDragHover)
+            await steadyPause(dropHover())
             try await checkInterrupt()
             guard dropIsVisible() else {
                 await cancelInPlace()
@@ -324,6 +328,19 @@ enum ComputerUseInputPoster {
     static func userHoldsDragKey() -> Bool {
         !CGEventSource.flagsState(.hidSystemState)
             .intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty
+    }
+
+    /// The pause over the drop before the release: under half of Finder's spring-loading delay
+    /// while spring-loaded folders are on, so a folder under the drop point doesn't open.
+    /// Read on every drag, since the user can change it any time; missing keys are macOS's
+    /// defaults, on with 0.5 s.
+    private static func dropHover() -> Duration {
+        func value(_ key: String) -> NSNumber? {
+            CFPreferencesCopyAppValue(key as CFString, kCFPreferencesAnyApplication) as? NSNumber
+        }
+        guard value("com.apple.springing.enabled")?.boolValue ?? true else { return systemDragHover }
+        let delay = value("com.apple.springing.delay")?.doubleValue ?? 0.5
+        return min(systemDragHover, .milliseconds(Int(min(max(0, delay), 1) * 500)))
     }
 
     /// A drag's pause between moves. Debug builds take `ALAS_COMPUTER_DRAG_STEP_MS` (1...1000)
