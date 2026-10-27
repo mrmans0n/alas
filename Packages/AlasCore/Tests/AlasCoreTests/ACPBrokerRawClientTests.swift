@@ -194,6 +194,71 @@ struct ACPBrokerRawClientTests {
         await client.detach()
     }
 
+    @Test func acknowledgedButUnansweredRequestRestoresWithoutNewConsumptionAuthority() async throws {
+        let service = RawBrokerFixture(pending: true)
+        let original = makeClient(service)
+        _ = try await original.start()
+        var requests = original.incomingRawFrames.makeAsyncIterator()
+        let request = try #require(await requests.next())
+        request.acknowledgeDurableConsumption()
+        try await original.replayRawBrokerEvents()
+        try await eventually { await service.acks.last == 1 }
+        await original.detach()
+        let restored = ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
+            command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "restored",
+            initialBrokerGeneration: .init(rawValue: 7), initialAcknowledgedCursor: .init(rawValue: 1), wireContext: .rawV2)
+        _ = try await restored.start()
+        try await restored.replayRawBrokerEvents()
+        var updates = restored.incomingV2Updates.makeAsyncIterator()
+        let update = try #require(await updates.next())
+        update.acknowledgeDurableConsumption()
+        try await restored.replayRawBrokerEvents()
+        try await eventually { await service.acks.last == 2 }
+        await restored.detach()
+        var recovered: [ACPBrokerRawFrameDelivery] = []
+        for await frame in restored.incomingRawFrames { recovered.append(frame) }
+        #expect(recovered.count == 1)
+        if let frame = recovered.first {
+            #expect(frame.frame == request.frame)
+            #expect(frame.pendingRequestID == "p")
+            #expect(frame.provenance.cursor.rawValue == 1)
+            #expect(frame.provenance.origin == .pendingSnapshot)
+            frame.acknowledgeDurableConsumption()
+        }
+        #expect(await service.acks == [1, 2])
+    }
+
+    @Test func consumedCompletionReleasesSourceBytesWhileTransportRemainsAlive() async throws {
+        let service = RawBrokerFixture()
+        let released = NSLockState(false)
+        await service.preloadTrackedOutcome { released.update { $0 = true } }
+        let client = makeClient(service)
+        client.preRegisterAwaitedOperationKeys(["key"])
+        _ = try await client.start()
+        #expect(!released.read())
+        client.replayedCompletion(forPreRegisteredOperationKey: "key")?.acknowledgeDurableConsumption()
+        await service.clearOutcome()
+        try await client.replayRawBrokerEvents()
+        try await eventually(within: .seconds(1)) { released.read() }
+        #expect(client.currentBrokerGeneration?.rawValue == 7)
+        await client.detach()
+    }
+
+    @Test func consumedCompletionCanStillCorrelateALaterBrokerReplay() async throws {
+        let service = RawBrokerFixture()
+        await service.preloadOutcome(rawOutcome(result: "null"), cursor: 3)
+        let client = makeClient(service)
+        client.preRegisterAwaitedOperationKeys(["key"])
+        _ = try await client.start()
+        client.replayedCompletion(forPreRegisteredOperationKey: "key")?.acknowledgeDurableConsumption()
+        try await client.replayRawBrokerEvents()
+        let replayed = try await client.send(ACPRequest(method: "session/prompt", brokerOperationKey: "key"))
+        #expect(replayed.body == Data("null".utf8))
+        #expect(client.terminalOutcome(forPreRegisteredOperationKey: "key") == nil)
+        #expect(await service.acks.isEmpty)
+        await client.detach()
+    }
+
     private func makeClient(_ service: RawBrokerFixture, context: ACPBrokerWireContext = .rawV2) -> ACPBrokerClient {
         ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
             command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",
@@ -228,6 +293,19 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         self.delayOpen = delayOpen
         self.rawBytes = rawBytes
         self.replaceHookDuringSend = replaceHookDuringSend
+    }
+    func clearOutcome() { outcome = nil }
+    func preloadTrackedOutcome(onRelease: @escaping @Sendable () -> Void) {
+        let source = Data((#"{"jsonrpc":"2.0","id":9,"result":{"padding":""# + String(repeating: "x", count: 2048) + #""}}"#).utf8)
+        let memory = UnsafeMutableRawPointer.allocate(byteCount: source.count, alignment: 1)
+        source.copyBytes(to: memory.assumingMemoryBound(to: UInt8.self), count: source.count)
+        let bytes = Data(bytesNoCopy: memory, count: source.count, deallocator: .custom { pointer, _ in
+            pointer.deallocate()
+            onRelease()
+        })
+        var value = ACPBrokerRPCOutcome(result: nil, error: nil)
+        value.rawFrame = .init(bytes: bytes)
+        outcome = value
     }
     func pendingRequest() -> ACPBrokerPendingRequest {
         var request = ACPBrokerPendingRequest(requestId: "p", adapterRequestId: .string("p"), kind: .question, payload: .null)

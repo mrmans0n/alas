@@ -21,7 +21,7 @@ public struct ACPBrokerRawFrameDelivery: Sendable {
     private let consumption: ACPV2SessionUpdateDelivery
 
     init(frame: Data, connectionID: UUID, provenance: ACPBrokerFrameProvenance,
-         pendingRequestID: String? = nil, acknowledgement: @escaping ACPDurableConsumptionAcknowledgement) {
+         pendingRequestID: String? = nil, acknowledgement: ACPDurableConsumptionAcknowledgement?) {
         self.frame = frame
         self.connectionID = connectionID
         self.provenance = provenance
@@ -155,6 +155,15 @@ actor ACPRawBrokerTransport {
         try validate(snapshot, expected: generation)
         initializeCache = snapshot.initializeRawResponse
         sessionCache = snapshot.remoteSessionRawResponse
+        // A later send may replay a consumed operation still retained by the
+        // helper behind an earlier receipt. Borrow its source only while that
+        // send needs correlation; never restore its consumed recovery authority.
+        for operation in snapshot.operations where awaiting[operation.operationKey] != nil {
+            if let outcome = operation.terminalOutcome, let cursor = operation.completedCursor,
+               completions[operation.operationKey]?.contains(where: { $0.cursor == cursor }) != true {
+                completions[operation.operationKey, default: []].append((outcome, cursor))
+            }
+        }
         summary.withLock { state in
             state.sessionCached = sessionCache != nil
             for op in snapshot.operations where op.terminalOutcome != nil {
@@ -164,7 +173,7 @@ actor ACPRawBrokerTransport {
             }
         }
         for pending in snapshot.pendingRequests {
-            guard let frame = pending.rawFrame, let cursor = pending.originCursor, cursor > acknowledged,
+            guard let frame = pending.rawFrame, let cursor = pending.originCursor,
                   !seen.contains(cursor) else { continue }
             // Snapshot receipt alone cannot consume anything. Reuse the actual journal identity.
             publish(frame, cursor: cursor, origin: .pendingSnapshot, pendingID: pending.requestId)
@@ -243,9 +252,11 @@ actor ACPRawBrokerTransport {
                          origin: ACPBrokerFrameProvenance.Origin, pendingID: String? = nil) {
         guard !terminated, let generation else { return }
         seen.insert(cursor)
-        protected.insert(cursor)
+        // A restored unresolved request may already have a durable receipt.
+        // Restore its resolution identity without protecting or consuming it again.
+        if cursor > acknowledged { protected.insert(cursor) }
         let provenance = ACPBrokerFrameProvenance(brokerID: openParams.brokerId, generation: generation, cursor: cursor, origin: origin)
-        let ack = acknowledgement(cursor)
+        let ack = cursor > acknowledged ? acknowledgement(cursor) : nil
         let method: String?
         if case .object(let fields) = try? LSPJSONValue.decode(from: frame.bytes), case .string(let value)? = fields["method"] {
             method = value
@@ -268,7 +279,16 @@ actor ACPRawBrokerTransport {
         }
     }
 
+    private func pruneConsumedCompletions() {
+        let consumed = summary.withLock { $0.consumed }
+        for key in Array(completions.keys) where awaiting[key] == nil {
+            completions[key]?.removeAll { consumed.contains($0.cursor) }
+            if completions[key]?.isEmpty == true { completions.removeValue(forKey: key) }
+        }
+    }
+
     private func flushAcknowledgements() async throws {
+        pruneConsumedCompletions()
         guard !terminated, let generation, !acknowledging else { return }
         acknowledging = true
         defer { acknowledging = false }
@@ -305,6 +325,7 @@ actor ACPRawBrokerTransport {
         defer {
             if awaiting[key] == 1 { awaiting.removeValue(forKey: key) }
             else { awaiting[key, default: 1] -= 1 }
+            pruneConsumedCompletions()
         }
         var request = ACPBrokerSendParams(brokerId: openParams.brokerId, generation: generation,
             operationKey: key, method: method, params: params)
