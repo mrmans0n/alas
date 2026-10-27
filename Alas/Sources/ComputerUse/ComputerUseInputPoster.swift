@@ -152,8 +152,8 @@ enum ComputerUseInputPoster {
         screenWindows: @Sendable () -> [ComputerUseInputGeometry.ScreenWindow],
         interrupt: @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> BackgroundDragOutcome {
-        // Every event, a cross-window drop's too, is addressed to the source window; a file-style
-        // drag into another window reaches it through the drag-session fallback.
+        // Every event is addressed to the one window: a drop into another window goes to the front
+        // before any event (`ComputerUseBackgroundDrag.route`).
         let target = Target(pid: pid, windowID: windowID, windowOrigin: windowFrame.origin)
         let gesture = Int64.random(in: 1 ... Int64(Int32.max))
         func event(_ type: CGEventType, at point: CGPoint, clickState: Int) throws -> CGEvent {
