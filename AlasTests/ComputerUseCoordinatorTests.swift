@@ -832,7 +832,11 @@ struct ComputerUseCoordinatorTests {
         #expect(handle == 1)
     }
 
-    enum WindowChange: CaseIterable { case none, elements, focus, target, truncatedBefore, truncatedAfter }
+    enum WindowChange: CaseIterable {
+        case none, elements, focus, target, truncatedBefore, truncatedAfter
+        /// Elements past the call's `limit` changed: the listing is cut, the change check's read isn't.
+        case elementsPastLimit
+    }
     enum ActionKind { case click, key, type, scroll, drag }
 
     @Test(arguments: [
@@ -855,6 +859,7 @@ struct ComputerUseCoordinatorTests {
         (.drag, .activation, .none, Warnings.drag),
         (.drag, .activation, .truncatedAfter, Warnings.drag),
         (.drag, .activation, .elements, nil),
+        (.drag, .background, .elementsPastLimit, nil),
     ] as [(ActionKind, ComputerUseDelivered, WindowChange, String?)])
     func actionThatChangedNothingSaysSo(
         _ kind: ActionKind, _ delivered: ComputerUseDelivered, change: WindowChange, warning: String?
@@ -869,7 +874,7 @@ struct ComputerUseCoordinatorTests {
         system.axTree = { _, _, _, _ in
             let read = reads.next()
             var tree = saveTree
-            if change == .elements, read == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
+            if [.elements, .elementsPastLimit].contains(change), read == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
             let cut = (change == .truncatedBefore && read == 2) || (change == .truncatedAfter && read == 3)
             return (tree, cut ? .timeLimit : nil, ComputerUseAXHandles())
         }
@@ -885,7 +890,7 @@ struct ComputerUseCoordinatorTests {
         case .key: .init(action: .key, windowID: 1, keys: "down")
         case .type: .init(action: .type, windowID: 1, ref: "e2", text: "x")
         case .scroll: .init(action: .scroll, windowID: 1, ref: "e2", dy: 3)
-        case .drag: .init(action: .drag, windowID: 1, ref: "e2", toRef: "e1")
+        case .drag: .init(action: .drag, windowID: 1, limit: change == .elementsPastLimit ? 1 : nil, ref: "e2", toRef: "e1")
         }
         let json = try #require(Self.text(await f.coordinator.perform(command, sessionID: "s")))
         let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])

@@ -1217,11 +1217,11 @@ final class ComputerUseCoordinator {
         var endAfter: ComputerUseWindowFingerprint?
     }
 
-    /// Said after a drag whose drop window (the start window, for a drag inside one) shows
+    /// Said after a front drag whose drop window (the start window, for a drag inside one) shows
     /// another title than before it: an item it hovered over may have opened.
-    static func titleChangeNote(before: String?, after: String?) -> String? {
+    private static func titleChangeNote(before: String?, after: String?) -> String? {
         guard let before, let after, !before.isEmpty, !after.isEmpty, before != after else { return nil }
-        return "\"\(before)\" now shows \"\(after)\"; the app may have opened a folder while the drag hovered over it."
+        return "\"\(before)\" now shows \"\(after)\": something the drag hovered over may have opened."
     }
 
     private static func joined(_ warnings: String?...) -> String? {
@@ -1500,7 +1500,8 @@ final class ComputerUseCoordinator {
     static let waitPoll: Duration = .milliseconds(250)
 
     /// Nodes and time the read before an input may take: it delays the input, and a read cut
-    /// short only turns the change check off.
+    /// short only turns the change check off. Also the elements every read lists for the change
+    /// check, whatever the call's `limit`: a Finder window's sidebar alone fills the default 100.
     static let fingerprintNodeBudget = 500
     static let fingerprintTimeLimit: Duration = .seconds(1)
 
@@ -1512,7 +1513,7 @@ final class ComputerUseCoordinator {
     ) async -> ComputerUseWindowFingerprint {
         let read = try? await readElements(
             window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
-            recordRefs: false, nodeBudget: Self.fingerprintNodeBudget, timeLimit: Self.fingerprintTimeLimit)
+            recordRefs: false, nodeBudget: Self.fingerprintNodeBudget + 1, timeLimit: Self.fingerprintTimeLimit)
         return await fingerprint(of: window, read: read, target: target)
     }
 
@@ -1523,7 +1524,7 @@ final class ComputerUseCoordinator {
         let focus = await system.focusState(window)
         var targetHash: Int?
         if let target { targetHash = await system.elementState(target.0, target.1) }
-        let complete = read.flatMap { $0.truncated ? nil : $0.elements }
+        let complete = read?.fingerprintElements
         return ComputerUseWindowFingerprint(
             focus: focus, windowTitle: window.title,
             elementsHash: complete.map { ComputerUseChangeCheck.elementsHash($0) },
@@ -1718,6 +1719,9 @@ final class ComputerUseCoordinator {
         /// Elements were left out for being deeper than the read's max depth.
         var depthLimited = false
         var elements: [ComputerUseInspectElement]
+        /// Every element up to `fingerprintNodeBudget`, past the call's `limit`, for the change
+        /// check; nil when the read was cut short or had more.
+        var fingerprintElements: [ComputerUseInspectElement]?
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
         var refs: [String: Int]
@@ -1743,8 +1747,9 @@ final class ComputerUseCoordinator {
         _ window: ComputerUseWindow, query: String?, limit: Int, maxDepth: Int, context: CallContext, recordRefs: Bool = true,
         nodeBudget: Int = .max, timeLimit: Duration = ComputerUseAXReader.deadline
     ) async throws -> ElementRead {
-        // Without a query the walk only needs one node past the limit to report truncation.
-        let budget = min(query == nil ? limit + 1 : Self.queryNodeBudget, nodeBudget)
+        // Without a query the walk only needs one node past what it lists to report truncation.
+        let fingerprintLimit = max(limit, Self.fingerprintNodeBudget)
+        let budget = min(query == nil ? fingerprintLimit + 1 : Self.queryNodeBudget, nodeBudget)
         let readLimit = min(timeLimit, ComputerUseAXReader.deadline)
         var tree = try await system.axTree(window, maxDepth, budget, readLimit)
         // A Chromium or Electron window may show only empty groups, or an empty web area, at first
@@ -1763,6 +1768,8 @@ final class ComputerUseCoordinator {
             updateSnapshot(of: window, context: context) { $0.showedWebContent = true }
         }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
+        let whole = fingerprintLimit == limit
+            ? flat : ComputerUseInspectTree.flatten(tree.root, query: query, limit: fingerprintLimit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
         // A partial read may have missed elements even when the limit was not reached.
@@ -1784,7 +1791,7 @@ final class ComputerUseCoordinator {
             truncated: flat.truncated || cut != nil,
             truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: cut),
             depthLimited: flat.depthLimited, elements: flat.elements,
-            handles: tree.handles, refs: flat.refs, identities: identities)
+            fingerprintElements: whole.truncated || cut != nil ? nil : whole.elements, handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
     }
