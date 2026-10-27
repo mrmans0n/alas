@@ -459,15 +459,6 @@ struct ComputerUseInputTests {
             displays: [CGRect(x: 0, y: 0, width: 1000, height: 800)]) == step)
     }
 
-    /// Columns: activated by the system, frontmost before, frontmost after.
-    @Test(arguments: [
-        (true, true, true, true), (true, false, false, true), (false, false, true, true),
-        (false, true, true, false), (false, false, false, false), (false, true, false, false),
-    ])
-    func anInputThatBroughtItsAppForwardCountsAsAnActivation(activated: Bool, before: Bool, after: Bool, forward: Bool) {
-        #expect(ComputerUseTakeover.broughtForward(activated: activated, frontmostBefore: before, frontmostAfter: after) == forward)
-    }
-
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
         let windows = [

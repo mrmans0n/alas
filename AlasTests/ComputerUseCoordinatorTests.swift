@@ -906,6 +906,11 @@ struct ComputerUseCoordinatorTests {
          "computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."),
         (.userTookOverDrag, true,
          "computer_user_active: You started using the Mac, so the drag was cancelled mid-way; nothing was dropped."),
+        // A failure after the app was brought to the front keeps its code and says so.
+        (.broughtForward(.dropOutOfBounds, note: " Notes was brought to the front for this."), true,
+         "computer_out_of_bounds: The point is outside window 1. Notes was brought to the front for this."),
+        (.broughtForward(.windowNotFound(1), note: " Notes was brought to the front for this."), true,
+         "computer_window_not_found: No on-screen window 1. Call computer_apps again. Notes was brought to the front for this."),
     ])
     func deliveryFailuresMapToTheirToolErrors(_ error: ComputerUseSystemError, drag: Bool, expected: String) async throws {
         var system = Self.system()

@@ -128,12 +128,29 @@ enum ComputerUseSystemError: Error, LocalizedError {
     case userTookOver(typed: Int, of: Int)
     /// The user took over after a drag's button went down; it was cancelled in place.
     case userTookOverDrag
+    /// `error`, thrown after its app was brought to the front for the input; `note` says so.
+    /// Only for an error that carries no message of its own to append the note to.
+    indirect case broughtForward(ComputerUseSystemError, note: String)
 
     /// The user's input stopped the input.
     var isUserTakeover: Bool {
         switch self {
         case .userActive, .userTookOver, .userTookOverDrag: true
+        case .broughtForward(let error, _): error.isUserTakeover
         default: false
+        }
+    }
+
+    /// The error with `note` after it: in its own message where it has one, else wrapped in
+    /// `broughtForward`, which keeps what the error is.
+    func appending(note: String) -> ComputerUseSystemError {
+        switch self {
+        case .actionFailed(let reason): .actionFailed(reason + note)
+        case .notActiveWindow(let reason): .notActiveWindow(reason + note)
+        case .captureFailed(let reason): .captureFailed(reason + note)
+        case .openFailed(let reason): .openFailed(reason + note)
+        case .broughtForward(let error, let earlier): .broughtForward(error, note: earlier + note)
+        default: .broughtForward(self, note: note)
         }
     }
 
@@ -151,6 +168,7 @@ enum ComputerUseSystemError: Error, LocalizedError {
         case .actionFailed(let reason): reason
         case .notActiveWindow(let reason): reason
         case .openFailed(let reason): reason
+        case .broughtForward(let error, let note): (error.errorDescription ?? "") + note
         }
     }
 }
@@ -1088,7 +1106,8 @@ extension LiveComputerUseSystem {
     }
 
     /// What `ComputerUseTakeover.dragRefusalBeforeActivation` refuses, from the windows as they
-    /// are now: nothing comes to the front for a drag that can't go once it is there. A parked
+    /// are now, and a drag without input watching or with a drag key the user holds: nothing
+    /// comes to the front for a drag that can't go once it is there. A parked
     /// window and other windows' coverage are judged after the activation.
     private static func refuseDragBeforeActivation(
         from: ComputerUseInputTarget, to: ComputerUseInputTarget, in window: ComputerUseWindow,
@@ -1097,6 +1116,8 @@ extension LiveComputerUseSystem {
         func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
             await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
         }
+        // Telling the user's input from the drag's events needs the input tap.
+        guard ComputerUseUserInput.isWatching else { throw ComputerUseSystemError.actionFailed(dragNeedsInputWatching) }
         // A key the user holds would ride along with the drag once it's in front.
         if ComputerUseInputPoster.userHoldsDragKey() { throw ComputerUseSystemError.userActive }
         let dropShown = toWindow ?? window
@@ -1114,6 +1135,8 @@ extension LiveComputerUseSystem {
         }
     }
 
+    static let dragNeedsInputWatching =
+        "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own."
     static let dragStartHiddenRefusal = "The drag's start element is scrolled out of view or hidden."
     static let dropHiddenRefusal = "The drop element is scrolled out of view or hidden."
 
@@ -1262,12 +1285,9 @@ extension LiveComputerUseSystem {
         case .drag(let from, let to, let toWindow, let modifiers):
             // The foreground drag: only with the app activated, and posted system-wide, since a file
             // drag's session follows the cursor. Telling the user's input from these events needs
-            // the input tap. The in-app drag is `dragInBackground`.
+            // the input tap, which `refuseDragBeforeActivation` requires. The in-app drag is
+            // `dragInBackground`.
             precondition(!background, "Drags only go with the app activated")
-            guard ComputerUseUserInput.isWatching else {
-                throw ComputerUseSystemError.actionFailed(
-                    "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own.")
-            }
             // The app is in front (`activated`). From here on the points are read again on every
             // look: a parked window comes back (AeroSpace switches to its workspace) and windows come
             // up a moment after the activation (`ComputerUseTakeover.dragStep`).
@@ -1425,15 +1445,10 @@ extension LiveComputerUseSystem {
             try await body()
         } catch {
             let putBack = await restoreActivation(previousPID, from: app.pid)
-            // A refusal after the app came forward says so: the user saw it come and go.
-            switch error {
-            case ComputerUseSystemError.actionFailed(let reason):
-                throw ComputerUseSystemError.actionFailed(reason + broughtForwardNote(app, putBack: putBack))
-            case ComputerUseSystemError.notActiveWindow(let reason):
-                throw ComputerUseSystemError.notActiveWindow(reason + broughtForwardNote(app, putBack: putBack))
-            default:
-                throw error
-            }
+            // Any failure after the app came forward says so: the user saw it come and go. A Stop
+            // (`CancellationError`) has no message to carry it.
+            guard let failure = error as? ComputerUseSystemError else { throw error }
+            throw failure.appending(note: broughtForwardNote(app, putBack: putBack))
         }
         try? await Task.sleep(for: activationSettle)
         await restoreActivation(previousPID, from: app.pid)

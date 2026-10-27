@@ -1158,21 +1158,30 @@ final class ComputerUseCoordinator {
                 delivered.delivery = .activation
             }
             return delivered
-        } catch ComputerUseSystemError.staleElement {
-            guard let ref = command.ref else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
-            throw Refusal(Message.stale(ref, windowID: window.windowID))
-        } catch ComputerUseSystemError.staleDropElement {
-            throw Refusal(Message.stale(command.toRef ?? "", windowID: (toWindow ?? window).windowID))
-        } catch ComputerUseSystemError.outOfBounds {
-            throw Refusal(Message.outOfBounds(window.windowID))
-        } catch ComputerUseSystemError.dropOutOfBounds {
-            throw Refusal(Message.outOfBounds((toWindow ?? window).windowID))
-        } catch ComputerUseSystemError.userActive {
-            throw Refusal(userActiveMessage(window))
-        } catch ComputerUseSystemError.userTookOver(let typed, let total) {
-            throw Refusal(Message.userTookOver(window.app, typed: typed, of: total))
-        } catch ComputerUseSystemError.userTookOverDrag {
-            throw Refusal(Message.userTookOverDrag)
+        } catch let error as ComputerUseSystemError {
+            throw deliveryFailure(error, of: command, to: window, toWindow: toWindow)
+        }
+    }
+
+    /// The tool error for a failed delivery. One that came after the app was brought to the front
+    /// (`broughtForward`) reads as it would otherwise, with the note after it.
+    private func deliveryFailure(
+        _ error: ComputerUseSystemError, of command: ComputerUseCommand, to window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?
+    ) -> any Error {
+        switch error {
+        case .broughtForward(let error, let note):
+            return Refusal(Self.message(for: deliveryFailure(error, of: command, to: window, toWindow: toWindow)) + note)
+        case .staleElement:
+            guard let ref = command.ref else { return ComputerUseSystemError.actionFailed("The element is no longer valid.") }
+            return Refusal(Message.stale(ref, windowID: window.windowID))
+        case .staleDropElement: return Refusal(Message.stale(command.toRef ?? "", windowID: (toWindow ?? window).windowID))
+        case .outOfBounds: return Refusal(Message.outOfBounds(window.windowID))
+        case .dropOutOfBounds: return Refusal(Message.outOfBounds((toWindow ?? window).windowID))
+        case .userActive: return Refusal(userActiveMessage(window))
+        case .userTookOver(let typed, let total): return Refusal(Message.userTookOver(window.app, typed: typed, of: total))
+        case .userTookOverDrag: return Refusal(Message.userTookOverDrag)
+        default: return error
         }
     }
 
@@ -1885,6 +1894,7 @@ final class ComputerUseCoordinator {
     private static func message(for error: any Error) -> String {
         switch error {
         case ComputerUseSystemError.windowNotFound(let id): Message.windowNotFound(id)
+        case ComputerUseSystemError.broughtForward(let error, let note): message(for: error) + note
         case ComputerUseSystemError.windowUnreadable(let id): Message.windowUnreadable(id)
         case ComputerUseSystemError.captureFailed(let reason): Message.captureFailed(reason)
         case ComputerUseSystemError.appNotResponding(let app): Message.captureFailed("\(app) is not responding")
