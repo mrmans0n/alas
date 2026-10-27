@@ -1324,14 +1324,16 @@ final class ComputerUseCoordinator {
                 // The action may have moved or resized the window; the read matches it by its frame.
                 window = try await currentWindow(window)
                 read = try await readElements(
-                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
+                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
+                    forChangeCheck: true)
             } catch ComputerUseSystemError.appNotResponding {
                 // An app still busy with what the input opened (a sheet sliding in) answers a moment later.
                 await sleep(Self.postReadRetryDelay)
                 try checkStillActive(context)
                 window = try await currentWindow(window)
                 read = try await readElements(
-                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
+                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
+                    forChangeCheck: true)
             }
             var verdict = try await check(
                 read, of: window, after: delivered, of: command, target: target, before: before, end: end,
@@ -1379,7 +1381,7 @@ final class ComputerUseCoordinator {
                         window = try await currentWindow(window)
                         polled = try await readElements(
                             window, query: command.query, limit: command.limit, maxDepth: command.maxDepth,
-                            context: context)
+                            context: context, forChangeCheck: true)
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
@@ -1466,7 +1468,8 @@ final class ComputerUseCoordinator {
         do {
             let current = try await currentWindow(window)
             let read = try await readElements(
-                current, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
+                current, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
+                forChangeCheck: true)
             entry["truncated"] = read.truncated
             entry["truncated_by"] = read.truncatedBy
             entry["elements"] = read.elements.map(Self.element)
@@ -1517,7 +1520,8 @@ final class ComputerUseCoordinator {
     ) async -> ComputerUseWindowFingerprint {
         let read = try? await readElements(
             window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
-            recordRefs: false, nodeBudget: Self.fingerprintNodeBudget + 1, timeLimit: Self.fingerprintTimeLimit)
+            recordRefs: false, nodeBudget: Self.fingerprintNodeBudget + 1, timeLimit: Self.fingerprintTimeLimit,
+            forChangeCheck: true)
         return await fingerprint(of: window, read: read, target: target)
     }
 
@@ -1724,7 +1728,7 @@ final class ComputerUseCoordinator {
         var depthLimited = false
         var elements: [ComputerUseInspectElement]
         /// Every element up to `fingerprintNodeBudget`, past the call's `limit`, for the change
-        /// check; nil when the read was cut short or had more.
+        /// check; nil when the read wasn't for it, was cut short or had more.
         var fingerprintElements: [ComputerUseInspectElement]?
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
@@ -1746,13 +1750,14 @@ final class ComputerUseCoordinator {
     }
 
     /// Reads the window the way computer_inspect does and, unless told not to, replaces its refs.
-    /// `nodeBudget` and `timeLimit` only lower the read's own caps.
+    /// `nodeBudget` and `timeLimit` only lower the read's own caps. `forChangeCheck`: the read also
+    /// lists `fingerprintElements`, so it walks up to `fingerprintNodeBudget` nodes whatever the limit.
     private func readElements(
         _ window: ComputerUseWindow, query: String?, limit: Int, maxDepth: Int, context: CallContext, recordRefs: Bool = true,
-        nodeBudget: Int = .max, timeLimit: Duration = ComputerUseAXReader.deadline
+        nodeBudget: Int = .max, timeLimit: Duration = ComputerUseAXReader.deadline, forChangeCheck: Bool = false
     ) async throws -> ElementRead {
         // Without a query the walk only needs one node past what it lists to report truncation.
-        let fingerprintLimit = max(limit, Self.fingerprintNodeBudget)
+        let fingerprintLimit = forChangeCheck ? max(limit, Self.fingerprintNodeBudget) : limit
         let budget = min(query == nil ? fingerprintLimit + 1 : Self.queryNodeBudget, nodeBudget)
         let readLimit = min(timeLimit, ComputerUseAXReader.deadline)
         var tree = try await system.axTree(window, maxDepth, budget, readLimit)
@@ -1772,7 +1777,7 @@ final class ComputerUseCoordinator {
             updateSnapshot(of: window, context: context) { $0.showedWebContent = true }
         }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
-        let whole = fingerprintLimit == limit
+        let whole = !forChangeCheck || fingerprintLimit == limit
             ? flat : ComputerUseInspectTree.flatten(tree.root, query: query, limit: fingerprintLimit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
@@ -1795,7 +1800,8 @@ final class ComputerUseCoordinator {
             truncated: flat.truncated || cut != nil,
             truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: cut),
             depthLimited: flat.depthLimited, elements: flat.elements,
-            fingerprintElements: whole.truncated || cut != nil ? nil : whole.elements, handles: tree.handles, refs: flat.refs, identities: identities)
+            fingerprintElements: !forChangeCheck || whole.truncated || cut != nil ? nil : whole.elements,
+            handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
     }

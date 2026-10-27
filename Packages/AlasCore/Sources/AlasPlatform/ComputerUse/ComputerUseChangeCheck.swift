@@ -22,8 +22,9 @@ public struct ComputerUseWindowFingerprint: Equatable, Sendable {
     /// Nil when nothing has focus or the focus couldn't be read.
     public var focus: Focus?
     public var windowTitle: String?
-    /// `ComputerUseChangeCheck.elementsHash` of the element list; nil when the read failed or was
-    /// cut short (limit, node budget, deadline), since elements past the cut may have changed.
+    /// `ComputerUseChangeCheck.elementsHash` of the element list (up to the change check's own
+    /// budget, not the call's listing limit); nil when the read failed or was cut short (node
+    /// budget, deadline), since elements past the cut may have changed.
     public var elementsHash: Int?
     /// The acted-on element's own state (value, selection, enabled, title); nil without one.
     public var targetHash: Int?
