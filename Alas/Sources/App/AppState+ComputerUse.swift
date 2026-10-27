@@ -49,7 +49,9 @@ extension AppState {
         coordinator.transcript = { link.state?.session(for: $0)?.transcript }
         coordinator.autoRun = { link.state?.session(for: $0)?.autoRunEnabled ?? false }
         coordinator.autoRunAllowed = { sessionID, app in
-            link.state?.session(for: sessionID)?.appendSystemNotice(ComputerUseCoordinator.autoRunNotice(appName: app.name))
+            let notice = ComputerUseCoordinator.autoRunNotice(appName: app.name)
+            // Through the session's runner, so the line is persisted and survives a reload.
+            link.state?.acpManager(forSession: sessionID)?.runners[sessionID]?.appendAndPersistSystemNotice(notice)
         }
         return coordinator
     }
