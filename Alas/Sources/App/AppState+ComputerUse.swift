@@ -47,6 +47,10 @@ extension AppState {
             appIsActive: { NSApp.isActive }
         )
         coordinator.transcript = { link.state?.session(for: $0)?.transcript }
+        coordinator.autoRun = { link.state?.session(for: $0)?.autoRunEnabled ?? false }
+        coordinator.autoRunAllowed = { sessionID, app in
+            link.state?.session(for: sessionID)?.appendSystemNotice(ComputerUseCoordinator.autoRunNotice(appName: app.name))
+        }
         return coordinator
     }
 

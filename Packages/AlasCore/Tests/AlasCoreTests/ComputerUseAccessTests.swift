@@ -70,6 +70,25 @@ struct ComputerUseAccessTests {
         #expect(access.access(for: alas, session: "s") == .needsApproval)
     }
 
+    @Test func autoRunGrantsForTheSessionButNeverOverABlockOrADenial() {
+        let access = makeAccess()
+        let notes = ComputerUseAppIdentity(name: "Notes", bundleID: "com.apple.Notes", pid: 1)
+        let keychain = ComputerUseAppIdentity(name: "Keychain", bundleID: "com.apple.keychainaccess", pid: 2)
+
+        #expect(access.grantForAutoRun(notes, session: "s", input: true))
+        access.turnEnded(session: "s")
+        #expect(access.access(for: notes, session: "s", input: true) == .allowed(.session))
+        #expect(!access.grantForAutoRun(notes, session: "s", input: true))
+        access.sessionEnded(session: "s")
+        #expect(access.access(for: notes, session: "s") == .needsApproval)
+
+        #expect(!access.grantForAutoRun(keychain, session: "s", input: false))
+        #expect(!access.grantForAutoRun(alas, session: "s", input: true))
+        access.record(.deny, for: notes, session: "s")
+        #expect(!access.grantForAutoRun(notes, session: "s", input: false))
+        #expect(access.access(for: notes, session: "s") == .denied)
+    }
+
     @Test func appWithoutBundleIDCannotBeAlwaysAllowed() {
         let access = makeAccess()
         access.record(.alwaysAllow, for: pidOnly, session: "s")
