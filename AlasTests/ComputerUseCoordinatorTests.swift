@@ -1249,24 +1249,48 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.events == ["background"])
     }
 
-    enum ForegroundDrag { case offScreen, direct }
+    /// `rowByRef`, `rowAtPoint`: the drag starts on a list row, named by its ref or at a point in
+    /// it as the latest read has it; `chromium`: in an app that builds its tree on request.
+    enum ForegroundDrag { case offScreen, direct, crossWindow, rowByRef, rowAtPoint, chromium }
 
-    /// A drag in a parked window, or asked for as direct, goes with the app brought to the front
-    /// as it always did: like direct delivery it waits for a user active in any app, then gives up.
+    /// A drag in a parked window, asked for as direct, into another window, from a list item or in
+    /// a Chromium or Electron app goes with the app brought to the front: like direct delivery it
+    /// waits for a user active in any app, then gives up.
     @Test(arguments: [
         (ForegroundDrag.offScreen, 60.0, true), (.direct, 60.0, true), (.offScreen, 0.5, false),
+        (.crossWindow, 60.0, true), (.rowByRef, 60.0, true), (.rowAtPoint, 60.0, true), (.chromium, 60.0, true),
     ])
-    func anOffScreenDragStaysOnTheForegroundPath(_ reason: ForegroundDrag, idleSeconds: TimeInterval, delivers: Bool) async throws {
+    func aDragTheBackgroundCantFinishGoesToTheFront(_ reason: ForegroundDrag, idleSeconds: TimeInterval, delivers: Bool) async throws {
         let recorder = Recorder()
-        var system = Self.system(recorder: recorder)
+        var windows = Self.windows
+        windows[5] = ComputerUseWindow(windowID: 5, title: "Other", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: Self.notes)
+        var system = Self.system(windows: windows, recorder: recorder)
         system.secondsSinceUserInput = { idleSeconds }
         // Window 1 spans (0, 0)-(400, 300): parked off the only display.
         if reason == .offScreen { system.displays = { [CGRect(x: 1000, y: 0, width: 800, height: 600)] } }
+        if reason == .chromium { system.usesManualAccessibility = { _ in true } }
+        if reason == .rowByRef || reason == .rowAtPoint {
+            // e1 the window, e2 a row spanning (0, 100)-(400, 120), e3 its cell.
+            let row = ComputerUseAXNode(
+                role: "AXRow", frame: CGRect(x: 0, y: 100, width: 400, height: 20),
+                children: [ComputerUseAXNode(role: "AXCell", frame: CGRect(x: 20, y: 100, width: 200, height: 20), handle: 2)],
+                handle: 1)
+            let tree = ComputerUseAXNode(role: "AXWindow", title: "Note", children: [row], handle: 0)
+            system.axTree = { _, _, _, _ in (tree, nil, ComputerUseAXHandles()) }
+        }
         system.perform = Self.tiered(.done, recorder: recorder)
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
-        let drag = ComputerUseCommand(
-            action: .drag, windowID: 1, ref: "e2", toRef: "e1", delivery: reason == .direct ? .direct : .background)
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
+        let delivery: ComputerUseCommand.Delivery = reason == .direct ? .direct : .background
+        let drag: ComputerUseCommand = switch reason {
+        case .crossWindow: .init(action: .drag, windowID: 1, ref: "e2", toWindowID: 5, toX: 10, toY: 10)
+        case .rowByRef: .init(action: .drag, windowID: 1, ref: "e3", toX: 20, toY: 20)
+        // (600, 220) in screenshot pixels is (300, 110) in points: in the row, past its cell.
+        case .rowAtPoint: .init(action: .drag, windowID: 1, x: 600, y: 220, toX: 20, toY: 20)
+        default: .init(action: .drag, windowID: 1, ref: "e2", toRef: "e1", delivery: delivery)
+        }
         let response = await f.coordinator.perform(drag, sessionID: "s")
         if delivers {
             #expect(try #require(Self.text(response)).contains(#""delivery":"activation""#))

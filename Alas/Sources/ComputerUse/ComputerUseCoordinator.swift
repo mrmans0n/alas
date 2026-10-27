@@ -137,6 +137,10 @@ final class ComputerUseCoordinator {
         /// The frame of its nearest scroll area at read time, window-relative too, which clips
         /// where pointer input lands on it.
         var localScrollArea: CGRect?
+        /// Its depth in the window's tree, and whether it is a list or table row or inside one,
+        /// for `ComputerUseBackgroundDrag.startsInItem`.
+        var depth = 0
+        var inRow = false
         /// Listed to the agent at some point: a later read that doesn't list it must still find
         /// the element the agent saw there, not whatever took its place.
         var shown: Bool
@@ -985,7 +989,6 @@ final class ComputerUseCoordinator {
         var window = window
         var toWindow = toWindow
         var input = try input(for: command, in: window, toWindow: toWindow, context: context)
-        let direct = Self.deliversDirect(command, input: input, in: window, toWindow: toWindow, displays: system.displays())
         // What the window looked like, so an input the app ignored doesn't pass for one that worked.
         // Read first, so the takeover wait and the ref re-check are the last steps before the input.
         var target: (ComputerUseAXHandles, Int)?
@@ -998,6 +1001,12 @@ final class ComputerUseCoordinator {
         // A drop into another window may change only that one.
         var beforeEnd: ComputerUseWindowFingerprint?
         if let toWindow { beforeEnd = await fingerprint(of: toWindow, for: command, target: nil, context: context) }
+        // After the read: it is what asks an Electron app for its tree, which marks it as one.
+        let direct = Self.deliversDirect(
+            command, input: input, in: window, toWindow: toWindow, displays: system.displays(),
+            startsInItem: startsInItem(command, input: input, in: window, context: context),
+            chromium: ComputerUseWebContent.isChromium(
+                bundleID: window.app.bundleID, acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid)))
         try checkStillActive(context)
         // The cursor moves before the takeover wait. Its pointer is window-local, so a remap after
         // the wait still lands under it.
@@ -1207,13 +1216,30 @@ final class ComputerUseCoordinator {
         payload["warning"] = [warning, hint].compactMap { $0 }.joined(separator: " ")
     }
 
+    /// Whether a drag starts on a list or table item, as the agent's latest read of the window
+    /// shows it: the ref's element, or the deepest read elements at the point. No new read.
+    private func startsInItem(
+        _ command: ComputerUseCommand, input: ComputerUseInput, in window: ComputerUseWindow, context: CallContext
+    ) -> Bool {
+        guard case .drag(let from, _, _) = input, let snapshot = snapshot(of: window, context: context) else { return false }
+        if let ref = command.ref { return snapshot.refs[ref]?.inRow ?? false }
+        guard case .point(let point) = from else { return false }
+        let elements = snapshot.refs.values.map {
+            ComputerUseBackgroundDrag.ReadElement(frame: $0.frame(in: window), depth: $0.depth, inRow: $0.inRow)
+        }
+        return ComputerUseBackgroundDrag.startsInItem(at: point, elements: elements)
+    }
+
     /// A drag between two on-screen points goes inside the app in the background, under a
-    /// background click's takeover rule. One in a parked window goes with the app brought to the
-    /// front, so the direct takeover rule applies to it: refused while the user is active, rather
-    /// than waited out. A ref's point counts as on screen with its window.
+    /// background click's takeover rule, unless `ComputerUseBackgroundDrag.route` sends it to the
+    /// front: into another window, from a list or table item (`startsInItem`), or in a Chromium
+    /// or Electron app (`chromium`). One in a parked window goes with the app brought to the
+    /// front too, so the direct takeover rule applies to it: refused while the user is active,
+    /// rather than waited out. A ref's point counts as on screen with its window. The system's
+    /// in-app drag decides with the same `route`.
     static func deliversDirect(
         _ command: ComputerUseCommand, input: ComputerUseInput, in window: ComputerUseWindow,
-        toWindow: ComputerUseWindow?, displays: [CGRect]
+        toWindow: ComputerUseWindow?, displays: [CGRect], startsInItem: Bool, chromium: Bool
     ) -> Bool {
         if command.delivery == .direct { return true }
         guard case .drag(let from, let to, _) = input else { return false }
@@ -1224,7 +1250,9 @@ final class ComputerUseCoordinator {
             }
         }
         let route = ComputerUseBackgroundDrag.route(
-            startOnScreen: onScreen(from, in: window), endOnScreen: onScreen(to, in: toWindow ?? window), direct: false)
+            startOnScreen: onScreen(from, in: window), endOnScreen: onScreen(to, in: toWindow ?? window),
+            crossWindow: toWindow.map { $0.windowID != window.windowID } ?? false, startsInItem: startsInItem,
+            chromium: chromium, direct: false)
         return route == .foreground
     }
 
@@ -1647,6 +1675,9 @@ final class ComputerUseCoordinator {
         var title: String?
         var frame: CGRect
         var scrollArea: CGRect?
+        var depth: Int
+        /// An `AXRow`, or inside one.
+        var inRow: Bool
     }
 
     /// Reads the window the way computer_inspect does and, unless told not to, replaces its refs.
@@ -1671,17 +1702,18 @@ final class ComputerUseCoordinator {
         // A partial read may have missed elements even when the limit was not reached.
         var identities: [Int: Identity] = [:]
         // Ancestors nearest last, as many as `ComputerUseAXActions.visibleCenter` climbs from the parent.
-        func collect(_ node: ComputerUseAXNode, above: [(role: String, frame: CGRect)]) {
+        func collect(_ node: ComputerUseAXNode, above: [(role: String, frame: CGRect)], depth: Int, rowAbove: Bool) {
+            let inRow = rowAbove || node.role == "AXRow"
             if let handle = node.handle {
                 let area = above.last { $0.role == "AXScrollArea" }?.frame
                 identities[handle] = Identity(
                     role: node.role, title: node.title, frame: node.frame,
-                    scrollArea: area.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil })
+                    scrollArea: area.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }, depth: depth, inRow: inRow)
             }
             let next = Array((above + [(node.role, node.frame)]).suffix(ComputerUseAXActions.scrollAncestorLevels + 1))
-            for child in node.children { collect(child, above: next) }
+            for child in node.children { collect(child, above: next, depth: depth + 1, rowAbove: inRow) }
         }
-        collect(tree.root, above: [])
+        collect(tree.root, above: [], depth: 0, rowAbove: false)
         let read = ElementRead(
             truncated: flat.truncated || tree.cut != nil,
             truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: tree.cut),
@@ -1707,18 +1739,21 @@ final class ComputerUseCoordinator {
             if listed.contains(ref) {
                 refs[ref] = ElementRef(
                     handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame),
-                    localScrollArea: identity.scrollArea.map(local), shown: true)
+                    localScrollArea: identity.scrollArea.map(local), depth: identity.depth, inRow: identity.inRow,
+                    shown: true)
             } else if let seen = previous[ref], seen.shown {
                 guard seen.role == identity.role, seen.title == identity.title, let before,
                       system.sameElement(before.handles, seen.handle, read.handles, handle)
                 else { continue }
                 refs[ref] = ElementRef(
                     handle: handle, role: seen.role, title: seen.title, localFrame: local(identity.frame),
-                    localScrollArea: identity.scrollArea.map(local), shown: true)
+                    localScrollArea: identity.scrollArea.map(local), depth: identity.depth, inRow: identity.inRow,
+                    shown: true)
             } else {
                 refs[ref] = ElementRef(
                     handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame),
-                    localScrollArea: identity.scrollArea.map(local), shown: false)
+                    localScrollArea: identity.scrollArea.map(local), depth: identity.depth, inRow: identity.inRow,
+                    shown: false)
             }
         }
         updateSnapshot(of: window, context: context) {

@@ -774,16 +774,44 @@ struct ComputerUseInputTests {
         #expect(ComputerUseTextCheck.isKeyCommandApp(app, hostPID: 1) == skips)
     }
 
+    /// Columns: start on screen, end on screen, into another window, from a list item, Chromium, direct.
     @Test(arguments: [
-        (true, true, false, ComputerUseBackgroundDrag.Route.background),
-        (true, true, true, .foreground),
-        (false, true, false, .foreground),
-        (true, false, false, .foreground),
-    ] as [(Bool, Bool, Bool, ComputerUseBackgroundDrag.Route)])
-    func aDragStaysInTheBackgroundOnlyBetweenOnScreenPointsWhenNotDirect(
-        start: Bool, end: Bool, direct: Bool, route: ComputerUseBackgroundDrag.Route
+        (true, true, false, false, false, false, ComputerUseBackgroundDrag.Route.background),
+        (true, true, false, false, false, true, .foreground),
+        (false, true, false, false, false, false, .foreground),
+        (true, false, false, false, false, false, .foreground),
+        (true, true, true, false, false, false, .foreground),
+        (true, true, false, true, false, false, .foreground),
+        (true, true, false, false, true, false, .foreground),
+    ] as [(Bool, Bool, Bool, Bool, Bool, Bool, ComputerUseBackgroundDrag.Route)])
+    func aDragStaysInTheBackgroundOnlyInsideOneWindowOffItemsOutsideChromiumWhenNotDirect(
+        start: Bool, end: Bool, crossWindow: Bool, item: Bool, chromium: Bool, direct: Bool,
+        route: ComputerUseBackgroundDrag.Route
     ) {
-        #expect(ComputerUseBackgroundDrag.route(startOnScreen: start, endOnScreen: end, direct: direct) == route)
+        #expect(ComputerUseBackgroundDrag.route(
+            startOnScreen: start, endOnScreen: end, crossWindow: crossWindow, startsInItem: item, chromium: chromium,
+            direct: direct) == route)
+    }
+
+    /// Finder's list view, as read: a row and the column spanning every row at one depth, a cell
+    /// in the row, and the header button above the rows, outside them.
+    @Test(arguments: [
+        (CGPoint(x: 100, y: 138), true),
+        (CGPoint(x: 45, y: 138), true),
+        (CGPoint(x: 100, y: 109), false),
+        (CGPoint(x: 100, y: 400), false),
+        (CGPoint(x: 900, y: 900), false),
+    ])
+    func aDragStartsInAnItemWhenTheDeepestElementsThereIncludeARow(point: CGPoint, inItem: Bool) {
+        let elements = [
+            ComputerUseBackgroundDrag.ReadElement(frame: CGRect(x: 39, y: 122, width: 1650, height: 957), depth: 4, inRow: false),
+            .init(frame: CGRect(x: 40, y: 128, width: 1648, height: 20), depth: 5, inRow: true),
+            .init(frame: CGRect(x: 66, y: 128, width: 1307, height: 20), depth: 6, inRow: true),
+            .init(frame: CGRect(x: 40, y: 123, width: 1323, height: 955), depth: 5, inRow: false),
+            .init(frame: CGRect(x: 40, y: 95, width: 1648, height: 28), depth: 5, inRow: false),
+            .init(frame: CGRect(x: 50, y: 95, width: 1323, height: 28), depth: 6, inRow: false),
+        ]
+        #expect(ComputerUseBackgroundDrag.startsInItem(at: point, elements: elements) == inItem)
     }
 
     @Test(arguments: [

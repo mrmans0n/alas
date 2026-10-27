@@ -1060,9 +1060,17 @@ extension LiveComputerUseSystem {
         guard let end = try await dragPoint(to, shown: dropWindow, now: dropWindow, isDrop: true, isCancelled: isCancelled)
         else { throw ComputerUseSystemError.actionFailed(dropHiddenRefusal) }
         let displays = displayFrames()
+        // The coordinator's `deliversDirect` decides with the same route before the takeover wait,
+        // and also from where its latest read says the drag starts: one from a list item came
+        // here as direct already, so that is no input here.
         let route = ComputerUseBackgroundDrag.route(
             startOnScreen: ComputerUseInputGeometry.pointIsOnScreen(start, displays: displays),
-            endOnScreen: ComputerUseInputGeometry.pointIsOnScreen(end, displays: displays), direct: false)
+            endOnScreen: ComputerUseInputGeometry.pointIsOnScreen(end, displays: displays),
+            crossWindow: dropWindow.windowID != window.windowID, startsInItem: false,
+            chromium: ComputerUseWebContent.isChromium(
+                bundleID: window.app.bundleID,
+                acceptsManualAccessibility: ComputerUseAXReader.acceptsManualAccessibility(window.app.pid)),
+            direct: false)
         guard route == .background else { return nil }
         // Like a background click: some views take a press only in their app's key window.
         try await makeKeyInBackground(window, &keying, interrupt: interrupt)
