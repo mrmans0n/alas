@@ -1327,6 +1327,36 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.sleeps.filter { $0 == ComputerUseCoordinator.dragConfirmPoll }.count == 2)
     }
 
+    /// A drag in the front flashes a selection that reads as the drop before the app moves the
+    /// item: the window is read until two reads agree past the source settle, so the result lists
+    /// it as it ends up.
+    @Test func aDragInTheFrontIsReadUntilTheWindowSettles() async throws {
+        let recorder = Recorder()
+        let reads = Counter()
+        var system = Self.system(recorder: recorder)
+        let saveTree = Self.saveTree
+        // Read 1 is before the drag, read 2 the one after the settle; from read 3 the item is gone.
+        system.axTree = { _, _, _, _ in
+            var tree = saveTree
+            if reads.next() >= 3 { tree.children.removeAll() }
+            return (tree, nil, ComputerUseAXHandles())
+        }
+        system.focusState = { _ in recorder.inputs.isEmpty ? nil : .init(role: "AXRow", title: "move-me.txt") }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            return .activation
+        }
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        let json = try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["warning"] == nil)
+        #expect((payload["elements"] as? [Any])?.count == 1)
+        // Read 3 differs from read 2, read 4 agrees with read 3 at the settle.
+        #expect(recorder.sleeps.filter { $0 == ComputerUseCoordinator.dragConfirmPoll }.count == 2)
+    }
+
     /// A drag that grabbed the window itself moved it: that is a failure, not a drop.
     @Test(arguments: [(CGFloat(40), true), (CGFloat(1), false)])
     func dragThatMovedTheWindowFails(offset: CGFloat, fails: Bool) async throws {

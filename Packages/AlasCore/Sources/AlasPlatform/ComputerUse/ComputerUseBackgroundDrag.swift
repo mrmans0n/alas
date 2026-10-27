@@ -73,16 +73,29 @@ public enum ComputerUseBackgroundDrag {
         windows.contains { $0.pid == sourcePID && $0.layer >= ComputerUseInputGeometry.draggingLayer }
     }
 
-    /// Whether to keep waiting for a drop to land. Stops at the deadline; once the drop shows and
-    /// the start window changed or isn't involved; and once it shows with no drag session active
-    /// past `sourceSettle` (a copy drag leaves the start window as it was, while a move's source
-    /// refreshes within the settle).
+    /// Whether to keep waiting for a drop to land. Stops at the deadline. Once the drop shows, a
+    /// drag delivered in the foreground (`foreground`) is read until the drag image is gone and
+    /// the last two reads came out the same (`settled`) with `sourceSettle` waited: activation,
+    /// the raise and the press flash a selection that shows as a change before the app moves
+    /// what was dropped. Otherwise it stops once the drop shows and the start window changed or
+    /// isn't involved, and once it shows with no drag session active past `sourceSettle` (a copy
+    /// drag leaves the start window as it was, while a move's source refreshes within the settle).
     public static func keepsPolling(
-        dropped: Bool, startChanged: Bool, crossWindow: Bool, sessionActive: Bool,
+        dropped: Bool, startChanged: Bool, crossWindow: Bool, sessionActive: Bool, foreground: Bool, settled: Bool,
         waited: Duration, deadline: Duration
     ) -> Bool {
         guard waited < deadline else { return false }
         guard dropped else { return true }
+        if foreground { return sessionActive || !settled || waited < sourceSettle }
         return !startChanged && crossWindow && (sessionActive || waited < sourceSettle)
+    }
+
+    /// Whether two consecutive reads of a window after a drag came out the same: both read, the
+    /// later one completely, and equal. A read cut short can't show the app is done.
+    public static func readsSettled(
+        previous: ComputerUseWindowFingerprint?, current: ComputerUseWindowFingerprint?
+    ) -> Bool {
+        guard let previous, let current, current.elementsHash != nil else { return false }
+        return previous == current
     }
 }

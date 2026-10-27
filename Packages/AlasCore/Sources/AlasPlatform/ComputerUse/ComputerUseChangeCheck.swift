@@ -90,10 +90,10 @@ public enum ComputerUseChangeCheck {
     }
 
     /// Whether the window's elements themselves changed: both reads complete and their elements
-    /// differ. Focus and selection don't count: activating, raising and pressing the mouse move
-    /// them before a drop shows.
+    /// differ but for which has focus (`contentHash`). Focus and selection don't count:
+    /// activating, raising and pressing the mouse move them before a drop shows.
     public static func elementsChanged(before: ComputerUseWindowFingerprint, after: ComputerUseWindowFingerprint?) -> Bool {
-        guard let before = before.elementsHash, let after = after?.elementsHash else { return false }
+        guard let before = before.contentHash, let after = after?.contentHash else { return false }
         return before != after
     }
 

@@ -336,19 +336,25 @@ struct ComputerUseInputTests {
     }
 
     /// A drop shows in a window only when its elements change, read completely both times; focus
-    /// or selection moving doesn't count.
+    /// or selection moving doesn't count, also where it flips an element's focused flag (the
+    /// elements hash differs, the focus-free one doesn't).
+    /// Columns: elements and focus-free hashes before and after.
     @Test(arguments: [
-        (Optional(1), Optional(2), false, true),
-        (1, 1, true, false),
-        (nil, 2, false, false),
-        (1, nil, false, false),
-    ] as [(Int?, Int?, Bool, Bool)])
-    func aWindowShowsADropOnlyWhenItsElementsChange(before: Int?, after: Int?, focusMoved: Bool, changed: Bool) {
+        (Optional(1), Optional(1), Optional(2), Optional(2), false, true),
+        (1, 1, 1, 1, true, false),
+        (1, 1, 2, 1, true, false),
+        (nil, nil, 2, 2, false, false),
+        (1, 1, nil, nil, false, false),
+    ] as [(Int?, Int?, Int?, Int?, Bool, Bool)])
+    func aWindowShowsADropOnlyWhenItsElementsChange(
+        before: Int?, contentBefore: Int?, after: Int?, contentAfter: Int?, focusMoved: Bool, changed: Bool
+    ) {
         let focus = ComputerUseWindowFingerprint.Focus(role: "AXTextField")
         let moved = ComputerUseWindowFingerprint.Focus(role: "AXRow")
         #expect(ComputerUseChangeCheck.elementsChanged(
-            before: .init(focus: focus, windowTitle: "Docs", elementsHash: before, targetHash: nil),
-            after: .init(focus: focusMoved ? moved : focus, windowTitle: "Docs", elementsHash: after, targetHash: nil)) == changed)
+            before: .init(focus: focus, windowTitle: "Docs", elementsHash: before, contentHash: contentBefore),
+            after: .init(focus: focusMoved ? moved : focus, windowTitle: "Docs", elementsHash: after, contentHash: contentAfter)
+        ) == changed)
     }
 
     /// A drag delivered as events whose window differs only in focus or selection (the press
@@ -898,24 +904,50 @@ struct ComputerUseInputTests {
                 before: alreadyListed ? [9] : [], now: [window], sourcePID: 7) == started)
     }
 
+    /// Columns: dropped, start changed, cross-window, session active, foreground, last two reads
+    /// settled, waited ms, keeps polling. The deadline is 1500 ms.
     @Test(arguments: [
-        (true, true, true, true, 100, false),
-        (true, false, false, true, 100, false),
-        (true, false, true, true, 100, true),
+        (true, true, true, true, false, false, 100, false),
+        (true, false, false, true, false, false, 100, false),
+        (true, false, true, true, false, false, 100, true),
         // A copy: the image is gone and the source settle is over.
-        (true, false, true, false, 600, false),
+        (true, false, true, false, false, false, 600, false),
         // A move: the image is gone, but the source window may still be refreshing.
-        (true, false, true, false, 100, true),
-        (false, false, true, true, 100, true),
-        (false, false, true, true, 1500, false),
-    ] as [(Bool, Bool, Bool, Bool, Int, Bool)])
-    func aDropIsAwaitedOnlyWhileACrossWindowDragSessionIsLive(
-        dropped: Bool, startChanged: Bool, crossWindow: Bool, sessionActive: Bool, waitedMs: Int, polls: Bool
+        (true, false, true, false, false, false, 100, true),
+        (false, false, true, true, false, false, 100, true),
+        (false, false, true, true, false, false, 1500, false),
+        // In the foreground, a same-window drop that showed (the selection flash) is read until
+        // two reads agree past the settle, whatever the start window did.
+        (true, true, false, false, true, false, 600, true),
+        (true, true, false, false, true, true, 250, true),
+        (true, true, false, false, true, true, 500, false),
+        (true, false, true, true, true, true, 600, true),
+        (true, true, false, false, true, false, 1500, false),
+        (false, false, false, false, true, true, 600, true),
+    ] as [(Bool, Bool, Bool, Bool, Bool, Bool, Int, Bool)])
+    func aDropIsAwaitedWhileItMaySettle(
+        dropped: Bool, startChanged: Bool, crossWindow: Bool, sessionActive: Bool, foreground: Bool, settled: Bool,
+        waitedMs: Int, polls: Bool
     ) {
         #expect(
             ComputerUseBackgroundDrag.keepsPolling(
-                dropped: dropped, startChanged: startChanged, crossWindow: crossWindow,
-                sessionActive: sessionActive, waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
+                dropped: dropped, startChanged: startChanged, crossWindow: crossWindow, sessionActive: sessionActive,
+                foreground: foreground, settled: settled, waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
             ) == polls)
+    }
+
+    /// Two reads after a drag agree only when both were read, the later one completely, and they
+    /// are equal. Columns: previous and current elements hash (nil fingerprint for 0), settled.
+    @Test(arguments: [
+        (Optional(1), Optional(1), true),
+        (1, 2, false),
+        (nil, nil, false),
+        (0, 1, false),
+    ] as [(Int?, Int?, Bool)])
+    func twoReadsAfterADragSettleOnlyWhenCompleteAndEqual(previous: Int?, current: Int?, settled: Bool) {
+        func read(_ hash: Int?) -> ComputerUseWindowFingerprint? {
+            hash == 0 ? nil : .init(windowTitle: "Docs", elementsHash: hash, contentHash: hash)
+        }
+        #expect(ComputerUseBackgroundDrag.readsSettled(previous: read(previous), current: read(current)) == settled)
     }
 }
