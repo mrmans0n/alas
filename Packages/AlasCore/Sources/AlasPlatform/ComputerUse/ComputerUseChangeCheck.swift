@@ -55,9 +55,9 @@ public enum ComputerUseChangeCheck {
 
     /// The warning for an action whose window looks the same after it, else nil. Without both
     /// complete element lists the check can't tell, so it doesn't warn, except after a drag: a
-    /// cut-short read is how a drag that did nothing looked like one that worked. A drag that went
-    /// as events and moved only focus and selection (the press selected the item it grabbed, and
-    /// nothing was dropped) warns too. The retry hint is only for clicks, scrolls and drags that
+    /// cut-short read is how a drag that did nothing looked like one that worked. A drag that
+    /// moved only focus and selection (the activation or the press selected the item it grabbed,
+    /// and nothing was dropped) warns too, however it went. The retry hint is only for clicks, scrolls and drags that
     /// went as events: a key or typed text can legitimately change nothing a read shows, and an
     /// activation already was the direct way.
     public static func warning(
@@ -65,15 +65,15 @@ public enum ComputerUseChangeCheck {
     ) -> String? {
         guard var before, var after else { return nil }
         if kind == .drag {
-            if deliveredAsEvents, onlyFocusOrSelectionMoved(before, after) { return dragWarning + retryDirectHint }
+            let warning = deliveredAsEvents ? dragWarning + retryDirectHint : dragWarning
+            if onlyFocusOrSelectionMoved(before, after) { return warning }
             if before.elementsHash == nil || after.elementsHash == nil {
                 before.elementsHash = nil
                 after.elementsHash = nil
             }
             before.contentHash = nil
             after.contentHash = nil
-            guard before == after else { return nil }
-            return deliveredAsEvents ? dragWarning + retryDirectHint : dragWarning
+            return before == after ? warning : nil
         }
         guard before.elementsHash != nil, after.elementsHash != nil, before == after else { return nil }
         let hint = deliveredAsEvents && (kind == .click || kind == .scroll)
@@ -87,14 +87,6 @@ public enum ComputerUseChangeCheck {
         guard let after, before.elementsHash != nil, after.elementsHash != nil else { return false }
         return before.elementsHash != after.elementsHash || before.windowTitle != after.windowTitle
             || before.targetHash != after.targetHash
-    }
-
-    /// Whether the window's elements themselves changed: both reads complete and their elements
-    /// differ but for which has focus (`contentHash`). Focus and selection don't count:
-    /// activating, raising and pressing the mouse move them before a drop shows.
-    public static func elementsChanged(before: ComputerUseWindowFingerprint, after: ComputerUseWindowFingerprint?) -> Bool {
-        guard let before = before.contentHash, let after = after?.contentHash else { return false }
-        return before != after
     }
 
     /// Both reads complete, with the same elements but for which has focus, and the same title:

@@ -1213,8 +1213,6 @@ final class ComputerUseCoordinator {
     private struct Settled {
         var warning: String?
         var after: ComputerUseWindowFingerprint?
-        /// The start window's own elements changed (`ComputerUseChangeCheck.elementsChanged`).
-        var startChanged = true
         /// The drop window read back after a drag into another window, nil when it wasn't.
         var endAfter: ComputerUseWindowFingerprint?
     }
@@ -1337,24 +1335,24 @@ final class ComputerUseCoordinator {
                 let clock = ContinuousClock()
                 let start = clock.now
                 var slept = Duration.zero
-                // A drop into another window may show there first: the start window, which the result
-                // lists, is read until it shows the drop too (a moved file leaves it), or until the
-                // drag image is gone (a copy leaves it as it was).
                 // Once a read showed the drop, a later one that shows nothing new doesn't undo it.
                 var dropped = verdict.warning == nil
-                // A drag in the front is read until two reads agree: the selection its press
-                // flashed shows as a change before the app moves what was dropped.
+                // A drag in the front is read until two reads of each window agree: the selection
+                // its press flashed shows as a change before the app moves what was dropped, and a
+                // drop into another window may show there before the source (which the result
+                // lists) refreshes. A background drag stays in one window.
                 let foreground = delivered.delivery == .activation
                 var previous: Settled?
                 func settled() -> Bool {
                     guard let previous else { return false }
+                    // A drop window read cut short, or not read, can't show the app is done either.
                     return ComputerUseBackgroundDrag.readsSettled(previous: previous.after, current: verdict.after)
-                        && previous.endAfter == verdict.endAfter
+                        && (end == nil
+                            || ComputerUseBackgroundDrag.readsSettled(previous: previous.endAfter, current: verdict.endAfter))
                 }
                 while ComputerUseBackgroundDrag.keepsPolling(
-                    dropped: dropped, startChanged: verdict.startChanged, crossWindow: end != nil,
-                    sessionActive: system.dragSessionActive(window.app.pid), foreground: foreground, settled: settled(),
-                    waited: max(slept, clock.now - start), deadline: Self.dragConfirmDeadline) {
+                    dropped: dropped, sessionActive: system.dragSessionActive(window.app.pid), foreground: foreground,
+                    settled: settled(), waited: max(slept, clock.now - start), deadline: Self.dragConfirmDeadline) {
                     await sleep(Self.dragConfirmPoll)
                     slept += Self.dragConfirmPoll
                     try checkStillActive(context)
@@ -1415,9 +1413,6 @@ final class ComputerUseCoordinator {
         let kind = Self.changeKind(command.action)
         let asEvents = [.event, .background].contains(delivered.delivery)
         var warning = ComputerUseChangeCheck.warning(before: before, after: after, kind: kind, deliveredAsEvents: asEvents)
-        // The start window shows the drop only when its elements change: activation, the raise and
-        // the mouse-down move focus and selection first.
-        let startChanged = ComputerUseChangeCheck.elementsChanged(before: before, after: after)
         var endAfter: ComputerUseWindowFingerprint?
         if let end {
             // The drop window read back too: the drop may have changed only that one.
@@ -1429,7 +1424,7 @@ final class ComputerUseCoordinator {
                 if endWarning == nil { warning = nil }
             }
         }
-        return Settled(warning: warning, after: after, startChanged: startChanged, endAfter: endAfter)
+        return Settled(warning: warning, after: after, endAfter: endAfter)
     }
 
     /// Reads the window a drag dropped into, as the start window is read, into `to_window`.

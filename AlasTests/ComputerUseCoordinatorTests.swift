@@ -1351,8 +1351,9 @@ struct ComputerUseCoordinatorTests {
         }
     }
 
-    /// A copy drag into another window leaves the start window as it was: the re-reads end once
-    /// the drag image is gone, not at the deadline.
+    /// A copy drag into another window, which goes in the front, leaves the start window as it
+    /// was: the re-reads end once the drag image is gone and both windows read the same twice,
+    /// not at the deadline.
     @Test func aCopyDragEndsWhenTheDragImageIsGone() async throws {
         let recorder = Recorder()
         let endReads = Counter()
@@ -1368,6 +1369,10 @@ struct ComputerUseCoordinatorTests {
             return (tree, nil, ComputerUseAXHandles())
         }
         system.dragSessionActive = { _ in looks.next() <= 2 }
+        system.perform = { input, _, _, _ in
+            recorder.record(input)
+            return .activation
+        }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")

@@ -335,36 +335,17 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.isSheetBacking(title: title, frame: frame, sheetFrames: sheets) == backing)
     }
 
-    /// A drop shows in a window only when its elements change, read completely both times; focus
-    /// or selection moving doesn't count, also where it flips an element's focused flag (the
-    /// elements hash differs, the focus-free one doesn't).
-    /// Columns: elements and focus-free hashes before and after.
-    @Test(arguments: [
-        (Optional(1), Optional(1), Optional(2), Optional(2), false, true),
-        (1, 1, 1, 1, true, false),
-        (1, 1, 2, 1, true, false),
-        (nil, nil, 2, 2, false, false),
-        (1, 1, nil, nil, false, false),
-    ] as [(Int?, Int?, Int?, Int?, Bool, Bool)])
-    func aWindowShowsADropOnlyWhenItsElementsChange(
-        before: Int?, contentBefore: Int?, after: Int?, contentAfter: Int?, focusMoved: Bool, changed: Bool
-    ) {
-        let focus = ComputerUseWindowFingerprint.Focus(role: "AXTextField")
-        let moved = ComputerUseWindowFingerprint.Focus(role: "AXRow")
-        #expect(ComputerUseChangeCheck.elementsChanged(
-            before: .init(focus: focus, windowTitle: "Docs", elementsHash: before, contentHash: contentBefore),
-            after: .init(focus: focusMoved ? moved : focus, windowTitle: "Docs", elementsHash: after, contentHash: contentAfter)
-        ) == changed)
-    }
-
-    /// A drag delivered as events whose window differs only in focus or selection (the press
-    /// selected what it grabbed) did nothing it can show; a foreground one isn't retried directly.
+    /// A drag whose window differs only in focus or selection (the activation or the press
+    /// selected what it grabbed) did nothing it can show, however it went; a foreground one isn't
+    /// retried directly.
     /// Columns: elements, focus-free elements, focus and target state after (before: 1, 1, A, 1), as events.
     @Test(arguments: [
         (Optional(1), Optional(1), "A", Optional(1), true, Optional(Self.dragNoEffect)),
         (2, 1, "B", 2, true, Self.dragNoEffect),
-        (2, 1, "B", 2, false, nil),
+        (2, 1, "B", 2, false, ComputerUseChangeCheck.dragWarning),
+        (1, 1, "A", 2, false, ComputerUseChangeCheck.dragWarning),
         (2, 2, "A", 1, true, nil),
+        (2, 2, "B", 1, false, nil),
         (nil, nil, "B", 2, true, nil),
         (nil, nil, "A", 1, false, ComputerUseChangeCheck.dragWarning),
     ] as [(Int?, Int?, String, Int?, Bool, String?)])
@@ -895,35 +876,29 @@ struct ComputerUseInputTests {
                 before: alreadyListed ? [9] : [], now: [window], sourcePID: 7) == started)
     }
 
-    /// Columns: dropped, start changed, cross-window, session active, foreground, last two reads
-    /// settled, waited ms, keeps polling. The deadline is 1500 ms.
+    /// Columns: dropped, session active, foreground, last two reads settled, waited ms, keeps
+    /// polling. The deadline is 1500 ms.
     @Test(arguments: [
-        (true, true, true, true, false, false, 100, false),
-        (true, false, false, true, false, false, 100, false),
-        (true, false, true, true, false, false, 100, true),
-        // A copy: the image is gone and the source settle is over.
-        (true, false, true, false, false, false, 600, false),
-        // A move: the image is gone, but the source window may still be refreshing.
-        (true, false, true, false, false, false, 100, true),
-        (false, false, true, true, false, false, 100, true),
-        (false, false, true, true, false, false, 1500, false),
-        // In the foreground, a same-window drop that showed (the selection flash) is read until
-        // two reads agree past the settle, whatever the start window did.
-        (true, true, false, false, true, false, 600, true),
-        (true, true, false, false, true, true, 250, true),
-        (true, true, false, false, true, true, 500, false),
-        (true, false, true, true, true, true, 600, true),
-        (true, true, false, false, true, false, 1500, false),
-        (false, false, false, false, true, true, 600, true),
-    ] as [(Bool, Bool, Bool, Bool, Bool, Bool, Int, Bool)])
+        // A background drag stays in one window: it stops once the drop shows.
+        (true, true, false, false, 100, false),
+        (false, false, false, false, 100, true),
+        (false, false, false, false, 1500, false),
+        // In the foreground, a drop that showed (the selection flash) is read until two reads
+        // agree past the settle, with the drag image gone.
+        (true, false, true, false, 600, true),
+        (true, false, true, true, 250, true),
+        (true, false, true, true, 500, false),
+        (true, true, true, true, 600, true),
+        (true, false, true, false, 1500, false),
+        (false, false, true, true, 600, true),
+    ] as [(Bool, Bool, Bool, Bool, Int, Bool)])
     func aDropIsAwaitedWhileItMaySettle(
-        dropped: Bool, startChanged: Bool, crossWindow: Bool, sessionActive: Bool, foreground: Bool, settled: Bool,
-        waitedMs: Int, polls: Bool
+        dropped: Bool, sessionActive: Bool, foreground: Bool, settled: Bool, waitedMs: Int, polls: Bool
     ) {
         #expect(
             ComputerUseBackgroundDrag.keepsPolling(
-                dropped: dropped, startChanged: startChanged, crossWindow: crossWindow, sessionActive: sessionActive,
-                foreground: foreground, settled: settled, waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
+                dropped: dropped, sessionActive: sessionActive, foreground: foreground, settled: settled,
+                waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
             ) == polls)
     }
 
