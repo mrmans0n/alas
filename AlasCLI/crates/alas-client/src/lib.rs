@@ -280,6 +280,23 @@ pub enum Command {
     Resolve,
 }
 
+/// The keys a drag may hold, as the app names them (`ComputerUseKeyChord.Modifier`).
+pub const COMPUTER_DRAG_MODIFIERS: [&str; 4] = ["command", "option", "control", "shift"];
+
+/// `names` when each is a drag modifier and none repeats.
+pub fn computer_drag_modifiers<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> Option<Vec<String>> {
+    let mut modifiers: Vec<String> = Vec::new();
+    for name in names {
+        if !COMPUTER_DRAG_MODIFIERS.contains(&name) || modifiers.iter().any(|seen| seen == name) {
+            return None;
+        }
+        modifiers.push(name.to_string());
+    }
+    Some(modifiers)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComputerCommand {
     /// `call_id` lets a later `Cancel` find the call in the app; the MCP
@@ -340,6 +357,8 @@ pub enum ComputerCommand {
         /// The window `to` is in, when it isn't `window_id`.
         to_window_id: Option<u32>,
         to: ComputerTarget,
+        /// Keys held for the whole drag, from `COMPUTER_DRAG_MODIFIERS`, each at most once.
+        modifiers: Vec<String>,
         direct: bool,
         post: ComputerPost,
         call_id: Option<String>,
@@ -1024,6 +1043,7 @@ fn computer_request(command: &ComputerCommand) -> Request {
             from,
             to_window_id,
             to,
+            modifiers,
             direct,
             post,
             ..
@@ -1037,6 +1057,12 @@ fn computer_request(command: &ComputerCommand) -> Request {
                 );
             }
             insert_target(&mut params, to, "to_ref", "to_x", "to_y");
+            if !modifiers.is_empty() {
+                params.insert(
+                    "modifiers".into(),
+                    serde_json::Value::from(modifiers.clone()),
+                );
+            }
             insert_direct(&mut params, *direct);
             insert_post(&mut params, post);
             "computer_drag"
@@ -2277,6 +2303,7 @@ mod tests {
                 from: ComputerTarget::Point { x: 10.5, y: 20.0 },
                 to_window_id: Some(9),
                 to: ComputerTarget::Ref("e3".into()),
+                modifiers: vec!["option".into(), "command".into()],
                 direct: true,
                 post: ComputerPost::default(),
                 call_id: None,
@@ -2288,7 +2315,7 @@ mod tests {
         assert_eq!(
             drag.params,
             Some(
-                serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_window_id": 9, "to_ref": "e3", "delivery": "direct" })
+                serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_window_id": 9, "to_ref": "e3", "modifiers": ["option", "command"], "delivery": "direct" })
             )
         );
 

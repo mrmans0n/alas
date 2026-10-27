@@ -736,7 +736,7 @@ final class ComputerUseCoordinator {
         case .scroll(let at, _, _): (kind, target) = (.scroll, at)
         case .type(_, let at, _): (kind, target) = (.type, at)
         case .key: (kind, target) = (.key, nil)
-        case .drag(let from, _, _): (kind, target) = (.drag, from)
+        case .drag(let from, _, _, _): (kind, target) = (.drag, from)
         }
         var point: CGPoint?
         if case .point(let at) = target { point = at }
@@ -1028,7 +1028,7 @@ final class ComputerUseCoordinator {
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
         // Parked where the drop landed, over the window it landed in. Cosmetic once the drop is
         // delivered: skipped when the call was stopped meanwhile, and the settle's check decides.
-        if case .drag(_, .point(let drop), _) = input, (try? checkStillActive(context)) != nil {
+        if case .drag(_, .point(let drop), _, _) = input, (try? checkStillActive(context)) != nil {
             try? await moveCursor(.jump(to: drop, outline: nil, click: false), over: toWindow ?? window, context: context)
         }
         if command.action == .drag { try await refuseIfDragMovedWindow(window) }
@@ -1231,7 +1231,7 @@ final class ComputerUseCoordinator {
     private func startsInItem(
         _ command: ComputerUseCommand, input: ComputerUseInput, in window: ComputerUseWindow, context: CallContext
     ) -> Bool {
-        guard case .drag(let from, _, _) = input, let snapshot = snapshot(of: window, context: context) else { return false }
+        guard case .drag(let from, _, _, _) = input, let snapshot = snapshot(of: window, context: context) else { return false }
         if let ref = command.ref { return snapshot.refs[ref]?.inRow ?? false }
         guard case .point(let point) = from else { return false }
         let elements = snapshot.refs.values.map {
@@ -1252,7 +1252,7 @@ final class ComputerUseCoordinator {
         toWindow: ComputerUseWindow?, displays: [CGRect], startsInItem: Bool, chromium: Bool
     ) -> Bool {
         if command.delivery == .direct { return true }
-        guard case .drag(let from, let to, _) = input else { return false }
+        guard case .drag(let from, let to, _, _) = input else { return false }
         func onScreen(_ target: ComputerUseInputTarget, in window: ComputerUseWindow) -> Bool {
             switch target {
             case .point(let point): ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays)
@@ -1560,7 +1560,9 @@ final class ComputerUseCoordinator {
         case .drag:
             // The drop end resolves in the window it is in: its refs, its screenshot, its frame.
             let end = try self.target(ref: command.toRef, x: command.toX, y: command.toY, in: toWindow ?? window, context: context)
-            return try .drag(from: target(command.ref, command.x, command.y), to: end, toWindow: toWindow)
+            return try .drag(
+                from: target(command.ref, command.x, command.y), to: end, toWindow: toWindow,
+                modifiers: Set(command.modifiers))
         case .apps, .screenshot, .inspect, .cancel, .openApp, .wait:
             preconditionFailure("\(command.action.rawValue) is not an input action")
         }

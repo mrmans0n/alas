@@ -1171,7 +1171,7 @@ struct ComputerUseCoordinatorTests {
         case .mapped, .mappedLate, .sourceLate:
             let json = try #require(Self.text(response))
             let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
-            guard case .drag(.point(let start), .point(let point), let toWindow) = try #require(recorder.inputs.first) else {
+            guard case .drag(.point(let start), .point(let point), let toWindow, _) = try #require(recorder.inputs.first) else {
                 Issue.record("expected a point drag")
                 return
             }

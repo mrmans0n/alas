@@ -61,32 +61,50 @@ enum ComputerUseInputPoster {
     /// back to the start and released there, so nothing moves; so does a covered drop
     /// (`dropIsVisible` false before the release). The button is always released. The cursor then
     /// goes back where it was, except when the user took over, since their hand is on it.
+    /// `modifiers` go down as key events right before the press and come up right after the
+    /// button, on every path; every mouse event carries exactly them, so a key the user holds
+    /// doesn't ride along. A drag key the user already holds refuses the drag before anything moves.
     /// Pauses don't shorten under cancellation, so a Stop can't turn into an early drop.
     static func systemDrag(
-        from start: CGPoint, to end: CGPoint, dropIsVisible: @Sendable () -> Bool,
+        from start: CGPoint, to end: CGPoint, modifiers: Set<ComputerUseKeyChord.Modifier>,
+        dropIsVisible: @Sendable () -> Bool,
         interrupt: @Sendable () -> ComputerUseInputInterrupt?
     ) async throws {
-        // Build everything first so a failure can't leave the button down or the cursor moved.
+        // Build everything first so a failure can't leave the button or a key down, or the cursor moved.
+        let held = flags(for: modifiers)
         let cursor = CGEvent(source: nil)?.location ?? start
-        let restore = try systemMouseEvent(.mouseMoved, at: cursor, clickState: 0)
-        let primer = try systemMouseEvent(.mouseMoved, at: start, clickState: 0)
-        let down = try systemMouseEvent(.leftMouseDown, at: start, clickState: 1)
+        let restore = try systemMouseEvent(.mouseMoved, at: cursor, clickState: 0, flags: [])
+        let primer = try systemMouseEvent(.mouseMoved, at: start, clickState: 0, flags: [])
+        let (keysDown, keysUp) = try systemModifierEvents(modifiers)
+        let down = try systemMouseEvent(.leftMouseDown, at: start, clickState: 1, flags: held)
         // Two short moves first cross the drag threshold while still over the item.
         let points = [CGPoint(x: start.x + 3, y: start.y + 3), CGPoint(x: start.x + 8, y: start.y + 8)]
             + ComputerUseInputGeometry.interpolate(from: start, to: end, steps: systemDragSteps)
-        let moves = try points.map { try systemMouseEvent(.leftMouseDragged, at: $0, clickState: 1) }
-        let back = try systemMouseEvent(.leftMouseDragged, at: start, clickState: 1)
-        let upAtStart = try systemMouseEvent(.leftMouseUp, at: start, clickState: 1)
-        let up = try systemMouseEvent(.leftMouseUp, at: end, clickState: 1)
+        let moves = try points.map { try systemMouseEvent(.leftMouseDragged, at: $0, clickState: 1, flags: held) }
+        let back = try systemMouseEvent(.leftMouseDragged, at: start, clickState: 1, flags: held)
+        let upAtStart = try systemMouseEvent(.leftMouseUp, at: start, clickState: 1, flags: held)
+        let up = try systemMouseEvent(.leftMouseUp, at: end, clickState: 1, flags: held)
         var pressed = false
+        var keysAreDown = false
+        /// After the button: the keys come up in reverse order. Once only.
+        func releaseKeys() {
+            guard keysAreDown else { return }
+            keysAreDown = false
+            keysUp.forEach(postSystemWide)
+        }
+        // Whatever ends the drag, no key of Alas's stays down.
+        defer { releaseKeys() }
         /// Cancels in place on a stop or the user's input, before the next event goes out.
         func checkInterrupt() async throws {
             switch interrupt() {
             case .cancelled:
-                if pressed { await cancelInPlace() }
+                if pressed { await cancelInPlace() } else { releaseKeys() }
                 throw CancellationError()
             case .userActive:
-                guard pressed else { throw ComputerUseSystemError.userActive }
+                guard pressed else {
+                    releaseKeys()
+                    throw ComputerUseSystemError.userActive
+                }
                 await cancelInPlace()
                 throw ComputerUseSystemError.userTookOverDrag
             case nil:
@@ -98,13 +116,21 @@ enum ComputerUseInputPoster {
             postSystemWide(back)
             await steadyPause(systemDragCancelSettle)
             postSystemWide(upAtStart)
+            releaseKeys()
         }
         // Nothing has moved yet: an active user keeps their cursor where it is.
         try await checkInterrupt()
+        if userHoldsDragKey() { throw ComputerUseSystemError.userActive }
         do {
             postSystemWide(primer)
             await steadyPause(stepDelay)
             try await checkInterrupt()
+            if !keysDown.isEmpty {
+                keysAreDown = true
+                keysDown.forEach(postSystemWide)
+                await steadyPause(stepDelay)
+                try await checkInterrupt()
+            }
             postSystemWide(down)
             pressed = true
             await steadyPause(systemDragDownHold)
@@ -120,6 +146,7 @@ enum ComputerUseInputPoster {
                 throw ComputerUseSystemError.actionFailed("The drop point is covered by another window.")
             }
             postSystemWide(up)
+            releaseKeys()
         } catch let error as ComputerUseSystemError where error.isUserTakeover {
             // The user's hand is on the cursor: it stays where they put it.
             throw error
@@ -146,9 +173,11 @@ enum ComputerUseInputPoster {
     /// the release. Once the app shows a new drag-layer window (a drag-and-drop session), the
     /// button comes up at the start and the outcome is `.dragSession`. `interrupt`, checked before
     /// every event, releases at the start and throws what `systemDrag` throws. The button is
-    /// always released.
+    /// always released. `modifiers` ride on every event's flags, as a chord's do: no key events,
+    /// so none can stay down, and none of the user's keys show in them.
     static func backgroundDrag(
-        from start: CGPoint, to end: CGPoint, pid: Int32, windowID: UInt32, windowFrame: CGRect,
+        from start: CGPoint, to end: CGPoint, modifiers: Set<ComputerUseKeyChord.Modifier>,
+        pid: Int32, windowID: UInt32, windowFrame: CGRect,
         screenWindows: @Sendable () -> [ComputerUseInputGeometry.ScreenWindow],
         interrupt: @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> BackgroundDragOutcome {
@@ -156,9 +185,11 @@ enum ComputerUseInputPoster {
         // before any event (`ComputerUseBackgroundDrag.route`).
         let target = Target(pid: pid, windowID: windowID, windowOrigin: windowFrame.origin)
         let gesture = Int64.random(in: 1 ... Int64(Int32.max))
+        let held = flags(for: modifiers)
         func event(_ type: CGEventType, at point: CGPoint, clickState: Int) throws -> CGEvent {
             let event = try mouseEvent(type, at: point, button: .left, clickState: clickState, target: target)
             event.setIntegerValueField(gestureField, value: gesture)
+            event.flags = held
             return event
         }
         // Build everything first so a failure can't leave the button down.
@@ -220,13 +251,58 @@ enum ComputerUseInputPoster {
         }
     }
 
-    private static func systemMouseEvent(_ type: CGEventType, at point: CGPoint, clickState: Int) throws -> CGEvent {
+    /// `flags` replace the keyboard state the HID source would stamp on the event.
+    private static func systemMouseEvent(
+        _ type: CGEventType, at point: CGPoint, clickState: Int, flags: CGEventFlags
+    ) throws -> CGEvent {
         guard let event = CGEvent(
             mouseEventSource: CGEventSource(stateID: .hidSystemState), mouseType: type, mouseCursorPosition: point,
             mouseButton: .left)
         else { throw ComputerUseSystemError.actionFailed("Could not create a mouse event.") }
         event.setIntegerValueField(.mouseEventClickState, value: Int64(clickState))
+        event.flags = flags
         return event
+    }
+
+    /// The modifier keys going down one by one, as a keyboard sends them (flags changed, each
+    /// carrying the keys down so far), and coming up in reverse order.
+    private static func systemModifierEvents(
+        _ modifiers: Set<ComputerUseKeyChord.Modifier>
+    ) throws -> (down: [CGEvent], up: [CGEvent]) {
+        let ordered = modifierOrder.filter { modifiers.contains($0.modifier) }
+        func event(_ code: Int, down: Bool, flags: CGEventFlags) throws -> CGEvent {
+            guard let event = CGEvent(
+                keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: CGKeyCode(code), keyDown: down)
+            else { throw ComputerUseSystemError.actionFailed("Could not create a key event.") }
+            event.type = .flagsChanged
+            event.flags = flags
+            return event
+        }
+        var downs: [CGEvent] = []
+        var flags: CGEventFlags = []
+        for (modifier, code) in ordered {
+            flags.formUnion(self.flags(for: [modifier]))
+            downs.append(try event(code, down: true, flags: flags))
+        }
+        var ups: [CGEvent] = []
+        for (modifier, code) in ordered.reversed() {
+            flags.subtract(self.flags(for: [modifier]))
+            ups.append(try event(code, down: false, flags: flags))
+        }
+        return (downs, ups)
+    }
+
+    private static let modifierOrder: [(modifier: ComputerUseKeyChord.Modifier, code: Int)] = [
+        (.command, kVK_Command), (.option, kVK_Option), (.control, kVK_Control), (.shift, kVK_Shift),
+    ]
+
+    /// Whether the user holds ⌘, ⌥, ⌃ or ⇧ on the keyboard now. The input tap only sees a key
+    /// change, so a key held since before the idle wait goes unseen, and an app that reads the
+    /// keyboard state during a system-wide drag (a Finder copy) would take it as the drag's.
+    /// Only meaningful while Alas holds no key itself.
+    static func userHoldsDragKey() -> Bool {
+        !CGEventSource.flagsState(.hidSystemState)
+            .intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty
     }
 
     /// Into the HID stream, where WindowServer routes it like the user's own input; marked as Alas's.

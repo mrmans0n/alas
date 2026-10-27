@@ -49,8 +49,10 @@ enum ComputerUseInput: Sendable {
     case key(ComputerUseKeyChord)
     case scroll(ComputerUseInputTarget, dx: Int, dy: Int)
     /// `toWindow`: the window the drop end is in, when it isn't the start's; its frame bounds that end.
-    /// Always delivered with the app activated.
-    case drag(from: ComputerUseInputTarget, to: ComputerUseInputTarget, toWindow: ComputerUseWindow?)
+    /// `modifiers` are held from the press to the release.
+    case drag(
+        from: ComputerUseInputTarget, to: ComputerUseInputTarget, toWindow: ComputerUseWindow?,
+        modifiers: Set<ComputerUseKeyChord.Modifier>)
     /// A left click as pointer events at the target, skipping the AX ways: the retry of an AX press
     /// that changed nothing in an app whose AX press only focuses (Electron).
     case pointerClick(ComputerUseInputTarget)
@@ -607,7 +609,7 @@ extension LiveComputerUseSystem {
         if direct || input.isDrag {
             // Raising the window moves the app's key window too; not while another input holds it.
             return try await keyLocks.run(window.app.pid) {
-                guard case .drag(let from, let to, let toWindow) = input else {
+                guard case .drag(let from, let to, let toWindow, let modifiers) = input else {
                     return try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
                 }
                 // The in-app drag makes the window key first, as a background click does; it is
@@ -618,7 +620,8 @@ extension LiveComputerUseSystem {
                         direct: direct,
                         background: {
                             try await dragInBackground(
-                                from: from, to: to, in: window, toWindow: toWindow, keying: &keying, interrupt: interrupt)
+                                from: from, to: to, in: window, toWindow: toWindow, modifiers: modifiers,
+                                keying: &keying, interrupt: interrupt)
                         },
                         sessionActive: { dragSessionActive(pid: window.app.pid) },
                         foreground: {
@@ -1050,7 +1053,7 @@ extension LiveComputerUseSystem {
     /// background click's, checked before the points resolve and between the drag's events.
     private static func dragInBackground(
         from: ComputerUseInputTarget, to: ComputerUseInputTarget, in window: ComputerUseWindow,
-        toWindow: ComputerUseWindow?, keying: inout KeyAttempt,
+        toWindow: ComputerUseWindow?, modifiers: Set<ComputerUseKeyChord.Modifier>, keying: inout KeyAttempt,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseInputPoster.BackgroundDragOutcome? {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
@@ -1080,8 +1083,8 @@ extension LiveComputerUseSystem {
         try await makeKeyInBackground(window, &keying, interrupt: interrupt)
         // The drag checks for a Stop and the takeover rule again before its first event.
         return try await ComputerUseInputPoster.backgroundDrag(
-            from: start, to: end, pid: window.app.pid, windowID: window.windowID, windowFrame: window.frame,
-            screenWindows: { screenWindows() }, interrupt: interrupt)
+            from: start, to: end, modifiers: modifiers, pid: window.app.pid, windowID: window.windowID,
+            windowFrame: window.frame, screenWindows: { screenWindows() }, interrupt: interrupt)
     }
 
     /// What `ComputerUseTakeover.dragRefusalBeforeActivation` refuses, from the windows as they
@@ -1094,6 +1097,8 @@ extension LiveComputerUseSystem {
         func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
             await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
         }
+        // A key the user holds would ride along with the drag once it's in front.
+        if ComputerUseInputPoster.userHoldsDragKey() { throw ComputerUseSystemError.userActive }
         let dropShown = toWindow ?? window
         let (source, drop) = (await current(window), await current(dropShown))
         let start = try await dragPoint(from, shown: window, now: source, isDrop: false, isCancelled: isCancelled)
@@ -1254,7 +1259,7 @@ extension LiveComputerUseSystem {
             let location = try await point(at)
             try checkCancelled()
             try ComputerUseInputPoster.scroll(at: location, dx: dx, dy: dy, target: target)
-        case .drag(let from, let to, let toWindow):
+        case .drag(let from, let to, let toWindow, let modifiers):
             // The foreground drag: only with the app activated, and posted system-wide, since a file
             // drag's session follows the cursor. Telling the user's input from these events needs
             // the input tap. The in-app drag is `dragInBackground`.
@@ -1349,7 +1354,7 @@ extension LiveComputerUseSystem {
             let pid = app.pid
             let (dragStart, dragEnd) = (start, end)
             let dragBegan = ComputerUseUserInput.now()
-            try await ComputerUseInputPoster.systemDrag(from: dragStart, to: dragEnd, dropIsVisible: {
+            try await ComputerUseInputPoster.systemDrag(from: dragStart, to: dragEnd, modifiers: modifiers, dropIsVisible: {
                 ComputerUseInputGeometry.topmostWindow(at: dragEnd, in: screenWindows(), ignoring: ignoring()) == dropWindowID
             }, interrupt: {
                 if isCancelled() || Task.isCancelled { return .cancelled }

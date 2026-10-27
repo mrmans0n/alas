@@ -756,7 +756,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_drag",
-            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. Drags inside one window stay in the app in the background when they can (sliders, canvases, splitters). Drags that go to the front briefly bring the app forward and move the real cursor, and are refused while the user is typing or using the mouse: drags into another window, drags that start on a list or table item (a file or a row), drags in Chrome and other Chromium or Electron apps, drags in a window that's off screen or on another space, drags with delivery \"direct\", and a background drag that starts a file-style drag and drop. A drag that goes to the front needs its drop point visible: when another window covers it, the drag is cancelled in place with an error. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
+            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. Drags inside one window stay in the app in the background when they can (sliders, canvases, splitters). Drags that go to the front briefly bring the app forward and move the real cursor, and are refused while the user is typing or using the mouse: drags into another window, drags that start on a list or table item (a file or a row), drags in Chrome and other Chromium or Electron apps, drags in a window that's off screen or on another space, drags with delivery \"direct\", and a background drag that starts a file-style drag and drop. A drag that goes to the front needs its drop point visible: when another window covers it, the drag is cancelled in place with an error. `modifiers` are held for the whole drag, for example `[\"option\"]` copies a Finder file drag. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
@@ -767,6 +767,13 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "to_ref": computer_ref_property("The element to drop on."),
                     "to_x": computer_pixel_property("End pixels from the left edge of the latest screenshot. Use with to_y, instead of to_ref."),
                     "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref."),
+                    "modifiers": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": alas_client::COMPUTER_DRAG_MODIFIERS },
+                        "uniqueItems": true,
+                        "maxItems": 4,
+                        "description": "Keys held from the press to the release. Default: none."
+                    },
                     "delivery": computer_delivery_property()
                 }),
                 &[]
@@ -1480,6 +1487,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "to_ref",
                     "to_x",
                     "to_y",
+                    "modifiers",
                     "delivery",
                     "query",
                     "limit",
@@ -1487,12 +1495,33 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "include_screenshot",
                 ],
             )?;
+            let modifiers = match args.get("modifiers") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(Value::as_str)
+                    .collect::<Option<Vec<_>>>()
+                    .and_then(alas_client::computer_drag_modifiers)
+                    .ok_or_else(|| {
+                        format!(
+                            "modifiers must list each of {} at most once",
+                            alas_client::COMPUTER_DRAG_MODIFIERS.join(", ")
+                        )
+                    })?,
+                Some(_) => {
+                    return Err(format!(
+                        "modifiers must list each of {} at most once",
+                        alas_client::COMPUTER_DRAG_MODIFIERS.join(", ")
+                    ));
+                }
+            };
             Ok(Command::Computer(alas_client::ComputerCommand::Drag {
                 window_id: required_window_id(args)?,
                 from: computer_target(args, "ref", "x", "y")?,
                 to_window_id: optional_bounded_u64(args, "to_window_id", 0, u32::MAX.into())?
                     .map(|value| value as u32),
                 to: computer_target(args, "to_ref", "to_x", "to_y")?,
+                modifiers,
                 direct: computer_direct(args)?,
                 post: computer_post(args)?,
                 call_id: None,
@@ -4274,6 +4303,7 @@ mod tests {
                     from: element("e1"),
                     to_window_id: Some(9),
                     to: element("e4"),
+                    modifiers: vec![],
                     direct: false,
                     post: post.clone(),
                     call_id: None,
@@ -4281,12 +4311,13 @@ mod tests {
             ),
             (
                 "computer_drag",
-                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "delivery": "direct" }),
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "modifiers": ["option", "shift"], "delivery": "direct" }),
                 ComputerCommand::Drag {
                     window_id: 7,
                     from: element("e1"),
                     to_window_id: None,
                     to: element("e2"),
+                    modifiers: vec!["option".into(), "shift".into()],
                     direct: true,
                     post,
                     call_id: None,
@@ -4415,6 +4446,18 @@ mod tests {
                 json!({ "window_id": 7, "ref": "e1", "dx": -101 }),
             ),
             ("computer_drag", json!({ "window_id": 7, "ref": "e1" })),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "modifiers": ["option", "option"] }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "modifiers": ["fn"] }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "modifiers": "option" }),
+            ),
             (
                 "computer_drag",
                 json!({ "window_id": 7, "ref": "e1", "to_window_id": -1, "to_ref": "e2" }),
