@@ -478,6 +478,14 @@ struct ComputerUseInputTests {
         #expect(ComputerUseTakeover.activationFailure(idleSeconds: idle) == failure)
     }
 
+    /// An ignored activation is forced only on an idle user whose front app is still in front.
+    @Test(arguments: [
+        (5.0, Optional(true), true), (5.0, nil, true), (5.0, false, false), (1.9, true, false), (2.0, true, true),
+    ] as [(TimeInterval, Bool?, Bool)])
+    func anIgnoredActivationIsForcedOnlyOnAnIdleUnchangedFront(idle: TimeInterval, previousIsFront: Bool?, forces: Bool) {
+        #expect(ComputerUseTakeover.forcesActivation(idleSeconds: idle, previousIsFront: previousIsFront) == forces)
+    }
+
     @Test(arguments: [
         (true, 0.5, true, 0.0, ComputerUseTakeover.Decision.wait),
         (true, 5.0, true, 0.0, .proceed),

@@ -1429,8 +1429,12 @@ extension LiveComputerUseSystem {
             try await body()
             return
         }
-        // Only to hand the front back afterwards.
-        let previousPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        // Only to hand the front back afterwards. WindowServer's front process first:
+        // `frontmostApplication` follows it only once its notification reached the main run loop.
+        var previousPID = ComputerUseSkyLight.frontProcessPID()
+        if previousPID == nil {
+            previousPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        }
         await MainActor.run { _ = NSRunningApplication(processIdentifier: app.pid)?.activate() }
         let asked = ContinuousClock.now
         let deadline = asked + activationWait
@@ -1444,10 +1448,16 @@ extension LiveComputerUseSystem {
             }
             frontmost = await isFrontmost(app.pid)
             guard !frontmost, ContinuousClock.now < deadline else { break }
-            // Cooperative activation drops the request while Alas isn't the front app.
+            // Cooperative activation drops the request while Alas isn't the front app. Forced only
+            // while macOS's own reasons to keep the front don't hold: the user is idle and still in
+            // the app that was in front.
             if !askedWindowServer, ContinuousClock.now - asked >= activationFallbackWait {
                 askedWindowServer = true
-                _ = ComputerUseSkyLight.setFrontProcess(pid: app.pid)
+                if ComputerUseTakeover.forcesActivation(
+                    idleSeconds: secondsSinceUserInput(),
+                    previousIsFront: previousPID.flatMap { ComputerUseSkyLight.isFrontProcess(pid: $0) }) {
+                    _ = ComputerUseSkyLight.setFrontProcess(pid: app.pid)
+                }
             }
             try? await Task.sleep(for: .milliseconds(25))
         }
@@ -1498,7 +1508,8 @@ extension LiveComputerUseSystem {
         }
         if asked, await becomesFrontmost(previousPID) { return true }
         // Still the target in front: the request was dropped, not overtaken by the user's pick.
-        guard await isFrontmost(pid), NSRunningApplication(processIdentifier: previousPID) != nil,
+        guard await isFrontmost(pid),
+              await MainActor.run(body: { NSRunningApplication(processIdentifier: previousPID) != nil }),
               ComputerUseSkyLight.setFrontProcess(pid: previousPID)
         else { return false }
         return await becomesFrontmost(previousPID)

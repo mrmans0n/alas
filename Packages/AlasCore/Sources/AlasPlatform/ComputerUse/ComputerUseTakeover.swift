@@ -129,6 +129,13 @@ public enum ComputerUseTakeover {
         idleSeconds < idleThreshold ? .userActive : .notFrontmost
     }
 
+    /// Whether an activation macOS ignored may be forced through WindowServer: only while the user
+    /// is idle, and while the app that was in front still is (`previousIsFront` false: the user
+    /// switched apps meanwhile; nil: unknown). Otherwise the activation fails as `activationFailure` says.
+    public static func forcesActivation(idleSeconds: TimeInterval, previousIsFront: Bool?) -> Bool {
+        idleSeconds >= idleThreshold && previousIsFront != false
+    }
+
     /// Seconds since the user's own input: from the input monitor's last event (`lastUserInput`,
     /// on the same clock as `now`), which events Alas posts never reach; the HID idle time, which
     /// counts those too, only while the monitor isn't running (nil).

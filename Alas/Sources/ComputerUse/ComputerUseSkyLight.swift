@@ -17,6 +17,7 @@ enum ComputerUseSkyLight {
     private typealias PostEventRecordTo = @convention(c) (UnsafeRawPointer, UnsafeRawPointer) -> Int32
     private typealias GetProcessForPID = @convention(c) (pid_t, UnsafeMutableRawPointer) -> Int32
     private typealias GetFrontProcess = @convention(c) (UnsafeMutableRawPointer) -> Int32
+    private typealias GetProcessPID = @convention(c) (UnsafeRawPointer, UnsafeMutablePointer<pid_t>) -> Int32
     private typealias SetFrontProcessWithOptions = @convention(c) (UnsafeRawPointer, UInt32, UInt32) -> Int32
     private typealias EventPostToPid = @convention(c) (pid_t, CGEvent) -> Void
     private typealias EventSetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
@@ -27,6 +28,7 @@ enum ComputerUseSkyLight {
         var postEventRecordTo: PostEventRecordTo?
         var getProcessForPID: GetProcessForPID?
         var getFrontProcess: GetFrontProcess?
+        var getProcessPID: GetProcessPID?
         var setFrontProcess: SetFrontProcessWithOptions?
         var eventPostToPid: EventPostToPid?
         var eventSetWindowLocation: EventSetWindowLocation?
@@ -45,6 +47,8 @@ enum ComputerUseSkyLight {
             // Deprecated Carbon, still exported; resolving it at runtime sidesteps the deprecation.
             getProcessForPID: resolve("GetProcessForPID", as: GetProcessForPID.self),
             getFrontProcess: resolve("_SLPSGetFrontProcess", as: GetFrontProcess.self),
+            // Deprecated Carbon, like GetProcessForPID.
+            getProcessPID: resolve("GetProcessPID", as: GetProcessPID.self),
             setFrontProcess: resolve("_SLPSSetFrontProcessWithOptions", as: SetFrontProcessWithOptions.self),
             eventPostToPid: resolve("SLEventPostToPid", as: EventPostToPid.self),
             eventSetWindowLocation: resolve("CGEventSetWindowLocation", as: EventSetWindowLocation.self),
@@ -115,6 +119,15 @@ enum ComputerUseSkyLight {
 
     /// `kCPSUserGenerated`.
     private static let userGeneratedActivation: UInt32 = 0x200
+
+    /// The pid of WindowServer's front process; nil when it can't tell.
+    static func frontProcessPID() -> pid_t? {
+        guard let getFront = symbols.getFrontProcess, let getPID = symbols.getProcessPID else { return nil }
+        var front = [UInt8](repeating: 0, count: 8)
+        guard getFront(&front) == 0 else { return nil }
+        var pid: pid_t = 0
+        return getPID(front, &pid) == 0 && pid > 0 ? pid : nil
+    }
 
     private static func processSerialNumber(_ pid: pid_t) -> [UInt8]? {
         guard symbols.postEventRecordTo != nil, let getProcess = symbols.getProcessForPID else { return nil }
