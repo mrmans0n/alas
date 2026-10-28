@@ -79,6 +79,7 @@ extension AppState {
             },
             showSession: { [weak self] in self?.showComputerUseSession($0) },
             stopShortcutWarning: { [weak self] in self?.computerUseStopHotKey?.unavailableReason },
+            retryStopShortcut: { [weak self] in self?.computerUseStopHotKey?.retryIfTaken() },
             stopShortcut: { [weak self] in self?.binding(for: .stopComputerUse) }
         )
         computerUseStatusItem = item
@@ -91,6 +92,12 @@ extension AppState {
             // Same as the status item's Stop: the session driving right now.
             guard let self, let sessionID = self.computerUse.driver?.sessionID else { return }
             Task { await self.computerUse.stop(sessionID: sessionID) }
+        }
+        // Once per drive: the binding is requested again each time a drive starts.
+        computerUseStopHotKey?.onTaken = { [weak self] binding in
+            guard let self, let sessionID = self.computerUse.driver?.sessionID else { return }
+            self.acpManager(forSession: sessionID)?.runners[sessionID]?
+                .appendAndPersistSystemNotice(ComputerUseStopHotKey.takenNotice(binding))
         }
         syncComputerUseStopHotKey()
     }

@@ -18,6 +18,17 @@ struct ComputerUseInputTests {
         #expect((ComputerUseStopShortcut.registration(binding: binding, driverActive: driving) != nil) == registered)
     }
 
+    /// Only a combination another app holds is registered again, and only while an agent drives.
+    @Test(arguments: [
+        (Int32?(-9878), true, true),
+        (-9878, false, false),
+        (nil, true, false),
+        (-50, true, false),
+    ])
+    func onlyATakenStopShortcutIsRetriedWhileAnAgentDrives(status: Int32?, driving: Bool, retries: Bool) {
+        #expect(ComputerUseStopShortcut.retries(status: status, driverActive: driving) == retries)
+    }
+
     @Test(arguments: [
         ("cmd+shift+s", Chord(modifiers: [.command, .shift], key: .character("s"))),
         ("Return", Chord(modifiers: [], key: .named(.return))),

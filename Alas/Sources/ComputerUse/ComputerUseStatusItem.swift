@@ -9,6 +9,7 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
     private let label: (String, String) -> String
     private let showSession: (String) -> Void
     private let stopShortcutWarning: () -> String?
+    private let retryStopShortcut: () -> Void
     private let stopShortcut: () -> ShortcutBinding?
     private var warningItem: NSMenuItem?
     private var stopItem: NSMenuItem?
@@ -20,24 +21,27 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
         agentName: @escaping (String) -> String,
         showSession: @escaping (String) -> Void,
         stopShortcutWarning: @escaping () -> String?,
+        retryStopShortcut: @escaping () -> Void,
         stopShortcut: @escaping () -> ShortcutBinding?
     ) {
         self.coordinator = coordinator
         self.label = { agentName($0) + " is using " + $1 }
         self.showSession = showSession
         self.stopShortcutWarning = stopShortcutWarning
+        self.retryStopShortcut = retryStopShortcut
         self.stopShortcut = stopShortcut
         super.init()
     }
 
-    /// Syncs now and re-arms observation on every change.
+    /// Syncs now and re-arms observation on every change, the stop shortcut's warning included.
     func start() {
-        let (driver, approvals) = withObservationTracking {
-            (coordinator.driver.map { ($0.sessionID, $0.app.name) }, coordinator.pendingApprovals)
+        let (driver, approvals, warning) = withObservationTracking {
+            (coordinator.driver.map { ($0.sessionID, $0.app.name) }, coordinator.pendingApprovals, stopShortcutWarning())
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in self?.start() }
         }
         apply(driver, approvals: approvals)
+        item?.button?.toolTip = driver == nil ? nil : warning
     }
 
     /// Shown while an agent drives an app, and while an approval card waits: the card shows in
@@ -96,7 +100,9 @@ final class ComputerUseStatusItem: NSObject, NSMenuDelegate {
 
     /// Read when the menu opens: the hot key registers after the driver changes, so the menu
     /// built on that change can't know yet whether it succeeded.
+    /// A shortcut another app held is tried again first, so the warning is current.
     func menuNeedsUpdate(_ menu: NSMenu) {
+        retryStopShortcut()
         let warning = stopShortcutWarning()
         warningItem?.title = warning ?? ""
         warningItem?.isHidden = warning == nil
