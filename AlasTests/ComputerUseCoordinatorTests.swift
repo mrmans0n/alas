@@ -840,6 +840,8 @@ struct ComputerUseCoordinatorTests {
         case overBudget
         /// An element below the call's `max_depth` changed.
         case belowMaxDepth
+        /// Only which element reports focus changed in the read: the focus-free hash is unchanged.
+        case focusedElement
     }
     enum ActionKind { case click, key, type, scroll, drag }
 
@@ -865,6 +867,8 @@ struct ComputerUseCoordinatorTests {
         (.drag, .activation, .elements, nil),
         (.drag, .background, .elementsPastLimit, nil),
         (.drag, .background, .overBudget, Warnings.drag),
+        // The press focused the item it grabbed and nothing was dropped.
+        (.drag, .background, .focusedElement, Warnings.drag + #" Retry with delivery: "direct"."#),
         // Only the depth hint: no "no change" over a read that left deeper elements out.
         (.click, .background, .belowMaxDepth, ComputerUseInspectTree.depthHint(maxDepth: 1, queryGiven: false, takesMaxDepth: true)),
     ] as [(ActionKind, ComputerUseDelivered, WindowChange, String?)])
@@ -887,6 +891,7 @@ struct ComputerUseCoordinatorTests {
                 tree.children += (0 ... budget).map { ComputerUseAXNode(role: "AXStaticText", title: "\($0)") }
             }
             if change == .belowMaxDepth, read == 3 { tree.children[0].children = [ComputerUseAXNode(role: "AXImage")] }
+            if change == .focusedElement, read >= 3 { tree.children[0].isFocused = true }
             let cut = (change == .truncatedBefore && read == 2) || (change == .truncatedAfter && read == 3)
             return (tree, cut ? .timeLimit : nil, ComputerUseAXHandles())
         }
@@ -923,6 +928,9 @@ struct ComputerUseCoordinatorTests {
          "computer_stale: The element ref e2 is no longer valid. Call computer_inspect on window 1 again."),
         (.userTookOverDrag, true,
          "computer_user_active: You started using the Mac, so the drag was cancelled mid-way; nothing was dropped."),
+        (.userHoldsKeys("⌥ Option"), true, "computer_user_active: ⌥ Option is held down; release it and try again."),
+        (.userHoldsKeys("⌃ Control and ⌘ Command"), true,
+         "computer_user_active: ⌃ Control and ⌘ Command are held down; release them and try again."),
         // A failure after the app was brought to the front keeps its code and says so.
         (.broughtForward(.dropOutOfBounds, note: " Notes was brought to the front for this."), true,
          "computer_out_of_bounds: The point is outside window 1. Notes was brought to the front for this."),
@@ -1368,64 +1376,50 @@ struct ComputerUseCoordinatorTests {
         }
     }
 
-    /// A copy drag into another window, which goes in the front, leaves the start window as it
-    /// was: the re-reads end once the drag image is gone and both windows read the same twice,
-    /// not at the deadline.
-    @Test func aCopyDragEndsWhenTheDragImageIsGone() async throws {
+    /// A drag in the front ends its re-reads once the window settles, not at the deadline: a copy
+    /// drag into another window leaves the start window as it was, and its re-reads end once the
+    /// drag image is gone and both windows read the same twice; a move inside the window flashes
+    /// a selection that reads as the drop before the app moves the item, so the window is read
+    /// until two reads agree past the source settle, and the result lists it as it ends up.
+    @Test(arguments: [true, false])
+    func aDragInTheFrontIsReadUntilTheWindowSettles(intoOtherWindow: Bool) async throws {
         let recorder = Recorder()
-        let endReads = Counter()
+        let reads = Counter()
         let looks = Counter()
         var windows = Self.windows
         windows[5] = ComputerUseWindow(windowID: 5, title: "Other", frame: CGRect(x: 10, y: 10, width: 500, height: 400), app: Self.notes)
         var system = Self.system(windows: windows, recorder: recorder)
         let saveTree = Self.saveTree
-        // The end window shows the copy from the read after the drop on.
         system.axTree = { window, _, _, _ in
             var tree = saveTree
-            if window.windowID == 5, endReads.next() >= 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
+            if intoOtherWindow {
+                // The end window shows the copy from the read after the drop on.
+                if window.windowID == 5, reads.next() >= 2 { tree.children.append(ComputerUseAXNode(role: "AXImage", handle: 2)) }
+            } else if reads.next() >= 3 {
+                // Read 1 is before the drag, read 2 the one after the settle; from read 3 the item is gone.
+                tree.children.removeAll()
+            }
             return (tree, nil, ComputerUseAXHandles())
         }
-        system.dragSessionActive = { _ in looks.next() <= 2 }
+        if intoOtherWindow {
+            system.dragSessionActive = { _ in looks.next() <= 2 }
+        } else {
+            system.focusState = { _ in recorder.inputs.isEmpty ? nil : .init(role: "AXRow", title: "move-me.txt") }
+        }
         system.perform = { input, _, _, _ in
             recorder.record(input)
             return .activation
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
-        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s")
-        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toWindowID: 5, toX: 100, toY: 100)
-        let json = try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s")))
-        #expect(!json.contains(#""warning""#))
-        #expect(recorder.sleeps.filter { $0 == ComputerUseCoordinator.dragConfirmPoll }.count == 2)
-    }
-
-    /// A drag in the front flashes a selection that reads as the drop before the app moves the
-    /// item: the window is read until two reads agree past the source settle, so the result lists
-    /// it as it ends up.
-    @Test func aDragInTheFrontIsReadUntilTheWindowSettles() async throws {
-        let recorder = Recorder()
-        let reads = Counter()
-        var system = Self.system(recorder: recorder)
-        let saveTree = Self.saveTree
-        // Read 1 is before the drag, read 2 the one after the settle; from read 3 the item is gone.
-        system.axTree = { _, _, _, _ in
-            var tree = saveTree
-            if reads.next() >= 3 { tree.children.removeAll() }
-            return (tree, nil, ComputerUseAXHandles())
-        }
-        system.focusState = { _ in recorder.inputs.isEmpty ? nil : .init(role: "AXRow", title: "move-me.txt") }
-        system.perform = { input, _, _, _ in
-            recorder.record(input)
-            return .activation
-        }
-        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
-        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
-        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        if intoOtherWindow { _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 5), sessionID: "s") }
+        let drag = ComputerUseCommand(
+            action: .drag, windowID: 1, x: 10, y: 10, toWindowID: intoOtherWindow ? 5 : nil, toX: 100, toY: 100)
         let json = try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s")))
         let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
         #expect(payload["warning"] == nil)
-        #expect((payload["elements"] as? [Any])?.count == 1)
-        // Read 3 differs from read 2, read 4 agrees with read 3 at the settle.
+        if !intoOtherWindow { #expect((payload["elements"] as? [Any])?.count == 1) }
+        // Moving: read 3 differs from read 2, read 4 agrees with read 3 at the settle.
         #expect(recorder.sleeps.filter { $0 == ComputerUseCoordinator.dragConfirmPoll }.count == 2)
     }
 

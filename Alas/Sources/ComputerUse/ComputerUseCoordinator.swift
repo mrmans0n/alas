@@ -365,6 +365,10 @@ final class ComputerUseCoordinator {
         static func userTookOver(_ app: ComputerUseAppIdentity, typed: Int, of total: Int) -> String {
             "computer_user_active: The user started using \(app.name); stopped after typing \(typed) of \(total) characters."
         }
+        static func userHoldsKeys(_ keys: String) -> String {
+            let (verb, pronoun) = keys.contains(" and ") ? ("are", "them") : ("is", "it")
+            return "computer_user_active: \(keys) \(verb) held down; release \(pronoun) and try again."
+        }
         static let userTookOverDrag =
             "computer_user_active: You started using the Mac, so the drag was cancelled mid-way; nothing was dropped."
         static func actionFailed(_ reason: String) -> String { "computer_action_failed: \(reason)" }
@@ -1181,6 +1185,7 @@ final class ComputerUseCoordinator {
         case .userActive: return Refusal(userActiveMessage(window))
         case .userTookOver(let typed, let total): return Refusal(Message.userTookOver(window.app, typed: typed, of: total))
         case .userTookOverDrag: return Refusal(Message.userTookOverDrag)
+        case .userHoldsKeys(let keys): return Refusal(Message.userHoldsKeys(keys))
         default: return error
         }
     }
@@ -1502,7 +1507,7 @@ final class ComputerUseCoordinator {
     /// Between re-reads of a drag that seems to have changed nothing, up to `dragConfirmDeadline`
     /// of them after the first read.
     static let dragConfirmPoll: Duration = .milliseconds(250)
-    static let dragConfirmDeadline: Duration = .milliseconds(1500)
+    nonisolated static let dragConfirmDeadline: Duration = .milliseconds(1500)
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)
 

@@ -80,7 +80,9 @@ enum ComputerUseInputInterrupt: Sendable {
 
 /// How an input reached the app, reported to the agent.
 enum ComputerUseDelivery: String, Sendable {
-    /// `background`: events posted to the window after it became its app's key window, without activation.
+    /// `background`: events posted to the window without activating its app, after it was made its
+    /// app's key window. A click, key or typed text goes there only once the key window is
+    /// confirmed; an in-app drag goes either way.
     case ax, event, activation, background
 }
 
@@ -128,6 +130,9 @@ enum ComputerUseSystemError: Error, LocalizedError {
     case userTookOver(typed: Int, of: Int)
     /// The user took over after a drag's button went down; it was cancelled in place.
     case userTookOverDrag
+    /// The user holds drag keys (`ComputerUseInputPoster.userHeldDragKeys`), which would ride along
+    /// with a drag in the front.
+    case userHoldsKeys(String)
     /// `error`, thrown after its app was brought to the front for the input; `note` says so.
     /// Only for an error that carries no message of its own to append the note to.
     indirect case broughtForward(ComputerUseSystemError, note: String)
@@ -135,7 +140,7 @@ enum ComputerUseSystemError: Error, LocalizedError {
     /// The user's input stopped the input.
     var isUserTakeover: Bool {
         switch self {
-        case .userActive, .userTookOver, .userTookOverDrag: true
+        case .userActive, .userTookOver, .userTookOverDrag, .userHoldsKeys: true
         case .broughtForward(let error, _): error.isUserTakeover
         default: false
         }
@@ -165,6 +170,7 @@ enum ComputerUseSystemError: Error, LocalizedError {
         case .userActive: "The user is using the app"
         case .userTookOver(let typed, let total): "The user took over after \(typed) of \(total) characters"
         case .userTookOverDrag: "The user took over during the drag"
+        case .userHoldsKeys(let keys): "The user holds \(keys)"
         case .actionFailed(let reason): reason
         case .notActiveWindow(let reason): reason
         case .openFailed(let reason): reason
@@ -297,7 +303,7 @@ struct ComputerUseSystem: Sendable {
 enum ComputerUseDragTiers {
     /// The longest the fallback waits for a released session's drag image to go, as long as the
     /// coordinator's copy-drag deadline.
-    static let sessionEndDeadline: Duration = .milliseconds(1500)
+    static let sessionEndDeadline = ComputerUseCoordinator.dragConfirmDeadline
 
     /// `background` drags inside the app and releases the button itself, at the start point when a
     /// session started; nil when the drag can't stay in the background. A Stop or a takeover it
@@ -319,6 +325,8 @@ enum ComputerUseDragTiers {
             // A drag image still showing would follow the foreground drag's cursor from where it is.
             let began = ContinuousClock.now
             var waited = Duration.zero
+            // The summed sleeps bound it under a test's instant sleep, the clock under a slow
+            // `sessionActive` (each look reads the window list) or a sleep that oversleeps.
             while sessionActive(), waited < sessionEndDeadline, ContinuousClock.now - began < sessionEndDeadline {
                 if isCancelled() { throw CancellationError() }
                 await sleep(ComputerUseBackgroundDrag.sessionPoll)
@@ -1080,7 +1088,11 @@ extension LiveComputerUseSystem {
         let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
         guard ComputerUseSkyLight.isAvailable else { return nil }
         if isCancelled() { throw CancellationError() }
-        if interrupt() == .userActive { throw ComputerUseSystemError.userActive }
+        if interrupt() == .userActive {
+            // The input may have been a Stop's click or shortcut, which lands a moment later.
+            if await ComputerUseInputPoster.stopFollows(interrupt) { throw CancellationError() }
+            throw ComputerUseSystemError.userActive
+        }
         // Events routed to the window reach it under other windows: only hidden points refuse.
         let dropWindow = toWindow ?? window
         guard let start = try await dragPoint(from, shown: window, now: window, isDrop: false, isCancelled: isCancelled)
@@ -1116,13 +1128,10 @@ extension LiveComputerUseSystem {
         from: ComputerUseInputTarget, to: ComputerUseInputTarget, in window: ComputerUseWindow,
         toWindow: ComputerUseWindow?, isCancelled: @escaping @Sendable () -> Bool
     ) async throws {
-        func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
-            await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
-        }
         // Telling the user's input from the drag's events needs the input tap.
         guard ComputerUseUserInput.isWatching else { throw ComputerUseSystemError.actionFailed(dragNeedsInputWatching) }
         // A key the user holds would ride along with the drag once it's in front.
-        if ComputerUseInputPoster.userHoldsDragKey() { throw ComputerUseSystemError.userActive }
+        if let keys = ComputerUseInputPoster.userHeldDragKeys() { throw ComputerUseSystemError.userHoldsKeys(keys) }
         let dropShown = toWindow ?? window
         let (source, drop) = (await current(window), await current(dropShown))
         let start = try await dragPoint(from, shown: window, now: source, isDrop: false, isCancelled: isCancelled)
@@ -1142,6 +1151,11 @@ extension LiveComputerUseSystem {
         "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own."
     static let dragStartHiddenRefusal = "The drag's start element is scrolled out of view or hidden."
     static let dropHiddenRefusal = "The drop element is scrolled out of view or hidden."
+
+    /// The window `shown` as it is now; `shown` itself when it's gone or now another app's.
+    private static func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
+        await window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
+    }
 
     /// Where an end of a drag is in `now`, the window `shown` as the agent saw it; nil while its
     /// element doesn't show. A ref's point is on the part of it its scroll area shows: an element
@@ -1298,9 +1312,6 @@ extension LiveComputerUseSystem {
             // The app is in front (`activated`). From here on the points are read again on every
             // look: a parked window comes back (AeroSpace switches to its workspace) and windows come
             // up a moment after the activation (`ComputerUseTakeover.dragStep`).
-            func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
-                await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
-            }
             let sourceShown = window
             let dropShown = toWindow ?? window
             var startWindow = window

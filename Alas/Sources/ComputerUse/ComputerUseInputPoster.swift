@@ -128,7 +128,7 @@ enum ComputerUseInputPoster {
         }
         // Nothing has moved yet: an active user keeps their cursor where it is.
         try await checkInterrupt()
-        if userHoldsDragKey() { throw ComputerUseSystemError.userActive }
+        if let keys = userHeldDragKeys() { throw ComputerUseSystemError.userHoldsKeys(keys) }
         do {
             postSystemWide(primer)
             await steadyPause(stepDelay)
@@ -216,34 +216,41 @@ enum ComputerUseInputPoster {
         var pressed = false
         // Whatever ends the drag early, the button comes up where it went down.
         defer { if pressed { post(upAtStart) } }
-        func checkInterrupt() throws {
+        func checkInterrupt() async throws {
             switch interrupt() {
             case .cancelled:
                 throw CancellationError()
             case .userActive:
-                throw pressed ? ComputerUseSystemError.userTookOverDrag : ComputerUseSystemError.userActive
+                // As in `systemDrag`: released first, a Stop that follows within `stopGrace` is a Stop.
+                let wasPressed = pressed
+                if pressed {
+                    post(upAtStart)
+                    pressed = false
+                }
+                if await stopFollows(interrupt) { throw CancellationError() }
+                throw wasPressed ? ComputerUseSystemError.userTookOverDrag : ComputerUseSystemError.userActive
             case nil:
                 break
             }
         }
 
-        try checkInterrupt()
+        try await checkInterrupt()
         post(primer)
         await steadyPause(ComputerUseBackgroundDrag.stepDelay)
-        try checkInterrupt()
+        try await checkInterrupt()
         let before = Set(screenWindows().map(\.id))
         post(down)
         pressed = true
         await steadyPause(backgroundDragDownHold)
         for drag in drags {
-            try checkInterrupt()
+            try await checkInterrupt()
             if ComputerUseBackgroundDrag.startedSession(before: before, now: screenWindows(), sourcePID: pid) {
                 return .dragSession
             }
             post(drag)
             await steadyPause(dragStepDelay(ComputerUseBackgroundDrag.stepDelay))
         }
-        try checkInterrupt()
+        try await checkInterrupt()
         // One last look: a drag image can come up a moment after the last move.
         await steadyPause(ComputerUseBackgroundDrag.sessionPoll)
         if ComputerUseBackgroundDrag.startedSession(before: before, now: screenWindows(), sourcePID: pid) {
@@ -323,13 +330,18 @@ enum ComputerUseInputPoster {
         (.command, kVK_Command), (.option, kVK_Option), (.control, kVK_Control), (.shift, kVK_Shift),
     ]
 
-    /// Whether the user holds ⌘, ⌥, ⌃ or ⇧ on the keyboard now. The input tap only sees a key
+    /// Which of ⌘, ⌥, ⌃ and ⇧ the user holds on the keyboard now. The input tap only sees a key
     /// change, so a key held since before the idle wait goes unseen, and an app that reads the
     /// keyboard state during a system-wide drag (a Finder copy) would take it as the drag's.
-    /// Only meaningful while Alas holds no key itself.
-    static func userHoldsDragKey() -> Bool {
-        !CGEventSource.flagsState(.hidSystemState)
-            .intersection([.maskCommand, .maskAlternate, .maskControl, .maskShift]).isEmpty
+    /// Only meaningful while Alas holds no key itself. Named as the refusal says them ("⌥ Option"),
+    /// in the menu bar's order: ⌃ ⌥ ⇧ ⌘; nil when none is down.
+    static func userHeldDragKeys() -> String? {
+        let flags = CGEventSource.flagsState(.hidSystemState)
+        let names: [(CGEventFlags, String)] = [
+            (.maskControl, "⌃ Control"), (.maskAlternate, "⌥ Option"), (.maskShift, "⇧ Shift"), (.maskCommand, "⌘ Command"),
+        ]
+        let held = names.filter { flags.contains($0.0) }.map(\.1)
+        return held.isEmpty ? nil : held.joined(separator: " and ")
     }
 
     /// The pause over the drop before the release, at most `systemDragHover`. While spring-loaded
