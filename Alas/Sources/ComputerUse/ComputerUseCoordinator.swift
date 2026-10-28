@@ -1525,9 +1525,9 @@ final class ComputerUseCoordinator {
     static let waitPoll: Duration = .milliseconds(250)
 
     /// Nodes and time the read before an input may take: it delays the input, and a read cut
-    /// short only narrows the change check to its first nodes. Also the elements every read lists
-    /// for the change check, whatever the call's `limit`: a Finder window's sidebar alone fills the
-    /// default 100.
+    /// short turns the change check off, except that a drag's still compares the nodes both reads
+    /// walked (`ComputerUseChangeCheck.prefixChanged`). Also the elements every read lists for the
+    /// change check, whatever the call's `limit`: a Finder window's sidebar alone fills the default 100.
     static let fingerprintNodeBudget = 500
     static let fingerprintTimeLimit: Duration = .seconds(1)
 
