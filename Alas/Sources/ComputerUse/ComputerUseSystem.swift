@@ -1333,7 +1333,8 @@ extension LiveComputerUseSystem {
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case nil:
                 try await requireActiveWindow()
-                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
+                // Only here: a ref or a point names the field, and computer_key's keys are meant for the view.
+                try await ComputerUseAXActions.refuseUntypableFocus(app: app, isCancelled: isCancelled)
             }
             try checkCancelled()
             if replace {

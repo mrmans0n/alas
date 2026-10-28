@@ -80,6 +80,31 @@ struct ComputerUseInputTests {
         #expect(ComputerUseSecureFocus.isTextEntry(element) == isTextEntry)
     }
 
+    /// Keys typed without a ref into a list or outline act on it (Finder renames the wrong file
+    /// after its type-to-select), so only text inputs and editing surfaces take them.
+    /// Columns: focused element, selects text, in a web area, terminal or code editor, bundle id, accepted.
+    @Test(arguments: [
+        (ComputerUseSecureFocus.Element?(.init(role: "AXTextField")), false, false, false, String?("com.apple.finder"), true),
+        (.init(role: "AXOutline"), false, false, false, "com.apple.finder", false),
+        (.init(role: "AXGroup"), false, false, false, "com.apple.finder", false),
+        (nil, false, false, false, "com.apple.finder", false),
+        (.init(role: "AXList"), false, false, false, "com.apple.mail", false),
+        (.init(role: "AXButton"), false, false, false, nil, false),
+        (nil, false, false, false, "com.apple.TextEdit", true),
+        (.init(role: "AXTable"), false, false, false, "com.apple.iWork.Numbers", true),
+        (.init(role: "AXStaticText"), true, false, false, nil, true),
+        (.init(role: "AXGroup"), false, true, false, "com.google.Chrome", true),
+        (.init(role: "AXUnknown"), false, false, true, "com.mitchellh.ghostty", true),
+    ])
+    func refLessTypingNeedsAFocusedTextInput(
+        element: ComputerUseSecureFocus.Element?, selectsText: Bool, inWebArea: Bool, keyCommandApp: Bool,
+        bundleID: String?, accepted: Bool
+    ) {
+        #expect(ComputerUseSecureFocus.acceptsTypedKeys(
+            element, selectsText: selectsText, inWebArea: inWebArea, keyCommandApp: keyCommandApp, bundleID: bundleID)
+            == accepted)
+    }
+
     /// Only a web page's field takes the click through AX focus; a native one keeps the plain click.
     @Test(arguments: [
         (ComputerUseSecureFocus.Element(role: "AXTextField"), true, true),

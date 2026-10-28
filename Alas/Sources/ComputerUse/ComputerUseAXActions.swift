@@ -76,6 +76,47 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// `refuseSecureFocus(app:)` for text typed as keys without a ref, which also refuses a focused
+    /// element that doesn't take typed text (`ComputerUseSecureFocus.acceptsTypedKeys`): keys in a
+    /// list or outline act on it instead (Finder's type-to-select). Proceeds when the focus can't
+    /// be read; nothing focused counts as such only when the app says so.
+    static func refuseUntypableFocus(app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled) async throws {
+        try await onQueue(isCancelled) {
+            let application = try ComputerUseAXReader.target(app.pid)
+            var focused: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused)
+            let element: AXUIElement?
+            if result == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() {
+                element = (focused as! AXUIElement)
+            } else if result == .noValue {
+                element = nil
+            } else {
+                return
+            }
+            if let element {
+                AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+                if isSecure(element) { throw secureRefusal }
+            }
+            let identity = element.map {
+                ComputerUseSecureFocus.Element(role: string(of: $0, kAXRoleAttribute), subrole: string(of: $0, kAXSubroleAttribute))
+            }
+            guard !ComputerUseSecureFocus.acceptsTypedKeys(
+                identity, selectsText: element.flatMap(selectedRange(of:)) != nil,
+                inWebArea: element.map(isInWebArea) ?? false,
+                keyCommandApp: ComputerUseTextCheck.isKeyCommandApp(app, hostPID: getpid()), bundleID: app.bundleID)
+            else { return }
+            throw ComputerUseSystemError.actionFailed(untypableFocusRefusal(app, role: identity?.role))
+        }
+    }
+
+    static func untypableFocusRefusal(_ app: ComputerUseAppIdentity, role: String?) -> String {
+        let what = role.map { "\(app.name)'s focused element (\($0)) isn't a text input" }
+            ?? "Nothing in \(app.name) has keyboard focus"
+        return what + ", so typed keys would act on the window instead (in Finder they select another file by its name). "
+            + "Nothing was typed. Pass the field's ref from computer_inspect to computer_type, or click the field first. "
+            + "For shortcuts, arrow keys or Return, use computer_key."
+    }
+
     /// Refuses a chord that may edit text while a secure field reads as focused: the app's focused
     /// element, or one inside the window. In a web page a field can read as focused while the
     /// keyboard stays in the address bar, which the app reports as its focused element. A read of
