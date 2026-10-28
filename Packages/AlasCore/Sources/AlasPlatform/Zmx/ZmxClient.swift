@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 import os
 import AlasFoundation
 import AlasModel
@@ -84,6 +85,27 @@ public final class ZmxClient: Sendable {
         guard env.isAvailable, let dir = env.zmxDir else { return nil }
         let prefix = ProcessInfo.processInfo.environment["ZMX_SESSION_PREFIX"] ?? ""
         return dir.appendingPathComponent(prefix + name).path
+    }
+
+    /// The foreground job in the persistent shell's PTY. Ghostty's outer
+    /// PTY only sees the attach client, which runs in a different process
+    /// tree from the shell and its agents.
+    public func foregroundPid(forSession name: String) -> pid_t? {
+        guard let path = socketPath(forSession: name) else { return nil }
+        let shellPID: pid_t
+        // Info.pid is the forkpty child, not the daemon or attach client.
+        switch ZmxIPCSocket.probe(path: path, timeout: .milliseconds(100)) {
+        case .v1(let pid, _), .preFreeze(let pid, _): shellPID = pid
+        case .unreachable: return nil
+        }
+        guard shellPID > 0 else { return nil }
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+        guard proc_pidinfo(shellPID, PROC_PIDTBSDINFO, 0, &info, size) == size,
+              info.pbi_pid == UInt32(shellPID),
+              info.e_tdev != UInt32.max,
+              let pid = pid_t(exactly: info.e_tpgid), pid > 0 else { return nil }
+        return pid
     }
 
     /// Best-effort `zmx kill <name>`. Never throws; logs and swallows

@@ -664,14 +664,16 @@ extension AppState {
         // The readiness seam replaces the detector wholesale in tests, whose
         // sessions have no process to observe.
         if scheduledAgentReadiness != nil { return true }
-        guard let expected = expectedHarness(forAgentID: agentID),
-              let pid = harness.detector.foregroundPid(sessionId: sessionID)
-        else { return false }
-        // Resolving a pid to an executable is a syscall, and `HarnessDetector`
-        // keeps it off the main thread for exactly that reason. The hop costs
+        guard let expected = expectedHarness(forAgentID: agentID) else { return false }
+        let detector = harness.detector
+        // Both the persistent PTY lookup and executable query belong off
+        // the main thread, just like the detector's regular poll. The hop costs
         // far less than the second of staleness this replaced, so the answer
         // is still current by the time the caller writes.
-        let detected = await Task.detached { HarnessDetector.matchKind(pid: pid) }.value
+        let detected = await Task.detached { () -> HarnessKind? in
+            guard let pid = detector.foregroundPid(sessionId: sessionID) else { return nil }
+            return HarnessDetector.matchKind(pid: pid)
+        }.value
         return detected == expected
     }
 

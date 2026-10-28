@@ -3505,7 +3505,7 @@ final class AppState {
             cfg: config.terminal,
             theme: themeStore.current
         )
-        session.registerForegroundPid(with: harness.detector)
+        session.registerForegroundPid(with: harness.detector, zmxClient: terminal.zmxClient)
         return tabs.appendTerminal(owner: context.owner, title: "Terminal", sessionId: session.id)
     }
 
@@ -3562,7 +3562,7 @@ final class AppState {
             cfg: config.terminal,
             theme: themeStore.current
         )
-        session.registerForegroundPid(with: harness.detector)
+        session.registerForegroundPid(with: harness.detector, zmxClient: terminal.zmxClient)
         return tabs.appendTerminal(owner: context.owner, title: agent.displayName, sessionId: session.id)
     }
 
@@ -3604,7 +3604,7 @@ final class AppState {
                 remoteCwdAlreadyValidated: restoredCwd != nil,
                 leafId: leafID
             )
-            newSession.registerForegroundPid(with: harness.detector)
+            newSession.registerForegroundPid(with: harness.detector, zmxClient: terminal.zmxClient)
             _ = tabs.splitFocusedLeaf(
                 owner: owner,
                 tabId: tabID,
@@ -7547,9 +7547,7 @@ final class AppState {
                 repoStartupScript: repoStartupScript,
                 leafId: leafID
             )
-            opened = .init(id: session.id, foregroundPid: { [weak session] in
-                session?.surface.foregroundPid
-            })
+            opened = .init(id: session.id, foregroundPid: session.foregroundPidProvider(zmxClient: terminal.zmxClient))
         }
         harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
         return opened
@@ -7613,9 +7611,7 @@ final class AppState {
                 environmentRemovals: environmentRemovals,
                 leafId: leafId
             )
-            opened = OpenedTerminalSession(id: session.id, foregroundPid: { [weak session] in
-                session?.surface.foregroundPid
-            })
+            opened = OpenedTerminalSession(id: session.id, foregroundPid: session.foregroundPidProvider(zmxClient: terminal.zmxClient))
         }
         harness.detector.register(sessionId: opened.id, pidProvider: opened.foregroundPid)
         let title = titleOverride ?? tabs.nextTerminalTitle(
@@ -7809,7 +7805,7 @@ final class AppState {
                 repoStartupScript: repoStartupScript,
                 leafId: newLeafId
             )
-            session.registerForegroundPid(with: harness.detector)
+            session.registerForegroundPid(with: harness.detector, zmxClient: terminal.zmxClient)
             _ = tabs.splitFocusedLeaf(
                 worktreeId: worktreeId, tabId: activeId, axis: axis,
                 newLeafId: newLeafId, newSessionId: newLeafId
@@ -8399,7 +8395,7 @@ final class AppState {
                 remoteCwdAlreadyValidated: forcedCwd != nil,
                 leafId: leaf.id
             )
-            session.registerForegroundPid(with: harness.detector)
+            session.registerForegroundPid(with: harness.detector, zmxClient: terminal.zmxClient)
         }
         return tabs.tabs(for: owner).first(where: { $0.id == tabID })
     }
@@ -8512,7 +8508,7 @@ final class AppState {
                 allowLegacyAttach: allowLegacyAttach,
                 preResolvedZmxSessionName: preResolvedZmxSessionName
             )
-            session.registerForegroundPid(with: harness.detector)
+            session.registerForegroundPid(with: harness.detector, zmxClient: terminal.zmxClient)
         }
         return tabs.tabs(forWorktree: worktreeId).first(where: { $0.id == tabId })
     }
