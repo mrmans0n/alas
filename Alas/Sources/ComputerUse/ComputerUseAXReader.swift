@@ -309,7 +309,7 @@ enum ComputerUseAXReader {
         private func node(_ element: AXUIElement, depth: Int) -> ComputerUseAXNode? {
             count += 1
             AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
-            let batch: (values: [String: AnyObject], identityKnown: Bool, children: [AXUIElement])?
+            let batch: (values: [String: AnyObject], identityKnown: Bool, children: [AXUIElement]?)?
             switch attributes(of: element) {
             case .gone: return nil
             case .unread: batch = nil
@@ -333,7 +333,7 @@ enum ComputerUseAXReader {
                 isEnabled: Self.bool(values?[kAXEnabledAttribute]) ?? true,
                 isFocused: Self.bool(values?[kAXFocusedAttribute]) ?? false,
                 handle: elements.count,
-                childCount: batch.map { _ in children.count }
+                childCount: batch?.children?.count
             )
             elements.append(element)
             if depth < maxDepth {
@@ -365,8 +365,9 @@ enum ComputerUseAXReader {
         /// What `attributes(of:)` got for an element.
         private enum Attributes {
             /// `identityKnown` is false when its role or subrole read failed (rather than being
-            /// absent), so whether it is a password field can't be told.
-            case read(values: [String: AnyObject], identityKnown: Bool, children: [AXUIElement])
+            /// absent), so whether it is a password field can't be told. `children` is nil when the
+            /// app answered but they couldn't be read: they are unknown, not none.
+            case read(values: [String: AnyObject], identityKnown: Bool, children: [AXUIElement]?)
             /// The walk has halted, or the app didn't answer, which counts toward a stalled app.
             case unread
             /// The element no longer exists.
@@ -402,7 +403,7 @@ enum ComputerUseAXReader {
                 children = ComputerUseReadCut.children(
                     batchResult: 0, batchComplete: true, childrenError: failed[kAXChildrenAttribute]?.rawValue)
             }
-            var elements: [AXUIElement] = []
+            var elements: [AXUIElement]? = []
             switch children {
             case .gone:
                 return .gone
@@ -410,8 +411,10 @@ enum ComputerUseAXReader {
                 // Children the app didn't answer for are missing, not none: the read is incomplete.
                 skippedUnanswered = true
                 if result == .cannotComplete { return .unread }
+                elements = nil
             case .unreadable:
                 unreadable = true
+                elements = nil
             case .read:
                 // Some apps answer the batch with kCFNull for an element without children.
                 if let value = byName[kAXChildrenAttribute], CFGetTypeID(value) != CFNullGetTypeID() {
@@ -422,6 +425,7 @@ enum ComputerUseAXReader {
                         }
                     } else {
                         unreadable = true
+                        elements = nil
                     }
                 }
             case .none, .perAttribute:

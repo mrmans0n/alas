@@ -166,24 +166,39 @@ struct ComputerUseInspectTreeTests {
     }
 
     /// How the window read after a drag differs from the one before it: a window with an outline
-    /// of four rows, of which a three-node prefix reads the window, the outline and the first row.
+    /// of four rows and a toolbar, of which a three-node prefix reads the window, the outline and
+    /// the first row.
     enum PrefixChange: CaseIterable {
-        case titleInPrefix, rowGonePastPrefix, onlyPastCommonLength, focusOnly, unreadableCut, partialLastNode, none
+        case titleInPrefix, rowGonePastPrefix, onlyPastCommonLength, focusOnly, partialLastNode, unknownChildren, none
+        /// A change in the prefix of a read cut this way.
+        case cut(ComputerUseReadCut)
+
+        static var allCases: [Self] {
+            [.titleInPrefix, .rowGonePastPrefix, .onlyPastCommonLength, .focusOnly, .partialLastNode, .unknownChildren, .none,
+             .cut(.appNotResponding), .cut(.elementsUnreadable), .cut(.webContentMissing)]
+        }
     }
 
     /// A cut-short read shows a change only in the nodes both reads hashed, a container's child
     /// count included; focus doesn't count, nor a read whose cut makes it incomparable, nor the
-    /// node a time limit stopped at.
+    /// node a time limit stopped at, nor anything from an element whose children couldn't be read
+    /// on (a time limit outranks the unreadable cut, and such an element lists none).
     @Test(arguments: PrefixChange.allCases)
     func cutShortReadsShowAChangeOnlyInTheNodesBothRead(_ change: PrefixChange) {
-        func window(rows: Int = 4, title: String = "a", focused: Bool = false, partialFirstRow: Bool = false) -> ComputerUseAXNode {
+        func window(
+            rows: Int = 4, title: String = "a", focused: Bool = false, partialFirstRow: Bool = false,
+            unknownChildren: Bool = false
+        ) -> ComputerUseAXNode {
             let cells = (0..<rows).map { index in
                 ComputerUseAXNode(
                     role: "AXRow", title: index == 0 ? title : "\(index)",
                     value: index == 0 && partialFirstRow ? nil : "v", isFocused: index == 0 && focused, childCount: 0)
             }
-            let outline = ComputerUseAXNode(role: "AXOutline", children: cells, childCount: rows)
-            return ComputerUseAXNode(role: "AXWindow", children: [outline], childCount: 1)
+            let outline = unknownChildren
+                ? ComputerUseAXNode(role: "AXOutline")
+                : ComputerUseAXNode(role: "AXOutline", children: cells, childCount: rows)
+            let toolbar = ComputerUseAXNode(role: "AXToolbar", childCount: 0)
+            return ComputerUseAXNode(role: "AXWindow", children: [outline, toolbar], childCount: 2)
         }
         func hashes(_ root: ComputerUseAXNode, cut: ComputerUseReadCut? = .nodeBudget, limit: Int = 3) -> [Int]? {
             ComputerUseChangeCheck.prefixHashes(root, cut: cut, maxDepth: 32, limit: limit)
@@ -194,9 +209,10 @@ struct ComputerUseInspectTreeTests {
         case .rowGonePastPrefix: (hashes(window(rows: 3)), true)
         case .onlyPastCommonLength: (hashes(window(title: "b"), limit: 2), false)
         case .focusOnly: (hashes(window(focused: true)), false)
-        case .unreadableCut: (hashes(window(title: "b"), cut: .elementsUnreadable), false)
         case .partialLastNode: (hashes(window(partialFirstRow: true), cut: .timeLimit), false)
+        case .unknownChildren: (hashes(window(unknownChildren: true), cut: .timeLimit), false)
         case .none: (hashes(window()), false)
+        case .cut(let cut): (hashes(window(title: "b"), cut: cut), false)
         }
         #expect(ComputerUseChangeCheck.prefixChanged(before, after) == changed)
     }
