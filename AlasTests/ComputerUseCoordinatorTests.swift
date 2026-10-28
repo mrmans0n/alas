@@ -836,6 +836,10 @@ struct ComputerUseCoordinatorTests {
         case none, elements, focus, target, truncatedBefore, truncatedAfter
         /// Elements past the call's `limit` changed: the listing is cut, the change check's read isn't.
         case elementsPastLimit
+        /// The window has more elements than the change check reads: it can't tell.
+        case overBudget
+        /// An element below the call's `max_depth` changed.
+        case belowMaxDepth
     }
     enum ActionKind { case click, key, type, scroll, drag }
 
@@ -860,6 +864,9 @@ struct ComputerUseCoordinatorTests {
         (.drag, .activation, .truncatedAfter, Warnings.drag),
         (.drag, .activation, .elements, nil),
         (.drag, .background, .elementsPastLimit, nil),
+        (.drag, .background, .overBudget, Warnings.drag),
+        // Only the depth hint: no "no change" over a read that left deeper elements out.
+        (.click, .background, .belowMaxDepth, ComputerUseInspectTree.depthHint(maxDepth: 1, queryGiven: false, takesMaxDepth: true)),
     ] as [(ActionKind, ComputerUseDelivered, WindowChange, String?)])
     func actionThatChangedNothingSaysSo(
         _ kind: ActionKind, _ delivered: ComputerUseDelivered, change: WindowChange, warning: String?
@@ -870,11 +877,16 @@ struct ComputerUseCoordinatorTests {
         let saveTree = Self.saveTree
         var system = Self.system()
         system.perform = { _, _, _, _ in delivered }
+        let budget = ComputerUseCoordinator.fingerprintNodeBudget
         // Read 1 is the inspect, 2 the window before the input, 3 the one after it.
         system.axTree = { _, _, _, _ in
             let read = reads.next()
             var tree = saveTree
-            if [.elements, .elementsPastLimit].contains(change), read == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
+            if [.elements, .elementsPastLimit, .overBudget].contains(change), read == 3 { tree.children.append(ComputerUseAXNode(role: "AXSheet", handle: 2)) }
+            if change == .overBudget {
+                tree.children += (0 ... budget).map { ComputerUseAXNode(role: "AXStaticText", title: "\($0)") }
+            }
+            if change == .belowMaxDepth, read == 3 { tree.children[0].children = [ComputerUseAXNode(role: "AXImage")] }
             let cut = (change == .truncatedBefore && read == 2) || (change == .truncatedAfter && read == 3)
             return (tree, cut ? .timeLimit : nil, ComputerUseAXHandles())
         }
@@ -886,7 +898,7 @@ struct ComputerUseCoordinatorTests {
         let f = Self.fixture(system: system, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
         let command: ComputerUseCommand = switch kind {
-        case .click: .init(action: .click, windowID: 1, ref: "e2")
+        case .click: .init(action: .click, windowID: 1, maxDepth: change == .belowMaxDepth ? 1 : 12, ref: "e2")
         case .key: .init(action: .key, windowID: 1, keys: "down")
         case .type: .init(action: .type, windowID: 1, ref: "e2", text: "x")
         case .scroll: .init(action: .scroll, windowID: 1, ref: "e2", dy: 3)

@@ -1728,7 +1728,7 @@ final class ComputerUseCoordinator {
         var depthLimited = false
         var elements: [ComputerUseInspectElement]
         /// Every element up to `fingerprintNodeBudget`, past the call's `limit`, for the change
-        /// check; nil when the read wasn't for it, was cut short or had more.
+        /// check; nil when the read wasn't for it, was cut short, had more or left deeper ones out.
         var fingerprintElements: [ComputerUseInspectElement]?
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
@@ -1800,7 +1800,8 @@ final class ComputerUseCoordinator {
             truncated: flat.truncated || cut != nil,
             truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: cut),
             depthLimited: flat.depthLimited, elements: flat.elements,
-            fingerprintElements: !forChangeCheck || whole.truncated || cut != nil ? nil : whole.elements,
+            // Elements past the depth limit may have changed as well.
+            fingerprintElements: !forChangeCheck || whole.truncated || whole.depthLimited || cut != nil ? nil : whole.elements,
             handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
