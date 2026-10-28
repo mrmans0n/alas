@@ -36,17 +36,19 @@ public final class PeerPortForwardHost: @unchecked Sendable {
     }
 
     private let limits: PeerPortForwardLimits
-    private let resolve: @Sendable (_ runID: String) async -> Int?
+    private let resolve: @Sendable (_ runID: String) async -> (host: String, port: Int)?
     private let send: Send
     private let queue = DispatchQueue(label: "io.nlopez.alas.peer-port-forward")
     private var streams: [Key: Stream] = [:]
 
-    /// `resolve` returns the loopback port of `runID` only while it is the
-    /// current active `.running` run of its worktree with a loopback
-    /// endpoint. `send` is called on an internal serial queue, in order.
+    /// `resolve` returns the endpoint host and port of `runID` only while it
+    /// is the current active `.running` run of its worktree with a loopback
+    /// endpoint. The host is dialled as declared, so `localhost` tries both
+    /// `::1` and `127.0.0.1`; anything `PeerPortForwardEndpoint` doesn't
+    /// accept as loopback is refused. `send` is called on an internal serial queue, in order.
     public init(
         limits: PeerPortForwardLimits = PeerPortForwardLimits(),
-        resolve: @escaping @Sendable (_ runID: String) async -> Int?,
+        resolve: @escaping @Sendable (_ runID: String) async -> (host: String, port: Int)?,
         send: @escaping Send
     ) {
         self.limits = limits
@@ -104,19 +106,23 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         let stream = Stream(runID: runID, window: limits.window)
         streams[key] = stream
         Task {
-            let port = await resolve(runID)
-            queue.async { self.dial(key, stream, port: port) }
+            let target = await resolve(runID)
+            queue.async { self.dial(key, stream, target: target) }
         }
     }
 
-    private func dial(_ key: Key, _ stream: Stream, port: Int?) {
+    private func dial(_ key: Key, _ stream: Stream, target: (host: String, port: Int)?) {
         // Closed while resolving.
         guard streams[key] === stream else { return }
-        guard let port, let nwPort = UInt16(exactly: port).flatMap(NWEndpoint.Port.init(rawValue:)), port > 0 else {
+        guard let target, PeerPortForwardEndpoint.isLoopbackHost(target.host), target.port > 0,
+              let nwPort = UInt16(exactly: target.port).flatMap(NWEndpoint.Port.init(rawValue:))
+        else {
             streams[key] = nil
             return send(key.connection, .refused(stream: key.stream, message: Self.notRunningMessage))
         }
-        let connection = NWConnection(host: "127.0.0.1", port: nwPort, using: .tcp)
+        let port = target.port
+        let host = NWEndpoint.Host(PeerPortForwardEndpoint.dialHost(target.host))
+        let connection = NWConnection(host: host, port: nwPort, using: .tcp)
         stream.connection = connection
         connection.stateUpdateHandler = { [weak self, weak stream] state in
             guard let self, let stream, self.streams[key] === stream else { return }

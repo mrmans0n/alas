@@ -63,7 +63,16 @@ public enum PeerPortForwardEndpoint: Sendable {
     /// forward it. Deliberately narrower than `RunEndpointPolicy.isLoopback`:
     /// a wildcard address like `0.0.0.0` is not a place to dial.
     public static func isLoopback(_ url: URL) -> Bool {
-        guard let host = url.host?.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]")) else { return false }
-        return ["localhost", "127.0.0.1", "::1"].contains(host)
+        url.host.map(isLoopbackHost) ?? false
+    }
+
+    /// `localhost`, `127.0.0.1`, or `::1` with or without brackets.
+    public static func isLoopbackHost(_ host: String) -> Bool {
+        ["localhost", "127.0.0.1", "::1"].contains(dialHost(host))
+    }
+
+    /// The host as `NWEndpoint.Host` takes it: lowercased, without IPv6 brackets.
+    static func dialHost(_ host: String) -> String {
+        host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
     }
 }

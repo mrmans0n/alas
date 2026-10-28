@@ -5,11 +5,15 @@ import Testing
 import AlasCore
 
 struct PeerPortForwardTests {
-    @Test func aStaleOrStoppedRunIsRefusedWithoutDialling() async throws {
+    /// Nil is a stale or stopped run; `0.0.0.0` would reach the listener but
+    /// isn't a loopback endpoint.
+    @Test(arguments: [nil, "0.0.0.0"])
+    func aStaleOrStoppedRunIsRefusedWithoutDialling(endpointHost: String?) async throws {
         let server = try await EchoServer.start()
         defer { server.stop() }
         let events = EventLog()
-        let host = PeerPortForwardHost(resolve: { _ in nil }, send: { events.append($1) })
+        let port = server.port
+        let host = PeerPortForwardHost(resolve: { _ in endpointHost.map { ($0, port) } }, send: { events.append($1) })
         let stream = UUID()
 
         host.receive(.open(stream: stream, runID: "stale"), from: UUID())
@@ -18,12 +22,14 @@ struct PeerPortForwardTests {
         #expect(server.accepted == 0)
     }
 
-    @Test func aPeerExceedingItsWindowLosesTheStream() async throws {
+    /// `localhost` is dialled as declared and reaches the IPv4 listener.
+    @Test(arguments: ["127.0.0.1", "localhost"])
+    func aPeerExceedingItsWindowLosesTheStream(endpointHost: String) async throws {
         let server = try await EchoServer.start()
         defer { server.stop() }
         let events = EventLog()
         let port = server.port
-        let host = PeerPortForwardHost(resolve: { _ in port }, send: { events.append($1) })
+        let host = PeerPortForwardHost(resolve: { _ in (endpointHost, port) }, send: { events.append($1) })
         let connection = UUID()
         let stream = UUID()
 
