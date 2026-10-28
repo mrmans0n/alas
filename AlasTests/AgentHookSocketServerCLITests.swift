@@ -415,8 +415,9 @@ struct AgentHookSocketServerCLITests {
         }
         let outcome = Outcome()
         server.onCLIRequest = { _ in
-            // Long enough for several looks at the connection.
-            let deadline = ContinuousClock.now + .milliseconds(500)
+            // A client that left is waited on until its cancellation lands; one that stays, long
+            // enough for several looks at the connection.
+            let deadline = ContinuousClock.now + (leaves ? .seconds(3) : .milliseconds(500))
             while !Task.isCancelled, ContinuousClock.now < deadline {
                 try? await Task.sleep(for: .milliseconds(10))
             }
@@ -426,7 +427,7 @@ struct AgentHookSocketServerCLITests {
 
         let json = #"{"v":1,"kind":"cli","command":"computer_apps","session_id":"s1"}"#
         let response = try await Self.sendToSocket(path: path, payload: json, leaves: leaves)
-        try await eventually("the call ended") { outcome.value != nil }
+        try await eventually("the call ended", within: .seconds(5)) { outcome.value != nil }
 
         #expect(outcome.value == leaves)
         if !leaves { #expect(try responseObject(response)["ok"] as? Bool == true) }
