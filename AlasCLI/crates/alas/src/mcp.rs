@@ -774,7 +774,7 @@ fn computer_tool_definitions() -> Vec<Value> {
                         "maxItems": 4,
                         "description": "Keys held from the press to the release. Default: none."
                     },
-                    "delivery": computer_delivery_property()
+                    "delivery": computer_drag_delivery_property()
                 }),
                 &[]
             )
@@ -852,6 +852,10 @@ fn computer_pixel_property(description: &str) -> Value {
 
 fn computer_delivery_property() -> Value {
     json!({ "type": "string", "enum": ["background", "direct"], "description": "background posts to the app without touching the user's focus; it may change the target app's key window, and activates the app briefly when that window can't be made key. direct briefly activates the app and is refused while the user is active. Default: background. The result's `delivery` reports how the input went: ax, background or activation." })
+}
+
+fn computer_drag_delivery_property() -> Value {
+    json!({ "type": "string", "enum": ["background", "direct"], "description": "background drags inside the app without touching the user's focus or cursor when the drag can stay there, and in the front otherwise (see the tool's description); it may change the target app's key window. direct always drags in the front. Default: background. The result's `delivery` reports how the drag went: background or activation." })
 }
 
 fn preview_tool_definitions() -> Vec<Value> {

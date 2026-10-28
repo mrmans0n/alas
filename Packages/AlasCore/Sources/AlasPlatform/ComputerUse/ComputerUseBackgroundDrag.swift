@@ -12,7 +12,8 @@ public enum ComputerUseBackgroundDrag {
     /// Interpolated pointer moves in a drag, and the pause between them.
     public static let steps = 12
     public static let stepDelay = Duration.milliseconds(16)
-    /// How often the window list is read while waiting for a drop to land.
+    /// How often the fallback looks whether a released drag and drop session's drag image is
+    /// gone, and the pause before the in-app drag's last look for one before its release.
     public static let sessionPoll = Duration.milliseconds(50)
     /// How long after a foreground drop the windows are still read with the drag image gone: a
     /// moved item's source window refreshes a moment after the drop.

@@ -23,8 +23,9 @@ public struct ComputerUseWindowFingerprint: Equatable, Sendable {
     public var focus: Focus?
     public var windowTitle: String?
     /// `ComputerUseChangeCheck.elementsHash` of the element list (up to the change check's own
-    /// budget, not the call's listing limit); nil when the read failed or was cut short (node
-    /// budget, deadline), since elements past the cut may have changed.
+    /// budget, not the call's listing limit); nil when the read failed, was cut short (node
+    /// budget, deadline), left elements out for depth, or listed more elements than that budget,
+    /// since elements past the cut may have changed.
     public var elementsHash: Int?
     /// The acted-on element's own state (value, selection, enabled, title); nil without one.
     public var targetHash: Int?
@@ -58,11 +59,11 @@ public enum ComputerUseChangeCheck {
     /// complete element lists the check can't tell, so it doesn't warn, except after a drag: a
     /// cut-short read is how a drag that did nothing looked like one that worked. A drag that
     /// moved only focus and selection (the activation or the press selected the item it grabbed,
-    /// and nothing was dropped) warns too, however it went. The retry hint is only for clicks, scrolls and drags that
-    /// went as events: a key or typed text can legitimately change nothing a read shows, and an
-    /// activation already was the direct way. A drag gets it only over two complete reads: a
-    /// cut-short read can't tell a drag that did nothing from one that worked, and repeating one
-    /// that worked does it twice.
+    /// and nothing was dropped) warns too, however it went. The retry hint is only for clicks,
+    /// scrolls and drags that went as events: a key or typed text can legitimately change nothing
+    /// a read shows, and an activation already was the direct way. A drag gets it only over two
+    /// complete reads: a cut-short read can't tell a drag that did nothing from one that worked,
+    /// and repeating one that worked does it twice.
     public static func warning(
         before: ComputerUseWindowFingerprint?, after: ComputerUseWindowFingerprint?, kind: Kind, deliveredAsEvents: Bool
     ) -> String? {

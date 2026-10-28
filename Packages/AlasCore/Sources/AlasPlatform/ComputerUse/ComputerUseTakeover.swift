@@ -33,7 +33,7 @@ public enum ComputerUseTakeover {
         case byOther
     }
 
-    /// The next step of a drag, which always goes with the target app in front.
+    /// The next step of the front drag, which goes with the target app in front.
     public enum DragStep: Equatable, Sendable {
         /// The user is typing or using the mouse: refused before anything else happens.
         case userActive
