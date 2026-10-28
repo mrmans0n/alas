@@ -135,7 +135,8 @@ struct NativePeerRunTabView: View {
     /// A loopback endpoint opens through the host's forward; any other as declared.
     private func openEndpoint(_ endpoint: URL, of row: PeerRuns.Row) {
         guard PeerPortForwardEndpoint.isLoopback(endpoint), let runID = row.record?.id else {
-            NSWorkspace.shared.open(endpoint)
+            // Never the Mac's own services: the row offers no other loopback spelling.
+            if !RunEndpointPolicy.isLoopback(endpoint) { NSWorkspace.shared.open(endpoint) }
             return
         }
         let hosts = hosts, serverId = serverId

@@ -317,11 +317,14 @@ struct RunTabPresentationTests {
     }
 
     /// A loopback endpoint opens only through a host that forwards it, and
-    /// never for a run over SSH; any other opens as declared.
+    /// never for a run over SSH; another loopback spelling never opens; any
+    /// other opens as declared.
     @Test(arguments: [
         ("http://localhost:3000", false, nil, false),
         ("http://localhost:3000", true, nil, true),
         ("http://localhost:3000", true, "devbox", false),
+        ("http://0.0.0.0:3000", true, nil, false),
+        ("http://[0:0:0:0:0:0:0:1]:3000", true, nil, false),
         ("http://devbox.local:3000", false, nil, true),
     ] as [(String, Bool, String?, Bool)])
     func peerRowsOfferTheRunsEndpoint(endpoint: String, servesForward: Bool, sshHost: String?, offered: Bool) throws {
