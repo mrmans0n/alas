@@ -32,12 +32,13 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         while flock(fd, LOCK_EX) != 0 {
             guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         }
-        var records = try read()
+        let (known, foreign) = try read()
+        var records = known
         for index in records.indices {
             if let owner = records[index].runOwner, !isAlive(owner) { records[index].runOwner = nil }
         }
         let result = try body(&records)
-        try Self.encoder.encode(records).write(to: fileURL, options: .atomic)
+        try write(records, foreign: foreign)
         return result
     }
 
@@ -45,15 +46,52 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         try update { $0 }
     }
 
-    private func read() throws -> [WorktreeVMRecord] {
-        guard let data = try? Data(contentsOf: fileURL), !data.isEmpty else { return [] }
-        return try Self.decoder.decode([WorktreeVMRecord].self, from: data)
+    /// Records this build decodes, plus raw JSON of those it cannot (for
+    /// example a newer build's guest OS), which are preserved verbatim.
+    /// Foreign records are not visible to `update` bodies or slot accounting.
+    /// An unparseable file is quarantined as `registry.json.corrupt`.
+    private func read() throws -> ([WorktreeVMRecord], [Any]) {
+        let data: Data
+        do {
+            data = try Data(contentsOf: fileURL)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+            return ([], [])
+        }
+        guard let elements = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
+            if !data.isEmpty { try quarantine() }
+            return ([], [])
+        }
+        var known: [WorktreeVMRecord] = []
+        var foreign: [Any] = []
+        for element in elements {
+            if JSONSerialization.isValidJSONObject(element),
+                let raw = try? JSONSerialization.data(withJSONObject: element),
+                let record = try? Self.decoder.decode(WorktreeVMRecord.self, from: raw)
+            {
+                known.append(record)
+            } else {
+                foreign.append(element)
+            }
+        }
+        return (known, foreign)
+    }
+
+    private func quarantine() throws {
+        let corrupt = fileURL.appendingPathExtension("corrupt")
+        try? FileManager.default.removeItem(at: corrupt)
+        try FileManager.default.moveItem(at: fileURL, to: corrupt)
+    }
+
+    private func write(_ records: [WorktreeVMRecord], foreign: [Any]) throws {
+        let encoded = try JSONSerialization.jsonObject(with: Self.encoder.encode(records)) as? [Any] ?? []
+        let data = try JSONSerialization.data(
+            withJSONObject: encoded + foreign, options: [.prettyPrinted, .sortedKeys])
+        try data.write(to: fileURL, options: .atomic)
     }
 
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         return encoder
     }()
 

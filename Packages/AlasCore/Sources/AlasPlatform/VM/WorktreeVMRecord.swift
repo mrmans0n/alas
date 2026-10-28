@@ -18,10 +18,12 @@ public struct VMRunOwner: Codable, Equatable, Sendable {
         self.label = label
     }
 
-    /// The current process as an owner.
-    public static func current(label: String) -> VMRunOwner {
+    /// The current process as an owner, or nil when its start time cannot be
+    /// read (a fabricated time would make `isAlive` clear our own run).
+    public static func current(label: String) -> VMRunOwner? {
         let pid = getpid()
-        return VMRunOwner(pid: pid, processStart: startTime(of: pid) ?? Date(), label: label)
+        guard let start = startTime(of: pid) else { return nil }
+        return VMRunOwner(pid: pid, processStart: start, label: label)
     }
 
     /// True when `owner.pid` exists and started at `owner.processStart`.

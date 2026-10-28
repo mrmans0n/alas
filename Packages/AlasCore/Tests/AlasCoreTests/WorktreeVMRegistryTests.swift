@@ -31,8 +31,8 @@ import Testing
         #expect(records.first { $0.id == "B" }?.runOwner == Self.me)
     }
 
-    @Test func currentOwnerIsAliveAndBogusStartTimeIsNot() {
-        let current = VMRunOwner.current(label: "Alas")
+    @Test func currentOwnerIsAliveAndBogusStartTimeIsNot() throws {
+        let current = try #require(VMRunOwner.current(label: "Alas"))
         #expect(VMRunOwner.isAlive(current))
         var recycled = current
         recycled.processStart = Date(timeIntervalSince1970: 1)
@@ -80,5 +80,25 @@ import Testing
             try await group.waitForAll()
         }
         #expect(try first.snapshot().count == 100)
+    }
+
+    @Test func unknownRecordsSurviveUpdatesAndGarbageIsQuarantined() throws {
+        let (registry, dir) = tempRegistry()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("registry.json")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let newer = """
+            [{"id":"L","guestOS":"linux","goldenBuild":"x","bundlePath":"/l","createdAt":0,"lastUsedAt":0}]
+            """
+        try Data(newer.utf8).write(to: file)
+
+        try registry.update { $0.append(Self.record("A")) }
+        #expect(try registry.snapshot().map(\.id) == ["A"])
+        let kept = try String(contentsOf: file, encoding: .utf8)
+        #expect(kept.contains("\"linux\""))
+
+        try Data("not json {".utf8).write(to: file)
+        #expect(try registry.snapshot().isEmpty)
+        #expect(try String(contentsOf: file.appendingPathExtension("corrupt"), encoding: .utf8) == "not json {")
     }
 }
