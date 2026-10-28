@@ -49,6 +49,22 @@ struct PeerPortForwardTests {
         try await eventually { events.all.contains(.closed(stream: stream)) }
     }
 
+    @Test func anOversizedCreditIsClampedNotOverflowed() async throws {
+        let server = try await EchoServer.start()
+        defer { server.stop() }
+        let events = EventLog()
+        let port = server.port
+        let host = PeerPortForwardHost(resolve: { _ in ("127.0.0.1", port) }, send: { events.append($1) })
+        let connection = UUID()
+        let stream = UUID()
+
+        host.receive(.open(stream: stream, runID: "run"), from: connection)
+        try await eventually { events.all.contains(.opened(stream: stream)) }
+        host.receive(.credit(stream: stream, bytes: .max), from: connection)
+        host.receive(.data(stream: stream, bytes: Data("ping".utf8)), from: connection)
+        try await eventually { events.received == Data("ping".utf8) }
+    }
+
     @Test func moreThanAWindowEchoesBackInOrderWhileCreditIsReturned() async throws {
         let server = try await EchoServer.start()
         defer { server.stop() }

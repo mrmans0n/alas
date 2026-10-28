@@ -204,7 +204,7 @@ public final class PeerPortForwarder: @unchecked Sendable {
             write(bytes, to: id)
         case .credit(let id, let bytes):
             guard let stream = streams[id], bytes > 0 else { return }
-            stream.sendWindow = min(limits.window, stream.sendWindow + bytes)
+            stream.sendWindow += min(bytes, limits.window - stream.sendWindow)
             read(id, stream)
         case .closed(let id):
             // Flush what the host sent, then end the local socket.

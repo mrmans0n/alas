@@ -45,8 +45,9 @@ public final class PeerPortForwardHost: @unchecked Sendable {
     private var routes: [UUID: @Sendable (PeerPortForwardEvent) -> Void] = [:]
     private let queue = DispatchQueue(label: "io.nlopez.alas.peer-port-forward")
     private var streams: [Key: Stream] = [:]
-    /// Run sockets the Mac closed, still writing out what it sent.
-    private var draining: [Key: NWConnection] = [:]
+    /// Run sockets the Mac closed, still writing out what it sent. They count
+    /// against the caps until cancelled.
+    private var draining: [Key: (connection: NWConnection, runID: String)] = [:]
 
     /// `resolve` returns the endpoint host and port of `runID` only while it
     /// is the current active `.running` run of its worktree with a loopback
@@ -69,8 +70,8 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         for stream in streams.values {
             stream.connection?.cancel()
         }
-        for connection in draining.values {
-            connection.cancel()
+        for drain in draining.values {
+            drain.connection.cancel()
         }
     }
 
@@ -91,9 +92,9 @@ public final class PeerPortForwardHost: @unchecked Sendable {
             for key in self.streams.keys where key.connection == connectionID {
                 self.drop(key)
             }
-            for (key, connection) in self.draining where key.connection == connectionID {
+            for (key, drain) in self.draining where key.connection == connectionID {
                 self.draining[key] = nil
-                connection.cancel()
+                drain.connection.cancel()
             }
         }
     }
@@ -103,6 +104,10 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         queue.async {
             for (key, stream) in self.streams where stream.runID == runID {
                 self.close(key, refusal: Self.notRunningMessage)
+            }
+            for (key, drain) in self.draining where drain.runID == runID {
+                self.draining[key] = nil
+                drain.connection.cancel()
             }
         }
     }
@@ -116,7 +121,8 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         case .credit(let id, let bytes):
             let key = Key(connection: connectionID, stream: id)
             guard let stream = streams[key], bytes > 0 else { return }
-            stream.sendWindow = min(limits.window, stream.sendWindow + bytes)
+            // Clamped before adding, so a huge grant can't overflow.
+            stream.sendWindow += min(bytes, limits.window - stream.sendWindow)
             read(key, stream)
         case .close(let id):
             finish(Key(connection: connectionID, stream: id))
@@ -126,9 +132,9 @@ public final class PeerPortForwardHost: @unchecked Sendable {
     private func open(_ key: Key, runID: String) {
         // A reused stream id is a protocol error; the stream it names ends.
         guard streams[key] == nil else { return close(key) }
-        let own = streams.keys.count { $0.connection == key.connection }
-        let run = streams.values.count { $0.runID == runID }
-        guard streams.count < limits.maxStreamsTotal, own < limits.maxStreamsPerConnection, run < limits.maxStreamsPerRun else {
+        let own = streams.keys.count { $0.connection == key.connection } + draining.keys.count { $0.connection == key.connection }
+        let run = streams.values.count { $0.runID == runID } + draining.values.count { $0.runID == runID }
+        guard streams.count + draining.count < limits.maxStreamsTotal, own < limits.maxStreamsPerConnection, run < limits.maxStreamsPerRun else {
             return send(key.connection, .refused(stream: key.stream, message: Self.limitReachedMessage))
         }
         let stream = Stream(runID: runID, window: limits.window)
@@ -218,7 +224,7 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         guard let stream = streams[key] else { return }
         guard stream.opened, let connection = stream.connection else { return drop(key) }
         streams[key] = nil
-        draining[key] = connection
+        draining[key] = (connection, stream.runID)
         connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in
             self?.draining[key] = nil
             connection.cancel()
