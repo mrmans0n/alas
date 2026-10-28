@@ -253,6 +253,7 @@ enum ComputerUseInputPoster {
         try await checkInterrupt()
         // One last look: a drag image can come up a moment after the last move.
         await steadyPause(ComputerUseBackgroundDrag.sessionPoll)
+        try await checkInterrupt()
         if ComputerUseBackgroundDrag.startedSession(before: before, now: screenWindows(), sourcePID: pid) {
             return .dragSession
         }
