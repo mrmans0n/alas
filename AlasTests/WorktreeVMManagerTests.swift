@@ -9,23 +9,26 @@ import Virtualization
 @Suite("WorktreeVMManager")
 final class WorktreeVMManagerTests {
     private struct StopRefused: Error {}
+    private struct HypervisorFailure: Error {}
 
     @MainActor
     private final class FakeMachine: VMMachine {
         unowned let hypervisor: FakeHypervisor
         let stopFails: Bool
+        let guestStopError: Error?
         var state: VZVirtualMachine.State = .stopped
         var virtualMachine: VZVirtualMachine? { nil }
         var onGuestStop: ((Error?) -> Void)?
-        init(hypervisor: FakeHypervisor, stopFails: Bool) {
+        init(hypervisor: FakeHypervisor, stopFails: Bool, guestStopError: Error?) {
             self.hypervisor = hypervisor
             self.stopFails = stopFails
+            self.guestStopError = guestStopError
         }
         func start() async throws { state = .running }
         func requestStop() throws {
             if stopFails { throw StopRefused() }
-            state = .stopped
-            onGuestStop?(nil)
+            state = guestStopError == nil ? .stopped : .error
+            onGuestStop?(guestStopError)
         }
         func stop() async throws {
             await hypervisor.holdStopIfGated()
@@ -64,10 +67,12 @@ final class WorktreeVMManagerTests {
     }
 
     /// Boots fake machines. `bootGate` holds the next boot and `stopGate` the
-    /// next forced stop while armed.
+    /// next forced stop while armed. With `guestStopError` set, a stop request
+    /// ends with that hypervisor error instead of a clean guest shutdown.
     @MainActor
     private final class FakeHypervisor {
         var stopFails = false
+        var guestStopError: Error?
         let bootGate = Gate()
         let stopGate = Gate()
         private(set) var boots = 0
@@ -75,7 +80,8 @@ final class WorktreeVMManagerTests {
         func boot(_ worktreeID: String) async throws -> RunningVM {
             boots += 1
             await bootGate.passIfArmed()
-            let vm = RunningVM(worktreeID: worktreeID, machine: FakeMachine(hypervisor: self, stopFails: stopFails))
+            let vm = RunningVM(worktreeID: worktreeID, machine: FakeMachine(
+                hypervisor: self, stopFails: stopFails, guestStopError: guestStopError))
             try await vm.start()
             return vm
         }
@@ -235,6 +241,33 @@ final class WorktreeVMManagerTests {
         }
         #expect(hypervisor.boots == 0)
         #expect(try registry.snapshot().isEmpty)
+    }
+
+    enum GoldenLastStop: CaseIterable { case guestShutdown, forcedOff, hypervisorError, beforeLaunch }
+
+    @Test(
+        "the golden image seals only after this process saw the guest shut down cleanly",
+        arguments: GoldenLastStop.allCases)
+    func sealingNeedsAnObservedCleanShutdown(_ lastStop: GoldenLastStop) async throws {
+        let id = WorktreeVMManager.goldenIDPrefix + "25A1"
+        let manager = makeManager()
+        switch lastStop {
+        case .guestShutdown:
+            _ = try await manager.startGolden(build: "25A1")
+        case .forcedOff:
+            _ = try await manager.startGolden(build: "25A1")
+            try await #require(manager.running(id)).forceStop()
+        case .hypervisorError:
+            hypervisor.guestStopError = HypervisorFailure()
+            _ = try await manager.startGolden(build: "25A1")
+        case .beforeLaunch:
+            try addRecord(id)
+        }
+
+        let shutdown = await manager.shutDownGoldenForSealing(build: "25A1")
+
+        #expect(shutdown == (lastStop == .guestShutdown ? .clean : .forcedOff))
+        #expect(manager.running(id) == nil)
     }
 
     @Test("a golden VM running in another process blocks sealing")

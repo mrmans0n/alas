@@ -61,9 +61,11 @@ final class WorktreeVMManager {
     @ObservationIgnored private var pendingAfterBoot: [String: PendingAction] = [:]
     /// Golden builds whose VM a tab has already booted on its own once.
     @ObservationIgnored private var autoStartedGoldenBuilds: Set<String> = []
-    /// VMs whose last stop in this process pulled the power instead of
-    /// letting the guest shut down. A golden VM among them must not be sealed.
-    @ObservationIgnored private var forcedOff: Set<String> = []
+    /// VMs this process saw shut down by the guest itself, without a forced
+    /// power-off or a hypervisor error, since their last boot. Only a golden
+    /// VM among them may be sealed: anything else (a relaunch included) is no
+    /// evidence that its disk is consistent.
+    @ObservationIgnored private var cleanlyShutDown: Set<String> = []
 
     private enum PendingAction { case stop, delete }
 
@@ -312,16 +314,20 @@ final class WorktreeVMManager {
     }
 
     enum GoldenShutdown: Equatable {
-        /// The guest shut down cleanly (now or earlier): safe to seal.
+        /// This process saw the guest shut down cleanly (now or earlier): safe
+        /// to seal.
         case clean
         /// The guest did not shut down when asked; the VM is still running.
         case stillRunning
-        /// The VM was last powered off without a guest shutdown.
+        /// The VM is stopped, but there is no evidence its guest shut down
+        /// cleanly: it was forced off, stopped with an error, or stopped
+        /// before this process launched.
         case forcedOff
     }
 
     /// Asks the golden VM to shut down before sealing. Never forces it: a disk
     /// pulled from under a running macOS must not become every clone's base.
+    /// `.clean` requires having seen the guest shut down cleanly.
     func shutDownGoldenForSealing(build: String) async -> GoldenShutdown {
         let id = Self.goldenIDPrefix + build
         if starting.contains(id) { return .stillRunning }
@@ -330,7 +336,7 @@ final class WorktreeVMManager {
             // `onStopped` normally untracks it; make sure before sealing.
             didStop(id)
         }
-        return forcedOff.contains(id) ? .forcedOff : .clean
+        return cleanlyShutDown.contains(id) ? .clean : .forcedOff
     }
 
     /// Drops the golden VM's registry record once its image is sealed; it is
@@ -419,6 +425,8 @@ final class WorktreeVMManager {
         // machine on the same disk meanwhile.
         starting.insert(id)
         defer { starting.remove(id) }
+        // Whatever this VM's last stop was, booting it again voids it.
+        cleanlyShutDown.remove(id)
         let booted: Result<RunningVM, Error>
         do {
             booted = .success(try await start(id, bundle))
@@ -461,13 +469,11 @@ final class WorktreeVMManager {
                 track(vm, id: id)
                 throw VMError(message: "The VM was \(abort) while it was starting, but it could not be stopped: \(forceStopError.localizedDescription)")
             }
-            forcedOff.insert(id)
             clearOwner(id)
             if pending == .delete { removeRecordAndBundle(id) }
             if pending == .stop { throw StoppedWhileStarting() }
             throw VMError(message: "The VM was \(abort) while it was starting")
         }
-        forcedOff.remove(id)
         track(vm, id: id)
         return .running(vm)
     }
@@ -477,10 +483,11 @@ final class WorktreeVMManager {
             if let error {
                 self?.logger.error("VM \(id, privacy: .public) stopped with error: \(String(describing: error), privacy: .public)")
             }
-            if vm?.wasForcedOff == true {
-                self?.forcedOff.insert(id)
+            // A VM already released gives no evidence, so it is not clean.
+            if error == nil, vm?.wasForcedOff == false {
+                self?.cleanlyShutDown.insert(id)
             } else {
-                self?.forcedOff.remove(id)
+                self?.cleanlyShutDown.remove(id)
             }
             self?.didStop(id)
         }

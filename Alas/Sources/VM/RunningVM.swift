@@ -103,7 +103,7 @@ final class RunningVM {
     }
 
     private func waitForGuestStop(timeout: Duration) async {
-        guard machine.state != .stopped else { return }
+        guard machine.state != .stopped, machine.state != .error else { return }
         let timeoutTask = Task { [weak self] in
             try? await Task.sleep(for: timeout)
             self?.resumeStopWaiters()
