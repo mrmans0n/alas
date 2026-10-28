@@ -63,14 +63,15 @@ final class ComputerUseStopHotKey {
             return
         }
         register(binding)
-        if isTaken { onTaken?(binding) }
+        // Once per registration request, not per retry: a drive requests its binding when it
+        // starts, though a binding change mid-drive requests it again.
+        if isTaken { onTaken?(binding) } else { stopRetrying() }
     }
 
     /// Registers the requested binding again if another app held it.
     func retryIfTaken() {
         guard let requested, isTaken else { return }
         register(requested)
-        if !isTaken { stopRetrying() }
     }
 
     private var isTaken: Bool {
@@ -107,6 +108,7 @@ final class ComputerUseStopHotKey {
             return
         }
         hotKey = ref
+        stopRetrying()
         if unavailableReason != nil { unavailableReason = nil }
     }
 

@@ -93,7 +93,8 @@ extension AppState {
             guard let self, let sessionID = self.computerUse.driver?.sessionID else { return }
             Task { await self.computerUse.stop(sessionID: sessionID) }
         }
-        // Once per drive: the binding is requested again each time a drive starts.
+        // Once per registration request (`ComputerUseStopHotKey.update`), which is once per drive
+        // unless the binding changes mid-drive; retries never post.
         computerUseStopHotKey?.onTaken = { [weak self] binding in
             guard let self, let sessionID = self.computerUse.driver?.sessionID else { return }
             self.acpManager(forSession: sessionID)?.runners[sessionID]?
