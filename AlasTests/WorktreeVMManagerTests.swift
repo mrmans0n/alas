@@ -12,11 +12,15 @@ final class WorktreeVMManagerTests {
 
     @MainActor
     private final class FakeMachine: VMMachine {
+        unowned let hypervisor: FakeHypervisor
         let stopFails: Bool
         var state: VZVirtualMachine.State = .stopped
         var virtualMachine: VZVirtualMachine? { nil }
         var onGuestStop: ((Error?) -> Void)?
-        init(stopFails: Bool) { self.stopFails = stopFails }
+        init(hypervisor: FakeHypervisor, stopFails: Bool) {
+            self.hypervisor = hypervisor
+            self.stopFails = stopFails
+        }
         func start() async throws { state = .running }
         func requestStop() throws {
             if stopFails { throw StopRefused() }
@@ -24,44 +28,61 @@ final class WorktreeVMManagerTests {
             onGuestStop?(nil)
         }
         func stop() async throws {
+            await hypervisor.holdStopIfGated()
             if stopFails { throw StopRefused() }
             state = .stopped
         }
     }
 
-    /// Boots fake machines. `gateNextBoot` holds the next boot until
-    /// `releaseBoot()`; streams instead of continuations keep the handler
-    /// free of nested closures.
+    /// Holds one call until `release()`; streams instead of continuations
+    /// keep the mock handlers free of nested closures.
     @MainActor
-    private final class FakeHypervisor {
-        var stopFails = false
-        var gateNextBoot = false
+    private final class Gate {
+        var armed = false
         private let entered: AsyncStream<Void>
         private let enteredContinuation: AsyncStream<Void>.Continuation
-        private let release: AsyncStream<Void>
-        private let releaseContinuation: AsyncStream<Void>.Continuation
+        private let released: AsyncStream<Void>
+        private let releasedContinuation: AsyncStream<Void>.Continuation
 
         init() {
             (entered, enteredContinuation) = AsyncStream<Void>.makeStream()
-            (release, releaseContinuation) = AsyncStream<Void>.makeStream()
+            (released, releasedContinuation) = AsyncStream<Void>.makeStream()
         }
 
+        func passIfArmed() async {
+            guard armed else { return }
+            armed = false
+            enteredContinuation.yield()
+            for await _ in released { break }
+        }
+
+        func waitUntilHeld() async {
+            for await _ in entered { break }
+        }
+
+        func release() { releasedContinuation.yield() }
+    }
+
+    /// Boots fake machines. `bootGate` holds the next boot and `stopGate` the
+    /// next forced stop while armed.
+    @MainActor
+    private final class FakeHypervisor {
+        var stopFails = false
+        let bootGate = Gate()
+        let stopGate = Gate()
+        private(set) var boots = 0
+
         func boot(_ worktreeID: String) async throws -> RunningVM {
-            if gateNextBoot {
-                gateNextBoot = false
-                enteredContinuation.yield()
-                for await _ in release { break }
-            }
-            let vm = RunningVM(worktreeID: worktreeID, machine: FakeMachine(stopFails: stopFails))
+            boots += 1
+            await bootGate.passIfArmed()
+            let vm = RunningVM(worktreeID: worktreeID, machine: FakeMachine(hypervisor: self, stopFails: stopFails))
             try await vm.start()
             return vm
         }
 
-        func waitUntilBootIsHeld() async {
-            for await _ in entered { break }
+        func holdStopIfGated() async {
+            await stopGate.passIfArmed()
         }
-
-        func releaseBoot() { releaseContinuation.yield() }
     }
 
     private let hypervisor = FakeHypervisor()
@@ -145,21 +166,46 @@ final class WorktreeVMManagerTests {
         #expect(!FileManager.default.fileExists(atPath: bundle.path))
     }
 
-    @Test("deleting a VM while it boots stops it once booted and removes its record and bundle")
-    func deleteDuringBootLeavesNothingBehind() async throws {
+    enum BootInterruption: CaseIterable { case stop, delete }
+
+    @Test(
+        "a VM stopped or deleted while booting stays starting until it is forced off",
+        arguments: BootInterruption.allCases)
+    func interruptedBootBlocksRestartUntilForcedOff(_ interruption: BootInterruption) async throws {
         let bundle = try addRecord("/repo/a")
-        hypervisor.gateNextBoot = true
+        hypervisor.bootGate.armed = true
+        hypervisor.stopGate.armed = true
         let manager = makeManager()
         let start = Task { try await manager.startVM(worktreeID: "/repo/a") }
-        await hypervisor.waitUntilBootIsHeld()
+        await hypervisor.bootGate.waitUntilHeld()
 
-        await manager.deleteVM(worktreeID: "/repo/a")
-        hypervisor.releaseBoot()
+        switch interruption {
+        case .stop: await manager.stopVM(worktreeID: "/repo/a")
+        case .delete: await manager.deleteVM(worktreeID: "/repo/a")
+        }
+        hypervisor.bootGate.release()
+        await hypervisor.stopGate.waitUntilHeld()
 
-        await #expect(throws: WorktreeVMManager.VMError.self) { _ = try await start.value }
+        // The booted VM is being forced off: a second start must not boot
+        // another machine on the same disk.
+        #expect(manager.isStarting("/repo/a"))
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            _ = try await manager.startVM(worktreeID: "/repo/a")
+        }
+        #expect(hypervisor.boots == 1)
+
+        hypervisor.stopGate.release()
+        let error = await #expect(throws: (any Error).self) { _ = try await start.value }
         #expect(manager.running("/repo/a") == nil)
-        #expect(try registry.snapshot().isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: bundle.path))
+        switch interruption {
+        case .stop:
+            #expect(error is WorktreeVMManager.StoppedWhileStarting)
+            #expect(try registry.snapshot().first?.runOwner == nil)
+        case .delete:
+            #expect(error is WorktreeVMManager.VMError)
+            #expect(try registry.snapshot().isEmpty)
+            #expect(!FileManager.default.fileExists(atPath: bundle.path))
+        }
     }
 
     @Test("a VM that refuses to stop keeps its slot and cannot be paused for another")
@@ -176,6 +222,19 @@ final class WorktreeVMManagerTests {
         #expect(manager.running("/repo/a") != nil)
         #expect(manager.running("/repo/b") == nil)
         #expect(try registry.snapshot().first { $0.id == "/repo/a" }?.runOwner != nil)
+    }
+
+    @Test("a sealed golden image is never booted again")
+    func sealedGoldenRefusesToStart() async throws {
+        let golden = VMBundle(url: root.appendingPathComponent("golden/25A1", isDirectory: true))
+        try FileManager.default.createDirectory(at: golden.url, withIntermediateDirectories: true)
+        try Data("25A1".utf8).write(to: golden.sealedMarker)
+
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            _ = try await self.makeManager().startGolden(build: "25A1")
+        }
+        #expect(hypervisor.boots == 0)
+        #expect(try registry.snapshot().isEmpty)
     }
 
     @Test("a golden VM running in another process blocks sealing")

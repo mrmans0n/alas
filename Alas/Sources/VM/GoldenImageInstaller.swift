@@ -30,13 +30,32 @@ final class GoldenImageInstaller: ObservableObject {
 
     private let root: URL
     private let isGoldenRunning: () -> Bool
+    /// Called with the build after its bundle is sealed.
+    private let onSealed: (String) -> Void
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "golden-image-installer")
     private var installProgressObservation: NSKeyValueObservation?
 
-    init(root: URL = Paths.vmsRoot, isGoldenRunning: @escaping () -> Bool = { false }) {
+    init(
+        root: URL = Paths.vmsRoot,
+        isGoldenRunning: @escaping () -> Bool = { false },
+        onSealed: @escaping (String) -> Void = { _ in }
+    ) {
         self.root = root
         self.isGoldenRunning = isGoldenRunning
+        self.onSealed = onSealed
         phase = Self.settledPhase(in: Self.goldenRoot(in: root)) ?? .idle
+    }
+
+    /// Re-reads a settled phase from disk, which another Alas process may
+    /// have changed (sealing the golden image, say). Leaves an install in
+    /// progress or a failure message alone.
+    func reloadFromDisk() {
+        switch phase {
+        case .downloading, .installing, .failed: return
+        case .idle, .awaitingSetup, .sealed: break
+        }
+        let onDisk = Self.settledPhase(in: goldenRoot) ?? .idle
+        if onDisk != phase { phase = onDisk }
     }
 
     /// The phase an earlier launch left on disk: the newest installed golden
@@ -101,6 +120,7 @@ final class GoldenImageInstaller: ObservableObject {
             }
 
             let ipsw = try await downloadRestoreImage(from: image.url, build: build)
+            try await validateRestoreImage(at: ipsw, build: build)
 
             phase = .installing(0)
             let partial = goldenRoot.appendingPathComponent(build + Self.partialSuffix, isDirectory: true)
@@ -114,7 +134,12 @@ final class GoldenImageInstaller: ObservableObject {
                 cpuCount: max(defaults.cpus, requirements.minimumSupportedCPUCount),
                 memoryBytes: max(defaults.memory, requirements.minimumSupportedMemorySize),
                 display: .default)
-            try await install(configuration: configuration, restoreImage: ipsw)
+            do {
+                try await install(configuration: configuration, restoreImage: ipsw)
+            } catch let error as VZError where Self.restoreImageErrors.contains(error.code) {
+                discardRestoreImage(at: ipsw)
+                throw InstallerError(message: "The macOS restore image could not be installed (\(error.localizedDescription)). Click Set up to download it again.")
+            }
 
             try FileManager.default.moveItem(at: partial, to: bundleURL)
             partialBundle = nil
@@ -145,6 +170,40 @@ final class GoldenImageInstaller: ObservableObject {
         let build = bundle.url.lastPathComponent
         try Data(build.utf8).write(to: bundle.sealedMarker, options: .atomic)
         phase = .sealed(build: build)
+        onSealed(build)
+    }
+
+    /// Install errors that blame the restore image itself, so the cached
+    /// download must not be reused.
+    private static let restoreImageErrors: Set<VZError.Code> = [.restoreImageLoadFailed, .invalidRestoreImage]
+
+    /// A cached or freshly downloaded IPSW that does not load (truncated,
+    /// corrupt, or for another build) is deleted so the next Set up
+    /// downloads it again instead of failing the same way forever.
+    private func validateRestoreImage(at ipsw: URL, build: String) async throws {
+        let loadedBuild: String
+        do {
+            loadedBuild = try await withCheckedThrowingContinuation { continuation in
+                VZMacOSRestoreImage.load(from: ipsw) { result in
+                    continuation.resume(with: result.map(\.buildVersion))
+                }
+            }
+        } catch {
+            discardRestoreImage(at: ipsw)
+            throw InstallerError(message: "The downloaded macOS restore image is damaged (\(error.localizedDescription)). Click Set up to download it again.")
+        }
+        guard loadedBuild == build else {
+            discardRestoreImage(at: ipsw)
+            throw InstallerError(message: "The downloaded macOS restore image is build \(loadedBuild), not \(build). Click Set up to download it again.")
+        }
+    }
+
+    private func discardRestoreImage(at ipsw: URL) {
+        do {
+            try FileManager.default.removeItem(at: ipsw)
+        } catch {
+            logger.error("Removing restore image \(ipsw.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     /// Interrupted installs leave `<build>.partial` bundles; they are never

@@ -197,7 +197,7 @@ struct VirtualMachineTabView: View {
     @ViewBuilder
     private func goldenSetupView(build: String) -> some View {
         header("Finish macOS setup, then click Done. Create a user that logs in automatically.") {
-            Button("Done", action: finishGoldenSetup)
+            Button("Done") { finishGoldenSetup(build: build) }
                 .disabled(finishingSetup)
         }
         if let golden = vms.runningGolden() {
@@ -259,7 +259,9 @@ struct VirtualMachineTabView: View {
     // MARK: - Actions
 
     private func refresh() {
-        goldenAvailable = GoldenImageInstaller.availableGolden() != nil
+        // Another Alas process may have sealed or replaced the golden image.
+        installer.reloadFromDisk()
+        goldenAvailable = vms.availableGolden() != nil
         record = vms.recordStatus(worktreeID)
         loaded = true
     }
@@ -320,15 +322,23 @@ struct VirtualMachineTabView: View {
         Task { await vms.stopVM(worktreeID: id) }
     }
 
-    private func finishGoldenSetup() {
+    /// Seals the golden image only after macOS shut itself down; a VM that
+    /// had to be forced off may have an inconsistent disk.
+    private func finishGoldenSetup(build: String) {
         errorMessage = nil
         finishingSetup = true
         Task {
-            await vms.stopGolden()
-            do {
-                try installer.markSetupDone()
-            } catch {
-                errorMessage = error.localizedDescription
+            switch await vms.shutDownGoldenForSealing(build: build) {
+            case .clean:
+                do {
+                    try installer.markSetupDone()
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            case .stillRunning:
+                errorMessage = "Shut down macOS from the Apple menu, then click Done."
+            case .forcedOff:
+                errorMessage = "macOS was powered off without shutting down. Start it, shut down macOS from the Apple menu, then click Done."
             }
             finishingSetup = false
             refresh()

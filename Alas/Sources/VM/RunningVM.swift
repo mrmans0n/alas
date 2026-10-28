@@ -58,6 +58,9 @@ final class RunningVM {
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
     /// Set by the manager; fires once the guest has stopped by any route.
     var onStopped: ((Error?) -> Void)?
+    /// True once `forceStop()` powered the VM off rather than the guest
+    /// shutting down.
+    private(set) var wasForcedOff = false
 
     init(worktreeID: String, machine: any VMMachine) {
         self.worktreeID = worktreeID
@@ -73,20 +76,29 @@ final class RunningVM {
     /// Requests a guest shutdown and forces the VM off when the guest has not
     /// stopped within `gracefulStopTimeout` (or refuses the request).
     func stop() async throws {
-        guard machine.state != .stopped, machine.state != .error else { return }
+        guard await !stopGracefully() else { return }
+        try await forceStop()
+    }
+
+    /// Requests a guest shutdown and waits up to `gracefulStopTimeout`. True
+    /// when the VM is stopped afterwards; false leaves it running.
+    func stopGracefully() async -> Bool {
+        guard machine.state != .stopped, machine.state != .error else { return true }
         do {
             try machine.requestStop()
-            await waitForGuestStop(timeout: Self.gracefulStopTimeout)
         } catch {
-            // The guest cannot take a stop request right now: force it.
+            // The guest cannot take a stop request right now.
+            return false
         }
-        try await forceStop()
+        await waitForGuestStop(timeout: Self.gracefulStopTimeout)
+        return machine.state == .stopped || machine.state == .error
     }
 
     /// Stops the VM immediately, without asking the guest.
     func forceStop() async throws {
         guard machine.state != .stopped, machine.state != .error else { return }
         try await machine.stop()
+        wasForcedOff = true
         guestStopped(nil)
     }
 

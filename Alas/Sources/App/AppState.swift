@@ -330,7 +330,9 @@ final class AppState {
     /// The one installer; it asks `vmManager` whether a golden VM still runs
     /// in any Alas process.
     @ObservationIgnored private(set) lazy var goldenImageInstaller = GoldenImageInstaller(
-        isGoldenRunning: { [weak vmManager] in vmManager?.goldenRunsAnywhere() ?? false })
+        root: vmManager.root,
+        isGoldenRunning: { [weak vmManager] in vmManager?.goldenRunsAnywhere() ?? false },
+        onSealed: { [weak vmManager] build in vmManager?.forgetGolden(build: build) })
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {

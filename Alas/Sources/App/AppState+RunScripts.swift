@@ -168,7 +168,7 @@ extension AppState {
     /// is ready. Without one the tab offers to set it up.
     func openVirtualMachine(in worktree: Worktree) {
         guard canOpenVirtualMachine(in: worktree) else { return }
-        if GoldenImageInstaller.availableGolden() != nil {
+        if vmManager.availableGolden() != nil {
             do {
                 try vmManager.createVM(worktreeID: worktree.id)
             } catch {

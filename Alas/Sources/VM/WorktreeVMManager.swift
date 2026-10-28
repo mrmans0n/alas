@@ -45,7 +45,7 @@ final class WorktreeVMManager {
     nonisolated static let goldenIDPrefix = "golden:"
 
     @ObservationIgnored private let registry: WorktreeVMRegistry
-    @ObservationIgnored private let root: URL
+    @ObservationIgnored let root: URL
     @ObservationIgnored private let start: StartVM
     @ObservationIgnored private let ownerLabel: String
     /// True for worktrees that live on a remote host; their VM would have to
@@ -61,6 +61,9 @@ final class WorktreeVMManager {
     @ObservationIgnored private var pendingAfterBoot: [String: PendingAction] = [:]
     /// Golden builds whose VM a tab has already booted on its own once.
     @ObservationIgnored private var autoStartedGoldenBuilds: Set<String> = []
+    /// VMs whose last stop in this process pulled the power instead of
+    /// letting the guest shut down. A golden VM among them must not be sealed.
+    @ObservationIgnored private var forcedOff: Set<String> = []
 
     private enum PendingAction { case stop, delete }
 
@@ -127,6 +130,11 @@ final class WorktreeVMManager {
         autoStartedGoldenBuilds.insert(build).inserted
     }
 
+    /// The newest sealed golden image under this manager's root.
+    func availableGolden() -> VMBundle? {
+        GoldenImageInstaller.availableGolden(root: root)
+    }
+
     func isStarting(_ id: String) -> Bool {
         starting.contains(id)
     }
@@ -153,11 +161,18 @@ final class WorktreeVMManager {
         guard !isRemoteWorktree(worktreeID) else {
             throw VMError(message: "VMs are only available for worktrees on this Mac, not on a remote host")
         }
-        guard !hasVM(worktreeID) else { return }
-        guard let golden = GoldenImageInstaller.availableGolden(root: root) else {
+        // Read strictly: an unreadable registry must not pass for "no VM",
+        // or the stale-bundle cleanup below could delete a real VM.
+        guard try !(vmsExist && registry.snapshot().contains { $0.id == worktreeID }) else { return }
+        guard let golden = availableGolden() else {
             throw VMError(message: "Install and finish setting up the golden macOS image first")
         }
         let destination = Self.bundleURL(forWorktree: worktreeID, root: root)
+        // A bundle without a record is left over from an interrupted create
+        // or delete; cloning over it would fail forever.
+        if FileManager.default.fileExists(atPath: destination.path) {
+            try FileManager.default.removeItem(at: destination)
+        }
         let bundle: VMBundle
         do {
             bundle = try VMBundle.cloneForWorktree(
@@ -279,10 +294,15 @@ final class WorktreeVMManager {
 
     /// Boots the golden VM so the user can finish Setup Assistant. It takes a
     /// slot like any worktree VM.
+    /// Refuses a sealed image: worktree VMs clone its disk, so it must not
+    /// change after sealing.
     func startGolden(build: String) async throws -> VMStartOutcome {
         let id = Self.goldenIDPrefix + build
-        let bundlePath = root.appendingPathComponent("golden", isDirectory: true)
-            .appendingPathComponent(build, isDirectory: true).path
+        let bundleURL = goldenBundleURL(build: build)
+        guard !VMBundle(url: bundleURL).isSealed else {
+            throw VMError(message: "This macOS image is already set up")
+        }
+        let bundlePath = bundleURL.path
         return try await startRecorded(id: id) { records in
             guard !records.contains(where: { $0.id == id }) else { return }
             let now = Date()
@@ -291,10 +311,44 @@ final class WorktreeVMManager {
         }
     }
 
-    func stopGolden() async {
-        for id in runningVMs.keys where id.hasPrefix(Self.goldenIDPrefix) {
-            await stopVM(worktreeID: id)
+    enum GoldenShutdown: Equatable {
+        /// The guest shut down cleanly (now or earlier): safe to seal.
+        case clean
+        /// The guest did not shut down when asked; the VM is still running.
+        case stillRunning
+        /// The VM was last powered off without a guest shutdown.
+        case forcedOff
+    }
+
+    /// Asks the golden VM to shut down before sealing. Never forces it: a disk
+    /// pulled from under a running macOS must not become every clone's base.
+    func shutDownGoldenForSealing(build: String) async -> GoldenShutdown {
+        let id = Self.goldenIDPrefix + build
+        if starting.contains(id) { return .stillRunning }
+        if let vm = runningVMs[id] {
+            guard await vm.stopGracefully() else { return .stillRunning }
+            // `onStopped` normally untracks it; make sure before sealing.
+            didStop(id)
         }
+        return forcedOff.contains(id) ? .forcedOff : .clean
+    }
+
+    /// Drops the golden VM's registry record once its image is sealed; it is
+    /// never booted again.
+    func forgetGolden(build: String) {
+        let id = Self.goldenIDPrefix + build
+        guard vmsExist else { return }
+        do {
+            try registry.update { records in
+                records.removeAll { $0.id == id && $0.runOwner == nil }
+            }
+        } catch {
+            logger.error("Removing golden VM record \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    private func goldenBundleURL(build: String) -> URL {
+        root.appendingPathComponent("golden", isDirectory: true).appendingPathComponent(build, isDirectory: true)
     }
 
     // MARK: - Internals
@@ -360,15 +414,18 @@ final class WorktreeVMManager {
         case .boot(let booting): bundle = booting
         }
 
+        // `id` stays in `starting` until the VM is tracked or fully cleaned
+        // up, so no second start can reclaim the slot and boot another
+        // machine on the same disk meanwhile.
         starting.insert(id)
+        defer { starting.remove(id) }
         let booted: Result<RunningVM, Error>
         do {
             booted = .success(try await start(id, bundle))
         } catch {
             booted = .failure(error)
         }
-        starting.remove(id)
-        let pending = pendingAfterBoot.removeValue(forKey: id)
+        var pending = pendingAfterBoot.removeValue(forKey: id)
         let vm: RunningVM
         switch booted {
         case .failure(let error):
@@ -386,24 +443,48 @@ final class WorktreeVMManager {
         case nil: ownsRecord(id, me) ? nil : "removed"
         }
         if let abort {
+            var forceStopError: Error?
             do {
                 try await vm.forceStop()
             } catch {
-                logger.error("Stopping VM \(id, privacy: .public) after boot failed: \(String(describing: error), privacy: .public)")
+                forceStopError = error
             }
+            // A delete requested while it was being forced off still applies.
+            if pendingAfterBoot.removeValue(forKey: id) == .delete { pending = .delete }
+            if let forceStopError, vm.state != .stopped, vm.state != .error {
+                // Still running: keep it tracked and counted rather than
+                // losing a live VM. Its bundle stays.
+                logger.error("Stopping VM \(id, privacy: .public) after boot failed: \(String(describing: forceStopError), privacy: .public)")
+                if pending == .delete {
+                    logger.error("Not deleting VM \(id, privacy: .public): it is still running")
+                }
+                track(vm, id: id)
+                throw VMError(message: "The VM was \(abort) while it was starting, but it could not be stopped: \(forceStopError.localizedDescription)")
+            }
+            forcedOff.insert(id)
             clearOwner(id)
             if pending == .delete { removeRecordAndBundle(id) }
             if pending == .stop { throw StoppedWhileStarting() }
             throw VMError(message: "The VM was \(abort) while it was starting")
         }
-        vm.onStopped = { [weak self] error in
+        forcedOff.remove(id)
+        track(vm, id: id)
+        return .running(vm)
+    }
+
+    private func track(_ vm: RunningVM, id: String) {
+        vm.onStopped = { [weak self, weak vm] error in
             if let error {
                 self?.logger.error("VM \(id, privacy: .public) stopped with error: \(String(describing: error), privacy: .public)")
+            }
+            if vm?.wasForcedOff == true {
+                self?.forcedOff.insert(id)
+            } else {
+                self?.forcedOff.remove(id)
             }
             self?.didStop(id)
         }
         runningVMs[id] = vm
-        return .running(vm)
     }
 
     /// Whether the record still exists with this process as owner. A registry
