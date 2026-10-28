@@ -923,8 +923,7 @@ extension ComputerUseAXActions {
         let (element, warning) = try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
-            try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app, byRef: true)
+            try settle(writeOutcome(inWebArea: isWebTextEntry(element), app: app, keysReach: keysReach), app: app, byRef: true)
             // Before routing: a document's text typed as keys goes in at the caret kept here.
             focusKeepingSelection(element, app: app)
             let warning = try routeDocument(element, app: app, keysReach: keysReach)
@@ -952,8 +951,7 @@ extension ComputerUseAXActions {
         let (inWebArea, documentWarning) = try await onQueue(interrupt: interrupt) {
             let inWebArea = isWebTextEntry(element.element)
             // A Chromium web field goes as keys first, whatever its window.
-            try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app, byRef: false)
+            try settle(writeOutcome(inWebArea: inWebArea, app: app, keysReach: keysReach), app: app, byRef: false)
             return (inWebArea, try routeDocument(element.element, app: app, keysReach: keysReach))
         }
         try await insert(
@@ -987,6 +985,15 @@ extension ComputerUseAXActions {
         var names: CFArray?
         guard AXUIElementCopyAttributeNames(element, &names) == .success else { return [] }
         return (names as? [String]) ?? []
+    }
+
+    /// `ComputerUseTextCheck.outcome` before an AX write into an element of the app.
+    private static func writeOutcome(
+        inWebArea: Bool, app: ComputerUseAppIdentity, keysReach: Bool
+    ) -> ComputerUseTextCheck.Outcome {
+        ComputerUseTextCheck.outcome(
+            nil, inWebArea: inWebArea, chromium: isChromium(app), terminal: ComputerUseTextCheck.isTerminal(app),
+            keysReach: keysReach)
     }
 
     /// Whether a web page's AX read-back is untrusted in the app (`ComputerUseTextCheck.outcome`).
@@ -1370,8 +1377,7 @@ extension ComputerUseAXActions {
                 var selection: CFRange?
                 var valueBefore: String?
                 if typedSoFar == 0 {
-                    try settle(ComputerUseTextCheck.outcome(
-                        nil, inWebArea: target.inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app, byRef: byRef)
+                    try settle(writeOutcome(inWebArea: target.inWebArea, app: app, keysReach: keysReach), app: app, byRef: byRef)
                     guard target.canSetSelectedText() else { throw Unsupported(error: .attributeUnsupported) }
                     countBefore = target.characterCount()
                     selection = target.selectedRange()
@@ -1476,8 +1482,7 @@ extension ComputerUseAXActions {
     private static func setValueChecked(
         _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool, byRef: Bool
     ) throws -> String? {
-        try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app, byRef: byRef)
+        try settle(writeOutcome(inWebArea: isWebTextEntry(element), app: app, keysReach: keysReach), app: app, byRef: byRef)
         let warning = try routeDocument(element, app: app, keysReach: keysReach)
         let before = isLong(element) ? nil : textValue(of: element)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)

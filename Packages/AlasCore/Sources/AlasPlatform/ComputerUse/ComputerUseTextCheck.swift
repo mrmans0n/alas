@@ -29,12 +29,16 @@ public enum ComputerUseTextCheck {
     /// inside a web page (`inWebArea`, an `AXWebArea` ancestor) of a Chromium or Electron app
     /// (`chromium`, `ComputerUseWebContent.isChromium`) is never written by AX: its AX value can
     /// show the text while the page never got it, so a read-back there proves nothing, and keys
-    /// after a write that did reach the page would type it twice. It gets key events, or a refusal
-    /// where they don't reach the window (`keysReach`). Anywhere else, WebKit's web pages included,
-    /// a value read back unchanged gets the same, and any other verdict counts as landed.
-    public static func outcome(_ readBack: Verdict?, inWebArea: Bool, chromium: Bool, keysReach: Bool) -> Outcome {
+    /// after a write that did reach the page would type it twice. Nor is a terminal's (`terminal`,
+    /// `isTerminal`): its grid takes the AX insert and the shell never sees it, while a long
+    /// scrollback goes unread. Both get key events, or a refusal where they don't reach the window
+    /// (`keysReach`). Anywhere else, WebKit's web pages included, a value read back unchanged gets
+    /// the same, and any other verdict counts as landed.
+    public static func outcome(
+        _ readBack: Verdict?, inWebArea: Bool, chromium: Bool, terminal: Bool = false, keysReach: Bool
+    ) -> Outcome {
         let instead: Outcome = keysReach ? .typeAsKeys : .refuse
-        if inWebArea, chromium { return instead }
+        if (inWebArea && chromium) || terminal { return instead }
         switch readBack {
         case nil: return .write
         case .landed, .unknown: return .landed
@@ -66,12 +70,22 @@ public enum ComputerUseTextCheck {
         return keysReach ? .keys : .axWarned
     }
 
-    /// Terminals and code editors, whose windows are left to the AX write as before.
-    public static let keyCommandBundleIDs: Set<String> = [
-        "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
-        "net.kovidgoyal.kitty", "io.alacritty", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92",
-        "dev.zed.Zed", "com.sublimetext.4", "com.apple.dt.Xcode", "org.vim.MacVim",
+    /// Terminal emulators, whose AX text writes never reach the pty (cua-driver's list).
+    public static let terminalBundleIDs: Set<String> = [
+        "co.zeit.hyper", "com.apple.Terminal", "com.github.wez.wezterm", "com.googlecode.iterm2", "com.mitchellh.ghostty",
+        "dev.warp.Warp-Stable", "dev.zed.Zed.Helper", "io.alacritty", "net.kovidgoyal.kitty", "org.alacritty",
     ]
+
+    /// A terminal emulator (`terminalBundleIDs`): text goes in as keys, never through AX.
+    public static func isTerminal(_ app: ComputerUseAppIdentity) -> Bool {
+        terminalBundleIDs.contains(app.bundleID ?? "")
+    }
+
+    /// Terminals and code editors, whose windows are not routed as documents.
+    public static let keyCommandBundleIDs: Set<String> = terminalBundleIDs.union([
+        "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "dev.zed.Zed", "com.sublimetext.4", "com.apple.dt.Xcode",
+        "org.vim.MacVim",
+    ])
 
     /// A terminal or code editor (`keyCommandBundleIDs`, any JetBrains IDE), or any Alas build.
     public static func isKeyCommandApp(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {
