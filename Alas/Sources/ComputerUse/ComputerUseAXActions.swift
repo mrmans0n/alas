@@ -948,7 +948,8 @@ extension ComputerUseAXActions {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
             try settleWrite(inWebArea: isWebTextEntry(element), app: app, keysReach: keysReach, byRef: true)
-            try refuseLineBreak(text, element, app: app)
+            // Only after settleWrite: it sends a Chromium page\'s field and a terminal to keys, line breaks and all.
+            try routeLineBreak(text, element, app: app, keysReach: keysReach)
             // Before routing: a document's text typed as keys goes in at the caret kept here.
             focusKeepingSelection(element, app: app)
             let warning = try routeDocument(element, app: app, keysReach: keysReach)
@@ -977,7 +978,8 @@ extension ComputerUseAXActions {
             let inWebArea = isWebTextEntry(element.element)
             // A Chromium web field goes as keys first, whatever its window.
             try settleWrite(inWebArea: inWebArea, app: app, keysReach: keysReach, byRef: false)
-            try refuseLineBreak(text, element.element, app: app)
+            // Only after settleWrite: it sends a Chromium page\'s field and a terminal to keys, line breaks and all.
+            try routeLineBreak(text, element.element, app: app, keysReach: keysReach)
             return (inWebArea, try routeDocument(element.element, app: app, keysReach: keysReach))
         }
         try await insert(
@@ -1025,11 +1027,18 @@ extension ComputerUseAXActions {
         try settle(outcome, app: app, byRef: byRef)
     }
 
-    /// Refuses text with a line break for an AX write into a Chromium browser's own field, which
-    /// never submits it (`ComputerUseTextCheck.refusesLineBreak`). Call on the AX queue.
-    private static func refuseLineBreak(_ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity) throws {
-        guard ComputerUseTextCheck.refusesLineBreak(text, bundleID: app.bundleID, inWebArea: isInWebArea(element)) else { return }
-        throw ComputerUseSystemError.actionFailed(ComputerUseTextCheck.lineBreakRefusal)
+    /// Sends text with a line break for a Chromium browser's own field to keys (`Unsupported`), or
+    /// refuses it off screen (`ComputerUseTextCheck.lineBreakOutcome`). After `settleWrite`, which
+    /// already sent a page's field to keys. Call on the AX queue.
+    private static func routeLineBreak(
+        _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool
+    ) throws {
+        switch ComputerUseTextCheck.lineBreakOutcome(
+            text, bundleID: app.bundleID, inWebArea: isInWebArea(element), keysReach: keysReach) {
+        case .typeAsKeys: throw Unsupported(error: .attributeUnsupported)
+        case .refuse: throw ComputerUseSystemError.actionFailed(ComputerUseTextCheck.offScreenLineBreakRefusal(app))
+        case .write, .landed: return
+        }
     }
 
     /// Whether a web page's AX read-back is untrusted in the app (`ComputerUseTextCheck.outcome`).
@@ -1519,7 +1528,8 @@ extension ComputerUseAXActions {
         _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool, byRef: Bool
     ) throws -> String? {
         try settleWrite(inWebArea: isWebTextEntry(element), app: app, keysReach: keysReach, byRef: byRef)
-        try refuseLineBreak(text, element, app: app)
+        // Only after settleWrite: it sends a Chromium page\'s field and a terminal to keys, line breaks and all.
+        try routeLineBreak(text, element, app: app, keysReach: keysReach)
         let warning = try routeDocument(element, app: app, keysReach: keysReach)
         let before = isLong(element) ? nil : textValue(of: element)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)

@@ -46,18 +46,27 @@ public enum ComputerUseTextCheck {
         }
     }
 
-    /// Whether text with a line break is refused before an AX write into a Chromium browser's own
-    /// field (`bundleID`, `ComputerUseWebContent.chromeBundleIDs`), outside any web page
-    /// (`inWebArea`): the address bar shows the inserted text, and the line break never submits it.
-    public static func refusesLineBreak(_ text: String, bundleID: String?, inWebArea: Bool) -> Bool {
-        !inWebArea && ComputerUseWebContent.chromeBundleIDs.contains(bundleID ?? "") && text.contains(where: \.isNewline)
+    /// What text bound for an AX write comes to, for a line break into a Chromium browser's own
+    /// field (`bundleID`, `ComputerUseWebContent.chromeBundleIDs`) outside any web page
+    /// (`inWebArea`, read only when the rest applies): the address bar shows the inserted text, and
+    /// the line break never submits it. It goes as keys, Return included, or is refused where keys
+    /// don't reach the window (`keysReach`). Anything else is written (`.write`). Asked after the
+    /// write's own `outcome`, which sends a page's field in a Chromium app to keys before this.
+    public static func lineBreakOutcome(
+        _ text: String, bundleID: String?, inWebArea: @autoclosure () -> Bool, keysReach: Bool
+    ) -> Outcome {
+        guard text.contains(where: \.isNewline), ComputerUseWebContent.chromeBundleIDs.contains(bundleID ?? ""),
+              !inWebArea()
+        else { return .write }
+        return keysReach ? .typeAsKeys : .refuse
     }
 
-    /// Said for a refused line break (`refusesLineBreak`).
-    public static let lineBreakRefusal =
-        "This is the browser's own field (such as the address bar), not web content: text typed there through "
-            + "accessibility shows up, but a line break in it doesn't submit it. Nothing was typed. Type the text without "
-            + "the line break, then press Return with computer_key \"return\"."
+    /// Said for a line break refused off screen (`lineBreakOutcome`).
+    public static func offScreenLineBreakRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches it through "
+            + "accessibility, and a line break typed that way into the browser's own field (such as the address bar) "
+            + "shows up as text without submitting it. Nothing was typed. Ask the user to bring the window on screen."
+    }
 
     /// How text gets into a document, which an AX write puts in without the app's edit model: a
     /// document app (TextEdit, any NSDocument one) then doesn't mark it edited, so it neither

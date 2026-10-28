@@ -877,18 +877,23 @@ struct ComputerUseInputTests {
         #expect(ComputerUseTextCheck.terminalReplaceRefusal(app, replace: false) == nil)
     }
 
-    /// Chrome's address bar shows an AX insert but never submits its line break, so that write is
-    /// refused; a page's field, another browser and text without a line break are not.
+    /// Chrome's address bar shows an AX insert but never submits its line break, so that text goes
+    /// as keys, or is refused off screen; a page's field, another browser and text without a line
+    /// break are written as before.
     @Test(arguments: [
-        ("https://example.com\n", String?("com.google.Chrome"), false, true),
-        ("a\r", "com.brave.Browser", false, true),
-        ("https://example.com", "com.google.Chrome", false, false),
-        ("line\nbreak", "com.google.Chrome", true, false),
-        ("https://example.com\n", "com.apple.Safari", false, false),
-        ("https://example.com\n", nil, false, false),
+        ("https://example.com\n", String?("com.google.Chrome"), false, true, ComputerUseTextCheck.Outcome.typeAsKeys),
+        ("https://example.com\n", "com.google.Chrome", false, false, .refuse),
+        ("a\r", "com.brave.Browser", false, true, .typeAsKeys),
+        ("https://example.com", "com.google.Chrome", false, true, .write),
+        ("line\nbreak", "com.google.Chrome", true, true, .write),
+        ("https://example.com\n", "com.apple.Safari", false, false, .write),
+        ("https://example.com\n", nil, false, true, .write),
     ])
-    func aLineBreakIntoAChromiumBrowsersOwnFieldIsRefused(text: String, bundleID: String?, inWebArea: Bool, refused: Bool) {
-        #expect(ComputerUseTextCheck.refusesLineBreak(text, bundleID: bundleID, inWebArea: inWebArea) == refused)
+    func aLineBreakIntoAChromiumBrowsersOwnFieldGoesAsKeys(
+        text: String, bundleID: String?, inWebArea: Bool, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome
+    ) {
+        #expect(ComputerUseTextCheck.lineBreakOutcome(
+            text, bundleID: bundleID, inWebArea: inWebArea, keysReach: keysReach) == outcome)
     }
 
     @Test(arguments: [
