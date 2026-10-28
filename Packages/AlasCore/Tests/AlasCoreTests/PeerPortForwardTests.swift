@@ -36,14 +36,60 @@ struct PeerPortForwardTests {
         host.receive(.open(stream: stream, runID: "run"), from: connection)
         try await eventually { events.all.contains(.opened(stream: stream)) }
 
-        // Never returning credit stalls the echo, so the host's writes stall
-        // and the Mac's unacknowledged bytes outgrow its window.
+        // The Mac sends back to back and ignores credit. Chunks queue faster
+        // than the host's writes complete, so its unwritten bytes pass the
+        // window. Should writes keep up, the host stops reading the echo once
+        // the Mac's window is spent, the echo server stops reading, and the
+        // writes stall until they don't.
         let chunk = Data(repeating: 7, count: PeerPortForwardLimits().maxChunk)
         for _ in 0..<4096 where !events.all.contains(.closed(stream: stream)) {
             host.receive(.data(stream: stream, bytes: chunk), from: connection)
             await Task.yield()
         }
         try await eventually { events.all.contains(.closed(stream: stream)) }
+    }
+
+    @Test func moreThanAWindowEchoesBackInOrderWhileCreditIsReturned() async throws {
+        let server = try await EchoServer.start()
+        defer { server.stop() }
+        let events = EventLog()
+        let port = server.port
+        let hostBox = Mutex<PeerPortForwardHost?>(nil)
+        let uncredited = Mutex(0)
+        let connection = UUID()
+        let stream = UUID()
+        let limits = PeerPortForwardLimits()
+        let host = PeerPortForwardHost(resolve: { _ in ("127.0.0.1", port) }, send: { _, event in
+            events.append(event)
+            // Credit only once the whole window is spent, so the host must
+            // pause its reads and resume them on credit.
+            guard case .data(_, let bytes) = event else { return }
+            let credit = uncredited.withLock { pending -> Int in
+                pending += bytes.count
+                guard pending >= limits.window else { return 0 }
+                defer { pending = 0 }
+                return pending
+            }
+            if credit > 0 {
+                hostBox.withLock { $0 }?.receive(.credit(stream: stream, bytes: credit), from: connection)
+            }
+        })
+        hostBox.withLock { $0 = host }
+        let payload = Data((0..<(4 * limits.window)).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ $0 >> 9) })
+
+        host.receive(.open(stream: stream, runID: "run"), from: connection)
+        try await eventually { events.all.contains(.opened(stream: stream)) }
+        var offset = 0
+        while offset < payload.count {
+            let chunk = payload[offset..<min(offset + limits.maxChunk, payload.count)]
+            let end = offset + chunk.count
+            try await eventually { end - events.credited <= limits.window }
+            host.receive(.data(stream: stream, bytes: Data(chunk)), from: connection)
+            offset += chunk.count
+        }
+        try await eventually { events.received.count >= payload.count }
+        #expect(events.received == payload)
+        #expect(!events.all.contains(.closed(stream: stream)))
     }
 
     @Test(arguments: [
@@ -62,6 +108,14 @@ private final class EventLog: Sendable {
     private let events = Mutex<[PeerPortForwardEvent]>([])
     var all: [PeerPortForwardEvent] { events.withLock { $0 } }
     func append(_ event: PeerPortForwardEvent) { events.withLock { $0.append(event) } }
+    /// Bytes the host relayed from the run, in order.
+    var received: Data {
+        all.reduce(into: Data()) { if case .data(_, let bytes) = $1 { $0.append(bytes) } }
+    }
+    /// Bytes the host acknowledged writing.
+    var credited: Int {
+        all.reduce(0) { if case .credit(_, let bytes) = $1 { $0 + bytes } else { $0 } }
+    }
 }
 
 /// A loopback TCP echo server that reads only once its previous echo was

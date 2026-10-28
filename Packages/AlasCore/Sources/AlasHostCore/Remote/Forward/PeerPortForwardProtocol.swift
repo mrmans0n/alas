@@ -11,10 +11,14 @@ import Foundation
 /// bytes it received to its socket. A side with no window left stops reading
 /// its socket; a side that sends beyond its window loses the stream.
 public enum PeerPortForwardCapability: Sendable {
-    /// Advertised in `hello` by hosts that forward run endpoints.
+    /// Advertised in `hello` by hosts that forward run endpoints. v1 pins
+    /// `PeerPortForwardLimits`' default `window` and `maxChunk` on both ends;
+    /// changing either needs a new capability.
     public static let v1 = "host.runs.forward.v1"
 }
 
+/// `window` and `maxChunk` are part of `PeerPortForwardCapability.v1`: both
+/// ends assume the defaults, so changing them needs a new capability.
 public struct PeerPortForwardLimits: Equatable, Sendable {
     /// Unacknowledged bytes either side may send on one stream.
     public var window: Int

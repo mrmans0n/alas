@@ -13,6 +13,7 @@ public final class PeerPortForwardHost: @unchecked Sendable {
 
     public static let notRunningMessage = "This run is no longer running on the host."
     public static let limitReachedMessage = "Too many forwarded connections are open to this host."
+    public static let protocolErrorMessage = "The forwarded connection broke the forwarding protocol."
 
     private struct Key: Hashable {
         let connection: UUID
@@ -56,6 +57,12 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         self.send = send
     }
 
+    deinit {
+        for stream in streams.values {
+            stream.connection?.cancel()
+        }
+    }
+
     /// Requests from one connection must be passed in the order they arrived.
     public func receive(_ request: PeerPortForwardRequest, from connectionID: UUID) {
         queue.async { self.handle(request, from: connectionID) }
@@ -74,7 +81,7 @@ public final class PeerPortForwardHost: @unchecked Sendable {
     public func runEnded(_ runID: String) {
         queue.async {
             for (key, stream) in self.streams where stream.runID == runID {
-                self.close(key)
+                self.close(key, refusal: Self.notRunningMessage)
             }
         }
     }
@@ -177,10 +184,12 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         })
     }
 
-    private func close(_ key: Key) {
-        guard streams[key] != nil else { return }
+    /// Ends a stream. One that never opened is refused, so the Mac doesn't
+    /// wait for an `opened` that won't come.
+    private func close(_ key: Key, refusal: String = protocolErrorMessage) {
+        guard let stream = streams[key] else { return }
         drop(key)
-        send(key.connection, .closed(stream: key.stream))
+        send(key.connection, stream.opened ? .closed(stream: key.stream) : .refused(stream: key.stream, message: refusal))
     }
 
     private func drop(_ key: Key) {
