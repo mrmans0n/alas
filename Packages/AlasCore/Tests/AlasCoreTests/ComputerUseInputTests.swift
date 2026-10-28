@@ -59,6 +59,23 @@ struct ComputerUseInputTests {
         #expect(try #require(Chord.parse(text)).mayEditText == edits)
     }
 
+    /// Typed text goes as unicode key events of at most a chunk's UTF-16 units, never splitting a
+    /// character, and each line break as the Return key, which Chrome's address bar needs to submit.
+    @Test(arguments: [
+        ("url\n", 4, [ComputerUseTypedKeys.text("url"), .returnKey]),
+        ("a\r\nb\rc", 4, [.text("a"), .returnKey, .text("b"), .returnKey, .text("c")]),
+        ("\n\n", 4, [.returnKey, .returnKey]),
+        ("abcdef", 4, [.text("abcd"), .text("ef")]),
+        ("ab\ncdefg", 4, [.text("ab"), .returnKey, .text("cdef"), .text("g")]),
+        // A tab stays text; an emoji (two units) is never split.
+        ("a\tb", 4, [.text("a\tb")]),
+        ("abc😀", 4, [.text("abc"), .text("😀")]),
+    ])
+    func typedTextSplitsIntoChunksAndReturnKeys(text: String, chunkUnits: Int, pieces: [ComputerUseTypedKeys]) {
+        #expect(ComputerUseTypedKeys.split(text, chunkUnits: chunkUnits) == pieces)
+        #expect(pieces.map(\.characterCount).reduce(0, +) == text.count)
+    }
+
     /// A web field can read as focused in its page while the app's focused element is the
     /// address bar: a chord that may edit text is refused when any focused element is secure.
     @Test(arguments: [("ctrl+y", true), ("cmd+delete", true), ("shift+cmd+v", true), ("tab", false), ("return", false)])

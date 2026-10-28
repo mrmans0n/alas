@@ -419,15 +419,15 @@ enum ComputerUseInputPoster {
         ComputerUseSkyLight.post(up, pid: pid)
     }
 
-    /// Posts `text` as unicode keyboard events in chunks of at most
-    /// `textChunkUnits` UTF-16 units, never splitting a character. Between
-    /// chunks, throws `CancellationError` once `interrupt` reports `.cancelled`
-    /// and `userTookOver` with the characters typed once it reports `.userActive`.
+    /// Posts `text` as unicode keyboard events in chunks of at most `textChunkUnits` UTF-16 units,
+    /// never splitting a character, and each line break as the Return key
+    /// (`ComputerUseTypedKeys.split`). Between pieces, throws `CancellationError` once `interrupt`
+    /// reports `.cancelled` and `userTookOver` with the characters typed once it reports `.userActive`.
     static func type(_ text: String, pid: Int32, interrupt: @Sendable () -> ComputerUseInputInterrupt?) async throws {
         let source = try source()
         let total = text.count
         var typed = 0
-        for (index, chunk) in chunks(text).enumerated() {
+        for (index, piece) in ComputerUseTypedKeys.split(text, chunkUnits: textChunkUnits).enumerated() {
             if index > 0 {
                 switch interrupt() {
                 case .cancelled: throw CancellationError()
@@ -436,7 +436,11 @@ enum ComputerUseInputPoster {
                 }
                 await pause()
             }
-            typed += chunk.count
+            typed += piece.characterCount
+            guard case .text(let chunk) = piece else {
+                try postKey(CGKeyCode(kVK_Return), flags: [], pid: pid)
+                continue
+            }
             let units = Array(chunk.utf16)
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: false)
@@ -448,24 +452,6 @@ enum ComputerUseInputPoster {
             ComputerUseSkyLight.post(down, pid: pid)
             ComputerUseSkyLight.post(up, pid: pid)
         }
-    }
-
-    static func chunks(_ text: String) -> [String] {
-        var result: [String] = []
-        var current = ""
-        var units = 0
-        for character in text {
-            let count = character.utf16.count
-            if units + count > textChunkUnits, !current.isEmpty {
-                result.append(current)
-                current = ""
-                units = 0
-            }
-            current.append(character)
-            units += count
-        }
-        if !current.isEmpty { result.append(current) }
-        return result
     }
 
     static func flags(for modifiers: Set<ComputerUseKeyChord.Modifier>) -> CGEventFlags {

@@ -80,3 +80,47 @@ public struct ComputerUseKeyChord: Equatable, Sendable {
         }
     }
 }
+
+/// Text typed as key events, cut into what each event carries.
+public enum ComputerUseTypedKeys: Equatable, Sendable {
+    /// A unicode string on one key event: at most the chunk's UTF-16 units, never a split character.
+    case text(String)
+    /// The Return key, for a line break: some fields (Chrome's address bar) take a line break
+    /// carried as a unicode string as nothing, while Return submits them.
+    case returnKey
+
+    /// `text` as key events: `\n`, `\r` and `\r\n` (one character) each as `returnKey`, the rest
+    /// in chunks of at most `chunkUnits` UTF-16 units, never splitting a character. Tabs and other
+    /// separators stay text.
+    public static func split(_ text: String, chunkUnits: Int) -> [Self] {
+        var result: [Self] = []
+        var current = ""
+        var units = 0
+        func flush() {
+            if !current.isEmpty { result.append(.text(current)) }
+            current = ""
+            units = 0
+        }
+        for character in text {
+            if character == "\n" || character == "\r" || character == "\r\n" {
+                flush()
+                result.append(.returnKey)
+                continue
+            }
+            let count = character.utf16.count
+            if units + count > chunkUnits { flush() }
+            current.append(character)
+            units += count
+        }
+        flush()
+        return result
+    }
+
+    /// The characters this piece types, for "typed N of M" counts.
+    public var characterCount: Int {
+        switch self {
+        case .text(let text): text.count
+        case .returnKey: 1
+        }
+    }
+}
