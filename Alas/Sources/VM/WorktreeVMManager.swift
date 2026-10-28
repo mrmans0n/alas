@@ -26,6 +26,19 @@ final class WorktreeVMManager {
         var errorDescription: String? { message }
     }
 
+    /// The VM was stopped on request before its boot finished. Not a failure:
+    /// callers show the VM as stopped.
+    struct StoppedWhileStarting: LocalizedError {
+        var errorDescription: String? { "The VM was stopped while it was starting" }
+    }
+
+    /// What the registry says about one worktree's VM.
+    struct RecordStatus: Equatable {
+        var hasVM = false
+        /// Label of the other Alas process running it, if any.
+        var runningElsewhere: String?
+    }
+
     typealias StartVM = (_ worktreeID: String, _ bundle: VMBundle) async throws -> RunningVM
 
     /// Registry ids at or under this prefix are golden VMs, not worktrees.
@@ -46,6 +59,8 @@ final class WorktreeVMManager {
     /// Stop or delete requests for VMs that were still booting, honoured once
     /// the boot returns.
     @ObservationIgnored private var pendingAfterBoot: [String: PendingAction] = [:]
+    /// Golden builds whose VM a tab has already booted on its own once.
+    @ObservationIgnored private var autoStartedGoldenBuilds: Set<String> = []
 
     private enum PendingAction { case stop, delete }
 
@@ -91,6 +106,25 @@ final class WorktreeVMManager {
 
     func running(_ worktreeID: String) -> RunningVM? {
         runningVMs[worktreeID]
+    }
+
+    /// One registry read for a VM tab: whether the worktree has a VM and
+    /// which other process, if any, runs it.
+    func recordStatus(_ worktreeID: String) -> RecordStatus {
+        guard vmsExist, let record = (try? registry.snapshot())?.first(where: { $0.id == worktreeID }) else {
+            return RecordStatus()
+        }
+        let me = VMRunOwner.current(label: ownerLabel)
+        let elsewhere = record.runOwner.flatMap { owner in
+            me.map(owner.isSameProcess(as:)) == true ? nil : owner.label
+        }
+        return RecordStatus(hasVM: true, runningElsewhere: elsewhere)
+    }
+
+    /// True the first time it is asked for `build`, so the golden VM boots by
+    /// itself once per setup rather than every time a VM tab appears.
+    func claimGoldenAutoStart(build: String) -> Bool {
+        autoStartedGoldenBuilds.insert(build).inserted
     }
 
     func isStarting(_ id: String) -> Bool {
@@ -359,6 +393,7 @@ final class WorktreeVMManager {
             }
             clearOwner(id)
             if pending == .delete { removeRecordAndBundle(id) }
+            if pending == .stop { throw StoppedWhileStarting() }
             throw VMError(message: "The VM was \(abort) while it was starting")
         }
         vm.onStopped = { [weak self] error in

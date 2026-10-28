@@ -36,6 +36,15 @@ final class GoldenImageInstaller: ObservableObject {
     init(root: URL = Paths.vmsRoot, isGoldenRunning: @escaping () -> Bool = { false }) {
         self.root = root
         self.isGoldenRunning = isGoldenRunning
+        phase = Self.settledPhase(in: Self.goldenRoot(in: root)) ?? .idle
+    }
+
+    /// The phase an earlier launch left on disk: the newest installed golden
+    /// is either sealed or still awaiting setup. Nil when none is installed.
+    private nonisolated static func settledPhase(in goldenRoot: URL) -> Phase? {
+        guard let newest = goldenBundles(in: goldenRoot).last else { return nil }
+        let build = newest.url.lastPathComponent
+        return newest.isSealed ? .sealed(build: build) : .awaitingSetup(build: build)
     }
 
     private nonisolated static func goldenRoot(in root: URL) -> URL {
@@ -67,6 +76,12 @@ final class GoldenImageInstaller: ObservableObject {
         switch phase {
         case .downloading, .installing: return
         default: break
+        }
+        // An installed golden still awaiting setup is resumed, never replaced
+        // by a newer download that would orphan it.
+        if case .awaitingSetup(let build)? = Self.settledPhase(in: goldenRoot) {
+            phase = .awaitingSetup(build: build)
+            return
         }
         phase = .downloading(0)
         var partialBundle: URL?

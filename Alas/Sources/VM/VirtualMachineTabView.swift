@@ -10,7 +10,7 @@ struct VirtualMachineTabView: View {
 
     /// Registry and disk facts, read on appear and after actions rather than
     /// on every render: reading the registry takes a file lock.
-    @State private var hasVM = false
+    @State private var record = WorktreeVMManager.RecordStatus()
     @State private var goldenAvailable = false
     @State private var loaded = false
 
@@ -42,10 +42,6 @@ struct VirtualMachineTabView: View {
         }
     }
 
-    /// Thrown when Stop is pressed while the VM boots; the Stopped screen
-    /// already says what happened.
-    private static let stoppedWhileStartingMessage = "The VM was stopped while it was starting"
-
     init(state: AppState, tab: VirtualMachineTabState) {
         self.state = state
         self.tab = tab
@@ -54,6 +50,19 @@ struct VirtualMachineTabView: View {
 
     private var vms: WorktreeVMManager { state.vmManager }
     private var worktreeID: String { tab.ownerKey }
+
+    private var screen: VMTabScreen {
+        VMTabScreen.resolve(
+            runningHere: vms.running(worktreeID) != nil,
+            startingHere: vms.isStarting(worktreeID),
+            slotChoice: choice?.candidates,
+            runningElsewhere: elsewhere?.label ?? record.runningElsewhere,
+            loaded: loaded,
+            hasVM: record.hasVM,
+            goldenAvailable: goldenAvailable,
+            installerPhase: installer.phase
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -73,15 +82,13 @@ struct VirtualMachineTabView: View {
             VStack(spacing: 0) { content }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .task { refresh() }
-        .onChange(of: installer.phase) { _, _ in refresh() }
         .task(id: awaitingSetupBuild) {
-            guard let build = awaitingSetupBuild,
-                  vms.runningGolden() == nil,
-                  !vms.isStarting(StartTarget.golden(build: build).id)
-            else { return }
-            start(.golden(build: build))
+            refresh()
+            autoStartGoldenOnce()
         }
+        // Progress ticks change the phase constantly; only a change of kind
+        // can change what the registry or disk say.
+        .onChange(of: phaseKind) { _, _ in refresh() }
     }
 
     private var awaitingSetupBuild: String? {
@@ -89,14 +96,26 @@ struct VirtualMachineTabView: View {
         return nil
     }
 
+    private var phaseKind: String {
+        switch installer.phase {
+        case .idle: "idle"
+        case .downloading: "downloading"
+        case .installing: "installing"
+        case .awaitingSetup(let build): "awaiting:\(build)"
+        case .sealed(let build): "sealed:\(build)"
+        case .failed: "failed"
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
-        if let running = vms.running(worktreeID) {
+        switch screen {
+        case .running:
             header("Running") {
                 Button("Stop") { stop(worktreeID) }
             }
-            VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: running.vm)
-        } else if vms.isStarting(worktreeID) {
+            VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: vms.running(worktreeID)?.vm)
+        case .starting:
             ContentUnavailableView {
                 Label("Starting VM", systemImage: "desktopcomputer")
             } description: {
@@ -104,28 +123,28 @@ struct VirtualMachineTabView: View {
             } actions: {
                 Button("Stop") { stop(worktreeID) }
             }
-        } else if let choice {
-            choiceView(choice)
-        } else if let elsewhere {
+        case .slotChoice:
+            if let choice { choiceView(choice) }
+        case .runningElsewhere(let label):
             ContentUnavailableView {
-                Label("Running in another Alas (\(elsewhere.label))", systemImage: "desktopcomputer")
+                Label("Running in another Alas (\(label))", systemImage: "desktopcomputer")
             } actions: {
-                Button("Start") { start(elsewhere.target) }
+                Button("Start") { start(elsewhere?.target ?? .worktree(worktreeID)) }
             }
-        } else if let build = awaitingSetupBuild {
+        case .goldenSetup(let build):
             goldenSetupView(build: build)
-        } else if !loaded {
+        case .loading:
             ProgressView().controlSize(.small)
-        } else if installerIsBusy || !goldenAvailable {
+        case .setup:
             setupView
-        } else if !hasVM {
+        case .createVM:
             ContentUnavailableView {
                 Label("No VM for this worktree", systemImage: "desktopcomputer")
             } actions: {
                 Button("Create VM", action: createVM)
                     .buttonStyle(.borderedProminent)
             }
-        } else {
+        case .stopped:
             ContentUnavailableView {
                 Label("Stopped", systemImage: "desktopcomputer")
             } actions: {
@@ -241,8 +260,19 @@ struct VirtualMachineTabView: View {
 
     private func refresh() {
         goldenAvailable = GoldenImageInstaller.availableGolden() != nil
-        hasVM = vms.hasVM(worktreeID)
+        record = vms.recordStatus(worktreeID)
         loaded = true
+    }
+
+    /// Boots the golden VM by itself once per setup; afterwards the Start
+    /// button does.
+    private func autoStartGoldenOnce() {
+        guard case .goldenSetup(let build) = screen,
+              vms.runningGolden() == nil,
+              !vms.isStarting(StartTarget.golden(build: build).id),
+              vms.claimGoldenAutoStart(build: build)
+        else { return }
+        start(.golden(build: build))
     }
 
     private func createVM() {
@@ -277,10 +307,10 @@ struct VirtualMachineTabView: View {
                         choice = SlotChoice(target: target, candidates: candidates)
                     }
                 }
+            } catch is WorktreeVMManager.StoppedWhileStarting {
+                // Stop was pressed during boot; the Stopped screen says so.
             } catch {
-                if error.localizedDescription != Self.stoppedWhileStartingMessage {
-                    errorMessage = error.localizedDescription
-                }
+                errorMessage = error.localizedDescription
             }
             refresh()
         }
