@@ -280,6 +280,23 @@ pub enum Command {
     Resolve,
 }
 
+/// The keys a drag may hold, as the app names them (`ComputerUseKeyChord.Modifier`).
+pub const COMPUTER_DRAG_MODIFIERS: [&str; 4] = ["command", "option", "control", "shift"];
+
+/// `names` when each is a drag modifier and none repeats.
+pub fn computer_drag_modifiers<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+) -> Option<Vec<String>> {
+    let mut modifiers: Vec<String> = Vec::new();
+    for name in names {
+        if !COMPUTER_DRAG_MODIFIERS.contains(&name) || modifiers.iter().any(|seen| seen == name) {
+            return None;
+        }
+        modifiers.push(name.to_string());
+    }
+    Some(modifiers)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ComputerCommand {
     /// `call_id` lets a later `Cancel` find the call in the app; the MCP
@@ -340,6 +357,8 @@ pub enum ComputerCommand {
         /// The window `to` is in, when it isn't `window_id`.
         to_window_id: Option<u32>,
         to: ComputerTarget,
+        /// Keys held for the whole drag, from `COMPUTER_DRAG_MODIFIERS`, each at most once.
+        modifiers: Vec<String>,
         direct: bool,
         post: ComputerPost,
         call_id: Option<String>,
@@ -1024,6 +1043,7 @@ fn computer_request(command: &ComputerCommand) -> Request {
             from,
             to_window_id,
             to,
+            modifiers,
             direct,
             post,
             ..
@@ -1037,6 +1057,12 @@ fn computer_request(command: &ComputerCommand) -> Request {
                 );
             }
             insert_target(&mut params, to, "to_ref", "to_x", "to_y");
+            if !modifiers.is_empty() {
+                params.insert(
+                    "modifiers".into(),
+                    serde_json::Value::from(modifiers.clone()),
+                );
+            }
             insert_direct(&mut params, *direct);
             insert_post(&mut params, post);
             "computer_drag"
@@ -1370,6 +1396,20 @@ pub enum TransportError {
 /// bounded the same way, while keeping a wedged app from hanging the shell
 /// forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `computer_*` calls may wait on the user's approval prompt the first time
+/// an app is used (up to the app's 50-second approval wait), so they get
+/// longer than [`READ_TIMEOUT`]. The app cancels a computer call whose client
+/// closes the connection, so giving up sooner would cancel an approved call.
+pub const COMPUTER_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long `dispatch` waits for the reply to `command`.
+pub fn read_timeout(command: &Command) -> Duration {
+    match command {
+        Command::Computer(_) => COMPUTER_READ_TIMEOUT,
+        _ => READ_TIMEOUT,
+    }
+}
 const MAX_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
 
 /// Bound on how long a single non-mutating `resolve` probe (used to find the
@@ -1496,7 +1536,8 @@ pub fn dispatch(command: &Command, target: &Target) -> Result<Response, Dispatch
         Target::Session { socket, session_id } => {
             let cwd = absolutize(&logical_base(), ".");
             let req = build_session_request(command, session_id.clone(), cwd);
-            send(Path::new(socket), &req).map_err(DispatchError::Transport)
+            send_with_timeout(Path::new(socket), &req, read_timeout(command))
+                .map_err(DispatchError::Transport)
         }
         Target::Directory { .. } => {
             let sockets = discover_live_sockets();
@@ -1522,7 +1563,7 @@ pub fn dispatch_to_sockets(
         return match sockets {
             [socket] => {
                 let req = build_request(command, None, Some(cwd.clone()));
-                send(socket, &req).map_err(DispatchError::Transport)
+                send_with_timeout(socket, &req, read_timeout(command)).map_err(DispatchError::Transport)
             }
             _ => Err(DispatchError::Ambiguous),
         };
@@ -1564,7 +1605,8 @@ pub fn dispatch_to_sockets(
         0 => Err(DispatchError::NotInWorktree),
         1 => {
             let req = build_request(command, None, Some(cwd.clone()));
-            send(&owners[0], &req).map_err(DispatchError::Transport)
+            send_with_timeout(&owners[0], &req, read_timeout(command))
+                .map_err(DispatchError::Transport)
         }
         _ => Err(DispatchError::Ambiguous),
     }
@@ -2210,6 +2252,13 @@ mod tests {
     }
 
     #[test]
+    fn computer_calls_outwait_the_approval_card() {
+        let apps = Command::Computer(ComputerCommand::Apps { call_id: None });
+        assert_eq!(read_timeout(&apps), COMPUTER_READ_TIMEOUT);
+        assert_eq!(read_timeout(&Command::Resolve), READ_TIMEOUT);
+    }
+
+    #[test]
     fn computer_commands_serialize_as_versioned_params_only_requests() {
         let shot = build_request(
             &Command::Computer(ComputerCommand::Screenshot {
@@ -2277,6 +2326,7 @@ mod tests {
                 from: ComputerTarget::Point { x: 10.5, y: 20.0 },
                 to_window_id: Some(9),
                 to: ComputerTarget::Ref("e3".into()),
+                modifiers: vec!["option".into(), "command".into()],
                 direct: true,
                 post: ComputerPost::default(),
                 call_id: None,
@@ -2288,7 +2338,7 @@ mod tests {
         assert_eq!(
             drag.params,
             Some(
-                serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_window_id": 9, "to_ref": "e3", "delivery": "direct" })
+                serde_json::json!({ "window_id": 7, "x": 10.5, "y": 20.0, "to_window_id": 9, "to_ref": "e3", "modifiers": ["option", "command"], "delivery": "direct" })
             )
         );
 

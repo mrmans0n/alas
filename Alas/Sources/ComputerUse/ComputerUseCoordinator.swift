@@ -127,6 +127,9 @@ final class ComputerUseCoordinator {
         var refs: [String: ElementRef] = [:]
         var handles = ComputerUseAXHandles()
         var lastScreenshot: (frame: CGRect, scale: CGFloat)?
+        /// A read of the window showed web content, a recorded one or not (the read before an
+        /// input counts): a later read without it lacks it (`ComputerUseWebContent.mayLackContent`).
+        var showedWebContent = false
     }
 
     /// An element as read: an action re-checks it before using the handle, since an app may
@@ -141,6 +144,10 @@ final class ComputerUseCoordinator {
         /// The frame of its nearest scroll area at read time, window-relative too, which clips
         /// where pointer input lands on it.
         var localScrollArea: CGRect?
+        /// Its depth in the window's tree, and whether it is a list or table row or inside one,
+        /// for `ComputerUseBackgroundDrag.startsInItem`.
+        var depth = 0
+        var inRow = false
         /// Listed to the agent at some point: a later read that doesn't list it must still find
         /// the element the agent saw there, not whatever took its place.
         var shown: Bool
@@ -366,6 +373,10 @@ final class ComputerUseCoordinator {
         static let userActiveElsewhere = "computer_user_active: You're using the Mac right now. Try again in a moment."
         static func userTookOver(_ app: ComputerUseAppIdentity, typed: Int, of total: Int) -> String {
             "computer_user_active: The user started using \(app.name); stopped after typing \(typed) of \(total) characters."
+        }
+        static func userHoldsKeys(_ keys: String) -> String {
+            let (verb, pronoun) = keys.contains(" and ") ? ("are", "them") : ("is", "it")
+            return "computer_user_active: \(keys) \(verb) held down; release \(pronoun) and try again."
         }
         static let userTookOverDrag =
             "computer_user_active: You started using the Mac, so the drag was cancelled mid-way; nothing was dropped."
@@ -745,7 +756,7 @@ final class ComputerUseCoordinator {
         case .scroll(let at, _, _): (kind, target) = (.scroll, at)
         case .type(_, let at, _): (kind, target) = (.type, at)
         case .key: (kind, target) = (.key, nil)
-        case .drag(let from, _, _): (kind, target) = (.drag, from)
+        case .drag(let from, _, _, _): (kind, target) = (.drag, from)
         }
         var point: CGPoint?
         if case .point(let at) = target { point = at }
@@ -998,7 +1009,6 @@ final class ComputerUseCoordinator {
         var window = window
         var toWindow = toWindow
         var input = try input(for: command, in: window, toWindow: toWindow, context: context)
-        let direct = Self.deliversDirect(command)
         // What the window looked like, so an input the app ignored doesn't pass for one that worked.
         // Read first, so the takeover wait and the ref re-check are the last steps before the input.
         var target: (ComputerUseAXHandles, Int)?
@@ -1011,6 +1021,12 @@ final class ComputerUseCoordinator {
         // A drop into another window may change only that one.
         var beforeEnd: ComputerUseWindowFingerprint?
         if let toWindow { beforeEnd = await fingerprint(of: toWindow, for: command, target: nil, context: context) }
+        // After the read: it is what asks an Electron app for its tree, which marks it as one.
+        let direct = Self.deliversDirect(
+            command, input: input, in: window, toWindow: toWindow, displays: system.displays(),
+            startsInItem: startsInItem(command, input: input, in: window, context: context),
+            chromium: ComputerUseWebContent.isChromium(
+                bundleID: window.app.bundleID, acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid)))
         try checkStillActive(context)
         // The cursor moves before the takeover wait. Its pointer is window-local, so a remap after
         // the wait still lands under it.
@@ -1032,7 +1048,7 @@ final class ComputerUseCoordinator {
         let delivered = try await deliver(input, of: command, to: window, toWindow: toWindow, direct: direct, context: context)
         // Parked where the drop landed, over the window it landed in. Cosmetic once the drop is
         // delivered: skipped when the call was stopped meanwhile, and the settle's check decides.
-        if case .drag(_, .point(let drop), _) = input, (try? checkStillActive(context)) != nil {
+        if case .drag(_, .point(let drop), _, _) = input, (try? checkStillActive(context)) != nil {
             try? await moveCursor(.jump(to: drop, outline: nil, click: false), over: toWindow ?? window, context: context)
         }
         if command.action == .drag { try await refuseIfDragMovedWindow(window) }
@@ -1145,27 +1161,45 @@ final class ComputerUseCoordinator {
     }
 
     /// Delivers the input, mapping its failures to the tool errors that name the ref and window.
+    /// An input that brought its app to the front reports `activation`, whatever tier it went by.
     private func deliver(
         _ input: ComputerUseInput, of command: ComputerUseCommand, to window: ComputerUseWindow,
         toWindow: ComputerUseWindow?, direct: Bool, context: CallContext
     ) async throws -> ComputerUseDelivered {
         do {
-            return try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
-        } catch ComputerUseSystemError.staleElement {
-            guard let ref = command.ref else { throw ComputerUseSystemError.actionFailed("The element is no longer valid.") }
-            throw Refusal(Message.stale(ref, windowID: window.windowID))
-        } catch ComputerUseSystemError.staleDropElement {
-            throw Refusal(Message.stale(command.toRef ?? "", windowID: (toWindow ?? window).windowID))
-        } catch ComputerUseSystemError.outOfBounds {
-            throw Refusal(Message.outOfBounds(window.windowID))
-        } catch ComputerUseSystemError.dropOutOfBounds {
-            throw Refusal(Message.outOfBounds((toWindow ?? window).windowID))
-        } catch ComputerUseSystemError.userActive {
-            throw Refusal(userActiveMessage(window))
-        } catch ComputerUseSystemError.userTookOver(let typed, let total) {
-            throw Refusal(Message.userTookOver(window.app, typed: typed, of: total))
-        } catch ComputerUseSystemError.userTookOverDrag {
-            throw Refusal(Message.userTookOverDrag)
+            let frontmostBefore = system.isFrontmost(window.app.pid)
+            var delivered = try await deliver(input, to: window, direct: direct, sessionID: context.sessionID)
+            if ComputerUseTakeover.broughtForward(
+                activated: delivered.delivery == .activation, frontmostBefore: frontmostBefore,
+                frontmostAfter: system.isFrontmost(window.app.pid)) {
+                delivered.delivery = .activation
+            }
+            return delivered
+        } catch let error as ComputerUseSystemError {
+            throw deliveryFailure(error, of: command, to: window, toWindow: toWindow)
+        }
+    }
+
+    /// The tool error for a failed delivery. One that came after the app was brought to the front
+    /// (`broughtForward`) reads as it would otherwise, with the note after it.
+    private func deliveryFailure(
+        _ error: ComputerUseSystemError, of command: ComputerUseCommand, to window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?
+    ) -> any Error {
+        switch error {
+        case .broughtForward(let error, let note):
+            return Refusal(Self.message(for: deliveryFailure(error, of: command, to: window, toWindow: toWindow)) + note)
+        case .staleElement:
+            guard let ref = command.ref else { return ComputerUseSystemError.actionFailed("The element is no longer valid.") }
+            return Refusal(Message.stale(ref, windowID: window.windowID))
+        case .staleDropElement: return Refusal(Message.stale(command.toRef ?? "", windowID: (toWindow ?? window).windowID))
+        case .outOfBounds: return Refusal(Message.outOfBounds(window.windowID))
+        case .dropOutOfBounds: return Refusal(Message.outOfBounds((toWindow ?? window).windowID))
+        case .userActive: return Refusal(userActiveMessage(window))
+        case .userTookOver(let typed, let total): return Refusal(Message.userTookOver(window.app, typed: typed, of: total))
+        case .userTookOverDrag: return Refusal(Message.userTookOverDrag)
+        case .userHoldsKeys(let keys): return Refusal(Message.userHoldsKeys(keys))
+        default: return error
         }
     }
 
@@ -1197,8 +1231,15 @@ final class ComputerUseCoordinator {
     private struct Settled {
         var warning: String?
         var after: ComputerUseWindowFingerprint?
-        /// The start window's own elements changed (`ComputerUseChangeCheck.elementsChanged`).
-        var startChanged = true
+        /// The drop window read back after a drag into another window, nil when it wasn't.
+        var endAfter: ComputerUseWindowFingerprint?
+    }
+
+    /// Said after a front drag whose drop window (the start window, for a drag inside one) shows
+    /// another title than before it: an item it hovered over may have opened.
+    private static func titleChangeNote(before: String?, after: String?) -> String? {
+        guard let before, let after, !before.isEmpty, !after.isEmpty, before != after else { return nil }
+        return "\"\(before)\" now shows \"\(after)\": something the drag hovered over may have opened."
     }
 
     private static func joined(_ warnings: String?...) -> String? {
@@ -1220,10 +1261,44 @@ final class ComputerUseCoordinator {
         payload["warning"] = [warning, hint].compactMap { $0 }.joined(separator: " ")
     }
 
-    /// Drags always go with the app brought to the front, so the direct takeover rule applies to
-    /// them: refused while the user is active, rather than waited out.
-    static func deliversDirect(_ command: ComputerUseCommand) -> Bool {
-        command.delivery == .direct || command.action == .drag
+    /// Whether a drag starts on a list or table item, as the agent's latest read of the window
+    /// shows it: the ref's element, or the deepest read elements at the point. No new read.
+    private func startsInItem(
+        _ command: ComputerUseCommand, input: ComputerUseInput, in window: ComputerUseWindow, context: CallContext
+    ) -> Bool {
+        guard case .drag(let from, _, _, _) = input, let snapshot = snapshot(of: window, context: context) else { return false }
+        if let ref = command.ref { return snapshot.refs[ref]?.inRow ?? false }
+        guard case .point(let point) = from else { return false }
+        let elements = snapshot.refs.values.map {
+            ComputerUseBackgroundDrag.ReadElement(frame: $0.frame(in: window), depth: $0.depth, inRow: $0.inRow)
+        }
+        return ComputerUseBackgroundDrag.startsInItem(at: point, elements: elements)
+    }
+
+    /// A drag between two on-screen points goes inside the app in the background, under a
+    /// background click's takeover rule, unless `ComputerUseBackgroundDrag.route` sends it to the
+    /// front: into another window, from a list or table item (`startsInItem`), or in a Chromium
+    /// or Electron app (`chromium`). One in a parked window goes with the app brought to the
+    /// front too, so the direct takeover rule applies to it: refused while the user is active,
+    /// rather than waited out. A ref's point counts as on screen with its window. The system's
+    /// in-app drag decides with the same `route`.
+    static func deliversDirect(
+        _ command: ComputerUseCommand, input: ComputerUseInput, in window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?, displays: [CGRect], startsInItem: Bool, chromium: Bool
+    ) -> Bool {
+        if command.delivery == .direct { return true }
+        guard case .drag(let from, let to, _, _) = input else { return false }
+        func onScreen(_ target: ComputerUseInputTarget, in window: ComputerUseWindow) -> Bool {
+            switch target {
+            case .point(let point): ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays)
+            case .element: ComputerUseInputGeometry.frameIsOnScreen(window.frame, displays: displays)
+            }
+        }
+        let route = ComputerUseBackgroundDrag.route(
+            startOnScreen: onScreen(from, in: window), endOnScreen: onScreen(to, in: toWindow ?? window),
+            crossWindow: toWindow.map { $0.windowID != window.windowID } ?? false, startsInItem: startsInItem,
+            chromium: chromium, direct: false)
+        return route == .foreground
     }
 
     /// An AX press may only focus an element in an app that builds its tree on request (Electron):
@@ -1267,30 +1342,55 @@ final class ComputerUseCoordinator {
                 // The action may have moved or resized the window; the read matches it by its frame.
                 window = try await currentWindow(window)
                 read = try await readElements(
-                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
+                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
+                    forChangeCheck: true)
             } catch ComputerUseSystemError.appNotResponding {
                 // An app still busy with what the input opened (a sheet sliding in) answers a moment later.
                 await sleep(Self.postReadRetryDelay)
                 try checkStillActive(context)
                 window = try await currentWindow(window)
                 read = try await readElements(
-                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
+                    window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
+                    forChangeCheck: true)
             }
             var verdict = try await check(
                 read, of: window, after: delivered, of: command, target: target, before: before, end: end,
                 context: context, payload: &payload)
+            var titleNote: String?
             if command.action == .drag {
                 // Finder and others show a drop a moment later: a drag that seems to have changed
                 // nothing is read again until it shows, or the deadline passes. Slow reads count too.
                 let clock = ContinuousClock()
                 let start = clock.now
                 var slept = Duration.zero
-                // A drop into another window may show there first: the start window, which the result
-                // lists, is read until it shows the drop too (a moved file leaves it).
                 // Once a read showed the drop, a later one that shows nothing new doesn't undo it.
                 var dropped = verdict.warning == nil
-                while !dropped || (end != nil && !verdict.startChanged), slept < Self.dragConfirmDeadline,
-                      clock.now - start < Self.dragConfirmDeadline {
+                // A drag in the front is read until two reads of each window agree: the selection
+                // its press flashed shows as a change before the app moves what was dropped, and a
+                // drop into another window may show there before the source (which the result
+                // lists) refreshes. A background drag stays in one window.
+                let foreground = delivered.delivery == .activation
+                var previous: Settled?
+                // Chrome rebuilds a web tree a couple of seconds after input: once a read of either
+                // window came back without it, the re-reads get longer.
+                var webContentMissing = false
+                func noteWebContent() {
+                    let cut = ComputerUseReadCut.webContentMissing.rawValue
+                    let dropCut = (payload["to_window"] as? [String: Any])?["truncated_by"] as? String
+                    if read.truncatedBy == cut || dropCut == cut { webContentMissing = true }
+                }
+                noteWebContent()
+                func settled() -> Bool {
+                    guard let previous else { return false }
+                    // A drop window read cut short, or not read, can't show the app is done either.
+                    return ComputerUseBackgroundDrag.readsSettled(previous: previous.after, current: verdict.after)
+                        && (end == nil
+                            || ComputerUseBackgroundDrag.readsSettled(previous: previous.endAfter, current: verdict.endAfter))
+                }
+                while ComputerUseBackgroundDrag.keepsPolling(
+                    dropped: dropped, sessionActive: system.dragSessionActive(window.app.pid), foreground: foreground,
+                    settled: settled(), webContentMissing: webContentMissing, waited: max(slept, clock.now - start),
+                    deadline: Self.dragConfirmDeadline) {
                     await sleep(Self.dragConfirmPoll)
                     slept += Self.dragConfirmPoll
                     try checkStillActive(context)
@@ -1299,7 +1399,7 @@ final class ComputerUseCoordinator {
                         window = try await currentWindow(window)
                         polled = try await readElements(
                             window, query: command.query, limit: command.limit, maxDepth: command.maxDepth,
-                            context: context)
+                            context: context, forChangeCheck: true)
                     } catch is CancellationError {
                         throw CancellationError()
                     } catch {
@@ -1307,15 +1407,27 @@ final class ComputerUseCoordinator {
                         break
                     }
                     read = polled
+                    previous = verdict
                     verdict = try await check(
                         read, of: window, after: delivered, of: command, target: target, before: before, end: end,
                         context: context, payload: &payload)
                     if verdict.warning == nil { dropped = true } else if dropped { verdict.warning = nil }
+                    noteWebContent()
+                }
+                // A front drag that hovered over a folder may have opened it (Finder's spring-loading).
+                // A background drag is posted to the app, never system-wide, so it can't; its title
+                // changes are the drag's own (a document now edited).
+                titleNote = if !foreground {
+                    nil
+                } else if let end {
+                    Self.titleChangeNote(before: end.before?.windowTitle, after: verdict.endAfter?.windowTitle)
+                } else {
+                    Self.titleChangeNote(before: before.windowTitle, after: verdict.after?.windowTitle)
                 }
             }
             Self.report(
-                depthLimited: read.depthLimited, warning: Self.joined(delivered.warning, verdict.warning), for: command,
-                into: &payload)
+                depthLimited: read.depthLimited, warning: Self.joined(delivered.warning, verdict.warning, titleNote),
+                for: command, into: &payload)
             return verdict
         } catch is CancellationError {
             throw CancellationError()
@@ -1350,20 +1462,18 @@ final class ComputerUseCoordinator {
         let kind = Self.changeKind(command.action)
         let asEvents = [.event, .background].contains(delivered.delivery)
         var warning = ComputerUseChangeCheck.warning(before: before, after: after, kind: kind, deliveredAsEvents: asEvents)
-        // The start window shows the drop only when its elements change: activation, the raise and
-        // the mouse-down move focus and selection first.
-        let startChanged = ComputerUseChangeCheck.elementsChanged(before: before, after: after)
+        var endAfter: ComputerUseWindowFingerprint?
         if let end {
             // The drop window read back too: the drop may have changed only that one.
             // An unreadable drop window says nothing either way, so the start window's verdict stands.
             if let endRead = try await readDropWindow(end.window, of: command, context: context, payload: &payload) {
-                let endAfter = await fingerprint(of: endRead.window, read: endRead.read, target: nil)
+                endAfter = await fingerprint(of: endRead.window, read: endRead.read, target: nil)
                 let endWarning = ComputerUseChangeCheck.warning(
                     before: end.before, after: endAfter, kind: kind, deliveredAsEvents: asEvents)
                 if endWarning == nil { warning = nil }
             }
         }
-        return Settled(warning: warning, after: after, startChanged: startChanged)
+        return Settled(warning: warning, after: after, endAfter: endAfter)
     }
 
     /// Reads the window a drag dropped into, as the start window is read, into `to_window`.
@@ -1376,7 +1486,8 @@ final class ComputerUseCoordinator {
         do {
             let current = try await currentWindow(window)
             let read = try await readElements(
-                current, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context)
+                current, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
+                forChangeCheck: true)
             entry["truncated"] = read.truncated
             entry["truncated_by"] = read.truncatedBy
             entry["elements"] = read.elements.map(Self.element)
@@ -1409,12 +1520,13 @@ final class ComputerUseCoordinator {
     /// Between re-reads of a drag that seems to have changed nothing, up to `dragConfirmDeadline`
     /// of them after the first read.
     static let dragConfirmPoll: Duration = .milliseconds(250)
-    static let dragConfirmDeadline: Duration = .milliseconds(1500)
+    nonisolated static let dragConfirmDeadline: Duration = .milliseconds(1500)
     static let takeoverPoll: Duration = .milliseconds(100)
     static let waitPoll: Duration = .milliseconds(250)
 
     /// Nodes and time the read before an input may take: it delays the input, and a read cut
-    /// short only turns the change check off.
+    /// short only turns the change check off. Also the elements every read lists for the change
+    /// check, whatever the call's `limit`: a Finder window's sidebar alone fills the default 100.
     static let fingerprintNodeBudget = 500
     static let fingerprintTimeLimit: Duration = .seconds(1)
 
@@ -1426,7 +1538,8 @@ final class ComputerUseCoordinator {
     ) async -> ComputerUseWindowFingerprint {
         let read = try? await readElements(
             window, query: command.query, limit: command.limit, maxDepth: command.maxDepth, context: context,
-            recordRefs: false, nodeBudget: Self.fingerprintNodeBudget, timeLimit: Self.fingerprintTimeLimit)
+            recordRefs: false, nodeBudget: Self.fingerprintNodeBudget + 1, timeLimit: Self.fingerprintTimeLimit,
+            forChangeCheck: true)
         return await fingerprint(of: window, read: read, target: target)
     }
 
@@ -1437,10 +1550,12 @@ final class ComputerUseCoordinator {
         let focus = await system.focusState(window)
         var targetHash: Int?
         if let target { targetHash = await system.elementState(target.0, target.1) }
+        let complete = read?.fingerprintElements
         return ComputerUseWindowFingerprint(
             focus: focus, windowTitle: window.title,
-            elementsHash: read.flatMap { $0.truncated ? nil : ComputerUseChangeCheck.elementsHash($0.elements) },
-            targetHash: targetHash)
+            elementsHash: complete.map { ComputerUseChangeCheck.elementsHash($0) },
+            targetHash: targetHash,
+            contentHash: complete.map { ComputerUseChangeCheck.elementsHash($0, focus: false) })
     }
 
     /// The window as it is now; gone or now another app's → `windowNotFound`.
@@ -1504,7 +1619,9 @@ final class ComputerUseCoordinator {
         case .drag:
             // The drop end resolves in the window it is in: its refs, its screenshot, its frame.
             let end = try self.target(ref: command.toRef, x: command.toX, y: command.toY, in: toWindow ?? window, context: context)
-            return try .drag(from: target(command.ref, command.x, command.y), to: end, toWindow: toWindow)
+            return try .drag(
+                from: target(command.ref, command.x, command.y), to: end, toWindow: toWindow,
+                modifiers: Set(command.modifiers))
         case .apps, .screenshot, .inspect, .cancel, .openApp, .wait:
             preconditionFailure("\(command.action.rawValue) is not an input action")
         }
@@ -1628,6 +1745,9 @@ final class ComputerUseCoordinator {
         /// Elements were left out for being deeper than the read's max depth.
         var depthLimited = false
         var elements: [ComputerUseInspectElement]
+        /// Every element up to `fingerprintNodeBudget`, past the call's `limit`, for the change
+        /// check; nil when the read wasn't for it, was cut short, had more or left deeper ones out.
+        var fingerprintElements: [ComputerUseInspectElement]?
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
         var refs: [String: Int]
@@ -1642,16 +1762,21 @@ final class ComputerUseCoordinator {
         var title: String?
         var frame: CGRect
         var scrollArea: CGRect?
+        var depth: Int
+        /// An `AXRow`, or inside one.
+        var inRow: Bool
     }
 
     /// Reads the window the way computer_inspect does and, unless told not to, replaces its refs.
-    /// `nodeBudget` and `timeLimit` only lower the read's own caps.
+    /// `nodeBudget` and `timeLimit` only lower the read's own caps. `forChangeCheck`: the read also
+    /// lists `fingerprintElements`, so it walks up to `fingerprintNodeBudget` nodes whatever the limit.
     private func readElements(
         _ window: ComputerUseWindow, query: String?, limit: Int, maxDepth: Int, context: CallContext, recordRefs: Bool = true,
-        nodeBudget: Int = .max, timeLimit: Duration = ComputerUseAXReader.deadline
+        nodeBudget: Int = .max, timeLimit: Duration = ComputerUseAXReader.deadline, forChangeCheck: Bool = false
     ) async throws -> ElementRead {
-        // Without a query the walk only needs one node past the limit to report truncation.
-        let budget = min(query == nil ? limit + 1 : Self.queryNodeBudget, nodeBudget)
+        // Without a query the walk only needs one node past what it lists to report truncation.
+        let fingerprintLimit = forChangeCheck ? max(limit, Self.fingerprintNodeBudget) : limit
+        let budget = min(query == nil ? fingerprintLimit + 1 : Self.queryNodeBudget, nodeBudget)
         let readLimit = min(timeLimit, ComputerUseAXReader.deadline)
         var tree = try await system.axTree(window, maxDepth, budget, readLimit)
         // A Chromium or Electron window may show only empty groups, or an empty web area, at first
@@ -1660,30 +1785,68 @@ final class ComputerUseCoordinator {
         if try await wakeWebContent(window, shown: tree.root, context: context) {
             tree = try await system.axTree(window, maxDepth, budget, readLimit)
         }
+        // A web window read without the web content it showed before is cut short, not empty:
+        // Chrome drops the web tree after input and builds it again after a read, so a read right
+        // after a drag lists only the toolbar, and a query over it finds nothing.
+        let showsContent = ComputerUseWebContent.hasWebContent(tree.root)
+        let cut = try await webContentMissing(tree, showsContent: showsContent, of: window, context: context)
+            ? .webContentMissing : tree.cut
+        if showsContent, snapshot(of: window, context: context)?.showedWebContent != true {
+            updateSnapshot(of: window, context: context) { $0.showedWebContent = true }
+        }
         let flat = ComputerUseInspectTree.flatten(tree.root, query: query, limit: limit, maxDepth: maxDepth)
+        let whole = !forChangeCheck || fingerprintLimit == limit
+            ? flat : ComputerUseInspectTree.flatten(tree.root, query: query, limit: fingerprintLimit, maxDepth: maxDepth)
         // A cancelled read never reaches the agent, so it must not replace the refs it holds.
         try Task.checkCancellation()
         // A partial read may have missed elements even when the limit was not reached.
         var identities: [Int: Identity] = [:]
         // Ancestors nearest last, as many as `ComputerUseAXActions.visibleCenter` climbs from the parent.
-        func collect(_ node: ComputerUseAXNode, above: [(role: String, frame: CGRect)]) {
+        func collect(_ node: ComputerUseAXNode, above: [(role: String, frame: CGRect)], depth: Int, rowAbove: Bool) {
+            let inRow = rowAbove || node.role == "AXRow"
             if let handle = node.handle {
                 let area = above.last { $0.role == "AXScrollArea" }?.frame
                 identities[handle] = Identity(
                     role: node.role, title: node.title, frame: node.frame,
-                    scrollArea: area.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil })
+                    scrollArea: area.flatMap { $0.width > 0 && $0.height > 0 ? $0 : nil }, depth: depth, inRow: inRow)
             }
             let next = Array((above + [(node.role, node.frame)]).suffix(ComputerUseAXActions.scrollAncestorLevels + 1))
-            for child in node.children { collect(child, above: next) }
+            for child in node.children { collect(child, above: next, depth: depth + 1, rowAbove: inRow) }
         }
-        collect(tree.root, above: [])
+        collect(tree.root, above: [], depth: 0, rowAbove: false)
         let read = ElementRead(
-            truncated: flat.truncated || tree.cut != nil,
-            truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: tree.cut),
+            truncated: flat.truncated || cut != nil,
+            truncatedBy: ComputerUseInspectTree.truncation(limitReached: flat.truncated, cut: cut),
             depthLimited: flat.depthLimited, elements: flat.elements,
+            // Elements past the depth limit may have changed as well.
+            fingerprintElements: !forChangeCheck || whole.truncated || whole.depthLimited || cut != nil ? nil : whole.elements,
             handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read
+    }
+
+    /// Whether a read of a Chromium or Electron window lacks the web content it showed before
+    /// (`ComputerUseWebContent.mayLackContent`), and a look past the read's depth limit finds
+    /// none either. A window that never showed any (a bubble, a popup, a native panel,
+    /// about:blank) has none to lack.
+    private func webContentMissing(
+        _ tree: (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles),
+        showsContent: Bool, of window: ComputerUseWindow, context: CallContext
+    ) async throws -> Bool {
+        let chromium = ComputerUseWebContent.isChromium(
+            bundleID: window.app.bundleID, acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid))
+        guard ComputerUseWebContent.mayLackContent(
+            chromium: chromium, showedContent: snapshot(of: window, context: context)?.showedWebContent == true,
+            showsContent: showsContent, cut: tree.cut)
+        else { return false }
+        // A look that failed can't show the content is there.
+        do {
+            return try await !probeWebContent(window)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return true
+        }
     }
 
     private func record(refs read: ElementRead, of window: ComputerUseWindow, context: CallContext) {
@@ -1702,18 +1865,21 @@ final class ComputerUseCoordinator {
             if listed.contains(ref) {
                 refs[ref] = ElementRef(
                     handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame),
-                    localScrollArea: identity.scrollArea.map(local), shown: true)
+                    localScrollArea: identity.scrollArea.map(local), depth: identity.depth, inRow: identity.inRow,
+                    shown: true)
             } else if let seen = previous[ref], seen.shown {
                 guard seen.role == identity.role, seen.title == identity.title, let before,
                       system.sameElement(before.handles, seen.handle, read.handles, handle)
                 else { continue }
                 refs[ref] = ElementRef(
                     handle: handle, role: seen.role, title: seen.title, localFrame: local(identity.frame),
-                    localScrollArea: identity.scrollArea.map(local), shown: true)
+                    localScrollArea: identity.scrollArea.map(local), depth: identity.depth, inRow: identity.inRow,
+                    shown: true)
             } else {
                 refs[ref] = ElementRef(
                     handle: handle, role: identity.role, title: identity.title, localFrame: local(identity.frame),
-                    localScrollArea: identity.scrollArea.map(local), shown: false)
+                    localScrollArea: identity.scrollArea.map(local), depth: identity.depth, inRow: identity.inRow,
+                    shown: false)
             }
         }
         updateSnapshot(of: window, context: context) {
@@ -1784,6 +1950,7 @@ final class ComputerUseCoordinator {
     private static func message(for error: any Error) -> String {
         switch error {
         case ComputerUseSystemError.windowNotFound(let id): Message.windowNotFound(id)
+        case ComputerUseSystemError.broughtForward(let error, let note): message(for: error) + note
         case ComputerUseSystemError.windowUnreadable(let id): Message.windowUnreadable(id)
         case ComputerUseSystemError.captureFailed(let reason): Message.captureFailed(reason)
         case ComputerUseSystemError.appNotResponding(let app): Message.captureFailed("\(app) is not responding")

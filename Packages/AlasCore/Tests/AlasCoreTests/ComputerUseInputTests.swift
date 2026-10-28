@@ -335,21 +335,32 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.isSheetBacking(title: title, frame: frame, sheetFrames: sheets) == backing)
     }
 
-    /// A drop shows in a window only when its elements change, read completely both times; focus
-    /// or selection moving doesn't count.
+    /// A drag whose window differs only in focus or selection (the activation or the press
+    /// selected what it grabbed) did nothing it can show, however it went; a foreground one isn't
+    /// retried directly, nor one over a cut-short read.
+    /// Columns: elements, focus-free elements, focus and target state after (before: 1, 1, A, 1), as events.
     @Test(arguments: [
-        (Optional(1), Optional(2), false, true),
-        (1, 1, true, false),
-        (nil, 2, false, false),
-        (1, nil, false, false),
-    ] as [(Int?, Int?, Bool, Bool)])
-    func aWindowShowsADropOnlyWhenItsElementsChange(before: Int?, after: Int?, focusMoved: Bool, changed: Bool) {
-        let focus = ComputerUseWindowFingerprint.Focus(role: "AXTextField")
-        let moved = ComputerUseWindowFingerprint.Focus(role: "AXRow")
-        #expect(ComputerUseChangeCheck.elementsChanged(
-            before: .init(focus: focus, windowTitle: "Docs", elementsHash: before, targetHash: nil),
-            after: .init(focus: focusMoved ? moved : focus, windowTitle: "Docs", elementsHash: after, targetHash: nil)) == changed)
+        (Optional(1), Optional(1), "A", Optional(1), true, Optional(Self.dragNoEffect)),
+        (2, 1, "B", 2, true, Self.dragNoEffect),
+        (2, 1, "B", 2, false, ComputerUseChangeCheck.dragWarning),
+        (1, 1, "A", 2, false, ComputerUseChangeCheck.dragWarning),
+        (2, 2, "A", 1, true, nil),
+        (2, 2, "B", 1, false, nil),
+        (nil, nil, "B", 2, true, nil),
+        (nil, nil, "A", 1, false, ComputerUseChangeCheck.dragWarning),
+        (nil, nil, "A", 1, true, ComputerUseChangeCheck.dragWarning),
+    ] as [(Int?, Int?, String, Int?, Bool, String?)])
+    func aDragThatOnlyMovedFocusOrSelectionWarns(
+        elements: Int?, content: Int?, focus: String, target: Int?, asEvents: Bool, warning: String?
+    ) {
+        let before = ComputerUseWindowFingerprint(
+            focus: .init(role: "A"), windowTitle: "Docs", elementsHash: 1, targetHash: 1, contentHash: 1)
+        let after = ComputerUseWindowFingerprint(
+            focus: .init(role: focus), windowTitle: "Docs", elementsHash: elements, targetHash: target, contentHash: content)
+        #expect(ComputerUseChangeCheck.warning(before: before, after: after, kind: .drag, deliveredAsEvents: asEvents) == warning)
     }
+
+    private static let dragNoEffect = ComputerUseChangeCheck.dragWarning + ComputerUseChangeCheck.retryDirectHint
 
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
@@ -394,6 +405,31 @@ struct ComputerUseInputTests {
     typealias State = ComputerUseTakeover.DragPointState
     typealias Step = ComputerUseTakeover.DragStep
 
+    /// Windows A and B on the display at (0, 0, 1000, 800); P is parked off it. Two windows stacked
+    /// at one frame (AeroSpace's accordion) overlap; a parked window waits for the activation.
+    @Test(arguments: [
+        ("A", "A", Optional(CGPoint(x: 20, y: 20)), Optional(CGPoint(x: 80, y: 80)), Optional<Step>.none),
+        ("A", "B", CGPoint(x: 20, y: 20), CGPoint(x: 520, y: 20), nil),
+        ("A", "A2", CGPoint(x: 20, y: 20), CGPoint(x: 80, y: 80), .overlap),
+        ("A", "A", nil, CGPoint(x: 80, y: 80), .hidden(.start)),
+        ("A", "B", CGPoint(x: 20, y: 20), nil, .hidden(.end)),
+        ("W", "W", CGPoint(x: 20, y: 20), CGPoint(x: 1100, y: 20), .offScreen),
+        ("P", "P", nil, CGPoint(x: 3020, y: 20), nil),
+        ("P", "P2", CGPoint(x: 3020, y: 20), CGPoint(x: 3080, y: 20), nil),
+    ] as [(String, String, CGPoint?, CGPoint?, Step?)])
+    func aFrontDragIsRefusedBeforeActivationOnlyForWhatActivationCantChange(
+        source: String, drop: String, start: CGPoint?, end: CGPoint?, step: Step?
+    ) {
+        let frames = [
+            "A": CGRect(x: 0, y: 0, width: 400, height: 300), "A2": CGRect(x: 0, y: 0, width: 400, height: 300),
+            "B": CGRect(x: 500, y: 0, width: 400, height: 300), "W": CGRect(x: 0, y: 0, width: 1200, height: 300),
+            "P": CGRect(x: 3000, y: 0, width: 400, height: 300), "P2": CGRect(x: 3000, y: 0, width: 400, height: 300),
+        ]
+        #expect(ComputerUseTakeover.dragRefusalBeforeActivation(
+            start: start, end: end, sourceFrame: frames[source]!, dropFrame: frames[drop]!, sameWindow: source == drop,
+            displays: [CGRect(x: 0, y: 0, width: 1000, height: 800)]) == step)
+    }
+
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
         let windows = [
@@ -429,6 +465,14 @@ struct ComputerUseInputTests {
     @Test(arguments: [(0.5, ComputerUseTakeover.ActivationFailure.userActive), (1.9, .userActive), (2.0, .notFrontmost), (60.0, .notFrontmost)])
     func anActivationRefusedDuringUserInputIsTheUserBeingActive(idle: TimeInterval, failure: ComputerUseTakeover.ActivationFailure) {
         #expect(ComputerUseTakeover.activationFailure(idleSeconds: idle) == failure)
+    }
+
+    /// An ignored activation is forced only on an idle user whose front app is still in front.
+    @Test(arguments: [
+        (5.0, Bool?.none, true), (5.0, false, false), (1.9, true, false),
+    ] as [(TimeInterval, Bool?, Bool)])
+    func anIgnoredActivationIsForcedOnlyOnAnIdleUnchangedFront(idle: TimeInterval, previousIsFront: Bool?, forces: Bool) {
+        #expect(ComputerUseTakeover.forcesActivation(idleSeconds: idle, previousIsFront: previousIsFront) == forces)
     }
 
     @Test(arguments: [
@@ -484,6 +528,26 @@ struct ComputerUseInputTests {
         #expect(
             ComputerUseTakeover.tookOverDrag(
                 lastUserInput: lastUserInput, dragBegan: 100, secureInputKeyAt: secureInputKeyAt) == tookOver)
+    }
+
+    /// Another process's single pointer move (a window manager centring the cursor) isn't the
+    /// user's, a stream of them is; anything else of theirs is, from any source; Alas's own never are.
+    /// Each row: events (type, source pid, Alas's, seconds) and whether each counts.
+    @Test(arguments: [
+        ([(CGEventType.mouseMoved, Int64(0), false, 0.0)], [true]),
+        ([(.mouseMoved, 4242, false, 0)], [false]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 4242, false, 0.05)], [false, true]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 4242, false, 0.15)], [false, false]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 7, false, 0.05)], [false, false]),
+        ([(.mouseMoved, 4242, true, 0), (.mouseMoved, 4242, false, 0.05)], [false, false]),
+        ([(.keyDown, 4242, false, 0), (.leftMouseDown, 4242, false, 0), (.leftMouseDragged, 4242, false, 0),
+          (.scrollWheel, 4242, false, 0)], [true, true, true, true]),
+        ([(.leftMouseDragged, 0, true, 0)], [false]),
+    ] as [([(CGEventType, Int64, Bool, TimeInterval)], [Bool])])
+    func onlyTheUsersOwnPointerMovesCountAsInput(events: [(CGEventType, Int64, Bool, TimeInterval)], counts: [Bool]) {
+        var moves = ComputerUsePostedMoves()
+        let seen = events.map { moves.countsAsUserInput(type: $0.0, sourcePID: $0.1, isAlasPosted: $0.2, now: $0.3) }
+        #expect(seen == counts)
     }
 
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.
@@ -772,5 +836,106 @@ struct ComputerUseInputTests {
     func terminalsCodeEditorsAndAlasAreNotTypedAsDocuments(bundleID: String?, skips: Bool) {
         let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
         #expect(ComputerUseTextCheck.isKeyCommandApp(app, hostPID: 1) == skips)
+    }
+
+    /// Columns: start on screen, end on screen, into another window, from a list item, Chromium, direct.
+    @Test(arguments: [
+        (true, true, false, false, false, false, ComputerUseBackgroundDrag.Route.background),
+        (true, true, false, false, false, true, .foreground),
+        (false, true, false, false, false, false, .foreground),
+        (true, false, false, false, false, false, .foreground),
+        (true, true, true, false, false, false, .foreground),
+        (true, true, false, true, false, false, .foreground),
+        (true, true, false, false, true, false, .foreground),
+    ] as [(Bool, Bool, Bool, Bool, Bool, Bool, ComputerUseBackgroundDrag.Route)])
+    func aDragStaysInTheBackgroundOnlyInsideOneWindowOffItemsOutsideChromiumWhenNotDirect(
+        start: Bool, end: Bool, crossWindow: Bool, item: Bool, chromium: Bool, direct: Bool,
+        route: ComputerUseBackgroundDrag.Route
+    ) {
+        #expect(ComputerUseBackgroundDrag.route(
+            startOnScreen: start, endOnScreen: end, crossWindow: crossWindow, startsInItem: item, chromium: chromium,
+            direct: direct) == route)
+    }
+
+    /// Finder's list view, as read: a row and the column spanning every row at one depth, a cell
+    /// in the row, and the header button above the rows, outside them.
+    @Test(arguments: [
+        (CGPoint(x: 100, y: 138), true),
+        (CGPoint(x: 45, y: 138), true),
+        (CGPoint(x: 100, y: 109), false),
+        (CGPoint(x: 100, y: 400), false),
+        (CGPoint(x: 900, y: 900), false),
+    ])
+    func aDragStartsInAnItemWhenTheDeepestElementsThereIncludeARow(point: CGPoint, inItem: Bool) {
+        let elements = [
+            ComputerUseBackgroundDrag.ReadElement(frame: CGRect(x: 39, y: 122, width: 1650, height: 957), depth: 4, inRow: false),
+            .init(frame: CGRect(x: 40, y: 128, width: 1648, height: 20), depth: 5, inRow: true),
+            .init(frame: CGRect(x: 66, y: 128, width: 1307, height: 20), depth: 6, inRow: true),
+            .init(frame: CGRect(x: 40, y: 123, width: 1323, height: 955), depth: 5, inRow: false),
+            .init(frame: CGRect(x: 40, y: 95, width: 1648, height: 28), depth: 5, inRow: false),
+            .init(frame: CGRect(x: 50, y: 95, width: 1323, height: 28), depth: 6, inRow: false),
+        ]
+        #expect(ComputerUseBackgroundDrag.startsInItem(at: point, elements: elements) == inItem)
+    }
+
+    @Test(arguments: [
+        (Int32(7), 500, false, true),
+        (7, 500, true, false),
+        (8, 500, false, false),
+        (7, 0, false, false),
+        (7, 1000, false, true),
+    ] as [(Int32, Int, Bool, Bool)])
+    func aNewDragLayerWindowOfTheSourceMarksANativeDragSession(
+        pid: Int32, layer: Int, alreadyListed: Bool, started: Bool
+    ) {
+        let window = ComputerUseInputGeometry.ScreenWindow(id: 9, pid: pid, layer: layer, frame: .zero)
+        #expect(
+            ComputerUseBackgroundDrag.startedSession(
+                before: alreadyListed ? [9] : [], now: [window], sourcePID: 7) == started)
+    }
+
+    /// Columns: dropped, session active, foreground, last two reads settled, a read lacked its web
+    /// content, waited ms, keeps polling. The deadline is 1500 ms.
+    @Test(arguments: [
+        // A background drag stays in one window: it stops once the drop shows.
+        (true, true, false, false, false, 100, false),
+        (false, false, false, false, false, 100, true),
+        (false, false, false, false, false, 1500, false),
+        // In the foreground, a drop that showed (the selection flash) is read until two reads
+        // agree past the settle, with the drag image gone.
+        (true, false, true, false, false, 600, true),
+        (true, false, true, true, false, 250, true),
+        (true, false, true, true, false, 500, false),
+        (true, true, true, true, false, 600, true),
+        (true, false, true, false, false, 1500, false),
+        (false, false, true, true, false, 600, true),
+        // A web tree Chrome is rebuilding gets 3 s.
+        (false, false, true, false, true, 2500, true),
+        (false, false, true, false, true, 3000, false),
+    ] as [(Bool, Bool, Bool, Bool, Bool, Int, Bool)])
+    func aDropIsAwaitedWhileItMaySettle(
+        dropped: Bool, sessionActive: Bool, foreground: Bool, settled: Bool, webContentMissing: Bool, waitedMs: Int,
+        polls: Bool
+    ) {
+        #expect(
+            ComputerUseBackgroundDrag.keepsPolling(
+                dropped: dropped, sessionActive: sessionActive, foreground: foreground, settled: settled,
+                webContentMissing: webContentMissing, waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
+            ) == polls)
+    }
+
+    /// Two reads after a drag agree only when both were read, the later one completely, and they
+    /// are equal. Columns: previous and current elements hash (nil fingerprint for 0), settled.
+    @Test(arguments: [
+        (Optional(1), Optional(1), true),
+        (1, 2, false),
+        (nil, nil, false),
+        (0, 1, false),
+    ] as [(Int?, Int?, Bool)])
+    func twoReadsAfterADragSettleOnlyWhenCompleteAndEqual(previous: Int?, current: Int?, settled: Bool) {
+        func read(_ hash: Int?) -> ComputerUseWindowFingerprint? {
+            hash == 0 ? nil : .init(windowTitle: "Docs", elementsHash: hash, contentHash: hash)
+        }
+        #expect(ComputerUseBackgroundDrag.readsSettled(previous: read(previous), current: read(current)) == settled)
     }
 }

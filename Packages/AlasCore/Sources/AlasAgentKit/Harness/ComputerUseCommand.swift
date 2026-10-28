@@ -1,5 +1,6 @@
 import Foundation
 import AlasACP
+import AlasPlatform
 
 /// A `computer_*` request from the CLI/MCP bridge. Bounds mirror the Rust side.
 public struct ComputerUseCommand: Equatable, Sendable {
@@ -59,6 +60,8 @@ public struct ComputerUseCommand: Equatable, Sendable {
     public var toRef: String?
     public var toX: Double?
     public var toY: Double?
+    /// Keys a drag holds from the press to the release; each at most once, never `function`.
+    public var modifiers: [ComputerUseKeyChord.Modifier]
     public var button: Button
     public var count: Int
     public var text: String?
@@ -77,7 +80,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         action: Action, windowID: UInt32? = nil, query: String? = nil, limit: Int? = nil, maxDepth: Int = 12,
         callID: String? = nil, ref: String? = nil, x: Double? = nil, y: Double? = nil,
         toWindowID: UInt32? = nil, toRef: String? = nil, toX: Double? = nil, toY: Double? = nil,
-        button: Button = .left, count: Int = 1, text: String? = nil, mode: TypeMode = .insert,
+        modifiers: [ComputerUseKeyChord.Modifier] = [], button: Button = .left, count: Int = 1, text: String? = nil, mode: TypeMode = .insert,
         keys: String? = nil, dx: Int = 0, dy: Int = 0, delivery: Delivery = .background,
         name: String? = nil, bundleID: String? = nil, condition: WaitCondition = .appear,
         timeoutMS: Int = 5000, includeScreenshot: Bool = false
@@ -95,6 +98,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         self.toRef = toRef
         self.toX = toX
         self.toY = toY
+        self.modifiers = modifiers
         self.button = button
         self.count = count
         self.text = text
@@ -123,6 +127,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         var to_ref: String?
         var to_x: Double?
         var to_y: Double?
+        var modifiers: [String]?
         var button: Button?
         var count: Int?
         var text: String?
@@ -153,6 +158,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
             note("to_ref", to_ref)
             note("to_x", to_x)
             note("to_y", to_y)
+            note("modifiers", modifiers)
             note("button", button)
             note("count", count)
             note("text", text)
@@ -182,7 +188,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         case .type: postAction.union(["text", "ref", "mode", "delivery"])
         case .key: postAction.union(["keys", "delivery"])
         case .scroll: postAction.union(pointTarget).union(["dx", "dy", "delivery"])
-        case .drag: postAction.union(pointTarget).union(["to_window_id", "to_ref", "to_x", "to_y", "delivery"])
+        case .drag: postAction.union(pointTarget).union(["to_window_id", "to_ref", "to_x", "to_y", "modifiers", "delivery"])
         case .openApp: ["name", "bundle_id", "call_id"]
         case .wait: ["window_id", "query", "condition", "timeout_ms", "limit", "call_id"]
         }
@@ -199,6 +205,10 @@ public struct ComputerUseCommand: Equatable, Sendable {
             maxDepth: params?.max_depth ?? defaultMaxDepth(for: action, query: params?.query), callID: params?.call_id,
             ref: params?.ref, x: params?.x, y: params?.y,
             toWindowID: params?.to_window_id, toRef: params?.to_ref, toX: params?.to_x, toY: params?.to_y,
+            modifiers: try (params?.modifiers ?? []).map {
+                guard let modifier = ComputerUseKeyChord.Modifier(rawValue: $0) else { throw AlasCLIRequestError.malformed }
+                return modifier
+            },
             button: params?.button ?? .left, count: params?.count ?? 1,
             text: params?.text, mode: params?.mode ?? .insert, keys: params?.keys,
             dx: params?.dx ?? 0, dy: params?.dy ?? 0, delivery: params?.delivery ?? .background,
@@ -276,6 +286,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         case .drag:
             try require(validTarget(ref: ref, x: x, y: y))
             try require(validTarget(ref: toRef, x: toX, y: toY))
+            try require(Set(modifiers).count == modifiers.count && !modifiers.contains(.function))
         case .openApp:
             switch (name, bundleID) {
             case let (value?, nil), let (nil, value?): try require(!isBlank(value) && value.utf8.count <= 256)
