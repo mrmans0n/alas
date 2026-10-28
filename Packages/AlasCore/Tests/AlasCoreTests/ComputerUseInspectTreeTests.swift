@@ -16,19 +16,42 @@ struct ComputerUseInspectTreeTests {
     }
 
     /// A truncated result names what cut it: the element limit first, then an app that stopped
-    /// answering, then the time limit, which may have kept the read from its node budget.
+    /// answering, then the time limit, then elements whose children couldn't be read, any of
+    /// which may have kept the read from its node budget.
     @Test(arguments: [
-        (true, true, true, true, String?("limit")),
-        (false, true, true, true, "app_not_responding"),
-        (false, false, true, true, "time_limit"),
-        (false, false, false, true, "node_budget"),
-        (false, false, false, false, nil),
+        (true, true, true, true, true, String?("limit")),
+        (false, true, true, true, true, "app_not_responding"),
+        (false, false, true, true, true, "time_limit"),
+        (false, false, false, true, true, "elements_unreadable"),
+        (false, false, false, false, true, "node_budget"),
+        (false, false, false, false, false, nil),
     ])
     func aTruncatedResultNamesWhatCutIt(
-        limitReached: Bool, appNotResponding: Bool, timedOut: Bool, budgetSpent: Bool, truncatedBy: String?
+        limitReached: Bool, appNotResponding: Bool, timedOut: Bool, unreadable: Bool, budgetSpent: Bool,
+        truncatedBy: String?
     ) {
-        let cut = ComputerUseReadCut.reason(appNotResponding: appNotResponding, timedOut: timedOut, budgetSpent: budgetSpent)
+        let cut = ComputerUseReadCut.reason(
+            appNotResponding: appNotResponding, timedOut: timedOut, elementsUnreadable: unreadable, budgetSpent: budgetSpent)
         #expect(ComputerUseInspectTree.truncation(limitReached: limitReached, cut: cut) == truncatedBy)
+    }
+
+    /// An element's children are read, absent, gone with it, unanswered, or unreadable, and a
+    /// batch that came back malformed or refused is read again one attribute at a time.
+    @Test(arguments: [
+        (Int32(0), true, Int32?.none, ComputerUseReadCut.ChildrenRead.read),
+        (0, false, nil, .perAttribute),
+        (-25200, false, nil, .perAttribute),
+        (-25202, false, nil, .gone),
+        (-25204, false, nil, .unanswered),
+        (0, true, -25212, .none),
+        (0, true, -25202, .gone),
+        (0, true, -25204, .unanswered),
+        (0, true, -25200, .unreadable),
+    ])
+    func anElementsChildrenReadAsWhatTheAppAnswered(
+        batchResult: Int32, complete: Bool, childrenError: Int32?, read: ComputerUseReadCut.ChildrenRead
+    ) {
+        #expect(ComputerUseReadCut.children(batchResult: batchResult, batchComplete: complete, childrenError: childrenError) == read)
     }
 
     /// The depth warning only suggests what would read deeper.

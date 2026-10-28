@@ -228,6 +228,8 @@ enum ComputerUseAXReader {
         var skippedUnanswered = false
         /// Set when children were left unread because the budget ran out or the walk halted.
         var cutOff = false
+        /// Set when the app answered for an element but not with its children.
+        var unreadable = false
 
         init(budget: Int, maxDepth: Int, deadline: ContinuousClock.Instant, isCancelled: @escaping () -> Bool) {
             self.budget = budget
@@ -263,9 +265,11 @@ enum ComputerUseAXReader {
 
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
+            // The window went away mid-read: nothing of it is left to list.
+            guard let root else { throw ComputerUseSystemError.windowUnreadable(window.windowID) }
             let cut = ComputerUseReadCut.reason(
                 appNotResponding: appStalled || skippedUnanswered, timedOut: ContinuousClock.now >= deadline,
-                budgetSpent: cutOff)
+                elementsUnreadable: unreadable, budgetSpent: cutOff)
             return (root, cut, ComputerUseAXHandles(elements))
         }
 
@@ -300,11 +304,17 @@ enum ComputerUseAXReader {
         /// The root is depth 0 and counts toward the budget. Once the walk
         /// halts (stalled app, cancellation, deadline) or the budget runs out,
         /// the nodes already built are kept and no more are read. An element the app doesn't
-        /// answer reads as `AXUnknown` without children, and the walk goes on past it.
-        private func node(_ element: AXUIElement, depth: Int) -> ComputerUseAXNode {
+        /// answer reads as `AXUnknown` without children, and the walk goes on past it. Nil for an
+        /// element that no longer exists, which its parent leaves out.
+        private func node(_ element: AXUIElement, depth: Int) -> ComputerUseAXNode? {
             count += 1
             AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
-            let batch = attributes(of: element)
+            let batch: (values: [String: AnyObject], identityKnown: Bool, children: [AXUIElement])?
+            switch attributes(of: element) {
+            case .gone: return nil
+            case .unread: batch = nil
+            case .read(let values, let identityKnown, let children): batch = (values, identityKnown, children)
+            }
             let values = batch?.values
             let role = Self.string(values?[kAXRoleAttribute]) ?? "AXUnknown"
             let subrole = Self.string(values?[kAXSubroleAttribute])
@@ -312,7 +322,7 @@ enum ComputerUseAXReader {
             // as the role rather than the subrole; both use the same string.
             // One whose role or subrole couldn't be read may be one.
             let isSecure = role == kAXSecureTextFieldSubrole || subrole == kAXSecureTextFieldSubrole || batch?.identityKnown != true
-            let children = (values?[kAXChildrenAttribute] as? [AXUIElement]) ?? []
+            let children = batch?.children ?? []
             var result = ComputerUseAXNode(
                 role: role,
                 subrole: subrole,
@@ -332,7 +342,7 @@ enum ComputerUseAXReader {
                             cutOff = true
                             break
                         }
-                        result.children.append(node(child, depth: depth + 1))
+                        if let child = node(child, depth: depth + 1) { result.children.append(child) }
                     }
                 } else if values == nil || !children.isEmpty {
                     // An element left unread may have had children.
@@ -351,42 +361,72 @@ enum ComputerUseAXReader {
             kAXSizeAttribute, kAXEnabledAttribute, kAXFocusedAttribute, kAXChildrenAttribute,
         ]
 
+        /// What `attributes(of:)` got for an element.
+        private enum Attributes {
+            /// `identityKnown` is false when its role or subrole read failed (rather than being
+            /// absent), so whether it is a password field can't be told.
+            case read(values: [String: AnyObject], identityKnown: Bool, children: [AXUIElement])
+            /// The walk has halted, or the app didn't answer, which counts toward a stalled app.
+            case unread
+            /// The element no longer exists.
+            case gone
+        }
+
         /// `nodeAttributes` by name, read in one message: a walk sends one per element rather than
         /// one per attribute, several times faster. Attributes the element lacks are absent. Read
-        /// one at a time where the app doesn't take the batch. Nil when the walk has halted, the
-        /// element is gone, or the app didn't answer, which counts toward a stalled app.
-        /// `identityKnown` is false when its role or subrole read failed (rather than being
-        /// absent), so whether it is a password field can't be told.
-        private func attributes(of element: AXUIElement) -> (values: [String: AnyObject], identityKnown: Bool)? {
-            guard !isHalted else { return nil }
+        /// one at a time where the app doesn't take the batch, or returns it malformed. Children
+        /// that are missing rather than none flag the read (`skippedUnanswered`, `unreadable`).
+        private func attributes(of element: AXUIElement) -> Attributes {
+            guard !isHalted else { return .unread }
             var list: CFArray?
             let result = AXUIElementCopyMultipleAttributeValues(
                 element, Self.nodeAttributes as CFArray, AXCopyMultipleAttributeOptions(rawValue: 0), &list)
             noteAnswer(result)
             var byName: [String: AnyObject] = [:]
             var failed: [String: AXError] = [:]
-            switch result {
-            case .success:
-                guard let values = list as? [AnyObject], values.count == Self.nodeAttributes.count else { return nil }
-                for (name, value) in zip(Self.nodeAttributes, values) {
+            let batch = (list as? [AnyObject]).flatMap { $0.count == Self.nodeAttributes.count ? $0 : nil }
+            if result == .success, let batch {
+                for (name, value) in zip(Self.nodeAttributes, batch) {
                     if Self.isError(value) { failed[name] = Self.axError(value) ?? .failure } else { byName[name] = value }
                 }
-            case .cannotComplete:
-                skippedUnanswered = true
-                return nil
-            case .invalidUIElement:
-                return nil
-            default:
+            }
+            var children = ComputerUseReadCut.children(
+                batchResult: result.rawValue, batchComplete: batch != nil, childrenError: failed[kAXChildrenAttribute]?.rawValue)
+            if children == .perAttribute {
                 for name in Self.nodeAttributes {
                     let read = read(element, name)
                     if let value = read.value { byName[name] = value } else { failed[name] = read.error }
                 }
-                if isHalted { return nil }
+                if isHalted { return .unread }
+                children = ComputerUseReadCut.children(
+                    batchResult: 0, batchComplete: true, childrenError: failed[kAXChildrenAttribute]?.rawValue)
             }
-            // Children the app didn't answer for are missing, not none: the read is incomplete.
-            if failed[kAXChildrenAttribute] == .cannotComplete { skippedUnanswered = true }
+            var elements: [AXUIElement] = []
+            switch children {
+            case .gone:
+                return .gone
+            case .unanswered:
+                // Children the app didn't answer for are missing, not none: the read is incomplete.
+                skippedUnanswered = true
+                if result == .cannotComplete { return .unread }
+            case .unreadable:
+                unreadable = true
+            case .read:
+                if let value = byName[kAXChildrenAttribute] {
+                    // Entries that aren't elements are left out rather than losing the rest.
+                    if CFGetTypeID(value) == CFArrayGetTypeID() {
+                        elements = (value as! [AnyObject]).compactMap {
+                            CFGetTypeID($0) == AXUIElementGetTypeID() ? ($0 as! AXUIElement) : nil
+                        }
+                    } else {
+                        unreadable = true
+                    }
+                }
+            case .none, .perAttribute:
+                break
+            }
             let identityKnown = [kAXRoleAttribute, kAXSubroleAttribute].allSatisfy { failed[$0].map(Self.isAbsent) ?? true }
-            return (byName, identityKnown)
+            return .read(values: byName, identityKnown: identityKnown, children: elements)
         }
 
         /// A failed read that only means the element doesn't have the attribute.
