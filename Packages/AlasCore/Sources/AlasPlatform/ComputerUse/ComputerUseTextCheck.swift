@@ -29,17 +29,43 @@ public enum ComputerUseTextCheck {
     /// inside a web page (`inWebArea`, an `AXWebArea` ancestor) of a Chromium or Electron app
     /// (`chromium`, `ComputerUseWebContent.isChromium`) is never written by AX: its AX value can
     /// show the text while the page never got it, so a read-back there proves nothing, and keys
-    /// after a write that did reach the page would type it twice. It gets key events, or a refusal
-    /// where they don't reach the window (`keysReach`). Anywhere else, WebKit's web pages included,
-    /// a value read back unchanged gets the same, and any other verdict counts as landed.
-    public static func outcome(_ readBack: Verdict?, inWebArea: Bool, chromium: Bool, keysReach: Bool) -> Outcome {
+    /// after a write that did reach the page would type it twice. Nor is a terminal's (`terminal`,
+    /// `isTerminal`): its grid takes the AX insert and the shell never sees it, while a long
+    /// scrollback goes unread. Both get key events, or a refusal where they don't reach the window
+    /// (`keysReach`). Anywhere else, WebKit's web pages included, a value read back unchanged gets
+    /// the same, and any other verdict counts as landed.
+    public static func outcome(
+        _ readBack: Verdict?, inWebArea: Bool, chromium: Bool, terminal: Bool = false, keysReach: Bool
+    ) -> Outcome {
         let instead: Outcome = keysReach ? .typeAsKeys : .refuse
-        if inWebArea, chromium { return instead }
+        if (inWebArea && chromium) || terminal { return instead }
         switch readBack {
         case nil: return .write
         case .landed, .unknown: return .landed
         case .unchanged: return instead
         }
+    }
+
+    /// What text bound for an AX write comes to, for a line break into a Chromium browser's own
+    /// field (`bundleID`, `ComputerUseWebContent.chromeBundleIDs`) outside any web page
+    /// (`inWebArea`, read only when the rest applies): the address bar shows the inserted text, and
+    /// the line break never submits it. It goes as keys, Return included, or is refused where keys
+    /// don't reach the window (`keysReach`). Anything else is written (`.write`). Asked after the
+    /// write's own `outcome`, which sends a page's field in a Chromium app to keys before this.
+    public static func lineBreakOutcome(
+        _ text: String, bundleID: String?, inWebArea: @autoclosure () -> Bool, keysReach: Bool
+    ) -> Outcome {
+        guard text.contains(where: \.isNewline), ComputerUseWebContent.chromeBundleIDs.contains(bundleID ?? ""),
+              !inWebArea()
+        else { return .write }
+        return keysReach ? .typeAsKeys : .refuse
+    }
+
+    /// Said for a line break refused off screen (`lineBreakOutcome`).
+    public static func offScreenLineBreakRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name)'s window is off screen (it may be on another Space or workspace), so text only reaches it through "
+            + "accessibility, and a line break typed that way into the browser's own field (such as the address bar) "
+            + "shows up as text without submitting it. Nothing was typed. Ask the user to bring the window on screen."
     }
 
     /// How text gets into a document, which an AX write puts in without the app's edit model: a
@@ -66,12 +92,39 @@ public enum ComputerUseTextCheck {
         return keysReach ? .keys : .axWarned
     }
 
-    /// Terminals and code editors, whose windows are left to the AX write as before.
-    public static let keyCommandBundleIDs: Set<String> = [
-        "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty", "dev.warp.Warp-Stable",
-        "net.kovidgoyal.kitty", "io.alacritty", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92",
-        "dev.zed.Zed", "com.sublimetext.4", "com.apple.dt.Xcode", "org.vim.MacVim",
+    /// Terminal emulators, whose AX text writes never reach the pty.
+    public static let terminalBundleIDs: Set<String> = [
+        "co.zeit.hyper", "com.apple.Terminal", "com.github.wez.wezterm", "com.googlecode.iterm2", "com.mitchellh.ghostty",
+        "com.raphaelamorim.rio", "dev.warp.Warp-Preview", "dev.warp.Warp-Stable", "io.alacritty", "net.kovidgoyal.kitty",
+        "org.alacritty", "org.tabby",
     ]
+
+    /// A terminal emulator (`terminalBundleIDs`): text goes in as keys, never through AX.
+    public static func isTerminal(_ app: ComputerUseAppIdentity) -> Bool {
+        terminalBundleIDs.contains(app.bundleID ?? "")
+    }
+
+    /// The refusal for typing in `replace` mode into a terminal (`isTerminal`), nil for anything
+    /// else: a terminal has no field value to replace, and the ⌘A before the text selects its
+    /// scrollback.
+    public static func terminalReplaceRefusal(_ app: ComputerUseAppIdentity, replace: Bool) -> String? {
+        guard replace, isTerminal(app) else { return nil }
+        return "\(app.name) is a terminal: it has no field value to replace, and ⌘A there selects the scrollback. "
+            + "Nothing was typed. Type with mode insert; to clear the command line, use computer_key (such as ctrl+u)."
+    }
+
+    /// The refusal for text bound for a terminal (`isTerminal`) whose window is off screen: it
+    /// takes text only as keys, which don't reach the window there.
+    public static func offScreenTerminalRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name) is a terminal, which takes text only as keys, and its window is off screen (it may be on another "
+            + "Space or workspace), where keys don't reach it. Nothing was typed. Ask the user to bring the window on screen."
+    }
+
+    /// Terminals and code editors, whose windows are not routed as documents.
+    public static let keyCommandBundleIDs: Set<String> = terminalBundleIDs.union([
+        "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "dev.zed.Zed", "com.sublimetext.4", "com.apple.dt.Xcode",
+        "org.vim.MacVim",
+    ])
 
     /// A terminal or code editor (`keyCommandBundleIDs`, any JetBrains IDE), or any Alas build.
     public static func isKeyCommandApp(_ app: ComputerUseAppIdentity, hostPID: Int32) -> Bool {

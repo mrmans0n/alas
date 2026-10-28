@@ -16,19 +16,42 @@ struct ComputerUseInspectTreeTests {
     }
 
     /// A truncated result names what cut it: the element limit first, then an app that stopped
-    /// answering, then the time limit, which may have kept the read from its node budget.
+    /// answering, then the time limit, then elements whose children couldn't be read, any of
+    /// which may have kept the read from its node budget.
     @Test(arguments: [
-        (true, true, true, true, String?("limit")),
-        (false, true, true, true, "app_not_responding"),
-        (false, false, true, true, "time_limit"),
-        (false, false, false, true, "node_budget"),
-        (false, false, false, false, nil),
+        (true, true, true, true, true, String?("limit")),
+        (false, true, true, true, true, "app_not_responding"),
+        (false, false, true, true, true, "time_limit"),
+        (false, false, false, true, true, "elements_unreadable"),
+        (false, false, false, false, true, "node_budget"),
+        (false, false, false, false, false, nil),
     ])
     func aTruncatedResultNamesWhatCutIt(
-        limitReached: Bool, appNotResponding: Bool, timedOut: Bool, budgetSpent: Bool, truncatedBy: String?
+        limitReached: Bool, appNotResponding: Bool, timedOut: Bool, unreadable: Bool, budgetSpent: Bool,
+        truncatedBy: String?
     ) {
-        let cut = ComputerUseReadCut.reason(appNotResponding: appNotResponding, timedOut: timedOut, budgetSpent: budgetSpent)
+        let cut = ComputerUseReadCut.reason(
+            appNotResponding: appNotResponding, timedOut: timedOut, elementsUnreadable: unreadable, budgetSpent: budgetSpent)
         #expect(ComputerUseInspectTree.truncation(limitReached: limitReached, cut: cut) == truncatedBy)
+    }
+
+    /// An element's children are read, absent, gone with it, unanswered, or unreadable, and a
+    /// batch that came back malformed or refused is read again one attribute at a time.
+    @Test(arguments: [
+        (Int32(0), true, Int32?.none, ComputerUseReadCut.ChildrenRead.read),
+        (0, false, nil, .perAttribute),
+        (-25200, false, nil, .perAttribute),
+        (-25202, false, nil, .gone),
+        (-25204, false, nil, .unanswered),
+        (0, true, -25212, .none),
+        (0, true, -25202, .gone),
+        (0, true, -25204, .unanswered),
+        (0, true, -25200, .unreadable),
+    ])
+    func anElementsChildrenReadAsWhatTheAppAnswered(
+        batchResult: Int32, complete: Bool, childrenError: Int32?, read: ComputerUseReadCut.ChildrenRead
+    ) {
+        #expect(ComputerUseReadCut.children(batchResult: batchResult, batchComplete: complete, childrenError: childrenError) == read)
     }
 
     /// The depth warning only suggests what would read deeper.
@@ -140,6 +163,58 @@ struct ComputerUseInspectTreeTests {
         let short = ComputerUseInspectTree.flatten(node("AXWindow", value: "short", [node("AXTextArea", value: emoji)]),
                                                    query: nil, limit: 2, maxDepth: 1)
         #expect(short.elements.map(\.valueLength) == [nil, 201])
+    }
+
+    /// How the window read after a drag differs from the one before it: a window with an outline
+    /// of four rows and a toolbar, of which a three-node prefix reads the window, the outline and
+    /// the first row.
+    enum PrefixChange: CaseIterable {
+        case titleInPrefix, rowGonePastPrefix, onlyPastCommonLength, focusOnly, partialLastNode, unknownChildren, none
+        /// A change in the prefix of a read cut this way.
+        case cut(ComputerUseReadCut)
+
+        static var allCases: [Self] {
+            [.titleInPrefix, .rowGonePastPrefix, .onlyPastCommonLength, .focusOnly, .partialLastNode, .unknownChildren, .none,
+             .cut(.appNotResponding), .cut(.elementsUnreadable), .cut(.webContentMissing)]
+        }
+    }
+
+    /// A cut-short read shows a change only in the nodes both reads hashed, a container's child
+    /// count included; focus doesn't count, nor a read whose cut makes it incomparable, nor the
+    /// node a time limit stopped at, nor anything from an element whose children couldn't be read
+    /// on (a time limit outranks the unreadable cut, and such an element lists none).
+    @Test(arguments: PrefixChange.allCases)
+    func cutShortReadsShowAChangeOnlyInTheNodesBothRead(_ change: PrefixChange) {
+        func window(
+            rows: Int = 4, title: String = "a", focused: Bool = false, partialFirstRow: Bool = false,
+            unknownChildren: Bool = false
+        ) -> ComputerUseAXNode {
+            let cells = (0..<rows).map { index in
+                ComputerUseAXNode(
+                    role: "AXRow", title: index == 0 ? title : "\(index)",
+                    value: index == 0 && partialFirstRow ? nil : "v", isFocused: index == 0 && focused, childCount: 0)
+            }
+            let outline = unknownChildren
+                ? ComputerUseAXNode(role: "AXOutline")
+                : ComputerUseAXNode(role: "AXOutline", children: cells, childCount: rows)
+            let toolbar = ComputerUseAXNode(role: "AXToolbar", childCount: 0)
+            return ComputerUseAXNode(role: "AXWindow", children: [outline, toolbar], childCount: 2)
+        }
+        func hashes(_ root: ComputerUseAXNode, cut: ComputerUseReadCut? = .nodeBudget, limit: Int = 3) -> [Int]? {
+            ComputerUseChangeCheck.prefixHashes(root, cut: cut, maxDepth: 32, limit: limit)
+        }
+        let before = hashes(window())
+        let (after, changed): ([Int]?, Bool) = switch change {
+        case .titleInPrefix: (hashes(window(title: "b")), true)
+        case .rowGonePastPrefix: (hashes(window(rows: 3)), true)
+        case .onlyPastCommonLength: (hashes(window(title: "b"), limit: 2), false)
+        case .focusOnly: (hashes(window(focused: true)), false)
+        case .partialLastNode: (hashes(window(partialFirstRow: true), cut: .timeLimit), false)
+        case .unknownChildren: (hashes(window(unknownChildren: true), cut: .timeLimit), false)
+        case .none: (hashes(window()), false)
+        case .cut(let cut): (hashes(window(title: "b"), cut: cut), false)
+        }
+        #expect(ComputerUseChangeCheck.prefixChanged(before, after) == changed)
     }
 
     @Test(arguments: [

@@ -28,6 +28,22 @@ private final class SQLiteWriteLock: Sendable {
 @MainActor
 @Suite("ACP session persistence")
 struct ACPSessionPersistenceTests {
+    @Test func brokerContextRoundTripRejectsAReplacedWriter() async throws {
+        let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await persistence.upsertSession(row(id: "context"))
+        let lease = try await persistence.seizeLease(sessionId: "context", instanceId: "A", pid: 1, now: 100, leaseToken: "old")
+        let old = fence(for: lease)
+        let state = ACPBrokerDurableState(brokerId: .init(rawValue: "raw"), generation: .init(rawValue: 7),
+            acknowledgedCursor: .init(rawValue: 4), wireContext: .rawV2)
+        #expect(try await persistence.updateACPBrokerState(sessionId: "context", state: state, fence: old))
+        let saved = try #require(try await persistence.loadSession(id: "context"))
+        #expect(try ACPBrokerRestorePolicy.context(from: saved.acpBrokerWireContextJSON) == .rawV2)
+        _ = try await persistence.seizeLease(sessionId: "context", instanceId: "B", pid: 2, now: 101, leaseToken: "new")
+        #expect(try await persistence.clearACPBrokerState(sessionId: "context", fence: old) == false)
+        #expect(try await persistence.updateACPBrokerAcknowledgedCursor(sessionId: "context", state: state, fence: old) == false)
+        #expect(try await persistence.loadSession(id: "context") == saved)
+    }
+
     @Test("SQLite lock waits do not block the main actor")
     func lockWaitRunsOffMainActor() async throws {
         let url = temporaryDatabaseURL()

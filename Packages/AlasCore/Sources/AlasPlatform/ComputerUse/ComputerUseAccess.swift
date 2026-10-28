@@ -149,6 +149,15 @@ public final class ComputerUseAccess {
         sessions[session] = state
     }
 
+    /// A session with auto-run on answers the card itself: an app that needs approval is allowed
+    /// for the session, as "Allow for this session" would, never "Always". Blocked apps and a
+    /// denial for this turn stand. True when it granted.
+    public func grantForAutoRun(_ app: ComputerUseAppIdentity, session: String, input: Bool) -> Bool {
+        guard access(for: app, session: session, input: input) == .needsApproval else { return false }
+        record(.allowForSession, for: app, session: session)
+        return true
+    }
+
     public func turnEnded(session: String) {
         guard var state = sessions[session] else { return }
         state.turnGrants = []

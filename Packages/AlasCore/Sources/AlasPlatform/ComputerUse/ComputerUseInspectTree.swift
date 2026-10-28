@@ -15,6 +15,9 @@ public struct ComputerUseAXNode: Sendable {
     public var handle: Int?
     /// The read stopped at its depth limit here, and the element has children it didn't read.
     public var childrenUnread: Bool
+    /// How many children the element listed when read, including any the read didn't walk;
+    /// nil when its attributes weren't read.
+    public var childCount: Int?
 
     public init(
         role: String,
@@ -27,7 +30,8 @@ public struct ComputerUseAXNode: Sendable {
         isFocused: Bool = false,
         children: [ComputerUseAXNode] = [],
         handle: Int? = nil,
-        childrenUnread: Bool = false
+        childrenUnread: Bool = false,
+        childCount: Int? = nil
     ) {
         self.role = role
         self.subrole = subrole
@@ -40,6 +44,7 @@ public struct ComputerUseAXNode: Sendable {
         self.children = children
         self.handle = handle
         self.childrenUnread = childrenUnread
+        self.childCount = childCount
     }
 }
 
@@ -101,17 +106,63 @@ public enum ComputerUseReadCut: String, Sendable, Equatable {
     case timeLimit = "time_limit"
     /// The app stopped answering, or left elements unanswered.
     case appNotResponding = "app_not_responding"
+    /// The app answered, but some elements' children couldn't be read.
+    case elementsUnreadable = "elements_unreadable"
+    /// A Chromium or Electron window read without the web content an earlier read of it showed,
+    /// which the app was rebuilding (`ComputerUseWebContent.mayLackContent`).
+    case webContentMissing = "web_content_missing"
 
     /// Elements in a row the app may leave unanswered (an AX message that timed out) before the
     /// read stops: one slow element, a source editor's whole text, doesn't end the walk.
     public static let unansweredLimit = 3
 
     /// The reason a read reports; nil when it read everything. An app that didn't answer explains
-    /// the rest, and a time limit explains a node budget it kept the read from reaching.
-    public static func reason(appNotResponding: Bool, timedOut: Bool, budgetSpent: Bool) -> Self? {
+    /// the rest, a time limit explains elements it left unread, and both explain a node budget
+    /// the read may not have reached otherwise.
+    public static func reason(
+        appNotResponding: Bool, timedOut: Bool, elementsUnreadable: Bool, budgetSpent: Bool
+    ) -> Self? {
         if appNotResponding { return .appNotResponding }
         if timedOut { return .timeLimit }
+        if elementsUnreadable { return .elementsUnreadable }
         return budgetSpent ? .nodeBudget : nil
+    }
+
+    /// What a read of one element's attributes says about its children.
+    public enum ChildrenRead: Equatable, Sendable {
+        /// The children entry holds a value.
+        case read
+        /// The element has no children: the attribute is absent or unsupported.
+        case none
+        /// The element no longer exists: it isn't on screen, and has no place in the tree.
+        case gone
+        /// The app didn't answer (`appNotResponding`).
+        case unanswered
+        /// The app answered, but not with the children (`elementsUnreadable`).
+        case unreadable
+        /// The batch read is unusable: read the attributes one at a time, and ask again with the
+        /// children's own result.
+        case perAttribute
+    }
+
+    /// Classifies a batch attribute read (`batchResult`, an `AXError`'s raw value; `batchComplete`,
+    /// whether it returned one entry per attribute asked) and its children entry's error
+    /// (`childrenError`, nil or 0 when it holds a value). A read one attribute at a time passes
+    /// 0 and true, with the children read's own error.
+    public static func children(batchResult: Int32, batchComplete: Bool, childrenError: Int32?) -> ChildrenRead {
+        switch batchResult {
+        case 0: if !batchComplete { return .perAttribute }
+        case -25204: return .unanswered // cannotComplete
+        case -25202: return .gone // invalidUIElement
+        default: return .perAttribute
+        }
+        switch childrenError {
+        case nil, 0: return .read
+        case -25212, -25205, -25208: return .none // noValue, attributeUnsupported, notImplemented
+        case -25202: return .gone
+        case -25204: return .unanswered
+        default: return .unreadable
+        }
     }
 }
 

@@ -47,6 +47,12 @@ extension AppState {
             appIsActive: { NSApp.isActive }
         )
         coordinator.transcript = { link.state?.session(for: $0)?.transcript }
+        coordinator.autoRun = { link.state?.session(for: $0)?.autoRunEnabled ?? false }
+        coordinator.autoRunAllowed = { sessionID, app in
+            let notice = ComputerUseCoordinator.autoRunNotice(appName: app.name)
+            // Through the session's runner, so the line is persisted and survives a reload.
+            link.state?.acpManager(forSession: sessionID)?.runners[sessionID]?.appendAndPersistSystemNotice(notice)
+        }
         return coordinator
     }
 
@@ -73,6 +79,7 @@ extension AppState {
             },
             showSession: { [weak self] in self?.showComputerUseSession($0) },
             stopShortcutWarning: { [weak self] in self?.computerUseStopHotKey?.unavailableReason },
+            retryStopShortcut: { [weak self] in self?.computerUseStopHotKey?.retryIfTaken() },
             stopShortcut: { [weak self] in self?.binding(for: .stopComputerUse) }
         )
         computerUseStatusItem = item
@@ -85,6 +92,13 @@ extension AppState {
             // Same as the status item's Stop: the session driving right now.
             guard let self, let sessionID = self.computerUse.driver?.sessionID else { return }
             Task { await self.computerUse.stop(sessionID: sessionID) }
+        }
+        // Once per registration request (`ComputerUseStopHotKey.update`), which is once per drive
+        // unless the binding changes mid-drive; retries never post.
+        computerUseStopHotKey?.onTaken = { [weak self] binding in
+            guard let self, let sessionID = self.computerUse.driver?.sessionID else { return }
+            self.acpManager(forSession: sessionID)?.runners[sessionID]?
+                .appendAndPersistSystemNotice(ComputerUseStopHotKey.takenNotice(binding))
         }
         syncComputerUseStopHotKey()
     }

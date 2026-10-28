@@ -8,6 +8,7 @@ struct ComputerUseInputTests {
     private typealias Chord = ComputerUseKeyChord
     private typealias Window = ComputerUseInputGeometry.ScreenWindow
     private typealias SavedType = ComputerUsePastePolicy.SavedType
+    private typealias Focus = ComputerUseSecureFocus.Element
 
     @Test(arguments: [
         (ShortcutBinding?.some(.init(key: ".", modifiers: [.control, .option, .command])), true, true),
@@ -16,6 +17,17 @@ struct ComputerUseInputTests {
     ] as [(ShortcutBinding?, Bool, Bool)])
     func theStopShortcutIsRegisteredOnlyWhileAnAgentDrives(binding: ShortcutBinding?, driving: Bool, registered: Bool) {
         #expect((ComputerUseStopShortcut.registration(binding: binding, driverActive: driving) != nil) == registered)
+    }
+
+    /// Only a combination another app holds is registered again, and only while an agent drives.
+    @Test(arguments: [
+        (Int32?(-9878), true, true),
+        (-9878, false, false),
+        (nil, true, false),
+        (-50, true, false),
+    ])
+    func onlyATakenStopShortcutIsRetriedWhileAnAgentDrives(status: Int32?, driving: Bool, retries: Bool) {
+        #expect(ComputerUseStopShortcut.retries(status: status, driverActive: driving) == retries)
     }
 
     @Test(arguments: [
@@ -48,6 +60,31 @@ struct ComputerUseInputTests {
         #expect(try #require(Chord.parse(text)).mayEditText == edits)
     }
 
+    /// Typed text goes as unicode key events of at most a chunk's UTF-16 units, never splitting a
+    /// character. A line break inside the text is Shift+Return, a new line where Return would send a
+    /// chat message; each trailing one is Return, which Chrome's address bar needs to submit. In a
+    /// terminal every line break is Return, so each line runs.
+    /// Columns: text, chunk units, terminal, pieces.
+    @Test(arguments: [
+        ("url\n", 4, false, [ComputerUseTypedKeys.text("url"), .returnKey(shift: false)]),
+        ("hi\nthere", 8, false, [.text("hi"), .returnKey(shift: true), .text("there")]),
+        ("a\r\nb\rc\n\n", 4, false,
+         [.text("a"), .returnKey(shift: true), .text("b"), .returnKey(shift: true), .text("c"),
+          .returnKey(shift: false), .returnKey(shift: false)]),
+        ("\n\n", 4, false, [.returnKey(shift: false), .returnKey(shift: false)]),
+        ("ls\npwd\n", 4, true, [.text("ls"), .returnKey(shift: false), .text("pwd"), .returnKey(shift: false)]),
+        ("ab\ncdefg", 4, false, [.text("ab"), .returnKey(shift: true), .text("cdef"), .text("g")]),
+        // A tab stays text; an emoji (two units) is never split.
+        ("a\tb", 4, false, [.text("a\tb")]),
+        ("abc😀", 4, false, [.text("abc"), .text("😀")]),
+    ])
+    func typedTextSplitsIntoChunksAndReturnKeys(
+        text: String, chunkUnits: Int, terminal: Bool, pieces: [ComputerUseTypedKeys]
+    ) {
+        #expect(ComputerUseTypedKeys.split(text, chunkUnits: chunkUnits, terminal: terminal) == pieces)
+        #expect(pieces.map(\.characterCount).reduce(0, +) == text.count)
+    }
+
     /// A web field can read as focused in its page while the app's focused element is the
     /// address bar: a chord that may edit text is refused when any focused element is secure.
     @Test(arguments: [("ctrl+y", true), ("cmd+delete", true), ("shift+cmd+v", true), ("tab", false), ("return", false)])
@@ -67,6 +104,41 @@ struct ComputerUseInputTests {
     ])
     func textEntryElementsAreRecognized(element: ComputerUseSecureFocus.Element, isTextEntry: Bool) {
         #expect(ComputerUseSecureFocus.isTextEntry(element) == isTextEntry)
+    }
+
+    /// Keys typed without a ref into a list or outline act on it (Finder renames the wrong file
+    /// after its type-to-select), so only text inputs and editing surfaces take them.
+    /// Columns: focused element, selects text, in a web area, terminal or code editor, bundle id, accepted.
+    @Test(arguments: [
+        (Focus(role: "AXTextField"), false, false, false, "com.apple.finder", true),
+        (Focus(role: "AXOutline"), false, false, false, "com.apple.finder", false),
+        (Focus(role: "AXGroup"), false, false, false, "com.apple.finder", false),
+        (nil, false, false, false, "com.apple.finder", false),
+        // Mail's message list, an NSTableView: type-select picks a message.
+        (Focus(role: "AXTable"), false, false, false, "com.apple.mail", false),
+        (Focus(role: "AXCell"), false, false, false, "com.apple.mail", false),
+        (Focus(role: "AXButton"), false, false, false, nil, false),
+        (nil, false, false, false, "com.apple.TextEdit", true),
+        // The window, or an element the app doesn't describe: as nothing focused.
+        (Focus(role: "AXWindow"), false, false, false, "com.apple.TextEdit", true),
+        (Focus(role: "AXUnknown"), false, false, false, nil, true),
+        (Focus(role: "AXWindow"), false, false, false, "com.apple.finder", false),
+        // A spreadsheet's grid, or a table cell being edited.
+        (Focus(role: "AXTable"), false, false, false, "com.apple.iWork.Numbers", true),
+        (Focus(role: "AXCell"), false, false, false, "org.libreoffice.script", true),
+        (Focus(role: "AXCell"), true, false, false, "com.apple.mail", true),
+        (Focus(role: "AXScrollArea"), false, false, false, "com.apple.iWork.Pages", true),
+        (Focus(role: "AXStaticText"), true, false, false, nil, true),
+        (Focus(role: "AXGroup"), false, true, false, "com.google.Chrome", true),
+        (Focus(role: "AXList"), false, false, true, "com.mitchellh.ghostty", true),
+    ] as [(Focus?, Bool, Bool, Bool, String?, Bool)])
+    func refLessTypingNeedsAFocusedTextInput(
+        element: ComputerUseSecureFocus.Element?, selectsText: Bool, inWebArea: Bool, keyCommandApp: Bool,
+        bundleID: String?, accepted: Bool
+    ) {
+        #expect(ComputerUseSecureFocus.acceptsTypedKeys(
+            element, selectsText: selectsText, inWebArea: inWebArea, keyCommandApp: keyCommandApp, bundleID: bundleID)
+            == accepted)
     }
 
     /// Only a web page's field takes the click through AX focus; a native one keeps the plain click.
@@ -335,21 +407,37 @@ struct ComputerUseInputTests {
         #expect(ComputerUseInputGeometry.isSheetBacking(title: title, frame: frame, sheetFrames: sheets) == backing)
     }
 
-    /// A drop shows in a window only when its elements change, read completely both times; focus
-    /// or selection moving doesn't count.
+    /// A drag whose window differs only in focus or selection (the activation or the press
+    /// selected what it grabbed) did nothing it can show, however it went; a foreground one isn't
+    /// retried directly, nor one over a cut-short read. A cut-short read whose first elements
+    /// changed (`prefixChanged`) shows the drag did something; over complete reads they don't count.
+    /// Columns: elements, focus-free elements, focus and target state after (before: 1, 1, A, 1),
+    /// first elements changed, as events.
     @Test(arguments: [
-        (Optional(1), Optional(2), false, true),
-        (1, 1, true, false),
-        (nil, 2, false, false),
-        (1, nil, false, false),
-    ] as [(Int?, Int?, Bool, Bool)])
-    func aWindowShowsADropOnlyWhenItsElementsChange(before: Int?, after: Int?, focusMoved: Bool, changed: Bool) {
-        let focus = ComputerUseWindowFingerprint.Focus(role: "AXTextField")
-        let moved = ComputerUseWindowFingerprint.Focus(role: "AXRow")
-        #expect(ComputerUseChangeCheck.elementsChanged(
-            before: .init(focus: focus, windowTitle: "Docs", elementsHash: before, targetHash: nil),
-            after: .init(focus: focusMoved ? moved : focus, windowTitle: "Docs", elementsHash: after, targetHash: nil)) == changed)
+        (Optional(1), Optional(1), "A", Optional(1), false, true, Optional(Self.dragNoEffect)),
+        (1, 1, "A", 1, true, true, Self.dragNoEffect),
+        (2, 1, "B", 2, false, true, Self.dragNoEffect),
+        (2, 1, "B", 2, false, false, ComputerUseChangeCheck.dragWarning),
+        (1, 1, "A", 2, false, false, ComputerUseChangeCheck.dragWarning),
+        (2, 2, "A", 1, false, true, nil),
+        (2, 2, "B", 1, false, false, nil),
+        (nil, nil, "B", 2, false, true, nil),
+        (nil, nil, "A", 1, false, false, ComputerUseChangeCheck.dragWarning),
+        (nil, nil, "A", 1, false, true, ComputerUseChangeCheck.dragWarning),
+        (nil, nil, "A", 1, true, true, nil),
+    ] as [(Int?, Int?, String, Int?, Bool, Bool, String?)])
+    func aDragThatOnlyMovedFocusOrSelectionWarns(
+        elements: Int?, content: Int?, focus: String, target: Int?, prefixChanged: Bool, asEvents: Bool, warning: String?
+    ) {
+        let before = ComputerUseWindowFingerprint(
+            focus: .init(role: "A"), windowTitle: "Docs", elementsHash: 1, targetHash: 1, contentHash: 1, prefixHashes: [1])
+        let after = ComputerUseWindowFingerprint(
+            focus: .init(role: focus), windowTitle: "Docs", elementsHash: elements, targetHash: target, contentHash: content,
+            prefixHashes: [prefixChanged ? 2 : 1])
+        #expect(ComputerUseChangeCheck.warning(before: before, after: after, kind: .drag, deliveredAsEvents: asEvents) == warning)
     }
+
+    private static let dragNoEffect = ComputerUseChangeCheck.dragWarning + ComputerUseChangeCheck.retryDirectHint
 
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
@@ -394,6 +482,31 @@ struct ComputerUseInputTests {
     typealias State = ComputerUseTakeover.DragPointState
     typealias Step = ComputerUseTakeover.DragStep
 
+    /// Windows A and B on the display at (0, 0, 1000, 800); P is parked off it. Two windows stacked
+    /// at one frame (AeroSpace's accordion) overlap; a parked window waits for the activation.
+    @Test(arguments: [
+        ("A", "A", Optional(CGPoint(x: 20, y: 20)), Optional(CGPoint(x: 80, y: 80)), Optional<Step>.none),
+        ("A", "B", CGPoint(x: 20, y: 20), CGPoint(x: 520, y: 20), nil),
+        ("A", "A2", CGPoint(x: 20, y: 20), CGPoint(x: 80, y: 80), .overlap),
+        ("A", "A", nil, CGPoint(x: 80, y: 80), .hidden(.start)),
+        ("A", "B", CGPoint(x: 20, y: 20), nil, .hidden(.end)),
+        ("W", "W", CGPoint(x: 20, y: 20), CGPoint(x: 1100, y: 20), .offScreen),
+        ("P", "P", nil, CGPoint(x: 3020, y: 20), nil),
+        ("P", "P2", CGPoint(x: 3020, y: 20), CGPoint(x: 3080, y: 20), nil),
+    ] as [(String, String, CGPoint?, CGPoint?, Step?)])
+    func aFrontDragIsRefusedBeforeActivationOnlyForWhatActivationCantChange(
+        source: String, drop: String, start: CGPoint?, end: CGPoint?, step: Step?
+    ) {
+        let frames = [
+            "A": CGRect(x: 0, y: 0, width: 400, height: 300), "A2": CGRect(x: 0, y: 0, width: 400, height: 300),
+            "B": CGRect(x: 500, y: 0, width: 400, height: 300), "W": CGRect(x: 0, y: 0, width: 1200, height: 300),
+            "P": CGRect(x: 3000, y: 0, width: 400, height: 300), "P2": CGRect(x: 3000, y: 0, width: 400, height: 300),
+        ]
+        #expect(ComputerUseTakeover.dragRefusalBeforeActivation(
+            start: start, end: end, sourceFrame: frames[source]!, dropFrame: frames[drop]!, sameWindow: source == drop,
+            displays: [CGRect(x: 0, y: 0, width: 1000, height: 800)]) == step)
+    }
+
     @Test func dragsLookThroughIgnoredWindows() {
         // Alas's own overlay 3 is frontmost over both windows.
         let windows = [
@@ -429,6 +542,14 @@ struct ComputerUseInputTests {
     @Test(arguments: [(0.5, ComputerUseTakeover.ActivationFailure.userActive), (1.9, .userActive), (2.0, .notFrontmost), (60.0, .notFrontmost)])
     func anActivationRefusedDuringUserInputIsTheUserBeingActive(idle: TimeInterval, failure: ComputerUseTakeover.ActivationFailure) {
         #expect(ComputerUseTakeover.activationFailure(idleSeconds: idle) == failure)
+    }
+
+    /// An ignored activation is forced only on an idle user whose front app is still in front.
+    @Test(arguments: [
+        (5.0, Bool?.none, true), (5.0, false, false), (1.9, true, false),
+    ] as [(TimeInterval, Bool?, Bool)])
+    func anIgnoredActivationIsForcedOnlyOnAnIdleUnchangedFront(idle: TimeInterval, previousIsFront: Bool?, forces: Bool) {
+        #expect(ComputerUseTakeover.forcesActivation(idleSeconds: idle, previousIsFront: previousIsFront) == forces)
     }
 
     @Test(arguments: [
@@ -484,6 +605,26 @@ struct ComputerUseInputTests {
         #expect(
             ComputerUseTakeover.tookOverDrag(
                 lastUserInput: lastUserInput, dragBegan: 100, secureInputKeyAt: secureInputKeyAt) == tookOver)
+    }
+
+    /// Another process's single pointer move (a window manager centring the cursor) isn't the
+    /// user's, a stream of them is; anything else of theirs is, from any source; Alas's own never are.
+    /// Each row: events (type, source pid, Alas's, seconds) and whether each counts.
+    @Test(arguments: [
+        ([(CGEventType.mouseMoved, Int64(0), false, 0.0)], [true]),
+        ([(.mouseMoved, 4242, false, 0)], [false]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 4242, false, 0.05)], [false, true]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 4242, false, 0.15)], [false, false]),
+        ([(.mouseMoved, 4242, false, 0), (.mouseMoved, 7, false, 0.05)], [false, false]),
+        ([(.mouseMoved, 4242, true, 0), (.mouseMoved, 4242, false, 0.05)], [false, false]),
+        ([(.keyDown, 4242, false, 0), (.leftMouseDown, 4242, false, 0), (.leftMouseDragged, 4242, false, 0),
+          (.scrollWheel, 4242, false, 0)], [true, true, true, true]),
+        ([(.leftMouseDragged, 0, true, 0)], [false]),
+    ] as [([(CGEventType, Int64, Bool, TimeInterval)], [Bool])])
+    func onlyTheUsersOwnPointerMovesCountAsInput(events: [(CGEventType, Int64, Bool, TimeInterval)], counts: [Bool]) {
+        var moves = ComputerUsePostedMoves()
+        let seen = events.map { moves.countsAsUserInput(type: $0.0, sourcePID: $0.1, isAlasPosted: $0.2, now: $0.3) }
+        #expect(seen == counts)
     }
 
     /// Without a confirmed key window the input falls back to activation, which an active user blocks.
@@ -564,6 +705,40 @@ struct ComputerUseInputTests {
     ] as [([Link], ComputerUseClickTarget.Choice)])
     private func clickTargets(chain: [Link], expected: ComputerUseClickTarget.Choice) {
         #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
+    }
+
+    /// AXPress doesn't reach a Chrome page's content (Chrome 156 kept a button's counter at 0), so
+    /// its left single click goes with the pointer, where its centre shows, holds the element and
+    /// the window was made key in the background; anything else gets the AX press as before. An
+    /// Electron app's press works (with the pointer retry after it).
+    /// Columns: left single, in a web area, Chrome browser, centre on screen, the element's level
+    /// above the hit, the hit's level above the element, route, pointer first.
+    @Test(arguments: [
+        (true, true, true, true, Int?(0), Int?.none, ComputerUseEventRoute.background, true),
+        // The hit is the button's label, or the wrapper over a 1×1 visually hidden control.
+        (true, true, true, true, 2, nil, .background, true),
+        (true, true, true, true, nil, 2, .background, true),
+        // An overlay or sticky header is there instead, or a far ancestor.
+        (true, true, true, true, nil, nil, .background, false),
+        (true, true, true, true, 9, nil, .background, false),
+        (true, true, true, true, nil, 3, .background, false),
+        // Not in the background: the AX press, never an activation or refusal for the pointer.
+        (true, true, true, true, 0, nil, .activation, false),
+        (true, true, true, true, 0, nil, .refuse, false),
+        (false, true, true, true, 0, nil, .background, false),
+        (true, false, true, true, 0, nil, .background, false),
+        // An Electron app or Safari, and a centre off screen.
+        (true, true, false, true, 0, nil, .background, false),
+        (true, true, true, false, 0, nil, .background, false),
+    ])
+    func aChromeWebElementIsClickedWithThePointerFirst(
+        leftSingle: Bool, inWebArea: Bool, chromeBrowser: Bool, centerOnScreen: Bool, targetAboveHit: Int?,
+        hitAboveTarget: Int?, route: ComputerUseEventRoute, pointerFirst: Bool
+    ) {
+        let candidate = ComputerUseClickTarget.pointerCandidate(
+            leftSingle: leftSingle, inWebArea: inWebArea, chromeBrowser: chromeBrowser, centerOnScreen: centerOnScreen,
+            hitOnElement: ComputerUseClickTarget.hitReaches(targetAboveHit: targetAboveHit, hitAboveTarget: hitAboveTarget))
+        #expect(ComputerUseClickTarget.pointerFirst(candidate: candidate, route: route) == pointerFirst)
     }
 
     @Test(arguments: [
@@ -722,14 +897,59 @@ struct ComputerUseInputTests {
         #expect(ComputerUseTextCheck.outcome(readBack, inWebArea: inWebArea, chromium: chromium, keysReach: keysReach) == outcome)
     }
 
+    /// A terminal's grid takes an AX insert that never reaches the shell: its text goes as keys,
+    /// or is refused off screen, and a replace (⌘A selects the scrollback) is refused. A code
+    /// editor keeps the AX write.
     @Test(arguments: [
-        (String?("com.google.Chrome"), false, true),
-        ("com.tinyspeck.slackmacgap", true, true),
-        ("com.apple.Safari", false, false),
-        (nil, false, false),
+        (String?("com.mitchellh.ghostty"), true, ComputerUseTextCheck.Outcome.typeAsKeys),
+        ("com.apple.Terminal", true, .typeAsKeys),
+        ("dev.warp.Warp-Preview", true, .typeAsKeys),
+        ("org.tabby", true, .typeAsKeys),
+        ("com.raphaelamorim.rio", true, .typeAsKeys),
+        ("com.github.wez.wezterm", false, .refuse),
+        ("com.microsoft.VSCode", true, .write),
+        ("dev.zed.Zed.Helper", true, .write),
+        (nil, true, .write),
     ])
-    func chromiumMeansAChromeBundleOrAnAppThatTookManualAccessibility(bundleID: String?, manual: Bool, chromium: Bool) {
-        #expect(ComputerUseWebContent.isChromium(bundleID: bundleID, acceptsManualAccessibility: manual) == chromium)
+    func aTerminalIsNeverWrittenByAX(bundleID: String?, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome) {
+        let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
+        let terminal = ComputerUseTextCheck.isTerminal(app)
+        #expect(ComputerUseTextCheck.outcome(
+            nil, inWebArea: false, chromium: false, terminal: terminal, keysReach: keysReach) == outcome)
+        #expect((ComputerUseTextCheck.terminalReplaceRefusal(app, replace: true) != nil) == terminal)
+        #expect(ComputerUseTextCheck.terminalReplaceRefusal(app, replace: false) == nil)
+    }
+
+    /// Chrome's address bar shows an AX insert but never submits its line break, so that text goes
+    /// as keys, or is refused off screen; a page's field, another browser and text without a line
+    /// break are written as before.
+    @Test(arguments: [
+        ("https://example.com\n", String?("com.google.Chrome"), false, true, ComputerUseTextCheck.Outcome.typeAsKeys),
+        ("https://example.com\n", "com.google.Chrome", false, false, .refuse),
+        ("a\r", "com.brave.Browser", false, true, .typeAsKeys),
+        ("https://example.com", "com.google.Chrome", false, true, .write),
+        ("line\nbreak", "com.google.Chrome", true, true, .write),
+        ("https://example.com\n", "com.apple.Safari", false, false, .write),
+        ("https://example.com\n", nil, false, true, .write),
+    ])
+    func aLineBreakIntoAChromiumBrowsersOwnFieldGoesAsKeys(
+        text: String, bundleID: String?, inWebArea: Bool, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome
+    ) {
+        #expect(ComputerUseTextCheck.lineBreakOutcome(
+            text, bundleID: bundleID, inWebArea: inWebArea, keysReach: keysReach) == outcome)
+    }
+
+    @Test(arguments: [
+        (String?("com.google.Chrome"), false, false, true),
+        ("com.tinyspeck.slackmacgap", true, false, true),
+        // An Electron app that refused the attribute, or wasn't asked yet.
+        ("com.tinyspeck.slackmacgap", false, true, true),
+        ("com.apple.Safari", false, false, false),
+        (nil, false, false, false),
+    ])
+    func chromiumMeansAChromeBundleOrAnElectronApp(bundleID: String?, manual: Bool, electron: Bool, chromium: Bool) {
+        #expect(ComputerUseWebContent.isChromium(
+            bundleID: bundleID, acceptsManualAccessibility: manual, embedsElectron: electron) == chromium)
     }
 
     /// Text for a document's text area goes as keys, which mark it edited; off screen it is the AX
@@ -772,5 +992,106 @@ struct ComputerUseInputTests {
     func terminalsCodeEditorsAndAlasAreNotTypedAsDocuments(bundleID: String?, skips: Bool) {
         let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
         #expect(ComputerUseTextCheck.isKeyCommandApp(app, hostPID: 1) == skips)
+    }
+
+    /// Columns: start on screen, end on screen, into another window, from a list item, Chromium, direct.
+    @Test(arguments: [
+        (true, true, false, false, false, false, ComputerUseBackgroundDrag.Route.background),
+        (true, true, false, false, false, true, .foreground),
+        (false, true, false, false, false, false, .foreground),
+        (true, false, false, false, false, false, .foreground),
+        (true, true, true, false, false, false, .foreground),
+        (true, true, false, true, false, false, .foreground),
+        (true, true, false, false, true, false, .foreground),
+    ] as [(Bool, Bool, Bool, Bool, Bool, Bool, ComputerUseBackgroundDrag.Route)])
+    func aDragStaysInTheBackgroundOnlyInsideOneWindowOffItemsOutsideChromiumWhenNotDirect(
+        start: Bool, end: Bool, crossWindow: Bool, item: Bool, chromium: Bool, direct: Bool,
+        route: ComputerUseBackgroundDrag.Route
+    ) {
+        #expect(ComputerUseBackgroundDrag.route(
+            startOnScreen: start, endOnScreen: end, crossWindow: crossWindow, startsInItem: item, chromium: chromium,
+            direct: direct) == route)
+    }
+
+    /// Finder's list view, as read: a row and the column spanning every row at one depth, a cell
+    /// in the row, and the header button above the rows, outside them.
+    @Test(arguments: [
+        (CGPoint(x: 100, y: 138), true),
+        (CGPoint(x: 45, y: 138), true),
+        (CGPoint(x: 100, y: 109), false),
+        (CGPoint(x: 100, y: 400), false),
+        (CGPoint(x: 900, y: 900), false),
+    ])
+    func aDragStartsInAnItemWhenTheDeepestElementsThereIncludeARow(point: CGPoint, inItem: Bool) {
+        let elements = [
+            ComputerUseBackgroundDrag.ReadElement(frame: CGRect(x: 39, y: 122, width: 1650, height: 957), depth: 4, inRow: false),
+            .init(frame: CGRect(x: 40, y: 128, width: 1648, height: 20), depth: 5, inRow: true),
+            .init(frame: CGRect(x: 66, y: 128, width: 1307, height: 20), depth: 6, inRow: true),
+            .init(frame: CGRect(x: 40, y: 123, width: 1323, height: 955), depth: 5, inRow: false),
+            .init(frame: CGRect(x: 40, y: 95, width: 1648, height: 28), depth: 5, inRow: false),
+            .init(frame: CGRect(x: 50, y: 95, width: 1323, height: 28), depth: 6, inRow: false),
+        ]
+        #expect(ComputerUseBackgroundDrag.startsInItem(at: point, elements: elements) == inItem)
+    }
+
+    @Test(arguments: [
+        (Int32(7), 500, false, true),
+        (7, 500, true, false),
+        (8, 500, false, false),
+        (7, 0, false, false),
+        (7, 1000, false, true),
+    ] as [(Int32, Int, Bool, Bool)])
+    func aNewDragLayerWindowOfTheSourceMarksANativeDragSession(
+        pid: Int32, layer: Int, alreadyListed: Bool, started: Bool
+    ) {
+        let window = ComputerUseInputGeometry.ScreenWindow(id: 9, pid: pid, layer: layer, frame: .zero)
+        #expect(
+            ComputerUseBackgroundDrag.startedSession(
+                before: alreadyListed ? [9] : [], now: [window], sourcePID: 7) == started)
+    }
+
+    /// Columns: dropped, session active, foreground, last two reads settled, a read lacked its web
+    /// content, waited ms, keeps polling. The deadline is 1500 ms.
+    @Test(arguments: [
+        // A background drag stays in one window: it stops once the drop shows.
+        (true, true, false, false, false, 100, false),
+        (false, false, false, false, false, 100, true),
+        (false, false, false, false, false, 1500, false),
+        // In the foreground, a drop that showed (the selection flash) is read until two reads
+        // agree past the settle, with the drag image gone.
+        (true, false, true, false, false, 600, true),
+        (true, false, true, true, false, 250, true),
+        (true, false, true, true, false, 500, false),
+        (true, true, true, true, false, 600, true),
+        (true, false, true, false, false, 1500, false),
+        (false, false, true, true, false, 600, true),
+        // A web tree Chrome is rebuilding gets 3 s.
+        (false, false, true, false, true, 2500, true),
+        (false, false, true, false, true, 3000, false),
+    ] as [(Bool, Bool, Bool, Bool, Bool, Int, Bool)])
+    func aDropIsAwaitedWhileItMaySettle(
+        dropped: Bool, sessionActive: Bool, foreground: Bool, settled: Bool, webContentMissing: Bool, waitedMs: Int,
+        polls: Bool
+    ) {
+        #expect(
+            ComputerUseBackgroundDrag.keepsPolling(
+                dropped: dropped, sessionActive: sessionActive, foreground: foreground, settled: settled,
+                webContentMissing: webContentMissing, waited: .milliseconds(waitedMs), deadline: .milliseconds(1500)
+            ) == polls)
+    }
+
+    /// Two reads after a drag agree only when both were read, the later one completely, and they
+    /// are equal. Columns: previous and current elements hash (nil fingerprint for 0), settled.
+    @Test(arguments: [
+        (Optional(1), Optional(1), true),
+        (1, 2, false),
+        (nil, nil, false),
+        (0, 1, false),
+    ] as [(Int?, Int?, Bool)])
+    func twoReadsAfterADragSettleOnlyWhenCompleteAndEqual(previous: Int?, current: Int?, settled: Bool) {
+        func read(_ hash: Int?) -> ComputerUseWindowFingerprint? {
+            hash == 0 ? nil : .init(windowTitle: "Docs", elementsHash: hash, contentHash: hash)
+        }
+        #expect(ComputerUseBackgroundDrag.readsSettled(previous: read(previous), current: read(current)) == settled)
     }
 }

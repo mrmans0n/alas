@@ -41,8 +41,10 @@ struct ComputerUseCommandTests {
         #expect(scroll.command == .computer(.init(action: .scroll, windowID: 3, ref: "e2", dy: -100)))
         let drag = try decode("computer_drag", #"{"window_id":3,"ref":"e2","to_x":5,"to_y":6,"delivery":"direct"}"#)
         #expect(drag.command == .computer(.init(action: .drag, windowID: 3, ref: "e2", toX: 5, toY: 6, delivery: .direct)))
-        let across = try decode("computer_drag", #"{"window_id":3,"ref":"e2","to_window_id":9,"to_ref":"e4"}"#)
-        #expect(across.command == .computer(.init(action: .drag, windowID: 3, ref: "e2", toWindowID: 9, toRef: "e4")))
+        let across = try decode("computer_drag", #"{"window_id":3,"ref":"e2","to_window_id":9,"to_ref":"e4","modifiers":["option","command"]}"#)
+        #expect(across.command == .computer(.init(
+            action: .drag, windowID: 3, ref: "e2", toWindowID: 9, toRef: "e4", modifiers: [.option, .command]
+        )))
         let directScroll = try decode("computer_scroll", #"{"window_id":3,"x":1,"y":2,"dx":4,"delivery":"direct"}"#)
         #expect(directScroll.command == .computer(.init(action: .scroll, windowID: 3, x: 1, y: 2, dx: 4, delivery: .direct)))
         let openApp = try decode("computer_open_app", #"{"bundle_id":"com.apple.Notes"}"#)
@@ -107,6 +109,10 @@ struct ComputerUseCommandTests {
         ("computer_drag", #"{"window_id":1,"ref":"e1"}"#),
         ("computer_drag", #"{"window_id":1,"ref":"e1","to_ref":"e2","to_x":1,"to_y":1}"#),
         ("computer_drag", #"{"window_id":1,"ref":"e1","to_window_id":-1,"to_ref":"e2"}"#),
+        ("computer_drag", #"{"window_id":1,"ref":"e1","to_ref":"e2","modifiers":["option","option"]}"#),
+        ("computer_drag", #"{"window_id":1,"ref":"e1","to_ref":"e2","modifiers":["function"]}"#),
+        ("computer_drag", #"{"window_id":1,"ref":"e1","to_ref":"e2","modifiers":["cmd"]}"#),
+        ("computer_click", #"{"window_id":1,"ref":"e1","modifiers":["shift"]}"#),
         ("computer_click", #"{"window_id":1,"ref":"e1","to_window_id":2}"#),
         ("computer_open_app", #"{"name":"Notes","bundle_id":"com.apple.Notes"}"#),
         ("computer_open_app", "{}"),

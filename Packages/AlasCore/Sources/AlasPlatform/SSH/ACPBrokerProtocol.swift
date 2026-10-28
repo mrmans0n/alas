@@ -147,6 +147,7 @@ public enum ACPBrokerPendingRequestKind: String, Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerMetadata: Codable, Equatable, Sendable {
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
     public let alasSessionId: String
@@ -169,6 +170,8 @@ public struct ACPBrokerMetadata: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerPendingRequest: Codable, Equatable, Sendable {
+    public var rawFrame: ACPBrokerRawJSONPayload? = nil
+    public var originCursor: ACPBrokerEventCursor? = nil
     public let requestId: String
     public let adapterRequestId: ACPBrokerJSONValue
     public let kind: ACPBrokerPendingRequestKind
@@ -183,6 +186,7 @@ public struct ACPBrokerPendingRequest: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerRPCOutcome: Codable, Equatable, Sendable {
+    public var rawFrame: ACPBrokerRawJSONPayload? = nil
     public let result: ACPBrokerJSONValue?
     public let error: JSONRPCError?
 
@@ -198,6 +202,7 @@ public struct ACPBrokerRPCOutcome: Codable, Equatable, Sendable {
 /// serialize into every attach reply. A broker from an older build still
 /// sends the field; `Codable` ignores it.
 public struct ACPBrokerOperationSnapshot: Codable, Equatable, Sendable {
+    public var completedCursor: ACPBrokerEventCursor? = nil
     public let operationKey: ACPBrokerOperationKey
     public let adapterRequestId: ACPBrokerAdapterRequestID
     public let method: String
@@ -212,6 +217,8 @@ public struct ACPBrokerOperationSnapshot: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerSnapshot: Codable, Equatable, Sendable {
+    public var initializeRawResponse: ACPBrokerRawJSONPayload? = nil
+    public var remoteSessionRawResponse: ACPBrokerRawJSONPayload? = nil
     public let metadata: ACPBrokerMetadata
     public let initializeResult: ACPBrokerJSONValue?
     public let remoteSessionResult: ACPBrokerJSONValue?
@@ -246,6 +253,7 @@ public struct ACPBrokerEvent: Codable, Equatable, Sendable {
 }
 
 public enum ACPBrokerEventKind: Equatable, Sendable {
+    case rawFrame(ACPBrokerRawJSONPayload)
     case initialized(result: ACPBrokerJSONValue)
     case remoteSessionReady(result: ACPBrokerJSONValue)
     case turnStateChanged(state: ACPBrokerTurnState)
@@ -266,6 +274,7 @@ public enum ACPBrokerEventKind: Equatable, Sendable {
 
 extension ACPBrokerEventKind: Codable {
     private enum CodingKeys: String, CodingKey {
+        case frame
         case type
         case result
         case state
@@ -284,6 +293,8 @@ extension ACPBrokerEventKind: Codable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let type = try container.decode(String.self, forKey: .type)
         switch type {
+        case "rawFrame":
+            self = .rawFrame(try container.decode(ACPBrokerRawJSONPayload.self, forKey: .frame))
         case "initialized":
             self = .initialized(result: try container.decode(ACPBrokerJSONValue.self, forKey: .result))
         case "remoteSessionReady":
@@ -327,6 +338,9 @@ extension ACPBrokerEventKind: Codable {
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         switch self {
+        case .rawFrame(let frame):
+            try container.encode("rawFrame", forKey: .type)
+            try container.encode(frame, forKey: .frame)
         case .initialized(let result):
             try container.encode("initialized", forKey: .type)
             try container.encode(result, forKey: .result)
@@ -380,6 +394,8 @@ private struct DynamicCodingKey: CodingKey {
 }
 
 public struct ACPBrokerOpenParams: Codable, Equatable, Sendable {
+    public var expectedGeneration: ACPBrokerGeneration? = nil
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let sessionId: String
     public let command: String
@@ -408,6 +424,7 @@ public struct ACPBrokerOpenResult: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerAttachParams: Codable, Equatable, Sendable {
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
     public let acknowledgedCursor: ACPBrokerEventCursor
@@ -440,6 +457,7 @@ public struct ACPBrokerAttachResult: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerSendParams: Codable, Equatable, Sendable {
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
     public let operationKey: ACPBrokerOperationKey
@@ -456,6 +474,7 @@ public struct ACPBrokerSendParams: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerNotifyParams: Codable, Equatable, Sendable {
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
     public let method: String
@@ -470,6 +489,7 @@ public struct ACPBrokerNotifyParams: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerSendResult: Codable, Equatable, Sendable {
+    public var rawFrame: ACPBrokerRawJSONPayload? = nil
     public let requestId: ACPBrokerAdapterRequestID
     public let replayed: Bool
     public let result: ACPBrokerJSONValue?
@@ -492,6 +512,7 @@ public struct ACPBrokerSendResult: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerRespondParams: Codable, Equatable, Sendable {
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
     public let requestId: ACPBrokerJSONValue
@@ -525,6 +546,7 @@ public struct ACPBrokerSimpleOK: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerAckParams: Codable, Equatable, Sendable {
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
     public let cursor: ACPBrokerEventCursor
@@ -537,6 +559,7 @@ public struct ACPBrokerAckParams: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerDetachParams: Codable, Equatable, Sendable {
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
 
@@ -547,6 +570,7 @@ public struct ACPBrokerDetachParams: Codable, Equatable, Sendable {
 }
 
 public struct ACPBrokerCloseParams: Codable, Equatable, Sendable {
+    public var wireContext: ACPBrokerWireContext? = nil
     public let brokerId: ACPBrokerID
     public let generation: ACPBrokerGeneration
 

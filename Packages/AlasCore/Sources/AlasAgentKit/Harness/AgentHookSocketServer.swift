@@ -337,6 +337,12 @@ public final class AgentHookSocketServer: @unchecked Sendable {
                 Self.sendResponse(clientFD: clientFD, ok: false, error: "Malformed request.")
                 return
             }
+            if request.endsWithItsClient {
+                // Nobody reads a reply for a client that left.
+                guard let response = await cliResponse(for: request, whileConnected: clientFD) else { return }
+                Self.sendResponse(clientFD: clientFD, response: response)
+                return
+            }
             let response = await cliResponse(for: request)
             Self.sendResponse(clientFD: clientFD, response: response)
             return
@@ -413,6 +419,44 @@ public final class AgentHookSocketServer: @unchecked Sendable {
         }, onCancel: {
             box.cancel()
         })
+    }
+
+    /// `cliResponse(for:)`, cancelled once the client closes its end of the connection first
+    /// (`clientLeft`); nil then.
+    private func cliResponse(for request: AlasCLIRequest, whileConnected clientFD: Int32) async -> AlasCLIResponse? {
+        await withTaskGroup(of: AlasCLIResponse?.self) { group in
+            group.addTask { await self.cliResponse(for: request) }
+            group.addTask {
+                while !Task.isCancelled {
+                    if Self.clientLeft(clientFD) { return nil }
+                    try? await Task.sleep(for: Self.clientWatchInterval)
+                }
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            return first
+        }
+    }
+
+    /// How often a call that ends with its client looks for the client having left.
+    static let clientWatchInterval: Duration = .milliseconds(100)
+
+    /// Whether the client closed its socket: the socket can't send any more (kqueue's write
+    /// filter reports EOF). A client that half-closed after its request (`shutdown(SHUT_WR)`)
+    /// still reads the reply, and looks the same as a closed one to a read or `poll`. Nothing is
+    /// written, so no SIGPIPE either.
+    static func clientLeft(_ clientFD: Int32) -> Bool {
+        let queue = kqueue()
+        guard queue >= 0 else { return false }
+        defer { close(queue) }
+        var change = kevent(
+            ident: UInt(clientFD), filter: Int16(EVFILT_WRITE), flags: UInt16(EV_ADD | EV_ONESHOT), fflags: 0, data: 0,
+            udata: nil)
+        var event = kevent()
+        var immediately = timespec(tv_sec: 0, tv_nsec: 0)
+        guard kevent(queue, &change, 1, &event, 1, &immediately) == 1 else { return false }
+        return event.flags & UInt16(EV_EOF) != 0
     }
 
     private static func payloadKind(_ data: Data) -> String? {

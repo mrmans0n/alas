@@ -49,8 +49,10 @@ enum ComputerUseInput: Sendable {
     case key(ComputerUseKeyChord)
     case scroll(ComputerUseInputTarget, dx: Int, dy: Int)
     /// `toWindow`: the window the drop end is in, when it isn't the start's; its frame bounds that end.
-    /// Always delivered with the app activated.
-    case drag(from: ComputerUseInputTarget, to: ComputerUseInputTarget, toWindow: ComputerUseWindow?)
+    /// `modifiers` are held from the press to the release.
+    case drag(
+        from: ComputerUseInputTarget, to: ComputerUseInputTarget, toWindow: ComputerUseWindow?,
+        modifiers: Set<ComputerUseKeyChord.Modifier>)
     /// A left click as pointer events at the target, skipping the AX ways: the retry of an AX press
     /// that changed nothing in an app whose AX press only focuses (Electron).
     case pointerClick(ComputerUseInputTarget)
@@ -78,7 +80,9 @@ enum ComputerUseInputInterrupt: Sendable {
 
 /// How an input reached the app, reported to the agent.
 enum ComputerUseDelivery: String, Sendable {
-    /// `background`: events posted to the window after it became its app's key window, without activation.
+    /// `background`: events posted to the window without activating its app, after it was made its
+    /// app's key window. A click, key or typed text goes there only once the key window is
+    /// confirmed; an in-app drag goes either way.
     case ax, event, activation, background
 }
 
@@ -126,12 +130,32 @@ enum ComputerUseSystemError: Error, LocalizedError {
     case userTookOver(typed: Int, of: Int)
     /// The user took over after a drag's button went down; it was cancelled in place.
     case userTookOverDrag
+    /// The user holds drag keys (`ComputerUseInputPoster.userHeldDragKeys`), which would ride along
+    /// with a drag in the front.
+    case userHoldsKeys(String)
+    /// `error`, thrown after its app was brought to the front for the input; `note` says so.
+    /// Only for an error that carries no message of its own to append the note to.
+    indirect case broughtForward(ComputerUseSystemError, note: String)
 
     /// The user's input stopped the input.
     var isUserTakeover: Bool {
         switch self {
-        case .userActive, .userTookOver, .userTookOverDrag: true
+        case .userActive, .userTookOver, .userTookOverDrag, .userHoldsKeys: true
+        case .broughtForward(let error, _): error.isUserTakeover
         default: false
+        }
+    }
+
+    /// The error with `note` after it: in its own message where it has one, else wrapped in
+    /// `broughtForward`, which keeps what the error is.
+    func appending(note: String) -> ComputerUseSystemError {
+        switch self {
+        case .actionFailed(let reason): .actionFailed(reason + note)
+        case .notActiveWindow(let reason): .notActiveWindow(reason + note)
+        case .captureFailed(let reason): .captureFailed(reason + note)
+        case .openFailed(let reason): .openFailed(reason + note)
+        case .broughtForward(let error, let earlier): .broughtForward(error, note: earlier + note)
+        default: .broughtForward(self, note: note)
         }
     }
 
@@ -146,9 +170,11 @@ enum ComputerUseSystemError: Error, LocalizedError {
         case .userActive: "The user is using the app"
         case .userTookOver(let typed, let total): "The user took over after \(typed) of \(total) characters"
         case .userTookOverDrag: "The user took over during the drag"
+        case .userHoldsKeys(let keys): "The user holds \(keys)"
         case .actionFailed(let reason): reason
         case .notActiveWindow(let reason): reason
         case .openFailed(let reason): reason
+        case .broughtForward(let error, let note): (error.errorDescription ?? "") + note
         }
     }
 }
@@ -195,6 +221,8 @@ struct ComputerUseSystem: Sendable {
     /// Whether the app builds its Accessibility tree on request (Chromium, Electron), where an AX
     /// press may only focus the element.
     var usesManualAccessibility: @Sendable (Int32) -> Bool = { _ in false }
+    /// Whether the app's bundle embeds Electron (`ComputerUseAppKind.embedsElectron`).
+    var embedsElectron: @Sendable (Int32) -> Bool = { _ in false }
     /// The apps among `pids` a system password prompt is showing in, or may be showing in without
     /// the probe budget having reached them (`ComputerUseCredentialPrompt.listing`), read with one
     /// window list and one process list, within one probe budget. Clear apps have no entry.
@@ -219,6 +247,19 @@ struct ComputerUseSystem: Sendable {
     /// The frames of the AXSheets in each app's windows, read for the apps among `pids`, so the
     /// windows backing them stay out of listings (`ComputerUseInputGeometry.isSheetBacking`).
     var sheetFrames: @Sendable (_ pids: [Int32]) async -> [Int32: [CGRect]] = { _ in [:] }
+    /// Whether the app shows a drag and drop session's image (`ComputerUseBackgroundDrag.sessionActive`),
+    /// read from the window list.
+    var dragSessionActive: @Sendable (Int32) -> Bool = { _ in false }
+
+    /// A Chromium browser or an Electron app, by any signal (`ComputerUseWebContent.isChromium`).
+    func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
+        ComputerUseAppKind.isChromium(app, manualAccessibility: usesManualAccessibility, electron: embedsElectron)
+    }
+
+    /// An Electron app, by either signal: it took `AXManualAccessibility`, or embeds Electron.
+    func isElectron(_ pid: Int32) -> Bool {
+        usesManualAccessibility(pid) || embedsElectron(pid)
+    }
 
     /// Whether a system password prompt is showing in the app, or may be: one app alone is probed
     /// first, so an unchecked one is the probe not getting to it, and counts as showing.
@@ -252,6 +293,7 @@ struct ComputerUseSystem: Sendable {
             openApp: { try await LiveComputerUseSystem.openApp($0) },
             releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
             usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) },
+            embedsElectron: { ComputerUseAppKind.embedsElectron(pid: $0) },
             credentialPrompts: { await LiveComputerUseSystem.credentialPrompts(pids: $0) },
             accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
             wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0, attribute: $1) },
@@ -262,8 +304,96 @@ struct ComputerUseSystem: Sendable {
             },
             processStart: { LiveComputerUseSystem.processStart($0) },
             displays: { LiveComputerUseSystem.displayFrames() },
-            sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) }
+            sheetFrames: { await ComputerUseAXReader.sheetFrames(pids: $0) },
+            dragSessionActive: { LiveComputerUseSystem.dragSessionActive(pid: $0) }
         )
+    }
+}
+
+/// A drag's two tiers: inside the app in the background, and the drag with the app brought to the
+/// front once the first started a native drag and drop session, which macOS tracks with the
+/// hardware pointer.
+enum ComputerUseDragTiers {
+    /// The longest the fallback waits for a released session's drag image to go, as long as the
+    /// coordinator's copy-drag deadline.
+    static let sessionEndDeadline = ComputerUseCoordinator.dragConfirmDeadline
+
+    /// `background` drags inside the app and releases the button itself, at the start point when a
+    /// session started; nil when the drag can't stay in the background. A Stop or a takeover it
+    /// throws ends the drag: the foreground drag never runs after one. `direct` goes to the
+    /// foreground drag at once.
+    static func deliver(
+        direct: Bool,
+        background: () async throws -> ComputerUseInputPoster.BackgroundDragOutcome?,
+        sessionActive: () -> Bool,
+        foreground: () async throws -> ComputerUseDelivered,
+        isCancelled: () -> Bool,
+        sleep: (Duration) async -> Void
+    ) async throws -> ComputerUseDelivered {
+        if direct { return try await foreground() }
+        switch try await background() {
+        case .done: return .background
+        case nil: return try await foreground()
+        case .dragSession:
+            // A drag image still showing would follow the foreground drag's cursor from where it is.
+            let began = ContinuousClock.now
+            var waited = Duration.zero
+            // The summed sleeps bound it under a test's instant sleep, the clock under a slow
+            // `sessionActive` (each look reads the window list) or a sleep that oversleeps.
+            while sessionActive(), waited < sessionEndDeadline, ContinuousClock.now - began < sessionEndDeadline {
+                if isCancelled() { throw CancellationError() }
+                await sleep(ComputerUseBackgroundDrag.sessionPoll)
+                waited += ComputerUseBackgroundDrag.sessionPoll
+            }
+            if isCancelled() { throw CancellationError() }
+            // A session still going would carry the foreground drag's item along with its own.
+            if sessionActive() { throw ComputerUseSystemError.actionFailed(sessionOutlastedRefusal) }
+            return try await foreground()
+        }
+    }
+
+    static let sessionOutlastedRefusal = "The app started a drag and drop that didn't end; nothing was dragged in the front."
+}
+
+/// What kind of app a process is, from its bundle on disk: no AX message, so safe for any pid.
+enum ComputerUseAppKind {
+    private struct ProcessKey: Hashable {
+        var pid: Int32
+        var start: TimeInterval
+    }
+
+    private static let electron = Mutex<[ProcessKey: Bool]>([:])
+
+    /// Whether the process's app bundle embeds `Electron Framework.framework`, as every Electron
+    /// app does, whether or not it takes `AXManualAccessibility`. CEF apps don't count. Cached
+    /// per process (pid and start time, so a reused pid isn't confused). Thread-safe.
+    static func embedsElectron(pid: Int32) -> Bool {
+        guard pid > 0, let start = LiveComputerUseSystem.processStart(pid) else { return false }
+        let key = ProcessKey(pid: pid, start: start)
+        if let known = electron.withLock({ $0[key] }) { return known }
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+        // …/X.app/Contents/MacOS/<executable>
+        let contents = URL(fileURLWithPath: String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)).deletingLastPathComponent().deletingLastPathComponent()
+        let framework = contents.appendingPathComponent("Frameworks/Electron Framework.framework")
+        let found = FileManager.default.fileExists(atPath: framework.path)
+        electron.withLock { $0[key] = found }
+        return found
+    }
+
+    /// `ComputerUseSystem.isChromium` for the live system, callable on the AX queue.
+    static func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
+        isChromium(app, manualAccessibility: ComputerUseAXReader.acceptsManualAccessibility, electron: { embedsElectron(pid: $0) })
+    }
+
+    /// `ComputerUseWebContent.isChromium` from the two per-pid signals, shared by the system seam
+    /// and the live AX-queue callers.
+    static func isChromium(
+        _ app: ComputerUseAppIdentity, manualAccessibility: (Int32) -> Bool, electron: (Int32) -> Bool
+    ) -> Bool {
+        ComputerUseWebContent.isChromium(
+            bundleID: app.bundleID, acceptsManualAccessibility: manualAccessibility(app.pid),
+            embedsElectron: electron(app.pid))
     }
 }
 
@@ -478,6 +608,9 @@ private enum LiveComputerUseSystem {
 extension LiveComputerUseSystem {
     /// How long a direct delivery waits for the target to come to the front.
     static let activationWait: Duration = .milliseconds(500)
+    /// How long an activation request may go unanswered before WindowServer is asked directly:
+    /// macOS ignores one from Alas while another app is frontmost. Answered ones land in ~15 ms.
+    static let activationFallbackWait: Duration = .milliseconds(150)
     /// Lets the target handle direct input before the previous app returns to the front.
     static let activationSettle: Duration = .milliseconds(100)
     /// The longest a paste waits for the target to read the text before the pasteboard is restored.
@@ -499,6 +632,11 @@ extension LiveComputerUseSystem {
 
     /// How long a background delivery waits for the app to report the window as its key window.
     static let keyConfirmWait: Duration = .milliseconds(200)
+
+    /// Whether the app shows a drag session's image. The window list only: no AX message to any app.
+    static func dragSessionActive(pid: Int32) -> Bool {
+        ComputerUseBackgroundDrag.sessionActive(screenWindows(), sourcePID: pid)
+    }
 
     /// Delivery order: an AX action on the element; else events posted to the window once it is
     /// its app's key window, without activating the app (`background`); else, when that window
@@ -533,6 +671,9 @@ extension LiveComputerUseSystem {
         if case .key(let chord) = input {
             try await ComputerUseAXActions.refuseSecureFocus(chord, in: window, isCancelled: isCancelled)
         }
+        if case .type(_, _, let replace) = input, let refusal = ComputerUseTextCheck.terminalReplaceRefusal(window.app, replace: replace) {
+            throw ComputerUseSystemError.actionFailed(refusal)
+        }
         // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing the
         // button needs no key window, so nothing is keyed or activated for it, also when direct.
         if case .key(let chord) = input,
@@ -549,11 +690,42 @@ extension LiveComputerUseSystem {
             // Events at a point off screen reach nothing: reporting them delivered would be wrong.
             if routed.offScreen { throw ComputerUseSystemError.actionFailed(offScreenRefusal(window.app)) }
         }
-        // Drags always go with the app in front; the coordinator applies the direct takeover rule to them.
+        // A drag goes inside the app in the background, and with the app in front when it can't
+        // or when it started a drag and drop session; the coordinator applies the direct takeover
+        // rule to the drags it sees go in front.
         if direct || input.isDrag {
             // Raising the window moves the app's key window too; not while another input holds it.
             return try await keyLocks.run(window.app.pid) {
-                try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
+                guard case .drag(let from, let to, let toWindow, let modifiers) = input else {
+                    return try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
+                }
+                // The in-app drag makes the window key first, as a background click does; it is
+                // handed back the same way, also after a fallback to the foreground drag.
+                var keying = KeyAttempt()
+                do {
+                    var delivered = try await ComputerUseDragTiers.deliver(
+                        direct: direct,
+                        background: {
+                            try await dragInBackground(
+                                from: from, to: to, in: window, toWindow: toWindow, modifiers: modifiers,
+                                keying: &keying, interrupt: interrupt)
+                        },
+                        sessionActive: { dragSessionActive(pid: window.app.pid) },
+                        foreground: {
+                            try await refuseDragBeforeActivation(
+                                from: from, to: to, in: window, toWindow: toWindow, isCancelled: isCancelled)
+                            return try await activated(input, in: window, ignoring: ignoring, interrupt: interrupt)
+                        },
+                        isCancelled: isCancelled,
+                        sleep: { try? await Task.sleep(for: $0) })
+                    await keying.restoreUserKeyWindow(window)
+                    delivered.keyedInBackground = keying.keyedInBackground
+                    return delivered
+                } catch {
+                    await keying.restoreUserKeyWindow(window)
+                    if keying.keyedInBackground { defocusIfInBackground(window) }
+                    throw error
+                }
             }
         }
         let app = window.app
@@ -562,7 +734,14 @@ extension LiveComputerUseSystem {
            try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
             throw ComputerUseAXActions.hiddenRefusal
         }
-        if let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
+        // A Chrome page's content takes no AXPress: a click there waits for the route, to go with
+        // the pointer in the background or as the AX press otherwise (`ComputerUseClickTarget.pointerFirst`).
+        let pointerCandidate = if case .click(.element(let handles, let handle), .left, 1) = input {
+            try await ComputerUseAXActions.pointerClickCandidate(handles, handle, in: window, isCancelled: isCancelled)
+        } else {
+            false
+        }
+        if !pointerCandidate, let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
         // From making the window key until it is handed back below, no other input may move key
         // status in this app: its events would land in whichever window the other one left key.
         return try await keyLocks.run(app.pid) {
@@ -571,7 +750,8 @@ extension LiveComputerUseSystem {
             do {
                 try await makeKeyInBackground(window, &keying, interrupt: interrupt)
                 var delivered = try await deliverEvents(
-                    input, in: window, keyConfirmed: keying.confirmed, ignoring: ignoring, interrupt: interrupt)
+                    input, in: window, keyConfirmed: keying.confirmed, pointerCandidate: pointerCandidate,
+                    ignoring: ignoring, interrupt: interrupt)
                 await keying.restoreUserKeyWindow(window)
                 // Also after an activation fallback: the previous app is back in front by then, so
                 // the release still finds the target in the background and defocuses it.
@@ -814,9 +994,10 @@ extension LiveComputerUseSystem {
     }
 
     /// Events, once AX had no way: to the window made key when that was confirmed, else the AX
-    /// ways on the focused window, else with the app activated around them.
+    /// ways on the focused window, else with the app activated around them. A click that skipped
+    /// AX for the pointer (`pointerCandidate`) gets its AX ways first anywhere but the background.
     private static func deliverEvents(
-        _ input: ComputerUseInput, in window: ComputerUseWindow, keyConfirmed: Bool,
+        _ input: ComputerUseInput, in window: ComputerUseWindow, keyConfirmed: Bool, pointerCandidate: Bool,
         ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseDelivered {
@@ -825,6 +1006,10 @@ extension LiveComputerUseSystem {
         let route = ComputerUseEventRoute.choose(
             skyLightAvailable: ComputerUseSkyLight.isAvailable, keyConfirmed: keyConfirmed,
             idleSeconds: secondsSinceUserInput())
+        if pointerCandidate, !ComputerUseClickTarget.pointerFirst(candidate: true, route: route),
+           let delivered = try await viaAX(input, in: window, interrupt: interrupt) {
+            return delivered
+        }
         if route == .background {
             // A key window validates the app's menus, so a chord's menu item is enabled now.
             if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
@@ -839,6 +1024,10 @@ extension LiveComputerUseSystem {
             do {
                 try await ComputerUseAXActions.makeActiveWindow(window, raise: false, isCancelled: isCancelled)
                 if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
+                // The focus the keys would get is already this window's: a refusal leaves the app where it is.
+                if case .type(_, nil, _) = input {
+                    try await ComputerUseAXActions.refuseUntypableFocus(app: app, isCancelled: isCancelled)
+                }
             } catch ComputerUseSystemError.notActiveWindow {
                 // Activation makes it the active window.
             }
@@ -962,6 +1151,109 @@ extension LiveComputerUseSystem {
         _ = ComputerUseSkyLight.defocus(pid: pid, windowID: window.windowID)
     }
 
+    /// The in-app drag: posted to the window without activating the app or moving the cursor.
+    /// Nil when it can't stay in the background: without SkyLight the events would go to the key
+    /// window, and a point off every display reaches nothing there. The takeover rule is a
+    /// background click's, checked before the points resolve and between the drag's events.
+    private static func dragInBackground(
+        from: ComputerUseInputTarget, to: ComputerUseInputTarget, in window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?, modifiers: Set<ComputerUseKeyChord.Modifier>, keying: inout KeyAttempt,
+        interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws -> ComputerUseInputPoster.BackgroundDragOutcome? {
+        let isCancelled: @Sendable () -> Bool = { interrupt() == .cancelled }
+        guard ComputerUseSkyLight.isAvailable else { return nil }
+        if isCancelled() { throw CancellationError() }
+        if interrupt() == .userActive {
+            // The input may have been a Stop's click or shortcut, which lands a moment later.
+            if await ComputerUseInputPoster.stopFollows(interrupt) { throw CancellationError() }
+            throw ComputerUseSystemError.userActive
+        }
+        // Events routed to the window reach it under other windows: only hidden points refuse.
+        let dropWindow = toWindow ?? window
+        guard let start = try await dragPoint(from, shown: window, now: window, isDrop: false, isCancelled: isCancelled)
+        else { throw ComputerUseSystemError.actionFailed(dragStartHiddenRefusal) }
+        guard let end = try await dragPoint(to, shown: dropWindow, now: dropWindow, isDrop: true, isCancelled: isCancelled)
+        else { throw ComputerUseSystemError.actionFailed(dropHiddenRefusal) }
+        let displays = displayFrames()
+        // The coordinator's `deliversDirect` decides with the same route before the takeover wait,
+        // and also from where its latest read says the drag starts: one from a list item came
+        // here as direct already, so that is no input here.
+        let route = ComputerUseBackgroundDrag.route(
+            startOnScreen: ComputerUseInputGeometry.pointIsOnScreen(start, displays: displays),
+            endOnScreen: ComputerUseInputGeometry.pointIsOnScreen(end, displays: displays),
+            crossWindow: dropWindow.windowID != window.windowID, startsInItem: false,
+            chromium: ComputerUseAppKind.isChromium(window.app),
+            direct: false)
+        guard route == .background else { return nil }
+        // Like a background click: some views take a press only in their app's key window.
+        try await makeKeyInBackground(window, &keying, interrupt: interrupt)
+        // The drag checks for a Stop and the takeover rule again before its first event.
+        return try await ComputerUseInputPoster.backgroundDrag(
+            from: start, to: end, modifiers: modifiers, pid: window.app.pid, windowID: window.windowID,
+            windowFrame: window.frame, screenWindows: { screenWindows() }, interrupt: interrupt)
+    }
+
+    /// What `ComputerUseTakeover.dragRefusalBeforeActivation` refuses, from the windows as they
+    /// are now, and a drag without input watching or with a drag key the user holds: nothing
+    /// comes to the front for a drag that can't go once it is there. A parked
+    /// window and other windows' coverage are judged after the activation.
+    private static func refuseDragBeforeActivation(
+        from: ComputerUseInputTarget, to: ComputerUseInputTarget, in window: ComputerUseWindow,
+        toWindow: ComputerUseWindow?, isCancelled: @escaping @Sendable () -> Bool
+    ) async throws {
+        // Telling the user's input from the drag's events needs the input tap.
+        guard ComputerUseUserInput.isWatching else { throw ComputerUseSystemError.actionFailed(dragNeedsInputWatching) }
+        // A key the user holds would ride along with the drag once it's in front.
+        if let keys = ComputerUseInputPoster.userHeldDragKeys() { throw ComputerUseSystemError.userHoldsKeys(keys) }
+        let dropShown = toWindow ?? window
+        let (source, drop) = (await current(window), await current(dropShown))
+        let start = try await dragPoint(from, shown: window, now: source, isDrop: false, isCancelled: isCancelled)
+        let end = try await dragPoint(to, shown: dropShown, now: drop, isDrop: true, isCancelled: isCancelled)
+        switch ComputerUseTakeover.dragRefusalBeforeActivation(
+            start: start, end: end, sourceFrame: source.frame, dropFrame: drop.frame,
+            sameWindow: drop.windowID == source.windowID, displays: displayFrames()) {
+        case .hidden(.start): throw ComputerUseSystemError.actionFailed(dragStartHiddenRefusal)
+        case .hidden(.end): throw ComputerUseSystemError.actionFailed(dropHiddenRefusal)
+        case .offScreen: throw ComputerUseSystemError.actionFailed(offScreenRefusal(window.app))
+        case .overlap: throw ComputerUseSystemError.actionFailed(dragOverlapRefusal)
+        default: break
+        }
+    }
+
+    static let dragNeedsInputWatching =
+        "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own."
+    static let dragStartHiddenRefusal = "The drag's start element is scrolled out of view or hidden."
+    static let dropHiddenRefusal = "The drop element is scrolled out of view or hidden."
+
+    /// The window `shown` as it is now; `shown` itself when it's gone or now another app's.
+    private static func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
+        await window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
+    }
+
+    /// Where an end of a drag is in `now`, the window `shown` as the agent saw it; nil while its
+    /// element doesn't show. A ref's point is on the part of it its scroll area shows: an element
+    /// scrolled under another part of the window (a sidebar) would get the press instead.
+    private static func dragPoint(
+        _ target: ComputerUseInputTarget, shown: ComputerUseWindow, now: ComputerUseWindow, isDrop: Bool,
+        isCancelled: @escaping @Sendable () -> Bool
+    ) async throws -> CGPoint? {
+        switch target {
+        case .element(let handles, let handle):
+            do {
+                return try await ComputerUseAXActions.visibleCenter(
+                    handles, handle, within: now.frame, app: now.app, requireOwnCenter: false, isCancelled: isCancelled)
+            } catch ComputerUseSystemError.staleElement where isDrop {
+                throw ComputerUseSystemError.staleDropElement
+            }
+        case .point(let point):
+            let point = CGPoint(x: point.x - shown.frame.minX + now.frame.minX, y: point.y - shown.frame.minY + now.frame.minY)
+            guard now.frame.contains(point) else {
+                throw isDrop ? ComputerUseSystemError.dropOutOfBounds : ComputerUseSystemError.outOfBounds
+            }
+            return point
+        }
+    }
+
     /// Activates the app around the events; one direct action at a time.
     private static func activated(
         _ input: ComputerUseInput, in window: ComputerUseWindow, ignoring: @escaping @Sendable () -> Set<UInt32>,
@@ -974,7 +1266,11 @@ extension LiveComputerUseSystem {
             // The takeover rule once more, right before the app comes to the front: the wait for an
             // idle user ended before the ref re-check and the lock waits. As the fallback route
             // does, a user who is back now isn't waited out again.
-            if secondsSinceUserInput() < ComputerUseTakeover.idleThreshold { throw ComputerUseSystemError.userActive }
+            if secondsSinceUserInput() < ComputerUseTakeover.idleThreshold {
+                // The input may have been a Stop's click or shortcut, which lands a moment later.
+                if await ComputerUseInputPoster.stopFollows(interrupt) { throw CancellationError() }
+                throw ComputerUseSystemError.userActive
+            }
             try await withActivation(of: window.app, isCancelled: isCancelled) {
                 try await postEvents(input, in: window, paste: true, background: false, ignoring: ignoring, interrupt: interrupt)
             }
@@ -1057,7 +1353,8 @@ extension LiveComputerUseSystem {
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case nil:
                 try await requireActiveWindow()
-                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
+                // Only here: a ref or a point names the field, and computer_key's keys are meant for the view.
+                try await ComputerUseAXActions.refuseUntypableFocus(app: app, isCancelled: isCancelled)
             }
             try checkCancelled()
             if replace {
@@ -1066,7 +1363,8 @@ extension LiveComputerUseSystem {
             // A clipboard holding anything but plain text is left alone, and the text typed instead.
             let pasted = paste ? try await self.paste(text, pid: app.pid) : false
             if !pasted {
-                try await ComputerUseInputPoster.type(text, pid: app.pid, interrupt: interrupt)
+                try await ComputerUseInputPoster.type(
+                    text, pid: app.pid, terminal: ComputerUseTextCheck.isTerminal(app), interrupt: interrupt)
             }
         case .key(let chord):
             try await requireActiveWindow()
@@ -1080,49 +1378,19 @@ extension LiveComputerUseSystem {
             let location = try await point(at)
             try checkCancelled()
             try ComputerUseInputPoster.scroll(at: location, dx: dx, dy: dy, target: target)
-        case .drag(let from, let to, let toWindow):
-            // Only with the app activated, and posted system-wide: a file drag's session follows
-            // the cursor. Telling the user's input from these events needs the input tap.
+        case .drag(let from, let to, let toWindow, let modifiers):
+            // The foreground drag: only with the app activated, and posted system-wide, since a file
+            // drag's session follows the cursor. Telling the user's input from these events needs
+            // the input tap, which `refuseDragBeforeActivation` requires. The in-app drag is
+            // `dragInBackground`.
             precondition(!background, "Drags only go with the app activated")
-            guard ComputerUseUserInput.isWatching else {
-                throw ComputerUseSystemError.actionFailed(
-                    "Drags need input watching (Settings > Computer Use > Input watching), so Alas can tell your input from its own.")
-            }
             // The app is in front (`activated`). From here on the points are read again on every
             // look: a parked window comes back (AeroSpace switches to its workspace) and windows come
             // up a moment after the activation (`ComputerUseTakeover.dragStep`).
-            func current(_ shown: ComputerUseWindow) async -> ComputerUseWindow {
-                await self.window(shown.windowID).flatMap { $0.app.pid == shown.app.pid ? $0 : nil } ?? shown
-            }
-            func moved(_ point: CGPoint, from shown: ComputerUseWindow, to now: ComputerUseWindow) -> CGPoint {
-                CGPoint(x: point.x - shown.frame.minX + now.frame.minX, y: point.y - shown.frame.minY + now.frame.minY)
-            }
             let sourceShown = window
             let dropShown = toWindow ?? window
             var startWindow = window
             var dropWindow = dropShown
-            /// Where an end of the drag is now; nil while its element doesn't show.
-            func resolve(
-                _ target: ComputerUseInputTarget, shown: ComputerUseWindow, now: ComputerUseWindow, isDrop: Bool
-            ) async throws -> CGPoint? {
-                switch target {
-                case .element(let handles, let handle):
-                    do {
-                        // A ref's point is on the part of it its scroll area shows: an element scrolled
-                        // under another part of the window (a sidebar) would get the press instead.
-                        return try await ComputerUseAXActions.visibleCenter(
-                            handles, handle, within: now.frame, app: now.app, requireOwnCenter: false, isCancelled: isCancelled)
-                    } catch ComputerUseSystemError.staleElement where isDrop {
-                        throw ComputerUseSystemError.staleDropElement
-                    }
-                case .point(let point):
-                    let point = moved(point, from: shown, to: now)
-                    guard now.frame.contains(point) else {
-                        throw isDrop ? ComputerUseSystemError.dropOutOfBounds : ComputerUseSystemError.outOfBounds
-                    }
-                    return point
-                }
-            }
             func state(_ point: CGPoint?, own: UInt32, other: UInt32, displays: [CGRect]) -> ComputerUseTakeover.DragPointState {
                 guard let point else { return .hidden }
                 if !ComputerUseInputGeometry.pointIsOnScreen(point, displays: displays) { return .offScreen }
@@ -1150,8 +1418,9 @@ extension LiveComputerUseSystem {
                     try checkCancelled()
                     startWindow = await current(sourceShown)
                     dropWindow = await current(dropShown)
-                    let startPoint = try await resolve(from, shown: sourceShown, now: startWindow, isDrop: false)
-                    let endPoint = try await resolve(to, shown: dropShown, now: dropWindow, isDrop: true)
+                    let startPoint = try await dragPoint(
+                        from, shown: sourceShown, now: startWindow, isDrop: false, isCancelled: isCancelled)
+                    let endPoint = try await dragPoint(to, shown: dropShown, now: dropWindow, isDrop: true, isCancelled: isCancelled)
                     let displays = displayFrames()
                     let step = ComputerUseTakeover.dragStep(
                         idleSeconds: secondsSinceUserInput(), activated: true,
@@ -1162,7 +1431,10 @@ extension LiveComputerUseSystem {
                     case .drag, .activate:
                         if let startPoint, let endPoint { (start, end) = (startPoint, endPoint) }
                         return
-                    case .userActive: throw ComputerUseSystemError.userActive
+                    case .userActive:
+                        // The input may have been a Stop's click or shortcut, which lands a moment later.
+                        if await ComputerUseInputPoster.stopFollows(interrupt) { throw CancellationError() }
+                        throw ComputerUseSystemError.userActive
                     case .raiseSource:
                         await raiseSource()
                     case .raiseDrop:
@@ -1170,10 +1442,8 @@ extension LiveComputerUseSystem {
                         raisedDrop = true
                         // The raise takes a moment to show; judging the overlap sooner would refuse early.
                         try? await Task.sleep(for: dragRaiseSettle)
-                    case .hidden(.start):
-                        throw ComputerUseSystemError.actionFailed("The drag's start element is scrolled out of view or hidden.")
-                    case .hidden(.end):
-                        throw ComputerUseSystemError.actionFailed("The drop element is scrolled out of view or hidden.")
+                    case .hidden(.start): throw ComputerUseSystemError.actionFailed(dragStartHiddenRefusal)
+                    case .hidden(.end): throw ComputerUseSystemError.actionFailed(dropHiddenRefusal)
                     case .offScreen: throw ComputerUseSystemError.actionFailed(offScreenRefusal(app))
                     case .overlap: throw ComputerUseSystemError.actionFailed(dragOverlapRefusal)
                     case .covered(.start):
@@ -1200,7 +1470,7 @@ extension LiveComputerUseSystem {
             let pid = app.pid
             let (dragStart, dragEnd) = (start, end)
             let dragBegan = ComputerUseUserInput.now()
-            try await ComputerUseInputPoster.systemDrag(from: dragStart, to: dragEnd, dropIsVisible: {
+            try await ComputerUseInputPoster.systemDrag(from: dragStart, to: dragEnd, modifiers: modifiers, dropIsVisible: {
                 ComputerUseInputGeometry.topmostWindow(at: dragEnd, in: screenWindows(), ignoring: ignoring()) == dropWindowID
             }, interrupt: {
                 if isCancelled() || Task.isCancelled { return .cancelled }
@@ -1245,11 +1515,17 @@ extension LiveComputerUseSystem {
             try await body()
             return
         }
-        // Only to hand the front back afterwards.
-        let previousPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        // Only to hand the front back afterwards. WindowServer's front process first:
+        // `frontmostApplication` follows it only once its notification reached the main run loop.
+        var previousPID = ComputerUseSkyLight.frontProcessPID()
+        if previousPID == nil {
+            previousPID = await MainActor.run { NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        }
         await MainActor.run { _ = NSRunningApplication(processIdentifier: app.pid)?.activate() }
-        let deadline = ContinuousClock.now + activationWait
+        let asked = ContinuousClock.now
+        let deadline = asked + activationWait
         var frontmost = false
+        var askedWindowServer = false
         while true {
             // A cancelled task's sleep returns at once, so the loop would spin until the deadline.
             if isCancelled() || Task.isCancelled {
@@ -1258,6 +1534,17 @@ extension LiveComputerUseSystem {
             }
             frontmost = await isFrontmost(app.pid)
             guard !frontmost, ContinuousClock.now < deadline else { break }
+            // Cooperative activation drops the request while Alas isn't the front app. Forced only
+            // while macOS's own reasons to keep the front don't hold: the user is idle and still in
+            // the app that was in front.
+            if !askedWindowServer, ContinuousClock.now - asked >= activationFallbackWait {
+                askedWindowServer = true
+                if ComputerUseTakeover.forcesActivation(
+                    idleSeconds: secondsSinceUserInput(),
+                    previousIsFront: previousPID.flatMap { ComputerUseSkyLight.isFrontProcess(pid: $0) }) {
+                    _ = ComputerUseSkyLight.setFrontProcess(pid: app.pid)
+                }
+            }
             try? await Task.sleep(for: .milliseconds(25))
         }
         guard frontmost else {
@@ -1270,11 +1557,19 @@ extension LiveComputerUseSystem {
         do {
             try await body()
         } catch {
-            await restoreActivation(previousPID, from: app.pid)
-            throw error
+            let putBack = await restoreActivation(previousPID, from: app.pid)
+            // Any failure after the app came forward says so: the user saw it come and go. A Stop
+            // (`CancellationError`) has no message to carry it.
+            guard let failure = error as? ComputerUseSystemError else { throw error }
+            throw failure.appending(note: broughtForwardNote(app, putBack: putBack))
         }
         try? await Task.sleep(for: activationSettle)
         await restoreActivation(previousPID, from: app.pid)
+    }
+
+    /// Appended to a refusal that came after the app was activated for it.
+    static func broughtForwardNote(_ app: ComputerUseAppIdentity, putBack: Bool) -> String {
+        putBack ? " \(app.name) was brought to the front for this and put back." : " \(app.name) was brought to the front for this."
     }
 
     /// Whether `pid` is WindowServer's front process. `frontmostApplication` follows it only
@@ -1284,15 +1579,36 @@ extension LiveComputerUseSystem {
         return await MainActor.run { NSRunningApplication(processIdentifier: pid)?.isActive ?? false }
     }
 
-    private static func restoreActivation(_ previousPID: Int32?, from pid: Int32) async {
-        guard let previousPID else { return }
+    /// True when the previous app came back to the front. Asked the way `withActivation` asks:
+    /// AppKit first, then WindowServer when the request goes unanswered.
+    @discardableResult
+    private static func restoreActivation(_ previousPID: Int32?, from pid: Int32) async -> Bool {
+        guard let previousPID else { return false }
         // Once the user picked another app, the front is theirs to keep.
-        guard await isFrontmost(pid) else { return }
-        await MainActor.run {
-            guard let previous = NSRunningApplication(processIdentifier: previousPID) else { return }
+        guard await isFrontmost(pid) else { return false }
+        let asked = await MainActor.run {
+            guard let previous = NSRunningApplication(processIdentifier: previousPID) else { return false }
             // The target is active now; asking on its behalf passes cooperative activation.
-            if let current = NSRunningApplication(processIdentifier: pid), previous.activate(from: current) { return }
-            _ = previous.activate()
+            if let current = NSRunningApplication(processIdentifier: pid), previous.activate(from: current) { return true }
+            return previous.activate()
+        }
+        if asked, await becomesFrontmost(previousPID) { return true }
+        // Still the target in front: the request was dropped, not overtaken by the user's pick.
+        guard await isFrontmost(pid),
+              await MainActor.run(body: { NSRunningApplication(processIdentifier: previousPID) != nil }),
+              ComputerUseSkyLight.setFrontProcess(pid: previousPID)
+        else { return false }
+        return await becomesFrontmost(previousPID)
+    }
+
+    /// Whether `pid` is the front process within `activationFallbackWait`.
+    private static func becomesFrontmost(_ pid: Int32) async -> Bool {
+        let deadline = ContinuousClock.now + activationFallbackWait
+        while true {
+            if await isFrontmost(pid) { return true }
+            guard ContinuousClock.now < deadline else { return false }
+            // Restores also run in cancelled tasks, whose sleep would return at once.
+            await ComputerUseInputPoster.steadyPause(.milliseconds(25))
         }
     }
 
@@ -1533,8 +1849,8 @@ private actor ComputerUseSerialLock {
 
 /// The user's physical input to any app, Alas included, from a listen-only event tap at the HID
 /// level. Events Alas posts to a pid never pass through it. The drags Alas posts system-wide do,
-/// and carry `postedEventMarker`, which the tap skips; so does every other event Alas posts. The
-/// tap runs on its own thread and run loop, never the main thread, and only stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
+/// and carry `postedEventMarker`, which the tap skips; so does every other event Alas posts, and
+/// a single pointer move another process posts (`ComputerUsePostedMoves`). The tap runs on its own thread and run loop, never the main thread, and only stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
 /// in a trusted process; until it runs the takeover check falls back to the HID idle time.
 enum ComputerUseUserInput {
     /// "ALAS", in every event Alas posts (`kCGEventSourceUserData`).
@@ -1551,6 +1867,8 @@ enum ComputerUseUserInput {
     private static let attemptInterval: UInt64 = 5_000_000_000
     /// Written and read on the tap thread only: before the tap is enabled, and by its callback.
     private nonisolated(unsafe) static var tap: CFMachPort?
+    /// Read and written by the tap's callback only, on the tap thread.
+    private nonisolated(unsafe) static var postedMoves = ComputerUsePostedMoves()
     /// macOS's Input Monitoring prompt was asked for once in this process.
     private static let listenAccessRequested = Atomic<Bool>(false)
     private static let log = Logger(subsystem: "io.nlopez.alas", category: "computer-use")
@@ -1645,7 +1963,10 @@ enum ComputerUseUserInput {
                 log.info("Computer use input tap re-enabled after macOS disabled it")
             }
         default:
-            guard event.getIntegerValueField(.eventSourceUserData) != postedEventMarker else { return }
+            guard postedMoves.countsAsUserInput(
+                type: type, sourcePID: event.getIntegerValueField(.eventSourceUnixProcessID),
+                isAlasPosted: event.getIntegerValueField(.eventSourceUserData) == postedEventMarker, now: now())
+            else { return }
             lastInputNanoseconds.store(DispatchTime.now().uptimeNanoseconds, ordering: .relaxed)
         }
     }

@@ -194,7 +194,7 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
             "usage: alas computer scroll <window-id> (--ref <eN> | --x <px> --y <px>) [--dx <-100...100>] [--dy <-100...100>] [--max-depth <1...32>] [--direct]"
         }
         "drag" => {
-            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) [--to-window-id <window-id>] (--to-ref <eN> | --to-x <px> --to-y <px>) [--max-depth <1...32>] [--direct]"
+            "usage: alas computer drag <window-id> (--ref <eN> | --x <px> --y <px>) [--to-window-id <window-id>] (--to-ref <eN> | --to-x <px> --to-y <px>) [--modifiers <command,option,control,shift>] [--max-depth <1...32>] [--direct]"
         }
         _ => {
             "usage: alas computer wait <window-id> <query> [--disappear] [--timeout-ms <100...20000>]"
@@ -237,6 +237,7 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
             "--to-ref",
             "--to-x",
             "--to-y",
+            "--modifiers",
             "--max-depth",
             "--direct",
         ],
@@ -374,6 +375,10 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
                 .map(|value| value.parse::<u32>().map_err(|_| usage.to_string()))
                 .transpose()?,
             to: target("--to-ref", "--to-x", "--to-y")?,
+            modifiers: match flag("--modifiers") {
+                None => Vec::new(),
+                Some(list) => alas_client::computer_drag_modifiers(list.split(',')).ok_or(usage)?,
+            },
             direct,
             post,
             call_id: None,
@@ -2423,6 +2428,8 @@ mod tests {
                 "3",
                 "--to-y",
                 "4",
+                "--modifiers",
+                "option,command",
                 "--direct"
             ])
             .unwrap(),
@@ -2431,6 +2438,7 @@ mod tests {
                 from: alas_client::ComputerTarget::Ref("e1".into()),
                 to_window_id: Some(9),
                 to: alas_client::ComputerTarget::Point { x: 3.0, y: 4.0 },
+                modifiers: vec!["option".into(), "command".into()],
                 direct: true,
                 post: post(),
                 call_id: None
@@ -2512,6 +2520,28 @@ mod tests {
             &["computer", "scroll", "7", "--ref", "e1", "--dy", "101"],
             &["computer", "drag", "7", "--ref", "e1"],
             &["computer", "drag", "7", "--ref", "e1", "--to-x", "1"],
+            &[
+                "computer",
+                "drag",
+                "7",
+                "--ref",
+                "e1",
+                "--to-ref",
+                "e2",
+                "--modifiers",
+                "option,option",
+            ],
+            &[
+                "computer",
+                "drag",
+                "7",
+                "--ref",
+                "e1",
+                "--to-ref",
+                "e2",
+                "--modifiers",
+                "cmd",
+            ],
             &["computer", "open-app"],
             &["computer", "open-app", "--name", "A", "--bundle-id", "b"],
             &["computer", "open-app", "--name"],

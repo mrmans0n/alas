@@ -1,10 +1,66 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import Alas
 
 @MainActor
 @Suite("ACPSessionManager remote restore")
 struct ACPSessionManagerRemoteRestoreTests {
+    @Test(arguments: [false, true])
+    func opaqueBrokerContextBlocksRemoteAuthorityBeforeTakeover(alreadyWriter: Bool) async throws {
+        let endpoint = ReplicaEndpoint()
+        let calls = Mutex<[String]>([])
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) { method, data in
+            calls.withLock { $0.append(method) }
+            return try await endpoint.request(method, data)
+        }
+        let (manager, store, client, session) = try await fixture(origin: .alasCreated, remoteCoordinator: coordinator)
+        defer { manager.shutdownBackgroundTasks()
+        coordinator.shutdown() }
+        await manager.flushAllPersistence()
+        if alreadyWriter {
+            #expect(await manager.acquireWriterLease(sessionId: session.id))
+            #expect(await coordinator.flush(sessionId: session.id))
+            coordinator.stopPublishing(sessionId: session.id)
+        }
+        calls.withLock { $0.removeAll() }
+        try store.db.exec("UPDATE sessions SET acp_broker_id = 'raw', acp_broker_generation = 7, acp_broker_wire_context = ? WHERE id = ?",
+            bindings: [" {future context} ", session.id])
+        await manager.attach(to: session.id, freshlyCreated: false)
+        await manager.restartConnection(to: session.id)
+        #expect(await manager.acquireWriterLease(sessionId: session.id) == false)
+        #expect(await manager.takeOver(sessionId: session.id) == false)
+        #expect(calls.withLock { $0 }.isEmpty)
+        #expect(client.sent.isEmpty)
+        #expect(try store.loadSession(id: session.id)?.acpBrokerWireContextJSON == " {future context} ")
+        #expect(try store.loadSession(id: session.id)?.remoteSessionId == "remote-id")
+    }
+
+    @Test func takeoverRevalidatesContextAfterLosingTheWriterLease() async throws {
+        let endpoint = ReplicaEndpoint()
+        let calls = Mutex<[String]>([])
+        let coordinator = ACPRemoteSessionCoordinator(owner: .init(serverId: "mac-a", instanceId: "A")) { method, data in
+            calls.withLock { $0.append(method) }
+            return try await endpoint.request(method, data)
+        }
+        let (manager, store, client, session) = try await fixture(origin: .alasCreated, instanceId: "A", remoteCoordinator: coordinator)
+        defer { manager.shutdownBackgroundTasks()
+        coordinator.shutdown() }
+        #expect(await manager.acquireWriterLease(sessionId: session.id))
+        manager.beforeLeaseReadForTesting = {
+            manager.beforeLeaseReadForTesting = nil
+            try? store.db.exec("UPDATE sessions SET acp_broker_id = 'raw', acp_broker_generation = 7, acp_broker_wire_context = ? WHERE id = ?",
+                bindings: [" {future context} ", session.id])
+            _ = try? store.seizeLease(sessionId: session.id, instanceId: "B", pid: Int64(getpid()), now: Int64(Date().timeIntervalSince1970))
+        }
+        calls.withLock { $0.removeAll() }
+        #expect(await manager.takeOver(sessionId: session.id) == false)
+        #expect(!calls.withLock { $0 }.contains("lease/seize"))
+        #expect(!calls.withLock { $0 }.contains("proc/kill"))
+        #expect(client.sent.isEmpty)
+        #expect(try store.loadSession(id: session.id)?.acpBrokerWireContextJSON == " {future context} ")
+    }
+
     @Test("loaded sessions refresh advertised provider state")
     func loadedSessionRefreshesProviders() async throws {
         let (manager, _, client, session) = try await fixture(origin: .agentImported)

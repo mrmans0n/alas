@@ -158,6 +158,60 @@ struct ACPSessionStoreCRUDTests {
         #expect(respawnedRow.helperProcStderrOffset == 1)
     }
 
+    @Test(arguments: [#"{"acpVersion":2,"payloadFormat":"alas.acp.raw-json.v1"}"#, " {future context} "])
+    func brokerContextSurvivesConflictingMetadataSnapshots(context: String) throws {
+        let store = try tmp()
+        var row = ACPSessionRow(id: "context", agentId: "fixture", title: "Original", autoRun: false,
+            acpBrokerId: "raw-broker", acpBrokerGeneration: 7, acpBrokerAcknowledgedCursor: 4,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false)
+        row.acpBrokerWireContextJSON = context
+        try store.upsertSession(row)
+        var metadata = row
+        metadata.title = "Renamed"
+        metadata.acpBrokerId = "other"
+        metadata.acpBrokerGeneration = 8
+        metadata.acpBrokerAcknowledgedCursor = 99
+        metadata.acpBrokerWireContextJSON = nil
+        try store.upsertSession(metadata)
+        let restored = try #require(try store.loadSession(id: row.id))
+        #expect(restored.title == "Renamed")
+        #expect(restored.acpBrokerId == "raw-broker")
+        #expect(restored.acpBrokerGeneration == 7)
+        #expect(restored.acpBrokerAcknowledgedCursor == 4)
+        #expect(restored.acpBrokerWireContextJSON == context)
+    }
+
+    @Test func brokerContextFencesWritesAndClearsAsOneDescriptor() throws {
+        let store = try tmp()
+        try store.upsertSession(.init(id: "context", agentId: "fixture", title: "Saved", remoteSessionId: "upstream",
+            autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        #expect(try store.updateACPBrokerState(sessionId: "context", brokerId: "raw", generation: 7,
+            acknowledgedCursor: 4, wireContext: .rawV2))
+        #expect(try store.updateACPBrokerState(sessionId: "context", brokerId: "raw", generation: 7,
+            acknowledgedCursor: 99, wireContext: .legacyV1) == false)
+        #expect(try store.updateACPBrokerAcknowledgedCursor(sessionId: "context", brokerId: "raw", generation: 7,
+            cursor: 99, wireContext: .legacyV1) == false)
+        #expect(try store.updateACPBrokerAcknowledgedCursor(sessionId: "context", brokerId: "raw", generation: 7,
+            cursor: 8, wireContext: .rawV2))
+        #expect(try store.updateACPBrokerAcknowledgedCursor(sessionId: "context", brokerId: "raw", generation: 7,
+            cursor: 5, wireContext: .rawV2))
+        var saved = try #require(try store.loadSession(id: "context"))
+        #expect(saved.acpBrokerAcknowledgedCursor == 8)
+        #expect(try ACPBrokerRestorePolicy.context(from: saved.acpBrokerWireContextJSON) == .rawV2)
+        #expect(try store.updateACPBrokerState(sessionId: "context", brokerId: "raw", generation: 8,
+            acknowledgedCursor: 1, wireContext: .legacyV1))
+        saved = try #require(try store.loadSession(id: "context"))
+        #expect(saved.acpBrokerAcknowledgedCursor == 1)
+        #expect(try ACPBrokerRestorePolicy.context(from: saved.acpBrokerWireContextJSON) == .legacyV1)
+        #expect(try store.clearACPBrokerState(sessionId: "context"))
+        saved = try #require(try store.loadSession(id: "context"))
+        #expect(saved.acpBrokerWireContextJSON == nil)
+        #expect(saved.acpBrokerId == nil)
+        #expect(saved.acpBrokerGeneration == nil)
+        #expect(saved.acpBrokerAcknowledgedCursor == 0)
+        #expect(saved.remoteSessionId == "upstream")
+    }
+
     @Test("broker state round-trips and survives metadata-only upserts")
     func brokerStateSurvivesMetadataUpserts() throws {
         let store = try tmp()

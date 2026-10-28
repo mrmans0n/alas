@@ -714,7 +714,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_type",
-            "description": "Type text into a window. With `ref` (from the latest computer_inspect or computer_wait of this window) the element is focused first; `mode: \"replace\"` (needs ref) sets the element's whole value. Without ref the text goes to the focused element. Returns the window's new elements (refs are replaced). Works in the background; `delivery: \"direct\"` briefly activates the app and pastes the text in one step when the user's clipboard is empty or holds only plain text (the check that the user isn't using the app then runs once, before it); otherwise it types the text, checking for the user between chunks, and may stop part-way, reporting how much was typed (\"stopped after typing N of M characters\"). The first use of each app asks the user for approval.",
+            "description": "Type text into a window. With `ref` (from the latest computer_inspect or computer_wait of this window) the element is focused first; `mode: \"replace\"` (needs ref) sets the element's whole value. Without ref the text goes to the focused element. Returns the window's new elements (refs are replaced). Works in the background; `delivery: \"direct\"` briefly activates the app and pastes the text in one step when the user's clipboard is empty or holds only plain text (the check that the user isn't using the app then runs once, before it); otherwise it types the text, checking for the user between chunks, and may stop part-way, reporting how much was typed (\"stopped after typing N of M characters\"). When text goes as keys, a line break inside it is Shift+Return and a trailing one is Return (in terminals, every line break is Return). The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
@@ -756,7 +756,7 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "computer_drag",
-            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. The drop point must be visible: when another window covers it, the drag is cancelled in place with an error. Drags bring the app to the front briefly; they're refused while the user is typing or using the mouse. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
+            "description": "Drag from one element or point to another in a window, or into another window with `to_window_id`. Each end is a `ref` (from the latest computer_inspect or computer_wait of its window) or an `x`+`y` pair (pixels in the latest computer_screenshot of its window); the start uses ref/x/y in window_id, the end uses to_ref/to_x/to_y in to_window_id (default: window_id). to_window_id must be another window of the same app; dragging between apps is refused. Drags inside one window stay in the app in the background when they can (sliders, canvases, splitters). Drags that go to the front briefly bring the app forward and move the real cursor, and are refused while the user is typing or using the mouse: drags into another window, drags that start on a list or table item (a file or a row), drags in Chrome and other Chromium or Electron apps, drags in a window that's off screen or on another space, drags with delivery \"direct\", and a background drag that starts a file-style drag and drop. A drag that goes to the front needs its drop point visible: when another window covers it, the drag is cancelled in place with an error. A window that's off screen or on another space is placed only once the app comes forward, so its refusals (windows that overlap, a hidden drop point) can briefly bring the app forward, and the error says so. `modifiers` are held for the whole drag, for example `[\"option\"]` copies a Finder file drag. Returns the start window's new elements (refs are replaced) and the drop window's under `to_window`. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
@@ -766,7 +766,15 @@ fn computer_tool_definitions() -> Vec<Value> {
                     "to_window_id": { "type": "integer", "minimum": 0, "maximum": 4294967295u64, "description": "Another window of the same app to drop into, a window_id from computer_apps. Default: window_id." },
                     "to_ref": computer_ref_property("The element to drop on."),
                     "to_x": computer_pixel_property("End pixels from the left edge of the latest screenshot. Use with to_y, instead of to_ref."),
-                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref.")
+                    "to_y": computer_pixel_property("End pixels from the top edge of the latest screenshot. Use with to_x, instead of to_ref."),
+                    "modifiers": {
+                        "type": "array",
+                        "items": { "type": "string", "enum": alas_client::COMPUTER_DRAG_MODIFIERS },
+                        "uniqueItems": true,
+                        "maxItems": 4,
+                        "description": "Keys held from the press to the release. Default: none."
+                    },
+                    "delivery": computer_drag_delivery_property()
                 }),
                 &[]
             )
@@ -844,6 +852,10 @@ fn computer_pixel_property(description: &str) -> Value {
 
 fn computer_delivery_property() -> Value {
     json!({ "type": "string", "enum": ["background", "direct"], "description": "background posts to the app without touching the user's focus; it may change the target app's key window, and activates the app briefly when that window can't be made key. direct briefly activates the app and is refused while the user is active. Default: background. The result's `delivery` reports how the input went: ax, background or activation." })
+}
+
+fn computer_drag_delivery_property() -> Value {
+    json!({ "type": "string", "enum": ["background", "direct"], "description": "background drags inside the app without touching the user's focus or cursor when the drag can stay there, and in the front otherwise (see the tool's description); it may change the target app's key window. direct always drags in the front. Default: background. The result's `delivery` reports how the drag went: background or activation." })
 }
 
 fn preview_tool_definitions() -> Vec<Value> {
@@ -1479,20 +1491,42 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "to_ref",
                     "to_x",
                     "to_y",
+                    "modifiers",
+                    "delivery",
                     "query",
                     "limit",
                     "max_depth",
                     "include_screenshot",
                 ],
             )?;
+            let modifiers = match args.get("modifiers") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(Value::Array(items)) => items
+                    .iter()
+                    .map(Value::as_str)
+                    .collect::<Option<Vec<_>>>()
+                    .and_then(alas_client::computer_drag_modifiers)
+                    .ok_or_else(|| {
+                        format!(
+                            "modifiers must list each of {} at most once",
+                            alas_client::COMPUTER_DRAG_MODIFIERS.join(", ")
+                        )
+                    })?,
+                Some(_) => {
+                    return Err(format!(
+                        "modifiers must list each of {} at most once",
+                        alas_client::COMPUTER_DRAG_MODIFIERS.join(", ")
+                    ));
+                }
+            };
             Ok(Command::Computer(alas_client::ComputerCommand::Drag {
                 window_id: required_window_id(args)?,
                 from: computer_target(args, "ref", "x", "y")?,
                 to_window_id: optional_bounded_u64(args, "to_window_id", 0, u32::MAX.into())?
                     .map(|value| value as u32),
                 to: computer_target(args, "to_ref", "to_x", "to_y")?,
-                // Always delivered with the app in front; the flag would only repeat that.
-                direct: false,
+                modifiers,
+                direct: computer_direct(args)?,
                 post: computer_post(args)?,
                 call_id: None,
             }))
@@ -2077,7 +2111,7 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
     if publishes(command) {
         alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
     } else if is_computer_call(command) {
-        alas_client::send_with_timeout(&env.socket, &req, COMPUTER_READ_TIMEOUT)
+        alas_client::send_with_timeout(&env.socket, &req, alas_client::COMPUTER_READ_TIMEOUT)
     } else {
         alas_client::send(&env.socket, &req)
     }
@@ -2088,10 +2122,6 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
 /// ssh, so it gets far longer than the default 30-second reply bound. The
 /// remote helper's relay waits slightly longer than this.
 const PR_CREATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// `computer_*` calls may wait on the user's approval prompt the first time
-/// an app is used, so they get longer than the default reply bound.
-const COMPUTER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Unknown tools and invalid arguments are JSON-RPC protocol errors
 /// (-32602); failures while executing a valid call are tool results with
@@ -4273,7 +4303,22 @@ mod tests {
                     from: element("e1"),
                     to_window_id: Some(9),
                     to: element("e4"),
+                    modifiers: vec![],
                     direct: false,
+                    post: post.clone(),
+                    call_id: None,
+                },
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "modifiers": ["option", "shift"], "delivery": "direct" }),
+                ComputerCommand::Drag {
+                    window_id: 7,
+                    from: element("e1"),
+                    to_window_id: None,
+                    to: element("e2"),
+                    modifiers: vec!["option".into(), "shift".into()],
+                    direct: true,
                     post,
                     call_id: None,
                 },
@@ -4403,6 +4448,18 @@ mod tests {
             ("computer_drag", json!({ "window_id": 7, "ref": "e1" })),
             (
                 "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "modifiers": ["option", "option"] }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "modifiers": ["fn"] }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "modifiers": "option" }),
+            ),
+            (
+                "computer_drag",
                 json!({ "window_id": 7, "ref": "e1", "to_window_id": -1, "to_ref": "e2" }),
             ),
             (
@@ -4420,10 +4477,6 @@ mod tests {
             (
                 "computer_drag",
                 json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "to_x": 1, "to_y": 1 }),
-            ),
-            (
-                "computer_drag",
-                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2", "delivery": "direct" }),
             ),
             ("computer_open_app", json!({})),
             (

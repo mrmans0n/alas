@@ -17,6 +17,8 @@ enum ComputerUseSkyLight {
     private typealias PostEventRecordTo = @convention(c) (UnsafeRawPointer, UnsafeRawPointer) -> Int32
     private typealias GetProcessForPID = @convention(c) (pid_t, UnsafeMutableRawPointer) -> Int32
     private typealias GetFrontProcess = @convention(c) (UnsafeMutableRawPointer) -> Int32
+    private typealias GetProcessPID = @convention(c) (UnsafeRawPointer, UnsafeMutablePointer<pid_t>) -> Int32
+    private typealias SetFrontProcessWithOptions = @convention(c) (UnsafeRawPointer, UInt32, UInt32) -> Int32
     private typealias EventPostToPid = @convention(c) (pid_t, CGEvent) -> Void
     private typealias EventSetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
     private typealias AXUIElementGetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<UInt32>) -> AXError
@@ -26,6 +28,8 @@ enum ComputerUseSkyLight {
         var postEventRecordTo: PostEventRecordTo?
         var getProcessForPID: GetProcessForPID?
         var getFrontProcess: GetFrontProcess?
+        var getProcessPID: GetProcessPID?
+        var setFrontProcess: SetFrontProcessWithOptions?
         var eventPostToPid: EventPostToPid?
         var eventSetWindowLocation: EventSetWindowLocation?
         var axGetWindow: AXUIElementGetWindow?
@@ -43,6 +47,9 @@ enum ComputerUseSkyLight {
             // Deprecated Carbon, still exported; resolving it at runtime sidesteps the deprecation.
             getProcessForPID: resolve("GetProcessForPID", as: GetProcessForPID.self),
             getFrontProcess: resolve("_SLPSGetFrontProcess", as: GetFrontProcess.self),
+            // Deprecated Carbon, like GetProcessForPID.
+            getProcessPID: resolve("GetProcessPID", as: GetProcessPID.self),
+            setFrontProcess: resolve("_SLPSSetFrontProcessWithOptions", as: SetFrontProcessWithOptions.self),
             eventPostToPid: resolve("SLEventPostToPid", as: EventPostToPid.self),
             eventSetWindowLocation: resolve("CGEventSetWindowLocation", as: EventSetWindowLocation.self),
             axGetWindow: resolve("_AXUIElementGetWindow", as: AXUIElementGetWindow.self)
@@ -98,6 +105,28 @@ enum ComputerUseSkyLight {
         var front = [UInt8](repeating: 0, count: 8)
         guard getFront(&front) == 0 else { return nil }
         return front == psn
+    }
+
+    /// Makes `pid` WindowServer's front process and brings its front window forward, as a click on
+    /// it would (yabai's `kCPSUserGenerated`, no window named). Unlike
+    /// `NSRunningApplication.activate()`, which macOS's cooperative activation ignores from an app
+    /// that isn't frontmost, it works from the background. False when the symbol is missing or
+    /// WindowServer refused; whether the app came forward is for the caller to confirm.
+    static func setFrontProcess(pid: pid_t) -> Bool {
+        guard let setFront = symbols.setFrontProcess, let psn = processSerialNumber(pid) else { return false }
+        return psn.withUnsafeBytes { setFront($0.baseAddress!, 0, userGeneratedActivation) } == 0
+    }
+
+    /// `kCPSUserGenerated`.
+    private static let userGeneratedActivation: UInt32 = 0x200
+
+    /// The pid of WindowServer's front process; nil when it can't tell.
+    static func frontProcessPID() -> pid_t? {
+        guard let getFront = symbols.getFrontProcess, let getPID = symbols.getProcessPID else { return nil }
+        var front = [UInt8](repeating: 0, count: 8)
+        guard getFront(&front) == 0 else { return nil }
+        var pid: pid_t = 0
+        return getPID(front, &pid) == 0 && pid > 0 ? pid : nil
     }
 
     private static func processSerialNumber(_ pid: pid_t) -> [UInt8]? {

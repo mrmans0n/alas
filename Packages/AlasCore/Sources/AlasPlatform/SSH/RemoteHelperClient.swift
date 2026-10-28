@@ -561,41 +561,45 @@ public actor RemoteHelperClient {
     }
 
     public func openACPBroker(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
-        try await request(method: "acp/open", params: params)
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/open" : "acp/open", params: params)
     }
 
     public func attachACPBroker(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
-        try await request(method: "acp/attach", params: params)
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/attach" : "acp/attach", params: params)
     }
 
     // The ACP broker is local-only and these frames carry prompts and file
     // contents, so they are never rewritten.
     public func sendACPBroker(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult {
-        try await request(method: "acp/send", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/send" : "acp/send", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
     }
 
     public func notifyACPBroker(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK {
-        try await request(method: "acp/notify", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/notify" : "acp/notify", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
     }
 
     public func respondACPBroker(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
-        try await request(method: "acp/respond", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/respond" : "acp/respond", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
     }
 
     public func ackACPBroker(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK {
-        try await request(method: "acp/ack", params: params, replaySubscriptionsOnStart: false)
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/ack" : "acp/ack", params: params, replaySubscriptionsOnStart: false)
     }
 
     public func detachACPBroker(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK {
-        try await request(method: "acp/detach", params: params, replaySubscriptionsOnStart: false)
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/detach" : "acp/detach", params: params, replaySubscriptionsOnStart: false)
     }
 
     public func closeACPBroker(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK {
-        try await request(method: "acp/close", params: params, replaySubscriptionsOnStart: false)
+        try await request(method: params.wireContext == .rawV2 ? "acp/raw/close" : "acp/close", params: params, replaySubscriptionsOnStart: false)
     }
 
-    public func listACPBroker() async throws -> ACPBrokerListResult {
-        try await request(method: "acp/list", params: RemoteHelperNoParams(), replaySubscriptionsOnStart: false)
+    public func listACPBroker(wireContext: ACPBrokerWireContext = .legacyV1) async throws -> ACPBrokerListResult {
+        if wireContext == .rawV2 {
+            struct RawList: Encodable { let wireContext = ACPBrokerWireContext.rawV2 }
+            return try await request(method: "acp/raw/list", params: RawList(), replaySubscriptionsOnStart: false)
+        }
+        return try await request(method: "acp/list", params: RemoteHelperNoParams(), replaySubscriptionsOnStart: false)
     }
 
     // MARK: Visual MCP relay (`mcp/*`)
@@ -814,6 +818,13 @@ public actor RemoteHelperClient {
             }
             if let subscriptionReplayTask {
                 try await subscriptionReplayTask.value
+            }
+        }
+        if method.hasPrefix("acp/raw/") {
+            if helperCapabilities?.generation != generation { _ = try await hello() }
+            guard helperCapabilities?.generation == generation,
+                  helperCapabilities?.capabilities.acpRawFrames == 1 else {
+                throw RemoteHelperClientError.decoding("This helper generation does not support raw ACP frames; update the bundled helper")
             }
         }
         if requiresSessionCoordination {
