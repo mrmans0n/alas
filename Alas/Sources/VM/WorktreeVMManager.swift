@@ -146,13 +146,12 @@ final class WorktreeVMManager {
     }
 
     /// True when any Alas process (release and dev builds share the registry)
-    /// runs a golden VM, so its disk must not be sealed. An unreadable
-    /// registry counts as running.
-    func goldenRunsAnywhere() -> Bool {
-        if runningGolden() != nil { return true }
-        guard vmsExist else { return false }
-        guard let records = try? registry.snapshot() else { return true }
-        return records.contains { $0.id.hasPrefix(Self.goldenIDPrefix) && $0.runOwner != nil }
+    /// runs or boots a golden VM, so its disk must not be sealed. Call it
+    /// inside a registry transaction.
+    private func goldenRunsAnywhere(_ records: [WorktreeVMRecord]) -> Bool {
+        runningGolden() != nil
+            || starting.contains { $0.hasPrefix(Self.goldenIDPrefix) }
+            || records.contains { $0.id.hasPrefix(Self.goldenIDPrefix) && $0.runOwner != nil }
     }
 
     // MARK: - Lifecycle
@@ -309,6 +308,11 @@ final class WorktreeVMManager {
         }
         let bundlePath = bundleURL.path
         return try await startRecorded(id: id) { records in
+            // Checked again under the registry lock: sealing happens under
+            // it too, so a golden sealed since the check above never boots.
+            guard !VMBundle(url: bundleURL).isSealed else {
+                throw VMError(message: "This macOS image is already set up")
+            }
             guard !records.contains(where: { $0.id == id }) else { return }
             let now = Date()
             records.append(WorktreeVMRecord(
@@ -342,17 +346,22 @@ final class WorktreeVMManager {
         return cleanlyShutDown.contains(id) ? .clean : .forcedOff
     }
 
-    /// Drops the golden VM's registry record once its image is sealed; it is
-    /// never booted again.
-    func forgetGolden(build: String) {
-        let id = Self.goldenIDPrefix + build
-        guard vmsExist else { return }
-        do {
-            try registry.update { records in
-                records.removeAll { $0.id == id && $0.runOwner == nil }
+    /// Seals a golden bundle once this process saw its guest shut down
+    /// cleanly. The running check, the marker write and dropping the golden
+    /// record (it is never booted again) are one registry transaction, the
+    /// same lock boot admission takes, so no Alas process can boot the golden
+    /// between the check and the seal.
+    func sealGolden(_ bundle: VMBundle) throws {
+        let id = Self.goldenIDPrefix + bundle.url.lastPathComponent
+        try registry.update { records in
+            guard !goldenRunsAnywhere(records) else {
+                throw VMError(message: "Shut down the golden VM before marking setup as done")
             }
-        } catch {
-            logger.error("Removing golden VM record \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            guard cleanlyShutDown.contains(id) else {
+                throw VMError(message: "macOS was powered off without shutting down. Start it, shut down macOS from the Apple menu, then click Done.")
+            }
+            try GoldenImageInstaller.writeSealedMarker(bundle)
+            records.removeAll { $0.id == id }
         }
     }
 
@@ -383,7 +392,7 @@ final class WorktreeVMManager {
     /// process as owner before booting, so two processes cannot both take the
     /// last slot. The reservation is released if the boot fails.
     private func startRecorded(
-        id: String, ensureRecord: ((inout [WorktreeVMRecord]) -> Void)?
+        id: String, ensureRecord: ((inout [WorktreeVMRecord]) throws -> Void)?
     ) async throws -> VMStartOutcome {
         if let vm = runningVMs[id] { return .running(vm) }
         guard !starting.contains(id) else {
@@ -394,7 +403,7 @@ final class WorktreeVMManager {
         }
         let localIDs = Set(runningVMs.keys)
         let admission: Admission = try registry.update { records in
-            ensureRecord?(&records)
+            try ensureRecord?(&records)
             guard let index = records.firstIndex(where: { $0.id == id }) else {
                 throw VMError(message: "This worktree has no VM")
             }

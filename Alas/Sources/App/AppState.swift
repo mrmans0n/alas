@@ -327,12 +327,14 @@ final class AppState {
     let acpModelCatalog: ACPAgentModelCatalog
     /// Worktree VMs (and the golden VM during its setup) this process runs.
     @ObservationIgnored let vmManager = WorktreeVMManager()
-    /// The one installer; it asks `vmManager` whether a golden VM still runs
-    /// in any Alas process.
+    /// The one installer; `vmManager` seals its golden image so no Alas
+    /// process can boot it meanwhile.
     @ObservationIgnored private(set) lazy var goldenImageInstaller = GoldenImageInstaller(
         root: vmManager.root,
-        isGoldenRunning: { [weak vmManager] in vmManager?.goldenRunsAnywhere() ?? false },
-        onSealed: { [weak vmManager] build in vmManager?.forgetGolden(build: build) })
+        seal: { [weak vmManager] bundle in
+            guard let vmManager else { throw WorktreeVMManager.VMError(message: "Alas is shutting down") }
+            try vmManager.sealGolden(bundle)
+        })
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {

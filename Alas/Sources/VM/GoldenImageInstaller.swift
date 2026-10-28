@@ -29,20 +29,19 @@ final class GoldenImageInstaller: ObservableObject {
     private nonisolated static let partialSuffix = ".partial"
 
     private let root: URL
-    private let isGoldenRunning: () -> Bool
-    /// Called with the build after its bundle is sealed.
-    private let onSealed: (String) -> Void
+    /// Writes the bundle's sealed marker. The app routes it through
+    /// `WorktreeVMManager.sealGolden`, which checks and writes under the
+    /// registry lock so no Alas process can boot the golden meanwhile.
+    private let seal: (VMBundle) throws -> Void
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "golden-image-installer")
     private var installProgressObservation: NSKeyValueObservation?
 
     init(
         root: URL = Paths.vmsRoot,
-        isGoldenRunning: @escaping () -> Bool = { false },
-        onSealed: @escaping (String) -> Void = { _ in }
+        seal: @escaping (VMBundle) throws -> Void = GoldenImageInstaller.writeSealedMarker
     ) {
         self.root = root
-        self.isGoldenRunning = isGoldenRunning
-        self.onSealed = onSealed
+        self.seal = seal
         phase = Self.settledPhase(in: Self.goldenRoot(in: root)) ?? .idle
     }
 
@@ -172,11 +171,9 @@ final class GoldenImageInstaller: ObservableObject {
     }
 
     /// Seals the golden bundle awaiting setup (or, after a relaunch, the newest
-    /// unsealed one). The golden VM must be stopped so its disk is consistent.
+    /// unsealed one). The golden VM must be stopped so its disk is consistent;
+    /// `seal` refuses otherwise.
     func markSetupDone() throws {
-        guard !isGoldenRunning() else {
-            throw InstallerError(message: "Shut down the golden VM before marking setup as done")
-        }
         let bundle: VMBundle
         if case .awaitingSetup(let build) = phase {
             bundle = VMBundle(url: goldenRoot.appendingPathComponent(build, isDirectory: true))
@@ -185,10 +182,12 @@ final class GoldenImageInstaller: ObservableObject {
         } else {
             throw InstallerError(message: "No golden VM is awaiting setup")
         }
-        let build = bundle.url.lastPathComponent
-        try Data(build.utf8).write(to: bundle.sealedMarker, options: .atomic)
-        phase = .sealed(build: build)
-        onSealed(build)
+        try seal(bundle)
+        phase = .sealed(build: bundle.url.lastPathComponent)
+    }
+
+    nonisolated static func writeSealedMarker(_ bundle: VMBundle) throws {
+        try Data(bundle.url.lastPathComponent.utf8).write(to: bundle.sealedMarker, options: .atomic)
     }
 
     /// Install errors that blame the restore image itself, so the cached

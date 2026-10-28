@@ -232,9 +232,7 @@ final class WorktreeVMManagerTests {
 
     @Test("a sealed golden image is never booted again")
     func sealedGoldenRefusesToStart() async throws {
-        let golden = VMBundle(url: root.appendingPathComponent("golden/25A1", isDirectory: true))
-        try FileManager.default.createDirectory(at: golden.url, withIntermediateDirectories: true)
-        try Data("25A1".utf8).write(to: golden.sealedMarker)
+        try GoldenImageInstaller.writeSealedMarker(makeGoldenBundle())
 
         await #expect(throws: WorktreeVMManager.VMError.self) {
             _ = try await self.makeManager().startGolden(build: "25A1")
@@ -265,14 +263,34 @@ final class WorktreeVMManagerTests {
         }
 
         let shutdown = await manager.shutDownGoldenForSealing(build: "25A1")
+        let golden = try makeGoldenBundle()
+        let sealed = (try? manager.sealGolden(golden)) != nil
 
-        #expect(shutdown == (lastStop == .guestShutdown ? .clean : .forcedOff))
+        let clean = lastStop == .guestShutdown
+        #expect(shutdown == (clean ? .clean : .forcedOff))
         #expect(manager.running(id) == nil)
+        #expect(sealed == clean)
+        #expect(golden.isSealed == clean)
     }
 
-    @Test("a golden VM running in another process blocks sealing")
-    func goldenRunningElsewhereCounts() throws {
-        try addRecord("golden:25A1", owner: elsewhere)
-        #expect(makeManager().goldenRunsAnywhere())
+    @Test("a golden VM another process booted after a clean shutdown here is not sealed")
+    func goldenBootedElsewhereBlocksSealing() async throws {
+        let id = WorktreeVMManager.goldenIDPrefix + "25A1"
+        let manager = makeManager()
+        _ = try await manager.startGolden(build: "25A1")
+        #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .clean)
+        try registry.update { records in
+            records[try #require(records.firstIndex { $0.id == id })].runOwner = elsewhere
+        }
+        let golden = try makeGoldenBundle()
+
+        #expect(throws: WorktreeVMManager.VMError.self) { try manager.sealGolden(golden) }
+        #expect(!golden.isSealed)
+    }
+
+    private func makeGoldenBundle() throws -> VMBundle {
+        let golden = VMBundle(url: root.appendingPathComponent("golden/25A1", isDirectory: true))
+        try FileManager.default.createDirectory(at: golden.url, withIntermediateDirectories: true)
+        return golden
     }
 }
