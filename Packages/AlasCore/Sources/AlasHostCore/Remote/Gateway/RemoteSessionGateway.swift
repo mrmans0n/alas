@@ -115,6 +115,9 @@ public final class RemoteSessionGateway {
             serveHost(request)
         case .console(let request):
             handleConsole(request)
+        case .portForward:
+            // Not routed yet: hosts don't advertise `PeerPortForwardCapability.v1`.
+            break
         case .listSessions:
             refreshSessionList()
         case .listWorktrees:
