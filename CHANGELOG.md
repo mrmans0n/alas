@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-28
+
+### ✨ Features
+
+- Review a paired host's local changes, commit ranges, branches, pull requests and merge requests from the Mac, with comments, thread actions and review publishing (#2218, #2219, #2220, #2223, #2224).
+- Manage a paired host worktree from the Mac: stash changes; resolve, continue or abort Git operations; cherry-pick or revert commits; edit commits; manage checkpoints; and merge or rebase branches (#2228, #2229, #2230, #2232, #2239).
+- Edit a paired host's worktree files from the Mac, with guarded saves, external-change reloads, unsaved-change protections and new file or folder creation (#2235, #2236).
+- Let auto-run approve computer-use apps for the current session, and drag inside supported apps without bringing them to the front (#2242, #2243).
+- Improve computer-use typing for Chromium and Electron web fields and document windows, and make Chrome's accessibility tree available on first contact (#2234, #2237).
+- Render agent-defined boolean options as pill toggles in local and paired-host composers (#2244).
+
+### 🐛 Fixes
+
+- Preserve cancellation, refusal and unknown ACP stop outcomes instead of treating every accepted prompt as a successful turn (#2221).
+- Keep in-flight host pairing alive during policy refreshes and improve paired-host review, palette and session behavior (#2225, #2226).
+- Make computer-use reads and drag confirmation more reliable in Electron apps and large windows, and retry a Stop shortcut after another app releases it (#2246, #2247).
+- Refuse unsafe ref-less typing, send terminal text as keys, preserve submit and newline behavior, and make Chrome web clicks reliable (#2251).
+
+### 🏗️ Internal
+
+- Build the disabled-by-default ACP 2 foundation for negotiation, transcripts, tool and plan state, ordered sessions, lossless stdio, raw broker transport and guarded persistence (#2217, #2222, #2227, #2233, #2238, #2240, #2241, #2250).
+- Move checkpoint services into the shared features package for the app and headless host (#2231).
+- Update SwiftTransformers, rusqlite, and the Dart and PowerShell tree-sitter grammars (#1888, #2215, #2248, #2252).
+
 ## [0.22.0] - 2026-10-25
 
 ### ✨ Features
