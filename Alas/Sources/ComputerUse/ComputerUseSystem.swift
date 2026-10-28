@@ -734,7 +734,14 @@ extension LiveComputerUseSystem {
            try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
             throw ComputerUseAXActions.hiddenRefusal
         }
-        if let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
+        // A Chrome page's content takes no AXPress: a click there waits for the route, to go with
+        // the pointer in the background or as the AX press otherwise (`ComputerUseClickTarget.pointerFirst`).
+        let pointerCandidate = if case .click(.element(let handles, let handle), .left, 1) = input {
+            try await ComputerUseAXActions.pointerClickCandidate(handles, handle, in: window, isCancelled: isCancelled)
+        } else {
+            false
+        }
+        if !pointerCandidate, let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
         // From making the window key until it is handed back below, no other input may move key
         // status in this app: its events would land in whichever window the other one left key.
         return try await keyLocks.run(app.pid) {
@@ -743,7 +750,8 @@ extension LiveComputerUseSystem {
             do {
                 try await makeKeyInBackground(window, &keying, interrupt: interrupt)
                 var delivered = try await deliverEvents(
-                    input, in: window, keyConfirmed: keying.confirmed, ignoring: ignoring, interrupt: interrupt)
+                    input, in: window, keyConfirmed: keying.confirmed, pointerCandidate: pointerCandidate,
+                    ignoring: ignoring, interrupt: interrupt)
                 await keying.restoreUserKeyWindow(window)
                 // Also after an activation fallback: the previous app is back in front by then, so
                 // the release still finds the target in the background and defocuses it.
@@ -777,11 +785,6 @@ extension LiveComputerUseSystem {
                 // A right click at its centre may still land.
             }
         case .click(.element(let handles, let handle), .left, let count) where count <= 2:
-            // A Chromium web page's content takes no AXPress: the click goes as events at the element.
-            if count == 1,
-               try await ComputerUseAXActions.clicksWithPointerFirst(handles, handle, in: window, isCancelled: isCancelled) {
-                break
-            }
             if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
                 // A web field may only read as focused in its page: unless the app's focus moved,
                 // the click goes as events at the field, as a user's would.
@@ -991,9 +994,10 @@ extension LiveComputerUseSystem {
     }
 
     /// Events, once AX had no way: to the window made key when that was confirmed, else the AX
-    /// ways on the focused window, else with the app activated around them.
+    /// ways on the focused window, else with the app activated around them. A click that skipped
+    /// AX for the pointer (`pointerCandidate`) gets its AX ways first anywhere but the background.
     private static func deliverEvents(
-        _ input: ComputerUseInput, in window: ComputerUseWindow, keyConfirmed: Bool,
+        _ input: ComputerUseInput, in window: ComputerUseWindow, keyConfirmed: Bool, pointerCandidate: Bool,
         ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseDelivered {
@@ -1002,6 +1006,10 @@ extension LiveComputerUseSystem {
         let route = ComputerUseEventRoute.choose(
             skyLightAvailable: ComputerUseSkyLight.isAvailable, keyConfirmed: keyConfirmed,
             idleSeconds: secondsSinceUserInput())
+        if pointerCandidate, !ComputerUseClickTarget.pointerFirst(candidate: true, route: route),
+           let delivered = try await viaAX(input, in: window, interrupt: interrupt) {
+            return delivered
+        }
         if route == .background {
             // A key window validates the app's menus, so a chord's menu item is enabled now.
             if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }

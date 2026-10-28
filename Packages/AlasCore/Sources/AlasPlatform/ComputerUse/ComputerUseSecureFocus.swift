@@ -67,7 +67,9 @@ public enum ComputerUseSecureFocus {
     /// Whether a left click by ref puts the keyboard in the element through AX focus: only a web
     /// page's field, where an AX press may mark it focused in the page while the keyboard stays
     /// in the address bar. A native field keeps the plain click: some select all their text on
-    /// taking focus, and a later ref-less type would replace it.
+    /// taking focus, and a later ref-less type would replace it. A Chromium browser's page field
+    /// is asked only when the pointer can't click it in the background
+    /// (`ComputerUseClickTarget.pointerFirst`); a WebKit (Safari) or Electron one always is.
     public static func focusesOnClick(_ element: Element, inWebArea: Bool) -> Bool {
         inWebArea && isTextEntry(element)
     }

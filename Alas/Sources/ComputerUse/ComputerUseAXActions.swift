@@ -153,8 +153,10 @@ enum ComputerUseAXActions {
 
     /// For a left click by ref on a web page's field: puts the keyboard in it, as a click would,
     /// where an AX press may only mark it focused inside the page. False, touching nothing, for
-    /// any other element (`ComputerUseSecureFocus.focusesOnClick`). A secure field may be
-    /// clicked; only typing into one is refused.
+    /// any other element (`ComputerUseSecureFocus.focusesOnClick`). A Chromium browser's page
+    /// field gets here only when the pointer can't click it in the background
+    /// (`ComputerUseClickTarget.pointerFirst`). A secure field may be clicked; only typing into
+    /// one is refused.
     static func focusTextEntry(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
     ) async throws -> Bool {
@@ -170,27 +172,66 @@ enum ComputerUseAXActions {
         }
     }
 
-    /// Whether a left single click on the element goes as a pointer click at its visible centre,
-    /// without an AX press first (`ComputerUseClickTarget.pointerFirst`): in a Chromium or Electron
-    /// app's web page, where AXPress doesn't reach the content, while that centre is on screen.
-    static func clicksWithPointerFirst(
+    /// Whether a left single click on the element may go as a pointer click at its visible centre,
+    /// without an AX press (`ComputerUseClickTarget.pointerCandidate`): in a Chromium browser's web
+    /// page, where AXPress doesn't reach the content, while that centre is on screen and the app's
+    /// own hit test finds the element there. The route decides after the window is made key
+    /// (`ComputerUseClickTarget.pointerFirst`).
+    static func pointerClickCandidate(
         _ handles: ComputerUseAXHandles, _ handle: Int, in window: ComputerUseWindow, isCancelled: @escaping IsCancelled
     ) async throws -> Bool {
-        let (chromium, inWebArea) = try await onQueue(isCancelled) { () -> (Bool, Bool) in
-            let chromium = ComputerUseAppKind.isChromium(window.app)
-            return (chromium, try chromium && isInWebArea(resolve(handles, handle)))
-        }
-        var onScreen = false
-        if inWebArea {
+        let app = window.app
+        let chromeBrowser = ComputerUseWebContent.chromeBundleIDs.contains(app.bundleID ?? "")
+        guard chromeBrowser else { return false }
+        let inWebArea = try await onQueue(isCancelled) { try isInWebArea(resolve(handles, handle)) }
+        guard inWebArea else { return false }
+        let center: CGPoint?
+        do {
+            center = try await visibleCenter(
+                handles, handle, within: window.frame, app: app, requireOwnCenter: true, isCancelled: isCancelled)
+        } catch let error as CancellationError {
+            throw error
+        } catch ComputerUseSystemError.userActive {
+            throw ComputerUseSystemError.userActive
+        } catch {
             // An element whose frame can't be read gets the AX press, as before.
-            let center = try? await visibleCenter(
-                handles, handle, within: window.frame, app: window.app, requireOwnCenter: true, isCancelled: isCancelled)
-            onScreen = center.flatMap { $0 }.map {
-                ComputerUseInputGeometry.pointIsOnScreen($0, displays: ComputerUseAXReader.displayFrames())
-            } ?? false
+            center = nil
         }
-        return ComputerUseClickTarget.pointerFirst(
-            leftSingle: true, inWebArea: inWebArea, chromium: chromium, centerOnScreen: onScreen)
+        let onScreen = center.map {
+            ComputerUseInputGeometry.pointIsOnScreen($0, displays: ComputerUseAXReader.displayFrames())
+        } ?? false
+        var hitOnElement = false
+        if let center, onScreen {
+            hitOnElement = try await onQueue(isCancelled) { () -> Bool in
+                let target = try resolve(handles, handle)
+                let application = try ComputerUseAXReader.target(app.pid)
+                guard let found = hit(at: center, in: window, application: application) else { return false }
+                var pid: pid_t = 0
+                guard AXUIElementGetPid(found, &pid) == .success,
+                      ComputerUseInputGeometry.pointRoute(
+                          point: center, targetPID: app.pid, window: window.frame,
+                          appHit: .init(pid: pid, frame: frame(of: found))) == .events
+                else { return false }
+                return ComputerUseClickTarget.hitReaches(
+                    targetAboveHit: level(of: target, above: found, within: ComputerUseClickTarget.hitDescendantLevels),
+                    hitAboveTarget: level(of: found, above: target, within: ComputerUseClickTarget.hitAncestorLevels))
+            }
+        }
+        return ComputerUseClickTarget.pointerCandidate(
+            leftSingle: true, inWebArea: inWebArea, chromeBrowser: chromeBrowser, centerOnScreen: onScreen,
+            hitOnElement: hitOnElement)
+    }
+
+    /// How many levels `ancestor` is above `element` (0 for the element itself), looking at most
+    /// `levels` up; nil when it isn't there. Call on the AX queue.
+    private static func level(of ancestor: AXUIElement, above element: AXUIElement, within levels: Int) -> Int? {
+        var current = element
+        for level in 0 ... levels {
+            if CFEqual(current, ancestor) { return level }
+            guard let parent = elementAttribute(current, kAXParentAttribute) else { return nil }
+            current = parent
+        }
+        return nil
     }
 
     /// Focuses the element before typing into it. Refuses secure text fields. An element that

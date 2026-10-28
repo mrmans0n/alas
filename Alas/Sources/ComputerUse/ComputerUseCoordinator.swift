@@ -1306,6 +1306,8 @@ final class ComputerUseCoordinator {
     /// click. Never in other apps, where an AX press that changed nothing is the app's answer, nor
     /// on a toggle or menu item (`role`, as read), where a second press could undo the first.
     /// A query-filtered read can't tell either: the press may have changed only elements it hides.
+    /// A Chrome page's element the pointer could reach in the background was clicked with it, not
+    /// pressed (`ComputerUseClickTarget.pointerFirst`): delivered other than `.ax`, it isn't retried.
     static func retriesWithPointer(
         _ command: ComputerUseCommand, role: String, delivered: ComputerUseDelivery, unchanged: Bool,
         electron: Bool

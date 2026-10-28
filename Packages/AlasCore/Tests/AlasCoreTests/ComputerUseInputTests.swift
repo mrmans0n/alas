@@ -681,21 +681,38 @@ struct ComputerUseInputTests {
         #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
     }
 
-    /// AXPress doesn't reach a Chromium page's content (Chrome 156 kept a button's counter at 0),
-    /// so its left single click goes with the pointer while its centre shows; else as before.
-    /// Columns: left single click, in a web area, Chromium or Electron, centre on screen, pointer first.
+    /// AXPress doesn't reach a Chrome page's content (Chrome 156 kept a button's counter at 0), so
+    /// its left single click goes with the pointer, where its centre shows, holds the element and
+    /// the window was made key in the background; anything else gets the AX press as before. An
+    /// Electron app's press works (with the pointer retry after it).
+    /// Columns: left single, in a web area, Chrome browser, centre on screen, the element's level
+    /// above the hit, the hit's level above the element, route, pointer first.
     @Test(arguments: [
-        (true, true, true, true, true),
-        (false, true, true, true, false),
-        (true, false, true, true, false),
-        (true, true, false, true, false),
-        (true, true, true, false, false),
+        (true, true, true, true, Int?(0), Int?.none, ComputerUseEventRoute.background, true),
+        // The hit is the button's label, or the wrapper over a 1×1 visually hidden control.
+        (true, true, true, true, 2, nil, .background, true),
+        (true, true, true, true, nil, 2, .background, true),
+        // An overlay or sticky header is there instead, or a far ancestor.
+        (true, true, true, true, nil, nil, .background, false),
+        (true, true, true, true, 9, nil, .background, false),
+        (true, true, true, true, nil, 3, .background, false),
+        // Not in the background: the AX press, never an activation or refusal for the pointer.
+        (true, true, true, true, 0, nil, .activation, false),
+        (true, true, true, true, 0, nil, .refuse, false),
+        (false, true, true, true, 0, nil, .background, false),
+        (true, false, true, true, 0, nil, .background, false),
+        // An Electron app or Safari, and a centre off screen.
+        (true, true, false, true, 0, nil, .background, false),
+        (true, true, true, false, 0, nil, .background, false),
     ])
-    func aChromiumWebElementIsClickedWithThePointerFirst(
-        leftSingle: Bool, inWebArea: Bool, chromium: Bool, centerOnScreen: Bool, pointerFirst: Bool
+    func aChromeWebElementIsClickedWithThePointerFirst(
+        leftSingle: Bool, inWebArea: Bool, chromeBrowser: Bool, centerOnScreen: Bool, targetAboveHit: Int?,
+        hitAboveTarget: Int?, route: ComputerUseEventRoute, pointerFirst: Bool
     ) {
-        #expect(ComputerUseClickTarget.pointerFirst(
-            leftSingle: leftSingle, inWebArea: inWebArea, chromium: chromium, centerOnScreen: centerOnScreen) == pointerFirst)
+        let candidate = ComputerUseClickTarget.pointerCandidate(
+            leftSingle: leftSingle, inWebArea: inWebArea, chromeBrowser: chromeBrowser, centerOnScreen: centerOnScreen,
+            hitOnElement: ComputerUseClickTarget.hitReaches(targetAboveHit: targetAboveHit, hitAboveTarget: hitAboveTarget))
+        #expect(ComputerUseClickTarget.pointerFirst(candidate: candidate, route: route) == pointerFirst)
     }
 
     @Test(arguments: [
