@@ -18,7 +18,7 @@ extension RemoteClientMessage {
     public var sessionId: String? {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession, .console, .host:
+             .createWorktreeSession, .createSession, .console, .portForward, .host:
             return nil
         case .subscribe(let id), .unsubscribe(let id), .takeOver(let id), .stop(let id), .queueClear(let id),
              .openSessionTab(let id), .closeSessionTab(let id):
@@ -37,7 +37,7 @@ extension RemoteClientMessage {
     public func replacingSessionId(_ new: String) -> RemoteClientMessage {
         switch self {
         case .helloAck, .listSessions, .listWorktrees, .listAgents, .listProjects, .listBranches,
-             .createWorktreeSession, .createSession, .console, .host:
+             .createWorktreeSession, .createSession, .console, .portForward, .host:
             return self
         case .subscribe: return .subscribe(sessionId: new)
         case .unsubscribe: return .unsubscribe(sessionId: new)
@@ -94,7 +94,7 @@ extension RemoteClientMessage {
 extension RemoteServerMessage {
     public var sessionId: String? {
         switch self {
-        case .hello, .identityProof, .console, .host, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .identityProof, .console, .portForward, .host, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
              .sessionCreated, .createSessionFailed:
             return nil
@@ -123,7 +123,7 @@ extension RemoteServerMessage {
 
     public func replacingSessionId(_ new: String) -> RemoteServerMessage {
         switch self {
-        case .hello, .identityProof, .console, .host, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
+        case .hello, .identityProof, .console, .portForward, .host, .sessionList, .worktreeList, .agentList, .projectList, .branchList,
              .branchListFailed, .worktreeSessionCreated, .worktreeSessionCreationFailed, .worktreeSessionNeedsRepoHookApproval,
              .sessionCreated, .createSessionFailed:
             return self

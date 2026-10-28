@@ -43,6 +43,10 @@ public final class RemoteSessionGateway {
     private let send: (RemoteServerMessage) -> Void
     /// Console channel of an authenticated Alas peer; nil for browsers.
     private let consoleLink: PeerConsoleLink?
+    /// This connection's identity to the presenter's port forward host;
+    /// connected on its first request.
+    private let portForwardID = UUID()
+    private var portForwardHost: PeerPortForwardHost?
     private var sessionListRefresh: Task<Void, Never>?
     private var sessionListGeneration = 0
     private var worktreeListRefresh: Task<Void, Never>?
@@ -115,6 +119,8 @@ public final class RemoteSessionGateway {
             serveHost(request)
         case .console(let request):
             handleConsole(request)
+        case .portForward(let request):
+            handlePortForward(request)
         case .listSessions:
             refreshSessionList()
         case .listWorktrees:
@@ -611,6 +617,19 @@ public final class RemoteSessionGateway {
         }
     }
 
+    /// Forwards are served, like consoles, only to authenticated Alas peers.
+    private func handlePortForward(_ request: PeerPortForwardRequest) {
+        if portForwardHost == nil, consoleLink != nil, let sendTracked, let host = presenter?.peerPortForwardHost {
+            host.connect(portForwardID) { sendTracked(.portForward($0)) {} }
+            portForwardHost = host
+        }
+        if let portForwardHost {
+            portForwardHost.receive(request, from: portForwardID)
+        } else if case .open(let stream, _) = request {
+            send(.portForward(.refused(stream: stream, message: "This host doesn't forward run endpoints.")))
+        }
+    }
+
     /// Hands a host protocol message to this connection's host connection,
     /// opened on first use for the caller the transport authenticated.
     private func serveHost(_ request: HostClientMessage) {
@@ -653,6 +672,8 @@ public final class RemoteSessionGateway {
         for continuation in pendingWrites.values { continuation.resume() }
         pendingWrites.removeAll()
         if let consoleLink { presenter?.peerConsoleHost?.close(consoleLink) }
+        portForwardHost?.connectionClosed(portForwardID)
+        portForwardHost = nil
         if let federation, let downstream { federation.detach(downstream) }
         self.downstream = nil
         hostSubscription?.cancel()
