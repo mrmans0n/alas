@@ -201,17 +201,55 @@ struct ACPComposerChips {
         }
     }
 
+    /// Agent-defined boolean options carry no icon, so they render as a
+    /// labelled pill with the same outlined on/off treatment as the fast-mode
+    /// and auto-run buttons.
     func booleanConfigToggle(_ option: ACPConfigOption) -> some View {
-        Toggle(isOn: Binding(
-            get: { option.currentBoolValue ?? false },
-            set: { onConfigValue(option.id, .boolean($0)) }
-        )) {
-            Text(option.name.isEmpty ? option.id : option.name)
-                .font(.system(size: 11, weight: .medium))
+        let isEnabled = option.currentBoolValue ?? false
+        let name = option.name.isEmpty ? option.id : option.name
+        return Button {
+            onConfigValue(option.id, .boolean(!isEnabled))
+        } label: {
+            Text(name)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(booleanOptionFg(isEnabled: isEnabled))
+                .padding(.horizontal, 9)
+                .frame(height: 24)
+                .background(
+                    RoundedRectangle(cornerRadius: 6).fill(booleanOptionBg(isEnabled: isEnabled))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6)
+                        .strokeBorder(booleanOptionBorder(isEnabled: isEnabled), lineWidth: 0.75)
+                )
         }
-        .toggleStyle(.switch)
-        .controlSize(.small)
-        .help(option.name.isEmpty ? option.id : option.name)
+        .buttonStyle(.plain)
+        .accessibilityLabel(name)
+        .accessibilityValue(isEnabled ? "On" : "Off")
+        .help("\(name): \(isEnabled ? "on" : "off")")
+    }
+
+    func booleanOptionBg(isEnabled: Bool) -> Color {
+        isEnabled ? booleanOptionAccent.opacity(0.20) : theme.color("bg-3").opacity(0.7)
+    }
+
+    func booleanOptionBorder(isEnabled: Bool) -> Color {
+        isEnabled ? booleanOptionAccent.opacity(0.55) : theme.color("line")
+    }
+
+    func booleanOptionFg(isEnabled: Bool) -> Color {
+        isEnabled
+            ? ACPSelectChip.labelForeground(accent: booleanOptionAccent, theme: theme)
+            : theme.color("fg-muted")
+    }
+
+    // Every theme hue near the toolbar is already taken (mode accent,
+    // thinking, auto-run, fast mode, model), so enabled options get a
+    // magenta of their own. labelForeground keeps the light variant legible.
+    private var booleanOptionAccent: Color {
+        theme.darkMode
+            ? Color(.sRGB, red: 0.90, green: 0.52, blue: 0.76, opacity: 1)
+            : Color(.sRGB, red: 0.78, green: 0.25, blue: 0.56, opacity: 1)
     }
 
     private func iconChipLabel(icon: String, spec: ChipSpec, fallback: String) -> String {
