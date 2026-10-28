@@ -18,6 +18,17 @@ struct ComputerUseInputTests {
         #expect((ComputerUseStopShortcut.registration(binding: binding, driverActive: driving) != nil) == registered)
     }
 
+    /// Only a combination another app holds is registered again, and only while an agent drives.
+    @Test(arguments: [
+        (Int32?(-9878), true, true),
+        (-9878, false, false),
+        (nil, true, false),
+        (-50, true, false),
+    ])
+    func onlyATakenStopShortcutIsRetriedWhileAnAgentDrives(status: Int32?, driving: Bool, retries: Bool) {
+        #expect(ComputerUseStopShortcut.retries(status: status, driverActive: driving) == retries)
+    }
+
     @Test(arguments: [
         ("cmd+shift+s", Chord(modifiers: [.command, .shift], key: .character("s"))),
         ("Return", Chord(modifiers: [], key: .named(.return))),
@@ -787,13 +798,16 @@ struct ComputerUseInputTests {
     }
 
     @Test(arguments: [
-        (String?("com.google.Chrome"), false, true),
-        ("com.tinyspeck.slackmacgap", true, true),
-        ("com.apple.Safari", false, false),
-        (nil, false, false),
+        (String?("com.google.Chrome"), false, false, true),
+        ("com.tinyspeck.slackmacgap", true, false, true),
+        // An Electron app that refused the attribute, or wasn't asked yet.
+        ("com.tinyspeck.slackmacgap", false, true, true),
+        ("com.apple.Safari", false, false, false),
+        (nil, false, false, false),
     ])
-    func chromiumMeansAChromeBundleOrAnAppThatTookManualAccessibility(bundleID: String?, manual: Bool, chromium: Bool) {
-        #expect(ComputerUseWebContent.isChromium(bundleID: bundleID, acceptsManualAccessibility: manual) == chromium)
+    func chromiumMeansAChromeBundleOrAnElectronApp(bundleID: String?, manual: Bool, electron: Bool, chromium: Bool) {
+        #expect(ComputerUseWebContent.isChromium(
+            bundleID: bundleID, acceptsManualAccessibility: manual, embedsElectron: electron) == chromium)
     }
 
     /// Text for a document's text area goes as keys, which mark it edited; off screen it is the AX

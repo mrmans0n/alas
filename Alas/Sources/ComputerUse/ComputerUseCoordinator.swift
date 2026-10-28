@@ -1021,12 +1021,12 @@ final class ComputerUseCoordinator {
         // A drop into another window may change only that one.
         var beforeEnd: ComputerUseWindowFingerprint?
         if let toWindow { beforeEnd = await fingerprint(of: toWindow, for: command, target: nil, context: context) }
-        // After the read: it is what asks an Electron app for its tree, which marks it as one.
+        // After the read: it is what asks an Electron app for its tree, which marks it as one
+        // when its bundle doesn't already (`ComputerUseSystem.isChromium`).
         let direct = Self.deliversDirect(
             command, input: input, in: window, toWindow: toWindow, displays: system.displays(),
             startsInItem: startsInItem(command, input: input, in: window, context: context),
-            chromium: ComputerUseWebContent.isChromium(
-                bundleID: window.app.bundleID, acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid)))
+            chromium: system.isChromium(window.app))
         try checkStillActive(context)
         // The cursor moves before the takeover wait. Its pointer is window-local, so a remap after
         // the wait still lands under it.
@@ -1067,7 +1067,7 @@ final class ComputerUseCoordinator {
         var retried = false
         if let target, let targetRef, delivered.warning == nil, Self.retriesWithPointer(
             command, role: targetRef.role, delivered: delivered.delivery, unchanged: unchanged,
-            manualAccessibility: system.usesManualAccessibility(window.app.pid)) {
+            electron: system.isElectron(window.app.pid)) {
             // The first press was delivered: a retry that fails reports why next to its result.
             retried = true
             let first = (payload: payload, window: window)
@@ -1308,11 +1308,11 @@ final class ComputerUseCoordinator {
     /// A query-filtered read can't tell either: the press may have changed only elements it hides.
     static func retriesWithPointer(
         _ command: ComputerUseCommand, role: String, delivered: ComputerUseDelivery, unchanged: Bool,
-        manualAccessibility: Bool
+        electron: Bool
     ) -> Bool {
         command.action == .click && command.ref != nil && command.button == .left && command.count == 1
             && (command.query ?? "").isEmpty && !noPointerRetryRoles.contains(role) && delivered == .ax && unchanged
-            && manualAccessibility
+            && electron
     }
 
     static let noPointerRetryRoles: Set<String> = [
@@ -1833,8 +1833,7 @@ final class ComputerUseCoordinator {
         _ tree: (root: ComputerUseAXNode, cut: ComputerUseReadCut?, handles: ComputerUseAXHandles),
         showsContent: Bool, of window: ComputerUseWindow, context: CallContext
     ) async throws -> Bool {
-        let chromium = ComputerUseWebContent.isChromium(
-            bundleID: window.app.bundleID, acceptsManualAccessibility: system.usesManualAccessibility(window.app.pid))
+        let chromium = system.isChromium(window.app)
         guard ComputerUseWebContent.mayLackContent(
             chromium: chromium, showedContent: snapshot(of: window, context: context)?.showedWebContent == true,
             showsContent: showsContent, cut: tree.cut)

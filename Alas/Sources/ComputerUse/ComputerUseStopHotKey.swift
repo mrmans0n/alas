@@ -1,24 +1,39 @@
 import AlasCore
+import AppKit
 import Carbon.HIToolbox
 import CoreGraphics
+import Observation
 import os
 
 /// A system-wide hot key, through Carbon's `RegisterEventHotKey`: it fires while another app is
-/// frontmost and needs no Accessibility or Input Monitoring grant.
+/// frontmost and needs no Accessibility or Input Monitoring grant. A combination another app holds
+/// is tried again while it is requested: when the status item's menu opens, when an app quits,
+/// and every `retryInterval`.
 @MainActor
+@Observable
 final class ComputerUseStopHotKey {
     private static let log = Logger(subsystem: "io.nlopez.alas", category: "computer-use")
     /// "ALSC": tells this hot key's events apart from any other the process registers.
     nonisolated private static let signature: OSType = 0x414C_5343
 
-    private let onPress: @MainActor () -> Void
-    private var handler: EventHandlerRef?
-    private var hotKey: EventHotKeyRef?
+    static let retryInterval: Duration = .seconds(10)
+
+    @ObservationIgnored private let onPress: @MainActor () -> Void
+    @ObservationIgnored private var handler: EventHandlerRef?
+    @ObservationIgnored private var hotKey: EventHotKeyRef?
     /// The binding last passed to `update`, so config saves that don't change it do nothing.
-    private var requested: ShortcutBinding?
+    @ObservationIgnored private var requested: ShortcutBinding?
     /// The last binding a failure was logged for, so repeated drives don't log it again.
-    private var loggedFailure: ShortcutBinding?
-    private var handlerInstalled = false
+    @ObservationIgnored private var loggedFailure: ShortcutBinding?
+    @ObservationIgnored private var handlerInstalled = false
+    /// The Carbon status of the last failed registration; nil when it never reached Carbon.
+    @ObservationIgnored private var failedStatus: Int32?
+    /// Live while a taken binding waits to be tried again.
+    @ObservationIgnored private var retryTask: Task<Void, Never>?
+    @ObservationIgnored private var terminationObserver: (any NSObjectProtocol)?
+    /// Called when a newly requested binding is held by another app, once per request: not again
+    /// for the retries.
+    @ObservationIgnored var onTaken: (@MainActor (ShortcutBinding) -> Void)?
 
     /// Why the requested binding isn't live, for the status item's menu; nil when it is
     /// registered or none is requested.
@@ -30,6 +45,7 @@ final class ComputerUseStopHotKey {
     }
 
     isolated deinit {
+        stopRetrying()
         if let hotKey { UnregisterEventHotKey(hotKey) }
         if let handler { RemoveEventHandler(handler) }
     }
@@ -41,7 +57,29 @@ final class ComputerUseStopHotKey {
         if let hotKey { UnregisterEventHotKey(hotKey) }
         hotKey = nil
         unavailableReason = nil
-        guard let binding else { return }
+        failedStatus = nil
+        guard let binding else {
+            stopRetrying()
+            return
+        }
+        register(binding)
+        // Once per registration request, not per retry: a drive requests its binding when it
+        // starts, though a binding change mid-drive requests it again.
+        if isTaken { onTaken?(binding) } else { stopRetrying() }
+    }
+
+    /// Registers the requested binding again if another app held it.
+    func retryIfTaken() {
+        guard let requested, isTaken else { return }
+        register(requested)
+    }
+
+    private var isTaken: Bool {
+        hotKey == nil && ComputerUseStopShortcut.retries(status: failedStatus, driverActive: requested != nil)
+    }
+
+    private func register(_ binding: ShortcutBinding) {
+        failedStatus = nil
         guard handlerInstalled else {
             fail(binding, reason: "Stop shortcut unavailable", log: "handler is not installed")
             return
@@ -61,17 +99,54 @@ final class ComputerUseStopHotKey {
         )
         guard status == noErr, let ref else {
             // Another app may own the combo already.
+            failedStatus = status
             fail(
                 binding, reason: "Stop shortcut unavailable: another app uses \(Self.inline(binding))",
                 log: "could not be registered (\(status))"
             )
+            if isTaken { startRetrying() }
             return
         }
         hotKey = ref
+        stopRetrying()
+        if unavailableReason != nil { unavailableReason = nil }
+    }
+
+    /// The holder quitting is the usual way a combination frees up; the timer covers one that
+    /// lets it go without quitting.
+    private func startRetrying() {
+        if terminationObserver == nil {
+            terminationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.retryIfTaken() }
+            }
+        }
+        guard retryTask == nil else { return }
+        retryTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.retryInterval)
+                guard !Task.isCancelled, let self else { return }
+                self.retryIfTaken()
+            }
+        }
+    }
+
+    private func stopRetrying() {
+        retryTask?.cancel()
+        retryTask = nil
+        if let terminationObserver { NSWorkspace.shared.notificationCenter.removeObserver(terminationObserver) }
+        terminationObserver = nil
+    }
+
+    /// The transcript line for a drive whose Stop shortcut another app holds.
+    static func takenNotice(_ binding: ShortcutBinding) -> String {
+        "\(inline(binding)) is used by another app; stop computer use from the menu bar item."
     }
 
     private func fail(_ binding: ShortcutBinding, reason: String, log: String) {
-        unavailableReason = reason
+        // Unchanged on a retry, so observers aren't woken every `retryInterval`.
+        if unavailableReason != reason { unavailableReason = reason }
         guard loggedFailure != binding else { return }
         loggedFailure = binding
         Self.log.error("Stop shortcut \(binding.displayString, privacy: .public) \(log, privacy: .public)")
