@@ -57,10 +57,15 @@ public struct WorktreeVMRecord: Codable, Equatable, Sendable, Identifiable {
     public var createdAt: Date
     public var lastUsedAt: Date
     public var runOwner: VMRunOwner?
+    /// Bumped by every process each time it admits a boot of this VM, so
+    /// evidence about one boot (a clean guest shutdown, say) cannot be
+    /// mistaken for a later boot elsewhere. Nil in records written before it
+    /// existed or rewritten by such a build.
+    public var bootGeneration: Int?
 
     public init(
         id: String, guestOS: VMGuestOS = .macOS, goldenBuild: String, bundlePath: String,
-        createdAt: Date, lastUsedAt: Date, runOwner: VMRunOwner? = nil
+        createdAt: Date, lastUsedAt: Date, runOwner: VMRunOwner? = nil, bootGeneration: Int? = nil
     ) {
         self.id = id
         self.guestOS = guestOS
@@ -69,5 +74,6 @@ public struct WorktreeVMRecord: Codable, Equatable, Sendable, Identifiable {
         self.createdAt = createdAt
         self.lastUsedAt = lastUsedAt
         self.runOwner = runOwner
+        self.bootGeneration = bootGeneration
     }
 }

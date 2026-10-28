@@ -62,10 +62,11 @@ final class WorktreeVMManager {
     /// Golden builds whose VM a tab has already booted on its own once.
     @ObservationIgnored private var autoStartedGoldenBuilds: Set<String> = []
     /// VMs this process saw shut down by the guest itself, without a forced
-    /// power-off or a hypervisor error, since their last boot. Only a golden
-    /// VM among them may be sealed: anything else (a relaunch included) is no
-    /// evidence that its disk is consistent.
-    @ObservationIgnored private var cleanlyShutDown: Set<String> = []
+    /// power-off or a hypervisor error, keyed to the registry boot generation
+    /// of that run. A golden VM may be sealed only while its record is still
+    /// at that generation: any later boot, in any process, or a relaunch
+    /// voids the evidence that its disk is consistent.
+    @ObservationIgnored private var cleanlyShutDown: [String: Int] = [:]
 
     private enum PendingAction { case stop, delete }
 
@@ -343,7 +344,7 @@ final class WorktreeVMManager {
             // `onStopped` normally untracks it; make sure before sealing.
             didStop(id)
         }
-        return cleanlyShutDown.contains(id) ? .clean : .forcedOff
+        return cleanlyShutDown[id] != nil ? .clean : .forcedOff
     }
 
     /// Seals a golden bundle once this process saw its guest shut down
@@ -357,7 +358,11 @@ final class WorktreeVMManager {
             guard !goldenRunsAnywhere(records) else {
                 throw VMError(message: "Shut down the golden VM before marking setup as done")
             }
-            guard cleanlyShutDown.contains(id) else {
+            // A boot in any process since the clean shutdown bumped the
+            // generation; checked before the record is dropped below.
+            guard let generation = cleanlyShutDown[id],
+                  records.first(where: { $0.id == id })?.bootGeneration == generation
+            else {
                 throw VMError(message: "macOS was powered off without shutting down. Start it, shut down macOS from the Apple menu, then click Done.")
             }
             try GoldenImageInstaller.writeSealedMarker(bundle)
@@ -384,7 +389,7 @@ final class WorktreeVMManager {
     }
 
     private enum Admission {
-        case boot(VMBundle)
+        case boot(VMBundle, generation: Int)
         case outcome(VMStartOutcome)
     }
 
@@ -417,7 +422,9 @@ final class WorktreeVMManager {
             case .start:
                 records[index].runOwner = me
                 records[index].lastUsedAt = Date()
-                return .boot(VMBundle(url: URL(fileURLWithPath: records[index].bundlePath)))
+                let generation = (records[index].bootGeneration ?? 0) + 1
+                records[index].bootGeneration = generation
+                return .boot(VMBundle(url: URL(fileURLWithPath: records[index].bundlePath)), generation: generation)
             case .alreadyRunningHere:
                 throw VMError(message: "This VM is already starting")
             case .runningElsewhere(let label):
@@ -427,9 +434,10 @@ final class WorktreeVMManager {
             }
         }
         let bundle: VMBundle
+        let generation: Int
         switch admission {
         case .outcome(let outcome): return outcome
-        case .boot(let booting): bundle = booting
+        case .boot(let booting, let bootGeneration): (bundle, generation) = (booting, bootGeneration)
         }
 
         // `id` stays in `starting` until the VM is tracked or fully cleaned
@@ -438,7 +446,7 @@ final class WorktreeVMManager {
         starting.insert(id)
         defer { starting.remove(id) }
         // Whatever this VM's last stop was, booting it again voids it.
-        cleanlyShutDown.remove(id)
+        cleanlyShutDown.removeValue(forKey: id)
         let booted: Result<RunningVM, Error>
         do {
             booted = .success(try await start(id, bundle))
@@ -478,7 +486,7 @@ final class WorktreeVMManager {
                 if pending == .delete {
                     logger.error("Not deleting VM \(id, privacy: .public): it is still running")
                 }
-                track(vm, id: id)
+                track(vm, id: id, generation: generation)
                 throw VMError(message: "The VM was \(abort) while it was starting, but it could not be stopped: \(forceStopError.localizedDescription)")
             }
             clearOwner(id)
@@ -486,20 +494,20 @@ final class WorktreeVMManager {
             if pending == .stop { throw StoppedWhileStarting() }
             throw VMError(message: "The VM was \(abort) while it was starting")
         }
-        track(vm, id: id)
+        track(vm, id: id, generation: generation)
         return .running(vm)
     }
 
-    private func track(_ vm: RunningVM, id: String) {
+    private func track(_ vm: RunningVM, id: String, generation: Int) {
         vm.onStopped = { [weak self, weak vm] error in
             if let error {
                 self?.logger.error("VM \(id, privacy: .public) stopped with error: \(String(describing: error), privacy: .public)")
             }
             // A VM already released gives no evidence, so it is not clean.
             if error == nil, vm?.wasForcedOff == false {
-                self?.cleanlyShutDown.insert(id)
+                self?.cleanlyShutDown[id] = generation
             } else {
-                self?.cleanlyShutDown.remove(id)
+                self?.cleanlyShutDown.removeValue(forKey: id)
             }
             self?.didStop(id)
         }

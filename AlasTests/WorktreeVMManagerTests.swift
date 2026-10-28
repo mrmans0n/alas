@@ -241,7 +241,12 @@ final class WorktreeVMManagerTests {
         #expect(try registry.snapshot().isEmpty)
     }
 
-    enum GoldenLastStop: CaseIterable { case guestShutdown, forcedOff, hypervisorError, beforeLaunch }
+    enum GoldenLastStop: CaseIterable {
+        case guestShutdown, forcedOff, hypervisorError, beforeLaunch
+        /// Clean shutdown here, then another process booted the golden and
+        /// was reaped (crashed) without a clean shutdown of its own.
+        case bootedElsewhereAfterCleanShutdown
+    }
 
     @Test(
         "the golden image seals only after this process saw the guest shut down cleanly",
@@ -260,17 +265,24 @@ final class WorktreeVMManagerTests {
             _ = try await manager.startGolden(build: "25A1")
         case .beforeLaunch:
             try addRecord(id)
+        case .bootedElsewhereAfterCleanShutdown:
+            _ = try await manager.startGolden(build: "25A1")
+            #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .clean)
+            try registry.update { records in
+                let index = try #require(records.firstIndex { $0.id == id })
+                records[index].bootGeneration = (records[index].bootGeneration ?? 0) + 1
+            }
         }
 
         let shutdown = await manager.shutDownGoldenForSealing(build: "25A1")
         let golden = try makeGoldenBundle()
         let sealed = (try? manager.sealGolden(golden)) != nil
 
-        let clean = lastStop == .guestShutdown
-        #expect(shutdown == (clean ? .clean : .forcedOff))
+        let sawCleanShutdown = [.guestShutdown, .bootedElsewhereAfterCleanShutdown].contains(lastStop)
+        #expect(shutdown == (sawCleanShutdown ? .clean : .forcedOff))
         #expect(manager.running(id) == nil)
-        #expect(sealed == clean)
-        #expect(golden.isSealed == clean)
+        #expect(sealed == (lastStop == .guestShutdown))
+        #expect(golden.isSealed == (lastStop == .guestShutdown))
     }
 
     @Test("a golden VM another process booted after a clean shutdown here is not sealed")
