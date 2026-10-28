@@ -83,15 +83,32 @@ public enum ComputerUseTextCheck {
         return keysReach ? .keys : .axWarned
     }
 
-    /// Terminal emulators, whose AX text writes never reach the pty (cua-driver's list).
+    /// Terminal emulators, whose AX text writes never reach the pty.
     public static let terminalBundleIDs: Set<String> = [
         "co.zeit.hyper", "com.apple.Terminal", "com.github.wez.wezterm", "com.googlecode.iterm2", "com.mitchellh.ghostty",
-        "dev.warp.Warp-Stable", "dev.zed.Zed.Helper", "io.alacritty", "net.kovidgoyal.kitty", "org.alacritty",
+        "com.raphaelamorim.rio", "dev.warp.Warp-Preview", "dev.warp.Warp-Stable", "io.alacritty", "net.kovidgoyal.kitty",
+        "org.alacritty", "org.tabby",
     ]
 
     /// A terminal emulator (`terminalBundleIDs`): text goes in as keys, never through AX.
     public static func isTerminal(_ app: ComputerUseAppIdentity) -> Bool {
         terminalBundleIDs.contains(app.bundleID ?? "")
+    }
+
+    /// The refusal for typing in `replace` mode into a terminal (`isTerminal`), nil for anything
+    /// else: a terminal has no field value to replace, and the ⌘A before the text selects its
+    /// scrollback.
+    public static func terminalReplaceRefusal(_ app: ComputerUseAppIdentity, replace: Bool) -> String? {
+        guard replace, isTerminal(app) else { return nil }
+        return "\(app.name) is a terminal: it has no field value to replace, and ⌘A there selects the scrollback. "
+            + "Nothing was typed. Type with mode insert; to clear the command line, use computer_key (such as ctrl+u)."
+    }
+
+    /// The refusal for text bound for a terminal (`isTerminal`) whose window is off screen: it
+    /// takes text only as keys, which don't reach the window there.
+    public static func offScreenTerminalRefusal(_ app: ComputerUseAppIdentity) -> String {
+        "\(app.name) is a terminal, which takes text only as keys, and its window is off screen (it may be on another "
+            + "Space or workspace), where keys don't reach it. Nothing was typed. Ask the user to bring the window on screen."
     }
 
     /// Terminals and code editors, whose windows are not routed as documents.

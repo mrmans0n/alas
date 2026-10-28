@@ -671,6 +671,9 @@ extension LiveComputerUseSystem {
         if case .key(let chord) = input {
             try await ComputerUseAXActions.refuseSecureFocus(chord, in: window, isCancelled: isCancelled)
         }
+        if case .type(_, _, let replace) = input, let refusal = ComputerUseTextCheck.terminalReplaceRefusal(window.app, replace: replace) {
+            throw ComputerUseSystemError.actionFailed(refusal)
+        }
         // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing the
         // button needs no key window, so nothing is keyed or activated for it, also when direct.
         if case .key(let chord) = input,

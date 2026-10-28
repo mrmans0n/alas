@@ -855,18 +855,26 @@ struct ComputerUseInputTests {
     }
 
     /// A terminal's grid takes an AX insert that never reaches the shell: its text goes as keys,
-    /// or is refused off screen. A code editor keeps the AX write.
+    /// or is refused off screen, and a replace (⌘A selects the scrollback) is refused. A code
+    /// editor keeps the AX write.
     @Test(arguments: [
         (String?("com.mitchellh.ghostty"), true, ComputerUseTextCheck.Outcome.typeAsKeys),
         ("com.apple.Terminal", true, .typeAsKeys),
+        ("dev.warp.Warp-Preview", true, .typeAsKeys),
+        ("org.tabby", true, .typeAsKeys),
+        ("com.raphaelamorim.rio", true, .typeAsKeys),
         ("com.github.wez.wezterm", false, .refuse),
         ("com.microsoft.VSCode", true, .write),
+        ("dev.zed.Zed.Helper", true, .write),
         (nil, true, .write),
     ])
     func aTerminalIsNeverWrittenByAX(bundleID: String?, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome) {
-        let terminal = ComputerUseTextCheck.isTerminal(ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200))
+        let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
+        let terminal = ComputerUseTextCheck.isTerminal(app)
         #expect(ComputerUseTextCheck.outcome(
             nil, inWebArea: false, chromium: false, terminal: terminal, keysReach: keysReach) == outcome)
+        #expect((ComputerUseTextCheck.terminalReplaceRefusal(app, replace: true) != nil) == terminal)
+        #expect(ComputerUseTextCheck.terminalReplaceRefusal(app, replace: false) == nil)
     }
 
     /// Chrome's address bar shows an AX insert but never submits its line break, so that write is
