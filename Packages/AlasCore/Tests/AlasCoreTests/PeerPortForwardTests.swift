@@ -92,6 +92,54 @@ struct PeerPortForwardTests {
         #expect(!events.all.contains(.closed(stream: stream)))
     }
 
+    @Test func aForwardedConnectionRelaysBothWaysAndEndsWithTheRun() async throws {
+        let server = try await EchoServer.start()
+        defer { server.stop() }
+        let serverPort = server.port
+        let running = Mutex(true)
+        let connection = UUID()
+        let forwarderBox = Mutex<PeerPortForwarder?>(nil)
+        let host = PeerPortForwardHost(
+            resolve: { _ in running.withLock { $0 } ? ("127.0.0.1", serverPort) : nil },
+            send: { _, event in forwarderBox.withLock { $0 }?.receive(event) }
+        )
+        let freePort = try await EchoServer.start()
+        let endpointPort = freePort.port
+        freePort.stop()
+        try await eventually { (try? await TestClient.connect(port: endpointPort)) == nil }
+        let endpoint = try #require(URL(string: "http://localhost:\(endpointPort)/app?x=1"))
+        let forwarder = PeerPortForwarder(runID: "run", endpoint: endpoint) { host.receive($0, from: connection) }
+        forwarderBox.withLock { $0 = forwarder }
+        defer { forwarder.stop() }
+
+        let url = try await forwarder.start()
+        #expect(url == endpoint)
+
+        // The endpoint's port is now taken, so another forward binds elsewhere.
+        let other = PeerPortForwarder(runID: "run", endpoint: endpoint) { _ in }
+        defer { other.stop() }
+        let otherURL = try await other.start()
+        var expected = try #require(URLComponents(url: endpoint, resolvingAgainstBaseURL: false))
+        expected.port = otherURL.port
+        #expect(otherURL.port != endpointPort)
+        #expect(otherURL == expected.url)
+
+        let client = try await TestClient.connect(port: endpointPort)
+        let payload = Data((0..<(4 * PeerPortForwardLimits().window)).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ $0 >> 11) })
+        client.send(payload)
+        try await eventually { client.received.bytes.count >= payload.count }
+        #expect(client.received.bytes == payload)
+
+        running.withLock { $0 = false }
+        host.runEnded("run")
+        try await eventually { client.received.ended }
+        #expect(client.received.bytes == payload)
+        // The host refuses the next connection, which stops the forward.
+        let late = try await TestClient.connect(port: endpointPort)
+        try await eventually { late.received.ended }
+        try await eventually { (try? await TestClient.connect(port: endpointPort)) == nil }
+    }
+
     @Test(arguments: [
         ("http://localhost:3000", true),
         ("http://127.0.0.1:5173/x", true),
@@ -156,6 +204,56 @@ private final class EchoServer: Sendable {
                 guard error == nil else { return connection.cancel() }
                 echo(connection)
             })
+        }
+    }
+}
+
+/// A loopback TCP client.
+private final class TestClient: Sendable {
+    private let connection: NWConnection
+    private let state = Mutex((bytes: Data(), ended: false))
+
+    private init(_ connection: NWConnection) { self.connection = connection }
+
+    deinit { connection.cancel() }
+
+    /// Throws unless the connection becomes ready.
+    static func connect(port: Int) async throws -> TestClient {
+        let connection = NWConnection(host: "127.0.0.1", port: try #require(NWEndpoint.Port(rawValue: UInt16(port))), using: .tcp)
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            let pending = Mutex<CheckedContinuation<Void, Error>?>(continuation)
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: pending.withLock { $0.take() }?.resume()
+                case .waiting(let error), .failed(let error):
+                    connection.cancel()
+                    pending.withLock { $0.take() }?.resume(throwing: error)
+                case .cancelled: pending.withLock { $0.take() }?.resume(throwing: CancellationError())
+                default: break
+                }
+            }
+            connection.start(queue: DispatchQueue(label: "PeerPortForwardTests.client"))
+        }
+        let client = TestClient(connection)
+        connection.stateUpdateHandler = nil
+        client.readUntilEnd()
+        return client
+    }
+
+    func send(_ data: Data) {
+        connection.send(content: data, completion: .contentProcessed { _ in })
+    }
+
+    /// Bytes read so far, and whether the stream ended with EOF.
+    var received: (bytes: Data, ended: Bool) { state.withLock { $0 } }
+
+    private func readUntilEnd() {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [self] data, _, isComplete, error in
+            state.withLock {
+                $0.bytes.append(data ?? Data())
+                $0.ended = isComplete
+            }
+            if !isComplete, error == nil { readUntilEnd() }
         }
     }
 }
