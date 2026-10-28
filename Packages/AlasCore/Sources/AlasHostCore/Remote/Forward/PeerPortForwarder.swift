@@ -36,9 +36,11 @@ public final class PeerPortForwarder: @unchecked Sendable {
     private let limits: PeerPortForwardLimits
     private let send: Send
     private let queue = DispatchQueue(label: "io.nlopez.alas.peer-port-forwarder")
-    private var listener: NWListener?
+    private var listeners: [NWListener] = []
     private var stopped = false
     private var streams: [UUID: Stream] = [:]
+    /// Local sockets the host closed, still writing out what it sent.
+    private var draining: [UUID: NWConnection] = [:]
 
     /// `send` is called on an internal serial queue, in order.
     public init(runID: String, endpoint: URL, limits: PeerPortForwardLimits = PeerPortForwardLimits(), send: @escaping Send) {
@@ -49,30 +51,51 @@ public final class PeerPortForwarder: @unchecked Sendable {
     }
 
     deinit {
-        listener?.cancel()
+        for listener in listeners {
+            listener.cancel()
+        }
         for stream in streams.values {
             stream.connection.cancel()
         }
+        for connection in draining.values {
+            connection.cancel()
+        }
     }
 
-    /// Listens on `127.0.0.1` at the endpoint's port, or on an ephemeral port
-    /// when that one is busy, and returns the endpoint with only the port
-    /// replaced by the one bound.
+    /// Listens on the endpoint's loopback at its port, or on an ephemeral
+    /// port when that one is busy, and returns the endpoint with only the
+    /// port replaced by the one bound. `[::1]` listens on IPv6, `localhost` on
+    /// both `127.0.0.1` and `::1` so a browser trying either lands here, and
+    /// anything else on `127.0.0.1`.
     public func start() async throws -> URL {
         guard let port = endpoint.port.flatMap(UInt16.init(exactly:)).flatMap(NWEndpoint.Port.init(rawValue:)),
               var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
         else { throw StartError.invalidEndpoint }
-        let bound: UInt16
-        do {
-            bound = try await listen(on: port)
-        } catch StartError.stopped {
-            throw StartError.stopped
-        } catch {
-            bound = try await listen(on: .any)
+        let attempts: [([NWEndpoint.Host], NWEndpoint.Port)]
+        switch endpoint.host.map(PeerPortForwardEndpoint.dialHost) {
+        case "::1":
+            attempts = [([.ipv6(.loopback)], port), ([.ipv6(.loopback)], .any)]
+        case "localhost":
+            // An ephemeral IPv4 port may be taken on IPv6, so try a few, then
+            // settle for IPv4 alone.
+            let both: [NWEndpoint.Host] = [.ipv4(.loopback), .ipv6(.loopback)]
+            attempts = [(both, port)] + Array(repeating: (both, .any), count: 3) + [([.ipv4(.loopback)], .any)]
+        default:
+            attempts = [([.ipv4(.loopback)], port), ([.ipv4(.loopback)], .any)]
         }
-        components.port = Int(bound)
-        guard let url = components.url else { throw StartError.invalidEndpoint }
-        return url
+        var lastError: Error = StartError.invalidEndpoint
+        for (addresses, port) in attempts {
+            do {
+                components.port = try await Int(listen(on: addresses, port: port))
+                guard let url = components.url else { throw StartError.invalidEndpoint }
+                return url
+            } catch StartError.stopped {
+                throw StartError.stopped
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
     }
 
     public func receive(_ event: PeerPortForwardEvent) {
@@ -84,26 +107,55 @@ public final class PeerPortForwarder: @unchecked Sendable {
         queue.async { self.shutDown() }
     }
 
-    private func listen(on port: NWEndpoint.Port) async throws -> UInt16 {
+    /// Binds every address at one port: `port`, or the first address's
+    /// ephemeral port. Binds none if any fails.
+    private func listen(on addresses: [NWEndpoint.Host], port: NWEndpoint.Port) async throws -> UInt16 {
+        var bound: [NWListener] = []
+        var port = port
+        do {
+            for address in addresses {
+                let listener = try await listen(on: address, port: port)
+                bound.append(listener)
+                port = listener.port ?? port
+            }
+            return port.rawValue
+        } catch {
+            let bound = bound
+            queue.async {
+                for listener in bound {
+                    listener.cancel()
+                }
+                self.listeners.removeAll { listener in bound.contains { $0 === listener } }
+            }
+            throw error
+        }
+    }
+
+    private func listen(on address: NWEndpoint.Host, port: NWEndpoint.Port) async throws -> NWListener {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: .ipv4(.loopback), port: port)
+        // Without it `127.0.0.1` and `::1` can't share a port. A port another
+        // listener holds, on that address or a wildcard, still fails.
+        parameters.allowLocalEndpointReuse = true
+        parameters.requiredLocalEndpoint = .hostPort(host: address, port: port)
         let listener = try NWListener(using: parameters)
         return try await withCheckedThrowingContinuation { continuation in
-            let pending = Mutex<CheckedContinuation<UInt16, Error>?>(continuation)
-            let finish: @Sendable (Result<UInt16, Error>) -> Void = { result in pending.withLock { $0.take() }?.resume(with: result) }
+            let pending = Mutex<CheckedContinuation<NWListener, Error>?>(continuation)
+            let finish: @Sendable (Result<NWListener, Error>) -> Void = { result in pending.withLock { $0.take() }?.resume(with: result) }
             queue.async {
                 guard !self.stopped else { return finish(.failure(StartError.stopped)) }
                 // Held before it's ready so `stop()` cancels a listener still starting.
-                self.listener = listener
+                self.listeners.append(listener)
                 listener.newConnectionHandler = { [weak self] connection in self?.accept(connection) }
                 listener.stateUpdateHandler = { [weak self] state in
                     switch state {
-                    case .ready:
-                        finish(.success(listener.port?.rawValue ?? 0))
-                    case .waiting(let error), .failed(let error):
-                        if self?.listener === listener { self?.listener = nil }
+                    case .ready where (listener.port?.rawValue ?? 0) != 0:
+                        finish(.success(listener))
+                    case .ready, .waiting, .failed:
+                        self?.listeners.removeAll { $0 === listener }
                         listener.cancel()
-                        finish(.failure(error))
+                        if case .failed(let error) = state { return finish(.failure(error)) }
+                        if case .waiting(let error) = state { return finish(.failure(error)) }
+                        finish(.failure(POSIXError(.EADDRNOTAVAIL)))
                     case .cancelled:
                         finish(.failure(StartError.stopped))
                     default:
@@ -142,6 +194,8 @@ public final class PeerPortForwarder: @unchecked Sendable {
             read(id, stream)
         case .refused(let id, let message):
             streams.removeValue(forKey: id)?.connection.cancel()
+            // A backstop: the app stops the forward itself when the run
+            // changes or the host disconnects.
             if message == PeerPortForwardHost.notRunningMessage { shutDown() }
         case .data(let id, let bytes):
             write(bytes, to: id)
@@ -153,7 +207,9 @@ public final class PeerPortForwarder: @unchecked Sendable {
             // Flush what the host sent, then end the local socket.
             guard let stream = streams.removeValue(forKey: id) else { return }
             let connection = stream.connection
-            connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+            draining[id] = connection
+            connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in
+                self?.draining[id] = nil
                 connection.cancel()
             })
         }
@@ -202,10 +258,16 @@ public final class PeerPortForwarder: @unchecked Sendable {
 
     private func shutDown() {
         stopped = true
-        listener?.cancel()
-        listener = nil
+        for listener in listeners {
+            listener.cancel()
+        }
+        listeners = []
         for id in streams.keys {
             close(id)
         }
+        for connection in draining.values {
+            connection.cancel()
+        }
+        draining = [:]
     }
 }

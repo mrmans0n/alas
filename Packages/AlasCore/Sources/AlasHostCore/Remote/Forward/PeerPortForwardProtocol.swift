@@ -42,7 +42,7 @@ public struct PeerPortForwardLimits: Equatable, Sendable {
 /// Mac → host.
 public enum PeerPortForwardRequest: Codable, Equatable, Sendable {
     /// Dials the loopback endpoint of `runID` (a `RunRecord.id`) on the host.
-    /// The Mac sends nothing else on `stream` until `opened`.
+    /// The Mac sends nothing but `close` on `stream` until `opened`.
     case open(stream: UUID, runID: String)
     case data(stream: UUID, bytes: Data)
     /// The Mac wrote `bytes` the host sent to its socket.

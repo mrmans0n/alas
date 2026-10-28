@@ -92,7 +92,9 @@ struct PeerPortForwardTests {
         #expect(!events.all.contains(.closed(stream: stream)))
     }
 
-    @Test func aForwardedConnectionRelaysBothWaysAndEndsWithTheRun() async throws {
+    /// `localhost` listens on both loopbacks; a browser may try `::1` first.
+    @Test(arguments: [("127.0.0.1", "127.0.0.1"), ("[::1]", "::1"), ("localhost", "127.0.0.1"), ("localhost", "::1")])
+    func aForwardedConnectionRelaysBothWaysAndEndsWithTheRun(endpointHost: String, clientHost: String) async throws {
         let server = try await EchoServer.start()
         defer { server.stop() }
         let serverPort = server.port
@@ -106,8 +108,8 @@ struct PeerPortForwardTests {
         let freePort = try await EchoServer.start()
         let endpointPort = freePort.port
         freePort.stop()
-        try await eventually { (try? await TestClient.connect(port: endpointPort)) == nil }
-        let endpoint = try #require(URL(string: "http://localhost:\(endpointPort)/app?x=1"))
+        try await eventually { (try? await TestClient.connect(host: clientHost, port: endpointPort)) == nil }
+        let endpoint = try #require(URL(string: "http://\(endpointHost):\(endpointPort)/app?x=1"))
         let forwarder = PeerPortForwarder(runID: "run", endpoint: endpoint) { host.receive($0, from: connection) }
         forwarderBox.withLock { $0 = forwarder }
         defer { forwarder.stop() }
@@ -124,7 +126,7 @@ struct PeerPortForwardTests {
         #expect(otherURL.port != endpointPort)
         #expect(otherURL == expected.url)
 
-        let client = try await TestClient.connect(port: endpointPort)
+        let client = try await TestClient.connect(host: clientHost, port: endpointPort)
         let payload = Data((0..<(4 * PeerPortForwardLimits().window)).map { UInt8(truncatingIfNeeded: $0 &* 7 &+ $0 >> 11) })
         client.send(payload)
         try await eventually { client.received.bytes.count >= payload.count }
@@ -135,9 +137,27 @@ struct PeerPortForwardTests {
         try await eventually { client.received.ended }
         #expect(client.received.bytes == payload)
         // The host refuses the next connection, which stops the forward.
-        let late = try await TestClient.connect(port: endpointPort)
+        let late = try await TestClient.connect(host: clientHost, port: endpointPort)
         try await eventually { late.received.ended }
-        try await eventually { (try? await TestClient.connect(port: endpointPort)) == nil }
+        try await eventually { (try? await TestClient.connect(host: clientHost, port: endpointPort)) == nil }
+    }
+
+    @Test func bytesSentJustBeforeCloseStillReachTheRun() async throws {
+        let server = try await EchoServer.start()
+        defer { server.stop() }
+        let events = EventLog()
+        let port = server.port
+        let host = PeerPortForwardHost(resolve: { _ in ("127.0.0.1", port) }, send: { events.append($1) })
+        let connection = UUID()
+        let stream = UUID()
+        let chunk = Data(repeating: 1, count: PeerPortForwardLimits().maxChunk)
+
+        host.receive(.open(stream: stream, runID: "run"), from: connection)
+        try await eventually { events.all.contains(.opened(stream: stream)) }
+        host.receive(.data(stream: stream, bytes: chunk), from: connection)
+        host.receive(.close(stream: stream), from: connection)
+
+        try await eventually { server.received == chunk.count }
     }
 
     @Test(arguments: [
@@ -171,9 +191,12 @@ private final class EventLog: Sendable {
 private final class EchoServer: Sendable {
     private let listener: NWListener
     private let acceptedCount = Mutex(0)
+    private let receivedCount = Mutex(0)
     private let queue = DispatchQueue(label: "PeerPortForwardTests.echo")
 
     var accepted: Int { acceptedCount.withLock { $0 } }
+    /// Bytes read from every connection.
+    var received: Int { receivedCount.withLock { $0 } }
     var port: Int { Int(listener.port?.rawValue ?? 0) }
 
     private init() throws {
@@ -188,7 +211,7 @@ private final class EchoServer: Sendable {
             guard let server else { return connection.cancel() }
             server.acceptedCount.withLock { $0 += 1 }
             connection.start(queue: server.queue)
-            echo(connection)
+            server.echo(connection)
         }
         server.listener.start(queue: server.queue)
         try await eventually { server.port != 0 }
@@ -197,10 +220,11 @@ private final class EchoServer: Sendable {
 
     func stop() { listener.cancel() }
 
-    private static func echo(_ connection: NWConnection) {
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { data, _, isComplete, error in
+    private func echo(_ connection: NWConnection) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [self] data, _, isComplete, error in
+            receivedCount.withLock { $0 += data?.count ?? 0 }
             guard error == nil, !isComplete, let data else { return connection.cancel() }
-            connection.send(content: data, completion: .contentProcessed { error in
+            connection.send(content: data, completion: .contentProcessed { [self] error in
                 guard error == nil else { return connection.cancel() }
                 echo(connection)
             })
@@ -218,8 +242,8 @@ private final class TestClient: Sendable {
     deinit { connection.cancel() }
 
     /// Throws unless the connection becomes ready.
-    static func connect(port: Int) async throws -> TestClient {
-        let connection = NWConnection(host: "127.0.0.1", port: try #require(NWEndpoint.Port(rawValue: UInt16(port))), using: .tcp)
+    static func connect(host: String, port: Int) async throws -> TestClient {
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: try #require(NWEndpoint.Port(rawValue: UInt16(port))), using: .tcp)
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let pending = Mutex<CheckedContinuation<Void, Error>?>(continuation)
             connection.stateUpdateHandler = { state in

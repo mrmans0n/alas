@@ -41,6 +41,8 @@ public final class PeerPortForwardHost: @unchecked Sendable {
     private let send: Send
     private let queue = DispatchQueue(label: "io.nlopez.alas.peer-port-forward")
     private var streams: [Key: Stream] = [:]
+    /// Run sockets the Mac closed, still writing out what it sent.
+    private var draining: [Key: NWConnection] = [:]
 
     /// `resolve` returns the endpoint host and port of `runID` only while it
     /// is the current active `.running` run of its worktree with a loopback
@@ -61,6 +63,9 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         for stream in streams.values {
             stream.connection?.cancel()
         }
+        for connection in draining.values {
+            connection.cancel()
+        }
     }
 
     /// Requests from one connection must be passed in the order they arrived.
@@ -73,6 +78,10 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         queue.async {
             for key in self.streams.keys where key.connection == connectionID {
                 self.drop(key)
+            }
+            for (key, connection) in self.draining where key.connection == connectionID {
+                self.draining[key] = nil
+                connection.cancel()
             }
         }
     }
@@ -98,7 +107,7 @@ public final class PeerPortForwardHost: @unchecked Sendable {
             stream.sendWindow = min(limits.window, stream.sendWindow + bytes)
             read(key, stream)
         case .close(let id):
-            drop(Key(connection: connectionID, stream: id))
+            finish(Key(connection: connectionID, stream: id))
         }
     }
 
@@ -190,6 +199,18 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         guard let stream = streams[key] else { return }
         drop(key)
         send(key.connection, stream.opened ? .closed(stream: key.stream) : .refused(stream: key.stream, message: refusal))
+    }
+
+    /// Ends a stream the Mac closed once what it sent is written.
+    private func finish(_ key: Key) {
+        guard let stream = streams[key] else { return }
+        guard stream.opened, let connection = stream.connection else { return drop(key) }
+        streams[key] = nil
+        draining[key] = connection
+        connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in
+            self?.draining[key] = nil
+            connection.cancel()
+        })
     }
 
     private func drop(_ key: Key) {
