@@ -1363,7 +1363,8 @@ extension LiveComputerUseSystem {
             // A clipboard holding anything but plain text is left alone, and the text typed instead.
             let pasted = paste ? try await self.paste(text, pid: app.pid) : false
             if !pasted {
-                try await ComputerUseInputPoster.type(text, pid: app.pid, interrupt: interrupt)
+                try await ComputerUseInputPoster.type(
+                    text, pid: app.pid, terminal: ComputerUseTextCheck.isTerminal(app), interrupt: interrupt)
             }
         case .key(let chord):
             try await requireActiveWindow()

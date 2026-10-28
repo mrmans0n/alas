@@ -420,14 +420,17 @@ enum ComputerUseInputPoster {
     }
 
     /// Posts `text` as unicode keyboard events in chunks of at most `textChunkUnits` UTF-16 units,
-    /// never splitting a character, and each line break as the Return key
-    /// (`ComputerUseTypedKeys.split`). Between pieces, throws `CancellationError` once `interrupt`
-    /// reports `.cancelled` and `userTookOver` with the characters typed once it reports `.userActive`.
-    static func type(_ text: String, pid: Int32, interrupt: @Sendable () -> ComputerUseInputInterrupt?) async throws {
+    /// never splitting a character, and each line break as Return or Shift+Return, as a terminal
+    /// (`terminal`) or any other app takes it (`ComputerUseTypedKeys.split`). Between pieces, throws
+    /// `CancellationError` once `interrupt` reports `.cancelled` and `userTookOver` with the
+    /// characters typed once it reports `.userActive`.
+    static func type(
+        _ text: String, pid: Int32, terminal: Bool, interrupt: @Sendable () -> ComputerUseInputInterrupt?
+    ) async throws {
         let source = try source()
         let total = text.count
         var typed = 0
-        for (index, piece) in ComputerUseTypedKeys.split(text, chunkUnits: textChunkUnits).enumerated() {
+        for (index, piece) in ComputerUseTypedKeys.split(text, chunkUnits: textChunkUnits, terminal: terminal).enumerated() {
             if index > 0 {
                 switch interrupt() {
                 case .cancelled: throw CancellationError()
@@ -437,9 +440,13 @@ enum ComputerUseInputPoster {
                 await pause()
             }
             typed += piece.characterCount
-            guard case .text(let chunk) = piece else {
-                try postKey(CGKeyCode(kVK_Return), flags: [], pid: pid)
+            let chunk: String
+            switch piece {
+            case .returnKey(let shift):
+                try postKey(CGKeyCode(kVK_Return), flags: shift ? .maskShift : [], pid: pid)
                 continue
+            case .text(let text):
+                chunk = text
             }
             let units = Array(chunk.utf16)
             guard let down = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: true),

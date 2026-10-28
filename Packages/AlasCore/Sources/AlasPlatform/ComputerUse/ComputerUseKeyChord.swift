@@ -85,14 +85,19 @@ public struct ComputerUseKeyChord: Equatable, Sendable {
 public enum ComputerUseTypedKeys: Equatable, Sendable {
     /// A unicode string on one key event: at most the chunk's UTF-16 units, never a split character.
     case text(String)
-    /// The Return key, for a line break: some fields (Chrome's address bar) take a line break
-    /// carried as a unicode string as nothing, while Return submits them.
-    case returnKey
+    /// The Return key for a line break, with Shift (`shift`) for one inside the text: some fields
+    /// (Chrome's address bar) take a line break carried as a unicode string as nothing, and a plain
+    /// Return sends a chat message where Shift+Return starts a new line.
+    case returnKey(shift: Bool)
 
-    /// `text` as key events: `\n`, `\r` and `\r\n` (one character) each as `returnKey`, the rest
-    /// in chunks of at most `chunkUnits` UTF-16 units, never splitting a character. Tabs and other
-    /// separators stay text.
-    public static func split(_ text: String, chunkUnits: Int) -> [Self] {
+    /// `text` as key events: each `\n`, `\r` and `\r\n` (one character) as `returnKey`, the rest in
+    /// chunks of at most `chunkUnits` UTF-16 units, never splitting a character. In a terminal
+    /// (`terminal`) every line break is a plain Return, so each line runs; elsewhere one followed
+    /// by more text is Shift+Return, a new line, and each in the trailing run a plain Return, which
+    /// submits (an address bar, a search field, a chat). Tabs and other separators stay text.
+    public static func split(_ text: String, chunkUnits: Int, terminal: Bool) -> [Self] {
+        let characters = Array(text)
+        let lastText = characters.lastIndex { !isLineBreak($0) }
         var result: [Self] = []
         var current = ""
         var units = 0
@@ -101,10 +106,11 @@ public enum ComputerUseTypedKeys: Equatable, Sendable {
             current = ""
             units = 0
         }
-        for character in text {
-            if character == "\n" || character == "\r" || character == "\r\n" {
+        for (index, character) in characters.enumerated() {
+            if isLineBreak(character) {
                 flush()
-                result.append(.returnKey)
+                let inner = lastText.map { index < $0 } ?? false
+                result.append(.returnKey(shift: inner && !terminal))
                 continue
             }
             let count = character.utf16.count
@@ -114,6 +120,10 @@ public enum ComputerUseTypedKeys: Equatable, Sendable {
         }
         flush()
         return result
+    }
+
+    private static func isLineBreak(_ character: Character) -> Bool {
+        character == "\n" || character == "\r" || character == "\r\n"
     }
 
     /// The characters this piece types, for "typed N of M" counts.

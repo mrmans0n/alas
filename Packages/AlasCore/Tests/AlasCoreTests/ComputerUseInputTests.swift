@@ -60,19 +60,27 @@ struct ComputerUseInputTests {
     }
 
     /// Typed text goes as unicode key events of at most a chunk's UTF-16 units, never splitting a
-    /// character, and each line break as the Return key, which Chrome's address bar needs to submit.
+    /// character. A line break inside the text is Shift+Return, a new line where Return would send a
+    /// chat message; each trailing one is Return, which Chrome's address bar needs to submit. In a
+    /// terminal every line break is Return, so each line runs.
+    /// Columns: text, chunk units, terminal, pieces.
     @Test(arguments: [
-        ("url\n", 4, [ComputerUseTypedKeys.text("url"), .returnKey]),
-        ("a\r\nb\rc", 4, [.text("a"), .returnKey, .text("b"), .returnKey, .text("c")]),
-        ("\n\n", 4, [.returnKey, .returnKey]),
-        ("abcdef", 4, [.text("abcd"), .text("ef")]),
-        ("ab\ncdefg", 4, [.text("ab"), .returnKey, .text("cdef"), .text("g")]),
+        ("url\n", 4, false, [ComputerUseTypedKeys.text("url"), .returnKey(shift: false)]),
+        ("hi\nthere", 8, false, [.text("hi"), .returnKey(shift: true), .text("there")]),
+        ("a\r\nb\rc\n\n", 4, false,
+         [.text("a"), .returnKey(shift: true), .text("b"), .returnKey(shift: true), .text("c"),
+          .returnKey(shift: false), .returnKey(shift: false)]),
+        ("\n\n", 4, false, [.returnKey(shift: false), .returnKey(shift: false)]),
+        ("ls\npwd\n", 4, true, [.text("ls"), .returnKey(shift: false), .text("pwd"), .returnKey(shift: false)]),
+        ("ab\ncdefg", 4, false, [.text("ab"), .returnKey(shift: true), .text("cdef"), .text("g")]),
         // A tab stays text; an emoji (two units) is never split.
-        ("a\tb", 4, [.text("a\tb")]),
-        ("abc😀", 4, [.text("abc"), .text("😀")]),
+        ("a\tb", 4, false, [.text("a\tb")]),
+        ("abc😀", 4, false, [.text("abc"), .text("😀")]),
     ])
-    func typedTextSplitsIntoChunksAndReturnKeys(text: String, chunkUnits: Int, pieces: [ComputerUseTypedKeys]) {
-        #expect(ComputerUseTypedKeys.split(text, chunkUnits: chunkUnits) == pieces)
+    func typedTextSplitsIntoChunksAndReturnKeys(
+        text: String, chunkUnits: Int, terminal: Bool, pieces: [ComputerUseTypedKeys]
+    ) {
+        #expect(ComputerUseTypedKeys.split(text, chunkUnits: chunkUnits, terminal: terminal) == pieces)
         #expect(pieces.map(\.characterCount).reduce(0, +) == text.count)
     }
 
