@@ -9,6 +9,26 @@ struct ACPSessionStoreSchemaTests {
         return try ACPSessionStore(path: url.path)
     }
 
+    @Test func legacyBrokerDescriptorSurvivesContextMigration() throws {
+        let original = try tmpStore()
+        try original.upsertSession(.init(id: "legacy", agentId: "fixture", title: "Saved", autoRun: false,
+            acpBrokerId: "broker", acpBrokerGeneration: 7, acpBrokerAcknowledgedCursor: 4,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        if try original.db.query("PRAGMA table_info(sessions)").contains(where: { ($0["name"] as? String) == "acp_broker_wire_context" }) {
+            try original.db.exec("ALTER TABLE sessions DROP COLUMN acp_broker_wire_context")
+        }
+        try original.db.exec("UPDATE schema_version SET version = 29")
+        let migrated = try ACPSessionStore(path: original.path)
+        let saved = try #require(try migrated.loadSession(id: "legacy"))
+        let descriptor = try #require(try ACPBrokerRestorePolicy.resolve(row: saved, supportedVersions: [.v1]))
+        #expect(descriptor.wireContext == .legacyV1)
+        #expect(descriptor.generation?.rawValue == 7)
+        #expect(descriptor.acknowledgedCursor.rawValue == 4)
+        #expect(saved.acpBrokerWireContextJSON == nil)
+        #expect(try migrated.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
+        #expect(try ACPSessionStore(path: original.path).loadSession(id: "legacy") == saved)
+    }
+
     @Test func goalDraftSurvivesReopeningWithoutCrossingSessions() throws {
         let store = try tmpStore()
         for id in ["first", "second"] {

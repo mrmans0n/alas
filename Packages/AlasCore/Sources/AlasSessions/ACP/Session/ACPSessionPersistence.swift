@@ -175,18 +175,19 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         } ?? false
     }
 
-    public func upsertSession(_ row: ACPSessionRow, preserveTitle: Bool = false) throws {
-        try openedStore().upsertSession(row, preserveTitle: preserveTitle)
+    public func upsertSession(_ row: ACPSessionRow, preserveTitle: Bool = false, preserveBrokerState: Bool = false) throws {
+        try openedStore().upsertSession(row, preserveTitle: preserveTitle, preserveBrokerState: preserveBrokerState)
     }
 
     @discardableResult
     public func upsertSession(
         _ row: ACPSessionRow,
         preserveTitle: Bool = false,
+        preserveBrokerState: Bool = false,
         fence: ACPSessionLeaseFence?
     ) throws -> Bool {
         let store = try openedStore()
-        let operation = { try store.upsertSession(row, preserveTitle: preserveTitle) }
+        let operation = { try store.upsertSession(row, preserveTitle: preserveTitle, preserveBrokerState: preserveBrokerState) }
         if let fence { return try store.withLeaseFence(fence, operation) != nil }
         try operation()
         return true
@@ -331,7 +332,8 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
                 sessionId: sessionId,
                 brokerId: state.brokerId.rawValue,
                 generation: generation,
-                acknowledgedCursor: acknowledgedCursor
+                acknowledgedCursor: acknowledgedCursor,
+                wireContext: state.wireContext
             )
         }
         if let fence { return try store.withLeaseFence(fence, operation) ?? false }
@@ -355,7 +357,8 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
                 sessionId: sessionId,
                 brokerId: state.brokerId.rawValue,
                 generation: generation,
-                cursor: acknowledgedCursor
+                cursor: acknowledgedCursor,
+                wireContext: state.wireContext
             )
         }
         if let fence { return try store.withLeaseFence(fence, operation) ?? false }
