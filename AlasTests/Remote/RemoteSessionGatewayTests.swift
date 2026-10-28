@@ -44,6 +44,7 @@ final class FakeRemoteApp: RemoteSessionPresenter, RemoteWorktreeInspecting {
     var host: AlasHost?
     var sessionListChanges: ChangeSignal<Void>?
     var peerConsoleHost: PeerConsoleHost? { nil }
+    var peerPortForwardHost: PeerPortForwardHost?
     func sessionTabIndex(_ id: String, owner: SessionOwnerID) -> Int? { nil }
     var fullToolCallContents: [String: String] = [:]
     var fullToolCallContentCallCount = 0
@@ -673,6 +674,18 @@ struct RemoteSessionGatewayTests {
         let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
         await gw.handle(.console(.attach(consoleId: "c", attachmentId: "a", scrollbackRows: 0)))
         #expect(sent == [.console(.detached(attachmentId: "a", reason: .unauthorized))])
+    }
+
+    @Test func portForwardIsRefusedWithoutAnAuthenticatedPeerLink() async {
+        // A forward host is present, but a connection without a console
+        // link (any non-Alas client) never reaches it.
+        let provider = FakeRemoteApp()
+        provider.peerPortForwardHost = PeerPortForwardHost(resolve: { _ in ("localhost", 3000) })
+        var sent: [RemoteServerMessage] = []
+        let gw = RemoteSessionGateway(app: provider) { sent.append($0) }
+        let stream = UUID()
+        await gw.handle(.portForward(.open(stream: stream, runID: "run-1")))
+        #expect(sent == [.portForward(.refused(stream: stream, message: "This host doesn't forward run endpoints."))])
     }
 
     @Test func listProjectsDropsSupersededPausedResponse() async {

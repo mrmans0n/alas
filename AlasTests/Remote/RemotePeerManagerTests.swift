@@ -2000,7 +2000,7 @@ struct RemotePeerManagerTests {
         #expect(availability.contains("srv-old"))
     }
 
-    @Test func consoleAndHostMessagesBypassFederationAndNeedACarryingLink() throws {
+    @Test func consoleForwardAndHostMessagesBypassFederationAndNeedACarryingLink() throws {
         let store = InMemoryPeerStore()
         store.save([verifiedPeer(), unverifiedPeer()])
         let links = Links()
@@ -2011,21 +2011,29 @@ struct RemotePeerManagerTests {
         manager.onConsoleEvent = { consoles.append(($0, $1)) }
         var hosts: [(String, HostServerMessage)] = []
         manager.onHostMessage = { hosts.append(($0, $1)) }
+        var forwards: [(String, PeerPortForwardEvent)] = []
+        manager.onPortForwardEvent = { forwards.append(($0, $1)) }
         manager.connectAll()
         let verified = try #require(links.byPeerId["p1"])
         let unverified = try #require(links.byPeerId["p2"])
         let event = PeerConsoleEvent.output(attachmentId: "a", sequence: 1, data: Data("x".utf8))
         let host = HostServerMessage.response(id: 1, result: .done)
+        let forward = PeerPortForwardEvent.closed(stream: UUID())
         verified.emit(.hello(serverId: "srv-a", name: "Mac A", protocolVersion: 1, federationEnabled: true,
                              capabilities: [PeerConsoleCapability.v1]))
         verified.emit(.message(.console(event)))                        // offline: dropped
         verified.emit(.message(.host(host)))
+        verified.emit(.message(.portForward(forward)))
         verified.emit(.stateChanged(.online))
         verified.emit(.message(.console(event)))                        // delivered to the console sink
         verified.emit(.message(.host(host)))                            // delivered to the host sink
+        verified.emit(.message(.portForward(forward)))                  // delivered to the forward sink
         unverified.emit(.stateChanged(.online))
         unverified.emit(.message(.console(event)))                      // unverified: dropped
         unverified.emit(.message(.host(host)))
+        unverified.emit(.message(.portForward(forward)))
+        #expect(forwards.map(\.0) == ["srv-a"])
+        #expect(forwards.map(\.1) == [forward])
         #expect(consoles.map(\.0) == ["srv-a"])
         #expect(consoles.map(\.1) == [event])
         #expect(hosts.map(\.0) == ["srv-a"])
