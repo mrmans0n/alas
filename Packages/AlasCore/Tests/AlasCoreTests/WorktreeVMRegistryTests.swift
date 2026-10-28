@@ -101,4 +101,70 @@ import Testing
         #expect(try registry.snapshot().isEmpty)
         #expect(try String(contentsOf: file.appendingPathExtension("corrupt"), encoding: .utf8) == "not json {")
     }
+
+    // MARK: - VMBundle
+
+    private static func makeGolden(in root: URL, sealed: Bool) throws -> VMBundle {
+        let url = root.appendingPathComponent("golden")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        let bundle = VMBundle(url: url)
+        try Data("disk-bytes".utf8).write(to: bundle.diskImage)
+        try Data("aux-bytes".utf8).write(to: bundle.auxiliaryStorage)
+        try Data("hw-bytes".utf8).write(to: bundle.hardwareModel)
+        try Data("old-id".utf8).write(to: bundle.machineIdentifier)
+        try Data("00:00:00:00:00:00".utf8).write(to: bundle.macAddress)
+        if sealed { try Data().write(to: bundle.sealedMarker) }
+        return bundle
+    }
+
+    private static func tempRoot() -> URL {
+        FileManager.default.temporaryDirectory.appendingPathComponent("alas-vm-bundle-\(UUID().uuidString)")
+    }
+
+    @Test func cloneRefusesUnsealedGolden() throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let golden = try Self.makeGolden(in: root, sealed: false)
+        #expect(throws: (any Error).self) {
+            try VMBundle.cloneForWorktree(
+                golden: golden, to: root.appendingPathComponent("wt"),
+                newMachineIdentifier: Data([1]), newMACAddress: "aa:bb:cc:dd:ee:ff")
+        }
+    }
+
+    @Test func cloneWritesFreshIdentity() throws {
+        let root = Self.tempRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let golden = try Self.makeGolden(in: root, sealed: true)
+        let clone = try VMBundle.cloneForWorktree(
+            golden: golden, to: root.appendingPathComponent("worktrees/wt"),
+            newMachineIdentifier: Data([1, 2, 3]), newMACAddress: "aa:bb:cc:dd:ee:ff")
+
+        #expect(try Data(contentsOf: clone.machineIdentifier) == Data([1, 2, 3]))
+        #expect(try String(contentsOf: clone.macAddress, encoding: .utf8) == "aa:bb:cc:dd:ee:ff")
+        #expect(try Data(contentsOf: clone.diskImage) == Data("disk-bytes".utf8))
+        #expect(try Data(contentsOf: clone.auxiliaryStorage) == Data("aux-bytes".utf8))
+        #expect(try Data(contentsOf: clone.hardwareModel) == Data("hw-bytes".utf8))
+        #expect(!FileManager.default.fileExists(atPath: clone.url.appendingPathExtension("partial").path))
+    }
+
+    @Test func failedCloneLeavesNoBundle() throws {
+        let root = Self.tempRoot()
+        let parent = root.appendingPathComponent("worktrees")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let golden = try Self.makeGolden(in: root, sealed: true)
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: parent.path)
+        let dest = parent.appendingPathComponent("wt")
+
+        #expect(throws: (any Error).self) {
+            try VMBundle.cloneForWorktree(
+                golden: golden, to: dest, newMachineIdentifier: Data([1]), newMACAddress: "aa:bb:cc:dd:ee:ff")
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path).isEmpty)
+    }
 }
