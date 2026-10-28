@@ -1751,7 +1751,7 @@ final class ComputerUseCoordinator {
         /// check; nil when the read wasn't for it, was cut short, had more or left deeper ones out.
         var fingerprintElements: [ComputerUseInspectElement]?
         /// `ComputerUseChangeCheck.prefixHashes` of the read, for the change check; nil when the
-        /// read wasn't for it or can't be compared.
+        /// read wasn't for it, can't be compared, or is of a Chromium or Electron window.
         var prefixHashes: [Int]?
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
@@ -1825,7 +1825,9 @@ final class ComputerUseCoordinator {
             depthLimited: flat.depthLimited, elements: flat.elements,
             // Elements past the depth limit may have changed as well.
             fingerprintElements: !forChangeCheck || whole.truncated || whole.depthLimited || cut != nil ? nil : whole.elements,
-            prefixHashes: forChangeCheck
+            // Not for a Chromium or Electron window: it rebuilds its tree after input, and a read
+            // made mid-rebuild can differ in its first nodes from one before the drag that did nothing.
+            prefixHashes: forChangeCheck && !system.isChromium(window.app)
                 ? ComputerUseChangeCheck.prefixHashes(
                     tree.root, cut: cut, maxDepth: maxDepth, limit: Self.fingerprintNodeBudget + 1)
                 : nil,
