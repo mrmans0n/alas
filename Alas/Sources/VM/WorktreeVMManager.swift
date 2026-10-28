@@ -42,6 +42,11 @@ final class WorktreeVMManager {
 
     private(set) var runningVMs: [String: RunningVM] = [:]
     @ObservationIgnored private var starting: Set<String> = []
+    /// Stop or delete requests for VMs that were still booting, honoured once
+    /// the boot returns.
+    @ObservationIgnored private var pendingAfterBoot: [String: PendingAction] = [:]
+
+    private enum PendingAction { case stop, delete }
 
     init(
         registry: WorktreeVMRegistry = WorktreeVMRegistry(),
@@ -91,6 +96,16 @@ final class WorktreeVMManager {
         runningVMs.first { $0.key.hasPrefix(Self.goldenIDPrefix) }?.value
     }
 
+    /// True when any Alas process (release and dev builds share the registry)
+    /// runs a golden VM, so its disk must not be sealed. An unreadable
+    /// registry counts as running.
+    func goldenRunsAnywhere() -> Bool {
+        if runningGolden() != nil { return true }
+        guard vmsExist else { return false }
+        guard let records = try? registry.snapshot() else { return true }
+        return records.contains { $0.id.hasPrefix(Self.goldenIDPrefix) && $0.runOwner != nil }
+    }
+
     // MARK: - Lifecycle
 
     /// Clones the newest sealed golden image for `worktreeID` and records it.
@@ -138,7 +153,7 @@ final class WorktreeVMManager {
         guard runningVMs[other] != nil else {
             throw VMError(message: "The VM to pause is not running in this window")
         }
-        await stopVM(worktreeID: other)
+        try await stop(other, force: false)
         switch try await startVM(worktreeID: worktreeID) {
         case .running(let vm):
             return vm
@@ -149,20 +164,49 @@ final class WorktreeVMManager {
         }
     }
 
+    /// Shuts the VM down. A VM still booting is stopped once its boot returns.
     func stopVM(worktreeID: String) async {
-        guard let vm = runningVMs[worktreeID] else { return }
         do {
-            try await vm.stop()
+            try await stop(worktreeID, force: false)
         } catch {
             logger.error("Stopping VM \(worktreeID, privacy: .public) failed: \(String(describing: error), privacy: .public)")
         }
-        didStop(worktreeID)
     }
 
-    /// Stops the VM if it runs here, then removes its bundle and record. A VM
-    /// another process is running is left alone.
+    /// Throws when the VM is still running afterwards; it then stays tracked
+    /// and keeps its slot.
+    private func stop(_ id: String, force: Bool) async throws {
+        if starting.contains(id) {
+            if pendingAfterBoot[id] == nil { pendingAfterBoot[id] = .stop }
+            return
+        }
+        guard let vm = runningVMs[id] else { return }
+        do {
+            if force { try await vm.forceStop() } else { try await vm.stop() }
+        } catch {
+            guard vm.state == .stopped || vm.state == .error else { throw error }
+        }
+        didStop(id)
+    }
+
+    /// Forces the VM off if it runs here (its disk is discarded anyway), then
+    /// removes its bundle and record. A VM another process is running is left
+    /// alone; one still booting is deleted once its boot returns.
     func deleteVM(worktreeID: String) async {
-        await stopVM(worktreeID: worktreeID)
+        if starting.contains(worktreeID) {
+            pendingAfterBoot[worktreeID] = .delete
+            return
+        }
+        do {
+            try await stop(worktreeID, force: true)
+        } catch {
+            logger.error("Deleting VM \(worktreeID, privacy: .public) failed, it is still running: \(String(describing: error), privacy: .public)")
+            return
+        }
+        removeRecordAndBundle(worktreeID)
+    }
+
+    private func removeRecordAndBundle(_ worktreeID: String) {
         guard vmsExist else { return }
         let me = VMRunOwner.current(label: ownerLabel)
         do {
@@ -278,13 +322,39 @@ final class WorktreeVMManager {
         }
 
         starting.insert(id)
-        defer { starting.remove(id) }
-        let vm: RunningVM
+        let booted: Result<RunningVM, Error>
         do {
-            vm = try await start(id, bundle)
+            booted = .success(try await start(id, bundle))
         } catch {
+            booted = .failure(error)
+        }
+        starting.remove(id)
+        let pending = pendingAfterBoot.removeValue(forKey: id)
+        let vm: RunningVM
+        switch booted {
+        case .failure(let error):
             clearOwner(id)
+            if pending == .delete { removeRecordAndBundle(id) }
             throw error
+        case .success(let bootedVM):
+            vm = bootedVM
+        }
+        // Stopped or deleted while booting, or the record vanished: never keep
+        // a VM the registry does not count.
+        let abort: String? = switch pending {
+        case .delete: "deleted"
+        case .stop: "stopped"
+        case nil: ownsRecord(id, me) ? nil : "removed"
+        }
+        if let abort {
+            do {
+                try await vm.forceStop()
+            } catch {
+                logger.error("Stopping VM \(id, privacy: .public) after boot failed: \(String(describing: error), privacy: .public)")
+            }
+            clearOwner(id)
+            if pending == .delete { removeRecordAndBundle(id) }
+            throw VMError(message: "The VM was \(abort) while it was starting")
         }
         vm.onStopped = { [weak self] error in
             if let error {
@@ -294,6 +364,19 @@ final class WorktreeVMManager {
         }
         runningVMs[id] = vm
         return .running(vm)
+    }
+
+    /// Whether the record still exists with this process as owner. A registry
+    /// that cannot be read keeps the VM rather than killing it.
+    private func ownsRecord(_ id: String, _ me: VMRunOwner) -> Bool {
+        do {
+            return try registry.update { records in
+                records.first { $0.id == id }?.runOwner?.isSameProcess(as: me) ?? false
+            }
+        } catch {
+            logger.error("Checking VM owner for \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            return true
+        }
     }
 
     private func didStop(_ id: String) {

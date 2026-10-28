@@ -80,10 +80,14 @@ final class RunningVM {
         } catch {
             // The guest cannot take a stop request right now: force it.
         }
-        if machine.state != .stopped {
-            try await machine.stop()
-            guestStopped(nil)
-        }
+        try await forceStop()
+    }
+
+    /// Stops the VM immediately, without asking the guest.
+    func forceStop() async throws {
+        guard machine.state != .stopped, machine.state != .error else { return }
+        try await machine.stop()
+        guestStopped(nil)
     }
 
     private func waitForGuestStop(timeout: Duration) async {
