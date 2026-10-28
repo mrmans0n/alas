@@ -102,6 +102,24 @@ final class GoldenImageInstaller: ObservableObject {
             phase = .awaitingSetup(build: build)
             return
         }
+        // Held through download, install and publication so two Alas
+        // processes never install at once or drop each other's partial
+        // bundle. The kernel releases it if this process dies.
+        let installLock: ComputerUseDriverLock
+        do {
+            installLock = try ComputerUseDriverLock.acquire(
+                at: root.appendingPathComponent("install.lock"), label: WorktreeVMManager.defaultOwnerLabel)
+        } catch {
+            switch error {
+            case .held:
+                phase = .failed("macOS is being set up in another Alas.")
+            case .unavailable(let reason):
+                logger.error("Golden image install lock unavailable: \(reason, privacy: .public)")
+                phase = .failed("macOS cannot be set up: \(reason)")
+            }
+            return
+        }
+        defer { installLock.release() }
         phase = .downloading(0)
         var partialBundle: URL?
         do {
@@ -207,7 +225,8 @@ final class GoldenImageInstaller: ObservableObject {
     }
 
     /// Interrupted installs leave `<build>.partial` bundles; they are never
-    /// resumable, so drop them before starting over.
+    /// resumable, so drop them before starting over. Only call this holding
+    /// the install lock: another process's partial bundle is live.
     private func removeStalePartialBundles() throws {
         let fm = FileManager.default
         let entries = (try? fm.contentsOfDirectory(at: goldenRoot, includingPropertiesForKeys: nil)) ?? []

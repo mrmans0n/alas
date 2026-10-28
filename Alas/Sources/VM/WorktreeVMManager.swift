@@ -163,40 +163,41 @@ final class WorktreeVMManager {
         guard !isRemoteWorktree(worktreeID) else {
             throw VMError(message: "VMs are only available for worktrees on this Mac, not on a remote host")
         }
-        // Read strictly: an unreadable registry must not pass for "no VM",
-        // or the stale-bundle cleanup below could delete a real VM.
-        guard try !(vmsExist && registry.snapshot().contains { $0.id == worktreeID }) else { return }
         guard let golden = availableGolden() else {
+            // A worktree that already has a VM needs no golden image.
+            guard try !(vmsExist && registry.snapshot().contains { $0.id == worktreeID }) else { return }
             throw VMError(message: "Install and finish setting up the golden macOS image first")
         }
         let destination = Self.bundleURL(forWorktree: worktreeID, root: root)
-        // A bundle without a record is left over from an interrupted create
-        // or delete; cloning over it would fail forever.
-        if FileManager.default.fileExists(atPath: destination.path) {
-            try FileManager.default.removeItem(at: destination)
-        }
-        let bundle: VMBundle
-        do {
-            bundle = try VMBundle.cloneForWorktree(
-                golden: golden, to: destination,
-                newMachineIdentifier: VZMacMachineIdentifier().dataRepresentation,
-                newMACAddress: VZMACAddress.randomLocallyAdministered().string)
-        } catch let error as NSError
-            where error.domain == NSPOSIXErrorDomain && [Int(EXDEV), Int(ENOTSUP)].contains(error.code)
-        {
-            throw VMError(message: "The golden image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
-        }
-        let now = Date()
-        do {
-            try registry.update { records in
-                records.removeAll { $0.id == worktreeID }
-                records.append(WorktreeVMRecord(
-                    id: worktreeID, goldenBuild: golden.url.lastPathComponent, bundlePath: bundle.url.path,
-                    createdAt: now, lastUsedAt: now))
+        // The check, stale-bundle cleanup, clone and record all happen under
+        // the registry lock, so another Alas process creating the same VM
+        // can neither delete this bundle as stale nor overwrite its record.
+        // An unreadable registry throws rather than passing for "no VM".
+        // If saving the record fails, the clone stays behind as a stale
+        // bundle; removing it outside the lock could delete another
+        // process's fresh clone, and the next create replaces it anyway.
+        try registry.update { records in
+            guard !records.contains(where: { $0.id == worktreeID }) else { return }
+            // A bundle without a record is left over from an interrupted
+            // create or delete; cloning over it would fail forever.
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
             }
-        } catch {
-            try? FileManager.default.removeItem(at: bundle.url)
-            throw error
+            let bundle: VMBundle
+            do {
+                bundle = try VMBundle.cloneForWorktree(
+                    golden: golden, to: destination,
+                    newMachineIdentifier: VZMacMachineIdentifier().dataRepresentation,
+                    newMACAddress: VZMACAddress.randomLocallyAdministered().string)
+            } catch let error as NSError
+                where error.domain == NSPOSIXErrorDomain && [Int(EXDEV), Int(ENOTSUP)].contains(error.code)
+            {
+                throw VMError(message: "The golden image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
+            }
+            let now = Date()
+            records.append(WorktreeVMRecord(
+                id: worktreeID, goldenBuild: golden.url.lastPathComponent, bundlePath: bundle.url.path,
+                createdAt: now, lastUsedAt: now))
         }
     }
 
@@ -266,17 +267,19 @@ final class WorktreeVMManager {
         guard vmsExist else { return }
         let me = VMRunOwner.current(label: ownerLabel)
         do {
-            let bundlePath: String? = try registry.update { records in
-                guard let index = records.firstIndex(where: { $0.id == worktreeID }) else { return nil }
-                if let owner = records[index].runOwner, !(me.map(owner.isSameProcess(as:)) ?? false) {
+            // The bundle goes under the registry lock too, so a concurrent
+            // create of the same worktree cannot clone into it in between.
+            try registry.update { records in
+                let index = records.firstIndex { $0.id == worktreeID }
+                if let index, let owner = records[index].runOwner, !(me.map(owner.isSameProcess(as:)) ?? false) {
                     throw VMError(message: "it is running in \(owner.label)")
                 }
-                return records.remove(at: index).bundlePath
-            }
-            let bundle = bundlePath.map { URL(fileURLWithPath: $0) }
-                ?? Self.bundleURL(forWorktree: worktreeID, root: root)
-            if FileManager.default.fileExists(atPath: bundle.path) {
-                try FileManager.default.removeItem(at: bundle)
+                let bundle = index.map { URL(fileURLWithPath: records[$0].bundlePath) }
+                    ?? Self.bundleURL(forWorktree: worktreeID, root: root)
+                if FileManager.default.fileExists(atPath: bundle.path) {
+                    try FileManager.default.removeItem(at: bundle)
+                }
+                if let index { records.remove(at: index) }
             }
         } catch {
             logger.error("Deleting VM \(worktreeID, privacy: .public) failed: \(String(describing: error), privacy: .public)")
