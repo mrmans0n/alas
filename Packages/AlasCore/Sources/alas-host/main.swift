@@ -312,7 +312,7 @@ if let listen = config.hostRemoteListen {
         identity: {
             RemoteServerIdentity(
                 serverId: settings.serverId, name: settings.resolvedDisplayName,
-                consoleCapabilities: shells.isAvailable ? PeerConsoleCapability.headlessHost : [],
+                consoleCapabilities: (shells.isAvailable ? PeerConsoleCapability.headlessHost : []) + [PeerPortForwardCapability.v1],
                 hostCapabilities: host.servedCapabilities
             )
         },
@@ -347,6 +347,7 @@ if let listen = config.hostRemoteListen {
     }
     let presenter = HeadlessSessionPresenter(core: host.coreContext)
     presenter.peerConsoleHost = shells.makePeerConsoleHost()
+    presenter.peerPortForwardHost = PeerPortForwardHost(core: host.coreContext)
     server.presenter = presenter
     openSessions = presenter
     // The port can change after the first: a listener that fails rebinds on

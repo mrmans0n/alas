@@ -18,6 +18,8 @@ public protocol RemoteSessionPresenter: AnyObject {
     var sessionListChanges: ChangeSignal<Void>? { get }
     /// Serves peer console traffic; nil when this app does not.
     var peerConsoleHost: PeerConsoleHost? { get }
+    /// Serves peer run endpoint forwarding; nil when this app does not.
+    var peerPortForwardHost: PeerPortForwardHost? { get }
     /// Opens a stored session as a tab in its worktree or checkout without
     /// selecting it. Succeeds without change when the tab is already open.
     func openSessionTab(for id: String) async -> RemoteSessionTabActionResult
@@ -30,4 +32,8 @@ public protocol RemoteSessionPresenter: AnyObject {
     /// A client created the session in `worktreeID`: the app opens it there,
     /// as it opens a session it creates.
     func sessionCreated(_ id: String, worktreeID: String)
+}
+
+@_spi(AppHost) extension RemoteSessionPresenter {
+    public var peerPortForwardHost: PeerPortForwardHost? { nil }
 }

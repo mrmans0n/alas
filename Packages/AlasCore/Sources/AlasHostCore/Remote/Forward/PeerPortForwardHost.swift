@@ -1,5 +1,7 @@
 import Foundation
 import Network
+import AlasFeatures
+import Observation
 
 /// Serves `PeerPortForwardRequest`s: each stream is a TCP connection from
 /// the host to a running run's loopback port, relayed to the Mac that opened
@@ -38,7 +40,9 @@ public final class PeerPortForwardHost: @unchecked Sendable {
 
     private let limits: PeerPortForwardLimits
     private let resolve: @Sendable (_ runID: String) async -> (host: String, port: Int)?
-    private let send: Send
+    private let sink: Send?
+    /// Per-connection sinks registered with `connect`, used without `sink`.
+    private var routes: [UUID: @Sendable (PeerPortForwardEvent) -> Void] = [:]
     private let queue = DispatchQueue(label: "io.nlopez.alas.peer-port-forward")
     private var streams: [Key: Stream] = [:]
     /// Run sockets the Mac closed, still writing out what it sent.
@@ -48,15 +52,17 @@ public final class PeerPortForwardHost: @unchecked Sendable {
     /// is the current active `.running` run of its worktree with a loopback
     /// endpoint. The host is dialled as declared, so `localhost` tries both
     /// `::1` and `127.0.0.1`; anything `PeerPortForwardEndpoint` doesn't
-    /// accept as loopback is refused. `send` is called on an internal serial queue, in order.
+    /// accept as loopback is refused. Events go to `send` when given, and
+    /// otherwise to the sink each connection registered with `connect`;
+    /// either is called on an internal serial queue, in order.
     public init(
         limits: PeerPortForwardLimits = PeerPortForwardLimits(),
         resolve: @escaping @Sendable (_ runID: String) async -> (host: String, port: Int)?,
-        send: @escaping Send
+        send: Send? = nil
     ) {
         self.limits = limits
         self.resolve = resolve
-        self.send = send
+        sink = send
     }
 
     deinit {
@@ -73,9 +79,15 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         queue.async { self.handle(request, from: connectionID) }
     }
 
+    /// Sends the connection's events to `send`. Call before its first request.
+    public func connect(_ connectionID: UUID, send: @escaping @Sendable (PeerPortForwardEvent) -> Void) {
+        queue.async { self.routes[connectionID] = send }
+    }
+
     /// Drops every stream the connection opened, without telling it.
     public func connectionClosed(_ connectionID: UUID) {
         queue.async {
+            self.routes[connectionID] = nil
             for key in self.streams.keys where key.connection == connectionID {
                 self.drop(key)
             }
@@ -213,7 +225,46 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         })
     }
 
+    private func send(_ connectionID: UUID, _ event: PeerPortForwardEvent) {
+        if let sink { sink(connectionID, event) } else { routes[connectionID]?(event) }
+    }
+
     private func drop(_ key: Key) {
         streams.removeValue(forKey: key)?.connection?.cancel()
+    }
+}
+
+extension RunRecordStore {
+    /// Where a peer's forward of `runID` connects: the run must be the
+    /// latest of its script, `.running` on this machine, with a loopback
+    /// endpoint. A URL without a port uses its scheme's default.
+    public func peerForwardTarget(runID: String) -> (host: String, port: Int)? {
+        // `allRecords` holds only each script's latest run, so a superseded id isn't found.
+        guard let record = allRecords.first(where: { $0.id == runID }), record.status == .running,
+              record.target.host == nil, let endpoint = record.endpoint, PeerPortForwardEndpoint.isLoopback(endpoint),
+              let host = endpoint.host, let port = endpoint.runEndpointPort
+        else { return nil }
+        return (host, port)
+    }
+}
+
+extension PeerPortForwardHost {
+    /// Serves `core`'s runs: resolves through its run store, and ends a run's
+    /// streams once it leaves `.running`, including when a restart replaces it.
+    @MainActor
+    public convenience init(core: AlasCoreContext) {
+        self.init(resolve: { runID in await MainActor.run { core.runRecords.peerForwardTarget(runID: runID) } })
+        endStreams(ofRunsLeaving: core)
+    }
+
+    @MainActor
+    private func endStreams(ofRunsLeaving core: AlasCoreContext, running previous: Set<String> = []) {
+        let running = Set(core.runRecords.allRecords.lazy.filter { $0.status == .running }.map(\.id))
+        for runID in previous.subtracting(running) {
+            runEnded(runID)
+        }
+        withObservationTracking { _ = core.runRecords } onChange: { [weak self] in
+            Task { @MainActor [weak self] in self?.endStreams(ofRunsLeaving: core, running: running) }
+        }
     }
 }

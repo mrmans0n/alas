@@ -170,6 +170,33 @@ struct PeerPortForwardTests {
     func loopbackEndpointsAreRecognised(url: String, isLoopback: Bool) throws {
         #expect(PeerPortForwardEndpoint.isLoopback(try #require(URL(string: url))) == isLoopback)
     }
+
+    /// The host forwards only its own current running run's loopback port.
+    @Test(arguments: [
+        ("http://localhost:3000", nil, true, true, "localhost:3000"),
+        ("https://127.0.0.1", nil, true, true, "127.0.0.1:443"),
+        ("http://[::1]", nil, true, true, "::1:80"),
+        ("http://dev.example:3000", nil, true, true, nil),
+        ("http://localhost:3000", "box", true, true, nil),
+        ("http://localhost:3000", nil, false, true, nil),
+        ("http://localhost:3000", nil, true, false, nil),
+    ] as [(String, String?, Bool, Bool, String?)])
+    func aForwardTargetsOnlyTheCurrentRunningLocalLoopbackEndpoint(
+        endpoint: String, sshHost: String?, running: Bool, current: Bool, expected: String?
+    ) throws {
+        func record(_ id: String) throws -> RunRecord {
+            RunRecord(
+                id: id, scriptKey: "dev", scriptName: "dev", worktreeID: "w", branch: "main",
+                target: RunExecutionTarget(host: sshHost, workingDirectory: "/w"),
+                endpoint: try #require(URL(string: endpoint)), status: .starting, startedAt: .now)
+        }
+        var store = RunRecordStore()
+        store.begin(try record("run"))
+        if running { store.markRunning(runID: "run", sessionID: nil) }
+        if !current { store.begin(try record("restarted")) }
+        let target = store.peerForwardTarget(runID: "run")
+        #expect(target.map { "\($0.host):\($0.port)" } == expected)
+    }
 }
 
 private final class EventLog: Sendable {
