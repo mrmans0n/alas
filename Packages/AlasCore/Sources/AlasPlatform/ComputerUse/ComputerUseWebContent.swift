@@ -14,9 +14,11 @@ public enum ComputerUseWebContent {
 
     public static let manualAccessibility = "AXManualAccessibility"
 
-    /// A Chromium browser (by bundle id) or an Electron app (one that took `manualAccessibility`).
-    public static func isChromium(bundleID: String?, acceptsManualAccessibility: Bool) -> Bool {
-        acceptsManualAccessibility || chromeBundleIDs.contains(bundleID ?? "")
+    /// A Chromium browser (by bundle id) or an Electron app: one that took `manualAccessibility`,
+    /// or whose bundle embeds Electron's framework (`embedsElectron`), which also finds one that
+    /// refused the attribute or wasn't asked yet.
+    public static func isChromium(bundleID: String?, acceptsManualAccessibility: Bool, embedsElectron: Bool) -> Bool {
+        acceptsManualAccessibility || embedsElectron || chromeBundleIDs.contains(bundleID ?? "")
     }
     public static let enhancedUserInterface = "AXEnhancedUserInterface"
 
@@ -181,7 +183,9 @@ public enum ComputerUseWebContent {
     /// Whether to wake the app: a Chromium or Electron one (`acceptsManualAccessibility`, or a
     /// Chromium browser by bundle id), due a try (`wakesAgain`), whose window showed no web
     /// content (`showsContent`, `hasWebContent`): no web area, or one without anything in it
-    /// yet, also in a read cut short.
+    /// yet, also in a read cut short. An app known as Electron only by its bundle (`isChromium`'s
+    /// `embedsElectron`) isn't woken: one that refuses `manualAccessibility` has no fallback here
+    /// (`next` gives `waitOnly`), and would wait out `contentDeadline` on every try.
     public static func needsWake(
         acceptsManualAccessibility: Bool, bundleID: String?, wakesAgain: Bool, showsContent: Bool
     ) -> Bool {

@@ -950,8 +950,7 @@ extension ComputerUseAXActions {
 
     /// Whether a web page's AX read-back is untrusted in the app (`ComputerUseTextCheck.outcome`).
     private static func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
-        ComputerUseWebContent.isChromium(
-            bundleID: app.bundleID, acceptsManualAccessibility: ComputerUseAXReader.acceptsManualAccessibility(app.pid))
+        ComputerUseAppKind.isChromium(app)
     }
 
     /// Whether the element takes typed text and sits in a web page.

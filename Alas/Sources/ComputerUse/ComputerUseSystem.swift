@@ -221,6 +221,8 @@ struct ComputerUseSystem: Sendable {
     /// Whether the app builds its Accessibility tree on request (Chromium, Electron), where an AX
     /// press may only focus the element.
     var usesManualAccessibility: @Sendable (Int32) -> Bool = { _ in false }
+    /// Whether the app's bundle embeds Electron (`ComputerUseAppKind.embedsElectron`).
+    var embedsElectron: @Sendable (Int32) -> Bool = { _ in false }
     /// The apps among `pids` a system password prompt is showing in, or may be showing in without
     /// the probe budget having reached them (`ComputerUseCredentialPrompt.listing`), read with one
     /// window list and one process list, within one probe budget. Clear apps have no entry.
@@ -248,6 +250,18 @@ struct ComputerUseSystem: Sendable {
     /// Whether the app shows a drag and drop session's image (`ComputerUseBackgroundDrag.sessionActive`),
     /// read from the window list.
     var dragSessionActive: @Sendable (Int32) -> Bool = { _ in false }
+
+    /// A Chromium browser or an Electron app, by any signal (`ComputerUseWebContent.isChromium`).
+    func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
+        ComputerUseWebContent.isChromium(
+            bundleID: app.bundleID, acceptsManualAccessibility: usesManualAccessibility(app.pid),
+            embedsElectron: embedsElectron(app.pid))
+    }
+
+    /// An Electron app, by either signal: it took `AXManualAccessibility`, or embeds Electron.
+    func isElectron(_ pid: Int32) -> Bool {
+        usesManualAccessibility(pid) || embedsElectron(pid)
+    }
 
     /// Whether a system password prompt is showing in the app, or may be: one app alone is probed
     /// first, so an unchecked one is the probe not getting to it, and counts as showing.
@@ -281,6 +295,7 @@ struct ComputerUseSystem: Sendable {
             openApp: { try await LiveComputerUseSystem.openApp($0) },
             releaseBackgroundFocus: { await LiveComputerUseSystem.releaseBackgroundFocus($0) },
             usesManualAccessibility: { ComputerUseAXReader.acceptsManualAccessibility($0) },
+            embedsElectron: { ComputerUseAppKind.embedsElectron(pid: $0) },
             credentialPrompts: { await LiveComputerUseSystem.credentialPrompts(pids: $0) },
             accessoryApps: { await LiveComputerUseSystem.accessoryApps() },
             wakeWebContent: { await ComputerUseAXReader.wakeWebContent($0, attribute: $1) },
@@ -340,6 +355,40 @@ enum ComputerUseDragTiers {
     }
 
     static let sessionOutlastedRefusal = "The app started a drag and drop that didn't end; nothing was dragged in the front."
+}
+
+/// What kind of app a process is, from its bundle on disk: no AX message, so safe for any pid.
+enum ComputerUseAppKind {
+    private struct ProcessKey: Hashable {
+        var pid: Int32
+        var start: TimeInterval
+    }
+
+    private static let electron = Mutex<[ProcessKey: Bool]>([:])
+
+    /// Whether the process's app bundle embeds `Electron Framework.framework`, as every Electron
+    /// app does, whether or not it takes `AXManualAccessibility`. CEF apps don't count. Cached
+    /// per process (pid and start time, so a reused pid isn't confused). Thread-safe.
+    static func embedsElectron(pid: Int32) -> Bool {
+        guard pid > 0, let start = LiveComputerUseSystem.processStart(pid) else { return false }
+        let key = ProcessKey(pid: pid, start: start)
+        if let known = electron.withLock({ $0[key] }) { return known }
+        var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
+        // …/X.app/Contents/MacOS/<executable>
+        let contents = URL(fileURLWithPath: String(cString: buffer)).deletingLastPathComponent().deletingLastPathComponent()
+        let framework = contents.appendingPathComponent("Frameworks/Electron Framework.framework")
+        let found = FileManager.default.fileExists(atPath: framework.path)
+        electron.withLock { $0[key] = found }
+        return found
+    }
+
+    /// `ComputerUseSystem.isChromium` for the live system, callable on the AX queue.
+    static func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
+        ComputerUseWebContent.isChromium(
+            bundleID: app.bundleID, acceptsManualAccessibility: ComputerUseAXReader.acceptsManualAccessibility(app.pid),
+            embedsElectron: embedsElectron(pid: app.pid))
+    }
 }
 
 private enum LiveComputerUseSystem {
@@ -1107,9 +1156,7 @@ extension LiveComputerUseSystem {
             startOnScreen: ComputerUseInputGeometry.pointIsOnScreen(start, displays: displays),
             endOnScreen: ComputerUseInputGeometry.pointIsOnScreen(end, displays: displays),
             crossWindow: dropWindow.windowID != window.windowID, startsInItem: false,
-            chromium: ComputerUseWebContent.isChromium(
-                bundleID: window.app.bundleID,
-                acceptsManualAccessibility: ComputerUseAXReader.acceptsManualAccessibility(window.app.pid)),
+            chromium: ComputerUseAppKind.isChromium(window.app),
             direct: false)
         guard route == .background else { return nil }
         // Like a background click: some views take a press only in their app's key window.
