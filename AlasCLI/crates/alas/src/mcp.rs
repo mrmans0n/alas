@@ -2107,7 +2107,7 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
     if publishes(command) {
         alas_client::send_with_timeout(&env.socket, &req, PR_CREATE_READ_TIMEOUT)
     } else if is_computer_call(command) {
-        alas_client::send_with_timeout(&env.socket, &req, COMPUTER_READ_TIMEOUT)
+        alas_client::send_with_timeout(&env.socket, &req, alas_client::COMPUTER_READ_TIMEOUT)
     } else {
         alas_client::send(&env.socket, &req)
     }
@@ -2118,10 +2118,6 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
 /// ssh, so it gets far longer than the default 30-second reply bound. The
 /// remote helper's relay waits slightly longer than this.
 const PR_CREATE_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
-
-/// `computer_*` calls may wait on the user's approval prompt the first time
-/// an app is used, so they get longer than the default reply bound.
-const COMPUTER_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// Unknown tools and invalid arguments are JSON-RPC protocol errors
 /// (-32602); failures while executing a valid call are tool results with

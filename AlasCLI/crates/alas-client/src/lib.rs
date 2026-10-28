@@ -1396,6 +1396,20 @@ pub enum TransportError {
 /// bounded the same way, while keeping a wedged app from hanging the shell
 /// forever.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// `computer_*` calls may wait on the user's approval prompt the first time
+/// an app is used (up to the app's 50-second approval wait), so they get
+/// longer than [`READ_TIMEOUT`]. The app cancels a computer call whose client
+/// closes the connection, so giving up sooner would cancel an approved call.
+pub const COMPUTER_READ_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How long `dispatch` waits for the reply to `command`.
+pub fn read_timeout(command: &Command) -> Duration {
+    match command {
+        Command::Computer(_) => COMPUTER_READ_TIMEOUT,
+        _ => READ_TIMEOUT,
+    }
+}
 const MAX_RESPONSE_BYTES: usize = 12 * 1024 * 1024;
 
 /// Bound on how long a single non-mutating `resolve` probe (used to find the
@@ -1522,7 +1536,8 @@ pub fn dispatch(command: &Command, target: &Target) -> Result<Response, Dispatch
         Target::Session { socket, session_id } => {
             let cwd = absolutize(&logical_base(), ".");
             let req = build_session_request(command, session_id.clone(), cwd);
-            send(Path::new(socket), &req).map_err(DispatchError::Transport)
+            send_with_timeout(Path::new(socket), &req, read_timeout(command))
+                .map_err(DispatchError::Transport)
         }
         Target::Directory { .. } => {
             let sockets = discover_live_sockets();
@@ -1548,7 +1563,7 @@ pub fn dispatch_to_sockets(
         return match sockets {
             [socket] => {
                 let req = build_request(command, None, Some(cwd.clone()));
-                send(socket, &req).map_err(DispatchError::Transport)
+                send_with_timeout(socket, &req, read_timeout(command)).map_err(DispatchError::Transport)
             }
             _ => Err(DispatchError::Ambiguous),
         };
@@ -1590,7 +1605,8 @@ pub fn dispatch_to_sockets(
         0 => Err(DispatchError::NotInWorktree),
         1 => {
             let req = build_request(command, None, Some(cwd.clone()));
-            send(&owners[0], &req).map_err(DispatchError::Transport)
+            send_with_timeout(&owners[0], &req, read_timeout(command))
+                .map_err(DispatchError::Transport)
         }
         _ => Err(DispatchError::Ambiguous),
     }
@@ -2233,6 +2249,13 @@ mod tests {
         assert_eq!(focus.subcommand.as_deref(), Some("focus"));
         assert_eq!(focus.params.as_ref().unwrap()["checkout_id"], checkout);
         assert_eq!(focus.params.as_ref().unwrap()["member_id"], member);
+    }
+
+    #[test]
+    fn computer_calls_outwait_the_approval_card() {
+        let apps = Command::Computer(ComputerCommand::Apps { call_id: None });
+        assert_eq!(read_timeout(&apps), COMPUTER_READ_TIMEOUT);
+        assert_eq!(read_timeout(&Command::Resolve), READ_TIMEOUT);
     }
 
     #[test]
