@@ -8,6 +8,7 @@ struct ComputerUseInputTests {
     private typealias Chord = ComputerUseKeyChord
     private typealias Window = ComputerUseInputGeometry.ScreenWindow
     private typealias SavedType = ComputerUsePastePolicy.SavedType
+    private typealias Focus = ComputerUseSecureFocus.Element
 
     @Test(arguments: [
         (ShortcutBinding?.some(.init(key: ".", modifiers: [.control, .option, .command])), true, true),
@@ -59,6 +60,31 @@ struct ComputerUseInputTests {
         #expect(try #require(Chord.parse(text)).mayEditText == edits)
     }
 
+    /// Typed text goes as unicode key events of at most a chunk's UTF-16 units, never splitting a
+    /// character. A line break inside the text is Shift+Return, a new line where Return would send a
+    /// chat message; each trailing one is Return, which Chrome's address bar needs to submit. In a
+    /// terminal every line break is Return, so each line runs.
+    /// Columns: text, chunk units, terminal, pieces.
+    @Test(arguments: [
+        ("url\n", 4, false, [ComputerUseTypedKeys.text("url"), .returnKey(shift: false)]),
+        ("hi\nthere", 8, false, [.text("hi"), .returnKey(shift: true), .text("there")]),
+        ("a\r\nb\rc\n\n", 4, false,
+         [.text("a"), .returnKey(shift: true), .text("b"), .returnKey(shift: true), .text("c"),
+          .returnKey(shift: false), .returnKey(shift: false)]),
+        ("\n\n", 4, false, [.returnKey(shift: false), .returnKey(shift: false)]),
+        ("ls\npwd\n", 4, true, [.text("ls"), .returnKey(shift: false), .text("pwd"), .returnKey(shift: false)]),
+        ("ab\ncdefg", 4, false, [.text("ab"), .returnKey(shift: true), .text("cdef"), .text("g")]),
+        // A tab stays text; an emoji (two units) is never split.
+        ("a\tb", 4, false, [.text("a\tb")]),
+        ("abc😀", 4, false, [.text("abc"), .text("😀")]),
+    ])
+    func typedTextSplitsIntoChunksAndReturnKeys(
+        text: String, chunkUnits: Int, terminal: Bool, pieces: [ComputerUseTypedKeys]
+    ) {
+        #expect(ComputerUseTypedKeys.split(text, chunkUnits: chunkUnits, terminal: terminal) == pieces)
+        #expect(pieces.map(\.characterCount).reduce(0, +) == text.count)
+    }
+
     /// A web field can read as focused in its page while the app's focused element is the
     /// address bar: a chord that may edit text is refused when any focused element is secure.
     @Test(arguments: [("ctrl+y", true), ("cmd+delete", true), ("shift+cmd+v", true), ("tab", false), ("return", false)])
@@ -78,6 +104,41 @@ struct ComputerUseInputTests {
     ])
     func textEntryElementsAreRecognized(element: ComputerUseSecureFocus.Element, isTextEntry: Bool) {
         #expect(ComputerUseSecureFocus.isTextEntry(element) == isTextEntry)
+    }
+
+    /// Keys typed without a ref into a list or outline act on it (Finder renames the wrong file
+    /// after its type-to-select), so only text inputs and editing surfaces take them.
+    /// Columns: focused element, selects text, in a web area, terminal or code editor, bundle id, accepted.
+    @Test(arguments: [
+        (Focus(role: "AXTextField"), false, false, false, "com.apple.finder", true),
+        (Focus(role: "AXOutline"), false, false, false, "com.apple.finder", false),
+        (Focus(role: "AXGroup"), false, false, false, "com.apple.finder", false),
+        (nil, false, false, false, "com.apple.finder", false),
+        // Mail's message list, an NSTableView: type-select picks a message.
+        (Focus(role: "AXTable"), false, false, false, "com.apple.mail", false),
+        (Focus(role: "AXCell"), false, false, false, "com.apple.mail", false),
+        (Focus(role: "AXButton"), false, false, false, nil, false),
+        (nil, false, false, false, "com.apple.TextEdit", true),
+        // The window, or an element the app doesn't describe: as nothing focused.
+        (Focus(role: "AXWindow"), false, false, false, "com.apple.TextEdit", true),
+        (Focus(role: "AXUnknown"), false, false, false, nil, true),
+        (Focus(role: "AXWindow"), false, false, false, "com.apple.finder", false),
+        // A spreadsheet's grid, or a table cell being edited.
+        (Focus(role: "AXTable"), false, false, false, "com.apple.iWork.Numbers", true),
+        (Focus(role: "AXCell"), false, false, false, "org.libreoffice.script", true),
+        (Focus(role: "AXCell"), true, false, false, "com.apple.mail", true),
+        (Focus(role: "AXScrollArea"), false, false, false, "com.apple.iWork.Pages", true),
+        (Focus(role: "AXStaticText"), true, false, false, nil, true),
+        (Focus(role: "AXGroup"), false, true, false, "com.google.Chrome", true),
+        (Focus(role: "AXList"), false, false, true, "com.mitchellh.ghostty", true),
+    ] as [(Focus?, Bool, Bool, Bool, String?, Bool)])
+    func refLessTypingNeedsAFocusedTextInput(
+        element: ComputerUseSecureFocus.Element?, selectsText: Bool, inWebArea: Bool, keyCommandApp: Bool,
+        bundleID: String?, accepted: Bool
+    ) {
+        #expect(ComputerUseSecureFocus.acceptsTypedKeys(
+            element, selectsText: selectsText, inWebArea: inWebArea, keyCommandApp: keyCommandApp, bundleID: bundleID)
+            == accepted)
     }
 
     /// Only a web page's field takes the click through AX focus; a native one keeps the plain click.
@@ -646,6 +707,40 @@ struct ComputerUseInputTests {
         #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
     }
 
+    /// AXPress doesn't reach a Chrome page's content (Chrome 156 kept a button's counter at 0), so
+    /// its left single click goes with the pointer, where its centre shows, holds the element and
+    /// the window was made key in the background; anything else gets the AX press as before. An
+    /// Electron app's press works (with the pointer retry after it).
+    /// Columns: left single, in a web area, Chrome browser, centre on screen, the element's level
+    /// above the hit, the hit's level above the element, route, pointer first.
+    @Test(arguments: [
+        (true, true, true, true, Int?(0), Int?.none, ComputerUseEventRoute.background, true),
+        // The hit is the button's label, or the wrapper over a 1×1 visually hidden control.
+        (true, true, true, true, 2, nil, .background, true),
+        (true, true, true, true, nil, 2, .background, true),
+        // An overlay or sticky header is there instead, or a far ancestor.
+        (true, true, true, true, nil, nil, .background, false),
+        (true, true, true, true, 9, nil, .background, false),
+        (true, true, true, true, nil, 3, .background, false),
+        // Not in the background: the AX press, never an activation or refusal for the pointer.
+        (true, true, true, true, 0, nil, .activation, false),
+        (true, true, true, true, 0, nil, .refuse, false),
+        (false, true, true, true, 0, nil, .background, false),
+        (true, false, true, true, 0, nil, .background, false),
+        // An Electron app or Safari, and a centre off screen.
+        (true, true, false, true, 0, nil, .background, false),
+        (true, true, true, false, 0, nil, .background, false),
+    ])
+    func aChromeWebElementIsClickedWithThePointerFirst(
+        leftSingle: Bool, inWebArea: Bool, chromeBrowser: Bool, centerOnScreen: Bool, targetAboveHit: Int?,
+        hitAboveTarget: Int?, route: ComputerUseEventRoute, pointerFirst: Bool
+    ) {
+        let candidate = ComputerUseClickTarget.pointerCandidate(
+            leftSingle: leftSingle, inWebArea: inWebArea, chromeBrowser: chromeBrowser, centerOnScreen: centerOnScreen,
+            hitOnElement: ComputerUseClickTarget.hitReaches(targetAboveHit: targetAboveHit, hitAboveTarget: hitAboveTarget))
+        #expect(ComputerUseClickTarget.pointerFirst(candidate: candidate, route: route) == pointerFirst)
+    }
+
     @Test(arguments: [
         // One plain-text item, in every flavour it may carry: pasted and put back.
         ([[SavedType(type: "public.utf16-external-plain-text", size: 24), SavedType(type: "public.utf8-plain-text", size: 12)]], true),
@@ -800,6 +895,48 @@ struct ComputerUseInputTests {
         readBack: Verdict?, inWebArea: Bool, chromium: Bool, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome
     ) {
         #expect(ComputerUseTextCheck.outcome(readBack, inWebArea: inWebArea, chromium: chromium, keysReach: keysReach) == outcome)
+    }
+
+    /// A terminal's grid takes an AX insert that never reaches the shell: its text goes as keys,
+    /// or is refused off screen, and a replace (⌘A selects the scrollback) is refused. A code
+    /// editor keeps the AX write.
+    @Test(arguments: [
+        (String?("com.mitchellh.ghostty"), true, ComputerUseTextCheck.Outcome.typeAsKeys),
+        ("com.apple.Terminal", true, .typeAsKeys),
+        ("dev.warp.Warp-Preview", true, .typeAsKeys),
+        ("org.tabby", true, .typeAsKeys),
+        ("com.raphaelamorim.rio", true, .typeAsKeys),
+        ("com.github.wez.wezterm", false, .refuse),
+        ("com.microsoft.VSCode", true, .write),
+        ("dev.zed.Zed.Helper", true, .write),
+        (nil, true, .write),
+    ])
+    func aTerminalIsNeverWrittenByAX(bundleID: String?, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome) {
+        let app = ComputerUseAppIdentity(name: "App", bundleID: bundleID, pid: 200)
+        let terminal = ComputerUseTextCheck.isTerminal(app)
+        #expect(ComputerUseTextCheck.outcome(
+            nil, inWebArea: false, chromium: false, terminal: terminal, keysReach: keysReach) == outcome)
+        #expect((ComputerUseTextCheck.terminalReplaceRefusal(app, replace: true) != nil) == terminal)
+        #expect(ComputerUseTextCheck.terminalReplaceRefusal(app, replace: false) == nil)
+    }
+
+    /// Chrome's address bar shows an AX insert but never submits its line break, so that text goes
+    /// as keys, or is refused off screen; a page's field, another browser and text without a line
+    /// break are written as before.
+    @Test(arguments: [
+        ("https://example.com\n", String?("com.google.Chrome"), false, true, ComputerUseTextCheck.Outcome.typeAsKeys),
+        ("https://example.com\n", "com.google.Chrome", false, false, .refuse),
+        ("a\r", "com.brave.Browser", false, true, .typeAsKeys),
+        ("https://example.com", "com.google.Chrome", false, true, .write),
+        ("line\nbreak", "com.google.Chrome", true, true, .write),
+        ("https://example.com\n", "com.apple.Safari", false, false, .write),
+        ("https://example.com\n", nil, false, true, .write),
+    ])
+    func aLineBreakIntoAChromiumBrowsersOwnFieldGoesAsKeys(
+        text: String, bundleID: String?, inWebArea: Bool, keysReach: Bool, outcome: ComputerUseTextCheck.Outcome
+    ) {
+        #expect(ComputerUseTextCheck.lineBreakOutcome(
+            text, bundleID: bundleID, inWebArea: inWebArea, keysReach: keysReach) == outcome)
     }
 
     @Test(arguments: [

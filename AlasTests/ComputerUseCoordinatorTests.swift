@@ -1494,13 +1494,16 @@ struct ComputerUseCoordinatorTests {
     enum PostRead: Sendable { case full, depthLimited, queryFiltered }
 
     @Test(arguments: [
-        (true, false, "AXButton", .full, true), (true, true, "AXButton", .full, false),
-        (false, false, "AXButton", .full, false), (true, false, "AXCheckBox", .full, false),
+        (true, false, "AXButton", .full, .ax, true), (true, true, "AXButton", .full, .ax, false),
+        (false, false, "AXButton", .full, .ax, false), (true, false, "AXCheckBox", .full, .ax, false),
         // A read that leaves elements out can't tell the press changed nothing.
-        (true, false, "AXButton", .depthLimited, false), (true, false, "AXButton", .queryFiltered, false),
-    ] as [(Bool, Bool, String, PostRead, Bool)])
+        (true, false, "AXButton", .depthLimited, .ax, false), (true, false, "AXButton", .queryFiltered, .ax, false),
+        // Only an AX press is retried: a click that went with the pointer first never is.
+        (true, false, "AXButton", .full, .background, false), (true, false, "AXButton", .full, .activation, false),
+    ] as [(Bool, Bool, String, PostRead, ComputerUseDelivery, Bool)])
     func electronClickThatChangedNothingIsRetriedWithThePointer(
-        manualAccessibility: Bool, changed: Bool, role: String, postRead: PostRead, retries: Bool
+        manualAccessibility: Bool, changed: Bool, role: String, postRead: PostRead, firstDelivery: ComputerUseDelivery,
+        retries: Bool
     ) async throws {
         let recorder = Recorder()
         let reads = Counter()
@@ -1521,7 +1524,7 @@ struct ComputerUseCoordinatorTests {
         system.perform = { input, _, _, _ in
             recorder.record(input)
             if case .pointerClick = input { return .background }
-            return .ax
+            return ComputerUseDelivered(delivery: firstDelivery)
         }
         let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
         _ = await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")
@@ -1540,7 +1543,7 @@ struct ComputerUseCoordinatorTests {
             }
             #expect(payload["delivery"] as? String == "background" && payload["retried"] as? String == "pointer")
         } else {
-            #expect(inputs.count == 1 && payload["delivery"] as? String == "ax" && payload["retried"] == nil)
+            #expect(inputs.count == 1 && payload["delivery"] as? String == firstDelivery.rawValue && payload["retried"] == nil)
         }
     }
 

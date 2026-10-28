@@ -76,6 +76,48 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// `refuseSecureFocus(app:)` for text typed as keys without a ref, which also refuses a focused
+    /// element that doesn't take typed text (`ComputerUseSecureFocus.acceptsTypedKeys`): keys in a
+    /// list or outline act on it instead (Finder's type-to-select). Proceeds when the focus can't
+    /// be read; nothing focused counts as such only when the app says so.
+    static func refuseUntypableFocus(app: ComputerUseAppIdentity, isCancelled: @escaping IsCancelled) async throws {
+        try await onQueue(isCancelled) {
+            let application = try ComputerUseAXReader.target(app.pid)
+            var focused: CFTypeRef?
+            let result = AXUIElementCopyAttributeValue(application, kAXFocusedUIElementAttribute as CFString, &focused)
+            let element: AXUIElement?
+            if result == .success, let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() {
+                element = (focused as! AXUIElement)
+            } else if result == .noValue {
+                element = nil
+            } else {
+                return
+            }
+            if let element {
+                AXUIElementSetMessagingTimeout(element, ComputerUseAXReader.messagingTimeout)
+                if isSecure(element) { throw secureRefusal }
+            }
+            let identity = element.map {
+                ComputerUseSecureFocus.Element(role: string(of: $0, kAXRoleAttribute), subrole: string(of: $0, kAXSubroleAttribute))
+            }
+            guard !ComputerUseSecureFocus.acceptsTypedKeys(
+                identity, selectsText: element.flatMap(selectedRange(of:)) != nil,
+                inWebArea: element.map(isInWebArea) ?? false,
+                keyCommandApp: ComputerUseTextCheck.isKeyCommandApp(app, hostPID: getpid()), bundleID: app.bundleID)
+            else { return }
+            throw ComputerUseSystemError.actionFailed(untypableFocusRefusal(app, role: identity?.role))
+        }
+    }
+
+    static func untypableFocusRefusal(_ app: ComputerUseAppIdentity, role: String?) -> String {
+        let what = role.map { "\(app.name)'s focused element (\($0)) isn't a text input" }
+            ?? "Nothing in \(app.name) has keyboard focus"
+        return what + ", so typed keys would act on the window instead (in Finder they select another file by its name). "
+            + "Nothing was typed. Pass the field's ref from computer_inspect to computer_type, or click the field first "
+            + "with computer_click (by ref, or at its x/y in a screenshot). "
+            + "For shortcuts, arrow keys or Return, use computer_key."
+    }
+
     /// Refuses a chord that may edit text while a secure field reads as focused: the app's focused
     /// element, or one inside the window. In a web page a field can read as focused while the
     /// keyboard stays in the address bar, which the app reports as its focused element. A read of
@@ -111,8 +153,10 @@ enum ComputerUseAXActions {
 
     /// For a left click by ref on a web page's field: puts the keyboard in it, as a click would,
     /// where an AX press may only mark it focused inside the page. False, touching nothing, for
-    /// any other element (`ComputerUseSecureFocus.focusesOnClick`). A secure field may be
-    /// clicked; only typing into one is refused.
+    /// any other element (`ComputerUseSecureFocus.focusesOnClick`). A Chromium browser's page
+    /// field gets here only when the pointer can't click it in the background
+    /// (`ComputerUseClickTarget.pointerFirst`). A secure field may be clicked; only typing into
+    /// one is refused.
     static func focusTextEntry(
         _ handles: ComputerUseAXHandles, _ handle: Int, app: ComputerUseAppIdentity, interrupt: @escaping Interrupt
     ) async throws -> Bool {
@@ -126,6 +170,68 @@ enum ComputerUseAXActions {
             AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue)
             return true
         }
+    }
+
+    /// Whether a left single click on the element may go as a pointer click at its visible centre,
+    /// without an AX press (`ComputerUseClickTarget.pointerCandidate`): in a Chromium browser's web
+    /// page, where AXPress doesn't reach the content, while that centre is on screen and the app's
+    /// own hit test finds the element there. The route decides after the window is made key
+    /// (`ComputerUseClickTarget.pointerFirst`).
+    static func pointerClickCandidate(
+        _ handles: ComputerUseAXHandles, _ handle: Int, in window: ComputerUseWindow, isCancelled: @escaping IsCancelled
+    ) async throws -> Bool {
+        let app = window.app
+        let chromeBrowser = ComputerUseWebContent.chromeBundleIDs.contains(app.bundleID ?? "")
+        guard chromeBrowser else { return false }
+        let inWebArea = try await onQueue(isCancelled) { try isInWebArea(resolve(handles, handle)) }
+        guard inWebArea else { return false }
+        let center: CGPoint?
+        do {
+            center = try await visibleCenter(
+                handles, handle, within: window.frame, app: app, requireOwnCenter: true, isCancelled: isCancelled)
+        } catch let error as CancellationError {
+            throw error
+        } catch ComputerUseSystemError.userActive {
+            throw ComputerUseSystemError.userActive
+        } catch {
+            // An element whose frame can't be read gets the AX press, as before.
+            center = nil
+        }
+        let onScreen = center.map {
+            ComputerUseInputGeometry.pointIsOnScreen($0, displays: ComputerUseAXReader.displayFrames())
+        } ?? false
+        var hitOnElement = false
+        if let center, onScreen {
+            hitOnElement = try await onQueue(isCancelled) { () -> Bool in
+                let target = try resolve(handles, handle)
+                let application = try ComputerUseAXReader.target(app.pid)
+                guard let found = hit(at: center, in: window, application: application) else { return false }
+                var pid: pid_t = 0
+                guard AXUIElementGetPid(found, &pid) == .success,
+                      ComputerUseInputGeometry.pointRoute(
+                          point: center, targetPID: app.pid, window: window.frame,
+                          appHit: .init(pid: pid, frame: frame(of: found))) == .events
+                else { return false }
+                return ComputerUseClickTarget.hitReaches(
+                    targetAboveHit: level(of: target, above: found, within: ComputerUseClickTarget.hitDescendantLevels),
+                    hitAboveTarget: level(of: found, above: target, within: ComputerUseClickTarget.hitAncestorLevels))
+            }
+        }
+        return ComputerUseClickTarget.pointerCandidate(
+            leftSingle: true, inWebArea: inWebArea, chromeBrowser: chromeBrowser, centerOnScreen: onScreen,
+            hitOnElement: hitOnElement)
+    }
+
+    /// How many levels `ancestor` is above `element` (0 for the element itself), looking at most
+    /// `levels` up; nil when it isn't there. Call on the AX queue.
+    private static func level(of ancestor: AXUIElement, above element: AXUIElement, within levels: Int) -> Int? {
+        var current = element
+        for level in 0 ... levels {
+            if CFEqual(current, ancestor) { return level }
+            guard let parent = elementAttribute(current, kAXParentAttribute) else { return nil }
+            current = parent
+        }
+        return nil
     }
 
     /// Focuses the element before typing into it. Refuses secure text fields. An element that
@@ -882,8 +988,9 @@ extension ComputerUseAXActions {
         let (element, warning) = try await onQueue(interrupt: interrupt) {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
-            try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app, byRef: true)
+            try settleWrite(inWebArea: isWebTextEntry(element), app: app, keysReach: keysReach, byRef: true)
+            // Only after settleWrite: it sends a Chromium page\'s field and a terminal to keys, line breaks and all.
+            try routeLineBreak(text, element, app: app, keysReach: keysReach)
             // Before routing: a document's text typed as keys goes in at the caret kept here.
             focusKeepingSelection(element, app: app)
             let warning = try routeDocument(element, app: app, keysReach: keysReach)
@@ -911,8 +1018,9 @@ extension ComputerUseAXActions {
         let (inWebArea, documentWarning) = try await onQueue(interrupt: interrupt) {
             let inWebArea = isWebTextEntry(element.element)
             // A Chromium web field goes as keys first, whatever its window.
-            try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app, byRef: false)
+            try settleWrite(inWebArea: inWebArea, app: app, keysReach: keysReach, byRef: false)
+            // Only after settleWrite: it sends a Chromium page\'s field and a terminal to keys, line breaks and all.
+            try routeLineBreak(text, element.element, app: app, keysReach: keysReach)
             return (inWebArea, try routeDocument(element.element, app: app, keysReach: keysReach))
         }
         try await insert(
@@ -946,6 +1054,32 @@ extension ComputerUseAXActions {
         var names: CFArray?
         guard AXUIElementCopyAttributeNames(element, &names) == .success else { return [] }
         return (names as? [String]) ?? []
+    }
+
+    /// `settle` for `ComputerUseTextCheck.outcome` before an AX write into an element of the app,
+    /// with a terminal's own refusal off screen.
+    private static func settleWrite(inWebArea: Bool, app: ComputerUseAppIdentity, keysReach: Bool, byRef: Bool) throws {
+        let terminal = ComputerUseTextCheck.isTerminal(app)
+        let outcome = ComputerUseTextCheck.outcome(
+            nil, inWebArea: inWebArea, chromium: isChromium(app), terminal: terminal, keysReach: keysReach)
+        if outcome == .refuse, terminal {
+            throw ComputerUseSystemError.actionFailed(ComputerUseTextCheck.offScreenTerminalRefusal(app))
+        }
+        try settle(outcome, app: app, byRef: byRef)
+    }
+
+    /// Sends text with a line break for a Chromium browser's own field to keys (`Unsupported`), or
+    /// refuses it off screen (`ComputerUseTextCheck.lineBreakOutcome`). After `settleWrite`, which
+    /// already sent a page's field to keys. Call on the AX queue.
+    private static func routeLineBreak(
+        _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool
+    ) throws {
+        switch ComputerUseTextCheck.lineBreakOutcome(
+            text, bundleID: app.bundleID, inWebArea: isInWebArea(element), keysReach: keysReach) {
+        case .typeAsKeys: throw Unsupported(error: .attributeUnsupported)
+        case .refuse: throw ComputerUseSystemError.actionFailed(ComputerUseTextCheck.offScreenLineBreakRefusal(app))
+        case .write, .landed: return
+        }
     }
 
     /// Whether a web page's AX read-back is untrusted in the app (`ComputerUseTextCheck.outcome`).
@@ -1329,8 +1463,7 @@ extension ComputerUseAXActions {
                 var selection: CFRange?
                 var valueBefore: String?
                 if typedSoFar == 0 {
-                    try settle(ComputerUseTextCheck.outcome(
-                        nil, inWebArea: target.inWebArea, chromium: isChromium(app), keysReach: keysReach), app: app, byRef: byRef)
+                    try settleWrite(inWebArea: target.inWebArea, app: app, keysReach: keysReach, byRef: byRef)
                     guard target.canSetSelectedText() else { throw Unsupported(error: .attributeUnsupported) }
                     countBefore = target.characterCount()
                     selection = target.selectedRange()
@@ -1435,8 +1568,9 @@ extension ComputerUseAXActions {
     private static func setValueChecked(
         _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool, byRef: Bool
     ) throws -> String? {
-        try settle(ComputerUseTextCheck.outcome(
-                nil, inWebArea: isWebTextEntry(element), chromium: isChromium(app), keysReach: keysReach), app: app, byRef: byRef)
+        try settleWrite(inWebArea: isWebTextEntry(element), app: app, keysReach: keysReach, byRef: byRef)
+        // Only after settleWrite: it sends a Chromium page\'s field and a terminal to keys, line breaks and all.
+        try routeLineBreak(text, element, app: app, keysReach: keysReach)
         let warning = try routeDocument(element, app: app, keysReach: keysReach)
         let before = isLong(element) ? nil : textValue(of: element)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)

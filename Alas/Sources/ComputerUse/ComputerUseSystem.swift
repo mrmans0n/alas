@@ -671,6 +671,9 @@ extension LiveComputerUseSystem {
         if case .key(let chord) = input {
             try await ComputerUseAXActions.refuseSecureFocus(chord, in: window, isCancelled: isCancelled)
         }
+        if case .type(_, _, let replace) = input, let refusal = ComputerUseTextCheck.terminalReplaceRefusal(window.app, replace: replace) {
+            throw ComputerUseSystemError.actionFailed(refusal)
+        }
         // A sheet or dialog takes Escape and Return as its cancel and default buttons; pressing the
         // button needs no key window, so nothing is keyed or activated for it, also when direct.
         if case .key(let chord) = input,
@@ -731,7 +734,14 @@ extension LiveComputerUseSystem {
            try await !ComputerUseAXActions.isShown(handles, handle, within: window.frame, isCancelled: isCancelled) {
             throw ComputerUseAXActions.hiddenRefusal
         }
-        if let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
+        // A Chrome page's content takes no AXPress: a click there waits for the route, to go with
+        // the pointer in the background or as the AX press otherwise (`ComputerUseClickTarget.pointerFirst`).
+        let pointerCandidate = if case .click(.element(let handles, let handle), .left, 1) = input {
+            try await ComputerUseAXActions.pointerClickCandidate(handles, handle, in: window, isCancelled: isCancelled)
+        } else {
+            false
+        }
+        if !pointerCandidate, let delivered = try await viaAX(input, in: window, interrupt: interrupt) { return delivered }
         // From making the window key until it is handed back below, no other input may move key
         // status in this app: its events would land in whichever window the other one left key.
         return try await keyLocks.run(app.pid) {
@@ -740,7 +750,8 @@ extension LiveComputerUseSystem {
             do {
                 try await makeKeyInBackground(window, &keying, interrupt: interrupt)
                 var delivered = try await deliverEvents(
-                    input, in: window, keyConfirmed: keying.confirmed, ignoring: ignoring, interrupt: interrupt)
+                    input, in: window, keyConfirmed: keying.confirmed, pointerCandidate: pointerCandidate,
+                    ignoring: ignoring, interrupt: interrupt)
                 await keying.restoreUserKeyWindow(window)
                 // Also after an activation fallback: the previous app is back in front by then, so
                 // the release still finds the target in the background and defocuses it.
@@ -983,9 +994,10 @@ extension LiveComputerUseSystem {
     }
 
     /// Events, once AX had no way: to the window made key when that was confirmed, else the AX
-    /// ways on the focused window, else with the app activated around them.
+    /// ways on the focused window, else with the app activated around them. A click that skipped
+    /// AX for the pointer (`pointerCandidate`) gets its AX ways first anywhere but the background.
     private static func deliverEvents(
-        _ input: ComputerUseInput, in window: ComputerUseWindow, keyConfirmed: Bool,
+        _ input: ComputerUseInput, in window: ComputerUseWindow, keyConfirmed: Bool, pointerCandidate: Bool,
         ignoring: @escaping @Sendable () -> Set<UInt32>,
         interrupt: @escaping @Sendable () -> ComputerUseInputInterrupt?
     ) async throws -> ComputerUseDelivered {
@@ -994,6 +1006,10 @@ extension LiveComputerUseSystem {
         let route = ComputerUseEventRoute.choose(
             skyLightAvailable: ComputerUseSkyLight.isAvailable, keyConfirmed: keyConfirmed,
             idleSeconds: secondsSinceUserInput())
+        if pointerCandidate, !ComputerUseClickTarget.pointerFirst(candidate: true, route: route),
+           let delivered = try await viaAX(input, in: window, interrupt: interrupt) {
+            return delivered
+        }
         if route == .background {
             // A key window validates the app's menus, so a chord's menu item is enabled now.
             if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
@@ -1008,6 +1024,10 @@ extension LiveComputerUseSystem {
             do {
                 try await ComputerUseAXActions.makeActiveWindow(window, raise: false, isCancelled: isCancelled)
                 if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
+                // The focus the keys would get is already this window's: a refusal leaves the app where it is.
+                if case .type(_, nil, _) = input {
+                    try await ComputerUseAXActions.refuseUntypableFocus(app: app, isCancelled: isCancelled)
+                }
             } catch ComputerUseSystemError.notActiveWindow {
                 // Activation makes it the active window.
             }
@@ -1333,7 +1353,8 @@ extension LiveComputerUseSystem {
                 try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
             case nil:
                 try await requireActiveWindow()
-                try await ComputerUseAXActions.refuseSecureFocus(app: app, isCancelled: isCancelled)
+                // Only here: a ref or a point names the field, and computer_key's keys are meant for the view.
+                try await ComputerUseAXActions.refuseUntypableFocus(app: app, isCancelled: isCancelled)
             }
             try checkCancelled()
             if replace {
@@ -1342,7 +1363,8 @@ extension LiveComputerUseSystem {
             // A clipboard holding anything but plain text is left alone, and the text typed instead.
             let pasted = paste ? try await self.paste(text, pid: app.pid) : false
             if !pasted {
-                try await ComputerUseInputPoster.type(text, pid: app.pid, interrupt: interrupt)
+                try await ComputerUseInputPoster.type(
+                    text, pid: app.pid, terminal: ComputerUseTextCheck.isTerminal(app), interrupt: interrupt)
             }
         case .key(let chord):
             try await requireActiveWindow()
