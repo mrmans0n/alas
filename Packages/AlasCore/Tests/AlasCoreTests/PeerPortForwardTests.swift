@@ -180,6 +180,33 @@ struct PeerPortForwardTests {
         try await eventually { client.received.bytes == Data("ping".utf8) }
     }
 
+    /// The app hands every forward of a peer each event, so a refusal of
+    /// another forward's stream must neither stop nor reach this one.
+    @Test func onlyItsOwnStreamsRefusalReachesAForwarder() async throws {
+        let busy = try await EchoServer.start()
+        defer { busy.stop() }
+        let opened = Mutex<[UUID]>([])
+        let refusals = Mutex<[String]>([])
+        let endpoint = try #require(URL(string: "http://127.0.0.1:\(busy.port)"))
+        let forwarder = PeerPortForwarder(runID: "run", endpoint: endpoint, onRefused: { message in
+            refusals.withLock { $0.append(message) }
+        }) { request in
+            if case .open(let stream, _) = request { opened.withLock { $0.append(stream) } }
+        }
+        defer { forwarder.stop() }
+        let port = try #require(try await forwarder.start().port)
+
+        forwarder.receive(.refused(stream: UUID(), message: PeerPortForwardHost.notRunningMessage))
+        let client = try await TestClient.connect(host: "127.0.0.1", port: port)
+        try await eventually { opened.withLock { $0.count } == 1 }
+        #expect(refusals.withLock { $0 }.isEmpty)
+
+        let stream = try #require(opened.withLock { $0.first })
+        forwarder.receive(.refused(stream: stream, message: "Nope."))
+        try await eventually { refusals.withLock { $0 } == ["Nope."] }
+        withExtendedLifetime(client) {}
+    }
+
     /// A host built on the run store ends a run's streams once the run finishes.
     @MainActor
     @Test func aForwardEndsWhenItsRunFinishes() async throws {

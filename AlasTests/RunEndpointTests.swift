@@ -69,7 +69,7 @@ struct RunEndpointTests {
     // MARK: - Port probe
 
     @Test func portProbeDetectsAListenerWithoutTouchingIt() throws {
-        let listener = try Listener()
+        let listener = try TCPPortListener()
         defer { listener.close() }
         #expect(RunPortProbe.isLocalPortInUse(listener.port))
         // Observing the collision must leave the other socket alone: it is
@@ -95,7 +95,7 @@ struct RunEndpointTests {
 
 /// A real listening socket on an OS-assigned port, so the probe is exercised
 /// against the same condition a dev server produces.
-private final class Listener {
+final class TCPPortListener {
     let descriptor: Int32
     let port: Int
 

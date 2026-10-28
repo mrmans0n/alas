@@ -170,9 +170,13 @@ final class NativePeerHosts {
             return nil
         }
         let key = ForwardKey(serverId: serverId, runID: runID)
+        forwards[key]?.refusalShown = false
         let forward = forwards[key] ?? startForward(key, endpoint: endpoint)
         do {
-            return try await forward.url.value
+            let url = try await forward.url.value
+            // Stopped while starting: its run or its peer went away.
+            guard forwards[key]?.token == forward.token else { return nil }
+            return url
         } catch {
             if forwards[key]?.token == forward.token { stopForwards { $0 == key } }
             // A forward stopped while starting was stopped on purpose.
@@ -204,9 +208,30 @@ final class NativePeerHosts {
         runs[serverId]?.contains { $0.id == runID && $0.status == .running } == true
     }
 
+    /// Shows the first refusal since the last Open, as a browser opens
+    /// several connections at once. A run the host no longer runs ends the
+    /// forward, so the next Open starts afresh.
+    private func forwardRefused(_ key: ForwardKey, message: String) {
+        let first = forwards[key]?.refusalShown == false
+        if message == PeerPortForwardHost.notRunningMessage {
+            stopForwards { $0 == key }
+        } else {
+            forwards[key]?.refusalShown = true
+        }
+        if first { showError("Open Failed", message) }
+    }
+
     private func startForward(_ key: ForwardKey, endpoint: URL) -> Forward {
         let token = UUID()
-        let forwarder = PeerPortForwarder(runID: key.runID, endpoint: endpoint) { [weak self] request in
+        let onRefused: @Sendable (String) -> Void = { [weak self] message in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.forwards[key]?.token == token else { return }
+                    self.forwardRefused(key, message: message)
+                }
+            }
+        }
+        let forwarder = PeerPortForwarder(runID: key.runID, endpoint: endpoint, onRefused: onRefused) { [weak self] request in
             // The main queue keeps the forwarder's order, and a stopped
             // forward's late requests never reach a newer connection.
             DispatchQueue.main.async {
@@ -791,6 +816,8 @@ final class NativePeerHosts {
         let token: UUID
         let forwarder: PeerPortForwarder
         let url: Task<URL, any Error>
+        /// A refusal was shown since the last Open.
+        var refusalShown = false
     }
 
     private func servesHostChannel(_ serverId: String) -> Bool {
