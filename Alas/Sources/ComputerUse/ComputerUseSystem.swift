@@ -253,9 +253,7 @@ struct ComputerUseSystem: Sendable {
 
     /// A Chromium browser or an Electron app, by any signal (`ComputerUseWebContent.isChromium`).
     func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
-        ComputerUseWebContent.isChromium(
-            bundleID: app.bundleID, acceptsManualAccessibility: usesManualAccessibility(app.pid),
-            embedsElectron: embedsElectron(app.pid))
+        ComputerUseAppKind.isChromium(app, manualAccessibility: usesManualAccessibility, electron: embedsElectron)
     }
 
     /// An Electron app, by either signal: it took `AXManualAccessibility`, or embeds Electron.
@@ -376,7 +374,7 @@ enum ComputerUseAppKind {
         var buffer = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return false }
         // …/X.app/Contents/MacOS/<executable>
-        let contents = URL(fileURLWithPath: String(cString: buffer)).deletingLastPathComponent().deletingLastPathComponent()
+        let contents = URL(fileURLWithPath: String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)).deletingLastPathComponent().deletingLastPathComponent()
         let framework = contents.appendingPathComponent("Frameworks/Electron Framework.framework")
         let found = FileManager.default.fileExists(atPath: framework.path)
         electron.withLock { $0[key] = found }
@@ -385,9 +383,17 @@ enum ComputerUseAppKind {
 
     /// `ComputerUseSystem.isChromium` for the live system, callable on the AX queue.
     static func isChromium(_ app: ComputerUseAppIdentity) -> Bool {
+        isChromium(app, manualAccessibility: ComputerUseAXReader.acceptsManualAccessibility, electron: { embedsElectron(pid: $0) })
+    }
+
+    /// `ComputerUseWebContent.isChromium` from the two per-pid signals, shared by the system seam
+    /// and the live AX-queue callers.
+    static func isChromium(
+        _ app: ComputerUseAppIdentity, manualAccessibility: (Int32) -> Bool, electron: (Int32) -> Bool
+    ) -> Bool {
         ComputerUseWebContent.isChromium(
-            bundleID: app.bundleID, acceptsManualAccessibility: ComputerUseAXReader.acceptsManualAccessibility(app.pid),
-            embedsElectron: embedsElectron(pid: app.pid))
+            bundleID: app.bundleID, acceptsManualAccessibility: manualAccessibility(app.pid),
+            embedsElectron: electron(app.pid))
     }
 }
 
