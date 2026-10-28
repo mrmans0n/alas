@@ -1013,6 +1013,10 @@ extension LiveComputerUseSystem {
             do {
                 try await ComputerUseAXActions.makeActiveWindow(window, raise: false, isCancelled: isCancelled)
                 if let delivered = try await viaKeyWindow(input, app: app, interrupt: interrupt) { return delivered }
+                // The focus the keys would get is already this window's: a refusal leaves the app where it is.
+                if case .type(_, nil, _) = input {
+                    try await ComputerUseAXActions.refuseUntypableFocus(app: app, isCancelled: isCancelled)
+                }
             } catch ComputerUseSystemError.notActiveWindow {
                 // Activation makes it the active window.
             }

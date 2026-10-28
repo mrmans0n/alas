@@ -88,13 +88,23 @@ struct ComputerUseInputTests {
         (.init(role: "AXOutline"), false, false, false, "com.apple.finder", false),
         (.init(role: "AXGroup"), false, false, false, "com.apple.finder", false),
         (nil, false, false, false, "com.apple.finder", false),
-        (.init(role: "AXList"), false, false, false, "com.apple.mail", false),
+        // Mail's message list, an NSTableView: type-select picks a message.
+        (.init(role: "AXTable"), false, false, false, "com.apple.mail", false),
+        (.init(role: "AXCell"), false, false, false, "com.apple.mail", false),
         (.init(role: "AXButton"), false, false, false, nil, false),
         (nil, false, false, false, "com.apple.TextEdit", true),
+        // The window, or an element the app doesn't describe: as nothing focused.
+        (.init(role: "AXWindow"), false, false, false, "com.apple.TextEdit", true),
+        (.init(role: "AXUnknown"), false, false, false, nil, true),
+        (.init(role: "AXWindow"), false, false, false, "com.apple.finder", false),
+        // A spreadsheet's grid, or a table cell being edited.
         (.init(role: "AXTable"), false, false, false, "com.apple.iWork.Numbers", true),
+        (.init(role: "AXCell"), false, false, false, "org.libreoffice.script", true),
+        (.init(role: "AXCell"), true, false, false, "com.apple.mail", true),
+        (.init(role: "AXScrollArea"), false, false, false, "com.apple.iWork.Pages", true),
         (.init(role: "AXStaticText"), true, false, false, nil, true),
         (.init(role: "AXGroup"), false, true, false, "com.google.Chrome", true),
-        (.init(role: "AXUnknown"), false, false, true, "com.mitchellh.ghostty", true),
+        (.init(role: "AXList"), false, false, true, "com.mitchellh.ghostty", true),
     ])
     func refLessTypingNeedsAFocusedTextInput(
         element: ComputerUseSecureFocus.Element?, selectsText: Bool, inWebArea: Bool, keyCommandApp: Bool,

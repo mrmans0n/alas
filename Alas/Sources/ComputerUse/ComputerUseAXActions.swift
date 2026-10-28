@@ -113,7 +113,8 @@ enum ComputerUseAXActions {
         let what = role.map { "\(app.name)'s focused element (\($0)) isn't a text input" }
             ?? "Nothing in \(app.name) has keyboard focus"
         return what + ", so typed keys would act on the window instead (in Finder they select another file by its name). "
-            + "Nothing was typed. Pass the field's ref from computer_inspect to computer_type, or click the field first. "
+            + "Nothing was typed. Pass the field's ref from computer_inspect to computer_type, or click the field first "
+            + "with computer_click (by ref, or at its x/y in a screenshot). "
             + "For shortcuts, arrow keys or Return, use computer_key."
     }
 
