@@ -2142,4 +2142,3 @@ struct TabsManagerRuntimeTitleTests {
         #expect(mgr.hasLoaded == true)
     }
 }
-
