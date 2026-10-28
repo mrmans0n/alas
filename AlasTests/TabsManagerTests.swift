@@ -1,5 +1,7 @@
+import AlasCore
 import Testing
 import Foundation
+import Virtualization
 @testable import Alas
 
 @MainActor
@@ -734,6 +736,36 @@ struct TabsManagerTests {
         #expect(state.url == secondURL)
         #expect(state.remoteHost == "devbox")
         #expect(manager.activeTabId(forWorktree: "owner-a") == blank.id)
+    }
+
+    @Test func openVirtualMachineIsOnePerWorktreeAndSurvivesClose() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TabsManagerVMTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let registry = WorktreeVMRegistry(fileURL: root.appendingPathComponent("registry.json"))
+        try registry.update { records in
+            records.append(WorktreeVMRecord(
+                id: "wt", goldenBuild: "25A1", bundlePath: root.appendingPathComponent("wt").path,
+                createdAt: Date(), lastUsedAt: Date()))
+        }
+        let vms = WorktreeVMManager(registry: registry, root: root, start: StubVMHypervisor.boot)
+        _ = try await vms.startVM(worktreeID: "wt")
+        let manager = TabsManager(store: TestPersistenceStore())
+
+        let first = manager.openVirtualMachine(worktreeId: "wt")
+        let cachedView = manager.vmView(ownerKey: "wt")
+        let second = manager.openVirtualMachine(worktreeId: "wt")
+
+        #expect(first.id == "vm:wt")
+        #expect(second.id == first.id)
+        #expect(manager.tabs(forWorktree: "wt").map(\.id) == [first.id])
+        #expect(manager.vmView(ownerKey: "wt") === cachedView)
+
+        manager.close(worktreeId: "wt", tabId: first.id)
+
+        #expect(manager.tabs(forWorktree: "wt").isEmpty)
+        #expect(vms.running("wt") != nil)
+        #expect(manager.vmView(ownerKey: "wt") !== cachedView)
     }
 
     @Test func webPreviewURLUpdatePreservesRemoteHostAndActiveSelection() {
@@ -2122,5 +2154,24 @@ struct TabsManagerRuntimeTitleTests {
         let mgr = TabsManager()
         mgr.loadAll(worktreeIds: [])
         #expect(mgr.hasLoaded == true)
+    }
+}
+
+/// Boots in-memory VMs for tab tests that need a running VM.
+@MainActor
+private enum StubVMHypervisor {
+    final class Machine: VMMachine {
+        var state: VZVirtualMachine.State = .stopped
+        var virtualMachine: VZVirtualMachine? { nil }
+        var onGuestStop: ((Error?) -> Void)?
+        func start() async throws { state = .running }
+        func requestStop() throws { state = .stopped }
+        func stop() async throws { state = .stopped }
+    }
+
+    static func boot(_ worktreeID: String, _ bundle: VMBundle) async throws -> RunningVM {
+        let vm = RunningVM(worktreeID: worktreeID, machine: Machine())
+        try await vm.start()
+        return vm
     }
 }

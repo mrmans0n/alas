@@ -29,7 +29,7 @@ final class WorktreeVMManager {
     typealias StartVM = (_ worktreeID: String, _ bundle: VMBundle) async throws -> RunningVM
 
     /// Registry ids at or under this prefix are golden VMs, not worktrees.
-    static let goldenIDPrefix = "golden:"
+    nonisolated static let goldenIDPrefix = "golden:"
 
     @ObservationIgnored private let registry: WorktreeVMRegistry
     @ObservationIgnored private let root: URL
@@ -41,7 +41,8 @@ final class WorktreeVMManager {
     @ObservationIgnored private let logger = Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
 
     private(set) var runningVMs: [String: RunningVM] = [:]
-    @ObservationIgnored private var starting: Set<String> = []
+    /// Observed so a VM tab can show a boot in progress.
+    private var starting: Set<String> = []
     /// Stop or delete requests for VMs that were still booting, honoured once
     /// the boot returns.
     @ObservationIgnored private var pendingAfterBoot: [String: PendingAction] = [:]
@@ -90,6 +91,10 @@ final class WorktreeVMManager {
 
     func running(_ worktreeID: String) -> RunningVM? {
         runningVMs[worktreeID]
+    }
+
+    func isStarting(_ id: String) -> Bool {
+        starting.contains(id)
     }
 
     func runningGolden() -> RunningVM? {

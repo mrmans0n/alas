@@ -24,6 +24,7 @@ enum Tab: Codable, Equatable, Identifiable {
     case ggSplitCommit(GGSplitCommitTabState)
     case ggLanding(GGLandingTabState)
     case webPreview(WebPreviewTabState)
+    case virtualMachine(VirtualMachineTabState)
     case runReport(RunReportTabState)
     case plugin(PluginTabState)
     case visualAid(VisualAidTabState)
@@ -52,6 +53,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit(let s): return s.id
         case .ggLanding(let s):    return s.id
         case .webPreview(let s):   return s.id
+        case .virtualMachine(let s): return s.id
         case .runReport(let s):    return s.id
         case .plugin(let s):       return s.id
         case .visualAid(let s):    return s.id
@@ -82,6 +84,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit:       return "Split Commit"
         case .ggLanding(let s):    return s.title
         case .webPreview(let s):   return s.title
+        case .virtualMachine(let s): return s.title
         case .runReport(let s):    return s.title
         case .plugin(let s):       return s.title
         case .visualAid(let s):    return s.title
@@ -112,6 +115,7 @@ enum Tab: Codable, Equatable, Identifiable {
         case .ggSplitCommit: return "arrow.trianglehead.branch"
         case .ggLanding:    return "arrow.down.to.line"
         case .webPreview:   return "globe"
+        case .virtualMachine: return "desktopcomputer"
         case .runReport:    return "terminal.fill"
         case .plugin:       return "puzzlepiece.extension"
         case .visualAid:    return "rectangle.on.rectangle"
@@ -225,6 +229,21 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
         self.url = url
         self.remoteHost = remoteHost
         self.id = "web-preview:\(ownerKey)"
+    }
+}
+
+/// A worktree's VM screen. Restores on relaunch; the VM itself does not
+/// boot until the user starts it.
+struct VirtualMachineTabState: Codable, Equatable, Identifiable {
+    let id: TabID
+    /// Worktree id.
+    let ownerKey: String
+
+    var title: String { "VM" }
+
+    init(ownerKey: String) {
+        self.ownerKey = ownerKey
+        self.id = "vm:\(ownerKey)"
     }
 }
 

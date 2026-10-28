@@ -11667,6 +11667,7 @@ final class AppState {
         case .deleted, .deletedButNotSaved:
             removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
             Task { [vmManager] in await vmManager.deleteVM(worktreeID: worktree.id) }
+            tabs.close(worktreeId: worktree.id, tabId: VirtualMachineTabState(ownerKey: worktree.id).id)
             // Callers that skip the refresh (batches, which refresh once at the
             // end) reconcile the selection themselves afterwards.
             if refreshAfter, selectedWorktreeId == worktree.id {

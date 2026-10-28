@@ -201,6 +201,7 @@
 		1B2C0785FEE6812131E4F945 /* SemanticTokensClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 163D115CEC0B818FD6538301 /* SemanticTokensClientTests.swift */; };
 		1B387AAB575A42ED1AFB5D46 /* RepoSelectorRowView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F787781F8DE2077B7B679C07 /* RepoSelectorRowView.swift */; };
 		1B46C7069E4F7E758FEC68D0 /* ComputerUseSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0FE0BCC635A72C98EC020C2D /* ComputerUseSystem.swift */; };
+		1B5B738D2FA0482EFDFB3D28 /* VMDisplaySurface.swift in Sources */ = {isa = PBXBuildFile; fileRef = F96397A9C2B512C8114AA551 /* VMDisplaySurface.swift */; };
 		1B8AED038B80C06EDA6DBC20 /* BeautifulMermaidBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8C143F318273ED3A36BA3709 /* BeautifulMermaidBackend.swift */; };
 		1B9CC3C13E96290B391E7C26 /* ImagePreviewTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12E1AD3C6506DA5E6BFF4864 /* ImagePreviewTabView.swift */; };
 		1BA6A97406CD857F02D81AE0 /* BuiltInAlasMCPTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE7A4A7B920C0E748973F282 /* BuiltInAlasMCPTests.swift */; };
@@ -1734,6 +1735,7 @@
 		F35B489DCC169F2B77DB6F3F /* ACPRemoteLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8CA0EE530F852A921942B04C /* ACPRemoteLaunchTests.swift */; };
 		F35DA0AAE170F25112485E10 /* ComputerUseCursorOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = B76294BC8066B15EA31F61B4 /* ComputerUseCursorOverlay.swift */; };
 		F395848DB5A63DBDED6B2323 /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = C18DE414CB2E7F817B9FCEAA /* PlatformServices.swift */; };
+		F39817F2E326967DB7CFDA09 /* VirtualMachineTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 143995043B72B58B5F32ABCE /* VirtualMachineTabView.swift */; };
 		F39CB778E3242159F12230FC /* PeerConsoleClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A0CD59703E379682647A79 /* PeerConsoleClientTests.swift */; };
 		F3C9321ABD5230C4FA4F7D4E /* GatekeeperRemediatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9FE7571B9A83F6BFFA6BFC6 /* GatekeeperRemediatorTests.swift */; };
 		F3CE20B0CD1EAB21DDED72C1 /* SessionSummaryContextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2812CA3096593798C675EF3E /* SessionSummaryContextTests.swift */; };
@@ -2005,6 +2007,7 @@
 		13F66EC4AF2B62C3637A6282 /* WorktreeCheckpointCaptureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeCheckpointCaptureTests.swift; sourceTree = "<group>"; };
 		14087D57E96448EEF0B80BD9 /* TerminalTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TerminalTabView.swift; sourceTree = "<group>"; };
 		141C4CAF1B49032EDF0FF404 /* ProjectIconTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectIconTests.swift; sourceTree = "<group>"; };
+		143995043B72B58B5F32ABCE /* VirtualMachineTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualMachineTabView.swift; sourceTree = "<group>"; };
 		1440CBF73B5E39F6CD4C1001 /* PaneBandStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneBandStyle.swift; sourceTree = "<group>"; };
 		145A3CF92ED4EEF2A0D8F5FB /* EditorNavigationHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorNavigationHistoryTests.swift; sourceTree = "<group>"; };
 		14907D679267359B3FB8A848 /* TabMergeConflictCodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabMergeConflictCodingTests.swift; sourceTree = "<group>"; };
@@ -3619,6 +3622,7 @@
 		F936C036893FC70AD506FDD4 /* GitServiceDiscardTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GitServiceDiscardTests.swift; sourceTree = "<group>"; };
 		F937FB8B70751A503689DFEB /* RunSchedulePlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunSchedulePlannerTests.swift; sourceTree = "<group>"; };
 		F94E5F7FC1D724C4DD7F489C /* VMConfigurationFactoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMConfigurationFactoryTests.swift; sourceTree = "<group>"; };
+		F96397A9C2B512C8114AA551 /* VMDisplaySurface.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMDisplaySurface.swift; sourceTree = "<group>"; };
 		F97EB3FA3E3C1206D76A9668 /* FileSearchDialog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileSearchDialog.swift; sourceTree = "<group>"; };
 		F9C0B9B3E26A743954A8DB13 /* WorkspaceSidebarLayoutTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSidebarLayoutTests.swift; sourceTree = "<group>"; };
 		F9CA43B30C70A80245BE99CE /* HarnessServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HarnessServiceTests.swift; sourceTree = "<group>"; };
@@ -4373,7 +4377,9 @@
 			children = (
 				C5EEE8D3D25830A0046104B8 /* GoldenImageInstaller.swift */,
 				F4D0638B08DC886A68F75760 /* RunningVM.swift */,
+				143995043B72B58B5F32ABCE /* VirtualMachineTabView.swift */,
 				C344B983ED8AD4748D280ABC /* VMConfigurationFactory.swift */,
+				F96397A9C2B512C8114AA551 /* VMDisplaySurface.swift */,
 				025657437F58CAE1E6E832D9 /* WorktreeVMManager.swift */,
 			);
 			path = VM;
@@ -7706,8 +7712,10 @@
 				C4466064F783E6667C5FD25D /* UpdateController.swift in Sources */,
 				B785053315764F42E3601F15 /* UpdateProgressSheet.swift in Sources */,
 				AFAB68532EEC0EA7DEB976B6 /* VMConfigurationFactory.swift in Sources */,
+				1B5B738D2FA0482EFDFB3D28 /* VMDisplaySurface.swift in Sources */,
 				C245DDADA1D81810E9302134 /* VerdictSheet.swift in Sources */,
 				DAA0AFA398C02EC663708825 /* ViewDragOut.swift in Sources */,
+				F39817F2E326967DB7CFDA09 /* VirtualMachineTabView.swift in Sources */,
 				70998F613C7C5B1DF225C3CF /* VisualAidTabView.swift in Sources */,
 				A2B26F6B9444F8A49254E41F /* VisualAidWebPage.swift in Sources */,
 				B7D79703ABCAFBC04A0091E5 /* VisualEffectView.swift in Sources */,

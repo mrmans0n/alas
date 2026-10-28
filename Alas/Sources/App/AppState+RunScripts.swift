@@ -159,6 +159,26 @@ extension AppState {
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
+    /// VMs run on this Mac, so worktrees on a remote host have none.
+    func canOpenVirtualMachine(in worktree: Worktree) -> Bool {
+        !RemotePath.isReserved(worktree.id) && webPreviewRemoteHost(for: worktree) == nil
+    }
+
+    /// Opens the worktree's VM tab, creating the VM first when a golden image
+    /// is ready. Without one the tab offers to set it up.
+    func openVirtualMachine(in worktree: Worktree) {
+        guard canOpenVirtualMachine(in: worktree) else { return }
+        if GoldenImageInstaller.availableGolden() != nil {
+            do {
+                try vmManager.createVM(worktreeID: worktree.id)
+            } catch {
+                showFileActionError(title: "Can't Create VM", message: error.localizedDescription)
+            }
+        }
+        let tab = tabs.openVirtualMachine(worktreeId: worktree.id)
+        activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
+    }
+
     /// Opens a run's declared endpoint. A remote run whose URL points at
     /// loopback is refused rather than silently opening whatever serves that
     /// port on this Mac.
