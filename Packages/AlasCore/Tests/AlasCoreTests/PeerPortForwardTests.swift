@@ -142,6 +142,30 @@ struct PeerPortForwardTests {
         try await eventually { (try? await TestClient.connect(host: clientHost, port: endpointPort)) == nil }
     }
 
+    /// A host built on the run store ends a run's streams once the run finishes.
+    @MainActor
+    @Test func aForwardEndsWhenItsRunFinishes() async throws {
+        let server = try await EchoServer.start()
+        defer { server.stop() }
+        let core = AlasCoreContext(projects: ProjectsManager(persistedProjects: []), runHistoryStore: nil, attentionStore: .scratch())
+        core.runRecords.begin(RunRecord(
+            id: "run", scriptKey: "dev", scriptName: "dev", worktreeID: "w", branch: "main",
+            target: RunExecutionTarget(host: nil, workingDirectory: "/w"),
+            endpoint: URL(string: "http://127.0.0.1:\(server.port)"), status: .starting, startedAt: .now))
+        core.runRecords.markRunning(runID: "run", sessionID: nil)
+        let host = PeerPortForwardHost(core: core)
+        let events = EventLog()
+        let connection = UUID()
+        let stream = UUID()
+        host.connect(connection) { events.append($0) }
+
+        host.receive(.open(stream: stream, runID: "run"), from: connection)
+        try await eventually { events.all.contains(.opened(stream: stream)) }
+        core.runRecords.finish(runID: "run", outcome: .succeeded, at: .now)
+
+        try await eventually { events.all.contains(.closed(stream: stream)) }
+    }
+
     @Test func bytesSentJustBeforeCloseStillReachTheRun() async throws {
         let server = try await EchoServer.start()
         defer { server.stop() }
