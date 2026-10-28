@@ -924,6 +924,7 @@ extension ComputerUseAXActions {
             let element = try resolve(handles, handle)
             try refuseSecure(element, app: app)
             try settle(writeOutcome(inWebArea: isWebTextEntry(element), app: app, keysReach: keysReach), app: app, byRef: true)
+            try refuseLineBreak(text, element, app: app)
             // Before routing: a document's text typed as keys goes in at the caret kept here.
             focusKeepingSelection(element, app: app)
             let warning = try routeDocument(element, app: app, keysReach: keysReach)
@@ -952,6 +953,7 @@ extension ComputerUseAXActions {
             let inWebArea = isWebTextEntry(element.element)
             // A Chromium web field goes as keys first, whatever its window.
             try settle(writeOutcome(inWebArea: inWebArea, app: app, keysReach: keysReach), app: app, byRef: false)
+            try refuseLineBreak(text, element.element, app: app)
             return (inWebArea, try routeDocument(element.element, app: app, keysReach: keysReach))
         }
         try await insert(
@@ -994,6 +996,13 @@ extension ComputerUseAXActions {
         ComputerUseTextCheck.outcome(
             nil, inWebArea: inWebArea, chromium: isChromium(app), terminal: ComputerUseTextCheck.isTerminal(app),
             keysReach: keysReach)
+    }
+
+    /// Refuses text with a line break for an AX write into a Chromium browser's own field, which
+    /// never submits it (`ComputerUseTextCheck.refusesLineBreak`). Call on the AX queue.
+    private static func refuseLineBreak(_ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity) throws {
+        guard ComputerUseTextCheck.refusesLineBreak(text, bundleID: app.bundleID, inWebArea: isInWebArea(element)) else { return }
+        throw ComputerUseSystemError.actionFailed(ComputerUseTextCheck.lineBreakRefusal)
     }
 
     /// Whether a web page's AX read-back is untrusted in the app (`ComputerUseTextCheck.outcome`).
@@ -1483,6 +1492,7 @@ extension ComputerUseAXActions {
         _ text: String, _ element: AXUIElement, app: ComputerUseAppIdentity, keysReach: Bool, byRef: Bool
     ) throws -> String? {
         try settle(writeOutcome(inWebArea: isWebTextEntry(element), app: app, keysReach: keysReach), app: app, byRef: byRef)
+        try refuseLineBreak(text, element, app: app)
         let warning = try routeDocument(element, app: app, keysReach: keysReach)
         let before = isLong(element) ? nil : textValue(of: element)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, text as CFString)

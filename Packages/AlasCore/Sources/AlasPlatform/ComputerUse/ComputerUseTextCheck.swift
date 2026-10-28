@@ -46,6 +46,19 @@ public enum ComputerUseTextCheck {
         }
     }
 
+    /// Whether text with a line break is refused before an AX write into a Chromium browser's own
+    /// field (`bundleID`, `ComputerUseWebContent.chromeBundleIDs`), outside any web page
+    /// (`inWebArea`): the address bar shows the inserted text, and the line break never submits it.
+    public static func refusesLineBreak(_ text: String, bundleID: String?, inWebArea: Bool) -> Bool {
+        !inWebArea && ComputerUseWebContent.chromeBundleIDs.contains(bundleID ?? "") && text.contains(where: \.isNewline)
+    }
+
+    /// Said for a refused line break (`refusesLineBreak`).
+    public static let lineBreakRefusal =
+        "This is the browser's own field (such as the address bar), not web content: text typed there through "
+            + "accessibility shows up, but a line break in it doesn't submit it. Nothing was typed. Type the text without "
+            + "the line break, then press Return with computer_key \"return\"."
+
     /// How text gets into a document, which an AX write puts in without the app's edit model: a
     /// document app (TextEdit, any NSDocument one) then doesn't mark it edited, so it neither
     /// autosaves the text nor keeps it on save, and an untitled one closes without asking.

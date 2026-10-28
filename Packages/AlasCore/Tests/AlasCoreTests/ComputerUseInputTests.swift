@@ -842,6 +842,20 @@ struct ComputerUseInputTests {
             nil, inWebArea: false, chromium: false, terminal: terminal, keysReach: keysReach) == outcome)
     }
 
+    /// Chrome's address bar shows an AX insert but never submits its line break, so that write is
+    /// refused; a page's field, another browser and text without a line break are not.
+    @Test(arguments: [
+        ("https://example.com\n", String?("com.google.Chrome"), false, true),
+        ("a\r", "com.brave.Browser", false, true),
+        ("https://example.com", "com.google.Chrome", false, false),
+        ("line\nbreak", "com.google.Chrome", true, false),
+        ("https://example.com\n", "com.apple.Safari", false, false),
+        ("https://example.com\n", nil, false, false),
+    ])
+    func aLineBreakIntoAChromiumBrowsersOwnFieldIsRefused(text: String, bundleID: String?, inWebArea: Bool, refused: Bool) {
+        #expect(ComputerUseTextCheck.refusesLineBreak(text, bundleID: bundleID, inWebArea: inWebArea) == refused)
+    }
+
     @Test(arguments: [
         (String?("com.google.Chrome"), false, false, true),
         ("com.tinyspeck.slackmacgap", true, false, true),
