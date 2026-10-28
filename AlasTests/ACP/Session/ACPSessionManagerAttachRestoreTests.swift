@@ -6,6 +6,129 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager attach restore", .serialized)
 struct ACPSessionManagerAttachRestoreTests {
+    @Test(arguments: [false, true])
+    func unsupportedSavedBrokerBlocksAttachRestartAndTakeover(enabled: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        var saved = row(remoteSessionId: "keep-upstream")
+        saved.acpBrokerId = "raw-broker"
+        saved.acpBrokerGeneration = 7
+        saved.acpBrokerAcknowledgedCursor = 4
+        saved.acpBrokerWireContextJSON = try ACPBrokerWireContext.rawV2.persistedJSON()
+        try store.upsertSession(saved)
+        let service = ManagerBrokerService(supportsPromptResponses: true)
+        let calls = PromptCounter()
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            experimentalACP2Enabled: { enabled }, setupEvaluator: { _ in .ready },
+            brokerServiceFactory: { _ = await calls.next()
+            return service })
+        _ = await manager.persistedSessionRow(id: saved.id)
+        let session = try #require(manager.placeholderSession(id: saved.id))
+        manager.retainSession(id: saved.id)
+        defer { manager.releaseSession(id: saved.id)
+        manager.shutdownBackgroundTasks() }
+        session.enqueue(blocks: [.text("keep queued")])
+        await manager.flushAllPersistence()
+        let originalQueue = session.queue
+        await manager.attach(to: saved.id, freshlyCreated: false)
+        await manager.restartConnection(to: saved.id)
+        #expect(await manager.acquireWriterLease(sessionId: saved.id) == false)
+        #expect(await manager.takeOver(sessionId: saved.id) == false)
+        #expect(await calls.next() == 1)
+        #expect(await service.opened.isEmpty)
+        #expect(await service.closed.isEmpty)
+        #expect(await service.sent.isEmpty)
+        #expect(manager.runners[saved.id] == nil)
+        #expect(session.queue == originalQueue)
+        #expect(session.lastError?.contains("ACP 2") == true)
+        let retained = try #require(try store.loadSession(id: saved.id))
+        #expect(retained.acpBrokerWireContextJSON == saved.acpBrokerWireContextJSON)
+        #expect(retained.acpBrokerGeneration == 7)
+        #expect(retained.acpBrokerAcknowledgedCursor == 4)
+        #expect(retained.remoteSessionId == "keep-upstream")
+    }
+
+    @Test(arguments: [false, true])
+    func detachDuringBrokerRestoreReadCannotStartALateConnection(restarting: Bool) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let service = ManagerBrokerService(supportsPromptResponses: true)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store,
+            setupEvaluator: { _ in .ready }, brokerServiceFactory: { service })
+        let persistenceGate = ManagerBrokerGate()
+        let restoreRead = AsyncStream<Void>.makeStream()
+        manager.beforePersistenceForTesting = { await persistenceGate.wait() }
+        manager.beforeBrokerRestoreReadForTesting = { restoreRead.continuation.yield(()) }
+        let session = manager.createSession(id: "cancel-restore", agentId: "claude")
+        manager.retainSession(id: session.id)
+        defer { manager.releaseSession(id: session.id)
+        manager.shutdownBackgroundTasks() }
+        let attaching = Task {
+            if restarting { await manager.restartConnection(to: session.id) }
+            else { await manager.attach(to: session.id, freshlyCreated: true) }
+        }
+        var events = restoreRead.stream.makeAsyncIterator()
+        _ = await events.next()
+        await manager.detach(sessionId: session.id)
+        await persistenceGate.release()
+        _ = await attaching.value
+        #expect(await service.opened.isEmpty)
+        #expect(manager.runners[session.id] == nil)
+    }
+
+    @Test func queuedMetadataCannotRevertAValidatedBrokerGeneration() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        var saved = row(id: "broker-metadata", remoteSessionId: nil, agentId: "claude")
+        saved.acpBrokerId = "broker"
+        saved.acpBrokerGeneration = 7
+        try store.upsertSession(saved)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        _ = await manager.persistedSessionRow(id: saved.id)
+        let session = try #require(manager.placeholderSession(id: saved.id))
+        await manager.hydrateIfNeeded(id: saved.id)
+        #expect(await manager.acquireWriterLease(sessionId: saved.id))
+        let gate = ManagerBrokerGate()
+        manager.beforePersistenceForTesting = { await gate.wait() }
+        manager.persistACPBrokerStateForTesting(sessionId: saved.id,
+            state: .init(brokerId: .init(rawValue: "broker"), generation: .init(rawValue: 8), acknowledgedCursor: .init(rawValue: 3)))
+        manager.persist(session)
+        await gate.release()
+        await manager.flushAllPersistence()
+        let stored = try #require(try store.loadSession(id: saved.id))
+        #expect(stored.acpBrokerGeneration == 8)
+        #expect(stored.acpBrokerAcknowledgedCursor == 3)
+        #expect(try ACPBrokerRestorePolicy.context(from: stored.acpBrokerWireContextJSON) == .legacyV1)
+        manager.shutdownBackgroundTasks()
+    }
+
+    @Test func durableContextSwitchRequiresANewGenerationInStoreAndCache() async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        var saved = row(id: "broker-context", remoteSessionId: nil)
+        saved.acpBrokerId = "broker"
+        saved.acpBrokerGeneration = 7
+        try store.upsertSession(saved)
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        _ = await manager.persistedSessionRow(id: saved.id)
+        _ = try #require(manager.placeholderSession(id: saved.id))
+        await manager.hydrateIfNeeded(id: saved.id)
+        #expect(await manager.acquireWriterLease(sessionId: saved.id))
+        defer { manager.shutdownBackgroundTasks() }
+        for generation in [UInt64(7), UInt64(8)] {
+            manager.persistACPBrokerStateForTesting(sessionId: saved.id,
+                state: .init(brokerId: .init(rawValue: "broker"), generation: .init(rawValue: generation),
+                    acknowledgedCursor: .init(rawValue: 3), wireContext: .rawV2))
+            await manager.flushAllPersistence()
+            let stored = try #require(try store.loadSession(id: saved.id))
+            let cached = try #require(await manager.persistedSessionRow(id: saved.id))
+            let expected: ACPBrokerWireContext = generation == 7 ? .legacyV1 : .rawV2
+            let actual = try ACPBrokerRestorePolicy.context(from: stored.acpBrokerWireContextJSON)
+            #expect(actual == expected, "generation \(generation), stored \(stored.acpBrokerWireContextJSON ?? "NULL")")
+            #expect(cached.acpBrokerWireContextJSON == stored.acpBrokerWireContextJSON)
+            #expect(cached.acpBrokerGeneration == stored.acpBrokerGeneration)
+            #expect(cached.acpBrokerAcknowledgedCursor == stored.acpBrokerAcknowledgedCursor)
+            #expect(stored.acpBrokerAcknowledgedCursor == (generation == 7 ? 0 : 3))
+            #expect(stored.acpBrokerGeneration == Int64(generation))
+        }
+    }
+
     @Test(arguments: ["@alas-ide/codex-acp", "@agentclientprotocol/codex-acp", "codex-acp", "unrelated-acp"])
     func attachedCodexIdentityEnablesSteeringCompletion(name: String) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

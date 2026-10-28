@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 29
+    public static let targetSchemaVersion = 30
     public let path: String
     public let db: SQLiteDatabase
 
@@ -79,6 +79,12 @@ public final class ACPSessionStore {
             let columns = try db.query("PRAGMA table_info(sessions)")
             if !columns.contains(where: { ($0["name"] as? String) == "session_hooks" }) {
                 try db.exec("ALTER TABLE sessions ADD COLUMN session_hooks TEXT")
+            }
+        }
+        if current < 30 {
+            let columns = try db.query("PRAGMA table_info(sessions)")
+            if !columns.contains(where: { ($0["name"] as? String) == "acp_broker_wire_context" }) {
+                try db.exec("ALTER TABLE sessions ADD COLUMN acp_broker_wire_context TEXT")
             }
         }
         try recoverFromConcurrentWriters()
@@ -622,15 +628,28 @@ extension ACPSessionStore {
         """, bindings: [targetSessionID])
     }
 
-    public func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false) throws {
+    public func upsertSession(_ s: ACPSessionRow, preserveTitle: Bool = false, preserveBrokerState: Bool = false) throws {
+        let stored = try loadSession(id: s.id)
+        let storedContext = stored.flatMap { knownBrokerContext($0.acpBrokerWireContextJSON) }
+        let incomingContext = knownBrokerContext(s.acpBrokerWireContextJSON)
+        let allowsBrokerMetadata = !preserveBrokerState && ((storedContext == .legacyV1 && incomingContext == .legacyV1)
+            || (storedContext == .rawV2 && incomingContext == .rawV2
+                && stored?.acpBrokerId == s.acpBrokerId && stored?.acpBrokerGeneration == s.acpBrokerGeneration))
+        // A concurrent descriptor replacement wins over this metadata snapshot.
+        // Cursor changes within the same identity still merge monotonically.
+        let brokerGuard = """
+        \(allowsBrokerMetadata ? 1 : 0) AND sessions.acp_broker_id IS ?
+          AND sessions.acp_broker_generation IS ? AND sessions.acp_broker_wire_context IS ?
+        """
+        let original: [Any?] = [stored?.acpBrokerId, stored?.acpBrokerGeneration, stored?.acpBrokerWireContextJSON]
         try db.exec("""
         INSERT INTO sessions (id, agent_id, title, title_source, remote_session_id, origin, context_recovery_pending, recovery_proc_id,
                               mcp_preamble_pending, mcp_preamble_sent, prompt_suggestions,
                               current_model, current_mode, config_option_values, native_subagents_disabled,
                               session_instructions, session_hooks, ephemeral_parent_id, ephemeral_cleanup_pending, auto_run, helper_proc_stdout_offset,
                               helper_proc_stderr_offset, acp_broker_id, acp_broker_generation,
-                              acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                              acp_broker_wire_context, acp_broker_acknowledged_cursor, created_at, updated_at, last_opened_at, archived)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             title = CASE WHEN ? THEN sessions.title ELSE excluded.title END,
             title_source = CASE WHEN ? THEN sessions.title_source ELSE excluded.title_source END,
@@ -653,14 +672,18 @@ extension ACPSessionStore {
             auto_run = excluded.auto_run,
             helper_proc_stdout_offset = COALESCE(excluded.helper_proc_stdout_offset, sessions.helper_proc_stdout_offset),
             helper_proc_stderr_offset = COALESCE(excluded.helper_proc_stderr_offset, sessions.helper_proc_stderr_offset),
-            acp_broker_id = COALESCE(excluded.acp_broker_id, sessions.acp_broker_id),
-            acp_broker_generation = COALESCE(excluded.acp_broker_generation, sessions.acp_broker_generation),
-            acp_broker_acknowledged_cursor = CASE
+            acp_broker_id = CASE WHEN \(brokerGuard)
+                THEN COALESCE(excluded.acp_broker_id, sessions.acp_broker_id) ELSE sessions.acp_broker_id END,
+            acp_broker_generation = CASE WHEN \(brokerGuard)
+                THEN COALESCE(excluded.acp_broker_generation, sessions.acp_broker_generation) ELSE sessions.acp_broker_generation END,
+            acp_broker_wire_context = CASE WHEN \(brokerGuard)
+                THEN COALESCE(excluded.acp_broker_wire_context, sessions.acp_broker_wire_context) ELSE sessions.acp_broker_wire_context END,
+            acp_broker_acknowledged_cursor = CASE WHEN \(brokerGuard) THEN CASE
                 WHEN COALESCE(excluded.acp_broker_id, sessions.acp_broker_id) IS sessions.acp_broker_id
                  AND COALESCE(excluded.acp_broker_generation, sessions.acp_broker_generation) IS sessions.acp_broker_generation
                 THEN MAX(sessions.acp_broker_acknowledged_cursor, excluded.acp_broker_acknowledged_cursor)
-                ELSE excluded.acp_broker_acknowledged_cursor
-            END,
+                ELSE excluded.acp_broker_acknowledged_cursor END
+                ELSE sessions.acp_broker_acknowledged_cursor END,
             updated_at = excluded.updated_at,
             last_opened_at = excluded.last_opened_at,
             -- A snapshot never brings an archived session back; only an
@@ -678,11 +701,16 @@ extension ACPSessionStore {
             s.ephemeralParentId, s.ephemeralCleanupPending ? 1 : 0,
             s.autoRun ? 1 : 0,
             s.helperProcStdoutOffset, s.helperProcStderrOffset,
-            s.acpBrokerId, s.acpBrokerGeneration, s.acpBrokerAcknowledgedCursor,
+            s.acpBrokerId, s.acpBrokerGeneration, s.acpBrokerWireContextJSON, s.acpBrokerAcknowledgedCursor,
             s.createdAt, s.updatedAt, s.lastOpenedAt, s.archived ? 1 : 0,
             preserveTitle ? 1 : 0,
             preserveTitle ? 1 : 0
-        ])
+        ] + original + original + original + original)
+    }
+
+    private func knownBrokerContext(_ json: String?) -> ACPBrokerWireContext? {
+        do { return try ACPBrokerRestorePolicy.context(from: json) }
+        catch { return nil } // Opaque context is preserved and never an ACK/metadata match.
     }
 
     public func loadSession(id: String) throws -> ACPSessionRow? {
@@ -901,33 +929,45 @@ extension ACPSessionStore {
         sessionId: String,
         brokerId: String,
         generation: Int64,
-        acknowledgedCursor: Int64
+        acknowledgedCursor: Int64,
+        wireContext: ACPBrokerWireContext = .legacyV1
     ) throws -> Bool {
-        try db.execChanges("""
+        guard let row = try loadSession(id: sessionId) else { return false }
+        let encoded = try wireContext.persistedJSON()
+        var candidate = row
+        candidate.acpBrokerId = brokerId
+        candidate.acpBrokerGeneration = generation
+        candidate.acpBrokerAcknowledgedCursor = acknowledgedCursor
+        candidate.acpBrokerWireContextJSON = encoded
+        _ = try ACPBrokerRestorePolicy.resolve(row: candidate, supportedVersions: [.v1, .v2])
+        if row.acpBrokerId == brokerId, row.acpBrokerGeneration == generation,
+           knownBrokerContext(row.acpBrokerWireContextJSON) != wireContext { return false }
+        return try db.execChanges("""
         UPDATE sessions
-        SET acp_broker_id = ?,
-            acp_broker_generation = ?,
-            acp_broker_acknowledged_cursor = ?
-        WHERE id = ?
-        """, bindings: [brokerId, generation, acknowledgedCursor, sessionId]) > 0
+        SET acp_broker_id = ?, acp_broker_generation = ?, acp_broker_wire_context = ?,
+            acp_broker_acknowledged_cursor = CASE
+                WHEN acp_broker_id IS ? AND acp_broker_generation IS ?
+                THEN MAX(acp_broker_acknowledged_cursor, ?) ELSE ? END
+        WHERE id = ? AND acp_broker_id IS ? AND acp_broker_generation IS ? AND acp_broker_wire_context IS ?
+        """, bindings: [brokerId, generation, encoded, brokerId, generation, acknowledgedCursor, acknowledgedCursor,
+            sessionId, row.acpBrokerId, row.acpBrokerGeneration, row.acpBrokerWireContextJSON]) > 0
     }
 
     public func updateACPBrokerAcknowledgedCursor(
         sessionId: String,
         brokerId: String,
         generation: Int64,
-        cursor: Int64
+        cursor: Int64,
+        wireContext: ACPBrokerWireContext = .legacyV1
     ) throws -> Bool {
-        try db.execChanges("""
+        guard cursor >= 0, generation > 0, let row = try loadSession(id: sessionId),
+              row.acpBrokerId == brokerId, row.acpBrokerGeneration == generation,
+              knownBrokerContext(row.acpBrokerWireContextJSON) == wireContext else { return false }
+        return try db.execChanges("""
         UPDATE sessions
-        SET acp_broker_acknowledged_cursor = CASE
-                WHEN acp_broker_acknowledged_cursor < ? THEN ?
-                ELSE acp_broker_acknowledged_cursor
-            END
-        WHERE id = ?
-          AND acp_broker_id = ?
-          AND acp_broker_generation = ?
-        """, bindings: [cursor, cursor, sessionId, brokerId, generation]) > 0
+        SET acp_broker_acknowledged_cursor = MAX(acp_broker_acknowledged_cursor, ?)
+        WHERE id = ? AND acp_broker_id = ? AND acp_broker_generation = ? AND acp_broker_wire_context IS ?
+        """, bindings: [cursor, sessionId, brokerId, generation, row.acpBrokerWireContextJSON]) > 0
     }
 
     public func clearACPBrokerState(sessionId: String) throws -> Bool {
@@ -935,6 +975,7 @@ extension ACPSessionStore {
         UPDATE sessions
         SET acp_broker_id = NULL,
             acp_broker_generation = NULL,
+            acp_broker_wire_context = NULL,
             acp_broker_acknowledged_cursor = 0
         WHERE id = ?
         """, bindings: [sessionId]) > 0
@@ -1436,6 +1477,7 @@ extension ACPSessionStore {
             helperProcStderrOffset: r["helper_proc_stderr_offset"] as? Int64,
             acpBrokerId: r["acp_broker_id"] as? String,
             acpBrokerGeneration: r["acp_broker_generation"] as? Int64,
+            acpBrokerWireContextJSON: r["acp_broker_wire_context"] as? String,
             acpBrokerAcknowledgedCursor: (r["acp_broker_acknowledged_cursor"] as? Int64) ?? 0,
             createdAt: (r["created_at"] as? Int64) ?? 0,
             updatedAt: (r["updated_at"] as? Int64) ?? 0,

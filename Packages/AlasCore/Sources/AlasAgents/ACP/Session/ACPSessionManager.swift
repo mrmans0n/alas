@@ -224,6 +224,7 @@ public final class ACPSessionManager: ChangeTracking {
     }
     private var autoReconnectTaskGenerations: [ACPSession.ID: UUID] = [:]
     private var restartingConnections: Set<ACPSession.ID> = []
+    private var restartValidationIDs: [ACPSession.ID: UUID] = [:]
     private var mergingForks: Set<ACPSession.ID> = []
     private var scheduledReconnectTasks: [ACPSession.ID: (deadline: Date, task: Task<Void, Never>)] = [:]
     private var managerQueuePersistenceCounts: [ACPSession.ID: Int] = [:]
@@ -1473,6 +1474,10 @@ public final class ACPSessionManager: ChangeTracking {
     /// How long `answerVisualAid` waits for its prompt to register; tests shorten it.
     public var visualAidPromptRegistrationWait: Duration = ACPSessionManager.visualAidPromptRegistrationTimeout
 #if DEBUG
+    public func persistACPBrokerStateForTesting(sessionId: ACPSession.ID, state: ACPBrokerDurableState) {
+        persistACPBrokerState(sessionId: sessionId, state: state)
+    }
+    public var beforeBrokerRestoreReadForTesting: (@MainActor () async -> Void)?
     public var beforeBrokerClientRegistrationForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     public var afterBrokerClientShutdownRequestedForTesting: (@MainActor (_ isolated: Bool) async -> Void)?
     public var beforeRestartRunnerStopForTesting: (@MainActor (_ sessionId: ACPSession.ID) async -> Void)?
@@ -1553,6 +1558,7 @@ public final class ACPSessionManager: ChangeTracking {
 
     private func recoverRemoteConversation(session: ACPSession, attempt: AttachmentAttempt) async throws {
         let sessionId = session.id
+        _ = try await resolveStoredBrokerRestore(sessionId: sessionId)
         guard let coordinator = remoteCoordinator, let previousLease = coordinator.lease(sessionId: sessionId),
               let previousFence = coordinator.fence(sessionId: sessionId), let oldToken = attempt.leaseToken,
               previousFence.token == oldToken else { throw RemoteSessionUnavailable.ownershipLost }
@@ -1630,8 +1636,9 @@ public final class ACPSessionManager: ChangeTracking {
     }
 
     private func acquireRemoteAuthority(sessionId: ACPSession.ID, lease: ACPSessionLease) async throws -> Bool {
-        guard let coordinator = try coordination() else { return true }
         guard let row = try await persistence.loadSession(id: sessionId) else { throw ACPSessionReplicaError.missingSession }
+        _ = try ACPBrokerRestorePolicy.resolve(row: row, supportedVersions: makeProtocolSelection().supportedVersions)
+        guard let coordinator = try coordination() else { return true }
         let key = RemoteSessionKey(worktreePath: RemotePath.realPath(worktreePath), agentId: row.agentId, remoteSessionId: row.remoteSessionId)
         let proposedProcId = row.recoveryProcId ?? coordinator.lease(sessionId: sessionId).flatMap {
             $0.key.agentId == key.agentId && $0.key.remoteSessionId == key.remoteSessionId ? $0.procId : nil
@@ -1741,6 +1748,7 @@ public final class ACPSessionManager: ChangeTracking {
         var hookReviewGeneration = 0
         var waiters: [AttachmentWaiter] = []
         var leaseToken: String?
+        var brokerRestoreBlocked = false
         var requiresFreshBrokerNamespace = false
         var brokerClient: ACPBrokerClient?
         var brokerClientStartupID: UUID?
@@ -2090,7 +2098,7 @@ public final class ACPSessionManager: ChangeTracking {
         unsavedCreations.insert(id)
         awaitingFirstAttach.insert(id)
         markSaved(id, once: enqueuePersistenceResult { persistence -> Bool in
-            try await persistence.upsertSession(row)
+            try await persistence.upsertSession(row, preserveBrokerState: true)
             return true
         })
         let session = ACPSession(
@@ -3432,6 +3440,7 @@ public final class ACPSessionManager: ChangeTracking {
             try await persistence.upsertSession(
                 rowToPersist,
                 preserveTitle: preserveTitle,
+                preserveBrokerState: true,
                 fence: fence
             )
         })
@@ -3454,7 +3463,7 @@ public final class ACPSessionManager: ChangeTracking {
         let rowToPersist = row
         let fence = leaseFence(sessionId: s.id)
         let result = await enqueuePersistenceResult { persistence in
-            try await persistence.upsertSession(rowToPersist, fence: fence)
+            try await persistence.upsertSession(rowToPersist, preserveBrokerState: true, fence: fence)
         }.value
         if result == true {
             unsavedCreations.remove(s.id)
@@ -3557,39 +3566,43 @@ public final class ACPSessionManager: ChangeTracking {
     private func persistACPBrokerState(sessionId: ACPSession.ID, state: ACPBrokerDurableState) {
         guard !isMirror(sessionId: sessionId) else { return }
         guard let generation = Self.sqliteBrokerInt64(state.generation.rawValue),
-              let acknowledgedCursor = Self.sqliteBrokerInt64(state.acknowledgedCursor.rawValue)
-        else {
+              Self.sqliteBrokerInt64(state.acknowledgedCursor.rawValue) != nil else {
             persistenceError = "ACP broker cursor state is out of SQLite Int64 range."
             return
         }
         let matchesCurrentGeneration: Bool
-        if var row = persistedRows[sessionId] {
-            matchesCurrentGeneration = row.acpBrokerId == state.brokerId.rawValue
-                && row.acpBrokerGeneration == generation
-            row.acpBrokerId = state.brokerId.rawValue
-            row.acpBrokerGeneration = generation
-            row.acpBrokerAcknowledgedCursor = matchesCurrentGeneration
-                ? max(row.acpBrokerAcknowledgedCursor, acknowledgedCursor)
-                : acknowledgedCursor
-            persistedRows[sessionId] = row
-            replaceRecentRow(row)
-        } else {
-            matchesCurrentGeneration = false
-        }
+        do {
+            let row = persistedRows[sessionId]
+            let sameGeneration = row?.acpBrokerId == state.brokerId.rawValue && row?.acpBrokerGeneration == generation
+            if sameGeneration, try ACPBrokerRestorePolicy.context(from: row?.acpBrokerWireContextJSON) != state.wireContext {
+                throw ACPBrokerRestoreError.invalidDescriptor(contextJSON: row?.acpBrokerWireContextJSON)
+            }
+            matchesCurrentGeneration = sameGeneration
+        } catch { persistenceError = error.localizedDescription
+        return }
         let fence = leaseFence(sessionId: sessionId)
-        enqueuePersistence { persistence in
+        let connectionOwner = connectionOwnerIDs[sessionId]
+        let callbackOwner = brokerCallbackOwnerIDs[sessionId]
+        enqueuePersistence { [weak self] persistence in
+            let applied: Bool
             if matchesCurrentGeneration {
-                _ = try await persistence.updateACPBrokerAcknowledgedCursor(
-                    sessionId: sessionId,
-                    state: state,
-                    fence: fence
-                )
+                applied = try await persistence.updateACPBrokerAcknowledgedCursor(sessionId: sessionId, state: state, fence: fence)
             } else {
-                _ = try await persistence.updateACPBrokerState(
-                    sessionId: sessionId,
-                    state: state,
-                    fence: fence
-                )
+                applied = try await persistence.updateACPBrokerState(sessionId: sessionId, state: state, fence: fence)
+            }
+            guard applied else { return }
+            let stored = try await persistence.loadSession(id: sessionId)
+            await MainActor.run { [weak self] in
+                guard let self, let stored,
+                      self.connectionOwnerIDs[sessionId] == connectionOwner,
+                      self.brokerCallbackOwnerIDs[sessionId] == callbackOwner,
+                      var row = self.persistedRows[sessionId] else { return }
+                row.acpBrokerId = stored.acpBrokerId
+                row.acpBrokerGeneration = stored.acpBrokerGeneration
+                row.acpBrokerWireContextJSON = stored.acpBrokerWireContextJSON
+                row.acpBrokerAcknowledgedCursor = stored.acpBrokerAcknowledgedCursor
+                self.persistedRows[sessionId] = row
+                self.replaceRecentRow(row)
             }
         }
     }
@@ -4293,7 +4306,7 @@ public final class ACPSessionManager: ChangeTracking {
 #if DEBUG
             await beforeDiscoveryImportForTesting?()
 #endif
-            try await persistence.upsertSession(row)
+            try await persistence.upsertSession(row, preserveBrokerState: true)
             try await persistence.resolveReplicaRelations()
             persistedRows[row.id] = row
             replaceRecentRow(row)
@@ -4329,6 +4342,30 @@ public final class ACPSessionManager: ChangeTracking {
         )
     }
 
+    private func resolveStoredBrokerRestore(sessionId: ACPSession.ID) async throws -> ACPBrokerRestoreDescriptor? {
+#if DEBUG
+        await beforeBrokerRestoreReadForTesting?()
+#endif
+        await flushPersistence()
+        let row = try await persistence.loadSession(id: sessionId)
+        try Task.checkCancellation()
+        return try ACPBrokerRestorePolicy.resolve(row: row, supportedVersions: makeProtocolSelection().supportedVersions)
+    }
+
+    private func surfaceBrokerRestoreFailure(_ error: any Error, sessionId: ACPSession.ID) {
+        let message = error.localizedDescription
+        sessions[sessionId]?.lastError = message
+        if runners[sessionId] == nil { sessions[sessionId]?.agentState = .failed(message) }
+        cancelAutoReconnect(sessionId: sessionId)
+    }
+
+    private func permitsStoredBrokerRestore(sessionId: ACPSession.ID) async -> Bool {
+        do { _ = try await resolveStoredBrokerRestore(sessionId: sessionId)
+        return true }
+        catch { surfaceBrokerRestoreFailure(error, sessionId: sessionId)
+        return false }
+    }
+
     private func makeProtocolSelection() -> ACPProtocolSelection {
         ACPProtocolSelection(experimentalV2Enabled: experimentalACP2Enabled())
     }
@@ -4346,6 +4383,7 @@ public final class ACPSessionManager: ChangeTracking {
 #if DEBUG
         await beforeBrokerClientRegistrationForTesting?(brokerIdOverride != nil)
 #endif
+        let descriptor = try await resolveStoredBrokerRestore(sessionId: sessionId)
         guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
               !Task.isCancelled,
               isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session)
@@ -4357,7 +4395,7 @@ public final class ACPSessionManager: ChangeTracking {
         let connectionOwnerID = attempt.id
         let usesPersistedBrokerNamespace = brokerIdOverride == nil
         let brokerId = brokerIdOverride ?? ACPBrokerID(
-            rawValue: persistedRows[sessionId]?.acpBrokerId ?? Self.defaultBrokerId(for: sessionId)
+            rawValue: descriptor?.brokerId.rawValue ?? Self.defaultBrokerId(for: sessionId)
         )
         let client = ACPBrokerClient(
             service: service,
@@ -4369,10 +4407,10 @@ public final class ACPSessionManager: ChangeTracking {
             env: environment,
             operationKeyPrefix: "\(instanceId):\(sessionId):\(UUID().uuidString)",
             initialBrokerGeneration: usesPersistedBrokerNamespace
-                ? Self.brokerGeneration(from: persistedRows[sessionId])
+                ? descriptor?.generation
                 : nil,
             initialAcknowledgedCursor: usesPersistedBrokerNamespace
-                ? Self.brokerCursor(from: persistedRows[sessionId])
+                ? (descriptor?.acknowledgedCursor ?? ACPBrokerEventCursor(rawValue: 0))
                 : ACPBrokerEventCursor(rawValue: 0),
             onDurableStateChanged: { [weak self] state in
                 Task { @MainActor [weak self] in
@@ -4395,7 +4433,8 @@ public final class ACPSessionManager: ChangeTracking {
                         self.runners[sessionId]?.flushQueueIfIdle()
                     }
                 }
-            }
+            },
+            wireContext: descriptor?.wireContext ?? .legacyV1
         )
         let connection = ACPConnection(client: client, protocolSelection: makeProtocolSelection())
         guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
@@ -4509,6 +4548,7 @@ public final class ACPSessionManager: ChangeTracking {
         environment: [String: String],
         attempt: AttachmentAttempt
     ) async throws -> ACPConnection {
+        _ = try await resolveStoredBrokerRestore(sessionId: sessionId)
         if attempt.requiresFreshBrokerNamespace {
             guard let serviceFactory = isolatedBrokerServiceFactory ?? brokerServiceFactory else {
                 throw ACPBrokerStartupTimedOutError()
@@ -4582,6 +4622,7 @@ public final class ACPSessionManager: ChangeTracking {
         attempt: AttachmentAttempt,
         serviceFactory: ACPBrokerServiceFactory? = nil
     ) async throws -> ACPConnection {
+        _ = try await resolveStoredBrokerRestore(sessionId: sessionId)
         guard let serviceFactory = serviceFactory ?? isolatedBrokerServiceFactory else {
             throw ACPBrokerStartupTimedOutError()
         }
@@ -5036,17 +5077,6 @@ public final class ACPSessionManager: ChangeTracking {
         }
     }
 
-    private static func brokerCursor(from row: ACPSessionRow?) -> ACPBrokerEventCursor {
-        let raw = row?.acpBrokerAcknowledgedCursor ?? 0
-        guard raw > 0 else { return ACPBrokerEventCursor(rawValue: 0) }
-        return ACPBrokerEventCursor(rawValue: UInt64(raw))
-    }
-
-    private static func brokerGeneration(from row: ACPSessionRow?) -> ACPBrokerGeneration? {
-        guard let raw = row?.acpBrokerGeneration, raw > 0 else { return nil }
-        return ACPBrokerGeneration(rawValue: UInt64(raw))
-    }
-
     private static func makeDefaultConnection(
         spec: ACPLaunchSpec,
         host: String?,
@@ -5187,6 +5217,7 @@ extension ACPSessionManager {
     /// now hold the lease. Idempotent for a lease we already own.
     @discardableResult
     public func acquireWriterLease(sessionId: ACPSession.ID) async -> Bool {
+        guard await permitsStoredBrokerRestore(sessionId: sessionId) else { return false }
         await flushPersistence()
         let now = Int64(Date().timeIntervalSince1970)
         let requestedToken = ownedLeaseTokens[sessionId] ?? UUID().uuidString
@@ -5229,6 +5260,12 @@ extension ACPSessionManager {
         attempt: AttachmentAttempt,
         session: ACPSession
     ) async -> Bool {
+        do { _ = try await resolveStoredBrokerRestore(sessionId: sessionId) }
+        catch {
+            attempt.brokerRestoreBlocked = true
+            surfaceBrokerRestoreFailure(error, sessionId: sessionId)
+            return false
+        }
         await flushPersistence()
         guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
             return false
@@ -5272,6 +5309,10 @@ extension ACPSessionManager {
         } catch {
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                 return false
+            }
+            if error is ACPBrokerRestoreError {
+                attempt.brokerRestoreBlocked = true
+                surfaceBrokerRestoreFailure(error, sessionId: sessionId)
             }
             persistenceError = error.localizedDescription
             await releaseWriterLease(sessionId: sessionId, leaseToken: requestedToken)
@@ -5541,14 +5582,26 @@ extension ACPSessionManager {
     @discardableResult
     public func takeOver(sessionId: ACPSession.ID) async -> Bool {
         guard !isDisposed, let takeoverSession = sessions[sessionId] else { return false }
-        // A client with a stale view can ask to take over what this instance
-        // already drives. Seizing again would tear down the live agent and
-        // re-attach, stranding a prompt sent meanwhile.
-        if isWriter(for: sessionId), await confirmedWriterLease(for: sessionId) { return true }
         takeoverSession.nextPromptWorkCount += 1
         defer { takeoverSession.nextPromptWorkCount -= 1 }
         let takeoverAttemptID = UUID()
         takeoverAttemptIDs[sessionId] = takeoverAttemptID
+        guard await permitsStoredBrokerRestore(sessionId: sessionId), !isDisposed,
+              sessions[sessionId] === takeoverSession, takeoverAttemptIDs[sessionId] == takeoverAttemptID else {
+            if takeoverAttemptIDs[sessionId] == takeoverAttemptID { takeoverAttemptIDs.removeValue(forKey: sessionId) }
+            return false
+        }
+        // A client with a stale view can ask to take over what this instance
+        // already drives. Seizing again would tear down the live agent and
+        // re-attach, stranding a prompt sent meanwhile.
+        if isWriter(for: sessionId), await confirmedWriterLease(for: sessionId) {
+            guard !isDisposed, sessions[sessionId] === takeoverSession,
+                  takeoverAttemptIDs[sessionId] == takeoverAttemptID else { return false }
+            takeoverAttemptIDs.removeValue(forKey: sessionId)
+            return true
+        }
+        guard !isDisposed, !Task.isCancelled, sessions[sessionId] === takeoverSession,
+              takeoverAttemptIDs[sessionId] == takeoverAttemptID else { return false }
         let now = Int64(Date().timeIntervalSince1970)
         let requestedToken = UUID().uuidString
         let lease: ACPSessionLease
@@ -5563,6 +5616,9 @@ extension ACPSessionManager {
             if let coordinator = try coordination() {
                 coordinator.stopPublishing(sessionId: sessionId)
                 guard let row = try await persistence.loadSession(id: sessionId) else { throw ACPSessionReplicaError.missingSession }
+                _ = try ACPBrokerRestorePolicy.resolve(row: row, supportedVersions: makeProtocolSelection().supportedVersions)
+                guard !isDisposed, !Task.isCancelled, sessions[sessionId] === takeoverSession,
+                      takeoverAttemptIDs[sessionId] == takeoverAttemptID else { throw CancellationError() }
                 let key = RemoteSessionKey(worktreePath: RemotePath.realPath(worktreePath), agentId: row.agentId, remoteSessionId: row.remoteSessionId)
                 let result = try await coordinator.claim(sessionId: sessionId, key: key,
                                                          proposedProcId: row.recoveryProcId ?? Self.helperACPProcId(sessionId: sessionId),
@@ -6174,7 +6230,6 @@ extension ACPSessionManager {
         attempt.requiresFreshBrokerNamespace = pendingFreshBrokerNamespaces.contains(sessionId)
         attachmentAttempts[sessionId] = attempt
         connectionOwnerIDs[sessionId] = attempt.id
-        retireBuiltInMCPAttachment(sessionId: sessionId)
         brokerCallbackOwnerIDs[sessionId] = nil
         await runAttachmentAttempt(
             attempt,
@@ -6200,6 +6255,18 @@ extension ACPSessionManager {
                 }
             }
         }
+        // Registering the attempt precedes this await so detach can fence it.
+        // No broker, remote authority or teardown handoff precedes validation.
+        do { _ = try await resolveStoredBrokerRestore(sessionId: sessionId) }
+        catch {
+            if let session = sessions[sessionId], isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) {
+                surfaceBrokerRestoreFailure(error, sessionId: sessionId)
+            }
+            return
+        }
+        guard let currentSession = sessions[sessionId],
+              isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: currentSession) else { return }
+        retireBuiltInMCPAttachment(sessionId: sessionId)
         await waitForTeardown(sessionId: sessionId)
         await resolveDelegatedSelectionHold(sessionId)
         guard let session = sessions[sessionId],
@@ -6533,6 +6600,7 @@ extension ACPSessionManager {
             return
         }
         guard acquiredLease else {
+            if attempt.brokerRestoreBlocked { return }
             let discardedModelSelection = pendingModel.removeValue(forKey: sessionId) != nil
             let discardedModeSelection = pendingMode.removeValue(forKey: sessionId) != nil
             // Queued config values belong to the same discarded creation request;
@@ -6799,6 +6867,11 @@ extension ACPSessionManager {
                 && launchSpec.setupCheck == .npxPackage(name: "@alas-ide/codex-acp")
         } catch {
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else { return }
+            if error is ACPBrokerRestoreError {
+                surfaceBrokerRestoreFailure(error, sessionId: sessionId)
+                await releaseWriterLease(sessionId: sessionId, attempt: attempt)
+                return
+            }
             let durableForkRetry = (error as? ACPBrokerDurableCompletionReplayError).flatMap {
                 $0.outcome.error == nil ? $0 : nil
             }
@@ -8646,9 +8719,18 @@ extension ACPSessionManager {
     /// Replaces an attach that has stopped making progress, keeping the
     /// persisted session and pending queue available to the next connection.
     public func restartConnection(to sessionId: ACPSession.ID) async {
-        guard let session = sessions[sessionId],
+        guard !isDisposed, let session = sessions[sessionId],
+              restartValidationIDs[sessionId] == nil, !restartingConnections.contains(sessionId) else { return }
+        let validationID = UUID()
+        restartValidationIDs[sessionId] = validationID
+        defer {
+            if restartValidationIDs[sessionId] == validationID { restartValidationIDs.removeValue(forKey: sessionId) }
+        }
+        guard await permitsStoredBrokerRestore(sessionId: sessionId), !isDisposed,
+              sessions[sessionId] === session, restartValidationIDs[sessionId] == validationID,
               restartingConnections.insert(sessionId).inserted
         else { return }
+        restartValidationIDs.removeValue(forKey: sessionId)
         var ownsRestartLatch = true
         takeoverAttemptIDs.removeValue(forKey: sessionId)
         session.connectionRestartInProgress = true
@@ -10351,6 +10433,7 @@ extension ACPSessionManager {
         sessions[sessionId]?.nextPromptActivity.send()
         teardownCounts[sessionId, default: 0] += 1
         takeoverAttemptIDs.removeValue(forKey: sessionId)
+        restartValidationIDs.removeValue(forKey: sessionId)
         defer {
             let remaining = teardownCounts[sessionId, default: 1] - 1
             if remaining == 0 {

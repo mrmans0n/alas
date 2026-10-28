@@ -91,6 +91,8 @@ public struct ACPSessionRow: Equatable, Sendable {
     public var helperProcStdoutOffset: Int64? = nil
     public var helperProcStderrOffset: Int64? = nil
     public var acpBrokerId: String? = nil
+    /// Original persisted context JSON; unknown/malformed values remain evidence.
+    public var acpBrokerWireContextJSON: String? = nil
     public var acpBrokerGeneration: Int64? = nil
     public var acpBrokerAcknowledgedCursor: Int64 = 0
     public let createdAt: Int64
@@ -98,7 +100,7 @@ public struct ACPSessionRow: Equatable, Sendable {
     public var lastOpenedAt: Int64
     public var archived: Bool
 
-    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, sessionInstructions: String? = nil, sessionHooks: String? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
+    public init(id: String, agentId: String, title: String, titleSource: ACPSessionTitleSource = .placeholder, remoteSessionId: String? = nil, origin: ACPSessionOrigin = .alasCreated, contextRecoveryPending: Bool = false, recoveryProcId: String? = nil, mcpPreamblePending: String? = nil, mcpPreambleSent: Bool = false, usageLimit: ACPUsageLimit? = nil, goalDraft: String = "", directTurnInFlight: Bool = false, authStatus: ACPAuthStatus? = nil, currentModel: String? = nil, currentMode: String? = nil, configOptionValues: [String: ACPConfigValue] = [:], nativeSubagentsDisabled: Bool? = nil, sessionInstructions: String? = nil, sessionHooks: String? = nil, promptSuggestions: [ACPPromptSuggestion]? = nil, ephemeralParentId: String? = nil, ephemeralCleanupPending: Bool = false, autoRun: Bool, helperProcStdoutOffset: Int64? = nil, helperProcStderrOffset: Int64? = nil, acpBrokerId: String? = nil, acpBrokerGeneration: Int64? = nil, acpBrokerWireContextJSON: String? = nil, acpBrokerAcknowledgedCursor: Int64 = 0, createdAt: Int64, updatedAt: Int64, lastOpenedAt: Int64, archived: Bool) {
         self.id = id
         self.agentId = agentId
         self.title = title
@@ -126,6 +128,7 @@ public struct ACPSessionRow: Equatable, Sendable {
         self.helperProcStdoutOffset = helperProcStdoutOffset
         self.helperProcStderrOffset = helperProcStderrOffset
         self.acpBrokerId = acpBrokerId
+        self.acpBrokerWireContextJSON = acpBrokerWireContextJSON
         self.acpBrokerGeneration = acpBrokerGeneration
         self.acpBrokerAcknowledgedCursor = acpBrokerAcknowledgedCursor
         self.createdAt = createdAt
