@@ -33,6 +33,10 @@ final class ComputerUseCoordinator {
 
     /// Finds a session's transcript, so a pending approval shows as awaiting permission.
     @ObservationIgnored var transcript: (String) -> ACPTranscript? = { _ in nil }
+    /// Whether a session has auto-run on: it then allows an app for the session instead of a card.
+    @ObservationIgnored var autoRun: (String) -> Bool = { _ in false }
+    /// Tells a session which app auto-run allowed, where the card would have shown.
+    @ObservationIgnored var autoRunAllowed: (String, ComputerUseAppIdentity) -> Void = { _, _ in }
 
     /// `expired`: the turn ended with the card still up, so no answer can apply to it.
     private enum ApprovalOutcome { case answered, stopped, timedOut, cancelled, expired }
@@ -309,6 +313,11 @@ final class ComputerUseCoordinator {
         "It can see and operate \(appName): read its controls, click, type and press keys."
     }
 
+    /// The transcript line that stands in for the card auto-run answered.
+    static func autoRunNotice(appName: String) -> String {
+        "Allowed \(appName) for this session (auto-run)"
+    }
+
     // MARK: - Errors
 
     enum Message {
@@ -513,6 +522,10 @@ final class ComputerUseCoordinator {
         case .allowed:
             return .allowed
         case .needsApproval:
+            if autoRun(sessionID), access.grantForAutoRun(app, session: sessionID, input: input) {
+                autoRunAllowed(sessionID, app)
+                return .allowed
+            }
             let id = access.pendingApproval(session: sessionID, app: app)
             syncPending()
             // A new card, or one a later call waits on while still up.

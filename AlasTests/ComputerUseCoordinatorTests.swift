@@ -152,6 +152,18 @@ struct ComputerUseCoordinatorTests {
         #expect(f.coordinator.pendingApprovals.isEmpty)
     }
 
+    @Test func autoRunAllowsTheAppWithoutACardAndSaysSo() async throws {
+        let f = Self.fixture()
+        var allowed: [String] = []
+        f.coordinator.autoRun = { $0 == "s" }
+        f.coordinator.autoRunAllowed = { allowed.append("\($0):\($1.name)") }
+        let json = try #require(Self.text(await f.coordinator.perform(.init(action: .inspect, windowID: 1), sessionID: "s")))
+        #expect(json.contains(#""elements""#))
+        #expect(f.coordinator.pendingApprovals.isEmpty)
+        #expect(allowed == ["s:\(Self.notes.name)"])
+        #expect(f.access.access(for: Self.notes, session: "s") == .allowed(.session))
+    }
+
     @Test func inspectReportsTruncatedWhenTheTreeReadWasIncomplete() async throws {
         let f = Self.fixture(system: Self.system(treeComplete: false))
         f.access.record(.allowForSession, for: Self.notes, session: "s")
