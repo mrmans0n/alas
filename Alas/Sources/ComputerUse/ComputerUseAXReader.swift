@@ -266,7 +266,7 @@ enum ComputerUseAXReader {
             let root = node(target, depth: 0)
             if isCancelled() { throw CancellationError() }
             // The window went away mid-read: nothing of it is left to list.
-            guard let root else { throw ComputerUseSystemError.windowUnreadable(window.windowID) }
+            guard let root else { throw ComputerUseSystemError.windowNotFound(window.windowID) }
             let cut = ComputerUseReadCut.reason(
                 appNotResponding: appStalled || skippedUnanswered, timedOut: ContinuousClock.now >= deadline,
                 elementsUnreadable: unreadable, budgetSpent: cutOff)
@@ -412,7 +412,8 @@ enum ComputerUseAXReader {
             case .unreadable:
                 unreadable = true
             case .read:
-                if let value = byName[kAXChildrenAttribute] {
+                // Some apps answer the batch with kCFNull for an element without children.
+                if let value = byName[kAXChildrenAttribute], CFGetTypeID(value) != CFNullGetTypeID() {
                     // Entries that aren't elements are left out rather than losing the rest.
                     if CFGetTypeID(value) == CFArrayGetTypeID() {
                         elements = (value as! [AnyObject]).compactMap {
