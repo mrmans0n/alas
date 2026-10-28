@@ -978,9 +978,9 @@ struct ACPComposerOptionsButton: View {
                     option.name.isEmpty ? option.id : option.name,
                     isEnabled: option.currentBoolValue == true,
                     icon: option.currentBoolValue == true ? "checkmark.circle.fill" : "circle",
-                    foreground: theme.color("fg-muted"),
-                    background: theme.color("bg-3").opacity(0.7),
-                    border: theme.color("line"),
+                    foreground: chips.booleanOptionFg(isEnabled: option.currentBoolValue == true),
+                    background: chips.booleanOptionBg(isEnabled: option.currentBoolValue == true),
+                    border: chips.booleanOptionBorder(isEnabled: option.currentBoolValue == true),
                     action: { chips.onConfigValue(option.id, .boolean(option.currentBoolValue != true)) }
                 )
             }
