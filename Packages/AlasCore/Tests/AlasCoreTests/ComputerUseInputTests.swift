@@ -8,6 +8,7 @@ struct ComputerUseInputTests {
     private typealias Chord = ComputerUseKeyChord
     private typealias Window = ComputerUseInputGeometry.ScreenWindow
     private typealias SavedType = ComputerUsePastePolicy.SavedType
+    private typealias Focus = ComputerUseSecureFocus.Element
 
     @Test(arguments: [
         (ShortcutBinding?.some(.init(key: ".", modifiers: [.control, .option, .command])), true, true),
@@ -109,28 +110,28 @@ struct ComputerUseInputTests {
     /// after its type-to-select), so only text inputs and editing surfaces take them.
     /// Columns: focused element, selects text, in a web area, terminal or code editor, bundle id, accepted.
     @Test(arguments: [
-        (ComputerUseSecureFocus.Element?(.init(role: "AXTextField")), false, false, false, String?("com.apple.finder"), true),
-        (.init(role: "AXOutline"), false, false, false, "com.apple.finder", false),
-        (.init(role: "AXGroup"), false, false, false, "com.apple.finder", false),
+        (Focus(role: "AXTextField"), false, false, false, "com.apple.finder", true),
+        (Focus(role: "AXOutline"), false, false, false, "com.apple.finder", false),
+        (Focus(role: "AXGroup"), false, false, false, "com.apple.finder", false),
         (nil, false, false, false, "com.apple.finder", false),
         // Mail's message list, an NSTableView: type-select picks a message.
-        (.init(role: "AXTable"), false, false, false, "com.apple.mail", false),
-        (.init(role: "AXCell"), false, false, false, "com.apple.mail", false),
-        (.init(role: "AXButton"), false, false, false, nil, false),
+        (Focus(role: "AXTable"), false, false, false, "com.apple.mail", false),
+        (Focus(role: "AXCell"), false, false, false, "com.apple.mail", false),
+        (Focus(role: "AXButton"), false, false, false, nil, false),
         (nil, false, false, false, "com.apple.TextEdit", true),
         // The window, or an element the app doesn't describe: as nothing focused.
-        (.init(role: "AXWindow"), false, false, false, "com.apple.TextEdit", true),
-        (.init(role: "AXUnknown"), false, false, false, nil, true),
-        (.init(role: "AXWindow"), false, false, false, "com.apple.finder", false),
+        (Focus(role: "AXWindow"), false, false, false, "com.apple.TextEdit", true),
+        (Focus(role: "AXUnknown"), false, false, false, nil, true),
+        (Focus(role: "AXWindow"), false, false, false, "com.apple.finder", false),
         // A spreadsheet's grid, or a table cell being edited.
-        (.init(role: "AXTable"), false, false, false, "com.apple.iWork.Numbers", true),
-        (.init(role: "AXCell"), false, false, false, "org.libreoffice.script", true),
-        (.init(role: "AXCell"), true, false, false, "com.apple.mail", true),
-        (.init(role: "AXScrollArea"), false, false, false, "com.apple.iWork.Pages", true),
-        (.init(role: "AXStaticText"), true, false, false, nil, true),
-        (.init(role: "AXGroup"), false, true, false, "com.google.Chrome", true),
-        (.init(role: "AXList"), false, false, true, "com.mitchellh.ghostty", true),
-    ])
+        (Focus(role: "AXTable"), false, false, false, "com.apple.iWork.Numbers", true),
+        (Focus(role: "AXCell"), false, false, false, "org.libreoffice.script", true),
+        (Focus(role: "AXCell"), true, false, false, "com.apple.mail", true),
+        (Focus(role: "AXScrollArea"), false, false, false, "com.apple.iWork.Pages", true),
+        (Focus(role: "AXStaticText"), true, false, false, nil, true),
+        (Focus(role: "AXGroup"), false, true, false, "com.google.Chrome", true),
+        (Focus(role: "AXList"), false, false, true, "com.mitchellh.ghostty", true),
+    ] as [(Focus?, Bool, Bool, Bool, String?, Bool)])
     func refLessTypingNeedsAFocusedTextInput(
         element: ComputerUseSecureFocus.Element?, selectsText: Bool, inWebArea: Bool, keyCommandApp: Bool,
         bundleID: String?, accepted: Bool
