@@ -142,6 +142,28 @@ struct PeerPortForwardTests {
         try await eventually { (try? await TestClient.connect(host: clientHost, port: endpointPort)) == nil }
     }
 
+    @Test func anEndpointWithItsSchemesDefaultPortIsForwarded() async throws {
+        let server = try await EchoServer.start()
+        defer { server.stop() }
+        let serverPort = server.port
+        let forwarderBox = Mutex<PeerPortForwarder?>(nil)
+        let host = PeerPortForwardHost(
+            resolve: { _ in ("127.0.0.1", serverPort) },
+            send: { _, event in forwarderBox.withLock { $0 }?.receive(event) }
+        )
+        let endpoint = try #require(URL(string: "http://127.0.0.1/app"))
+        let connection = UUID()
+        let forwarder = PeerPortForwarder(runID: "run", endpoint: endpoint) { host.receive($0, from: connection) }
+        forwarderBox.withLock { $0 = forwarder }
+        defer { forwarder.stop() }
+
+        // Port 80 when free, else an ephemeral one.
+        let url = try await forwarder.start()
+        let client = try await TestClient.connect(host: "127.0.0.1", port: url.port ?? 80)
+        client.send(Data("ping".utf8))
+        try await eventually { client.received.bytes == Data("ping".utf8) }
+    }
+
     /// A host built on the run store ends a run's streams once the run finishes.
     @MainActor
     @Test func aForwardEndsWhenItsRunFinishes() async throws {

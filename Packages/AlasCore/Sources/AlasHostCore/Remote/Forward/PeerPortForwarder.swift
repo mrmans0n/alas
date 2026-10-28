@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import AlasFeatures
 import Synchronization
 
 /// The Mac end of a run's forward: listens on `127.0.0.1` and relays each
@@ -68,7 +69,7 @@ public final class PeerPortForwarder: @unchecked Sendable {
     /// both `127.0.0.1` and `::1` so a browser trying either lands here, and
     /// anything else on `127.0.0.1`.
     public func start() async throws -> URL {
-        guard let port = endpoint.port.flatMap(UInt16.init(exactly:)).flatMap(NWEndpoint.Port.init(rawValue:)),
+        guard let port = endpoint.runEndpointPort.flatMap(UInt16.init(exactly:)).flatMap(NWEndpoint.Port.init(rawValue:)),
               var components = URLComponents(url: endpoint, resolvingAgainstBaseURL: false)
         else { throw StartError.invalidEndpoint }
         let attempts: [([NWEndpoint.Host], NWEndpoint.Port)]
@@ -86,7 +87,9 @@ public final class PeerPortForwarder: @unchecked Sendable {
         var lastError: Error = StartError.invalidEndpoint
         for (addresses, port) in attempts {
             do {
-                components.port = try await Int(listen(on: addresses, port: port))
+                let bound = try await Int(listen(on: addresses, port: port))
+                // An implicit 80 or 443 that was free stays implicit.
+                components.port = endpoint.port == nil && bound == endpoint.runEndpointPort ? nil : bound
                 guard let url = components.url else { throw StartError.invalidEndpoint }
                 return url
             } catch StartError.stopped {
