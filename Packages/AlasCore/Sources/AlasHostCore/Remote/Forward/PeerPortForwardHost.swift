@@ -132,6 +132,10 @@ public final class PeerPortForwardHost: @unchecked Sendable {
     private func open(_ key: Key, runID: String) {
         // A reused stream id is a protocol error; the stream it names ends.
         guard streams[key] == nil else { return close(key) }
+        // So is one whose previous socket is still draining.
+        guard draining[key] == nil else {
+            return send(key.connection, .refused(stream: key.stream, message: Self.protocolErrorMessage))
+        }
         let own = streams.keys.count { $0.connection == key.connection } + draining.keys.count { $0.connection == key.connection }
         let run = streams.values.count { $0.runID == runID } + draining.values.count { $0.runID == runID }
         guard streams.count + draining.count < limits.maxStreamsTotal, own < limits.maxStreamsPerConnection, run < limits.maxStreamsPerRun else {
@@ -226,7 +230,7 @@ public final class PeerPortForwardHost: @unchecked Sendable {
         streams[key] = nil
         draining[key] = (connection, stream.runID)
         connection.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [weak self] _ in
-            self?.draining[key] = nil
+            if self?.draining[key]?.connection === connection { self?.draining[key] = nil }
             connection.cancel()
         })
     }
