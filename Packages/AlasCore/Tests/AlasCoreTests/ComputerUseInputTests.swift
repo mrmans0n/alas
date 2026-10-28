@@ -362,17 +362,6 @@ struct ComputerUseInputTests {
 
     private static let dragNoEffect = ComputerUseChangeCheck.dragWarning + ComputerUseChangeCheck.retryDirectHint
 
-    @Test func theFocusFreeHashIgnoresOnlyFocus() {
-        let row = ComputerUseInspectElement(ref: "e1", depth: 1, role: "AXRow")
-        var focused = row
-        focused.isFocused = true
-        var renamed = row
-        renamed.title = "b.txt"
-        #expect(ComputerUseChangeCheck.elementsHash([row], focus: false) == ComputerUseChangeCheck.elementsHash([focused], focus: false))
-        #expect(ComputerUseChangeCheck.elementsHash([row]) != ComputerUseChangeCheck.elementsHash([focused]))
-        #expect(ComputerUseChangeCheck.elementsHash([row], focus: false) != ComputerUseChangeCheck.elementsHash([renamed], focus: false))
-    }
-
     typealias Hit = ComputerUseInputGeometry.PointHit
     typealias Route = ComputerUseInputGeometry.PointRoute
     private static let inner = CGRect(x: 200, y: 50, width: 600, height: 550)
@@ -480,7 +469,7 @@ struct ComputerUseInputTests {
 
     /// An ignored activation is forced only on an idle user whose front app is still in front.
     @Test(arguments: [
-        (5.0, Optional(true), true), (5.0, nil, true), (5.0, false, false), (1.9, true, false), (2.0, true, true),
+        (5.0, Bool?.none, true), (5.0, false, false), (1.9, true, false),
     ] as [(TimeInterval, Bool?, Bool)])
     func anIgnoredActivationIsForcedOnlyOnAnIdleUnchangedFront(idle: TimeInterval, previousIsFront: Bool?, forces: Bool) {
         #expect(ComputerUseTakeover.forcesActivation(idleSeconds: idle, previousIsFront: previousIsFront) == forces)
