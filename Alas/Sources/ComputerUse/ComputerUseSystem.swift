@@ -774,6 +774,11 @@ extension LiveComputerUseSystem {
                 // A right click at its centre may still land.
             }
         case .click(.element(let handles, let handle), .left, let count) where count <= 2:
+            // A Chromium web page's content takes no AXPress: the click goes as events at the element.
+            if count == 1,
+               try await ComputerUseAXActions.clicksWithPointerFirst(handles, handle, in: window, isCancelled: isCancelled) {
+                break
+            }
             if count == 1, try await ComputerUseAXActions.focusTextEntry(handles, handle, app: app, interrupt: interrupt) {
                 // A web field may only read as focused in its page: unless the app's focus moved,
                 // the click goes as events at the field, as a user's would.

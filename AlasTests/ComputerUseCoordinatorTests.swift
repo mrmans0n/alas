@@ -1544,6 +1544,15 @@ struct ComputerUseCoordinatorTests {
         }
     }
 
+    /// Only an AX press is retried: a Chromium web page's element clicked with the pointer first
+    /// (`ComputerUseClickTarget.pointerFirst`) is never clicked twice.
+    @Test(arguments: [(ComputerUseDelivery.ax, true), (.background, false), (.activation, false)])
+    func onlyAnAXPressIsRetriedWithThePointer(delivery: ComputerUseDelivery, retries: Bool) {
+        let click = ComputerUseCommand(action: .click, windowID: 1, ref: "e2")
+        #expect(ComputerUseCoordinator.retriesWithPointer(
+            click, role: "AXButton", delivered: delivery, unchanged: true, electron: true) == retries)
+    }
+
     /// A press the app didn't answer in time (a modal panel it opened) counts as delivered with a
     /// warning, and is never pressed again, also where an Electron press that changed nothing would be.
     @Test func anUnconfirmedPressIsDeliveredWithAWarningAndNotRetried() async throws {

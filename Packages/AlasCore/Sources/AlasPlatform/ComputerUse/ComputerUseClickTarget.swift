@@ -31,4 +31,13 @@ public enum ComputerUseClickTarget {
         if let stop, chain[stop].role == "AXRow" { return .selectRow(stop) }
         return .none
     }
+
+    /// Whether a click by ref goes as a pointer click at the element's visible centre instead of
+    /// an AX press: a left single click (`leftSingle`) on an element in a web page (`inWebArea`)
+    /// of a Chromium or Electron app (`chromium`), whose web content an AXPress doesn't reach,
+    /// while that centre is on screen (`centerOnScreen`); off screen only AX reaches the window.
+    /// Toggles and menu items too: no press went before it, so nothing is pressed twice.
+    public static func pointerFirst(leftSingle: Bool, inWebArea: Bool, chromium: Bool, centerOnScreen: Bool) -> Bool {
+        leftSingle && inWebArea && chromium && centerOnScreen
+    }
 }

@@ -169,6 +169,29 @@ enum ComputerUseAXActions {
         }
     }
 
+    /// Whether a left single click on the element goes as a pointer click at its visible centre,
+    /// without an AX press first (`ComputerUseClickTarget.pointerFirst`): in a Chromium or Electron
+    /// app's web page, where AXPress doesn't reach the content, while that centre is on screen.
+    static func clicksWithPointerFirst(
+        _ handles: ComputerUseAXHandles, _ handle: Int, in window: ComputerUseWindow, isCancelled: @escaping IsCancelled
+    ) async throws -> Bool {
+        let (chromium, inWebArea) = try await onQueue(isCancelled) { () -> (Bool, Bool) in
+            let chromium = ComputerUseAppKind.isChromium(window.app)
+            return (chromium, try chromium && isInWebArea(resolve(handles, handle)))
+        }
+        var onScreen = false
+        if inWebArea {
+            // An element whose frame can't be read gets the AX press, as before.
+            let center = try? await visibleCenter(
+                handles, handle, within: window.frame, app: window.app, requireOwnCenter: true, isCancelled: isCancelled)
+            onScreen = center.flatMap { $0 }.map {
+                ComputerUseInputGeometry.pointIsOnScreen($0, displays: ComputerUseAXReader.displayFrames())
+            } ?? false
+        }
+        return ComputerUseClickTarget.pointerFirst(
+            leftSingle: true, inWebArea: inWebArea, chromium: chromium, centerOnScreen: onScreen)
+    }
+
     /// Focuses the element before typing into it. Refuses secure text fields. An element that
     /// already has focus keeps its caret and selection (`insertText` focuses a document's text
     /// that way before handing it to keys).

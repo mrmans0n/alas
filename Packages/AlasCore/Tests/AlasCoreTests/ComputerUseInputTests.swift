@@ -671,6 +671,23 @@ struct ComputerUseInputTests {
         #expect(ComputerUseClickTarget.choose(chain: chain) == expected)
     }
 
+    /// AXPress doesn't reach a Chromium page's content (Chrome 156 kept a button's counter at 0),
+    /// so its left single click goes with the pointer while its centre shows; else as before.
+    /// Columns: left single click, in a web area, Chromium or Electron, centre on screen, pointer first.
+    @Test(arguments: [
+        (true, true, true, true, true),
+        (false, true, true, true, false),
+        (true, false, true, true, false),
+        (true, true, false, true, false),
+        (true, true, true, false, false),
+    ])
+    func aChromiumWebElementIsClickedWithThePointerFirst(
+        leftSingle: Bool, inWebArea: Bool, chromium: Bool, centerOnScreen: Bool, pointerFirst: Bool
+    ) {
+        #expect(ComputerUseClickTarget.pointerFirst(
+            leftSingle: leftSingle, inWebArea: inWebArea, chromium: chromium, centerOnScreen: centerOnScreen) == pointerFirst)
+    }
+
     @Test(arguments: [
         // One plain-text item, in every flavour it may carry: pasted and put back.
         ([[SavedType(type: "public.utf16-external-plain-text", size: 24), SavedType(type: "public.utf8-plain-text", size: 12)]], true),
