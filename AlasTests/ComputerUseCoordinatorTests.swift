@@ -1287,6 +1287,32 @@ struct ComputerUseCoordinatorTests {
         #expect(recorder.checks == [false] && recorder.events == ["background"])
     }
 
+    /// A drag in a window with more elements than the change check lists (a Finder folder of
+    /// hundreds of files) is confirmed by the nodes both reads walked: moving a file out of the
+    /// list drops its outline's child count, though the row itself lies past what they read. A
+    /// read that can't be compared that way (a web window without its web content) still warns.
+    @Test(arguments: [ComputerUseReadCut.nodeBudget, .webContentMissing])
+    func aDragInAWindowTooLargeToListIsConfirmedByItsFirstElements(cut: ComputerUseReadCut) async throws {
+        let recorder = Recorder()
+        var system = Self.system(recorder: recorder)
+        system.secondsSinceUserInput = { 0.5 }
+        system.axTree = { _, _, _, _ in
+            let count = recorder.inputs.isEmpty ? 600 : 599
+            let rows = (0..<count).map { ComputerUseAXNode(role: "AXRow", title: "file \($0)", childCount: 0) }
+            let outline = ComputerUseAXNode(role: "AXOutline", children: rows, childCount: count)
+            return (ComputerUseAXNode(role: "AXWindow", title: "Downloads", children: [outline], childCount: 1),
+                    cut, ComputerUseAXHandles())
+        }
+        system.perform = Self.tiered(.done, recorder: recorder)
+        let f = Self.fixture(system: system, recorder: recorder, allowed: [Self.notes])
+        _ = await f.coordinator.perform(.init(action: .screenshot, windowID: 1), sessionID: "s")
+        let drag = ComputerUseCommand(action: .drag, windowID: 1, x: 10, y: 10, toX: 100, toY: 100)
+        let json = try #require(Self.text(await f.coordinator.perform(drag, sessionID: "s")))
+        let payload = try #require(try JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any])
+        #expect(payload["delivery"] as? String == "background")
+        #expect(payload["warning"] as? String == (cut == .nodeBudget ? nil : ComputerUseChangeCheck.dragWarning))
+    }
+
     /// A drag that started a drag and drop session was released where it began; the foreground
     /// drag runs once the session's image is gone, and never while it still shows at the deadline.
     @Test(arguments: [2, 100])

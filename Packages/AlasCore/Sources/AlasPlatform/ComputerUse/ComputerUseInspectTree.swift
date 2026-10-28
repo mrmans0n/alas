@@ -15,6 +15,9 @@ public struct ComputerUseAXNode: Sendable {
     public var handle: Int?
     /// The read stopped at its depth limit here, and the element has children it didn't read.
     public var childrenUnread: Bool
+    /// How many children the element listed when read, including any the read didn't walk;
+    /// nil when its attributes weren't read.
+    public var childCount: Int?
 
     public init(
         role: String,
@@ -27,7 +30,8 @@ public struct ComputerUseAXNode: Sendable {
         isFocused: Bool = false,
         children: [ComputerUseAXNode] = [],
         handle: Int? = nil,
-        childrenUnread: Bool = false
+        childrenUnread: Bool = false,
+        childCount: Int? = nil
     ) {
         self.role = role
         self.subrole = subrole
@@ -40,6 +44,7 @@ public struct ComputerUseAXNode: Sendable {
         self.children = children
         self.handle = handle
         self.childrenUnread = childrenUnread
+        self.childCount = childCount
     }
 }
 

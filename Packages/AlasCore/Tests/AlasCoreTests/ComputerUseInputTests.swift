@@ -348,26 +348,31 @@ struct ComputerUseInputTests {
 
     /// A drag whose window differs only in focus or selection (the activation or the press
     /// selected what it grabbed) did nothing it can show, however it went; a foreground one isn't
-    /// retried directly, nor one over a cut-short read.
-    /// Columns: elements, focus-free elements, focus and target state after (before: 1, 1, A, 1), as events.
+    /// retried directly, nor one over a cut-short read. A cut-short read whose first elements
+    /// changed (`prefixChanged`) shows the drag did something; over complete reads they don't count.
+    /// Columns: elements, focus-free elements, focus and target state after (before: 1, 1, A, 1),
+    /// first elements changed, as events.
     @Test(arguments: [
-        (Optional(1), Optional(1), "A", Optional(1), true, Optional(Self.dragNoEffect)),
-        (2, 1, "B", 2, true, Self.dragNoEffect),
-        (2, 1, "B", 2, false, ComputerUseChangeCheck.dragWarning),
-        (1, 1, "A", 2, false, ComputerUseChangeCheck.dragWarning),
-        (2, 2, "A", 1, true, nil),
-        (2, 2, "B", 1, false, nil),
-        (nil, nil, "B", 2, true, nil),
-        (nil, nil, "A", 1, false, ComputerUseChangeCheck.dragWarning),
-        (nil, nil, "A", 1, true, ComputerUseChangeCheck.dragWarning),
-    ] as [(Int?, Int?, String, Int?, Bool, String?)])
+        (Optional(1), Optional(1), "A", Optional(1), false, true, Optional(Self.dragNoEffect)),
+        (1, 1, "A", 1, true, true, Self.dragNoEffect),
+        (2, 1, "B", 2, false, true, Self.dragNoEffect),
+        (2, 1, "B", 2, false, false, ComputerUseChangeCheck.dragWarning),
+        (1, 1, "A", 2, false, false, ComputerUseChangeCheck.dragWarning),
+        (2, 2, "A", 1, false, true, nil),
+        (2, 2, "B", 1, false, false, nil),
+        (nil, nil, "B", 2, false, true, nil),
+        (nil, nil, "A", 1, false, false, ComputerUseChangeCheck.dragWarning),
+        (nil, nil, "A", 1, false, true, ComputerUseChangeCheck.dragWarning),
+        (nil, nil, "A", 1, true, true, nil),
+    ] as [(Int?, Int?, String, Int?, Bool, Bool, String?)])
     func aDragThatOnlyMovedFocusOrSelectionWarns(
-        elements: Int?, content: Int?, focus: String, target: Int?, asEvents: Bool, warning: String?
+        elements: Int?, content: Int?, focus: String, target: Int?, prefixChanged: Bool, asEvents: Bool, warning: String?
     ) {
         let before = ComputerUseWindowFingerprint(
-            focus: .init(role: "A"), windowTitle: "Docs", elementsHash: 1, targetHash: 1, contentHash: 1)
+            focus: .init(role: "A"), windowTitle: "Docs", elementsHash: 1, targetHash: 1, contentHash: 1, prefixHashes: [1])
         let after = ComputerUseWindowFingerprint(
-            focus: .init(role: focus), windowTitle: "Docs", elementsHash: elements, targetHash: target, contentHash: content)
+            focus: .init(role: focus), windowTitle: "Docs", elementsHash: elements, targetHash: target, contentHash: content,
+            prefixHashes: [prefixChanged ? 2 : 1])
         #expect(ComputerUseChangeCheck.warning(before: before, after: after, kind: .drag, deliveredAsEvents: asEvents) == warning)
     }
 

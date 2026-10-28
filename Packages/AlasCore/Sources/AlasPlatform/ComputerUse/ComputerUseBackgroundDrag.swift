@@ -100,6 +100,6 @@ public enum ComputerUseBackgroundDrag {
         previous: ComputerUseWindowFingerprint?, current: ComputerUseWindowFingerprint?
     ) -> Bool {
         guard let previous, let current, current.elementsHash != nil else { return false }
-        return previous == current
+        return previous.withoutPrefix == current.withoutPrefix
     }
 }

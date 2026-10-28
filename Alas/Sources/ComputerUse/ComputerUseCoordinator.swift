@@ -1525,8 +1525,9 @@ final class ComputerUseCoordinator {
     static let waitPoll: Duration = .milliseconds(250)
 
     /// Nodes and time the read before an input may take: it delays the input, and a read cut
-    /// short only turns the change check off. Also the elements every read lists for the change
-    /// check, whatever the call's `limit`: a Finder window's sidebar alone fills the default 100.
+    /// short only narrows the change check to its first nodes. Also the elements every read lists
+    /// for the change check, whatever the call's `limit`: a Finder window's sidebar alone fills the
+    /// default 100.
     static let fingerprintNodeBudget = 500
     static let fingerprintTimeLimit: Duration = .seconds(1)
 
@@ -1555,7 +1556,8 @@ final class ComputerUseCoordinator {
             focus: focus, windowTitle: window.title,
             elementsHash: complete.map { ComputerUseChangeCheck.elementsHash($0) },
             targetHash: targetHash,
-            contentHash: complete.map { ComputerUseChangeCheck.elementsHash($0, focus: false) })
+            contentHash: complete.map { ComputerUseChangeCheck.elementsHash($0, focus: false) },
+            prefixHashes: read?.prefixHashes)
     }
 
     /// The window as it is now; gone or now another app's → `windowNotFound`.
@@ -1748,6 +1750,9 @@ final class ComputerUseCoordinator {
         /// Every element up to `fingerprintNodeBudget`, past the call's `limit`, for the change
         /// check; nil when the read wasn't for it, was cut short, had more or left deeper ones out.
         var fingerprintElements: [ComputerUseInspectElement]?
+        /// `ComputerUseChangeCheck.prefixHashes` of the read, for the change check; nil when the
+        /// read wasn't for it or can't be compared.
+        var prefixHashes: [Int]?
         var handles: ComputerUseAXHandles
         /// Every ref the read named, listed or not, to its handle.
         var refs: [String: Int]
@@ -1820,6 +1825,10 @@ final class ComputerUseCoordinator {
             depthLimited: flat.depthLimited, elements: flat.elements,
             // Elements past the depth limit may have changed as well.
             fingerprintElements: !forChangeCheck || whole.truncated || whole.depthLimited || cut != nil ? nil : whole.elements,
+            prefixHashes: forChangeCheck
+                ? ComputerUseChangeCheck.prefixHashes(
+                    tree.root, cut: cut, maxDepth: maxDepth, limit: Self.fingerprintNodeBudget + 1)
+                : nil,
             handles: tree.handles, refs: flat.refs, identities: identities)
         if recordRefs { record(refs: read, of: window, context: context) }
         return read

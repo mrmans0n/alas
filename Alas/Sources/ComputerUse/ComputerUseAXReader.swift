@@ -332,7 +332,8 @@ enum ComputerUseAXReader {
                 frame: Self.frame(position: values?[kAXPositionAttribute], size: values?[kAXSizeAttribute]) ?? .zero,
                 isEnabled: Self.bool(values?[kAXEnabledAttribute]) ?? true,
                 isFocused: Self.bool(values?[kAXFocusedAttribute]) ?? false,
-                handle: elements.count
+                handle: elements.count,
+                childCount: batch.map { _ in children.count }
             )
             elements.append(element)
             if depth < maxDepth {
