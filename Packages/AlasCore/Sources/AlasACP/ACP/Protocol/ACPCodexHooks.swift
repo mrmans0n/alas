@@ -126,6 +126,7 @@ public enum ACPCodexHookReviewError: String, Sendable {
         else if case ACPClientError.jsonrpc(let wrapped) = error { rpc = wrapped }
         else if let replay = error as? ACPBrokerDurableCompletionReplayError { rpc = replay.outcome.error }
         else if let raw = error as? ACPBrokerRawRPCError { rpc = raw.rpcError }
+        else if let raw = error as? ACPRawRPCError { rpc = raw.rpcError }
         else { rpc = nil }
         guard let rpc, rpc.code == -32044,
               let data = rpc.data?.value as? [String: Any], let kind = data["kind"] as? String else { return nil }

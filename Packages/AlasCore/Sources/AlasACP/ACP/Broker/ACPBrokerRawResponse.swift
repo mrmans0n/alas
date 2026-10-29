@@ -39,6 +39,7 @@ public struct ACPBrokerRawResponse: Sendable {
 
 /// Retains the full source error and its explicit durable-consumption authority.
 public struct ACPBrokerRawRPCError: LocalizedError, Sendable {
+    public let rawDelivery: ACPRawRPCDelivery?
     public let frame: ACPBrokerRawJSONPayload
     public let rpcError: JSONRPCError?
     private let acknowledgement: ACPDurableConsumptionAcknowledgement?
@@ -46,9 +47,17 @@ public struct ACPBrokerRawRPCError: LocalizedError, Sendable {
 
     public init(frame: ACPBrokerRawJSONPayload, rpcError: JSONRPCError?,
                 acknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
+        self.rawDelivery = nil
         self.frame = frame
         self.rpcError = rpcError
         self.acknowledgement = acknowledgement
+    }
+
+    public init(rawDelivery: ACPRawRPCDelivery, rpcError: JSONRPCError?) {
+        self.rawDelivery = rawDelivery
+        self.frame = ACPBrokerRawJSONPayload(bytes: rawDelivery.frame)
+        self.rpcError = rpcError
+        self.acknowledgement = rawDelivery.acknowledgement
     }
 
     public func acknowledgeDurableConsumption() { acknowledgement?() }

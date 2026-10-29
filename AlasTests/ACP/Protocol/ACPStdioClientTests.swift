@@ -310,7 +310,7 @@ struct ACPStdioClientTests {
         let consumed = Mutex(0)
         let barrier = AsyncStream<Void>.makeStream()
         transport.send(frame: bytes) { consumed.withLock { $0 += 1 } }
-        transport.send(frame: Data(#"{"method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
         #expect(await boundedResult {
             var iterator = barrier.stream.makeAsyncIterator()
             return await iterator.next() != nil
@@ -327,7 +327,7 @@ struct ACPStdioClientTests {
         #expect(throws: (any Error).self) { try delivery.decode() }
         transport.send(exitStatus: 0, finish: false)
         transport.send(frame: bytes) { consumed.withLock { $0 += 1 } }
-        transport.send(frame: Data(#"{"method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
         #expect(await boundedResult {
             var iterator = barrier.stream.makeAsyncIterator()
             return await iterator.next() != nil
@@ -453,6 +453,168 @@ struct ACPStdioClientTests {
         delivery.acknowledgeDurableConsumption()
         #expect(consumed.withLock { $0 } == 1)
         await client.shutdown()
+    }
+
+    @Test(arguments: ["null", #"{"n":1e999,"big":123456789012345678901234567890}"#, "error"])
+    func v2RPCViewsRetainFullSourceWithoutImplicitConsumption(result: String) async throws {
+        let fields = result == "error" ? #""error":{"code":-32044,"message":"changed","data":{"kind":"codex_hook_changed","n":1e999}}"# : "\"result\":\(result)"
+        let bytes = Data(" {\"jsonrpc\":\"2.0\",\"id\":1, \(fields)}\n".utf8)
+        let count = Mutex(0)
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in .frame(bytes, onConsumed: { count.withLock { $0 += 1 } }) })
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { Task { await client.shutdown() } }
+        do {
+            let response = try await client.send(.init(method: "session/prompt"))
+            #expect(result != "error")
+            let delivery = try #require(response.rawDelivery)
+            #expect(delivery.source == .stdio(requestID: .number(1), method: "session/prompt"))
+            #expect(delivery.frame == bytes)
+            #expect(delivery.connectionID == client.updateConnectionID)
+            #expect(count.withLock { $0 } == 0)
+            response.durableConsumptionAcknowledgement?()
+            delivery.acknowledgeDurableConsumption()
+        } catch let error as ACPRawRPCError {
+            #expect(result == "error")
+            #expect(error.delivery.frame == bytes)
+            #expect(ACPCodexHookReviewError.classify(error) == .changed)
+            #expect(count.withLock { $0 } == 0)
+            error.acknowledgeDurableConsumption()
+            error.delivery.acknowledgeDurableConsumption()
+        }
+        #expect(count.withLock { $0 } == 1)
+        await client.shutdown()
+    }
+
+    @Test(arguments: [
+        #"{"jsonrpc":"1.0","id":1,"result":null}"#,
+        #"{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":1,"message":"bad"}}"#,
+        #"{"jsonrpc":"2.0","id":1,"error":{"code":1e999,"message":"bad"}}"#,
+        #"{"jsonrpc":"2.0","id":1}"#,
+    ])
+    func v2BoundMalformedResponseRetainsUnconsumedFailure(frame: String) async throws {
+        let bytes = Data(frame.utf8)
+        let count = Mutex(0)
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in .frame(bytes, onConsumed: { count.withLock { $0 += 1 } }) })
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        do {
+            _ = try await client.send(.init(method: "m"))
+            Issue.record("Malformed v2 response became success")
+        } catch let error as ACPRawRPCError {
+            #expect(error.rpcError == nil)
+            #expect(error.delivery.frame == bytes)
+            #expect(count.withLock { $0 } == 0)
+            error.acknowledgeDurableConsumption()
+            #expect(count.withLock { $0 } == 1)
+        }
+        await client.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func v2ReversedResponsesKeepExactRequestBindings(prefixed: Bool) async throws {
+        let transport = FakeJSONRPCTransport()
+        if prefixed { transport.requestIDPrefix = "ns" }
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        let first = Task { try await client.send(.init(method: "first")) }
+        #expect(await boundedResult { while transport.sentFrames.count < 1, !Task.isCancelled { await Task.yield() }
+        return transport.sentFrames.count >= 1 } == true)
+        let second = Task { try await client.send(.init(method: "second")) }
+        #expect(await boundedResult { while transport.sentFrames.count < 2, !Task.isCancelled { await Task.yield() }
+        return transport.sentFrames.count >= 2 } == true)
+        let secondID = prefixed ? #""ns:2""# : "2"
+        let firstID = prefixed ? #""ns:1""# : "1"
+        transport.send(frame: Data("{\"jsonrpc\":\"2.0\",\"id\":\(secondID),\"result\":\"second\"}".utf8))
+        transport.send(frame: Data("{\"jsonrpc\":\"2.0\",\"id\":\(firstID),\"result\":\"first\"}".utf8))
+        let a = try await first.value
+        let b = try await second.value
+        #expect(a.body == Data(#""first""#.utf8))
+        #expect(b.body == Data(#""second""#.utf8))
+        #expect(a.rawDelivery?.source == .stdio(requestID: prefixed ? .string("ns:1") : .number(1), method: "first"))
+        #expect(b.rawDelivery?.source == .stdio(requestID: prefixed ? .string("ns:2") : .number(2), method: "second"))
+        await client.shutdown()
+    }
+
+    @Test(arguments: [
+        Data(#"{"jsonrpc":"2.0","id":99,"result":null}"#.utf8),
+        Data(#"{"jsonrpc":"2.0","id":null,"result":null}"#.utf8),
+        Data(#"{"jsonrpc":"2.0","id":1,"id":1,"result":null}"#.utf8),
+        Data(#"{"jsonrpc":"2.0","id":1,"method":"fs/read_text_file","result":null}"#.utf8),
+        Data(#"{"jsonrpc":"2.0","id":1,"method":null,"result":null}"#.utf8),
+        Data(#"{"jsonrpc":"2.0","id":null,"method":"fs/read_text_file","params":{}}"#.utf8),
+        Data(#"{"jsonrpc":"2.0","id":1e999,"method":"peer/request","params":{}}"#.utf8),
+        Data([255, 0]),
+    ])
+    func v2AmbiguousEvidenceCannotSettleAPendingRequestOrConsume(frame: Data) async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let settled = Mutex(false)
+        let request = Task { () -> ACPResponse? in
+            defer { settled.withLock { $0 = true } }
+            return try? await client.send(.init(method: "m"))
+        }
+        #expect(await boundedResult { while transport.sentFrames.isEmpty, !Task.isCancelled { await Task.yield() }
+        return !transport.sentFrames.isEmpty } == true)
+        let consumed = Mutex(0)
+        transport.send(frame: frame) { consumed.withLock { $0 += 1 } }
+        let captured = await boundedResult {
+            var diagnostics = client.incomingRawRPCDiagnostics.makeAsyncIterator()
+            return await diagnostics.next()
+        }
+        let delivered = try #require(captured)
+        let evidence = try #require(delivered)
+        #expect(evidence.frame == frame)
+        #expect(evidence.source == .diagnostic)
+        #expect(evidence.brokerProvenance == nil)
+        #expect(!settled.withLock { $0 })
+        #expect(consumed.withLock { $0 } == 0)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":"matched"}"#.utf8))
+        #expect(await request.value?.body == Data(#""matched""#.utf8))
+        evidence.acknowledgeDurableConsumption()
+        #expect(consumed.withLock { $0 } == 1)
+        await client.shutdown()
+    }
+
+    @Test func v2InboundRequestCanReuseAnOutgoingIDWithoutSettlingIt() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        let settled = Mutex(false)
+        let request = Task { () -> ACPResponse? in
+            defer { settled.withLock { $0 = true } }
+            return try? await client.send(.init(method: "m"))
+        }
+        #expect(await boundedResult { while transport.sentFrames.isEmpty, !Task.isCancelled { await Task.yield() }
+        return !transport.sentFrames.isEmpty } == true)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"method":"fs/read_text_file","params":{"sessionId":"s","path":"/tmp/a"}}"#.utf8))
+        var files = client.fileRequests.makeAsyncIterator()
+        guard case .read(let id, _) = try #require(await files.next()) else { Issue.record("Expected inbound read")
+        return }
+        #expect(id == .number(1))
+        #expect(!settled.withLock { $0 })
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":null}"#.utf8))
+        #expect(await request.value?.rawDelivery?.source == .stdio(requestID: .number(1), method: "m"))
+        await client.shutdown()
+    }
+
+    @Test func v2ShutdownCannotConsumeReturnedOrBufferedRPCHandles() async throws {
+        let consumed = Mutex(0)
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in
+            .frame(Data(#"{"jsonrpc":"2.0","id":1,"result":null}"#.utf8), onConsumed: { consumed.withLock { $0 += 1 } })
+        })
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        let response = try await client.send(.init(method: "m"))
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":99,"result":null}"#.utf8)) { consumed.withLock { $0 += 1 } }
+        var diagnostics = client.incomingRawRPCDiagnostics.makeAsyncIterator()
+        let evidence = try #require(await diagnostics.next())
+        await client.shutdown()
+        response.acknowledgeDurableConsumption()
+        evidence.acknowledgeDurableConsumption()
+        #expect(consumed.withLock { $0 } == 0)
     }
 
     private final class ResultBox<T>: @unchecked Sendable {

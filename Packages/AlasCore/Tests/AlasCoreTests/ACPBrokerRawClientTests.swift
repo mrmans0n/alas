@@ -70,16 +70,28 @@ struct ACPBrokerRawClientTests {
             Issue.record("Expected raw error") }
             catch let error as ACPBrokerRawRPCError {
                 #expect(error.frame.bytes == RawBrokerFixture.error)
+                let raw = try #require(error.rawDelivery)
+                #expect(raw.frame == error.frame.bytes)
+                #expect(raw.connectionID == client.updateConnectionID)
+                #expect(raw.source == .brokerOperation(operationKey: .init(rawValue: "key"), requestID: .init(rawValue: 9), method: "session/prompt"))
+                #expect(raw.brokerProvenance?.cursor.rawValue == 3)
                 #expect(error.rpcError?.message == "rejected")
                 #expect(ACPCodexHookReviewError.classify(error) == .required)
                 error.acknowledgeDurableConsumption()
+                raw.acknowledgeDurableConsumption()
                 error.acknowledgeDurableConsumption()
             }
         } else {
             let result = try await client.send(request)
             #expect(result.body == Data("null".utf8))
+            let raw = try #require(result.rawDelivery)
+            #expect(raw.frame == Data(#"{"jsonrpc":"2.0","id":9,"result":null}"#.utf8))
+            #expect(raw.connectionID == client.updateConnectionID)
+            #expect(raw.source == .brokerOperation(operationKey: .init(rawValue: "key"), requestID: .init(rawValue: 9), method: "session/prompt"))
+            #expect(raw.brokerProvenance?.cursor.rawValue == 3)
             #expect(await service.acks.isEmpty)
             result.acknowledgeDurableConsumption()
+            raw.acknowledgeDurableConsumption()
             result.acknowledgeDurableConsumption()
         }
         try await client.replayRawBrokerEvents()
@@ -120,13 +132,35 @@ struct ACPBrokerRawClientTests {
         #expect(await service.closeCount == (mismatch ? 0 : 1))
     }
 
-    @Test func cachedResponsesKeepOpaqueNumbersWithoutMintingConsumptionAuthority() async throws {
-        let service = RawBrokerFixture(cached: true)
+    @Test(arguments: [false, true])
+    func cachedResponsesKeepOpaqueNumbersWithoutMintingConsumptionAuthority(isError: Bool) async throws {
+        let service = RawBrokerFixture(isError: isError, cached: true)
         let client = makeClient(service)
         _ = try await client.start()
-        let response = try await client.send(ACPRequest(method: "initialize"))
-        #expect(response.body == Data(#"{"n":1e999}"#.utf8))
-        #expect(response.durableConsumptionAcknowledgement == nil)
+        let raw: ACPRawRPCDelivery
+        if isError {
+            do {
+                _ = try await client.send(ACPRequest(method: "initialize"))
+                Issue.record("Expected cached RPC error")
+                await client.detach()
+                return
+            } catch let error as ACPBrokerRawRPCError {
+                raw = try #require(error.rawDelivery)
+                #expect(error.frame.bytes == RawBrokerFixture.error)
+                #expect(ACPCodexHookReviewError.classify(error) == .required)
+                error.acknowledgeDurableConsumption()
+            }
+        } else {
+            let response = try await client.send(ACPRequest(method: "initialize"))
+            #expect(response.body == Data(#"{"n":1e999}"#.utf8))
+            #expect(response.durableConsumptionAcknowledgement == nil)
+            raw = try #require(response.rawDelivery)
+        }
+        #expect(raw.source == .brokerSnapshotCache)
+        #expect(raw.brokerProvenance == nil)
+        #expect(try raw.decode().id == .number(isError ? "9" : "42"))
+        raw.acknowledgeDurableConsumption()
+        #expect(await service.acks.isEmpty)
         #expect(await service.outcome == nil)
         await client.detach()
     }
@@ -176,7 +210,12 @@ struct ACPBrokerRawClientTests {
         #expect(client.terminalOutcome(forPreRegisteredOperationKey: "key") == nil)
         #expect(client.replayedCompletion(forPreRegisteredOperationKey: "key") == nil)
         do { _ = try await client.send(ACPRequest(method: "session/prompt", brokerOperationKey: "key")) }
-        catch let error as ACPBrokerRawRPCError { error.acknowledgeDurableConsumption() }
+        catch let error as ACPBrokerRawRPCError {
+            let raw = try #require(error.rawDelivery)
+            #expect(raw.brokerProvenance?.cursor.rawValue == 3)
+            raw.acknowledgeDurableConsumption()
+            error.acknowledgeDurableConsumption()
+        }
         try await client.replayRawBrokerEvents()
         #expect(client.terminalOutcome(forPreRegisteredOperationKey: "key") == nil)
         await client.detach()
@@ -211,7 +250,12 @@ struct ACPBrokerRawClientTests {
         client.preRegisterAwaitedOperationKeys(["key"])
         _ = try await client.start()
         do { _ = try await client.send(ACPRequest(method: "session/prompt", brokerOperationKey: "key")) }
-        catch let error as ACPBrokerRawRPCError { error.acknowledgeDurableConsumption() }
+        catch let error as ACPBrokerRawRPCError {
+            let raw = try #require(error.rawDelivery)
+            #expect(raw.brokerProvenance?.cursor.rawValue == 3)
+            raw.acknowledgeDurableConsumption()
+            error.acknowledgeDurableConsumption()
+        }
         try await client.replayRawBrokerEvents()
         #expect(client.terminalOutcome(forPreRegisteredOperationKey: "key")?.rawFrame?.bytes == Data(#"{"jsonrpc":"2.0","id":10,"result":null}"#.utf8))
         await client.detach()
@@ -426,7 +470,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
                 turnState: .unknown("unknown"), acknowledgedCursor: snapshot.acknowledgedCursor,
                 journalTail: snapshot.journalTail, pendingRequests: snapshot.pendingRequests, operations: [op])
         }
-        if cached { snapshot.initializeRawResponse = .init(bytes: Data(#"{"jsonrpc":"2.0","id":42,"result":{"n":1e999}}"#.utf8)) }
+        if cached { snapshot.initializeRawResponse = .init(bytes: isError ? Self.error : Data(#"{"jsonrpc":"2.0","id":42,"result":{"n":1e999}}"#.utf8)) }
         return snapshot
     }
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
