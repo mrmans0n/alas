@@ -79,6 +79,21 @@ public enum AlasCLIResponse: Equatable, Sendable {
         }
         return try JSONSerialization.data(withJSONObject: object)
     }
+
+    /// The inverse of `encode()`.
+    public static func decode(_ data: Data) throws -> AlasCLIResponse {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let ok = object["ok"] as? Bool
+        else { throw AlasCLIRequestError.malformed }
+        if ok {
+            guard let lines = object["lines"] else { return .ok }
+            guard let lines = lines as? [String] else { throw AlasCLIRequestError.malformed }
+            return .text(lines)
+        }
+        guard let message = object["error"] as? String else { throw AlasCLIRequestError.malformed }
+        if let exitCode = object["exit_code"] as? Int { return .errorWithExitCode(message, exitCode) }
+        return .error(message)
+    }
 }
 
 private extension String {
