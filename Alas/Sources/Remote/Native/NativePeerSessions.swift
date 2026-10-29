@@ -211,6 +211,8 @@ final class NativePeerSessions {
     /// one is already in `documentRequestsInFlight`. Cleared once the retry
     /// it queues has been sent.
     @ObservationIgnored private var documentRequestOutdated = false
+    /// The sides the open image diff was last read with, so a changes reply that moves them reads it again.
+    @ObservationIgnored private var imageDiffRead: (document: NativePeerWorkspace.Document, plan: NativePeerWorkspace.ImageDiffPlan)?
 
     init(
         federation: FederatedSessionsProvider,
@@ -1272,8 +1274,10 @@ final class NativePeerSessions {
 
     /// Sends `document`'s read: an image diff's two sides when its host serves file bytes, else its text read.
     private func sendDocumentRead(_ document: NativePeerWorkspace.Document) -> Bool {
+        imageDiffRead = nil
         if let target = hostBytesTarget,
            let plan = workspace.imageDiffPlan(for: document, comparisonMode: comparisonMode()) {
+            imageDiffRead = (document, plan)
             return readImageDiff(document, plan: plan, target: target)
         }
         return switch document {
@@ -1777,6 +1781,11 @@ final class NativePeerSessions {
         if let replyDocument { documentRequestsInFlight.remove(replyDocument) }
         let isDocumentReply = replyDocument != nil && replyDocument == workspace.document
         let handled = workspace.apply(message)
+        let isCommitFilesReply: Bool = switch message {
+        case .commitFiles, .commitFilesFailed: true
+        default: false
+        }
+        if isChangesReply || isCommitFilesReply { replanImageDiff() }
         if isChangesReply, changesRequestOutdated {
             changesRequestOutdated = false
             requestChanges()
@@ -1790,6 +1799,16 @@ final class NativePeerSessions {
             open(document)
         }
         return handled
+    }
+
+    /// Reads the open image diff again when the lists just landed move its sides: a reload plans it from the
+    /// rows it had, before their refresh arrives.
+    private func replanImageDiff() {
+        guard let read = imageDiffRead, read.document == workspace.document, openedReview == nil,
+              openedCommitEditor == nil,
+              workspace.imageDiffPlan(for: read.document, comparisonMode: comparisonMode()) != read.plan
+        else { return }
+        open(read.document)
     }
 
     /// Clears what was sent from the composer, leaving anything the user
