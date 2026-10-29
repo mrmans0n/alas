@@ -183,4 +183,19 @@ struct VMGuestServiceTests {
         #expect(result.timedOut)
         #expect(result.stdout == "started\n")
     }
+
+    @Test(.timeLimit(.minutes(1))) func runnerKillsAMemberThatIgnoresSIGTERM() async throws {
+        var runner = Self.plainRunner
+        runner.killGrace = .seconds(20)
+        // The shell dies on SIGTERM and the child's output is gone, so the run ends before the kill grace.
+        let result = await runner.run(
+            #"perl -e '$SIG{TERM} = "IGNORE"; sleep 30' >/dev/null 2>&1 & echo $!; wait"#, timeout: .seconds(1))
+        #expect(result.timedOut)
+        let child = try #require(pid_t(result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while kill(child, 0) == 0, ContinuousClock.now < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        #expect(kill(child, 0) != 0)
+    }
 }

@@ -357,6 +357,7 @@ private final class ProcessGroup: @unchecked Sendable {
     private let leader: pid_t
     private var reaped = false
     private var didTimeOut = false
+    private var terminating = false
 
     init(leader: pid_t) { self.leader = leader }
 
@@ -366,7 +367,9 @@ private final class ProcessGroup: @unchecked Sendable {
 
     func signal(_ signal: Int32) {
         lock.withLock {
-            if !reaped { killpg(leader, signal) }
+            guard !reaped else { return }
+            if signal == SIGTERM { terminating = true }
+            killpg(leader, signal)
         }
     }
 
@@ -383,8 +386,11 @@ private final class ProcessGroup: @unchecked Sendable {
     }
 
     /// Reaps the leader and returns its wait status; the group is not signalled after this.
+    /// Once termination started, a member that outlived SIGTERM is killed first: the unreaped
+    /// leader still holds the group id, so the kill can't reach a recycled group.
     func reap() -> Int32 {
         lock.withLock {
+            if terminating { killpg(leader, SIGKILL) }
             reaped = true
             var status: Int32 = 0
             while waitpid(leader, &status, 0) < 0, errno == EINTR {}
