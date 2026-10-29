@@ -28,6 +28,29 @@ private final class SQLiteWriteLock: Sendable {
 @MainActor
 @Suite("ACP session persistence")
 struct ACPSessionPersistenceTests {
+    @Test func concurrentReceiptRetriesCommitOnceWithoutConsumingTheDelivery() async throws {
+        let url = temporaryDatabaseURL()
+        let persistence = ACPSessionPersistence(path: url.path)
+        try await persistence.upsertSession(row(id: "journal"))
+        let lease = try await persistence.seizeLease(sessionId: "journal", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let owner = fence(for: lease)
+        let connection = UUID()
+        let stream = try await persistence.registerV2UpdateJournal(sessionId: "journal", upstreamSessionId: "upstream", source: .stdio(connectionID: connection), fence: owner)
+        let delivery = ACPV2SessionUpdateDelivery(frame: Data([255, 0]), connectionID: connection)
+        let receipts = try await withThrowingTaskGroup(of: ACPV2UpdateJournalReceipt.self) { group in
+            for _ in 0..<16 { group.addTask { try await persistence.appendV2Update(delivery, to: stream, fence: owner) } }
+            var results: [ACPV2UpdateJournalReceipt] = []
+            for try await receipt in group { results.append(receipt) }
+            return results
+        }
+        #expect(receipts.filter(\.wasInserted).count == 1)
+        #expect(receipts.allSatisfy { $0.record.ordinal == 1 && $0.record.frame == Data([255, 0]) })
+        _ = try await persistence.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        await #expect(throws: ACPV2UpdateJournalError.staleLease) {
+            try await persistence.appendV2Update(delivery, to: stream, fence: owner)
+        }
+    }
+
     @Test func brokerContextRoundTripRejectsAReplacedWriter() async throws {
         let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
         try await persistence.upsertSession(row(id: "context"))

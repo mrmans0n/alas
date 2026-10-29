@@ -9,6 +9,21 @@ struct ACPSessionStoreSchemaTests {
         return try ACPSessionStore(path: url.path)
     }
 
+    @Test func journalMigrationKeepsLegacyRowsAndStartsWithoutReceipts() throws {
+        let store = try tmpStore()
+        try store.upsertSession(.init(id: "old", agentId: "fixture", title: "Legacy", autoRun: false,
+            acpBrokerId: "legacy", createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let saved = try store.loadSession(id: "old")
+        try store.db.exec("DROP TABLE IF EXISTS acp_v2_update_records")
+        try store.db.exec("DROP TABLE IF EXISTS acp_v2_update_streams")
+        try store.db.exec("UPDATE schema_version SET version = 30")
+        let reopened = try ACPSessionStore(path: store.path)
+        #expect(try reopened.loadSession(id: "old") == saved)
+        #expect(try reopened.db.query("SELECT id FROM acp_v2_update_streams").isEmpty)
+        #expect(try reopened.db.query("SELECT ordinal FROM acp_v2_update_records").isEmpty)
+        #expect(try reopened.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
+    }
+
     @Test func legacyBrokerDescriptorSurvivesContextMigration() throws {
         let original = try tmpStore()
         try original.upsertSession(.init(id: "legacy", agentId: "fixture", title: "Saved", autoRun: false,
