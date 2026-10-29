@@ -26,6 +26,7 @@ actor VMGuestClient {
     /// Every way a call can fail before the guest answers it, with the text agents see.
     enum Failure: LocalizedError, Equatable {
         case helperMissing
+        case helperUnresponsive
         case stopped
         case outdated
         case cancelled
@@ -35,6 +36,8 @@ actor VMGuestClient {
             switch self {
             case .helperMissing:
                 "computer_vm_helper_missing: The Alas VM Guest helper isn't running in this VM. Install it with Customize base image."
+            case .helperUnresponsive:
+                "computer_vm_helper_missing: The Alas VM Guest helper isn't responding in this VM. Restart the VM or reinstall the helper with Customize base image."
             case .stopped:
                 "computer_vm_stopped: The VM stopped or its helper disconnected."
             case .outdated:
@@ -55,6 +58,8 @@ actor VMGuestClient {
         let transport: VMGuestTransport
         var hello: VMGuestHello?
         var helloWaiter: CheckedContinuation<VMGuestHello, Error>?
+        /// The helper did not answer `hello` within `helloTimeout`.
+        var helloTimedOut = false
         /// Requests sent on this connection, by id. A reply that arrives before its caller starts
         /// waiting is parked as `.answered`.
         var pending: [UInt64: Pending] = [:]
@@ -75,10 +80,15 @@ actor VMGuestClient {
     private let hostVersion: String
     private let retryWindow: Duration
     private let retryInterval: Duration
-    private let clock: any Clock<Duration>
+    private let helloTimeout: Duration
+    /// The client's clock: connect retries and the hello timeout wait through it.
+    private let sleep: @Sendable (Duration) async throws -> Void
     private var connection: Connection?
-    /// The connect and hello every first caller shares.
-    private var establishing: Task<Void, Error>?
+    /// The connect and hello every first caller shares. Callers wait in `establishWaiters`, so one
+    /// of them giving up does not cancel it for the others.
+    private var establishing: Task<Void, Never>?
+    private var establishWaiters: [UInt64: CheckedContinuation<Void, Error>] = [:]
+    private var nextWaiter: UInt64 = 0
     private var nextToken: UInt64 = 0
     private var nextID: UInt64 = 0
     private var closed = false
@@ -90,13 +100,15 @@ actor VMGuestClient {
         hostVersion: String = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0",
         retryWindow: Duration = .seconds(5),
         retryInterval: Duration = .milliseconds(250),
-        clock: any Clock<Duration> = ContinuousClock()
+        helloTimeout: Duration = .seconds(5),
+        sleep: @escaping @Sendable (Duration) async throws -> Void = { try await Task.sleep(for: $0) }
     ) {
         self.connect = connect
         self.hostVersion = hostVersion
         self.retryWindow = retryWindow
         self.retryInterval = retryInterval
-        self.clock = clock
+        self.helloTimeout = helloTimeout
+        self.sleep = sleep
     }
 
     // MARK: - Calls
@@ -148,6 +160,7 @@ actor VMGuestClient {
         closed = true
         establishing?.cancel()
         establishing = nil
+        finishEstablishing(.failure(Failure.stopped))
         if let connection { lose(connection) }
     }
 
@@ -200,21 +213,50 @@ actor VMGuestClient {
         guard !closed else { throw Failure.stopped }
         // A connection still saying hello is not ready; its callers wait on `establishing`.
         if let connection, !connection.lost, connection.hello != nil { return connection }
-        do {
-            if let establishing {
-                try await establishing.value
-            } else {
-                let task = Task { try await self.establish() }
-                establishing = task
-                defer { if establishing == task { establishing = nil } }
-                try await task.value
+        if establishing == nil {
+            establishing = Task {
+                let result: Result<Void, Error>
+                do {
+                    try await self.establish()
+                    result = .success(())
+                } catch {
+                    result = .failure(error)
+                }
+                await self.establishFinished(result)
             }
-        } catch {
-            // `close()` cancels a connect in progress; that is the VM stopping, not a cancelled call.
-            throw closed ? Failure.stopped : error
+        }
+        nextWaiter += 1
+        let waiter = nextWaiter
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                if Task.isCancelled {
+                    continuation.resume(throwing: Failure.cancelled)
+                } else {
+                    establishWaiters[waiter] = continuation
+                }
+            }
+        } onCancel: {
+            Task { await self.stopWaiting(waiter) }
         }
         guard !closed, let connection, !connection.lost, connection.hello != nil else { throw Failure.stopped }
         return connection
+    }
+
+    private func establishFinished(_ result: Result<Void, Error>) {
+        establishing = nil
+        // `close()` cancels a connect in progress; that is the VM stopping, not a cancelled call.
+        finishEstablishing(closed ? .failure(Failure.stopped) : result)
+    }
+
+    private func finishEstablishing(_ result: Result<Void, Error>) {
+        let waiters = establishWaiters
+        establishWaiters = [:]
+        for waiter in waiters.values { waiter.resume(with: result) }
+    }
+
+    /// A cancelled caller stops waiting; the connect goes on for the others.
+    private func stopWaiting(_ waiter: UInt64) {
+        establishWaiters.removeValue(forKey: waiter)?.resume(throwing: Failure.cancelled)
     }
 
     /// Connects and says hello; the result becomes `connection`.
@@ -228,15 +270,23 @@ actor VMGuestClient {
         let connection = Connection(token: nextToken, transport: transport)
         self.connection = connection
         Task { await self.read(connection) }
+        let timeout = Task { [sleep, helloTimeout, token = connection.token] in
+            guard (try? await sleep(helloTimeout)) != nil else { return }
+            await self.helloTimedOut(token)
+        }
+        defer { timeout.cancel() }
         do {
             try await transport.send(VMGuestFramer.frame(.hello(hostVersion: hostVersion)))
         } catch {
             lose(connection)
-            throw Failure.stopped
+            throw connection.helloTimedOut ? Failure.helperUnresponsive : Failure.stopped
         }
+        // The reader may have taken the reply while the hello was being sent.
         let hello = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<VMGuestHello, Error>) in
-            if connection.lost {
-                continuation.resume(throwing: Failure.stopped)
+            if let hello = connection.hello {
+                continuation.resume(returning: hello)
+            } else if connection.lost {
+                continuation.resume(throwing: connection.helloTimedOut ? Failure.helperUnresponsive : Failure.stopped)
             } else {
                 connection.helloWaiter = continuation
             }
@@ -244,6 +294,16 @@ actor VMGuestClient {
         if hello.protocolRevision != VMGuestProtocol.revision {
             Self.log.error("guest helper \(hello.guestVersion, privacy: .public) speaks revision \(hello.protocolRevision, privacy: .public), this build \(VMGuestProtocol.revision, privacy: .public)")
         }
+    }
+
+    /// A helper that accepted the connection but never answered `hello`.
+    private func helloTimedOut(_ token: UInt64) {
+        guard let connection, connection.token == token, connection.hello == nil, !connection.lost else { return }
+        Self.log.error("the guest helper didn't answer hello within \(self.helloTimeout, privacy: .public)")
+        connection.helloTimedOut = true
+        connection.helloWaiter?.resume(throwing: Failure.helperUnresponsive)
+        connection.helloWaiter = nil
+        lose(connection)
     }
 
     /// The helper may still be starting: keeps trying for `retryWindow`.
@@ -259,7 +319,7 @@ actor VMGuestClient {
                 }
             }
             do {
-                try await clock.sleep(for: retryInterval)
+                try await sleep(retryInterval)
             } catch {
                 throw Failure.cancelled
             }
