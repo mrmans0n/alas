@@ -44,7 +44,7 @@ On a host worktree, every one of these shows the same red note, "Binary files ca
 5. **Same path rules as reading text.** No `.git`, nothing gitignored (except folder projects), no symlinks, contained in the worktree, regular files only.
 6. **Capability-gated and compatible.**
    - A new capability gates the byte reads.
-   - Older hosts keep today's note, and older Macs are unaffected.
+   - Older hosts keep today's note for images, but their text read's binary and too-large refusals now show the placeholder card with the size they already send. Older Macs are unaffected.
 
 ## Non-goals
 

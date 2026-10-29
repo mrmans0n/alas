@@ -661,7 +661,7 @@ extension GitService {
         return String(revision.dropFirst(blobImageRevisionPrefix.count))
     }
 
-    private static func isLFSPointer(_ data: Data) -> Bool {
+    static func isLFSPointer(_ data: Data) -> Bool {
         String(data: data, encoding: .utf8)?.hasPrefix("version https://git-lfs.github.com/spec/v1") == true
     }
 
