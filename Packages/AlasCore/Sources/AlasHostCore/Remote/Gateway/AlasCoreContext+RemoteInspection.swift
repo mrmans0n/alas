@@ -820,6 +820,8 @@ extension AlasCoreContext {
             switch revision {
             case .index:
                 rev = ""
+            case .head:
+                rev = "HEAD"
             case .base(let comparisonMode):
                 let commits = try await git.commitsAhead(
                     at: worktree.path,

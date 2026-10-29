@@ -292,6 +292,8 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
 /// A stored side of a file, in the forms the host's diff reads accept.
 public enum HostFileRevision: Codable, Equatable, Sendable {
     case index
+    /// HEAD, the old side of a staged change.
+    case head
     /// The comparison ref the host's changes use, or HEAD without one.
     case base(comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
     case commit(sha: String)

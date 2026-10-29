@@ -558,6 +558,7 @@ struct HostProtocolServerTests {
 
         #expect(try await read("icon.png") == bytes(working))
         #expect(try await read("icon.png", at: .index) == bytes(committed))
+        #expect(try await read("icon.png", at: .head) == bytes(committed))
         #expect(try await read("icon.png", at: .base(comparisonMode: nil)) == bytes(committed))
         #expect(try await read("icon.png", at: .commit(sha: sha)) == bytes(committed))
         #expect(try await read("icon.png", at: .parent(sha: sha)) == bytes(before))

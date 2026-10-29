@@ -1261,7 +1261,22 @@ final class NativePeerSessions {
             return false
         }
         documentRequestsInFlight.insert(document)
-        let sent = switch document {
+        let sent = sendDocumentRead(document)
+        if !sent {
+            documentRequestsInFlight.remove(document)
+            workspace.markUnavailable()
+            return false
+        }
+        return true
+    }
+
+    /// Sends `document`'s read: an image diff's two sides when its host serves file bytes, else its text read.
+    private func sendDocumentRead(_ document: NativePeerWorkspace.Document) -> Bool {
+        if let target = hostBytesTarget,
+           let plan = workspace.imageDiffPlan(for: document, comparisonMode: comparisonMode()) {
+            return readImageDiff(document, plan: plan, target: target)
+        }
+        return switch document {
         case .diff(let path, let stage):
             routeWorkspaceRead(.fileDiff(path: path, stage: stage?.rawValue, comparisonMode: comparisonMode())) {
                 .fileDiff(
@@ -1282,12 +1297,6 @@ final class NativePeerSessions {
         case .stashDiff, .checkpointDiff:
             readHostDiff(document)
         }
-        if !sent {
-            documentRequestsInFlight.remove(document)
-            workspace.markUnavailable()
-            return false
-        }
-        return true
     }
 
     func closeDocument() {
@@ -1314,14 +1323,42 @@ final class NativePeerSessions {
         Task { [weak self] in
             let result = await read()
             guard let self, workspaceEpoch == epoch else { return }
-            documentRequestsInFlight.remove(document)
             workspace.finishDocument(document, with: result)
-            if documentRequestOutdated, workspace.document == document {
-                documentRequestOutdated = false
-                open(document)
-            }
+            hostDocumentReadLanded(document)
         }
         return true
+    }
+
+    /// Reads both sides of an image diff over `target`'s host channel.
+    private func readImageDiff(
+        _ document: NativePeerWorkspace.Document, plan: NativePeerWorkspace.ImageDiffPlan,
+        target: (serverId: String, worktree: PeerHostWorktree)
+    ) -> Bool {
+        guard let hosts else { return false }
+        func read(_ side: NativePeerWorkspace.ImageDiffPlan.Side?) async -> NativePeerWorkspace.ImageSide {
+            guard let side else { return .missing }
+            return NativePeerWorkspace.imageSide(await hosts.read(
+                .fileBytes(path: side.path, revision: side.revision), in: target.worktree, serverId: target.serverId))
+        }
+        let epoch = workspaceEpoch
+        Task { [weak self] in
+            // ponytail: the sides are read one after the other; read them together if the wait shows.
+            let before = await read(plan.before)
+            let after = await read(plan.after)
+            guard let self, workspaceEpoch == epoch else { return }
+            workspace.finishImageDiff(document, plan: plan, before: before, after: after)
+            hostDocumentReadLanded(document)
+        }
+        return true
+    }
+
+    /// Clears a landed host read's in-flight marker and sends a retry queued while it was out.
+    private func hostDocumentReadLanded(_ document: NativePeerWorkspace.Document) {
+        documentRequestsInFlight.remove(document)
+        if documentRequestOutdated, workspace.document == document {
+            documentRequestOutdated = false
+            open(document)
+        }
     }
 
     func openReview(_ sessionID: String, serverId: String, worktree: PeerHostWorktree) {

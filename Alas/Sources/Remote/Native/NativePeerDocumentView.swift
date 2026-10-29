@@ -20,6 +20,8 @@ struct NativePeerDocumentView: View {
     /// The `.image` content, decoded; nil before decoding or when it failed.
     @State private var decodedImage: ImagePreviewInfo?
     @State private var imageDecodeFailed = false
+    /// The `.imageDiff` content, decoded.
+    @State private var imageDiffPair: ImageDiffPair?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,6 +32,7 @@ struct NativePeerDocumentView: View {
         .background(theme.color("bg-1"))
         .task(id: content) {
             decodeImage()
+            decodeImageDiff()
             await buildDisplayModel()
         }
     }
@@ -99,6 +102,14 @@ struct NativePeerDocumentView: View {
                 detail: Self.binaryDetail(byteSize: byteSize, tooLarge: tooLarge),
                 icon: "doc.fill"
             )
+        case .loaded(.imageDiff):
+            if let pair = imageDiffPair {
+                ImageDiffView(pair: pair, relativePath: document.path, onOpenFile: nil)
+            } else {
+                Spinner()
+                    .frame(width: 16, height: 16)
+                    .padding()
+            }
         case .loaded(.diff(let diff, let truncated)):
             if truncated { note("The peer cut off this diff.") }
             if diff.hunks.isEmpty {
@@ -142,6 +153,26 @@ struct NativePeerDocumentView: View {
         let kind = tooLarge ? "Too large to preview" : "Binary file"
         guard let byteSize else { return kind }
         return "\(kind) | \(ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file))"
+    }
+
+    private func decodeImageDiff() {
+        guard case .loaded(.imageDiff(let before, let after, let kind, let oldPath)) = content else {
+            imageDiffPair = nil
+            return
+        }
+        imageDiffPair = ImageDiffPair(
+            before: Self.decodedSide(before), after: Self.decodedSide(after), oldPath: oldPath, kind: kind)
+    }
+
+    /// Decodes in memory: a host's LFS store is out of reach, so a pointer fails to decode.
+    private static func decodedSide(_ side: NativePeerWorkspace.ImageSide) -> ImageDiffSide {
+        switch side {
+        case .data(let data):
+            NSImage(data: data).map(GitService.imageSide(forDecodedImage:))
+                ?? .failed(ImageDiffLoadFailure(message: "decode"))
+        case .missing: .missing
+        case .failed(let message): .failed(ImageDiffLoadFailure(message: message))
+        }
     }
 
     private func decodeImage() {

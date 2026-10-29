@@ -298,6 +298,36 @@ struct NativePeerWorkspaceTests {
         #expect(workspace.documentContent == expected)
     }
 
+    typealias PlanSide = NativePeerWorkspace.ImageDiffPlan.Side
+
+    /// An image diff reads the sides local's image diffs compare: index to working tree when
+    /// unstaged, HEAD to index when staged, the comparison ref to the working tree for the branch,
+    /// a commit's parent to itself; the old path for a rename, and no side an add or delete lacks.
+    @Test(arguments: [
+        (NativePeerWorkspace.Document.diff(path: "a.png", stage: .unstaged), "M", nil as String?,
+         PlanSide(path: "a.png", revision: .index) as PlanSide?, PlanSide(path: "a.png", revision: nil) as PlanSide?,
+         ImageDiffPairKind.modified),
+        (.diff(path: "a.png", stage: .staged), "M", nil, PlanSide(path: "a.png", revision: .head),
+         PlanSide(path: "a.png", revision: .index), .modified),
+        (.diff(path: "a.png", stage: nil), "M", nil, PlanSide(path: "a.png", revision: .base(comparisonMode: .manual)),
+         PlanSide(path: "a.png", revision: nil), .modified),
+        (.commitDiff(path: "a.png", sha: "abc"), "M", nil, PlanSide(path: "a.png", revision: .parent(sha: "abc")),
+         PlanSide(path: "a.png", revision: .commit(sha: "abc")), .modified),
+        (.commitDiff(path: "new.png", sha: "abc"), "R", "old.png", PlanSide(path: "old.png", revision: .parent(sha: "abc")),
+         PlanSide(path: "new.png", revision: .commit(sha: "abc")), .renamed),
+        (.diff(path: "a.png", stage: .staged), "A", nil, nil, PlanSide(path: "a.png", revision: .index), .added),
+        (.diff(path: "a.png", stage: .unstaged), "D", nil, PlanSide(path: "a.png", revision: .index), nil, .deleted),
+    ])
+    func imageDiffReadsTheSidesLocalCompares(
+        document: NativePeerWorkspace.Document, status: String, renameFrom: String?,
+        before: PlanSide?, after: PlanSide?, kind: ImageDiffPairKind
+    ) {
+        let plan = NativePeerWorkspace.imageDiffPlan(
+            for: document, status: status, renameFrom: renameFrom, comparisonMode: .manual)
+        #expect(plan == NativePeerWorkspace.ImageDiffPlan(
+            before: before, after: after, kind: kind, oldPath: kind == .renamed ? renameFrom : nil))
+    }
+
     enum Kind: Sendable, CaseIterable { case localChanges, commit, commitRange, branch, reviewRequest }
 
     /// A comment the host files, an agent's or a Mac's, lands on the file and
