@@ -382,6 +382,19 @@ final class WorktreeVMManagerTests {
         ])
     }
 
+    @Test("a corrupt registry is quarantined and read again, and a VM bundle on disk still counts as a VM")
+    func corruptRegistryNeitherHidesAVMNorBlocksTheAnswer() throws {
+        let manager = makeManager()
+        let file = root.appendingPathComponent("registry.json")
+        try Data("not json {".utf8).write(to: file)
+        #expect(manager.hasVMRecord("/repo/a") == false)
+
+        try Data("not json {".utf8).write(to: file)
+        let bundle = WorktreeVMManager.bundleURL(forWorktree: "/repo/a", root: root)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        #expect(manager.hasVMRecord("/repo/a") == true)
+    }
+
     private func makeGoldenBundle() throws -> VMBundle {
         let golden = VMBundle(url: root.appendingPathComponent("golden/25A1", isDirectory: true))
         try FileManager.default.createDirectory(at: golden.url, withIntermediateDirectories: true)

@@ -160,9 +160,17 @@ final class WorktreeVMManager {
 
     /// Whether the worktree has a VM, read without locking or writing the registry, so it is
     /// cheap enough for every computer use call; nil when the registry can't be read.
+    /// A record a newer build wrote counts, and so does the worktree's clone bundle on disk,
+    /// so a VM worktree never passes for one without a VM. An unreadable registry is
+    /// quarantined once by a locked snapshot and read again.
     func hasVMRecord(_ worktreeID: String) -> Bool? {
         guard vmsExist else { return false }
-        return (try? registry.read()).map { $0.contains { $0.id == worktreeID } }
+        if FileManager.default.fileExists(atPath: Self.bundleURL(forWorktree: worktreeID, root: root).path) {
+            return true
+        }
+        if let ids = try? registry.recordIDs() { return ids.contains(worktreeID) }
+        _ = try? registry.snapshot()
+        return (try? registry.recordIDs()).map { $0.contains(worktreeID) }
     }
 
     /// False until the first VM is installed, so queries and worktree

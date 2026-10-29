@@ -46,15 +46,14 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         try update { $0 }
     }
 
-    /// The records without taking the lock or writing: writes are atomic renames, so a reader
-    /// sees one whole file. Dead owners read as nil but stay in the file; an unparseable file
-    /// throws instead of being quarantined.
-    public func read() throws -> [WorktreeVMRecord] {
-        try load(quarantining: false).0.map { record in
-            var record = record
-            if let owner = record.runOwner, !isAlive(owner) { record.runOwner = nil }
-            return record
-        }
+    /// The id of every record, including ones this build cannot decode: a record from a newer
+    /// build still means its worktree has a VM. Read without taking the lock or writing, since
+    /// writes are atomic renames and a reader sees one whole file; an unparseable file throws
+    /// instead of being quarantined.
+    public func recordIDs() throws -> Set<String> {
+        let (known, foreign) = try load(quarantining: false)
+        let foreignIDs = foreign.compactMap { ($0 as? [String: Any])?["id"] as? String }
+        return Set(known.map(\.id) + foreignIDs)
     }
 
     /// Records this build decodes, plus raw JSON of those it cannot (for
