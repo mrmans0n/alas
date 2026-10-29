@@ -17,16 +17,18 @@ struct VMGuestProtocolTests {
         var offset = 0
         while offset < stream.count {
             let end = min(offset + sliceSize, stream.count)
-            received += try framer.append(stream[offset..<end])
+            received += framer.append(stream[offset..<end]).messages
             offset = end
         }
         #expect(received == messages)
     }
 
-    @Test func framerThrowsOnMalformedCompleteFrameThenRecovers() throws {
+    @Test func framerSkipsMalformedFramesWithoutLosingNeighbours() throws {
         var framer = VMGuestFramer()
-        let bad = Data([0, 0, 0, 3]) + Data("{x}".utf8)
-        #expect(throws: (any Error).self) { try framer.append(bad) }
-        #expect(try framer.append(VMGuestFramer.frame(.cancel(id: 9))) == [.cancel(id: 9)])
+        let garbage = Data([0, 0, 0, 3]) + Data("{x}".utf8)
+        let stream = try VMGuestFramer.frame(.cancel(id: 1)) + garbage + VMGuestFramer.frame(.cancel(id: 2))
+        let output = framer.append(stream)
+        #expect(output.messages == [.cancel(id: 1), .cancel(id: 2)])
+        #expect(output.malformedFrames == 1)
     }
 }

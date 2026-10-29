@@ -127,18 +127,31 @@ public struct VMGuestFramer: Sendable {
         return withUnsafeBytes(of: &length) { Data($0) } + payload
     }
 
-    /// Buffers partial frames and returns every message completed by `bytes`. Throws only when a
-    /// complete frame is not a valid message; that frame is dropped, so the stream stays usable.
-    public mutating func append(_ bytes: Data) throws -> [VMGuestMessage] {
+    public struct Output: Equatable, Sendable {
+        public var messages: [VMGuestMessage]
+        /// Complete frames that were not valid messages; each was skipped.
+        public var malformedFrames: Int
+    }
+
+    /// Buffers partial frames and returns every message completed by `bytes`, in order. A complete
+    /// frame that is not a valid message is skipped and counted, so it never costs the good messages
+    /// around it.
+    public mutating func append(_ bytes: Data) -> Output {
         buffer.append(bytes)
-        var messages: [VMGuestMessage] = []
-        while buffer.count >= 4 {
-            let length = buffer.prefix(4).reduce(0) { Int($0) << 8 | Int($1) }
-            guard buffer.count >= 4 + length else { break }
-            let payload = buffer.dropFirst(4).prefix(length)
-            buffer = Data(buffer.dropFirst(4 + length))
-            messages.append(try JSONDecoder().decode(VMGuestMessage.self, from: Data(payload)))
+        var output = Output(messages: [], malformedFrames: 0)
+        var start = buffer.startIndex
+        while buffer.endIndex - start >= 4 {
+            let length = buffer[start ..< start + 4].reduce(0) { Int($0) << 8 | Int($1) }
+            let end = start + 4 + length
+            guard buffer.endIndex >= end else { break }
+            if let message = try? JSONDecoder().decode(VMGuestMessage.self, from: buffer[start + 4 ..< end]) {
+                output.messages.append(message)
+            } else {
+                output.malformedFrames += 1
+            }
+            start = end
         }
-        return messages
+        if start > buffer.startIndex { buffer = Data(buffer[start...]) }
+        return output
     }
 }
