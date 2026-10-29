@@ -51,6 +51,10 @@ struct NativePeerWorkspace: Equatable {
     enum DocumentContent: Equatable {
         case diff(ParsedDiff, truncated: Bool)
         case text(String, truncated: Bool)
+        /// A file's bytes, decoded by the view.
+        case image(Data)
+        /// A file shown as a placeholder card; `tooLarge` when it is an image above the preview cap.
+        case binary(byteSize: Int?, tooLarge: Bool)
     }
 
     static let offlineMessage = "Peer is offline."
@@ -66,6 +70,8 @@ struct NativePeerWorkspace: Equatable {
     /// The open `.file` document's version, when the host would save it. Kept while the same
     /// document reloads, so an editor open on it stays.
     private(set) var documentVersion: WorktreeFileVersion?
+    /// Whether the open document's host serves file bytes, so binary refusals show a card instead of a note.
+    private var documentPreviewsFiles = false
     private var loadingPaths: Set<String> = []
     private var loadedPaths: Set<String> = []
     private var failedPaths: Set<String> = []
@@ -140,9 +146,10 @@ struct NativePeerWorkspace: Equatable {
         )
     }
 
-    mutating func beginDocument(_ document: Document) {
+    mutating func beginDocument(_ document: Document, previewsFiles: Bool = false) {
         if document != self.document { documentVersion = nil }
         self.document = document
+        documentPreviewsFiles = previewsFiles
         documentContent = .loading
     }
 
@@ -284,10 +291,15 @@ struct NativePeerWorkspace: Equatable {
             guard document == .file(path: path) else { return true }
             documentContent = .loaded(.text(text, truncated: truncated))
             documentVersion = version
-        case .fileUnavailable(_, let path, let reason, _, let message):
+        case .fileBytes(_, let path, let data, _):
             guard document == .file(path: path) else { return true }
             documentVersion = nil
-            documentContent = .failed(Self.describe(reason, message: message))
+            documentContent = .loaded(.image(data))
+        case .fileUnavailable(_, let path, let reason, let byteSize, let message):
+            guard document == .file(path: path) else { return true }
+            documentVersion = nil
+            documentContent = Self.unavailableContent(
+                path: path, reason: reason, byteSize: byteSize, message: message, previewsFiles: documentPreviewsFiles)
         default:
             return false
         }
@@ -318,6 +330,25 @@ struct NativePeerWorkspace: Equatable {
                 in: tree, for: path, with: [], state: .notLoaded).nodes)
         }
         fileTreeRevision &+= 1
+    }
+
+    /// What a `.file` document the host would not serve shows. A host that serves file bytes gets the
+    /// local placeholder card for a binary file, and for an image or known binary above the cap; an
+    /// older host keeps the note.
+    static func unavailableContent(
+        path: String, reason: RemoteFileAccessReason, byteSize: Int?, message: String?, previewsFiles: Bool
+    ) -> Load<DocumentContent> {
+        guard previewsFiles else { return .failed(describe(reason, message: message)) }
+        switch reason {
+        case .binary:
+            return .loaded(.binary(byteSize: byteSize, tooLarge: false))
+        case .tooLarge where ImageFileType.isSupported(relativePath: path):
+            return .loaded(.binary(byteSize: byteSize, tooLarge: true))
+        case .tooLarge where BinaryFileType.isKnownBinary(relativePath: path):
+            return .loaded(.binary(byteSize: byteSize, tooLarge: false))
+        default:
+            return .failed(describe(reason, message: message))
+        }
     }
 
     static func describe(_ reason: RemoteFileAccessReason, message: String?) -> String {

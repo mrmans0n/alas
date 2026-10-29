@@ -486,6 +486,15 @@ final class NativePeerSessions {
         hostFileBuffers[file]?.revert()
     }
 
+    /// The selected worktree on a host that serves file bytes, whether or not a tab is open: only the host
+    /// channel carries them.
+    var hostBytesTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard let selectedWorktree, let host = selectedWorktreeGroup?.host,
+              hosts?.servesFileBytes(serverId: selectedWorktree.serverId) == true
+        else { return nil }
+        return (selectedWorktree.serverId, host)
+    }
+
     /// The selected tab-less worktree, read over its host's channel.
     private var hostReadTarget: (serverId: String, worktree: PeerHostWorktree)? {
         guard selectedTab == nil, let selectedWorktree, let host = selectedWorktreeGroup?.host,
@@ -1241,7 +1250,8 @@ final class NativePeerSessions {
             documentRequestOutdated = false
             hostFileRefusals = [:]
         }
-        workspace.beginDocument(document)
+        let bytesTarget = hostBytesTarget
+        workspace.beginDocument(document, previewsFiles: bytesTarget != nil)
         guard !documentRequestsInFlight.contains(document) else {
             // A request for this exact document is already outstanding —
             // whether it's the one already open (a refresh) or one just
@@ -1265,7 +1275,11 @@ final class NativePeerSessions {
         case .commitDiff(let path, let sha):
             routeWorkspaceRead(.commitDiff(sha: sha, path: path)) { .commitFileDiff(sessionId: $0, sha: sha, path: path) }
         case .file(let path):
-            routeWorkspaceRead(.file(path: path)) { .readFile(sessionId: $0, path: path) }
+            if ImageFileType.isSupported(relativePath: path), let target = bytesTarget {
+                routeHostRead(.fileBytes(path: path, revision: nil), to: target)
+            } else {
+                routeWorkspaceRead(.file(path: path)) { .readFile(sessionId: $0, path: path) }
+            }
         case .stashDiff, .checkpointDiff:
             readHostDiff(document)
         }
@@ -1460,7 +1474,13 @@ final class NativePeerSessions {
     /// host's channel. An answer after the selection moved is dropped.
     private func routeWorkspaceRead(_ read: HostWorktreeRead, session: (String) -> RemoteClientMessage) -> Bool {
         if selectedSessionId != nil { return routeWhileOnline(session) }
-        guard let hosts, let target = hostReadTarget else { return false }
+        guard let target = hostReadTarget else { return false }
+        return routeHostRead(read, to: target)
+    }
+
+    /// Sends `read` over `target`'s host channel and applies the answer, as a workspace reply.
+    private func routeHostRead(_ read: HostWorktreeRead, to target: (serverId: String, worktree: PeerHostWorktree)) -> Bool {
+        guard let hosts else { return false }
         let epoch = workspaceEpoch
         let worktreeId = target.worktree.snapshot.worktree.id
         Task { [weak self] in
@@ -1714,7 +1734,7 @@ final class NativePeerSessions {
             .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:)))
         case .commitDiffResult(_, let sha, let path, _, _, _), .commitDiffFailed(_, let sha, let path, _, _):
             .commitDiff(path: path, sha: sha)
-        case .fileContents(_, let path, _, _, _), .fileUnavailable(_, let path, _, _, _):
+        case .fileContents(_, let path, _, _, _), .fileUnavailable(_, let path, _, _, _), .fileBytes(_, let path, _, _):
             .file(path: path)
         default: nil
         }

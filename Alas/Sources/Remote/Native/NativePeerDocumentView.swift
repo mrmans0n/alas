@@ -17,6 +17,9 @@ struct NativePeerDocumentView: View {
     @State private var layoutMode: DiffLayoutMode = .split
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    /// The `.image` content, decoded; nil before decoding or when it failed.
+    @State private var decodedImage: ImagePreviewInfo?
+    @State private var imageDecodeFailed = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,7 +28,10 @@ struct NativePeerDocumentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
-        .task(id: content) { await buildDisplayModel() }
+        .task(id: content) {
+            decodeImage()
+            await buildDisplayModel()
+        }
     }
 
     private var badge: String {
@@ -85,6 +91,14 @@ struct NativePeerDocumentView: View {
                 textColor: NSColor(theme.color("fg")),
                 backgroundColor: .clear
             )
+        case .loaded(.image):
+            imagePreview
+        case .loaded(.binary(let byteSize, let tooLarge)):
+            FilePreviewMessage(
+                title: (document.path as NSString).lastPathComponent,
+                detail: Self.binaryDetail(byteSize: byteSize, tooLarge: tooLarge),
+                icon: "doc.fill"
+            )
         case .loaded(.diff(let diff, let truncated)):
             if truncated { note("The peer cut off this diff.") }
             if diff.hunks.isEmpty {
@@ -107,6 +121,37 @@ struct NativePeerDocumentView: View {
                     .padding()
             }
         }
+    }
+
+    @ViewBuilder
+    private var imagePreview: some View {
+        if let info = decodedImage {
+            // A host file has no local URL, so no Open with System or Reveal.
+            ImagePreviewBody(info: info, name: (document.path as NSString).lastPathComponent)
+        } else if imageDecodeFailed {
+            FilePreviewMessage.decodeFailed()
+        } else {
+            Spinner()
+                .frame(width: 16, height: 16)
+                .padding()
+        }
+    }
+
+    /// The card's kind, then the size when the host sent it.
+    private static func binaryDetail(byteSize: Int?, tooLarge: Bool) -> String {
+        let kind = tooLarge ? "Too large to preview" : "Binary file"
+        guard let byteSize else { return kind }
+        return "\(kind) | \(ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file))"
+    }
+
+    private func decodeImage() {
+        guard case .loaded(.image(let data)) = content else {
+            decodedImage = nil
+            imageDecodeFailed = false
+            return
+        }
+        decodedImage = ImagePreviewInfo(data: data)
+        imageDecodeFailed = decodedImage == nil
     }
 
     private func note(_ text: String, color: String = "fg-dim") -> some View {

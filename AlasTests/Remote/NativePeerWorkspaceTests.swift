@@ -267,6 +267,29 @@ struct NativePeerWorkspaceTests {
         #expect(workspace.documentVersion == (step == .reopenSameFile ? version : nil))
     }
 
+    /// A host that serves file bytes turns a binary refusal, or an image or known binary over the
+    /// cap, into the placeholder card with its size; an older host, a text file over the cap and
+    /// any other refusal keep the note. `tooLarge` is the card's flag, nil for the note.
+    @Test(arguments: [
+        ("a.dat", RemoteFileAccessReason.binary, true, false as Bool?),
+        ("a.png", .tooLarge, true, true),
+        ("a.pdf", .tooLarge, true, false),
+        ("a.log", .tooLarge, true, nil),
+        ("a.png", .notFound, true, nil),
+        ("a.dat", .binary, false, nil),
+        ("a.png", .tooLarge, false, nil),
+    ])
+    func unavailableFileShowsTheCardOnlyFromAHostThatServesBytes(
+        path: String, reason: RemoteFileAccessReason, previewsFiles: Bool, tooLarge: Bool?
+    ) {
+        let content = NativePeerWorkspace.unavailableContent(
+            path: path, reason: reason, byteSize: 42, message: nil, previewsFiles: previewsFiles)
+        let expected: NativePeerWorkspace.Load<NativePeerWorkspace.DocumentContent> = tooLarge.map {
+            .loaded(.binary(byteSize: 42, tooLarge: $0))
+        } ?? .failed(NativePeerWorkspace.describe(reason, message: nil))
+        #expect(content == expected)
+    }
+
     enum Kind: Sendable, CaseIterable { case localChanges, commit, commitRange, branch, reviewRequest }
 
     /// A comment the host files, an agent's or a Mac's, lands on the file and

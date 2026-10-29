@@ -124,6 +124,11 @@ final class NativePeerHosts {
         channels[serverId]?.isSubscribed == true && supports(serverId, HostProtocolCapability.worktreesReadV1)
     }
 
+    /// Whether `serverId` serves `HostWorktreeRead.fileBytes`, for previews.
+    func servesFileBytes(serverId: String) -> Bool {
+        canRead(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesFileBytesV1)
+    }
+
     /// The reply a session in `worktree` would get for `read`. Nil when the
     /// host cannot be read, refused, or did not answer in time.
     func read(_ read: HostWorktreeRead, in worktree: PeerHostWorktree, serverId: String) async -> RemoteServerMessage? {
