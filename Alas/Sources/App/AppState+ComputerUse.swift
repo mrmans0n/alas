@@ -196,7 +196,7 @@ extension AppState {
         var helper: Result<VMGuestHello, VMGuestClient.Failure>?
         if case .guest(let id) = route, let client = vmManager.guestClient(for: id) {
             do {
-                helper = .success(try await client.hello())
+                helper = .success(try await client.status())
             } catch {
                 helper = .failure(error as? VMGuestClient.Failure ?? .stopped)
             }

@@ -52,13 +52,15 @@ struct VMGuestClientTests {
     private final class FakeGuest: Sendable {
         let end: PipeEnd
         let received: AsyncStream<VMGuestMessage>
+        /// The Screen Recording grant each `helloReply` reports.
+        let screenRecording = Mutex(false)
         private let receivedContinuation: AsyncStream<VMGuestMessage>.Continuation
 
         init(end: PipeEnd, protocolRevision: Int, answersHello: Bool = true) {
             self.end = end
             (received, receivedContinuation) = AsyncStream<VMGuestMessage>.makeStream()
             let continuation = receivedContinuation
-            Task {
+            Task { [self] in
                 var framer = VMGuestFramer()
                 while let data = try? await end.receive() {
                     for message in framer.append(data).messages {
@@ -66,7 +68,7 @@ struct VMGuestClientTests {
                             guard answersHello else { continue }
                             try? await end.send(VMGuestFramer.frame(.helloReply(
                                 guestVersion: "9.9", protocolRevision: protocolRevision,
-                                accessibility: true, screenRecording: false)))
+                                accessibility: true, screenRecording: self.screenRecording.withLock { $0 })))
                         } else {
                             continuation.yield(message)
                         }
@@ -292,6 +294,16 @@ struct VMGuestClientTests {
         let client = VMGuestClient(connect: { EagerHelloTransport() })
 
         #expect(try await client.hello().guestVersion == "eager")
+    }
+
+    @Test(.timeLimit(.minutes(1))) func statusAsksTheHelperAgainForItsGrants() async throws {
+        let (client, guests) = Self.connectedClient()
+        #expect(try await client.status().screenRecording == false)
+
+        try await Self.firstGuest(guests).screenRecording.withLock { $0 = true }
+
+        #expect(try await client.status().screenRecording == true)
+        #expect(try await client.hello().screenRecording == true)
     }
 
     @Test func outdatedHelperIsRefused() async throws {

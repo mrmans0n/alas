@@ -56,9 +56,18 @@ actor VMGuestClient {
     private final class Connection {
         let token: UInt64
         let transport: VMGuestTransport
+        /// The latest `helloReply`; nil until the handshake's.
         var hello: VMGuestHello?
-        var helloWaiter: CheckedContinuation<VMGuestHello, Error>?
-        /// The helper did not answer `hello` within `helloTimeout`.
+        /// Hellos sent and answered on this connection. The helper answers them in order, so
+        /// the nth reply answers the nth hello: the handshake's is 1.
+        var hellosSent: UInt64 = 0
+        var hellosAnswered: UInt64 = 0
+        var helloWaiters: [UInt64: CheckedContinuation<VMGuestHello, Error>] = [:]
+        /// Replies that arrived before their sender started waiting.
+        var helloReplies: [UInt64: VMGuestHello] = [:]
+        /// Later hellos whose sender gave up waiting; their late replies are dropped.
+        var abandonedHellos: Set<UInt64> = []
+        /// The helper did not answer the handshake's `hello` within `helloTimeout`.
         var helloTimedOut = false
         /// Requests sent on this connection, by id. A reply that arrives before its caller starts
         /// waiting is parked as `.answered`.
@@ -117,6 +126,12 @@ actor VMGuestClient {
     /// helper, so callers can show which version it is.
     func hello() async throws -> VMGuestHello {
         try await connected().hello!
+    }
+
+    /// Like `hello()`, but asks the helper again on the established connection, so grants given
+    /// since it connected show. Refreshes what `hello()` returns.
+    func status() async throws -> VMGuestHello {
+        try await sayHello(on: connected())
     }
 
     func perform(_ command: ComputerUseCommand, sessionID: String) async -> AlasCLIResponse {
@@ -273,40 +288,54 @@ actor VMGuestClient {
         let connection = Connection(token: nextToken, transport: transport)
         self.connection = connection
         Task { await self.read(connection) }
-        let timeout = Task { [sleep, helloTimeout, token = connection.token] in
-            guard (try? await sleep(helloTimeout)) != nil else { return }
-            await self.helloTimedOut(token)
-        }
-        defer { timeout.cancel() }
-        do {
-            try await transport.send(VMGuestFramer.frame(.hello(hostVersion: hostVersion)))
-        } catch {
-            lose(connection)
-            throw connection.helloTimedOut ? Failure.helperUnresponsive : Failure.stopped
-        }
-        // The reader may have taken the reply while the hello was being sent.
-        let hello = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<VMGuestHello, Error>) in
-            if let hello = connection.hello {
-                continuation.resume(returning: hello)
-            } else if connection.lost {
-                continuation.resume(throwing: connection.helloTimedOut ? Failure.helperUnresponsive : Failure.stopped)
-            } else {
-                connection.helloWaiter = continuation
-            }
-        }
+        let hello = try await sayHello(on: connection)
         if hello.protocolRevision != VMGuestProtocol.revision {
             Self.log.error("guest helper \(hello.guestVersion, privacy: .public) speaks revision \(hello.protocolRevision, privacy: .public), this build \(VMGuestProtocol.revision, privacy: .public)")
         }
     }
 
-    /// A helper that accepted the connection but never answered `hello`.
-    private func helloTimedOut(_ token: UInt64) {
-        guard let connection, connection.token == token, connection.hello == nil, !connection.lost else { return }
+    /// Sends a `hello` on `connection` and waits up to `helloTimeout` for its reply.
+    private func sayHello(on connection: Connection) async throws -> VMGuestHello {
+        connection.hellosSent += 1
+        let number = connection.hellosSent
+        let timeout = Task { [sleep, helloTimeout, token = connection.token] in
+            guard (try? await sleep(helloTimeout)) != nil else { return }
+            await self.helloTimedOut(token, number: number)
+        }
+        defer { timeout.cancel() }
+        do {
+            try await connection.transport.send(VMGuestFramer.frame(.hello(hostVersion: hostVersion)))
+        } catch {
+            lose(connection)
+            throw connection.helloTimedOut ? Failure.helperUnresponsive : Failure.stopped
+        }
+        // The reader may have taken the reply while the hello was being sent.
+        return try await withCheckedThrowingContinuation { continuation in
+            if let hello = connection.helloReplies.removeValue(forKey: number) {
+                continuation.resume(returning: hello)
+            } else if connection.lost {
+                continuation.resume(throwing: connection.helloTimedOut ? Failure.helperUnresponsive : Failure.stopped)
+            } else if connection.abandonedHellos.contains(number) {
+                continuation.resume(throwing: Failure.helperUnresponsive)
+            } else {
+                connection.helloWaiters[number] = continuation
+            }
+        }
+    }
+
+    /// A hello the helper did not answer in time. Without an answer to the handshake the
+    /// connection is useless; a later hello just fails, leaving calls on the connection running.
+    private func helloTimedOut(_ token: UInt64, number: UInt64) {
+        guard let connection, connection.token == token, !connection.lost,
+              connection.hellosAnswered < number else { return }
         Self.log.error("the guest helper didn't answer hello within \(self.helloTimeout, privacy: .public)")
-        connection.helloTimedOut = true
-        connection.helloWaiter?.resume(throwing: Failure.helperUnresponsive)
-        connection.helloWaiter = nil
-        lose(connection)
+        guard connection.hello != nil else {
+            connection.helloTimedOut = true
+            lose(connection)
+            return
+        }
+        connection.abandonedHellos.insert(number)
+        connection.helloWaiters.removeValue(forKey: number)?.resume(throwing: Failure.helperUnresponsive)
     }
 
     /// The helper may still be starting: keeps trying for `retryWindow`.
@@ -356,8 +385,13 @@ actor VMGuestClient {
                 guestVersion: guestVersion, accessibility: accessibility, screenRecording: screenRecording,
                 protocolRevision: protocolRevision)
             connection.hello = hello
-            connection.helloWaiter?.resume(returning: hello)
-            connection.helloWaiter = nil
+            connection.hellosAnswered += 1
+            let number = connection.hellosAnswered
+            if let waiter = connection.helloWaiters.removeValue(forKey: number) {
+                waiter.resume(returning: hello)
+            } else if connection.abandonedHellos.remove(number) == nil {
+                connection.helloReplies[number] = hello
+            }
         case let .response(id, _), let .runResult(id, _, _, _, _, _):
             switch connection.pending[id] {
             case let .waiting(continuation?):
@@ -379,8 +413,11 @@ actor VMGuestClient {
         connection.lost = true
         connection.transport.close()
         if self.connection === connection { self.connection = nil }
-        connection.helloWaiter?.resume(throwing: Failure.stopped)
-        connection.helloWaiter = nil
+        let helloWaiters = connection.helloWaiters
+        connection.helloWaiters = [:]
+        for waiter in helloWaiters.values {
+            waiter.resume(throwing: connection.helloTimedOut ? Failure.helperUnresponsive : Failure.stopped)
+        }
         let pending = connection.pending
         connection.pending = [:]
         for case let .waiting(continuation?) in pending.values {
