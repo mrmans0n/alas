@@ -1890,6 +1890,10 @@ final class AppState {
         Task.detached(priority: .utility) {
             WorktreeTrashCleaner.sweep(projects: cleanupProjects)
         }
+        // A guest disk left attached by a crash mid-patch would hold the VM bundle.
+        Task.detached(priority: .utility) {
+            VMDiskSession.detachStaleSessions(under: Paths.vmsRoot)
+        }
 
         // Kick off a background resolution of the user's login-shell PATH so
         // every `Process.git()` invocation uses the same environment a terminal
