@@ -1,3 +1,4 @@
+import AlasComputerUseKit
 import SwiftUI
 
 /// Toolbar badge shown while this session drives an app or is stopped.

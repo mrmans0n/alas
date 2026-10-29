@@ -1,12 +1,13 @@
+import AlasCore
 import ApplicationServices
 import CoreGraphics
 import ScreenCaptureKit
 import Security
 
 /// The macOS implementation of `ComputerUsePlatform`.
-enum ComputerUseSystemPermissions {
+public enum ComputerUseSystemPermissions {
     @MainActor
-    static func make() -> ComputerUsePlatform {
+    public static func make() -> ComputerUsePlatform {
         ComputerUsePlatform(
             isGranted: { permission in
                 switch permission {

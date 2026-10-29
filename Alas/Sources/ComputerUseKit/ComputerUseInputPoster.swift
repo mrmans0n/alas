@@ -9,7 +9,7 @@ import Foundation
 /// on that path; a system drag goes system-wide with the app activated and puts the cursor back
 /// after. Every sequence that presses something releases it before returning or checking for
 /// cancellation.
-enum ComputerUseInputPoster {
+public enum ComputerUseInputPoster {
     /// Unicode text per keyboard event; larger strings are dropped by some apps.
     static let textChunkUnits = 20
     private static let stepDelay: Duration = .milliseconds(8)
@@ -475,7 +475,7 @@ enum ComputerUseInputPoster {
         return flags
     }
 
-    static func keyCode(for key: ComputerUseKeyChord.Key) -> CGKeyCode? {
+    public static func keyCode(for key: ComputerUseKeyChord.Key) -> CGKeyCode? {
         switch key {
         case .character(let character):
             characterCodes[Character(character.lowercased())].map(CGKeyCode.init)

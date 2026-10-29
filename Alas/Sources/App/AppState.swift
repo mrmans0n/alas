@@ -1,4 +1,5 @@
 @_spi(AppHost) import AlasCore
+import AlasComputerUseKit
 import AppKit
 import Foundation
 import Observation

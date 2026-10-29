@@ -53,6 +53,8 @@ targets:
       Release: Config/Alas-Release.xcconfig
     sources:
       - path: Alas/Sources
+        excludes:
+          - "ComputerUseKit/**"
       - path: Alas/Resources/Themes
         buildPhase: resources
       - path: Alas/Resources/CodeThemes
@@ -116,6 +118,10 @@ targets:
       - sdk: libsqlite3.tbd
       - package: AlasCore
         product: AlasCore
+      # Static, so AlasCore is linked once (into the app), not into a dylib as well.
+      - target: AlasComputerUseKit
+        link: true
+        embed: false
       # The headless host, built against the same AlasCore the app links,
       # so it costs its own sources only. Inside the bundle it finds the
       # web client at ../RemoteWeb.
@@ -198,6 +204,27 @@ targets:
         ARCHS: $(ALAS_APP_ARCHS)
         ALAS_APP_ARCHS: $(ARCHS_STANDARD)
         PRODUCT_NAME: alas-host
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        SKIP_INSTALL: YES
+
+  # The computer-use executor and coordinator, shared by the app and the VM guest helper.
+  AlasComputerUseKit:
+    type: framework.static
+    platform: macOS
+    sources:
+      - path: Alas/Sources/ComputerUseKit
+    dependencies:
+      - package: AlasCore
+        product: AlasCore
+    settings:
+      base:
+        ARCHS: $(ALAS_APP_ARCHS)
+        ALAS_APP_ARCHS: $(ARCHS_STANDARD)
+        PRODUCT_NAME: AlasComputerUseKit
+        PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.alas.computerusekit
+        GENERATE_INFOPLIST_FILE: YES
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
