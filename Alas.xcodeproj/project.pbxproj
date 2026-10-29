@@ -1563,6 +1563,7 @@
 		D8C50433D3268DA1F43DCB72 /* VMGuestPatcherTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2A60808C8CBCC1A935CC7E4B /* VMGuestPatcherTests.swift */; };
 		D95A7FAF0B955642ED9D7521 /* ACPAuthFailureTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 380D04E9EB0D0ED0C24702DA /* ACPAuthFailureTests.swift */; };
 		D98DD9D4BE2AF6E9ABEB2401 /* AlasCoreExports.swift in Sources */ = {isa = PBXBuildFile; fileRef = F82F6946A682F86F58B7120B /* AlasCoreExports.swift */; };
+		D9CFFC79F05087397A884F77 /* GoldenProvisioner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA338659CE24024F81DE97DB /* GoldenProvisioner.swift */; };
 		D9E335CB096989ECD0A861F9 /* BeautifulMermaidBackendTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5341B1BDF38DAE656D5B6849 /* BeautifulMermaidBackendTests.swift */; };
 		D9E8451463778A9778403D64 /* ACPTranscriptRowAccessibility.swift in Sources */ = {isa = PBXBuildFile; fileRef = C333FC7915436F54A251FF67 /* ACPTranscriptRowAccessibility.swift */; };
 		D9FD24854A41DF2E9214E078 /* ReviewDraftCommentController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58BC051640BBB02A2EBF6E4F /* ReviewDraftCommentController.swift */; };
@@ -1891,10 +1892,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1912,10 +1913,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -3231,6 +3232,7 @@
 		B98E7424CBFF07A59BCB703A /* DiffPaneDocumentCacheTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffPaneDocumentCacheTests.swift; sourceTree = "<group>"; };
 		B9A252BAD78A56343D68E782 /* RemoteFileAccessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteFileAccessTests.swift; sourceTree = "<group>"; };
 		B9E5B10C3760424D35418FD1 /* ACPUpstreamReferenceChip.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPUpstreamReferenceChip.swift; sourceTree = "<group>"; };
+		BA338659CE24024F81DE97DB /* GoldenProvisioner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoldenProvisioner.swift; sourceTree = "<group>"; };
 		BA3763292E781FCA2AB207F1 /* permission-request-meta.json */ = {isa = PBXFileReference; lastKnownFileType = text.json; path = "permission-request-meta.json"; sourceTree = "<group>"; };
 		BA5820BB012E55F3A0C1272B /* RightPaneGGStackTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneGGStackTests.swift; sourceTree = "<group>"; };
 		BA59378FB8733DBAC67592A3 /* RemotePairingServiceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemotePairingServiceTests.swift; sourceTree = "<group>"; };
@@ -4493,6 +4495,7 @@
 			isa = PBXGroup;
 			children = (
 				C5EEE8D3D25830A0046104B8 /* GoldenImageInstaller.swift */,
+				BA338659CE24024F81DE97DB /* GoldenProvisioner.swift */,
 				65BECB867D8F4F3BE679BE4D /* HelperCodeRequirement.swift */,
 				F4D0638B08DC886A68F75760 /* RunningVM.swift */,
 				143995043B72B58B5F32ABCE /* VirtualMachineTabView.swift */,
@@ -7627,6 +7630,7 @@
 				79212B50265AAC9A392957C9 /* GitLFSBlobResolver.swift in Sources */,
 				E703B4895A0337310A17FED6 /* GitService+ImageDiff.swift in Sources */,
 				D242A1D6511D56CB15B72057 /* GoldenImageInstaller.swift in Sources */,
+				D9CFFC79F05087397A884F77 /* GoldenProvisioner.swift in Sources */,
 				18FEAA97EA576EC5276D2B28 /* HarnessPill.swift in Sources */,
 				9AB589065CDDE7B2CD11F685 /* HelperCodeRequirement.swift in Sources */,
 				387EF12B6875648E422956F7 /* Highlighted.swift in Sources */,

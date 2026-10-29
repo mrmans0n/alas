@@ -109,6 +109,7 @@ struct VirtualMachineTabView: View {
         case .idle: "idle"
         case .downloading: "downloading"
         case .installing: "installing"
+        case .provisioning(let step): "provisioning:\(step)"
         case .awaitingSetup(let build): "awaiting:\(build)"
         case .sealed(let build): "sealed:\(build)"
         case .failed: "failed"
@@ -180,13 +181,13 @@ struct VirtualMachineTabView: View {
     private var canCustomize: Bool {
         switch installer.phase {
         case .idle, .sealed: goldenAvailable
-        case .downloading, .installing, .awaitingSetup, .failed: false
+        case .downloading, .installing, .provisioning, .awaitingSetup, .failed: false
         }
     }
 
     private var installerIsBusy: Bool {
         switch installer.phase {
-        case .downloading, .installing: true
+        case .downloading, .installing, .provisioning: true
         default: false
         }
     }
@@ -202,6 +203,11 @@ struct VirtualMachineTabView: View {
                 progress("Downloading macOS", fraction: fraction)
             case .installing(let fraction):
                 progress("Installing macOS", fraction: fraction)
+            case .provisioning(let step):
+                VStack(spacing: 6) {
+                    Text(step.title)
+                    ProgressView().controlSize(.small)
+                }
             case .failed(let message):
                 Text(message)
             default:
@@ -226,7 +232,22 @@ struct VirtualMachineTabView: View {
 
     @ViewBuilder
     private func goldenSetupView(build: String) -> some View {
+        if let note = installer.failureNote {
+            HStack {
+                Image(systemName: "exclamationmark.triangle")
+                Text(note)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 12)).padding(.horizontal, 8).padding(.top, 8)
+        }
         header("Create a user that logs in automatically. Install the helper: open My Shared Files › helper › Install Alas VM Guest, then allow it in Accessibility and Screen Recording. Shut down macOS, then click Done.") {
+            // Customizing the base image is for the user's own changes.
+            if vms.customizingFrom == nil {
+                Button("Set up automatically") {
+                    Task { await installer.start() }
+                }
+                .disabled(finishingSetup)
+            }
             Button("Done") { finishGoldenSetup(build: build) }
                 .disabled(finishingSetup)
         }

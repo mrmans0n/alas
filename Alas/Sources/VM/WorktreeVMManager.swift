@@ -428,6 +428,48 @@ final class WorktreeVMManager {
         }
     }
 
+    /// Powers the golden VM off at once, running or still booting. Only for
+    /// boots whose disk will not be sealed from this run: the unattended
+    /// setup's first boot, or giving up on it.
+    func forceStopGolden(build: String) async {
+        let id = Self.goldenIDPrefix + build
+        do {
+            try await stop(id, force: true)
+        } catch {
+            logger.error("Forcing golden VM \(id, privacy: .public) off failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Whether this process runs or boots the golden VM.
+    func isGoldenRunning(build: String) -> Bool {
+        let id = Self.goldenIDPrefix + build
+        return runningVMs[id] != nil || starting.contains(id)
+    }
+
+    /// The golden guest helper's current version and grants.
+    func goldenHelperStatus(build: String) async throws -> VMGuestHello {
+        guard let client = guestClient(for: Self.goldenIDPrefix + build) else {
+            throw VMError(message: "The golden VM is not running")
+        }
+        return try await client.status()
+    }
+
+    /// Runs `command` in the golden guest through its helper without waiting
+    /// for the result: a command that shuts the guest down drops the
+    /// connection before it can answer. The guest stopping by itself is
+    /// recorded as a clean shutdown, as for one from the Apple menu.
+    func requestGoldenGuestCommand(build: String, _ command: String) {
+        guard let client = guestClient(for: Self.goldenIDPrefix + build) else { return }
+        let logger = logger
+        Task {
+            do {
+                _ = try await client.run(command, timeoutSeconds: 60)
+            } catch {
+                logger.notice("Golden guest command ended without a reply: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
     enum GoldenShutdown: Equatable {
         /// This process saw the guest shut down cleanly (now or earlier): safe
         /// to seal.

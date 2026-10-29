@@ -41,7 +41,7 @@ enum VMTabScreen: Equatable {
         case .awaitingSetup(let build):
             return hasVM && !customizingHere ? .stoppedWhileCustomizing : .goldenSetup(build: build)
         case _ where hasVM: return .stopped
-        case .downloading, .installing, .failed: return .setup
+        case .downloading, .installing, .provisioning, .failed: return .setup
         case .idle, .sealed: return goldenAvailable ? .createVM : .setup
         }
     }

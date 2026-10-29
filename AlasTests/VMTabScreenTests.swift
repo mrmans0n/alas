@@ -37,6 +37,7 @@ struct VMTabScreenTests {
         Case(name: "no VM, golden awaiting setup", phase: .awaitingSetup(build: "25A1"),
              expected: .goldenSetup(build: "25A1")),
         Case(name: "no VM, golden downloading", goldenAvailable: true, phase: .downloading(0.1), expected: .setup),
+        Case(name: "no VM, golden provisioning", phase: .provisioning(step: .verifying), expected: .setup),
         Case(name: "no VM, install failed", phase: .failed("offline"), expected: .setup),
         Case(name: "no VM, no golden", expected: .setup),
         Case(name: "no VM, sealed golden", goldenAvailable: true, phase: .sealed(build: "25A1"), expected: .createVM),

@@ -344,7 +344,8 @@ final class AppState {
         seal: { [weak vmManager] bundle in
             guard let vmManager else { throw WorktreeVMManager.VMError(message: "Alas is shutting down") }
             try vmManager.sealGolden(bundle)
-        })
+        },
+        provisioner: GoldenProvisioner.live(manager: vmManager))
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {

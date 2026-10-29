@@ -4,18 +4,35 @@ import Virtualization
 import os
 
 /// Downloads the latest supported macOS restore image and installs it into a
-/// golden VM bundle under `vmsRoot/golden/<build>/`. The user finishes Setup
-/// Assistant inside the golden VM, then `markSetupDone()` seals the bundle so
-/// worktree VMs can clone it.
+/// golden VM bundle under `vmsRoot/golden/<build>/`, then sets it up and
+/// seals it without the user through `GoldenProvisioner`. When that cannot
+/// finish, the user finishes Setup Assistant inside the golden VM, then
+/// `markSetupDone()` seals the bundle so worktree VMs can clone it.
 @MainActor
 final class GoldenImageInstaller: ObservableObject {
     enum Phase: Equatable {
         case idle
         case downloading(Double)
         case installing(Double)
+        /// The unattended setup is running on the installed golden.
+        case provisioning(step: ProvisioningStep)
         case awaitingSetup(build: String)
         case sealed(build: String)
         case failed(String)
+    }
+
+    enum ProvisioningStep: Equatable, Sendable {
+        case firstBoot, patching, finishing, verifying, shuttingDown
+
+        /// The progress line the VM tab shows.
+        var title: String {
+            switch self {
+            case .firstBoot: "Preparing macOS: first boot…"
+            case .patching, .finishing: "Preparing macOS: setting up the user and helper…"
+            case .verifying: "Preparing macOS: checking the helper…"
+            case .shuttingDown: "Preparing macOS: finishing…"
+            }
+        }
     }
 
     struct InstallerError: LocalizedError {
@@ -24,6 +41,9 @@ final class GoldenImageInstaller: ObservableObject {
     }
 
     @Published private(set) var phase: Phase = .idle
+    /// Why the unattended setup gave up, shown above the manual setup
+    /// instructions while the golden awaits setup.
+    @Published private(set) var failureNote: String?
 
     private static let diskImageSize: UInt64 = 64 << 30
     private nonisolated static let partialSuffix = ".partial"
@@ -33,15 +53,20 @@ final class GoldenImageInstaller: ObservableObject {
     /// `WorktreeVMManager.sealGolden`, which checks and writes under the
     /// registry lock so no Alas process can boot the golden meanwhile.
     private let seal: (VMBundle) throws -> Void
+    /// Sets up an installed golden without the user. Nil leaves every
+    /// install to the manual setup.
+    private let provisioner: GoldenProvisioner?
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "golden-image-installer")
     private var installProgressObservation: NSKeyValueObservation?
 
     init(
         root: URL = Paths.vmsRoot,
-        seal: @escaping (VMBundle) throws -> Void = GoldenImageInstaller.writeSealedMarker
+        seal: @escaping (VMBundle) throws -> Void = GoldenImageInstaller.writeSealedMarker,
+        provisioner: GoldenProvisioner? = nil
     ) {
         self.root = root
         self.seal = seal
+        self.provisioner = provisioner
         phase = Self.settledPhase(in: Self.goldenRoot(in: root)) ?? .idle
     }
 
@@ -50,11 +75,12 @@ final class GoldenImageInstaller: ObservableObject {
     /// progress or a failure message alone.
     func reloadFromDisk() {
         switch phase {
-        case .downloading, .installing, .failed: return
+        case .downloading, .installing, .provisioning, .failed: return
         case .idle, .awaitingSetup, .sealed: break
         }
         let onDisk = Self.settledPhase(in: goldenRoot) ?? .idle
         if onDisk != phase { phase = onDisk }
+        if case .awaitingSetup = onDisk {} else { failureNote = nil }
     }
 
     /// The phase an earlier launch left on disk: the newest installed golden
@@ -95,23 +121,31 @@ final class GoldenImageInstaller: ObservableObject {
             .map(VMBundle.init(url:))
     }
 
+    /// Installs the newest macOS and sets it up unattended. An installed
+    /// golden still awaiting setup (after a relaunch or a fallback) is
+    /// set up again from its first boot, never redownloaded.
     func start() async {
         #if !arch(arm64)
         phase = .failed(WorktreeVMManager.unsupportedMessage)
         #else
         switch phase {
-        case .downloading, .installing: return
+        case .downloading, .installing, .provisioning: return
         default: break
         }
         // An installed golden still awaiting setup is resumed, never replaced
         // by a newer download that would orphan it.
+        var resuming: String?
         if case .awaitingSetup(let build)? = Self.settledPhase(in: goldenRoot) {
-            phase = .awaitingSetup(build: build)
-            return
+            guard provisioner != nil else {
+                phase = .awaitingSetup(build: build)
+                return
+            }
+            resuming = build
         }
-        // Held through download, install and publication so two Alas
-        // processes never install at once or drop each other's partial
-        // bundle. The kernel releases it if this process dies.
+        // Held through download, install, publication and the unattended
+        // setup so two Alas processes never install or patch at once, or
+        // drop each other's partial bundle. The kernel releases it if this
+        // process dies.
         let installLock: ComputerUseDriverLock
         do {
             installLock = try ComputerUseDriverLock.acquire(
@@ -127,6 +161,14 @@ final class GoldenImageInstaller: ObservableObject {
             return
         }
         defer { installLock.release() }
+        failureNote = nil
+        let build: String? = if let resuming { resuming } else { await install() }
+        if let build { await provision(build: build) }
+    }
+
+    /// Downloads and installs the newest macOS. Returns the build to set up,
+    /// or nil when the phase is already settled (sealed or failed).
+    private func install() async -> String? {
         phase = .downloading(0)
         var partialBundle: URL?
         do {
@@ -135,8 +177,9 @@ final class GoldenImageInstaller: ObservableObject {
             let build = image.buildVersion
             let bundleURL = goldenRoot.appendingPathComponent(build, isDirectory: true)
             if FileManager.default.fileExists(atPath: bundleURL.path) {
-                phase = VMBundle(url: bundleURL).isSealed ? .sealed(build: build) : .awaitingSetup(build: build)
-                return
+                guard VMBundle(url: bundleURL).isSealed else { return build }
+                phase = .sealed(build: build)
+                return nil
             }
             guard let requirements = image.mostFeaturefulSupportedConfiguration,
                   requirements.hardwareModel.isSupported
@@ -169,12 +212,35 @@ final class GoldenImageInstaller: ObservableObject {
             try FileManager.default.moveItem(at: partial, to: bundleURL)
             partialBundle = nil
             logger.info("Installed golden macOS \(build, privacy: .public)")
-            phase = .awaitingSetup(build: build)
+            return build
         } catch {
             installProgressObservation = nil
             if let partialBundle { try? FileManager.default.removeItem(at: partialBundle) }
             logger.error("Golden image install failed: \(String(describing: error), privacy: .public)")
             phase = .failed(error.localizedDescription)
+            return nil
+        }
+    }
+
+    /// Runs the unattended setup on the installed `build`; whatever it cannot
+    /// finish is left to the manual setup, with a note saying why.
+    private func provision(build: String) async {
+        guard let provisioner else {
+            phase = .awaitingSetup(build: build)
+            return
+        }
+        let bundle = VMBundle(url: goldenRoot.appendingPathComponent(build, isDirectory: true))
+        phase = .provisioning(step: .firstBoot)
+        let outcome = await provisioner.run(bundle: bundle) { [weak self] step in
+            self?.phase = .provisioning(step: step)
+        }
+        switch outcome {
+        case .sealed:
+            failureNote = nil
+            phase = .sealed(build: build)
+        case .fallback(let reason):
+            failureNote = "Automatic setup couldn't finish (\(reason)). Finish it by hand:"
+            phase = .awaitingSetup(build: build)
         }
         #endif
     }
@@ -192,6 +258,7 @@ final class GoldenImageInstaller: ObservableObject {
             throw InstallerError(message: "No golden VM is awaiting setup")
         }
         try seal(bundle)
+        failureNote = nil
         phase = .sealed(build: bundle.url.lastPathComponent)
     }
 
