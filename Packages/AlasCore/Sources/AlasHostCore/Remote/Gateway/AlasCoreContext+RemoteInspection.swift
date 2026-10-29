@@ -86,12 +86,11 @@ extension AlasCoreContext {
     /// oversized case is reported from the script's own `stat`-derived size
     /// header, never from having transferred the whole file.
     @_spi(Testing) public func readRemoteWorktreeFileRaw(
-        host: String, worktreeRoot: String, relativePath: String
+        host: String, worktreeRoot: String, relativePath: String, maxBytes: Int = RemoteWorktreeFileAccess.maxFileBytes
     ) async -> RemoteWorktreeRawReadOutcome {
         do {
             switch try await RemotePathContainment.containedRead(
-                host: host, path: relativePath, worktreeRoot: worktreeRoot,
-                maxBytes: RemoteWorktreeFileAccess.maxFileBytes
+                host: host, path: relativePath, worktreeRoot: worktreeRoot, maxBytes: maxBytes
             ) {
             case .outsideWorktree:
                 return .containmentRejected
@@ -100,7 +99,7 @@ extension AlasCoreContext {
             case .unreadable:
                 return .unreadable("remote read failed")
             case let .ok(byteSize, prefix):
-                guard byteSize <= RemoteWorktreeFileAccess.maxFileBytes else {
+                guard byteSize <= maxBytes else {
                     return .tooLarge(byteSize: byteSize)
                 }
                 return .data(prefix)
@@ -782,6 +781,135 @@ extension AlasCoreContext {
         }
     }
 
+    @_spi(Testing) public func remoteFileBytes(sessionId: String, path: String, revision: HostFileRevision?) async -> RemoteFileBytesResult {
+        await remoteFileBytes(in: remoteWorktreeContext(sessionId: sessionId), path: path, revision: revision)
+    }
+
+    /// A file's raw bytes for a preview, under the text read's path rules
+    /// but with no binary or UTF-8 gate: the working tree's when `revision`
+    /// is nil, else the blob at that revision, refused over `maxBytes`
+    /// before it is read.
+    func remoteFileBytes(
+        in context: RemoteWorktreeContextResult, path: String, revision: HostFileRevision?,
+        maxBytes: Int = RemoteWorktreeFileAccess.maxPreviewBytes
+    ) async -> RemoteFileBytesResult {
+        let worktree: Worktree
+        switch context {
+        case .sessionUnknown: return .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
+        case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, byteSize: nil, message: nil)
+        case .found(let found): worktree = found
+        }
+        guard let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path),
+              let url = RemoteWorktreeFileAccess.resolve(path: path, in: worktree.path)
+        else {
+            return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+        }
+        guard let revision else {
+            return await remoteWorkingTreeBytes(worktree, normalizedPath: normalizedPath, url: url, maxBytes: maxBytes)
+        }
+        // A folder has no history; and a control character could end the batch request below.
+        guard !isFolderWorktree(worktree),
+              !normalizedPath.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F })
+        else {
+            return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+        }
+        let git = GitService()
+        do {
+            // Only the forms the diff reads use, and SHAs verified as commits here.
+            let rev: String
+            switch revision {
+            case .index:
+                rev = ""
+            case .head:
+                rev = "HEAD"
+            case .base(let comparisonMode):
+                let commits = try await git.commitsAhead(
+                    at: worktree.path,
+                    baseBranch: environment.configuration().worktrees.baseBranch,
+                    resolution: GitService.BaseResolution.forCommits(
+                        mode: comparisonMode ?? environment.configuration().changes.comparisonMode,
+                        userOverrodeBaseBranch: false
+                    ))
+                rev = commits.comparisonRef ?? "HEAD"
+            case .commit(let sha), .parent(let sha):
+                guard RemoteWorktreeFileAccess.isCommitSHA(sha) else {
+                    return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+                }
+                let commit: String
+                do {
+                    commit = try await git.resolveRevision(at: worktree.path, ref: sha)
+                } catch let error as NSError where error.domain == "GitService.resolveRevision" {
+                    // git ran and names no such commit; anything else failed to run.
+                    return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+                }
+                rev = revision == .commit(sha: sha) ? commit : commit + "^"
+            }
+            // As diffs do, a path ignored now is still read where it is tracked.
+            if try await git.isPathIgnored(worktreePath: worktree.path, path: normalizedPath, comparisonRef: rev) {
+                return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+            }
+            // `./` keeps the path a path, relative to the worktree root.
+            let check = try await Process.git(
+                ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+                cwd: worktree.path, stdin: "\(rev):./\(normalizedPath)\n")
+            guard check.exitCode == 0 else {
+                return .failure(reason: .gitFailed, byteSize: nil, message: check.stderr)
+            }
+            // A missing object answers `<name> missing` on a clean exit.
+            let fields = check.stdout.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            guard fields.count == 3, fields[1] == "blob", let byteSize = Int(fields[2]) else {
+                return .failure(reason: .notFound, byteSize: nil, message: nil)
+            }
+            guard byteSize <= maxBytes else { return .failure(reason: .tooLarge, byteSize: byteSize, message: nil) }
+            // `cat-file blob` by id: the stored bytes, with no textconv.
+            let blob = try await Process.gitData(["cat-file", "blob", fields[0]], cwd: worktree.path)
+            guard blob.exitCode == 0 else {
+                return .failure(reason: .gitFailed, byteSize: nil, message: blob.stderr)
+            }
+            return .success(data: blob.stdout)
+        } catch {
+            return .failure(reason: .gitFailed, byteSize: nil, message: error.localizedDescription)
+        }
+    }
+
+    /// The working-tree file's bytes, through `remoteFileContents`'s path chain.
+    private func remoteWorkingTreeBytes(
+        _ worktree: Worktree, normalizedPath: String, url: URL, maxBytes: Int
+    ) async -> RemoteFileBytesResult {
+        if !worktree.path.isRemoteAlasPath, RemoteWorktreeFileAccess.isSymlink(at: url) {
+            return .failure(reason: .notFound, byteSize: nil, message: nil)
+        }
+        do {
+            let ignored = isFolderWorktree(worktree)
+                ? false
+                : try await GitService().isPathIgnored(worktreePath: worktree.path, path: normalizedPath)
+            if ignored { return .failure(reason: .pathRejected, byteSize: nil, message: nil) }
+        } catch {
+            return .failure(reason: .gitFailed, byteSize: nil, message: error.localizedDescription)
+        }
+        if worktree.path.isRemoteAlasPath {
+            guard let host = RemoteHostRegistry.shared.host(forPath: worktree.path.path) else {
+                return .failure(reason: .gitFailed, byteSize: nil, message: "Remote host is not registered for this worktree.")
+            }
+            switch await readRemoteWorktreeFileRaw(
+                host: host, worktreeRoot: worktree.path.path, relativePath: normalizedPath, maxBytes: maxBytes
+            ) {
+            case .containmentRejected: return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+            case .notFound: return .failure(reason: .notFound, byteSize: nil, message: nil)
+            case .unreadable(let detail): return .failure(reason: .gitFailed, byteSize: nil, message: detail)
+            case .tooLarge(let byteSize): return .failure(reason: .tooLarge, byteSize: byteSize, message: nil)
+            case .data(let data):
+                guard data.count <= maxBytes else { return .failure(reason: .tooLarge, byteSize: data.count, message: nil) }
+                return .success(data: data)
+            }
+        }
+        switch await RemoteWorktreeFileAccess.probeVersion(at: url, maxBytes: maxBytes) {
+        case .missing: return .failure(reason: .notFound, byteSize: nil, message: nil)
+        case .tooLarge(let byteSize): return .failure(reason: .tooLarge, byteSize: byteSize, message: nil)
+        case .version(_, let data): return .success(data: data)
+        }
+    }
+
     /// The message a session in `worktree` would get for `read`, answered as
     /// `id`: the session path's own mapping, over the worktree's reads.
     @_spi(Testing) public func remoteRead(_ read: HostWorktreeRead, in worktree: Worktree, replyingAs id: String) async -> RemoteServerMessage {
@@ -817,6 +945,9 @@ extension AlasCoreContext {
         }
         func remoteFileContents(sessionId _: String, path: String) async -> RemoteFileContentsResult {
             await core.remoteFileContents(in: .found(worktree), path: path)
+        }
+        func remoteFileBytes(sessionId _: String, path: String, revision: HostFileRevision?) async -> RemoteFileBytesResult {
+            await core.remoteFileBytes(in: .found(worktree), path: path, revision: revision)
         }
         func remoteRangeFiles(sessionId _: String, base: String, head: String, threeDot: Bool) async -> RemoteCommitFilesResult {
             await core.remoteRangeFiles(in: .found(worktree), base: base, head: head, threeDot: threeDot)

@@ -1495,7 +1495,8 @@ final class NativePeerSessions {
             .commitDiffFailed(
                 sessionId: id, sha: HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot), path: path,
                 reason: .unknown, message: nil)
-        case .file(let path): .fileUnavailable(sessionId: id, path: path, reason: .unknown, byteSize: nil, message: nil)
+        case .file(let path), .fileBytes(let path, _):
+            .fileUnavailable(sessionId: id, path: path, reason: .unknown, byteSize: nil, message: nil)
         }
     }
 

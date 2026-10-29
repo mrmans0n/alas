@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 @_spi(Testing) @testable import AlasCore
-@_spi(Testing) @testable import AlasHostCore
+@_spi(Testing) @_spi(AppHost) @testable import AlasHostCore
 
 @MainActor
 struct HostProtocolServerTests {
@@ -516,6 +516,74 @@ struct HostProtocolServerTests {
         fixture.core.projects.setWorktreeHidden(projectId: fixture.projectID, path: worktree.path, hidden: true)
         #expect(try await fixture.request(.readWorktree(worktree: ref, read: .file(path: "notes.txt")))
             == .failure(error: .notFound(what: "worktree \(ref.path) in project \(fixture.projectID)")))
+    }
+
+    /// A preview reads a file's raw bytes, from the working tree or a stored
+    /// side, under the text read's path rules and refused over the cap.
+    @Test func aMacReadsAWorktreeFilesBytes() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let id = worktree.id
+        func git(_ arguments: String...) async throws -> String {
+            let result = try await Process.git(arguments, cwd: repo)
+            #expect(result.exitCode == 0, "\(arguments): \(result.stderr)")
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func read(_ path: String, at revision: HostFileRevision? = nil) async throws -> RemoteServerMessage? {
+            guard case .worktreeRead(let reply) = try await fixture.request(
+                .readWorktree(worktree: ref, read: .fileBytes(path: path, revision: revision)))
+            else { return nil }
+            return reply
+        }
+        func bytes(_ data: Data, _ path: String = "icon.png") -> RemoteServerMessage {
+            .fileBytes(sessionId: id, path: path, data: data, byteSize: data.count)
+        }
+        func refused(_ path: String, _ reason: RemoteFileAccessReason) -> RemoteServerMessage {
+            .fileUnavailable(sessionId: id, path: path, reason: reason, byteSize: nil, message: nil)
+        }
+        let before = Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0x01])
+        let committed = Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFF, 0x02, 0x0A])
+        let working = Data([0x89, 0x50, 0x4E, 0x47, 0x00, 0xFE])
+        let icon = repo.appendingPathComponent("icon.png")
+        try before.write(to: icon)
+        _ = try await git("add", "icon.png")
+        _ = try await git("commit", "-q", "-m", "Add icon")
+        try committed.write(to: icon)
+        _ = try await git("commit", "-q", "-am", "Change icon")
+        let sha = try await git("rev-parse", "HEAD")
+        try working.write(to: icon)
+        try Data([1]).write(to: repo.appendingPathComponent("new.bin"))
+
+        #expect(try await read("icon.png") == bytes(working))
+        #expect(try await read("icon.png", at: .index) == bytes(committed))
+        #expect(try await read("icon.png", at: .head) == bytes(committed))
+        #expect(try await read("icon.png", at: .base(comparisonMode: nil)) == bytes(committed))
+        #expect(try await read("icon.png", at: .commit(sha: sha)) == bytes(committed))
+        #expect(try await read("icon.png", at: .parent(sha: sha)) == bytes(before))
+        #expect(try await read("new.bin", at: .base(comparisonMode: nil)) == refused("new.bin", .notFound))
+
+        // Over the cap, refused with its size before it is read.
+        for revision in [nil, HostFileRevision.commit(sha: sha)] {
+            #expect(await fixture.core.remoteFileBytes(in: .found(worktree), path: "icon.png", revision: revision, maxBytes: 4)
+                == .failure(reason: .tooLarge, byteSize: revision == nil ? working.count : committed.count, message: nil))
+        }
+
+        // The text read's path rules.
+        try FileManager.default.createSymbolicLink(at: repo.appendingPathComponent("link.png"), withDestinationURL: icon)
+        try Data("*.log\n".utf8).write(to: repo.appendingPathComponent(".gitignore"))
+        try Data([1]).write(to: repo.appendingPathComponent("debug.log"))
+        #expect(try await read("link.png") == refused("link.png", .notFound))
+        #expect(try await read("debug.log") == refused("debug.log", .pathRejected))
+        #expect(try await read(".git/config") == refused(".git/config", .pathRejected))
+        #expect(try await read(".git/config", at: .index) == refused(".git/config", .pathRejected))
+
+        // Only verified commit SHAs name a revision.
+        let tree = try await git("rev-parse", "HEAD^{tree}")
+        for name in ["HEAD~1", tree, String(repeating: "0", count: 40)] {
+            #expect(try await read("icon.png", at: .commit(sha: name)) == refused("icon.png", .pathRejected))
+        }
     }
 
     /// A range is read as a commit is, its replies named by the range. Refs

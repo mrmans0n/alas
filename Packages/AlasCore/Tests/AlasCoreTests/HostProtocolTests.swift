@@ -4,6 +4,16 @@ import Testing
 @testable import AlasHostCore
 
 struct HostProtocolTests {
+    /// A preview at the cap, all `/`-heavy base64 that JSON escapes,
+    /// still fits one WebSocket frame inside its host reply envelope.
+    @Test func aFileBytesReplyAtTheCapFitsOneFrame() throws {
+        let data = Data(repeating: 0xFF, count: RemoteWorktreeFileAccess.maxPreviewBytes)
+        let reply = RemoteServerMessage.host(.response(id: Int.max, result: .worktreeRead(reply: .fileBytes(
+            sessionId: UUID().uuidString, path: String(repeating: "a/", count: 100) + "icon.png",
+            data: data, byteSize: data.count))))
+        #expect(try JSONEncoder().encode(reply).count < WebSocketFrame.maxPayloadLength)
+    }
+
     private static let worktreePath = URL(fileURLWithPath: "/srv/feature")
     private static let worktree = Worktree(
         id: Worktree.makeId(path: worktreePath), projectId: "p", name: "feature", branch: "feature",

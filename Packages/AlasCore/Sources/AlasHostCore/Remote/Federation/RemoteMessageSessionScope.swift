@@ -114,7 +114,7 @@ extension RemoteServerMessage {
              .commitFiles(let id, _, _, _), .commitFilesFailed(let id, _, _, _),
              .commitDiffResult(let id, _, _, _, _, _), .commitDiffFailed(let id, _, _, _, _),
              .fileTree(let id, _, _, _), .fileTreeFailed(let id, _, _, _), .fileContents(let id, _, _, _, _),
-             .fileUnavailable(let id, _, _, _, _), .mentionCandidates(let id, _, _):
+             .fileUnavailable(let id, _, _, _, _), .fileBytes(let id, _, _, _), .mentionCandidates(let id, _, _):
             return id
         case .sessionConfig(let cfg):
             return cfg.sessionId
@@ -197,6 +197,8 @@ extension RemoteServerMessage {
             return .fileContents(sessionId: new, path: path, text: text, truncated: truncated, version: version)
         case .fileUnavailable(_, let path, let reason, let byteSize, let message):
             return .fileUnavailable(sessionId: new, path: path, reason: reason, byteSize: byteSize, message: message)
+        case .fileBytes(_, let path, let data, let byteSize):
+            return .fileBytes(sessionId: new, path: path, data: data, byteSize: byteSize)
         case .mentionCandidates(_, let query, let candidates):
             return .mentionCandidates(sessionId: new, query: query, candidates: candidates)
         }
