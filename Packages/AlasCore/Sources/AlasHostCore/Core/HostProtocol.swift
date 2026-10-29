@@ -278,12 +278,25 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
     /// `.commitDiffFailed` named by `rangeSpec(base:head:threeDot:)`.
     case rangeDiff(base: String, head: String, threeDot: Bool, path: String, originalPath: String?)
     case file(path: String)
+    /// A file's raw bytes, for a preview: the working tree's when `revision`
+    /// is nil. Answered as `.fileBytes` or `.fileUnavailable`.
+    case fileBytes(path: String, revision: HostFileRevision?)
 
     /// How a range's replies name it: `base..head`, or `base...head` for
     /// a branch comparison from their merge base.
     public static func rangeSpec(base: String, head: String, threeDot: Bool) -> String {
         "\(base)\(threeDot ? "..." : "..")\(head)"
     }
+}
+
+/// A stored side of a file, in the forms the host's diff reads accept.
+public enum HostFileRevision: Codable, Equatable, Sendable {
+    case index
+    /// The comparison ref the host's changes use, or HEAD without one.
+    case base(comparisonMode: AppConfig.Changes.ChangesComparisonMode?)
+    case commit(sha: String)
+    /// The commit before `sha`: a root commit's has no file.
+    case parent(sha: String)
 }
 
 /// A draft review as a worktree's Reviews list shows it.

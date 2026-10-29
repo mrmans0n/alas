@@ -910,6 +910,8 @@ public enum RemoteServerMessage: Equatable, Sendable {
     case fileUnavailable(
         sessionId: String, path: String, reason: RemoteFileAccessReason,
         byteSize: Int?, message: String?)
+    /// A file's raw bytes, the answer to `HostWorktreeRead.fileBytes`.
+    case fileBytes(sessionId: String, path: String, data: Data, byteSize: Int)
     /// The answer to `searchMentions`, echoing its query so a viewer drops
     /// answers to keystrokes it has moved past.
     case mentionCandidates(sessionId: String, query: String, candidates: [RemoteMention])
@@ -938,6 +940,7 @@ extension RemoteServerMessage: Codable {
         case visualId
         case hook
         case version
+        case data
     }
 
     public init(from decoder: Decoder) throws {
@@ -1191,6 +1194,12 @@ extension RemoteServerMessage: Codable {
                 reason: try c.decode(RemoteFileAccessReason.self, forKey: .reason),
                 byteSize: try c.decodeIfPresent(Int.self, forKey: .byteSize),
                 message: try c.decodeIfPresent(String.self, forKey: .message))
+        case "fileBytes":
+            self = .fileBytes(
+                sessionId: try c.decode(String.self, forKey: .sessionId),
+                path: try c.decode(String.self, forKey: .path),
+                data: try c.decode(Data.self, forKey: .data),
+                byteSize: try c.decode(Int.self, forKey: .byteSize))
         case let other:
             throw DecodingError.dataCorruptedError(forKey: .type, in: c, debugDescription: "unknown type \(other)")
         }
@@ -1465,6 +1474,12 @@ extension RemoteServerMessage: Codable {
             try c.encode(reason.rawValue, forKey: .reason)
             try c.encodeIfPresent(byteSize, forKey: .byteSize)
             try c.encodeIfPresent(message, forKey: .message)
+        case .fileBytes(let s, let path, let data, let byteSize):
+            try c.encode("fileBytes", forKey: .type)
+            try c.encode(s, forKey: .sessionId)
+            try c.encode(path, forKey: .path)
+            try c.encode(data, forKey: .data)
+            try c.encode(byteSize, forKey: .byteSize)
         }
     }
 }
@@ -1504,6 +1519,8 @@ public enum HostProtocolCapability: Sendable {
     public static let worktreesLifecycleV1 = "host.worktrees.lifecycle.v1"
     /// Hosts that serve `readWorktree`.
     public static let worktreesReadV1 = "host.worktrees.read.v1"
+    /// Hosts that serve the `fileBytes` read of `readWorktree`.
+    public static let worktreesFileBytesV1 = "host.worktrees.fileBytes.v1"
     /// Hosts that serve `listRunScripts` and `restartRun`.
     public static let runsScriptsV1 = "host.runs.scripts.v1"
     /// Hosts that serve `renameBranch`.
@@ -1545,7 +1562,7 @@ public enum HostProtocolCapability: Sendable {
     /// Everything every host serves of the host protocol.
     public static let served = [
         v1, sessionsV1, worktreesFollowV1, eventsV1, runsOutputV1, worktreesLifecycleV1, worktreesReadV1, runsScriptsV1,
-        worktreesRenameBranchV1, repoHooksApprovalV1,
+        worktreesRenameBranchV1, repoHooksApprovalV1, worktreesFileBytesV1,
     ]
     /// What only a headless host serves.
     public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1,

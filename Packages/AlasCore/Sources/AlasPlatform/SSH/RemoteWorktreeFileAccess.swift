@@ -45,6 +45,8 @@ public enum RemoteWorktreeFileAccess: Sendable {
     }
 
     public static let maxFileBytes = 512 * 1024
+    /// The cap on a file's raw bytes read for a preview, such as an image.
+    public static let maxPreviewBytes = 8 * 1024 * 1024
     public static let maxDiffLines = 2_000
     public static let maxChangedFiles = 500
     /// Caps a single directory listing (the root, or one expanded
@@ -405,10 +407,10 @@ public enum RemoteWorktreeFileAccess: Sendable {
         }.value
     }
 
-    /// The regular file at `url` as one no-follow open, capped at `maxFileBytes`.
-    public static func probeVersion(at url: URL) async -> FileVersionProbe {
+    /// The regular file at `url` as one no-follow open, capped at `maxBytes`.
+    public static func probeVersion(at url: URL, maxBytes: Int = maxFileBytes) async -> FileVersionProbe {
         await Task.detached(priority: .userInitiated) {
-            readCapped(openRegularFileNoFollow(at: url), maxBytes: maxFileBytes)
+            readCapped(openRegularFileNoFollow(at: url), maxBytes: maxBytes)
         }.value
     }
 

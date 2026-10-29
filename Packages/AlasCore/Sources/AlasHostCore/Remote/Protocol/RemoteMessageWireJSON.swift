@@ -905,3 +905,8 @@ public enum RemoteFileContentsResult: Equatable, Sendable {
     case success(text: String, truncated: Bool, version: WorktreeFileVersion? = nil)
     case failure(reason: RemoteFileAccessReason, byteSize: Int?, message: String?)
 }
+
+public enum RemoteFileBytesResult: Equatable, Sendable {
+    case success(data: Data)
+    case failure(reason: RemoteFileAccessReason, byteSize: Int?, message: String?)
+}
