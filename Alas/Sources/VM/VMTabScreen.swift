@@ -14,8 +14,11 @@ enum VMTabScreen: Equatable {
     case createVM
     case stopped
 
-    /// A worktree that has its own VM always shows that VM's states; golden
-    /// setup screens are only for worktrees that have none yet.
+    /// A worktree that has its own VM shows that VM's states, except that a
+    /// golden awaiting setup takes over once its own VM is not running or
+    /// booting here: with a sealed golden already cloned, that only happens
+    /// while the base image is being customized. Install screens are only
+    /// for worktrees that have no VM yet.
     static func resolve(
         runningHere: Bool,
         startingHere: Bool,
@@ -31,9 +34,9 @@ enum VMTabScreen: Equatable {
         if let slotChoice { return .slotChoice(candidates: slotChoice) }
         if let runningElsewhere { return .runningElsewhere(label: runningElsewhere) }
         if !loaded { return .loading }
-        if hasVM { return .stopped }
         switch installerPhase {
         case .awaitingSetup(let build): return .goldenSetup(build: build)
+        case _ where hasVM: return .stopped
         case .downloading, .installing, .failed: return .setup
         case .idle, .sealed: return goldenAvailable ? .createVM : .setup
         }

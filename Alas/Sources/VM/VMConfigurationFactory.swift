@@ -11,6 +11,14 @@ struct VMDisplaySize: Codable, Equatable, Sendable {
     static let `default` = VMDisplaySize(width: 1920, height: 1200, pixelsPerInch: 144)
 }
 
+/// A host directory shared with the guest. macOS guests mount every share
+/// under `/Volumes/My Shared Files/<name>`.
+struct VMShare: Equatable, Sendable {
+    var name: String
+    var hostURL: URL
+    var readOnly: Bool
+}
+
 /// Builds Virtualization.framework configurations from on-disk VM bundles.
 enum VMConfigurationFactory {
     struct ConfigurationError: LocalizedError {
@@ -22,10 +30,11 @@ enum VMConfigurationFactory {
 
     /// A macOS guest: hardware model, machine identifier and auxiliary storage
     /// come from the bundle, plus a virtio disk, NAT networking with the
-    /// bundle's MAC address, a display, keyboard, trackpad and a vsock device.
-    /// No audio device is attached.
+    /// bundle's MAC address, a display, keyboard, trackpad, a vsock device and,
+    /// when `shares` is not empty, one auto-mounted virtio file system holding
+    /// them all. No audio device is attached.
     static func macOS(
-        bundle: VMBundle, cpuCount: Int, memoryBytes: UInt64, display: VMDisplaySize
+        bundle: VMBundle, cpuCount: Int, memoryBytes: UInt64, display: VMDisplaySize, shares: [VMShare] = []
     ) throws -> VZVirtualMachineConfiguration {
         let platform = VZMacPlatformConfiguration()
         guard let hardwareModel = VZMacHardwareModel(
@@ -75,6 +84,14 @@ enum VMConfigurationFactory {
         configuration.keyboards = [VZUSBKeyboardConfiguration()]
         configuration.pointingDevices = [VZMacTrackpadConfiguration()]
         configuration.socketDevices = [VZVirtioSocketDeviceConfiguration()]
+        if !shares.isEmpty {
+            let fileSystem = VZVirtioFileSystemDeviceConfiguration(
+                tag: VZVirtioFileSystemDeviceConfiguration.macOSGuestAutomountTag)
+            fileSystem.share = VZMultipleDirectoryShare(directories: Dictionary(
+                shares.map { ($0.name, VZSharedDirectory(url: $0.hostURL, readOnly: $0.readOnly)) },
+                uniquingKeysWith: { first, _ in first }))
+            configuration.directorySharingDevices = [fileSystem]
+        }
 
         try configuration.validate()
         return configuration

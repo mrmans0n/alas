@@ -1853,6 +1853,9 @@ final class AppState {
             RemotePath.isReserved(worktreeID)
                 || self?.projectAndWorktree(withWorktreeId: worktreeID)?.project.host != nil
         }
+        vmManager.worktreePath = { [weak self] worktreeID in
+            self?.projectAndWorktree(withWorktreeId: worktreeID)?.worktree.path
+        }
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
             await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
         }

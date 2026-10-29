@@ -96,6 +96,7 @@ final class WorktreeVMManagerTests {
 
     private let root: URL
     private let registry: WorktreeVMRegistry
+    private var helperDirectory: URL { root.appendingPathComponent("helper", isDirectory: true) }
     private let elsewhere = VMRunOwner(pid: 999_999, processStart: Date(timeIntervalSince1970: 1), label: "Alas Dev")
 
     init() throws {
@@ -112,7 +113,7 @@ final class WorktreeVMManagerTests {
 
     private func makeManager() -> WorktreeVMManager {
         let hypervisor = hypervisor
-        return WorktreeVMManager(registry: registry, root: root) { worktreeID, _ in
+        return WorktreeVMManager(registry: registry, root: root, helperDirectory: helperDirectory) { worktreeID, _, _ in
             try await hypervisor.boot(worktreeID)
         }
     }
@@ -171,6 +172,7 @@ final class WorktreeVMManagerTests {
         #expect(manager.running("/repo/a") == nil)
         #expect(try registry.snapshot().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: bundle.path))
+        #expect(!FileManager.default.fileExists(atPath: manager.transferDirectory(forWorktree: "/repo/a").path))
     }
 
     enum BootInterruption: CaseIterable { case stop, delete }
@@ -299,6 +301,60 @@ final class WorktreeVMManagerTests {
 
         #expect(throws: WorktreeVMManager.VMError.self) { try manager.sealGolden(golden) }
         #expect(!golden.isSealed)
+    }
+
+    @Test("customizing the base image is refused while a golden VM runs in any process")
+    func unsealRefusesWhileAGoldenRunsAnywhere() throws {
+        let golden = try makeGoldenBundle()
+        try GoldenImageInstaller.writeSealedMarker(golden)
+        try addRecord(WorktreeVMManager.goldenIDPrefix + "25A1", owner: elsewhere)
+
+        #expect(throws: WorktreeVMManager.VMError.self) { try self.makeManager().unsealGoldenForCustomizing() }
+        #expect(golden.isSealed)
+    }
+
+    @Test("a customized base image seals again only after a fresh clean shutdown")
+    func unsealThenSealNeedsAFreshCleanShutdown() async throws {
+        let manager = makeManager()
+        _ = try await manager.startGolden(build: "25A1")
+        #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .clean)
+        let golden = try makeGoldenBundle()
+        try manager.sealGolden(golden)
+
+        try manager.unsealGoldenForCustomizing()
+
+        #expect(!golden.isSealed)
+        #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .forcedOff)
+        #expect(throws: WorktreeVMManager.VMError.self) { try manager.sealGolden(golden) }
+        #expect(!golden.isSealed)
+
+        _ = try await manager.startGolden(build: "25A1")
+        #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .clean)
+        try manager.sealGolden(golden)
+        #expect(golden.isSealed)
+    }
+
+    @Test("worktree VMs share the helper, the worktree and a transfer folder; the golden only the helper")
+    func worktreeSharesPointAtTheRightDirectories() throws {
+        let worktree = root.appendingPathComponent("checkout", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: helperDirectory, withIntermediateDirectories: true)
+        let manager = makeManager()
+        manager.worktreePath = { $0 == "/repo/a" ? worktree : nil }
+
+        let transfer = manager.transferDirectory(forWorktree: "/repo/a")
+        #expect(try manager.shares(forWorktree: "/repo/a") == [
+            VMShare(name: "helper", hostURL: helperDirectory, readOnly: true),
+            VMShare(name: "worktree", hostURL: worktree, readOnly: true),
+            VMShare(name: "transfer", hostURL: transfer, readOnly: false),
+        ])
+        #expect(transfer.deletingLastPathComponent().lastPathComponent == "transfer")
+        #expect(transfer.lastPathComponent
+            == WorktreeVMManager.bundleURL(forWorktree: "/repo/a", root: root).lastPathComponent)
+        #expect(FileManager.default.fileExists(atPath: transfer.path))
+        #expect(try manager.shares(forWorktree: WorktreeVMManager.goldenIDPrefix + "25A1") == [
+            VMShare(name: "helper", hostURL: helperDirectory, readOnly: true),
+        ])
     }
 
     private func makeGoldenBundle() throws -> VMBundle {

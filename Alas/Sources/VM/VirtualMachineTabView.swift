@@ -19,6 +19,7 @@ struct VirtualMachineTabView: View {
     @State private var choice: SlotChoice?
     @State private var errorMessage: String?
     @State private var finishingSetup = false
+    @State private var confirmingCustomize = false
 
     private struct RunningElsewhere {
         let target: StartTarget
@@ -89,6 +90,12 @@ struct VirtualMachineTabView: View {
         // Progress ticks change the phase constantly; only a change of kind
         // can change what the registry or disk say.
         .onChange(of: phaseKind) { _, _ in refresh() }
+        .alert("Customize the base image?", isPresented: $confirmingCustomize) {
+            Button("Customize", action: customizeBaseImage)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("New VMs will use your changes. Existing VMs are not affected.")
+        }
     }
 
     private var awaitingSetupBuild: String? {
@@ -112,6 +119,7 @@ struct VirtualMachineTabView: View {
         switch screen {
         case .running:
             header("Running") {
+                customizeButton
                 Button("Stop") { stop(worktreeID) }
             }
             VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: vms.running(worktreeID)?.vm)
@@ -150,7 +158,17 @@ struct VirtualMachineTabView: View {
             } actions: {
                 Button("Start") { start(.worktree(worktreeID)) }
                     .buttonStyle(.borderedProminent)
+                customizeButton
             }
+        }
+    }
+
+    /// Hidden while a golden image installs: unsealing the previous one then
+    /// would leave two images awaiting setup.
+    @ViewBuilder
+    private var customizeButton: some View {
+        if !installerIsBusy {
+            Button("Customize base image") { confirmingCustomize = true }
         }
     }
 
@@ -196,7 +214,7 @@ struct VirtualMachineTabView: View {
 
     @ViewBuilder
     private func goldenSetupView(build: String) -> some View {
-        header("Finish macOS setup, then click Done. Create a user that logs in automatically.") {
+        header("Install the helper: open My Shared Files › helper › Install Alas VM Guest, then allow it in Accessibility and Screen Recording. Shut down macOS, then click Done.") {
             Button("Done") { finishGoldenSetup(build: build) }
                 .disabled(finishingSetup)
         }
@@ -281,6 +299,18 @@ struct VirtualMachineTabView: View {
         errorMessage = nil
         do {
             try vms.createVM(worktreeID: worktreeID)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        refresh()
+    }
+
+    /// Reopens the golden image; the tab then shows golden setup, whose Done
+    /// seals it again.
+    private func customizeBaseImage() {
+        errorMessage = nil
+        do {
+            try vms.unsealGoldenForCustomizing()
         } catch {
             errorMessage = error.localizedDescription
         }
