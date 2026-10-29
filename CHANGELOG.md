@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- Offer reconnect in the MCP popover when changed settings need a new session attachment.
+
 ## [0.22.1] - 2026-10-28
 
 ### ✨ Features
