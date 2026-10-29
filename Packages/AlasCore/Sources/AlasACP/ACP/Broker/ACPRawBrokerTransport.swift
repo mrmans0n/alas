@@ -363,6 +363,12 @@ actor ACPRawBrokerTransport {
             try await replay(requireFresh: result.pending != true)
             if result.pending == true { try await Task.sleep(for: .milliseconds(50))
             continue }
+            // A broker-generated exit has no adapter response bytes. Preserve
+            // its diagnostic without inventing a raw adapter frame.
+            if result.rawFrame == nil, result.result == nil,
+               let error = result.error, error.code == -32074 {
+                throw ACPClientError.jsonrpc(error)
+            }
             guard result.result == nil, let frame = result.rawFrame else {
                 throw ACPClientError.decoding("Raw broker operation has no source response; observation lost")
             }

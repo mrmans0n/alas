@@ -6,6 +6,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixes
+
+- Show agent startup diagnostics, including runtime requirements and recovery commands, above expandable ACP error details instead of a bare protocol error.
+
 ## [0.22.1] - 2026-10-28
 
 ### ✨ Features
