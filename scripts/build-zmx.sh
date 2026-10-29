@@ -125,7 +125,7 @@ if [ "${target_arch}" = "universal" ]; then
     exit 0
 fi
 
-# zmx requires Zig 0.16; Ghostty retains its separate Zig 0.15 toolchain.
+# zmx requires Zig 0.16; Ghostty uses its own Zig 0.17 toolchain.
 resolve_zig_bin() {
     if [ -n "${ALAS_ZMX_ZIG_BIN:-}" ]; then
         printf '%s\n' "${ALAS_ZMX_ZIG_BIN}"

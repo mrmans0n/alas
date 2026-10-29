@@ -12,6 +12,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Show agent startup diagnostics, including runtime requirements and recovery commands, above expandable ACP error details instead of a bare protocol error.
 - Bound adapter output draining after process exit so descendants holding stdout or stderr open cannot leave agent requests pending indefinitely.
 
+### 🏗️ Internal
+
+- Update the embedded Ghostty to 1.4.0, built with Zig 0.17, and adopt its MIME-aware clipboard API.
+
 ## [0.22.1] - 2026-10-28
 
 ### ✨ Features

@@ -18,8 +18,8 @@ permissions:
 
 jobs:
   macos-app:
-    # Same toolchain story as build.yml: macos-26 ships Xcode 26 (Ghostty's
-    # main HEAD requirement). Submodule + zig@0.15 are required for the
+    # Same toolchain story as build.yml: macos-26 ships Xcode 26 (Ghostty
+    # 1.4's requirement). Submodule + zig@0.17 are required for the
     # Ghostty xcframework build.
     runs-on: macos-26
     # Each matrix leg has two notarytool --wait --timeout 30m calls (one .app
@@ -62,10 +62,10 @@ jobs:
           git config --global --unset-all credential.helper || true
           git config --global credential.helper ""
 
-      - name: Install xcodegen + Zig 0.15 + Zig 0.16
-        # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
-        # linker bug. See ThirdParty/ghostty/HACKING.md.
-        run: brew install xcodegen zig@0.15 zig@0.16 create-dmg
+      - name: Install xcodegen + Zig 0.17 + Zig 0.16
+        # Ghostty requires Zig 0.17 (build.zig.zon minimum_zig_version);
+        # zmx stays on Zig 0.16.
+        run: brew install xcodegen zig@0.17 zig@0.16 create-dmg
 
       - name: Test build-ghostty.sh harness
         run: bash scripts/tests/build-ghostty/run.sh
@@ -156,7 +156,7 @@ jobs:
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
             shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-treesitter-pack.sh
-            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
+            shasum -a 256 "$(brew --prefix zig@0.17)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
 

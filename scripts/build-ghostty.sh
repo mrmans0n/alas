@@ -4,49 +4,16 @@ set -euo pipefail
 # Ensure mise is on PATH (Xcode build phases use a minimal environment)
 export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH}"
 
-# Workaround: Zig 0.15.2 cannot link executables on macOS 26 (Darwin 25) because
-# the macOS 26 SDK's libSystem.tbd only exports arm64e-macos targets, not arm64-macos,
-# which causes zig's bundled lld to fail to resolve standard C library symbols.
-# We intercept `xcrun --sdk macosx --show-sdk-path` to return a macOS 15 SDK that
-# has arm64-macos targets, while the actual Ghostty xcframework is built for the
-# native architecture via zig's own cross-compilation infrastructure.
-_fake_xcrun_dir="$(mktemp -d)"
+# Lock and staging dirs this run must not leave behind on interrupt.
 _held_lock=""
 _held_staging=""
 _script_cleanup() {
-  rm -rf "${_fake_xcrun_dir}" 2>/dev/null || true
   [ -n "${_held_staging}" ] && rm -rf "${_held_staging}" 2>/dev/null || true
   if [ -n "${_held_lock}" ] && [ -d "${_held_lock}" ]; then
     rm -rf "${_held_lock}" 2>/dev/null || true
   fi
 }
 trap _script_cleanup EXIT
-
-# Find the macOS 15 SDK from Command Line Tools (always available alongside Xcode)
-_macos15_sdk=""
-for _candidate in \
-    /Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk \
-    /Library/Developer/CommandLineTools/SDKs/MacOSX15.sdk \
-    /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.4.sdk
-do
-    if [ -d "${_candidate}" ]; then
-        _macos15_sdk="${_candidate}"
-        break
-    fi
-done
-
-if [ -n "${_macos15_sdk}" ]; then
-    cat > "${_fake_xcrun_dir}/xcrun" << XCRUN_EOF
-#!/usr/bin/env bash
-if [[ "\$*" == *"--show-sdk-path"* ]]; then
-    echo "${_macos15_sdk}"
-    exit 0
-fi
-exec /usr/bin/xcrun "\$@"
-XCRUN_EOF
-    chmod +x "${_fake_xcrun_dir}/xcrun"
-    export PATH="${_fake_xcrun_dir}:${PATH}"
-fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 script_path="${script_dir}/$(basename "${BASH_SOURCE[0]}")"
@@ -57,6 +24,7 @@ ghostty_submodule_path="${ghostty_dir#"${repo_root}/"}"
 ghostty_build_root="${srcroot}/.build/ghostty"
 ghostty_local_cache_dir="${ghostty_build_root}/.zig-cache"
 ghostty_global_cache_dir="${ghostty_build_root}/.zig-global-cache"
+ghostty_pkg_dir="${ghostty_build_root}/zig-pkg"
 ghostty_fingerprint_path="${ghostty_build_root}/fingerprint"
 ghostty_legacy_prefix_path="${ghostty_dir}/zig-out"
 ghostty_legacy_share_path="${ghostty_legacy_prefix_path}/share"
@@ -89,7 +57,7 @@ resolve_zig_bin() {
   if [ -n "${ALAS_ZIG_BIN:-}" ]; then
     printf '%s\n' "${ALAS_ZIG_BIN}"
   else
-    printf '%s/bin/zig\n' "$(brew --prefix zig@0.15 2>/dev/null)"
+    printf '%s/bin/zig\n' "$(brew --prefix zig@0.17 2>/dev/null)"
   fi
 }
 
@@ -141,24 +109,29 @@ run_zig_build_with_retries() {
 
   while true; do
     rm -rf "${ghostty_dir}/macos/GhosttyKit.xcframework" "${ghostty_build_root}/share"
+    # Zig 0.17 dropped `zig build --global-cache-dir`; the env vars keep the
+    # global cache and fetched packages under .build/ghostty instead of
+    # ~/.cache/zig and the submodule's zig-pkg/.
     if (
       cd "${ghostty_dir}"
-      "${zig_bin}" build \
+      ZIG_GLOBAL_CACHE_DIR="${ghostty_global_cache_dir}" \
+        ZIG_LOCAL_PKG_DIR="${ghostty_pkg_dir}" \
+        "${zig_bin}" build \
         -Doptimize=ReleaseFast \
         -Demit-xcframework=true \
         -Dsentry=false \
         -Dtarget="${zig_arch}-macos.14.0" \
         --prefix "${ghostty_build_root}" \
-        --cache-dir "${ghostty_local_cache_dir}" \
-        --global-cache-dir "${ghostty_global_cache_dir}"
+        --cache-dir "${ghostty_local_cache_dir}"
     ) &&
       [ -d "${ghostty_dir}/macos/GhosttyKit.xcframework" ] &&
       [ -d "${ghostty_resources_path}" ] &&
       [ -d "${ghostty_terminfo_path}" ]; then
       return 0
+    else
+      status=$?
     fi
 
-    status=$?
     if [ "${attempt}" -gt "${#ghostty_retry_delays[@]}" ]; then
       return "${status}"
     fi
@@ -174,16 +147,14 @@ run_zig_build_with_retries() {
 build_and_install_local() {
   (
     cd "${ghostty_dir}"
-    # Use Homebrew's patched zig@0.15 — vanilla Zig 0.15.2 has a known linking
-    # issue with Xcode 26.4 (https://codeberg.org/ziglang/zig/issues/31658) that
-    # silently strips the embedded apprt symbols (ghostty_app_new etc.) from
-    # libghostty.a. Brew's bottle ships with the workaround patch.
-    # See ThirdParty/ghostty/HACKING.md. The brew prefix is resolved dynamically
-    # because Apple Silicon installs under /opt/homebrew while Intel uses
-    # /usr/local. ALAS_ZIG_BIN overrides for tests and custom toolchains.
+    # Ghostty pins an exact Zig minor (build.zig.zon minimum_zig_version);
+    # zig@0.17 is Homebrew's alias for the 0.17 series. The brew prefix is
+    # resolved dynamically because Apple Silicon installs under /opt/homebrew
+    # while Intel uses /usr/local. ALAS_ZIG_BIN overrides for tests and custom
+    # toolchains.
     zig_bin="$(resolve_zig_bin)"
     if [ ! -x "${zig_bin}" ]; then
-      echo "error: zig not found (looked at ${zig_bin}). Install with: brew install zig@0.15, or set ALAS_ZIG_BIN" >&2
+      echo "error: zig not found (looked at ${zig_bin}). Install with: brew install zig@0.17, or set ALAS_ZIG_BIN" >&2
       exit 1
     fi
     # Zig uses the LLVM triple name `aarch64`, not Apple's `arm64`. Translate
@@ -193,8 +164,8 @@ build_and_install_local() {
     # deterministic and matches project.yml's MACOSX_DEPLOYMENT_TARGET (14.0)
     # — without this, the embedded minos floats with whatever floor zig
     # picks for the bare `*-macos` triple, which is not stable across zig
-    # releases. Note: zig 0.15 requires at least a two-component version
-    # (14.0), not a bare major (14), to parse the triple correctly.
+    # releases. Note: zig requires at least a two-component version (14.0),
+    # not a bare major (14), to parse the triple correctly.
     case "${target_arch}" in
       arm64)  zig_arch="aarch64" ;;
       x86_64) zig_arch="x86_64" ;;

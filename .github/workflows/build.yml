@@ -55,7 +55,7 @@ concurrency:
 jobs:
   build-test:
     # macos-26 GA on GitHub-hosted runners ships Xcode 26 — matches what
-    # Ghostty's main HEAD requires (per ThirdParty/ghostty/HACKING.md).
+    # Ghostty 1.4 requires (per ThirdParty/ghostty/HACKING.md).
     runs-on: macos-26
     # Build once; test runners queue only after products and the plan are published.
     timeout-minutes: 110
@@ -119,10 +119,10 @@ jobs:
           git config --global gc.auto 0
           git config --global receive.autogc false
 
-      - name: Install xcodegen + Zig 0.15 + Zig 0.16 + SwiftFormat
-        # Homebrew's zig@0.15 ships the patch for Zig 0.15.2 + Xcode 26.4
-        # linker bug Ghostty's HACKING.md describes. Vanilla Zig 0.15.2 does not.
-        run: brew install xcodegen zig@0.15 zig@0.16 swiftformat ripgrep
+      - name: Install xcodegen + Zig 0.17 + Zig 0.16 + SwiftFormat
+        # Ghostty requires Zig 0.17 (build.zig.zon minimum_zig_version);
+        # zmx stays on Zig 0.16.
+        run: brew install xcodegen zig@0.17 zig@0.16 swiftformat ripgrep
 
       - name: Check formatting
         run: swiftformat Alas AlasTests Packages --lint --reporter github-actions-log
@@ -244,7 +244,7 @@ jobs:
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
             shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-treesitter-pack.sh
-            shasum -a 256 "$(brew --prefix zig@0.15)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
+            shasum -a 256 "$(brew --prefix zig@0.17)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
 
