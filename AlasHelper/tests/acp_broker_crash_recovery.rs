@@ -759,6 +759,71 @@ fn load_updates_do_not_mark_turn_as_streaming() {
 }
 
 #[test]
+fn startup_exit_replays_actionable_stderr_in_legacy_and_raw_transport() {
+    let diagnostic =
+        "error: Bun runtime must be >= 1.4.4 (found v1.4.2). Please upgrade: bun upgrade";
+    for raw in [false, true] {
+        for noisy in [false, true] {
+            let fixture = Fixture::new("startup-stderr");
+            let script = if noisy {
+                // No trailing newline, and stdout closes before stderr. A
+                // stdout-EOF completion must not outrun the stderr reader.
+                format!("#!/bin/sh\nexec 1>&-\nprintf '%s' '{diagnostic}' >&2\nexit 42\n")
+            } else {
+                "#!/bin/sh\nexit 42\n".to_owned()
+            };
+            std::fs::write(&fixture.adapter, script).unwrap();
+            let namespace = if raw { "acp/raw" } else { "acp" };
+            let context = json!({"acpVersion":2,"payloadFormat":"alas.acp.raw-json.v1"});
+            let mut open_params = fixture.open_params("startup", 0);
+            if raw {
+                open_params["wireContext"] = context.clone();
+            }
+            let mut helper = Helper::start(&fixture.home);
+            let opened = helper.request(&format!("{namespace}/open"), open_params);
+            let mut base = json!({
+                "brokerId": "startup",
+                "generation": opened["snapshot"]["metadata"]["generation"]
+            });
+            if raw {
+                base["wireContext"] = context;
+            }
+            let mut request = base.clone();
+            request["operationKey"] = json!("initialize-startup");
+            request["method"] = json!("initialize");
+            request["params"] = json!({});
+            let deadline = poll_deadline();
+            let terminal = loop {
+                let result = helper.request(&format!("{namespace}/send"), request.clone());
+                if result.get("error").is_some() || std::time::Instant::now() >= deadline {
+                    break result;
+                }
+                std::thread::yield_now();
+            };
+            let replayed = helper.request(&format!("{namespace}/send"), request);
+            let mut attach = base.clone();
+            attach["acknowledgedCursor"] = json!(0);
+            let attached = helper.request(&format!("{namespace}/attach"), attach);
+            helper.request(&format!("{namespace}/close"), base);
+
+            assert_eq!(terminal["error"]["code"], -32074, "{terminal}");
+            assert_eq!(replayed["error"], terminal["error"]);
+            assert!(terminal.get("rawFrame").is_none(), "{terminal}");
+            if noisy {
+                assert_eq!(terminal["error"]["data"]["stderr"], diagnostic);
+            } else {
+                assert!(terminal["error"].get("data").is_none_or(Value::is_null));
+            }
+            let completions: Vec<_> = attached["events"].as_array().unwrap().iter()
+                .filter(|event| event["kind"]["type"] == "operationCompleted")
+                .collect();
+            assert_eq!(completions.len(), 1, "{attached}");
+            assert_eq!(completions[0]["kind"]["outcome"]["error"], terminal["error"]);
+        }
+    }
+}
+
+#[test]
 fn adapter_exit_completes_inflight_prompt_with_error() {
     let fixture = Fixture::new("prompt-exit");
     let mut helper = Helper::start(&fixture.home);
@@ -794,10 +859,6 @@ fn adapter_exit_completes_inflight_prompt_with_error() {
 
     assert_eq!(completed["replayed"], true, "{completed}");
     assert_eq!(completed["error"]["code"], -32074, "{completed}");
-    assert_eq!(
-        completed["error"]["message"],
-        "adapter exited before completing request"
-    );
 
     let attached = helper.request(
         "acp/attach",

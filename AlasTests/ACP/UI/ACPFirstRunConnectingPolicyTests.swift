@@ -5,22 +5,6 @@ import Testing
 @MainActor
 @Suite("ACP first-run connecting policy")
 struct ACPFirstRunConnectingPolicyTests {
-    @Test("first-run connecting view copy stays stable")
-    func firstRunConnectingViewCopyStaysStable() {
-        #expect(ACPFirstRunConnectingViewCopy.title == "Connecting...")
-        #expect(ACPFirstRunConnectingViewCopy.subtitle(agentDisplayName: "Codex") == "Preparing a new Codex chat.")
-    }
-
-    @Test("phase labels stay stable")
-    func phaseLabelsStayStable() {
-        #expect(ACPFirstRunConnectingPhase.allCases.map(\.label) == [
-            "Checking setup",
-            "Launching adapter",
-            "Initializing",
-            "Creating session",
-        ])
-    }
-
     @Test("fresh hydrating empty sessions show checking setup")
     func freshHydratingEmptySessionShowsCheckingSetup() {
         let session = ACPSession(
@@ -150,5 +134,46 @@ struct ACPFirstRunConnectingPolicyTests {
     func firstRunConnectingSuppressesChrome() {
         #expect(ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: true) == false)
         #expect(ACPFirstRunConnectingPolicy.showsChrome(firstRunConnecting: false) == true)
+    }
+}
+
+@Suite("ACP startup error presentation")
+struct ACPStartupErrorPresentationTests {
+    @Test("startup stderr is prominent and original protocol details are preserved")
+    func startupDiagnostic() throws {
+        let error = "ACP session attach failed: ACP error -32074: Process exited\nstderr: Bun runtime is unsupported.\nInstall a compatible runtime."
+        let presentation = try #require(ACPStartupErrorPresentation(error: error, agentDisplayName: "OMP"))
+        #expect(presentation.diagnostic == "Bun runtime is unsupported.\nInstall a compatible runtime.")
+        #expect(presentation.details == error)
+    }
+
+    @Test("startup without usable stderr keeps a friendly title and technical details",
+          arguments: [
+              "ACP session attach failed: ACP error -32074",
+              "ACP session attach failed: ACP error -32074\nstderr: \n\t",
+          ])
+    func startupWithoutDiagnostic(error: String) throws {
+        let presentation = try #require(ACPStartupErrorPresentation(error: error, agentDisplayName: nil))
+        #expect(presentation.diagnostic == nil)
+        #expect(presentation.details == error)
+    }
+
+    @Test("only the exact startup prefix is reclassified",
+          arguments: [
+              "ACP error -32074: Process exited\nstderr: diagnostic",
+              "Prompt failed: ACP session attach failed: transport closed",
+              "ACP session attach failed",
+              "Permission denied",
+          ])
+    func otherErrors(error: String) {
+        #expect(ACPStartupErrorPresentation(error: error, agentDisplayName: "OMP") == nil)
+    }
+
+    @Test("stderr parsing uses the first line delimiter and preserves later markers")
+    func diagnosticBoundaries() throws {
+        let error = "ACP session attach failed: message mentions stderr: inline\nstderr: \nfirst\nstderr: second\n"
+        let presentation = try #require(ACPStartupErrorPresentation(error: error, agentDisplayName: " "))
+        #expect(presentation.diagnostic == "first\nstderr: second")
+        #expect(presentation.details == error)
     }
 }

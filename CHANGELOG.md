@@ -9,6 +9,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### 🐛 Fixes
 
 - Offer reconnect in the MCP popover when changed settings need a new session attachment.
+- Show agent startup diagnostics, including runtime requirements and recovery commands, above expandable ACP error details instead of a bare protocol error.
+- Bound adapter output draining after process exit so descendants holding stdout or stderr open cannot leave agent requests pending indefinitely.
 
 ## [0.22.1] - 2026-10-28
 
