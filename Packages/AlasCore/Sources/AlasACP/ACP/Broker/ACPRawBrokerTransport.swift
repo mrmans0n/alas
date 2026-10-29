@@ -74,7 +74,7 @@ actor ACPRawBrokerTransport {
     nonisolated let frames: AsyncStream<ACPBrokerRawFrameDelivery>
     private let updatesCont: AsyncStream<ACPV2SessionUpdateDelivery>.Continuation
     private let framesCont: AsyncStream<ACPBrokerRawFrameDelivery>.Continuation
-    private let connectionID = UUID()
+    nonisolated let connectionID = UUID()
     private let service: ACPBrokerServicing
     private var openParams: ACPBrokerOpenParams
     private let prefix: String
