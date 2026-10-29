@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import Alas
+@testable import AlasComputerUseKit
 
 @MainActor
 struct ComputerUseCoordinatorTests {

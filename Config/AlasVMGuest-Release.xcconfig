@@ -1,0 +1,3 @@
+// Release signing is applied by scripts/sign-and-notarize.sh.
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = -

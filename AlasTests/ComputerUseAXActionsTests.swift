@@ -3,6 +3,7 @@ import CoreGraphics
 import Foundation
 import Testing
 @testable import Alas
+@testable import AlasComputerUseKit
 
 struct ComputerUseAXActionsTests {
     /// A click by ref must show, whatever its button or count; typing by ref may target a field

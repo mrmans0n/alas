@@ -220,6 +220,42 @@ public struct ComputerUseCommand: Equatable, Sendable {
         return command
     }
 
+    /// The `{"command":"computer_<action>","params":{…}}` request `decode(action:data:)` turns back into
+    /// an equal command. Only values that differ from the decode defaults are written.
+    public func requestJSON() throws -> Data {
+        var params: [String: Any] = [:]
+        func put(_ key: String, _ value: Any?) { if let value { params[key] = value } }
+        put("window_id", windowID)
+        put("query", query)
+        if limit != action.defaultLimit { put("limit", limit) }
+        if maxDepth != Self.defaultMaxDepth(for: action, query: query) { put("max_depth", maxDepth) }
+        put("call_id", callID)
+        put("ref", ref)
+        put("x", x)
+        put("y", y)
+        put("to_window_id", toWindowID)
+        put("to_ref", toRef)
+        put("to_x", toX)
+        put("to_y", toY)
+        if !modifiers.isEmpty { put("modifiers", modifiers.map(\.rawValue)) }
+        if button != .left { put("button", button.rawValue) }
+        if count != 1 { put("count", count) }
+        put("text", text)
+        if mode != .insert { put("mode", mode.rawValue) }
+        put("keys", keys)
+        if dx != 0 { put("dx", dx) }
+        if dy != 0 { put("dy", dy) }
+        if delivery != .background { put("delivery", delivery.rawValue) }
+        put("name", name)
+        put("bundle_id", bundleID)
+        if condition != .appear { put("condition", condition.rawValue) }
+        if timeoutMS != 5000 { put("timeout_ms", timeoutMS) }
+        if includeScreenshot { put("include_screenshot", true) }
+        var object: [String: Any] = ["command": "computer_\(action.rawValue)"]
+        if !params.isEmpty { object["params"] = params }
+        return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+    }
+
     public func validate() throws {
         func require(_ condition: Bool) throws {
             guard condition else { throw AlasCLIRequestError.malformed }

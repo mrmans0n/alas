@@ -277,6 +277,15 @@ pub enum Command {
     },
     Preview(PreviewCommand),
     Computer(ComputerCommand),
+    /// MCP-only: run a shell command in the calling session's worktree VM.
+    /// The app applies the default timeout when absent.
+    VmRun {
+        command: String,
+        timeout_seconds: Option<u32>,
+    },
+    /// MCP-only: whether the calling session's worktree has a running VM,
+    /// its guest helper, and the shared transfer folder.
+    VmStatus,
     Resolve,
 }
 
@@ -932,6 +941,24 @@ pub fn build_request(
         }
         Command::Preview(preview) => preview_request(preview),
         Command::Computer(computer) => computer_request(computer),
+        Command::VmRun {
+            command,
+            timeout_seconds,
+        } => {
+            let mut r = Request::new("vm_run");
+            let mut params = serde_json::Map::new();
+            params.insert("command".into(), serde_json::Value::String(command.clone()));
+            if let Some(timeout) = timeout_seconds {
+                params.insert("timeout_seconds".into(), serde_json::Value::from(*timeout));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::VmStatus => {
+            let mut r = Request::new("vm_status");
+            r.params = Some(serde_json::json!({}));
+            r
+        }
         Command::Resolve => Request::new("resolve"),
     };
     req.session_id = session_id;
@@ -1403,10 +1430,24 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// closes the connection, so giving up sooner would cancel an approved call.
 pub const COMPUTER_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// The guest's own bound on a `vm_run` command when the call gives none.
+pub const VM_RUN_DEFAULT_TIMEOUT_SECONDS: u32 = 120;
+
+/// How much longer than its command a `vm_run` waits, so the guest's
+/// timed-out reply arrives before the connection gives up.
+const VM_RUN_REPLY_GRACE: Duration = Duration::from_secs(30);
+
 /// How long `dispatch` waits for the reply to `command`.
 pub fn read_timeout(command: &Command) -> Duration {
     match command {
         Command::Computer(_) => COMPUTER_READ_TIMEOUT,
+        Command::VmRun {
+            timeout_seconds, ..
+        } => {
+            Duration::from_secs(u64::from(
+                timeout_seconds.unwrap_or(VM_RUN_DEFAULT_TIMEOUT_SECONDS),
+            )) + VM_RUN_REPLY_GRACE
+        }
         _ => READ_TIMEOUT,
     }
 }
@@ -1432,26 +1473,85 @@ pub fn send_with_timeout(
     req: &Request,
     read_timeout: Duration,
 ) -> Result<Response, TransportError> {
-    let payload = serde_json::to_vec(req).map_err(|_| TransportError::Malformed)?;
-    let mut stream = UnixStream::connect(socket).map_err(|_| TransportError::Connect)?;
-    stream
-        .set_read_timeout(Some(read_timeout))
-        .map_err(|_| TransportError::Io)?;
-    stream.write_all(&payload).map_err(|_| TransportError::Io)?;
-    stream.flush().map_err(|_| TransportError::Io)?;
+    send_polling(socket, req, read_timeout, read_timeout, || true)
+        .unwrap_or(Err(TransportError::Io))
+}
+
+/// How often [`send_while`] asks whether its caller still wants the reply.
+const SEND_WHILE_POLL: Duration = Duration::from_millis(100);
+
+/// `send_with_timeout` that gives up once `keep_going` turns false, checked
+/// at least every [`SEND_WHILE_POLL`]: it closes the connection, so the app
+/// stops a call that ends with its client, and returns None.
+pub fn send_while(
+    socket: &Path,
+    req: &Request,
+    read_timeout: Duration,
+    keep_going: impl Fn() -> bool,
+) -> Option<Result<Response, TransportError>> {
+    send_polling(
+        socket,
+        req,
+        read_timeout,
+        read_timeout.min(SEND_WHILE_POLL),
+        keep_going,
+    )
+}
+
+/// Writes the request, then reads to EOF, failing after `read_timeout`
+/// without data. Wakes every `poll` to ask `keep_going`; None once it says no.
+fn send_polling(
+    socket: &Path,
+    req: &Request,
+    read_timeout: Duration,
+    poll: Duration,
+    keep_going: impl Fn() -> bool,
+) -> Option<Result<Response, TransportError>> {
+    let payload = match serde_json::to_vec(req) {
+        Ok(payload) => payload,
+        Err(_) => return Some(Err(TransportError::Malformed)),
+    };
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return Some(Err(TransportError::Connect));
+    };
+    if stream.set_read_timeout(Some(poll)).is_err()
+        || stream.write_all(&payload).is_err()
+        || stream.flush().is_err()
+    {
+        return Some(Err(TransportError::Io));
+    }
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
+    let mut last_data = std::time::Instant::now();
     loop {
-        let read = stream.read(&mut chunk).map_err(|_| TransportError::Io)?;
-        if read == 0 {
-            break;
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                if buf.len() + read > MAX_RESPONSE_BYTES {
+                    return Some(Err(TransportError::ResponseTooLarge));
+                }
+                buf.extend_from_slice(&chunk[..read]);
+                last_data = std::time::Instant::now();
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                if !keep_going() {
+                    return None;
+                }
+                if last_data.elapsed() >= read_timeout {
+                    return Some(Err(TransportError::Io));
+                }
+            }
+            Err(_) => return Some(Err(TransportError::Io)),
         }
-        if buf.len() + read > MAX_RESPONSE_BYTES {
-            return Err(TransportError::ResponseTooLarge);
-        }
-        buf.extend_from_slice(&chunk[..read]);
     }
-    serde_json::from_slice(&buf).map_err(|_| TransportError::Malformed)
+    Some(serde_json::from_slice(&buf).map_err(|_| TransportError::Malformed))
 }
 
 /// The one-shot registration ping `alas mcp` sends over the unix socket so
@@ -2256,6 +2356,49 @@ mod tests {
         let apps = Command::Computer(ComputerCommand::Apps { call_id: None });
         assert_eq!(read_timeout(&apps), COMPUTER_READ_TIMEOUT);
         assert_eq!(read_timeout(&Command::Resolve), READ_TIMEOUT);
+    }
+
+    #[test]
+    fn vm_run_outwaits_its_guest_timeout() {
+        let run = |timeout_seconds| Command::VmRun {
+            command: "ls".into(),
+            timeout_seconds,
+        };
+        assert_eq!(read_timeout(&run(None)), Duration::from_secs(150));
+        assert_eq!(read_timeout(&run(Some(600))), Duration::from_secs(630));
+        assert_eq!(read_timeout(&Command::VmStatus), READ_TIMEOUT);
+    }
+
+    #[test]
+    fn vm_commands_serialize_as_params_only_requests() {
+        let run = build_request(
+            &Command::VmRun {
+                command: "open x.app".into(),
+                timeout_seconds: None,
+            },
+            Some("acp-1".into()),
+            Some("/wt".into()),
+        );
+        assert_eq!(run.command, "vm_run");
+        assert_eq!(
+            run.params,
+            Some(serde_json::json!({ "command": "open x.app" }))
+        );
+        let bounded = build_request(
+            &Command::VmRun {
+                command: "make".into(),
+                timeout_seconds: Some(5),
+            },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(
+            bounded.params,
+            Some(serde_json::json!({ "command": "make", "timeout_seconds": 5 }))
+        );
+        let status = build_request(&Command::VmStatus, Some("acp-1".into()), None);
+        assert_eq!(status.command, "vm_status");
+        assert_eq!(status.params, Some(serde_json::json!({})));
     }
 
     #[test]

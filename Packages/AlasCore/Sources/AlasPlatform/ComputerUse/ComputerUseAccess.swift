@@ -14,6 +14,10 @@ public struct ComputerUseAppIdentity: Hashable, Sendable {
     public var approvalKey: String { bundleID ?? "pid:\(pid)" }
 }
 
+/// `guest`: the process runs inside a worktree's VM, a sandbox of its own, so nothing on the host
+/// is at stake: the blocklist and Alas-build refusals do not apply and apps need no approval card.
+public enum ComputerUseAccessMode: Sendable { case host, guest }
+
 public enum ComputerUseApprovalChoice: Sendable { case allowForTurn, allowForSession, alwaysAllow, deny }
 
 public enum ComputerUseGrantScope: String, Sendable { case turn, session, always }
@@ -102,15 +106,19 @@ public final class ComputerUseAccess {
     }
 
     private let hostPID: Int32
+    private let mode: ComputerUseAccessMode
     private let alwaysAllowed: () -> Set<String>
     private var sessions: [String: SessionState] = [:]
     private var pendingEntries: [PendingEntry] = []
 
     /// This process, or any Alas build: see `ComputerUseBlocklist.isAlas`.
-    public func isAlas(_ app: ComputerUseAppIdentity) -> Bool { ComputerUseBlocklist.isAlas(app, hostPID: hostPID) }
+    public func isAlas(_ app: ComputerUseAppIdentity) -> Bool {
+        mode == .host && ComputerUseBlocklist.isAlas(app, hostPID: hostPID)
+    }
 
-    public init(hostPID: Int32, alwaysAllowed: @escaping () -> Set<String>) {
+    public init(hostPID: Int32, alwaysAllowed: @escaping () -> Set<String>, mode: ComputerUseAccessMode = .host) {
         self.hostPID = hostPID
+        self.mode = mode
         self.alwaysAllowed = alwaysAllowed
     }
 
@@ -119,10 +127,11 @@ public final class ComputerUseAccess {
         let blocked = input
             ? ComputerUseBlocklist.isInputBlocked(app, hostPID: hostPID)
             : ComputerUseBlocklist.isBlocked(app, hostPID: hostPID)
-        if blocked { return .blocked }
+        if mode == .host, blocked { return .blocked }
         let key = app.approvalKey
         let state = sessions[session] ?? SessionState()
         if state.denied.contains(key) { return .denied }
+        if mode == .guest { return .allowed(.session) }
         if let bundleID = app.bundleID, alwaysAllowed().contains(bundleID) { return .allowed(.always) }
         if state.sessionGrants.contains(key) { return .allowed(.session) }
         if state.turnGrants.contains(key) { return .allowed(.turn) }

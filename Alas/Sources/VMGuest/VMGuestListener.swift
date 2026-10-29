@@ -1,0 +1,146 @@
+import AlasComputerUseKit
+import AlasCore
+import Darwin
+import Foundation
+import os
+
+/// Accepts the host's vsock connections on `VMGuestPort.computerUse` and hands their messages
+/// to `VMGuestService`. Each connection reads on a thread of its own (the reads block), handles
+/// every message in its own task, so a `cancel` is read while its command runs, and serializes
+/// its writes.
+final class VMGuestListener: Sendable {
+    private let service: VMGuestService
+    private static let log = Logger(subsystem: "io.nlopez.vmguest", category: "listener")
+
+    init(service: VMGuestService) {
+        self.service = service
+    }
+
+    /// Binds the port and accepts connections until the process exits.
+    func start() throws {
+        let fd = socket(AF_VSOCK, SOCK_STREAM, 0)
+        guard fd >= 0 else { throw POSIXError(.init(rawValue: errno) ?? .EIO) }
+        var address = sockaddr_vm()
+        address.svm_len = UInt8(MemoryLayout<sockaddr_vm>.size)
+        address.svm_family = sa_family_t(AF_VSOCK)
+        address.svm_cid = VMADDR_CID_ANY
+        address.svm_port = VMGuestPort.computerUse
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, socklen_t(MemoryLayout<sockaddr_vm>.size))
+            }
+        }
+        guard bound == 0, listen(fd, 8) == 0 else {
+            let code = errno
+            close(fd)
+            throw POSIXError(.init(rawValue: code) ?? .EIO)
+        }
+        Self.log.notice("listening on vsock port \(VMGuestPort.computerUse, privacy: .public)")
+        let service = service
+        Thread.detachNewThread {
+            var token: UInt64 = 0
+            while true {
+                let connection = accept(fd, nil, nil)
+                if connection < 0 {
+                    let code = errno
+                    if code != EINTR {
+                        Self.log.error("accept failed: errno \(code, privacy: .public)")
+                        // Back off so a persistent error (EMFILE, say) doesn't spin a core.
+                        usleep(100_000)
+                    }
+                    continue
+                }
+                Self.log.notice("host connected")
+                token += 1
+                Connection(fd: connection, token: token, service: service).start()
+            }
+        }
+    }
+}
+
+/// One host connection. `token` scopes its request ids and sessions in the service.
+private final class Connection: @unchecked Sendable {
+    private let fd: Int32
+    private let token: UInt64
+    private let service: VMGuestService
+    private let writeLock = NSLock()
+    /// Guarded by `writeLock`: set once the descriptor is closed, so no write reaches a reused one.
+    private var closed = false
+    private static let log = Logger(subsystem: "io.nlopez.vmguest", category: "connection")
+
+    init(fd: Int32, token: UInt64, service: VMGuestService) {
+        self.fd = fd
+        self.token = token
+        self.service = service
+    }
+
+    func start() {
+        let (messages, continuation) = AsyncStream<VMGuestMessage>.makeStream()
+        Thread.detachNewThread { self.readLoop(into: continuation) }
+        // In arrival order; each message then runs in its own task, so a `cancel` is handled while
+        // its command runs.
+        Task { @MainActor in
+            for await message in messages {
+                Task { await self.dispatch(message) }
+            }
+            self.service.connectionClosed(self.token)
+            self.writeLock.withLock {
+                self.closed = true
+                close(self.fd)
+            }
+        }
+    }
+
+    private func readLoop(into messages: AsyncStream<VMGuestMessage>.Continuation) {
+        var framer = VMGuestFramer()
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        while true {
+            let count = read(fd, &buffer, buffer.count)
+            if count < 0, errno == EINTR { continue }
+            guard count > 0 else { break }
+            let output = framer.append(Data(buffer[..<count]))
+            if output.malformedFrames > 0 {
+                Self.log.error("skipped \(output.malformedFrames, privacy: .public) malformed frame(s)")
+            }
+            for message in output.messages { messages.yield(message) }
+        }
+        Self.log.notice("host disconnected")
+        messages.finish()
+    }
+
+    @MainActor
+    private func dispatch(_ message: VMGuestMessage) async {
+        if let reply = await service.handle(message, connection: token) { send(reply) }
+    }
+
+    /// The lock keeps frames whole when replies finish together.
+    @MainActor
+    private func send(_ message: VMGuestMessage) {
+        let frame: Data
+        do {
+            frame = try VMGuestFramer.frame(message)
+        } catch {
+            Self.log.error("couldn't encode a reply: \(error.localizedDescription, privacy: .public)")
+            return
+        }
+        // Off the main actor: a large frame may wait on the host to read.
+        Thread.detachNewThread {
+            self.writeLock.withLock {
+                guard !self.closed else { return }
+                let fd = self.fd
+                frame.withUnsafeBytes { raw in
+                    var offset = 0
+                    while offset < raw.count {
+                        let written = write(fd, raw.baseAddress! + offset, raw.count - offset)
+                        if written < 0 {
+                            if errno == EINTR { continue }
+                            Self.log.error("write failed: errno \(errno, privacy: .public)")
+                            return
+                        }
+                        offset += written
+                    }
+                }
+            }
+        }
+    }
+}

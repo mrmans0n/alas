@@ -31,6 +31,22 @@ import Testing
         #expect(records.first { $0.id == "B" }?.runOwner == Self.me)
     }
 
+    @Test func recordIDsLeaveTheFileUntouched() throws {
+        let (writer, dir) = tempRegistry()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writer.update { $0 = [Self.record("A", owner: Self.other)] }
+        let url = dir.appendingPathComponent("registry.json")
+        let past = Date(timeIntervalSince1970: 5_000)
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: url.path)
+        let before = try Data(contentsOf: url)
+
+        let reader = WorktreeVMRegistry(fileURL: url, isAlive: { _ in false })
+        #expect(try reader.recordIDs() == ["A"])
+        #expect(try Data(contentsOf: url) == before)
+        let modified = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        #expect(modified == past)
+    }
+
     @Test func currentOwnerIsAliveAndBogusStartTimeIsNot() throws {
         let current = try #require(VMRunOwner.current(label: "Alas"))
         #expect(VMRunOwner.isAlive(current))
@@ -82,7 +98,7 @@ import Testing
         #expect(try first.snapshot().count == 100)
     }
 
-    @Test func unknownRecordsSurviveUpdatesAndGarbageIsQuarantined() throws {
+    @Test func unknownRecordsCountAndSurviveUpdatesAndGarbageIsQuarantined() throws {
         let (registry, dir) = tempRegistry()
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("registry.json")
@@ -91,6 +107,7 @@ import Testing
             [{"id":"L","guestOS":"linux","goldenBuild":"x","bundlePath":"/l","createdAt":0,"lastUsedAt":0}]
             """
         try Data(newer.utf8).write(to: file)
+        #expect(try registry.recordIDs() == ["L"])
 
         try registry.update { $0.append(Self.record("A")) }
         #expect(try registry.snapshot().map(\.id) == ["A"])

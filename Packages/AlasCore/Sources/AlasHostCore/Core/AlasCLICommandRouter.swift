@@ -36,6 +36,14 @@ public struct AlasCLICommandRouter {
     var computerCommand: (ComputerUseCommand, String) async -> AlasCLIResponse = { _, _ in
         .error("Computer use is not available.")
     }
+    /// `vm_run`: the command, its timeout in seconds, and the calling session.
+    var vmRun: (String, Int, String) async -> AlasCLIResponse = { _, _, _ in
+        .error("Worktree VMs are not available.")
+    }
+    /// `vm_status` for the calling session.
+    var vmStatus: (String) async -> AlasCLIResponse = { _ in
+        .error("Worktree VMs are not available.")
+    }
     var activateApp: () -> Void
     /// On a headless host, screen-bound commands are refused.
     var isHeadless = false
@@ -66,6 +74,12 @@ public struct AlasCLICommandRouter {
         computerCommand: @escaping (ComputerUseCommand, String) async -> AlasCLIResponse = { _, _ in
             .error("Computer use is not available.")
         },
+        vmRun: @escaping (String, Int, String) async -> AlasCLIResponse = { _, _, _ in
+            .error("Worktree VMs are not available.")
+        },
+        vmStatus: @escaping (String) async -> AlasCLIResponse = { _ in
+            .error("Worktree VMs are not available.")
+        },
         activateApp: @escaping () -> Void,
         isHeadless: Bool = false
     ) {
@@ -82,6 +96,8 @@ public struct AlasCLICommandRouter {
         self.workspaceCommand = workspaceCommand
         self.previewCommand = previewCommand
         self.computerCommand = computerCommand
+        self.vmRun = vmRun
+        self.vmStatus = vmStatus
         self.activateApp = activateApp
         self.isHeadless = isHeadless
     }
@@ -127,15 +143,16 @@ public struct AlasCLICommandRouter {
             }
             return await previewCommand(command, owner, request.sessionId)
         case .computer(let command):
-            // Side sessions never show the approval card, and checkout owners have no
-            // computer tools in their MCP scope.
-            guard let sessionID = request.sessionId, callers.acpOrigin(ofSession: sessionID) != nil,
-                  !callers.isReadOnlySideSession(sessionID),
-                  case .worktree? = callers.owner(ofSession: sessionID)
-            else {
+            guard let sessionID = computerUseCaller(request.sessionId) else {
                 return .error("computer_unsupported_caller: Computer use is only available to ACP agent sessions.")
             }
             return await computerCommand(command, sessionID)
+        case .vmRun(let command, let timeoutSeconds):
+            guard let sessionID = computerUseCaller(request.sessionId) else { return Self.vmUnsupportedCaller }
+            return await vmRun(command, timeoutSeconds, sessionID)
+        case .vmStatus:
+            guard let sessionID = computerUseCaller(request.sessionId) else { return Self.vmUnsupportedCaller }
+            return await vmStatus(sessionID)
         case .workspace(let command):
             return await workspaceCommand(command, caller)
         case .visualShow(let title, let html, let question, let presentation):
@@ -270,7 +287,7 @@ public struct AlasCLICommandRouter {
             case .ambiguous(let labels):
                 return .error("ambiguous worktree \"\(target)\"; matches: \(labels.joined(separator: ", "))")
             }
-        case .workspace, .preview, .computer:
+        case .workspace, .preview, .computer, .vmRun, .vmStatus:
             preconditionFailure("Workspace commands are handled before generic origin resolution")
         case .review(.localChanges(let worktreeOverride)):
             switch service.reviewOrigin(origin: origin, override: worktreeOverride, projectWorktrees: projectWorktrees) {
@@ -330,6 +347,22 @@ public struct AlasCLICommandRouter {
             }
             return await host.prs.shipStack(sessionID: sessionId, worktreeID: origin.id)
         }
+    }
+
+    private static let vmUnsupportedCaller = AlasCLIResponse.error(
+        "computer_unsupported_caller: VM tools are only available to ACP agent sessions."
+    )
+
+    /// The session that may use computer and VM tools: a worktree's ACP agent session. Side
+    /// sessions never show the approval card, and checkout owners have no computer or VM tools
+    /// in their MCP scope.
+    private func computerUseCaller(_ sessionID: String?) -> String? {
+        let callers = host.callers
+        guard let sessionID, callers.acpOrigin(ofSession: sessionID) != nil,
+              !callers.isReadOnlySideSession(sessionID),
+              case .worktree? = callers.owner(ofSession: sessionID)
+        else { return nil }
+        return sessionID
     }
 
     private func notify(_ body: String, title: String?, level: AlasCLINotifyLevel, from source: NoticeSource, caller: HostCaller) -> AlasCLIResponse {

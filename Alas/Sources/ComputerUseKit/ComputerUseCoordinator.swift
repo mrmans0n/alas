@@ -5,38 +5,49 @@ import Observation
 import os
 
 /// An approval card: one per (session, app), shared by every call that waits on it.
-struct ComputerUsePendingApproval: Identifiable, Equatable {
-    let id: UUID
-    let sessionID: String
-    let app: ComputerUseAppIdentity
+public struct ComputerUsePendingApproval: Identifiable, Equatable {
+    public let id: UUID
+    public let sessionID: String
+    public let app: ComputerUseAppIdentity
 }
 
 /// The drawn agent cursor the coordinator moves before each pointer input; `.none` draws nothing.
-struct ComputerUseCursor: Sendable {
-    var present: @MainActor @Sendable (ComputerUseWindow) -> Void
-    var perform: @MainActor @Sendable (ComputerUseCursorCue) async -> Void
-    var dismiss: @MainActor @Sendable () -> Void
-    static let none = ComputerUseCursor(present: { _ in }, perform: { _ in }, dismiss: {})
+public struct ComputerUseCursor: Sendable {
+    public var present: @MainActor @Sendable (ComputerUseWindow) -> Void
+    public var perform: @MainActor @Sendable (ComputerUseCursorCue) async -> Void
+    public var dismiss: @MainActor @Sendable () -> Void
+
+    public init(
+        present: @escaping @MainActor @Sendable (ComputerUseWindow) -> Void,
+        perform: @escaping @MainActor @Sendable (ComputerUseCursorCue) async -> Void,
+        dismiss: @escaping @MainActor @Sendable () -> Void
+    ) {
+        self.present = present
+        self.perform = perform
+        self.dismiss = dismiss
+    }
+
+    public static let none = ComputerUseCursor(present: { _ in }, perform: { _ in }, dismiss: {})
 }
 
 /// Serves `computer_*` calls from ACP sessions: readiness, per-app approval,
 /// the machine-wide driver lock, and the stop/turn/session lifecycle.
 @MainActor
 @Observable
-final class ComputerUseCoordinator {
-    private(set) var pendingApprovals: [ComputerUsePendingApproval] = []
+public final class ComputerUseCoordinator {
+    public private(set) var pendingApprovals: [ComputerUsePendingApproval] = []
     /// This process's active driver: published once a call holds the lock, so Stop shows
     /// during the first capture; kept by a successful screenshot or inspect.
-    private(set) var driver: (sessionID: String, app: ComputerUseAppIdentity)?
+    public private(set) var driver: (sessionID: String, app: ComputerUseAppIdentity)?
     /// Sessions the user stopped; only a resume clears them, not a session end or reconnect.
-    private(set) var stoppedSessions: Set<String> = []
+    public private(set) var stoppedSessions: Set<String> = []
 
     /// Finds a session's transcript, so a pending approval shows as awaiting permission.
-    @ObservationIgnored var transcript: (String) -> ACPTranscript? = { _ in nil }
+    @ObservationIgnored public var transcript: (String) -> ACPTranscript? = { _ in nil }
     /// Whether a session has auto-run on: it then allows an app for the session instead of a card.
-    @ObservationIgnored var autoRun: (String) -> Bool = { _ in false }
+    @ObservationIgnored public var autoRun: (String) -> Bool = { _ in false }
     /// Tells a session which app auto-run allowed, where the card would have shown.
-    @ObservationIgnored var autoRunAllowed: (String, ComputerUseAppIdentity) -> Void = { _, _ in }
+    @ObservationIgnored public var autoRunAllowed: (String, ComputerUseAppIdentity) -> Void = { _, _ in }
 
     /// `expired`: the turn ended with the card still up, so no answer can apply to it.
     private enum ApprovalOutcome { case answered, stopped, timedOut, cancelled, expired }
@@ -172,7 +183,7 @@ final class ComputerUseCoordinator {
 
     static let resultLimit = 12 * 1024 * 1024
 
-    init(
+    public init(
         system: ComputerUseSystem,
         access: ComputerUseAccess,
         readiness: @escaping @MainActor () -> ComputerUseReadiness,
@@ -316,12 +327,12 @@ final class ComputerUseCoordinator {
     }
 
     /// The approval card's reason line: one approval covers seeing and operating the app.
-    static func approvalReason(appName: String) -> String {
+    public static func approvalReason(appName: String) -> String {
         "It can see and operate \(appName): read its controls, click, type and press keys."
     }
 
     /// The transcript line that stands in for the card auto-run answered.
-    static func autoRunNotice(appName: String) -> String {
+    public static func autoRunNotice(appName: String) -> String {
         "Allowed \(appName) for this session (auto-run)"
     }
 
@@ -396,7 +407,7 @@ final class ComputerUseCoordinator {
 
     // MARK: - Calls
 
-    func perform(_ command: ComputerUseCommand, sessionID: String) async -> AlasCLIResponse {
+    public func perform(_ command: ComputerUseCommand, sessionID: String) async -> AlasCLIResponse {
         if command.action == .cancel {
             // Only the session's own calls: another session's call id is ignored.
             if let callID = command.callID { calls[CallKey(sessionID: sessionID, callID: callID)]?.cancel() }
@@ -618,7 +629,7 @@ final class ComputerUseCoordinator {
         return windows.filter { !ComputerUseInputGeometry.isSheetBacking(title: $0.title, frame: $0.frame, sheetFrames: sheets) }
     }
 
-    func answer(_ id: UUID, _ choice: ComputerUseApprovalChoice) {
+    public func answer(_ id: UUID, _ choice: ComputerUseApprovalChoice) {
         guard let resolved = access.resolvePending(id) else { return }
         let app = resolved.app
         access.record(choice, for: app, session: resolved.session)
@@ -627,9 +638,12 @@ final class ComputerUseCoordinator {
         syncPending()
     }
 
-    func isStopped(sessionID: String) -> Bool { stoppedSessions.contains(sessionID) }
+    /// The error a stopped session's calls answer, for sessions whose calls run elsewhere.
+    public static var stoppedMessage: String { Message.stopped }
 
-    func stop(sessionID: String) async {
+    public func isStopped(sessionID: String) -> Bool { stoppedSessions.contains(sessionID) }
+
+    public func stop(sessionID: String) async {
         access.stop(session: sessionID)
         stoppedSessions.insert(sessionID)
         endActivity(of: sessionID)
@@ -646,13 +660,13 @@ final class ComputerUseCoordinator {
         await restore.value
     }
 
-    func resume(sessionID: String) {
+    public func resume(sessionID: String) {
         access.resume(session: sessionID)
         stoppedSessions.remove(sessionID)
     }
 
     /// A card still up from this turn expires with it: answering it later would grant the next turn.
-    func turnEnded(sessionID: String) {
+    public func turnEnded(sessionID: String) {
         access.turnEnded(session: sessionID)
         // An input from the ended turn stops between its events.
         for flag in inputFlags[sessionID] ?? [] { flag.set() }
@@ -670,7 +684,7 @@ final class ComputerUseCoordinator {
 
     /// Idempotent: the manager may report a runtime end more than once (detach, reconnect).
     /// A stop outlives it, so a reconnected session stays stopped until the user resumes.
-    func sessionEnded(sessionID: String) {
+    public func sessionEnded(sessionID: String) {
         let ids = access.pending.filter { $0.session == sessionID }.map(\.id)
         access.sessionEnded(session: sessionID)
         endActivity(of: sessionID)

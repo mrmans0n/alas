@@ -39,8 +39,18 @@ public struct AlasCLIRequest: Equatable, Sendable {
         /// MCP-only: publish this worktree's gg stack with `gg sync` and bind
         /// the stack shepherd to the calling session.
         case stackShip
+        /// MCP-only: run a shell command in the calling session's worktree VM.
+        case vmRun(command: String, timeoutSeconds: Int)
+        /// MCP-only: the calling session's worktree VM, its guest helper, and transfer folder.
+        case vmStatus
         case resolve
     }
+
+    /// `vm_run`'s guest-side timeout bounds and default, in seconds.
+    public static let vmRunTimeoutRange = 1...600
+    public static let vmRunDefaultTimeout = 120
+    /// The longest `vm_run` command accepted, matching the MCP bridge.
+    public static let vmRunCommandMaxBytes = 64 * 1024
 
     /// A CLI run inside a remote terminal reports paths on the remote host;
     /// re-key absolute `open` paths and worktree targets onto the caller's virtual namespace. Local anchors
@@ -133,10 +143,14 @@ public struct AlasCLIRequest: Equatable, Sendable {
 
     /// A call whose work ends with the client that asked: a computer input still running after
     /// its `alas` or MCP server went away would drive the Mac for nobody, so it stops as a Stop
-    /// would. Other calls run to their end, as they always did.
+    /// would, and a `vm_run` stops its guest command (how an MCP server cancels one). Other calls
+    /// run to their end, as they always did.
     public var endsWithItsClient: Bool {
-        if case .computer(let command) = command { return command.action != .cancel }
-        return false
+        switch command {
+        case .computer(let command): command.action != .cancel
+        case .vmRun: true
+        default: false
+        }
     }
 
     private struct Raw: Decodable {
@@ -385,6 +399,11 @@ public struct AlasCLIRequest: Equatable, Sendable {
             self.session_ids = session_ids
             self.timeout_ms = timeout_ms
         }
+    }
+
+    private struct VMRunParams: Decodable {
+        var command: String?
+        var timeout_seconds: Int?
     }
 
     private struct SessionInterruptParams: Decodable {
@@ -739,6 +758,19 @@ public struct AlasCLIRequest: Equatable, Sendable {
                 throw AlasCLIRequestError.unsupportedCommand
             }
             command = .computer(try ComputerUseCommand.decode(action: action, data: data))
+        case "vm_run":
+            let params = try Self.decodeParams(VMRunParams.self, from: data)
+            // Sent to the shell as given; only a blank or oversized command is refused.
+            guard let shell = params.command, !shell.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  shell.utf8.count <= Self.vmRunCommandMaxBytes else {
+                throw AlasCLIRequestError.malformed
+            }
+            command = .vmRun(
+                command: shell,
+                timeoutSeconds: try bounded(params.timeout_seconds, Self.vmRunTimeoutRange, default: Self.vmRunDefaultTimeout)
+            )
+        case "vm_status":
+            command = .vmStatus
         case "resolve":
             command = .resolve
         default:

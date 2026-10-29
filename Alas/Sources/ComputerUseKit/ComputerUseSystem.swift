@@ -8,12 +8,12 @@ import ScreenCaptureKit
 import Synchronization
 
 /// An on-screen window of a running app, below the menu bar's layer: a normal window or a panel.
-struct ComputerUseWindow: Sendable, Equatable {
-    var windowID: UInt32
-    var title: String?
+public struct ComputerUseWindow: Sendable, Equatable {
+    public var windowID: UInt32
+    public var title: String?
     /// Points, global, top-left origin (CG window bounds).
-    var frame: CGRect
-    var app: ComputerUseAppIdentity
+    public var frame: CGRect
+    public var app: ComputerUseAppIdentity
 }
 
 struct ComputerUseScreenshot: Sendable {
@@ -181,9 +181,9 @@ enum ComputerUseSystemError: Error, LocalizedError {
 
 /// The macOS calls behind the computer_apps, computer_screenshot and
 /// computer_inspect tools. Closures so the coordinator can be tested with fakes.
-struct ComputerUseSystem: Sendable {
+public struct ComputerUseSystem: Sendable {
     var runningApps: @Sendable () async -> [(app: ComputerUseAppIdentity, windows: [ComputerUseWindow])]
-    var window: @Sendable (UInt32) async -> ComputerUseWindow?
+    public var window: @Sendable (UInt32) async -> ComputerUseWindow?
     var screenshot: @Sendable (ComputerUseWindow) async throws -> ComputerUseScreenshot
     /// `cut` says why the read stopped early (node budget, time limit, stalled app); nil when
     /// it read everything. `handles` retains the elements behind each node's `handle`.
@@ -268,7 +268,7 @@ struct ComputerUseSystem: Sendable {
     }
     /// The live system. `cursorWindowIDs` names Alas's own overlay windows (the drawn cursor),
     /// which the live drag's hit-tests look through.
-    static func live(cursorWindowIDs: @escaping @Sendable () -> Set<UInt32> = { [] }) -> ComputerUseSystem {
+    public static func live(cursorWindowIDs: @escaping @Sendable () -> Set<UInt32> = { [] }) -> ComputerUseSystem {
         ComputerUseSystem(
             runningApps: { await LiveComputerUseSystem.runningApps() },
             window: { await LiveComputerUseSystem.window($0) },
@@ -1852,7 +1852,7 @@ private actor ComputerUseSerialLock {
 /// and carry `postedEventMarker`, which the tap skips; so does every other event Alas posts, and
 /// a single pointer move another process posts (`ComputerUsePostedMoves`). The tap runs on its own thread and run loop, never the main thread, and only stores a timestamp. It needs the Accessibility grant, so it is created on the first idle check
 /// in a trusted process; until it runs the takeover check falls back to the HID idle time.
-enum ComputerUseUserInput {
+public enum ComputerUseUserInput {
     /// "ALAS", in every event Alas posts (`kCGEventSourceUserData`).
     static let postedEventMarker: Int64 = 0x414C_4153
     /// Uptime nanoseconds of the last input; 0 before any.
@@ -1875,12 +1875,12 @@ enum ComputerUseUserInput {
 
     /// Whether the tap runs, so the takeover check sees the user's input to every app. Asking
     /// also starts it when it can run and isn't yet (throttled).
-    static var isWatching: Bool {
+    public static var isWatching: Bool {
         lastInput() != nil
     }
 
     /// Asks macOS for Input Monitoring, which the tap needs when Accessibility alone doesn't do.
-    static func requestListenAccess() {
+    public static func requestListenAccess() {
         _ = CGRequestListenEventAccess()
     }
 

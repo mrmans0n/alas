@@ -13,7 +13,7 @@ extension AlasCLICommandRouter {
     /// The local-changes review is not one: a paired Mac shows it.
     public static func isScreenBound(_ command: AlasCLIRequest.Command) -> Bool {
         switch command {
-        case .open, .openAt, .preview, .computer, .workspace, .worktree(.switch):
+        case .open, .openAt, .preview, .computer, .vmRun, .vmStatus, .workspace, .worktree(.switch):
             true
         default:
             false

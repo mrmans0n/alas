@@ -131,4 +131,42 @@ struct ComputerUseCommandTests {
     func rejectsInvalidRequests(command: String, params: String) {
         #expect(throws: AlasCLIRequestError.self) { try decode(command, params) }
     }
+
+    @Test func decodesVMCommandsWithTheirTimeoutBounds() throws {
+        #expect(try decode("vm_run", #"{"command":"open x.app"}"#).command == .vmRun(command: "open x.app", timeoutSeconds: 120))
+        #expect(try decode("vm_run", #"{"command":"make","timeout_seconds":1}"#).command == .vmRun(command: "make", timeoutSeconds: 1))
+        #expect(try decode("vm_run", #"{"command":"make","timeout_seconds":600}"#).command == .vmRun(command: "make", timeoutSeconds: 600))
+        #expect(try decode("vm_status", "{}").command == .vmStatus)
+        #expect(try decode("vm_status", nil).command == .vmStatus)
+        for params in [nil, "{}", #"{"command":"  "}"#, #"{"command":"ls","timeout_seconds":0}"#, #"{"command":"ls","timeout_seconds":601}"#] {
+            #expect(throws: AlasCLIRequestError.self) { try decode("vm_run", params) }
+        }
+    }
+
+    @Test(arguments: [
+        ComputerUseCommand(action: .screenshot, windowID: 7, callID: "42-1"),
+        ComputerUseCommand(action: .inspect, windowID: 42, query: "Save", limit: 50, maxDepth: 20),
+        ComputerUseCommand(action: .click, windowID: 3, query: "ok", ref: "e12", button: .right, count: 2, delivery: .direct, includeScreenshot: true),
+        ComputerUseCommand(action: .type, windowID: 3, ref: "e1", text: "héllo \"x\"", mode: .replace),
+        ComputerUseCommand(action: .key, windowID: 3, keys: "cmd+shift+4"),
+        ComputerUseCommand(action: .scroll, windowID: 3, x: 10.5, y: 20, dx: -5, dy: 40),
+        ComputerUseCommand(action: .drag, windowID: 3, ref: "e1", toWindowID: 4, toX: 5, toY: 6, modifiers: [.option, .shift]),
+        ComputerUseCommand(action: .openApp, bundleID: "com.apple.Notes"),
+        ComputerUseCommand(action: .wait, windowID: 3, query: "Done", maxDepth: 32, condition: .disappear, timeoutMS: 9000),
+        ComputerUseCommand(action: .apps),
+        ComputerUseCommand(action: .cancel, callID: "42-1"),
+    ])
+    func requestJSONRoundTrips(command: ComputerUseCommand) throws {
+        let data = try command.requestJSON()
+        let envelope = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(envelope["command"] as? String == "computer_\(command.action.rawValue)")
+        #expect(try ComputerUseCommand.decode(action: command.action, data: data) == command)
+    }
+
+    @Test(arguments: [
+        AlasCLIResponse.ok, .text(["{\"a\":1}", "line"]), .error("nope"), .errorWithExitCode("bad", 3),
+    ])
+    func responseRoundTrips(response: AlasCLIResponse) throws {
+        #expect(try AlasCLIResponse.decode(response.encode()) == response)
+    }
 }

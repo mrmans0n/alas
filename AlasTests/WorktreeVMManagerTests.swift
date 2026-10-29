@@ -35,6 +35,7 @@ final class WorktreeVMManagerTests {
             if stopFails { throw StopRefused() }
             state = .stopped
         }
+        func openGuestConnection(port: UInt32) async throws -> VMGuestTransport { throw StopRefused() }
     }
 
     /// Holds one call until `release()`; streams instead of continuations
@@ -95,6 +96,7 @@ final class WorktreeVMManagerTests {
 
     private let root: URL
     private let registry: WorktreeVMRegistry
+    private var helperDirectory: URL { root.appendingPathComponent("helper", isDirectory: true) }
     private let elsewhere = VMRunOwner(pid: 999_999, processStart: Date(timeIntervalSince1970: 1), label: "Alas Dev")
 
     init() throws {
@@ -111,7 +113,7 @@ final class WorktreeVMManagerTests {
 
     private func makeManager() -> WorktreeVMManager {
         let hypervisor = hypervisor
-        return WorktreeVMManager(registry: registry, root: root) { worktreeID, _ in
+        return WorktreeVMManager(registry: registry, root: root, helperDirectory: helperDirectory) { worktreeID, _, _ in
             try await hypervisor.boot(worktreeID)
         }
     }
@@ -170,6 +172,7 @@ final class WorktreeVMManagerTests {
         #expect(manager.running("/repo/a") == nil)
         #expect(try registry.snapshot().isEmpty)
         #expect(!FileManager.default.fileExists(atPath: bundle.path))
+        #expect(!FileManager.default.fileExists(atPath: manager.transferDirectory(forWorktree: "/repo/a").path))
     }
 
     enum BootInterruption: CaseIterable { case stop, delete }
@@ -298,6 +301,98 @@ final class WorktreeVMManagerTests {
 
         #expect(throws: WorktreeVMManager.VMError.self) { try manager.sealGolden(golden) }
         #expect(!golden.isSealed)
+    }
+
+    enum UnsealBlocker: CaseIterable { case goldenRunsElsewhere, anotherGoldenAwaitsSetup }
+
+    @Test(
+        "customizing the base image is refused while a golden VM runs anywhere or another awaits setup",
+        arguments: UnsealBlocker.allCases)
+    func unsealRefusesWhileAGoldenRunsAnywhere(_ blocker: UnsealBlocker) throws {
+        let golden = try makeGoldenBundle()
+        try GoldenImageInstaller.writeSealedMarker(golden)
+        switch blocker {
+        case .goldenRunsElsewhere:
+            try addRecord(WorktreeVMManager.goldenIDPrefix + "25A1", owner: elsewhere)
+        case .anotherGoldenAwaitsSetup:
+            try FileManager.default.createDirectory(
+                at: root.appendingPathComponent("golden/25A0", isDirectory: true), withIntermediateDirectories: true)
+        }
+        let manager = makeManager()
+
+        #expect(throws: WorktreeVMManager.VMError.self) { try manager.unsealGoldenForCustomizing(from: "/repo/a") }
+        #expect(golden.isSealed)
+        #expect(manager.customizingFrom == nil)
+    }
+
+    @Test("no VM is cloned from a base image another process is customizing")
+    func createVMRefusesWhileTheGoldenIsCustomized() throws {
+        // The golden still looked sealed when createVM checked; under the
+        // registry lock another process already runs it.
+        try GoldenImageInstaller.writeSealedMarker(makeGoldenBundle())
+        try addRecord(WorktreeVMManager.goldenIDPrefix + "25A1", owner: elsewhere)
+
+        #expect(throws: WorktreeVMManager.VMError.self) { try self.makeManager().createVM(worktreeID: "/repo/a") }
+        #expect(try !registry.snapshot().contains { $0.id == "/repo/a" })
+    }
+
+    @Test("a customized base image seals again only after a fresh clean shutdown")
+    func unsealThenSealNeedsAFreshCleanShutdown() async throws {
+        let manager = makeManager()
+        _ = try await manager.startGolden(build: "25A1")
+        #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .clean)
+        let golden = try makeGoldenBundle()
+        try manager.sealGolden(golden)
+
+        try manager.unsealGoldenForCustomizing(from: "/repo/a")
+
+        #expect(!golden.isSealed)
+        #expect(manager.customizingFrom == "/repo/a")
+        #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .forcedOff)
+        #expect(throws: WorktreeVMManager.VMError.self) { try manager.sealGolden(golden) }
+        #expect(!golden.isSealed)
+
+        _ = try await manager.startGolden(build: "25A1")
+        #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .clean)
+        try manager.sealGolden(golden)
+        #expect(golden.isSealed)
+        #expect(manager.customizingFrom == nil)
+    }
+
+    @Test("worktree VMs share the helper, the worktree and a transfer folder; the golden only the helper")
+    func worktreeSharesPointAtTheRightDirectories() throws {
+        let worktree = root.appendingPathComponent("checkout", isDirectory: true)
+        try FileManager.default.createDirectory(at: worktree, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: helperDirectory, withIntermediateDirectories: true)
+        let manager = makeManager()
+        manager.worktreePath = { $0 == "/repo/a" ? worktree : nil }
+
+        let transfer = manager.transferDirectory(forWorktree: "/repo/a")
+        #expect(try manager.shares(forWorktree: "/repo/a") == [
+            VMShare(name: "helper", hostURL: helperDirectory, readOnly: true),
+            VMShare(name: "worktree", hostURL: worktree, readOnly: true),
+            VMShare(name: "transfer", hostURL: transfer, readOnly: false),
+        ])
+        #expect(transfer.deletingLastPathComponent().lastPathComponent == "transfer")
+        #expect(transfer.lastPathComponent
+            == WorktreeVMManager.bundleURL(forWorktree: "/repo/a", root: root).lastPathComponent)
+        #expect(FileManager.default.fileExists(atPath: transfer.path))
+        #expect(try manager.shares(forWorktree: WorktreeVMManager.goldenIDPrefix + "25A1") == [
+            VMShare(name: "helper", hostURL: helperDirectory, readOnly: true),
+        ])
+    }
+
+    @Test("a corrupt registry is quarantined and read again, and a VM bundle on disk still counts as a VM")
+    func corruptRegistryNeitherHidesAVMNorBlocksTheAnswer() throws {
+        let manager = makeManager()
+        let file = root.appendingPathComponent("registry.json")
+        try Data("not json {".utf8).write(to: file)
+        #expect(manager.hasVMRecord("/repo/a") == false)
+
+        try Data("not json {".utf8).write(to: file)
+        let bundle = WorktreeVMManager.bundleURL(forWorktree: "/repo/a", root: root)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        #expect(manager.hasVMRecord("/repo/a") == true)
     }
 
     private func makeGoldenBundle() throws -> VMBundle {

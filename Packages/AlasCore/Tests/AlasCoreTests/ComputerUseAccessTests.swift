@@ -169,4 +169,16 @@ struct ComputerUseAccessTests {
         #expect(ComputerUseApprovalNudge.shouldNudge(
             lastNudgeAt: sinceLast.map { now.addingTimeInterval(-$0) }, now: now, appIsActive: active) == nudges)
     }
+
+    @Test(arguments: [
+        ComputerUseAppIdentity(name: "Alas Dev", bundleID: "io.nlopez.alas.dev", pid: 200),
+        ComputerUseAppIdentity(name: "1Password", bundleID: "com.1password.1password", pid: 201),
+        ComputerUseAppIdentity(name: "Keychain Access", bundleID: "com.apple.keychainaccess", pid: 202),
+    ])
+    func guestModeAllowsAlasAndBlocklistedApps(app: ComputerUseAppIdentity) {
+        let guest = ComputerUseAccess(hostPID: hostPID, alwaysAllowed: { [] }, mode: .guest)
+        #expect(guest.access(for: app, session: "s", input: true) == .allowed(.session))
+        #expect(!guest.isAlas(app))
+        #expect(makeAccess().access(for: app, session: "s", input: true) == .blocked)
+    }
 }

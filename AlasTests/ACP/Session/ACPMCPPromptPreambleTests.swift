@@ -208,6 +208,7 @@ struct ACPMCPPromptPreambleTests {
             "computer_apps", "computer_screenshot", "computer_inspect",
             "computer_click", "computer_type", "computer_key", "computer_scroll", "computer_drag",
             "computer_open_app", "computer_wait",
+            "vm_run", "vm_status",
         ])
     }
 

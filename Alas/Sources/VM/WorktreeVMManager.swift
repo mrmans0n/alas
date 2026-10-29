@@ -39,7 +39,7 @@ final class WorktreeVMManager {
         var runningElsewhere: String?
     }
 
-    typealias StartVM = (_ worktreeID: String, _ bundle: VMBundle) async throws -> RunningVM
+    typealias StartVM = (_ worktreeID: String, _ bundle: VMBundle, _ shares: [VMShare]) async throws -> RunningVM
 
     /// Registry ids at or under this prefix are golden VMs, not worktrees.
     nonisolated static let goldenIDPrefix = "golden:"
@@ -51,9 +51,21 @@ final class WorktreeVMManager {
     /// True for worktrees that live on a remote host; their VM would have to
     /// run there, which is not supported.
     @ObservationIgnored var isRemoteWorktree: (String) -> Bool = { RemotePath.isReserved($0) }
+    /// The checkout directory of a worktree, shared read-only with its VM.
+    /// Installed by the app; nil leaves the worktree share out.
+    @ObservationIgnored var worktreePath: (String) -> URL? = { _ in nil }
+    /// The guest helper and its installer, shared read-only with every VM.
+    @ObservationIgnored private let helperDirectory: URL?
     @ObservationIgnored private let logger = Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
 
     private(set) var runningVMs: [String: RunningVM] = [:]
+    /// The worktree whose tab asked to customize the base image, or
+    /// switched to it with Finish customizing; it shows golden setup while
+    /// other worktrees keep their own VM. In memory only: after a relaunch
+    /// no tab is, until one picks Finish customizing. Cleared by sealing.
+    private(set) var customizingFrom: String?
+    /// One client per running VM that something has talked to; closed when the VM stops.
+    @ObservationIgnored private var guestClients: [String: VMGuestClient] = [:]
     /// Observed so a VM tab can show a boot in progress.
     private var starting: Set<String> = []
     /// Stop or delete requests for VMs that were still booting, honoured once
@@ -74,11 +86,13 @@ final class WorktreeVMManager {
         registry: WorktreeVMRegistry = WorktreeVMRegistry(),
         root: URL = Paths.vmsRoot,
         ownerLabel: String = WorktreeVMManager.defaultOwnerLabel,
+        helperDirectory: URL? = Bundle.main.resourceURL?.appendingPathComponent("alas-vm-guest", isDirectory: true),
         start: @escaping StartVM = WorktreeVMManager.bootVirtualMachine
     ) {
         self.registry = registry
         self.root = root
         self.ownerLabel = ownerLabel
+        self.helperDirectory = helperDirectory
         self.start = start
     }
 
@@ -88,22 +102,75 @@ final class WorktreeVMManager {
             ?? "Alas"
     }
 
-    static func bootVirtualMachine(worktreeID: String, bundle: VMBundle) async throws -> RunningVM {
+    static func bootVirtualMachine(worktreeID: String, bundle: VMBundle, shares: [VMShare]) async throws -> RunningVM {
         let resources = VMConfigurationFactory.defaultResources(
             hostCPUs: ProcessInfo.processInfo.processorCount,
             hostMemory: ProcessInfo.processInfo.physicalMemory)
         let configuration = try VMConfigurationFactory.macOS(
-            bundle: bundle, cpuCount: resources.cpus, memoryBytes: resources.memory, display: .default)
+            bundle: bundle, cpuCount: resources.cpus, memoryBytes: resources.memory, display: .default,
+            shares: shares)
+        // Diagnostic for suspend and resume, which a later plan builds on:
+        // whether this configuration, shares included, supports save/restore.
+        do {
+            try configuration.validateSaveRestoreSupport()
+            vmLogger.notice("VM \(worktreeID, privacy: .public) supports save/restore with \(shares.count) shares")
+        } catch {
+            vmLogger.notice("VM \(worktreeID, privacy: .public) does not support save/restore with \(shares.count) shares: \(String(describing: error), privacy: .public)")
+        }
         let vm = RunningVM(worktreeID: worktreeID, machine: VirtualizationMachine(configuration: configuration))
         try await vm.start()
         return vm
     }
 
+    private static let vmLogger = Logger(subsystem: "io.nlopez.alas", category: "vm")
+
+    // MARK: - Shared folders
+
+    /// `<root>/transfer/<name>-<hash>/`, named like the worktree's VM bundle:
+    /// the one folder the guest can write back to the host.
+    func transferDirectory(forWorktree worktreeID: String) -> URL {
+        root.appendingPathComponent("transfer", isDirectory: true)
+            .appendingPathComponent(Self.directoryName(forWorktree: worktreeID), isDirectory: true)
+    }
+
+    /// The folders a VM sees under `/Volumes/My Shared Files`: the guest
+    /// helper (read-only) for every VM, plus the worktree checkout
+    /// (read-only) and a writable transfer folder, created here, for
+    /// worktree VMs. A helper or worktree directory that does not exist is
+    /// left out, since the VM would refuse to boot with it.
+    func shares(forWorktree id: String) throws -> [VMShare] {
+        var shares: [VMShare] = []
+        func addIfPresent(_ name: String, _ url: URL?) {
+            guard let url, FileManager.default.fileExists(atPath: url.path) else {
+                logger.error("Not sharing \(name, privacy: .public) with VM \(id, privacy: .public): \(url?.path ?? "no directory", privacy: .public) does not exist")
+                return
+            }
+            shares.append(VMShare(name: name, hostURL: url, readOnly: true))
+        }
+        addIfPresent("helper", helperDirectory)
+        guard !id.hasPrefix(Self.goldenIDPrefix) else { return shares }
+        addIfPresent("worktree", worktreePath(id))
+        let transfer = transferDirectory(forWorktree: id)
+        try FileManager.default.createDirectory(at: transfer, withIntermediateDirectories: true)
+        shares.append(VMShare(name: "transfer", hostURL: transfer, readOnly: false))
+        return shares
+    }
+
     // MARK: - Queries
 
-    func hasVM(_ worktreeID: String) -> Bool {
+    /// Whether the worktree has a VM, read without locking or writing the registry, so it is
+    /// cheap enough for every computer use call; nil when the registry can't be read.
+    /// A record a newer build wrote counts, and so does the worktree's clone bundle on disk,
+    /// so a VM worktree never passes for one without a VM. An unreadable registry is
+    /// quarantined once by a locked snapshot and read again.
+    func hasVMRecord(_ worktreeID: String) -> Bool? {
         guard vmsExist else { return false }
-        return (try? registry.snapshot().contains { $0.id == worktreeID }) ?? false
+        if FileManager.default.fileExists(atPath: Self.bundleURL(forWorktree: worktreeID, root: root).path) {
+            return true
+        }
+        if let ids = try? registry.recordIDs() { return ids.contains(worktreeID) }
+        _ = try? registry.snapshot()
+        return (try? registry.recordIDs()).map { $0.contains(worktreeID) }
     }
 
     /// False until the first VM is installed, so queries and worktree
@@ -112,6 +179,23 @@ final class WorktreeVMManager {
 
     func running(_ worktreeID: String) -> RunningVM? {
         runningVMs[worktreeID]
+    }
+
+    /// The guest client already made for a VM this process runs, without creating one.
+    func existingGuestClient(for worktreeID: String) -> VMGuestClient? {
+        runningVMs[worktreeID] == nil ? nil : guestClients[worktreeID]
+    }
+
+    /// The client for the guest helper of a VM this process runs; nil when it does not run here.
+    func guestClient(for worktreeID: String) -> VMGuestClient? {
+        guard let vm = runningVMs[worktreeID] else { return nil }
+        if let client = guestClients[worktreeID] { return client }
+        let client = VMGuestClient(connect: { @MainActor [weak vm] in
+            guard let vm else { throw VMError(message: "The VM stopped") }
+            return try await vm.openGuestConnection(port: VMGuestPort.computerUse)
+        })
+        guestClients[worktreeID] = client
+        return client
     }
 
     /// One registry read for a VM tab: whether the worktree has a VM and
@@ -147,7 +231,7 @@ final class WorktreeVMManager {
     }
 
     /// True when any Alas process (release and dev builds share the registry)
-    /// runs or boots a golden VM, so its disk must not be sealed. Call it
+    /// runs or boots a golden VM, so its disk must not be sealed or unsealed. Call it
     /// inside a registry transaction.
     private func goldenRunsAnywhere(_ records: [WorktreeVMRecord]) -> Bool {
         runningGolden() != nil
@@ -163,6 +247,7 @@ final class WorktreeVMManager {
         guard !isRemoteWorktree(worktreeID) else {
             throw VMError(message: "VMs are only available for worktrees on this Mac, not on a remote host")
         }
+        let root = root
         guard let golden = availableGolden() else {
             // A worktree that already has a VM needs no golden image.
             guard try !(vmsExist && registry.snapshot().contains { $0.id == worktreeID }) else { return }
@@ -178,6 +263,13 @@ final class WorktreeVMManager {
         // process's fresh clone, and the next create replaces it anyway.
         try registry.update { records in
             guard !records.contains(where: { $0.id == worktreeID }) else { return }
+            // Re-checked under the lock unsealing takes: another process may
+            // have reopened the golden, and booted it, since the read above.
+            guard golden.isSealed, !goldenRunsAnywhere(records),
+                  GoldenImageInstaller.availableGolden(root: root)?.url == golden.url
+            else {
+                throw VMError(message: "The base image is being customized. Finish customizing it first.")
+            }
             // A bundle without a record is left over from an interrupted
             // create or delete; cloning over it would fail forever.
             if FileManager.default.fileExists(atPath: destination.path) {
@@ -279,6 +371,10 @@ final class WorktreeVMManager {
                 if FileManager.default.fileExists(atPath: bundle.path) {
                     try FileManager.default.removeItem(at: bundle)
                 }
+                let transfer = transferDirectory(forWorktree: worktreeID)
+                if !worktreeID.hasPrefix(Self.goldenIDPrefix), FileManager.default.fileExists(atPath: transfer.path) {
+                    try FileManager.default.removeItem(at: transfer)
+                }
                 if let index { records.remove(at: index) }
             }
         } catch {
@@ -349,7 +445,7 @@ final class WorktreeVMManager {
 
     /// Seals a golden bundle once this process saw its guest shut down
     /// cleanly. The running check, the marker write and dropping the golden
-    /// record (it is never booted again) are one registry transaction, the
+    /// record (only customizing boots it again) are one registry transaction, the
     /// same lock boot admission takes, so no Alas process can boot the golden
     /// between the check and the seal.
     func sealGolden(_ bundle: VMBundle) throws {
@@ -367,7 +463,56 @@ final class WorktreeVMManager {
             }
             try GoldenImageInstaller.writeSealedMarker(bundle)
             records.removeAll { $0.id == id }
+            // Spent: should the image be customized again, from this process
+            // or another, sealing it needs a new clean shutdown.
+            cleanlyShutDown.removeValue(forKey: id)
         }
+        customizingFrom = nil
+    }
+
+    /// Shows golden setup on `worktreeID`'s tab while the base image is
+    /// being customized, typically after a relaunch forgot which tab it was.
+    func finishCustomizing(from worktreeID: String) {
+        customizingFrom = worktreeID
+    }
+
+    /// Reopens the newest sealed golden image for changes: the next VM tab
+    /// shows golden setup, and Done seals it again through `sealGolden`,
+    /// after a new clean shutdown. Worktree VMs already cloned from it are
+    /// independent copies and stay as they are. The running check, removing
+    /// the sealed marker and bumping the golden's boot generation are one
+    /// registry transaction, the same lock boot admission and sealing take.
+    /// `worktreeID`'s tab then shows golden setup.
+    func unsealGoldenForCustomizing(from worktreeID: String) throws {
+        let root = root
+        try registry.update { records in
+            guard !GoldenImageInstaller.goldenBundles(root: root).contains(where: { !$0.isSealed }) else {
+                throw VMError(message: "A macOS image is already awaiting setup. Finish it before customizing.")
+            }
+            guard let golden = GoldenImageInstaller.availableGolden(root: root) else {
+                throw VMError(message: "There is no base image to customize")
+            }
+            guard !goldenRunsAnywhere(records) else {
+                throw VMError(message: "The base image is running. Shut it down before customizing it.")
+            }
+            let build = golden.url.lastPathComponent
+            let id = Self.goldenIDPrefix + build
+            try FileManager.default.removeItem(at: golden.sealedMarker)
+            // Sealing dropped the record. A recreated one starts above any
+            // generation an earlier record reached, so no process's old
+            // clean-shutdown evidence can match it.
+            if let index = records.firstIndex(where: { $0.id == id }) {
+                records[index].bootGeneration = (records[index].bootGeneration ?? 0) + 1
+            } else {
+                let now = Date()
+                records.append(WorktreeVMRecord(
+                    id: id, goldenBuild: build, bundlePath: golden.url.path, createdAt: now, lastUsedAt: now,
+                    bootGeneration: Int(now.timeIntervalSince1970 * 1000)))
+            }
+            cleanlyShutDown.removeValue(forKey: id)
+            autoStartedGoldenBuilds.remove(build)
+        }
+        customizingFrom = worktreeID
     }
 
     private func goldenBundleURL(build: String) -> URL {
@@ -379,13 +524,17 @@ final class WorktreeVMManager {
     /// `<root>/worktrees/<name>-<hash>/`: a readable, filesystem-safe name from
     /// the worktree's last path component plus a digest of the full id.
     static func bundleURL(forWorktree worktreeID: String, root: URL) -> URL {
+        root.appendingPathComponent("worktrees", isDirectory: true)
+            .appendingPathComponent(directoryName(forWorktree: worktreeID), isDirectory: true)
+    }
+
+    private static func directoryName(forWorktree worktreeID: String) -> String {
         let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_."))
         let leaf = URL(fileURLWithPath: worktreeID).lastPathComponent
         let name = String(leaf.unicodeScalars.map { allowed.contains($0) && $0.isASCII ? Character($0) : "_" })
             .trimmingCharacters(in: CharacterSet(charactersIn: "."))
         let digest = SHA256.hash(data: Data(worktreeID.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
-        return root.appendingPathComponent("worktrees", isDirectory: true)
-            .appendingPathComponent(name.isEmpty ? digest : "\(name.prefix(64))-\(digest)", isDirectory: true)
+        return name.isEmpty ? digest : "\(name.prefix(64))-\(digest)"
     }
 
     private enum Admission {
@@ -449,7 +598,7 @@ final class WorktreeVMManager {
         cleanlyShutDown.removeValue(forKey: id)
         let booted: Result<RunningVM, Error>
         do {
-            booted = .success(try await start(id, bundle))
+            booted = .success(try await start(id, bundle, try shares(forWorktree: id)))
         } catch {
             booted = .failure(error)
         }
@@ -528,6 +677,9 @@ final class WorktreeVMManager {
     }
 
     private func didStop(_ id: String) {
+        if let client = guestClients.removeValue(forKey: id) {
+            Task { await client.close() }
+        }
         guard runningVMs.removeValue(forKey: id) != nil else { return }
         clearOwner(id)
     }
