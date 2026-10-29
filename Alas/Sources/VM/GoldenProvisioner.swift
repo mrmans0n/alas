@@ -116,7 +116,8 @@ struct GoldenProvisioner {
             let reason = (error as? Failure)?.reason ?? Reason.vmStart
             Self.logger.error("Unattended setup of golden \(build, privacy: .public) stopped: \(reason, privacy: .public)")
             await stop(build)
-            if patched { await turnSSHDOffOffline(bundle) }
+            // A patch that failed part-way may already have turned sshd on.
+            if patched || reason == Reason.disk { await turnSSHDOffOffline(bundle) }
             return .fallback(reason: reason)
         }
     }
@@ -497,6 +498,8 @@ enum GuestSSH {
         process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = stderr
+        // The app doesn't ignore SIGPIPE: if ssh exits first, the write must fail rather than kill Alas.
+        _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         try process.run()
 
         // The pipe buffer holds the whole script; closing ends the remote shell's input.
