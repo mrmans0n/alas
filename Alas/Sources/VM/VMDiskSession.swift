@@ -55,6 +55,7 @@ final class VMDiskSession: @unchecked Sendable {
         let imagePath = diskImage.resolvingSymlinksInPath().path
 
         let attached: [String: Any]
+        var attemptedAttach = false
         do {
             // The owner file comes first: a sweep that sees the directory can always tell who owns it.
             try fm.createDirectory(at: session, withIntermediateDirectories: true)
@@ -63,10 +64,17 @@ final class VMDiskSession: @unchecked Sendable {
                 .write(to: session.appendingPathComponent(ownerFileName))
             try fm.createDirectory(at: dataMount, withIntermediateDirectories: false)
             try fm.createDirectory(at: systemMount, withIntermediateDirectories: false)
+            // Someone else (another Alas process, or a hand attach) holds it: leave theirs alone.
+            if isImageAttached(imagePath) {
+                throw Failure(message: "The VM disk is already attached elsewhere: \(imagePath)")
+            }
+            attemptedAttach = true
             attached = try runPlist(
                 "/usr/bin/hdiutil", ["attach", "-readwrite", "-nomount", "-plist", diskImage.path], timeout: attachTimeout
             )
         } catch {
+            // A killed or failed attach may still have attached the image; never leave our attach behind.
+            if attemptedAttach { detachImage(at: imagePath) }
             removeSessionDirectory(session)
             throw error
         }
@@ -241,6 +249,14 @@ final class VMDiskSession: @unchecked Sendable {
     }
 
     // MARK: - Tools
+
+    /// Whether `hdiutil` lists the image as attached. An unreadable `hdiutil info` counts as attached.
+    private static func isImageAttached(_ imagePath: String) -> Bool {
+        guard let info = try? runPlist("/usr/bin/hdiutil", ["info", "-plist"]) else { return true }
+        return (info["images"] as? [[String: Any]] ?? []).contains { image in
+            (image["image-path"] as? String).map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path } == imagePath
+        }
+    }
 
     /// Detaches an image by path, for an attach whose output named no whole disk.
     private static func detachImage(at imagePath: String) {
