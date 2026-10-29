@@ -59,6 +59,11 @@ final class WorktreeVMManager {
     @ObservationIgnored private let logger = Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
 
     private(set) var runningVMs: [String: RunningVM] = [:]
+    /// The worktree whose tab asked to customize the base image, or
+    /// switched to it with Finish customizing; it shows golden setup while
+    /// other worktrees keep their own VM. In memory only: after a relaunch
+    /// no tab is, until one picks Finish customizing. Cleared by sealing.
+    private(set) var customizingFrom: String?
     /// One client per running VM that something has talked to; closed when the VM stops.
     @ObservationIgnored private var guestClients: [String: VMGuestClient] = [:]
     /// Observed so a VM tab can show a boot in progress.
@@ -108,9 +113,9 @@ final class WorktreeVMManager {
         // whether this configuration, shares included, supports save/restore.
         do {
             try configuration.validateSaveRestoreSupport()
-            vmLogger.debug("VM \(worktreeID, privacy: .public) supports save/restore with \(shares.count) shares")
+            vmLogger.notice("VM \(worktreeID, privacy: .public) supports save/restore with \(shares.count) shares")
         } catch {
-            vmLogger.debug("VM \(worktreeID, privacy: .public) does not support save/restore with \(shares.count) shares: \(String(describing: error), privacy: .public)")
+            vmLogger.notice("VM \(worktreeID, privacy: .public) does not support save/restore with \(shares.count) shares: \(String(describing: error), privacy: .public)")
         }
         let vm = RunningVM(worktreeID: worktreeID, machine: VirtualizationMachine(configuration: configuration))
         try await vm.start()
@@ -227,6 +232,7 @@ final class WorktreeVMManager {
         guard !isRemoteWorktree(worktreeID) else {
             throw VMError(message: "VMs are only available for worktrees on this Mac, not on a remote host")
         }
+        let root = root
         guard let golden = availableGolden() else {
             // A worktree that already has a VM needs no golden image.
             guard try !(vmsExist && registry.snapshot().contains { $0.id == worktreeID }) else { return }
@@ -242,6 +248,13 @@ final class WorktreeVMManager {
         // process's fresh clone, and the next create replaces it anyway.
         try registry.update { records in
             guard !records.contains(where: { $0.id == worktreeID }) else { return }
+            // Re-checked under the lock unsealing takes: another process may
+            // have reopened the golden, and booted it, since the read above.
+            guard golden.isSealed, !goldenRunsAnywhere(records),
+                  GoldenImageInstaller.availableGolden(root: root)?.url == golden.url
+            else {
+                throw VMError(message: "The base image is being customized. Finish customizing it first.")
+            }
             // A bundle without a record is left over from an interrupted
             // create or delete; cloning over it would fail forever.
             if FileManager.default.fileExists(atPath: destination.path) {
@@ -439,6 +452,13 @@ final class WorktreeVMManager {
             // or another, sealing it needs a new clean shutdown.
             cleanlyShutDown.removeValue(forKey: id)
         }
+        customizingFrom = nil
+    }
+
+    /// Shows golden setup on `worktreeID`'s tab while the base image is
+    /// being customized, typically after a relaunch forgot which tab it was.
+    func finishCustomizing(from worktreeID: String) {
+        customizingFrom = worktreeID
     }
 
     /// Reopens the newest sealed golden image for changes: the next VM tab
@@ -447,9 +467,13 @@ final class WorktreeVMManager {
     /// independent copies and stay as they are. The running check, removing
     /// the sealed marker and bumping the golden's boot generation are one
     /// registry transaction, the same lock boot admission and sealing take.
-    func unsealGoldenForCustomizing() throws {
+    /// `worktreeID`'s tab then shows golden setup.
+    func unsealGoldenForCustomizing(from worktreeID: String) throws {
         let root = root
         try registry.update { records in
+            guard !GoldenImageInstaller.goldenBundles(root: root).contains(where: { !$0.isSealed }) else {
+                throw VMError(message: "A macOS image is already awaiting setup. Finish it before customizing.")
+            }
             guard let golden = GoldenImageInstaller.availableGolden(root: root) else {
                 throw VMError(message: "There is no base image to customize")
             }
@@ -473,6 +497,7 @@ final class WorktreeVMManager {
             cleanlyShutDown.removeValue(forKey: id)
             autoStartedGoldenBuilds.remove(build)
         }
+        customizingFrom = worktreeID
     }
 
     private func goldenBundleURL(build: String) -> URL {

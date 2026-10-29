@@ -303,14 +303,37 @@ final class WorktreeVMManagerTests {
         #expect(!golden.isSealed)
     }
 
-    @Test("customizing the base image is refused while a golden VM runs in any process")
-    func unsealRefusesWhileAGoldenRunsAnywhere() throws {
+    enum UnsealBlocker: CaseIterable { case goldenRunsElsewhere, anotherGoldenAwaitsSetup }
+
+    @Test(
+        "customizing the base image is refused while a golden VM runs anywhere or another awaits setup",
+        arguments: UnsealBlocker.allCases)
+    func unsealRefusesWhileAGoldenRunsAnywhere(_ blocker: UnsealBlocker) throws {
         let golden = try makeGoldenBundle()
         try GoldenImageInstaller.writeSealedMarker(golden)
+        switch blocker {
+        case .goldenRunsElsewhere:
+            try addRecord(WorktreeVMManager.goldenIDPrefix + "25A1", owner: elsewhere)
+        case .anotherGoldenAwaitsSetup:
+            try FileManager.default.createDirectory(
+                at: root.appendingPathComponent("golden/25A0", isDirectory: true), withIntermediateDirectories: true)
+        }
+        let manager = makeManager()
+
+        #expect(throws: WorktreeVMManager.VMError.self) { try manager.unsealGoldenForCustomizing(from: "/repo/a") }
+        #expect(golden.isSealed)
+        #expect(manager.customizingFrom == nil)
+    }
+
+    @Test("no VM is cloned from a base image another process is customizing")
+    func createVMRefusesWhileTheGoldenIsCustomized() throws {
+        // The golden still looked sealed when createVM checked; under the
+        // registry lock another process already runs it.
+        try GoldenImageInstaller.writeSealedMarker(makeGoldenBundle())
         try addRecord(WorktreeVMManager.goldenIDPrefix + "25A1", owner: elsewhere)
 
-        #expect(throws: WorktreeVMManager.VMError.self) { try self.makeManager().unsealGoldenForCustomizing() }
-        #expect(golden.isSealed)
+        #expect(throws: WorktreeVMManager.VMError.self) { try self.makeManager().createVM(worktreeID: "/repo/a") }
+        #expect(try !registry.snapshot().contains { $0.id == "/repo/a" })
     }
 
     @Test("a customized base image seals again only after a fresh clean shutdown")
@@ -321,9 +344,10 @@ final class WorktreeVMManagerTests {
         let golden = try makeGoldenBundle()
         try manager.sealGolden(golden)
 
-        try manager.unsealGoldenForCustomizing()
+        try manager.unsealGoldenForCustomizing(from: "/repo/a")
 
         #expect(!golden.isSealed)
+        #expect(manager.customizingFrom == "/repo/a")
         #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .forcedOff)
         #expect(throws: WorktreeVMManager.VMError.self) { try manager.sealGolden(golden) }
         #expect(!golden.isSealed)
@@ -332,6 +356,7 @@ final class WorktreeVMManagerTests {
         #expect(await manager.shutDownGoldenForSealing(build: "25A1") == .clean)
         try manager.sealGolden(golden)
         #expect(golden.isSealed)
+        #expect(manager.customizingFrom == nil)
     }
 
     @Test("worktree VMs share the helper, the worktree and a transfer folder; the golden only the helper")

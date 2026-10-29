@@ -60,6 +60,7 @@ struct VirtualMachineTabView: View {
             runningElsewhere: elsewhere?.label ?? record.runningElsewhere,
             loaded: loaded,
             hasVM: record.hasVM,
+            customizingHere: vms.customizingFrom == worktreeID,
             goldenAvailable: goldenAvailable,
             installerPhase: installer.phase
         )
@@ -119,7 +120,6 @@ struct VirtualMachineTabView: View {
         switch screen {
         case .running:
             header("Running") {
-                customizeButton
                 Button("Stop") { stop(worktreeID) }
             }
             VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: vms.running(worktreeID)?.vm)
@@ -158,17 +158,29 @@ struct VirtualMachineTabView: View {
             } actions: {
                 Button("Start") { start(.worktree(worktreeID)) }
                     .buttonStyle(.borderedProminent)
-                customizeButton
+                if canCustomize {
+                    Button("Customize base image") { confirmingCustomize = true }
+                }
+            }
+        case .stoppedWhileCustomizing:
+            ContentUnavailableView {
+                Label("Stopped", systemImage: "desktopcomputer")
+            } description: {
+                Text("The base image is being customized.")
+            } actions: {
+                Button("Start") { start(.worktree(worktreeID)) }
+                    .buttonStyle(.borderedProminent)
+                Button("Finish customizing") { vms.finishCustomizing(from: worktreeID) }
             }
         }
     }
 
-    /// Hidden while a golden image installs: unsealing the previous one then
-    /// would leave two images awaiting setup.
-    @ViewBuilder
-    private var customizeButton: some View {
-        if !installerIsBusy {
-            Button("Customize base image") { confirmingCustomize = true }
+    /// Only with a sealed golden settled: unsealing it while another image
+    /// installs or awaits setup would leave two images awaiting setup.
+    private var canCustomize: Bool {
+        switch installer.phase {
+        case .idle, .sealed: goldenAvailable
+        case .downloading, .installing, .awaitingSetup, .failed: false
         }
     }
 
@@ -214,7 +226,7 @@ struct VirtualMachineTabView: View {
 
     @ViewBuilder
     private func goldenSetupView(build: String) -> some View {
-        header("Install the helper: open My Shared Files › helper › Install Alas VM Guest, then allow it in Accessibility and Screen Recording. Shut down macOS, then click Done.") {
+        header("Create a user that logs in automatically. Install the helper: open My Shared Files › helper › Install Alas VM Guest, then allow it in Accessibility and Screen Recording. Shut down macOS, then click Done.") {
             Button("Done") { finishGoldenSetup(build: build) }
                 .disabled(finishingSetup)
         }
@@ -310,7 +322,7 @@ struct VirtualMachineTabView: View {
     private func customizeBaseImage() {
         errorMessage = nil
         do {
-            try vms.unsealGoldenForCustomizing()
+            try vms.unsealGoldenForCustomizing(from: worktreeID)
         } catch {
             errorMessage = error.localizedDescription
         }

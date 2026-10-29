@@ -77,6 +77,11 @@ final class GoldenImageInstaller: ObservableObject {
         goldenBundles(in: goldenRoot(in: root)).last { $0.isSealed }
     }
 
+    /// Completed golden bundles under `root`, oldest build first.
+    nonisolated static func goldenBundles(root: URL) -> [VMBundle] {
+        goldenBundles(in: goldenRoot(in: root))
+    }
+
     /// Completed (non-partial) golden bundles, oldest build first.
     private nonisolated static func goldenBundles(in goldenRoot: URL) -> [VMBundle] {
         let entries = (try? FileManager.default.contentsOfDirectory(
