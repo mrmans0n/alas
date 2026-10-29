@@ -328,6 +328,11 @@ final class AppState {
     let acpModelCatalog: ACPAgentModelCatalog
     /// Worktree VMs (and the golden VM during its setup) this process runs.
     @ObservationIgnored let vmManager = WorktreeVMManager()
+    /// Sessions whose computer use runs in their worktree's VM and that made a call this turn;
+    /// the badge shows for them as it does for the host driver.
+    var vmComputerUseSessions: [String: String] = [:]
+    /// VM sessions the user stopped from the badge; only a resume clears them.
+    var vmStoppedSessions: Set<String> = []
     /// The one installer; `vmManager` seals its golden image so no Alas
     /// process can boot it meanwhile.
     @ObservationIgnored private(set) lazy var goldenImageInstaller = GoldenImageInstaller(
@@ -7350,7 +7355,8 @@ final class AppState {
             },
             computerCommand: { [weak self] command, sessionID in
                 guard let self else { return .error("Alas is not available.") }
-                return await self.computerUse.perform(command, sessionID: sessionID)
+                let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
+                return await self.performComputerUse(command, sessionID: sessionID, worktreeID: worktreeID)
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
@@ -12487,7 +12493,7 @@ final class AppState {
             },
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
-                    self?.computerUse.turnEnded(sessionID: completion.sessionId)
+                    self?.computerUseTurnEnded(sessionID: completion.sessionId, owner: owner)
                     self?.scheduledAgentTurns.deliver(completion)
                     self?.reviewShepherd.turnCompleted(sessionID: completion.sessionId)
                     self?.stackShepherd.turnCompleted(sessionID: completion.sessionId)
@@ -12824,7 +12830,7 @@ final class AppState {
         let worktreeId = worktree.id
         mgr.admitsNewWork = { [weak self] in self?.projectsManager.admitsNewWork(worktreeId: worktreeId) ?? false }
         mgr.onSessionRuntimeEnded = { [weak self] sessionID in
-            self?.computerUse.sessionEnded(sessionID: sessionID)
+            self?.computerUseSessionEnded(sessionID: sessionID, owner: owner)
         }
         acpManagers[owner] = mgr
         acpManagerProjectIds[owner] = worktree.projectId
@@ -12995,7 +13001,7 @@ final class AppState {
             },
             onTurnCompleted: { [weak self] completion in
                 Task { @MainActor [weak self] in
-                    self?.computerUse.turnEnded(sessionID: completion.sessionId)
+                    self?.computerUseTurnEnded(sessionID: completion.sessionId, owner: owner)
                     await self?.acpOrchestration.childTurnCompleted(completion)
                 }
             },
@@ -13180,7 +13186,7 @@ final class AppState {
             return (adapterState, configOutcome, userServerNames, skippedServerStatuses, requestedServerStatuses)
         }
         manager.onSessionRuntimeEnded = { [weak self] sessionID in
-            self?.computerUse.sessionEnded(sessionID: sessionID)
+            self?.computerUseSessionEnded(sessionID: sessionID, owner: owner)
         }
         acpManagers[owner] = manager
         observeNextPromptSessions(manager, owner: owner)

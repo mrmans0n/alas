@@ -638,6 +638,9 @@ public final class ComputerUseCoordinator {
         syncPending()
     }
 
+    /// The error a stopped session's calls answer, for sessions whose calls run elsewhere.
+    public static var stoppedMessage: String { Message.stopped }
+
     public func isStopped(sessionID: String) -> Bool { stoppedSessions.contains(sessionID) }
 
     public func stop(sessionID: String) async {

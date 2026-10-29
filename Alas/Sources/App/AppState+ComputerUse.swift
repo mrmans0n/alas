@@ -117,6 +117,74 @@ extension AppState {
         computerUseStopHotKey?.update(registration)
     }
 
+    // MARK: - VM sessions
+
+    /// Routes one call: a session whose worktree has a VM talks to its guest and never reaches
+    /// the host coordinator, so no host readiness, approvals, driver lock, or overlay apply.
+    func performComputerUse(_ command: ComputerUseCommand, sessionID: String, worktreeID: String?) async -> AlasCLIResponse {
+        // A running VM answers without a registry read.
+        let runningHere = worktreeID.map { vmManager.running($0) != nil } ?? false
+        let hasVM = runningHere || (worktreeID.map(vmManager.hasVM) ?? false)
+        switch VMComputerUseRoute.resolve(worktreeID: worktreeID, hasVM: hasVM, runningHere: runningHere) {
+        case .desktop:
+            return await computerUse.perform(command, sessionID: sessionID)
+        case .vmNotRunning:
+            return .error(VMComputerUseRoute.vmNotRunningMessage)
+        case .guest(let worktreeID):
+            if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
+                return .error(ComputerUseCoordinator.stoppedMessage)
+            }
+            guard let client = vmManager.guestClient(for: worktreeID) else {
+                return .error(VMComputerUseRoute.vmNotRunningMessage)
+            }
+            if command.action != .cancel { vmComputerUseSessions[sessionID] = worktreeID }
+            // Awaited in the request's own task, so a client disconnect cancels it and the
+            // client tells the guest to cancel the call.
+            return await client.perform(command, sessionID: sessionID)
+        }
+    }
+
+    /// Whether the badge shows a session as driving its VM.
+    func isDrivingVM(sessionID: String) -> Bool { vmComputerUseSessions[sessionID] != nil }
+
+    /// The badge's Stop: a VM session stops in its guest, the rest on the host.
+    func stopComputerUse(sessionID: String) async {
+        guard let worktreeID = vmComputerUseSessions[sessionID] else {
+            await computerUse.stop(sessionID: sessionID)
+            return
+        }
+        vmStoppedSessions.insert(sessionID)
+        vmComputerUseSessions[sessionID] = nil
+        await vmManager.guestClient(for: worktreeID)?.lifecycle(.stop, sessionID: sessionID)
+        try? await host.sessions.stop(sessionID, caller: .app)
+    }
+
+    /// The badge's Resume, for whichever side stopped the session.
+    func resumeComputerUse(sessionID: String) {
+        computerUse.resume(sessionID: sessionID)
+        guard vmStoppedSessions.remove(sessionID) != nil else { return }
+        guard case .worktree(let worktreeID)? = host.callers.owner(ofSession: sessionID),
+              let client = vmManager.guestClient(for: worktreeID) else { return }
+        Task { await client.lifecycle(.resume, sessionID: sessionID) }
+    }
+
+    func computerUseTurnEnded(sessionID: String, owner: SessionOwnerID) {
+        computerUse.turnEnded(sessionID: sessionID)
+        vmComputerUseSessions[sessionID] = nil
+        forwardVMLifecycle(.turnEnded, sessionID: sessionID, owner: owner)
+    }
+
+    func computerUseSessionEnded(sessionID: String, owner: SessionOwnerID) {
+        computerUse.sessionEnded(sessionID: sessionID)
+        vmComputerUseSessions[sessionID] = nil
+        forwardVMLifecycle(.sessionEnded, sessionID: sessionID, owner: owner)
+    }
+
+    private func forwardVMLifecycle(_ event: VMGuestLifecycleEvent, sessionID: String, owner: SessionOwnerID) {
+        guard case .worktree(let worktreeID) = owner, let client = vmManager.guestClient(for: worktreeID) else { return }
+        Task { await client.lifecycle(event, sessionID: sessionID) }
+    }
+
     func showComputerUseSession(_ sessionID: String) {
         guard let owner = acpOwner(forSession: sessionID) else { return }
         switch owner {

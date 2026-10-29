@@ -26,7 +26,7 @@ struct ACPToolbar: View {
                 owner: owner,
                 agentLookup: agentLookup
             )
-            ComputerUseBadge(sessionID: session.id, coordinator: state.computerUse)
+            ComputerUseBadge(sessionID: session.id, state: state)
             ACPMCPStatusControl(
                 session: session,
                 currentServers: state.mcpServersForACPToolbar(worktree: worktree, owner: owner),
