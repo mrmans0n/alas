@@ -153,7 +153,10 @@ targets:
         HEADER_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/include $(SRCROOT)/.build/treesitter-pack/include
         LIBRARY_SEARCH_PATHS: $(inherited) $(SRCROOT)/.build/fff/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/fff/universal/install/lib $(SRCROOT)/.build/treesitter-pack/$(CURRENT_ARCH)/install/lib $(SRCROOT)/.build/treesitter-pack/universal/install/lib
         LD_RUNPATH_SEARCH_PATHS: $(inherited) @executable_path/../Frameworks
-        OTHER_LDFLAGS: $(inherited) -lc++ -lfff_c -lalas_treesitter_pack
+        # Ghostty's archive goes first: since Zig 0.17 its bundled compiler-rt
+        # symbols are no longer weak, so if the Rust grammar pack's copies of
+        # __mulsc3/__divsc3 load first, ld reports duplicate symbols.
+        OTHER_LDFLAGS: $(inherited) -lc++ $(SRCROOT)/.build/ghostty/GhosttyKit.xcframework/macos-arm64_x86_64/ghostty-internal.a -lfff_c -lalas_treesitter_pack
     preBuildScripts:
       - name: Build GhosttyKit
         script: '"${SRCROOT}/scripts/build-ghostty.sh"'

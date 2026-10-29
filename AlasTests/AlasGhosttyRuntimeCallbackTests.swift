@@ -39,20 +39,23 @@ struct AlasGhosttyRuntimeCallbackTests {
                 action.tag = GHOSTTY_ACTION_CELL_SIZE
                 let handled = config.value.action_cb(nil, target, action)
 
-                let readStarted = config.value.read_clipboard_cb(
+                let readResult = config.value.read_clipboard_cb(
                     nil,
                     GHOSTTY_CLIPBOARD_SELECTION,
-                    nil
+                    nil,
+                    nil,
+                    0,
+                    false
                 )
                 config.value.confirm_read_clipboard_cb(nil, nil, nil, GHOSTTY_CLIPBOARD_REQUEST_PASTE)
                 config.value.write_clipboard_cb(nil, GHOSTTY_CLIPBOARD_SELECTION, nil, 0, false)
                 config.value.close_surface_cb(nil, false)
 
-                continuation.resume(returning: (handled, readStarted))
+                continuation.resume(returning: (handled, readResult))
             }
         }
 
         #expect(result.0)
-        #expect(!result.1)
+        #expect(result.1 == GHOSTTY_CLIPBOARD_READ_UNSUPPORTED)
     }
 }

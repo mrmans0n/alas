@@ -177,7 +177,7 @@ entry skips zig entirely.
 | `ALAS_GHOSTTY_CACHE_DIR` | `~/Library/Caches/Alas/GhosttyKit` | Override the cache root. |
 | `ALAS_GHOSTTY_CACHE_KEEP` | `5` | Number of fingerprint entries (per arch) to keep after GC. |
 | `ALAS_GHOSTTY_CACHE_DISABLE` | unset | When `1`, skip the shared cache (read & write). |
-| `ALAS_ZIG_BIN` | `$(brew --prefix zig@0.15)/bin/zig` | Override the zig binary. |
+| `ALAS_ZIG_BIN` | `$(brew --prefix zig@0.17)/bin/zig` | Override the zig binary. |
 | `ALAS_GHOSTTY_LOCK_STALE_SECS` | `60` | Grace period before a lock is considered stale. |
 | `ALAS_GHOSTTY_LOCK_TIMEOUT_SECS` | `1800` | Max wait before giving up on the lock and building locally. |
 

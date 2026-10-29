@@ -2,7 +2,7 @@
 
 ## Repository and Worktree Management
 
-1. Start Alas with `PATH="/opt/homebrew/opt/zig@0.15/bin:$PATH" cargo run` if Zig 0.15 is not already on `PATH`; otherwise `cargo run` is sufficient.
+1. Start Alas with `PATH="/opt/homebrew/opt/zig@0.17/bin:$PATH" cargo run` if Zig 0.17 is not already on `PATH`; otherwise `cargo run` is sufficient.
 2. Add an existing Git repository.
 3. Confirm the main worktree and linked worktrees appear in the left navigator.
 4. Create a worktree from the row overflow menu.
