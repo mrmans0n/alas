@@ -36,6 +36,7 @@ public final class PeerPortForwarder: @unchecked Sendable {
     public let endpoint: URL
     private let limits: PeerPortForwardLimits
     private let send: Send
+    private let onRefused: @Sendable (_ message: String) -> Void
     private let queue = DispatchQueue(label: "io.nlopez.alas.peer-port-forwarder")
     private var listeners: [NWListener] = []
     private var stopped = false
@@ -43,11 +44,17 @@ public final class PeerPortForwarder: @unchecked Sendable {
     /// Local sockets the host closed, still writing out what it sent.
     private var draining: [UUID: NWConnection] = [:]
 
-    /// `send` is called on an internal serial queue, in order.
-    public init(runID: String, endpoint: URL, limits: PeerPortForwardLimits = PeerPortForwardLimits(), send: @escaping Send) {
+    /// `send` and `onRefused`, given the host's message for a refused
+    /// stream this forwarder opened, are called on an internal serial queue,
+    /// in order.
+    public init(
+        runID: String, endpoint: URL, limits: PeerPortForwardLimits = PeerPortForwardLimits(),
+        onRefused: @escaping @Sendable (_ message: String) -> Void = { _ in }, send: @escaping Send
+    ) {
         self.runID = runID
         self.endpoint = endpoint
         self.limits = limits
+        self.onRefused = onRefused
         self.send = send
     }
 
@@ -196,7 +203,10 @@ public final class PeerPortForwarder: @unchecked Sendable {
             stream.opened = true
             read(id, stream)
         case .refused(let id, let message):
-            streams.removeValue(forKey: id)?.connection.cancel()
+            // Another forward's stream on the same peer is none of ours.
+            guard let stream = streams.removeValue(forKey: id) else { return }
+            stream.connection.cancel()
+            onRefused(message)
             // A backstop: the app stops the forward itself when the run
             // changes or the host disconnects.
             if message == PeerPortForwardHost.notRunningMessage { shutDown() }

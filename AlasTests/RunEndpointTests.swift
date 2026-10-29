@@ -69,7 +69,7 @@ struct RunEndpointTests {
     // MARK: - Port probe
 
     @Test func portProbeDetectsAListenerWithoutTouchingIt() throws {
-        let listener = try Listener()
+        let listener = try TCPPortListener()
         defer { listener.close() }
         #expect(RunPortProbe.isLocalPortInUse(listener.port))
         // Observing the collision must leave the other socket alone: it is
@@ -95,7 +95,7 @@ struct RunEndpointTests {
 
 /// A real listening socket on an OS-assigned port, so the probe is exercised
 /// against the same condition a dev server produces.
-private final class Listener {
+final class TCPPortListener {
     let descriptor: Int32
     let port: Int
 
@@ -148,11 +148,11 @@ private final class IPv6OnlyListener {
 
     init() throws {
         let fd = socket(AF_INET6, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw Listener.ListenerError.failed }
+        guard fd >= 0 else { throw TCPPortListener.ListenerError.failed }
         var only: Int32 = 1
         guard setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &only, socklen_t(MemoryLayout<Int32>.size)) == 0 else {
             Darwin.close(fd)
-            throw Listener.ListenerError.failed
+            throw TCPPortListener.ListenerError.failed
         }
         var address = sockaddr_in6()
         address.sin6_len = UInt8(MemoryLayout<sockaddr_in6>.size)
@@ -166,7 +166,7 @@ private final class IPv6OnlyListener {
         }
         guard bound == 0, listen(fd, 1) == 0 else {
             Darwin.close(fd)
-            throw Listener.ListenerError.failed
+            throw TCPPortListener.ListenerError.failed
         }
         var assigned = sockaddr_in6()
         var length = socklen_t(MemoryLayout<sockaddr_in6>.size)
@@ -177,7 +177,7 @@ private final class IPv6OnlyListener {
         }
         guard named == 0 else {
             Darwin.close(fd)
-            throw Listener.ListenerError.failed
+            throw TCPPortListener.ListenerError.failed
         }
         descriptor = fd
         port = Int(UInt16(bigEndian: assigned.sin6_port))

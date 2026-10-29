@@ -1405,6 +1405,7 @@ private struct RootBaseHandlers: ViewModifier {
                 state.stampSeenSessionsForTermination()
                 state.stopPairingApprovals()
                 state.stopRemoteTailscaleServe()
+                state.nativePeerSessions?.hosts?.stopForwards()
                 state.flushScheduledSpacesSave()
                 state.stopAllProjectGitWatchers()
                 state.tabs.snapshotDirtyBuffersForQuit()

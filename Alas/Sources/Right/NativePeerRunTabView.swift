@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// A paired host's Run tab for one of its worktrees: the scripts it lists and
@@ -72,7 +73,8 @@ struct NativePeerRunTabView: View {
                         ForEach(scoped, id: \.script.key) { row in
                             RunRowView(
                                 presentation: RunTabPresentation.peerRow(
-                                    row, hostName: hostName, consoleIds: consoleIds, now: now
+                                    row, hostName: hostName, consoleIds: consoleIds,
+                                    servesForward: hosts.servesForward(serverId: serverId), now: now
                                 ),
                                 onAction: { perform($0, on: row) }
                             )
@@ -109,7 +111,10 @@ struct NativePeerRunTabView: View {
         case .openTerminal:
             if let sessionID = row.record?.sessionID { openConsole(sessionID) }
             return
-        case .openEndpoint, .edit: return
+        case .openEndpoint(let endpoint):
+            openEndpoint(endpoint, of: row)
+            return
+        case .edit: return
         }
         let key = "\(worktreeKey)|\(row.script.key)"
         guard inFlight.insert(key).inserted else { return }
@@ -124,6 +129,20 @@ struct NativePeerRunTabView: View {
                 guard case .output(let runID) = command else { return }
                 output = PeerRunOutput(id: runID, scriptName: row.script.name, presentation: presentation)
             }
+        }
+    }
+
+    /// A loopback endpoint opens through the host's forward; any other as declared.
+    private func openEndpoint(_ endpoint: URL, of row: PeerRuns.Row) {
+        guard PeerPortForwardEndpoint.isLoopback(endpoint), let runID = row.record?.id else {
+            // Never the Mac's own services: the row offers no other loopback spelling.
+            if !RunEndpointPolicy.isLoopback(endpoint) { NSWorkspace.shared.open(endpoint) }
+            return
+        }
+        let hosts = hosts, serverId = serverId
+        Task {
+            guard let local = await hosts.forwardedEndpoint(endpoint, runID: runID, serverId: serverId) else { return }
+            NSWorkspace.shared.open(local)
         }
     }
 }

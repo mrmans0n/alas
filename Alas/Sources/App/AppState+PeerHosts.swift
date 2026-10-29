@@ -6,6 +6,9 @@ extension AppState {
     func makeNativePeerHosts() -> NativePeerHosts {
         let hosts = NativePeerHosts(
             send: { [weak self] serverId, message in self?.remotePeers.sendToPeer(.host(message), serverId: serverId) },
+            sendPortForward: { [weak self] serverId, request in
+                self?.remotePeers.sendToPeer(.portForward(request), serverId: serverId)
+            },
             supports: { [weak self] serverId, capability in
                 self?.remotePeers.capabilities[serverId]?.contains(capability) == true
             },
@@ -29,6 +32,9 @@ extension AppState {
         )
         remotePeers.onHostMessage = { [weak hosts] serverId, message in
             hosts?.receive(serverId: serverId, message)
+        }
+        remotePeers.onPortForwardEvent = { [weak hosts] serverId, event in
+            hosts?.receive(serverId: serverId, event)
         }
         return hosts
     }

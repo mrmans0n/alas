@@ -875,6 +875,49 @@ struct NativePeerSessionsTests {
         try await eventually("reads after the reconnect") { readCount() == 4 }
     }
 
+    /// A run's forward starts once, is reused by the next Open, and stops
+    /// when the host's run stops.
+    @Test func aRunsForwardIsReusedAndStopsWithItsRun() async throws {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        var sent: [HostClientMessage] = []
+        let hosts = NativePeerHosts(send: { sent.append($1) }, sendPortForward: { _, _ in }, supports: { _, _ in true })
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] },
+            hosts: hosts
+        )
+        client.start()
+        defer { client.stop() }
+        // The endpoint's port is taken here, so the forward binds an ephemeral one.
+        let busy = try TCPPortListener()
+        defer { busy.close() }
+        let endpoint = try #require(URL(string: "http://127.0.0.1:\(busy.port)/app"))
+        func run(_ status: RunStatus) -> RunRecord {
+            RunRecord(
+                id: "run-1", scriptKey: "repo:dev.sh", scriptName: "Dev", worktreeID: "wt", branch: "main",
+                target: RunExecutionTarget(host: nil, workingDirectory: "/srv/wt"), endpoint: endpoint,
+                status: status, startedAt: .distantPast
+            )
+        }
+        let cursor = HostCursor(generation: UUID(), sequence: 0)
+        try await eventually("snapshot request") { sent.count == 1 }
+        hosts.receive(serverId: "B", .response(id: sent[0].id, result: .snapshot(snapshot: HostSnapshot(
+            cursor: cursor, projects: [], worktrees: [], workspaceCheckouts: [], runs: [run(.running)], sessions: []
+        ))))
+        try await eventually("subscribe request") { sent.count == 2 }
+        hosts.receive(serverId: "B", .response(id: sent[1].id, result: .subscribed))
+
+        let url = try #require(await hosts.forwardedEndpoint(endpoint, runID: "run-1", serverId: "B"))
+        let port = try #require(url.port)
+        #expect(port != busy.port)
+        #expect(await hosts.forwardedEndpoint(endpoint, runID: "run-1", serverId: "B") == url)
+        #expect(RunPortProbe.isLocalPortInUse(port))
+
+        hosts.receive(serverId: "B", .events(events: [.runChanged(run(.finished(.stopped)))], cursor: cursor))
+        try await eventually("forward stopped") { !RunPortProbe.isLocalPortInUse(port) }
+    }
+
     @Test func selectingAPeerSessionLoadsItsWorktreeAndRoutesReplies() {
         let links = FakeLinks()
         links.online("B", name: "Mac B")

@@ -87,6 +87,9 @@ public final class RemotePeerManager {
     /// Peer console events, kept off the federation fan-out: they belong to
     /// one attachment on this Mac, never to ACP subscribers.
     @ObservationIgnored public var onConsoleEvent: (@MainActor (_ serverId: String, PeerConsoleEvent) -> Void)?
+    /// Run endpoint forward events, kept off the federation fan-out like
+    /// console events: they belong to this Mac's own forwards to that peer.
+    @ObservationIgnored public var onPortForwardEvent: (@MainActor (_ serverId: String, PeerPortForwardEvent) -> Void)?
     /// Peer host-protocol messages, kept off the federation fan-out like
     /// console events: they answer this Mac's own host channel to that peer.
     @ObservationIgnored public var onHostMessage: (@MainActor (_ serverId: String, HostServerMessage) -> Void)?
@@ -1158,6 +1161,10 @@ public final class RemotePeerManager {
                   let peer = peers.first(where: { $0.id == peerId }) else { return }
             if case .console(let event) = message {
                 onConsoleEvent?(peer.serverId, event)
+                return
+            }
+            if case .portForward(let event) = message {
+                onPortForwardEvent?(peer.serverId, event)
                 return
             }
             if case .host(let message) = message {

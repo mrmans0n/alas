@@ -36,6 +36,7 @@ final class NativePeerHosts {
     @ObservationIgnored var onRunsChanged: (@MainActor (_ serverId: String) -> Void)?
 
     private let send: @MainActor (_ serverId: String, HostClientMessage) -> Void
+    private let sendPortForward: @MainActor (_ serverId: String, PeerPortForwardRequest) -> Void
     private let supports: @MainActor (_ serverId: String, _ capability: String) -> Bool
     let confirm: @MainActor (PeerWorktreeRemoval.Confirmation, _ peerName: String) async -> Bool
     let showError: @MainActor (_ title: String, _ message: String) -> Void
@@ -52,9 +53,13 @@ final class NativePeerHosts {
     @ObservationIgnored private var gitFollowSends = 0
     /// The host files followed, by peer, worktree and path.
     @ObservationIgnored private var fileFollows: [FileFollowKey: FileFollow] = [:]
+    /// Run endpoint forwards, by peer and run. A forward lives while its run
+    /// is `.running` and its peer stays online: a reconnect starts clean.
+    @ObservationIgnored private var forwards: [ForwardKey: Forward] = [:]
 
     init(
         send: @escaping @MainActor (_ serverId: String, HostClientMessage) -> Void,
+        sendPortForward: @escaping @MainActor (_ serverId: String, PeerPortForwardRequest) -> Void = { _, _ in },
         supports: @escaping @MainActor (_ serverId: String, _ capability: String) -> Bool,
         confirm: @escaping @MainActor (PeerWorktreeRemoval.Confirmation, _ peerName: String) async -> Bool = { _, _ in false },
         showError: @escaping @MainActor (_ title: String, _ message: String) -> Void = { _, _ in },
@@ -63,6 +68,7 @@ final class NativePeerHosts {
         timeout: Duration = PeerHostChannel.defaultTimeout
     ) {
         self.send = send
+        self.sendPortForward = sendPortForward
         self.supports = supports
         self.confirm = confirm
         self.showError = showError
@@ -79,6 +85,7 @@ final class NativePeerHosts {
             channels[serverId] = nil
             channel.disconnect() // its onChange drops `worktrees[serverId]`
         }
+        stopForwards { !online.contains($0.serverId) || !self.servesHostChannel($0.serverId) }
         for serverId in online where servesHostChannel(serverId) {
             let channel = channels[serverId] ?? makeChannel(serverId)
             guard !channel.isSubscribed, !channel.isConnecting else { continue }
@@ -105,6 +112,7 @@ final class NativePeerHosts {
         subscribed = []
         gitFollowSent = false
         fileFollows = [:]
+        stopForwards()
         for channel in stopped {
             channel.onChange = nil
             channel.disconnect()
@@ -146,6 +154,96 @@ final class NativePeerHosts {
             return .refused(title: "Run Script Failed", message: FederatedSessionsProvider.peerUnavailableMessage)
         }
         return await PeerRuns.perform(command, on: row, in: Self.ref(worktree)) { await channel.request($0) }
+    }
+
+    /// Whether `serverId` forwards its runs' loopback endpoints to this Mac.
+    func servesForward(serverId: String) -> Bool {
+        servesRuns(serverId: serverId) && supports(serverId, PeerPortForwardCapability.v1)
+    }
+
+    /// The local URL that reaches `runID`'s loopback `endpoint` on the host,
+    /// through its forward, started on first use. Nil, with the error shown,
+    /// when the forward can't start.
+    func forwardedEndpoint(_ endpoint: URL, runID: String, serverId: String) async -> URL? {
+        guard servesForward(serverId: serverId), isRunning(runID, serverId: serverId) else {
+            showError("Open Failed", "This run is no longer running on the host.")
+            return nil
+        }
+        let key = ForwardKey(serverId: serverId, runID: runID)
+        forwards[key]?.refusalShown = false
+        let forward = forwards[key] ?? startForward(key, endpoint: endpoint)
+        do {
+            let url = try await forward.url.value
+            // Stopped while starting: its run or its peer went away.
+            guard forwards[key]?.token == forward.token else { return nil }
+            return url
+        } catch {
+            if forwards[key]?.token == forward.token { stopForwards { $0 == key } }
+            // A forward stopped while starting was stopped on purpose.
+            switch error as? PeerPortForwarder.StartError {
+            case .stopped: break
+            case .invalidEndpoint: showError("Open Failed", "\(endpoint.absoluteString) names no port to forward.")
+            case nil: showError("Open Failed", "Couldn't listen for \(endpoint.absoluteString) on this Mac: \(error.localizedDescription)")
+            }
+            return nil
+        }
+    }
+
+    /// Hands a host's forward event to its forwards; each ignores streams it didn't open.
+    func receive(serverId: String, _ event: PeerPortForwardEvent) {
+        for (key, forward) in forwards where key.serverId == serverId {
+            forward.forwarder.receive(event)
+        }
+    }
+
+    /// Stops the forwards `matching` selects, every one by default.
+    func stopForwards(matching: (ForwardKey) -> Bool = { _ in true }) {
+        for (key, forward) in forwards where matching(key) {
+            forwards[key] = nil
+            forward.forwarder.stop()
+        }
+    }
+
+    private func isRunning(_ runID: String, serverId: String) -> Bool {
+        runs[serverId]?.contains { $0.id == runID && $0.status == .running } == true
+    }
+
+    /// Shows the first refusal since the last Open, as a browser opens
+    /// several connections at once. A run the host no longer runs ends the
+    /// forward, so the next Open starts afresh.
+    private func forwardRefused(_ key: ForwardKey, message: String) {
+        let first = forwards[key]?.refusalShown == false
+        if message == PeerPortForwardHost.notRunningMessage {
+            stopForwards { $0 == key }
+        } else {
+            forwards[key]?.refusalShown = true
+        }
+        if first { showError("Open Failed", message) }
+    }
+
+    private func startForward(_ key: ForwardKey, endpoint: URL) -> Forward {
+        let token = UUID()
+        let onRefused: @Sendable (String) -> Void = { [weak self] message in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.forwards[key]?.token == token else { return }
+                    self.forwardRefused(key, message: message)
+                }
+            }
+        }
+        let forwarder = PeerPortForwarder(runID: key.runID, endpoint: endpoint, onRefused: onRefused) { [weak self] request in
+            // The main queue keeps the forwarder's order, and a stopped
+            // forward's late requests never reach a newer connection.
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, self.forwards[key]?.token == token else { return }
+                    self.sendPortForward(key.serverId, request)
+                }
+            }
+        }
+        let forward = Forward(token: token, forwarder: forwarder, url: Task { try await forwarder.start() })
+        forwards[key] = forward
+        return forward
     }
 
     private static func ref(_ worktree: PeerHostWorktree) -> WorktreeRef {
@@ -709,6 +807,19 @@ final class NativePeerHosts {
         }
     }
 
+    struct ForwardKey: Hashable {
+        let serverId: String
+        let runID: String
+    }
+
+    private struct Forward {
+        let token: UUID
+        let forwarder: PeerPortForwarder
+        let url: Task<URL, any Error>
+        /// A refusal was shown since the last Open.
+        var refusalShown = false
+    }
+
     private func servesHostChannel(_ serverId: String) -> Bool {
         supports(serverId, HostProtocolCapability.v1) && supports(serverId, HostProtocolCapability.eventsV1)
     }
@@ -737,7 +848,10 @@ final class NativePeerHosts {
                 sendFileFollow(key, follow, nudge: true)
             }
             onChange?()
-            if runsChanged { onRunsChanged?(serverId) }
+            if runsChanged {
+                stopForwards { $0.serverId == serverId && !self.isRunning($0.runID, serverId: serverId) }
+                onRunsChanged?(serverId)
+            }
         }
         channel.onNotice = { [notice] in notice(serverId, $0) }
         channel.onWorktreeNotice = { [worktreeNotice] in worktreeNotice(serverId, $0) }

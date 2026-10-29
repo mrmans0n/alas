@@ -77,9 +77,18 @@ enum RunTabPresentation {
 
     /// A peer's row follows the local rules, without a script to edit. Its
     /// terminal is the run's console, when the host lists it in `consoleIds`.
+    /// Its endpoint is the run's: a loopback one only opens through a host
+    /// that `servesForward`, for a run on the host itself (never one over
+    /// SSH); another loopback spelling never; any other as declared.
     static func peerRow(
-        _ row: PeerRuns.Row, hostName: String, consoleIds: Set<String>, now: Date
+        _ row: PeerRuns.Row, hostName: String, consoleIds: Set<String>, servesForward: Bool = false, now: Date
     ) -> RunRowPresentation {
+        let forwardable = servesForward && row.record?.target.host == nil
+        // Any other loopback spelling (127.0.0.2, 0.0.0.0, [0:0::1]) would reach the Mac's own services.
+        let endpoint = row.record?.endpoint.flatMap { url -> URL? in
+            if PeerPortForwardEndpoint.isLoopback(url) { return forwardable ? url : nil }
+            return RunEndpointPolicy.isLoopback(url) ? nil : url
+        }
         let script = RunScript(
             scope: row.script.scope,
             fileName: row.script.fileName,
@@ -88,7 +97,8 @@ enum RunTabPresentation {
             displayName: row.script.name,
             onExit: .keep,
             cwd: row.script.cwd,
-            isExecutable: true
+            isExecutable: true,
+            endpoint: endpoint
         )
         let hasReport = if case .finished = row.record?.status { true } else { false }
         let input = RunRowInput(

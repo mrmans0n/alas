@@ -316,6 +316,26 @@ struct RunTabPresentationTests {
         #expect(RunTabPresentation.peerRow(hosted, hostName: "Studio", consoleIds: ["other"], now: epoch).actions == [.stop, .restart])
     }
 
+    /// A loopback endpoint opens only through a host that forwards it, and
+    /// never for a run over SSH; another loopback spelling never opens; any
+    /// other opens as declared.
+    @Test(arguments: [
+        ("http://localhost:3000", false, nil, false),
+        ("http://localhost:3000", true, nil, true),
+        ("http://localhost:3000", true, "devbox", false),
+        ("http://0.0.0.0:3000", true, nil, false),
+        ("http://[0:0:0:0:0:0:0:1]:3000", true, nil, false),
+        ("http://devbox.local:3000", false, nil, true),
+    ] as [(String, Bool, String?, Bool)])
+    func peerRowsOfferTheRunsEndpoint(endpoint: String, servesForward: Bool, sshHost: String?, offered: Bool) throws {
+        let url = try #require(URL(string: endpoint))
+        let script = HostRunScript(scope: .repo, fileName: "dev.sh", name: "Dev Server", cwd: nil, target: RunExecutionTarget(host: nil, workingDirectory: "/wt"))
+        let row = RunTabPresentation.peerRow(
+            PeerRuns.Row(script: script, record: record(status: .running, endpoint: url, host: sshHost)),
+            hostName: "Studio", consoleIds: [], servesForward: servesForward, now: epoch)
+        #expect(row.actions == (offered ? [.stop, .restart, .openEndpoint(url)] : [.stop, .restart]))
+    }
+
     // MARK: - Port conflicts
 
     @Test func portConflictNamesTheOtherOwnerWithoutOfferingToKillIt() {
