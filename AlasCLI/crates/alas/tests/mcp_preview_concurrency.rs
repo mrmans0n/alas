@@ -106,6 +106,21 @@ fn handle_fake_connection(
                 )
                 .unwrap();
         }
+        Some("vm_run") => {
+            // Reports the run as a wait, then never answers: once the client
+            // closes its end, reports that as a cancel, the way the app stops
+            // a run whose client left.
+            let (release_tx, _release_rx) = mpsc::channel();
+            events_tx
+                .send(ServerEvent::Wait {
+                    release: release_tx,
+                })
+                .unwrap();
+            // Accepted from a nonblocking listener; block until the client leaves.
+            stream.set_nonblocking(false).unwrap();
+            while matches!(stream.read(&mut chunk), Ok(read) if read > 0) {}
+            events_tx.send(ServerEvent::Cancel).unwrap();
+        }
         Some("preview_cancel") | Some("computer_cancel") => {
             events_tx.send(ServerEvent::Cancel).unwrap();
             stream
@@ -519,6 +534,50 @@ fn http_cancelled_computer_call_returns_the_cancellation_error() {
     assert!(response.contains(r#""id":"shot-1""#));
     assert!(response.contains("-32800"), "{response}");
     assert!(!response.contains(r#""result""#));
+}
+
+#[test]
+fn http_cancelled_vm_run_closes_its_app_connection() {
+    let fake = start_fake_alas("vm-run-cancel-http");
+    let mcp = start_mcp_http(&fake.socket, "test-token");
+
+    let port = mcp.port;
+    let call = thread::spawn(move || {
+        http_post(
+            port,
+            "test-token",
+            json!({
+                "jsonrpc": "2.0",
+                "id": "run-1",
+                "method": "tools/call",
+                "params": {
+                    "name": "vm_run",
+                    "arguments": { "command": "sleep 600", "timeout_seconds": 600 }
+                }
+            }),
+        )
+    });
+    let _release = wait_started(&fake);
+    let cancel = http_post(mcp.port, "test-token", cancelled_notification("run-1"));
+    assert!(cancel.starts_with("HTTP/1.1 202 Accepted"));
+    // The connection closes, so the app stops the guest command; no
+    // separate cancel request goes out.
+    match fake.events.recv_timeout(Duration::from_secs(5)).unwrap() {
+        ServerEvent::Cancel => {}
+        ServerEvent::Wait { .. } => panic!("unexpected second call"),
+    }
+    let commands: Vec<Value> = fake
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|request| request.get("command").cloned())
+        .collect();
+    assert_eq!(commands, vec![json!("vm_run")]);
+
+    let response = call.join().unwrap();
+    assert!(response.contains(r#""id":"run-1""#));
+    assert!(response.contains("-32800"), "{response}");
 }
 
 #[test]

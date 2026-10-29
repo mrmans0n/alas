@@ -1473,26 +1473,85 @@ pub fn send_with_timeout(
     req: &Request,
     read_timeout: Duration,
 ) -> Result<Response, TransportError> {
-    let payload = serde_json::to_vec(req).map_err(|_| TransportError::Malformed)?;
-    let mut stream = UnixStream::connect(socket).map_err(|_| TransportError::Connect)?;
-    stream
-        .set_read_timeout(Some(read_timeout))
-        .map_err(|_| TransportError::Io)?;
-    stream.write_all(&payload).map_err(|_| TransportError::Io)?;
-    stream.flush().map_err(|_| TransportError::Io)?;
+    send_polling(socket, req, read_timeout, read_timeout, || true)
+        .unwrap_or(Err(TransportError::Io))
+}
+
+/// How often [`send_while`] asks whether its caller still wants the reply.
+const SEND_WHILE_POLL: Duration = Duration::from_millis(100);
+
+/// `send_with_timeout` that gives up once `keep_going` turns false, checked
+/// at least every [`SEND_WHILE_POLL`]: it closes the connection, so the app
+/// stops a call that ends with its client, and returns None.
+pub fn send_while(
+    socket: &Path,
+    req: &Request,
+    read_timeout: Duration,
+    keep_going: impl Fn() -> bool,
+) -> Option<Result<Response, TransportError>> {
+    send_polling(
+        socket,
+        req,
+        read_timeout,
+        read_timeout.min(SEND_WHILE_POLL),
+        keep_going,
+    )
+}
+
+/// Writes the request, then reads to EOF, failing after `read_timeout`
+/// without data. Wakes every `poll` to ask `keep_going`; None once it says no.
+fn send_polling(
+    socket: &Path,
+    req: &Request,
+    read_timeout: Duration,
+    poll: Duration,
+    keep_going: impl Fn() -> bool,
+) -> Option<Result<Response, TransportError>> {
+    let payload = match serde_json::to_vec(req) {
+        Ok(payload) => payload,
+        Err(_) => return Some(Err(TransportError::Malformed)),
+    };
+    let Ok(mut stream) = UnixStream::connect(socket) else {
+        return Some(Err(TransportError::Connect));
+    };
+    if stream.set_read_timeout(Some(poll)).is_err()
+        || stream.write_all(&payload).is_err()
+        || stream.flush().is_err()
+    {
+        return Some(Err(TransportError::Io));
+    }
     let mut buf = Vec::new();
     let mut chunk = [0u8; 8192];
+    let mut last_data = std::time::Instant::now();
     loop {
-        let read = stream.read(&mut chunk).map_err(|_| TransportError::Io)?;
-        if read == 0 {
-            break;
+        match stream.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(read) => {
+                if buf.len() + read > MAX_RESPONSE_BYTES {
+                    return Some(Err(TransportError::ResponseTooLarge));
+                }
+                buf.extend_from_slice(&chunk[..read]);
+                last_data = std::time::Instant::now();
+            }
+            Err(err)
+                if matches!(
+                    err.kind(),
+                    std::io::ErrorKind::WouldBlock
+                        | std::io::ErrorKind::TimedOut
+                        | std::io::ErrorKind::Interrupted
+                ) =>
+            {
+                if !keep_going() {
+                    return None;
+                }
+                if last_data.elapsed() >= read_timeout {
+                    return Some(Err(TransportError::Io));
+                }
+            }
+            Err(_) => return Some(Err(TransportError::Io)),
         }
-        if buf.len() + read > MAX_RESPONSE_BYTES {
-            return Err(TransportError::ResponseTooLarge);
-        }
-        buf.extend_from_slice(&chunk[..read]);
     }
-    serde_json::from_slice(&buf).map_err(|_| TransportError::Malformed)
+    Some(serde_json::from_slice(&buf).map_err(|_| TransportError::Malformed))
 }
 
 /// The one-shot registration ping `alas mcp` sends over the unix socket so

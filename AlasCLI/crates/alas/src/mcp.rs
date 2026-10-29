@@ -2161,6 +2161,27 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
     }
 }
 
+/// `dispatch` for a call the app stops when its client leaves (`vm_run`):
+/// closes the connection once `keep_going` turns false, and returns None.
+fn dispatch_while(
+    env: &McpEnv,
+    command: &Command,
+    keep_going: impl Fn() -> bool,
+) -> Option<Result<Response, TransportError>> {
+    let mut req = alas_client::build_request(
+        command,
+        Some(env.session_id.clone()),
+        Some(env.worktree_dir.clone()),
+    );
+    req.mcp_transport = Some(env.transport);
+    alas_client::send_while(
+        &env.socket,
+        &req,
+        alas_client::read_timeout(command),
+        keep_going,
+    )
+}
+
 /// `pr_create` checks the branch, pushes it, and opens the PR/MR with
 /// `gh`/`glab` before replying; on an SSH worktree each of those runs over
 /// ssh, so it gets far longer than the default 30-second reply bound. The
@@ -2422,7 +2443,8 @@ const SESSION_WAIT_SLICE_MS: u64 = 1_000;
 /// waits so a cancelled request stops within one slice instead of holding a
 /// worker until its timeout. Returns None once `still_pending` turns false,
 /// for any command: a cancelled computer call still runs to its end in the
-/// app's reply, but its result is dropped.
+/// app's reply, but its result is dropped. A cancelled `vm_run` closes its
+/// connection at once, which stops the guest command.
 fn dispatch_session_wait(
     env: &McpEnv,
     command: &Command,
@@ -2433,6 +2455,9 @@ fn dispatch_session_wait(
         timeout_ms,
     } = command
     else {
+        if matches!(command, Command::VmRun { .. }) {
+            return dispatch_while(env, command, still_pending);
+        }
         let result = dispatch(env, command);
         return still_pending().then_some(result);
     };
@@ -2502,7 +2527,7 @@ fn register_pending_call(
             computer.set_call_id(next_computer_call_id());
         }
     } else if preview_id_for_cancel(command).is_none()
-        && !matches!(command, Command::SessionWait { .. })
+        && !matches!(command, Command::SessionWait { .. } | Command::VmRun { .. })
     {
         return None;
     }
@@ -2558,8 +2583,9 @@ fn cancellation_command_for_message(
     let mut pending = pending.lock().ok()?;
     let command = pending.get(&key).cloned()?;
     // A wait has nothing to cancel in the app: dropping it from `pending`
-    // stops its worker at the next slice (see `dispatch_session_wait`).
-    if matches!(command, Command::SessionWait { .. }) {
+    // stops its worker at the next slice (see `dispatch_session_wait`). A
+    // `vm_run` worker then closes its connection, which ends the run.
+    if matches!(command, Command::SessionWait { .. } | Command::VmRun { .. }) {
         pending.remove(&key);
         return None;
     }
@@ -4123,19 +4149,28 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_a_pending_session_wait_drops_it_without_an_app_command() {
-        let pending = std::sync::Mutex::new(std::collections::HashMap::new());
-        let mut wait = Command::SessionWait {
-            session_ids: vec!["child".into()],
-            timeout_ms: None,
-        };
-        assert!(register_pending_call(&pending, &json!(9), &mut wait).is_some());
-        let msg: Value = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}}"#,
-        )
-        .unwrap();
-        assert_eq!(cancellation_command_for_message(&msg, &pending), None);
-        assert!(pending.lock().unwrap().is_empty());
+    fn cancelling_a_pending_session_wait_or_vm_run_drops_it_without_an_app_command() {
+        let commands = [
+            Command::SessionWait {
+                session_ids: vec!["child".into()],
+                timeout_ms: None,
+            },
+            // Its worker closes the connection instead, which ends the run.
+            Command::VmRun {
+                command: "make".into(),
+                timeout_seconds: None,
+            },
+        ];
+        for mut command in commands {
+            let pending = std::sync::Mutex::new(std::collections::HashMap::new());
+            assert!(register_pending_call(&pending, &json!(9), &mut command).is_some());
+            let msg: Value = serde_json::from_str(
+                r#"{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":9}}"#,
+            )
+            .unwrap();
+            assert_eq!(cancellation_command_for_message(&msg, &pending), None);
+            assert!(pending.lock().unwrap().is_empty());
+        }
     }
 
     #[test]
