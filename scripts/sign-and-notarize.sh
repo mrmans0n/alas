@@ -136,6 +136,27 @@ for cli_arch in macos-x86_64 macos-aarch64; do
 done
 sign_embedded_executable "$app_path/Contents/Resources/alas-host/alas-host" "alas-host"
 
+# Nested app bundles are signed inside-out, before the outer app, so its seal covers a signed
+# helper. The helper has no nested code of its own.
+sign_embedded_app() {
+  local path="$1"
+  local label="$2"
+  if [ ! -d "$path" ]; then
+    return
+  fi
+
+  echo "==> Signing embedded $label"
+  codesign \
+    --force \
+    --options runtime \
+    --timestamp \
+    --sign "$MACOS_SIGNING_IDENTITY" \
+    "$path"
+  codesign --verify --strict --verbose=2 "$path"
+}
+
+sign_embedded_app "$app_path/Contents/Resources/alas-vm-guest/Alas VM Guest.app" "Alas VM Guest"
+
 echo "==> Signing $app_path"
 codesign \
   --force \

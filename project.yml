@@ -55,6 +55,7 @@ targets:
       - path: Alas/Sources
         excludes:
           - "ComputerUseKit/**"
+          - "VMGuest/**"
       - path: Alas/Resources/Themes
         buildPhase: resources
       - path: Alas/Resources/CodeThemes
@@ -83,6 +84,12 @@ targets:
       - path: Alas/Resources/WhatsNew
         buildPhase: resources
         type: folder
+      # Next to the embedded Alas VM Guest.app, which it installs inside a VM.
+      - path: "Alas/Resources/VMGuest/Install Alas VM Guest.command"
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: alas-vm-guest
     info:
       path: Alas/Resources/Info.plist
       properties:
@@ -119,9 +126,18 @@ targets:
       - package: AlasCore
         product: AlasCore
       # Static, so AlasCore is linked once (into the app), not into a dylib as well.
+      # Its archive also holds AlasCore's objects: never link it with -all_load, -ObjC or
+      # -force_load, or those symbols are duplicated.
       - target: AlasComputerUseKit
         link: true
         embed: false
+      # The helper app a worktree VM runs; the install script next to it sets it up there.
+      - target: AlasVMGuest
+        embed: true
+        codeSign: false
+        copy:
+          destination: resources
+          subpath: alas-vm-guest
       # The headless host, built against the same AlasCore the app links,
       # so it costs its own sources only. Inside the bundle it finds the
       # web client at ../RemoteWeb.
@@ -210,6 +226,8 @@ targets:
         SKIP_INSTALL: YES
 
   # The computer-use executor and coordinator, shared by the app and the VM guest helper.
+  # Linked by both alongside the AlasCore package, without -all_load, -ObjC or -force_load:
+  # the archive holds AlasCore's objects too, and forcing them in duplicates symbols.
   AlasComputerUseKit:
     type: framework.static
     platform: macOS
@@ -228,6 +246,45 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"
+        SKIP_INSTALL: YES
+
+  # Alas VM Guest: performs computer-use calls and vm_run commands inside a worktree VM.
+  # Depends on the kit and AlasCore directly; no -all_load, -ObjC or -force_load (the kit's
+  # archive also holds AlasCore's objects, so forcing them in duplicates symbols).
+  AlasVMGuest:
+    type: application
+    platform: macOS
+    configFiles:
+      Debug: Config/AlasVMGuest-Debug.xcconfig
+      Release: Config/AlasVMGuest-Release.xcconfig
+    sources:
+      - path: Alas/Sources/VMGuest
+    info:
+      path: Alas/Resources/VMGuest/Info.plist
+      properties:
+        CFBundleDevelopmentRegion: en
+        CFBundleName: "Alas VM Guest"
+        CFBundleDisplayName: "Alas VM Guest"
+        # Its own version, so release bumps keep editing one CFBundleShortVersionString.
+        CFBundleShortVersionString: "1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "15.0"
+        LSUIElement: true
+        NSPrincipalClass: NSApplication
+        NSHumanReadableCopyright: "Copyright © 2026 Nacho Lopez"
+    dependencies:
+      - target: AlasComputerUseKit
+        link: true
+        embed: false
+      - package: AlasCore
+        product: AlasCore
+    settings:
+      base:
+        ARCHS: $(ALAS_APP_ARCHS)
+        ALAS_APP_ARCHS: $(ARCHS_STANDARD)
+        PRODUCT_NAME: "Alas VM Guest"
+        PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.vmguest
+        ENABLE_HARDENED_RUNTIME: YES
         SKIP_INSTALL: YES
 
   AlasTests:

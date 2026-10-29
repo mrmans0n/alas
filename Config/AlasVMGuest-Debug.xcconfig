@@ -1,0 +1,5 @@
+// Signed like the Debug app: ad-hoc unless Local.xcconfig sets a stable identity.
+CODE_SIGN_STYLE = Automatic
+CODE_SIGN_IDENTITY = -
+// Optional, gitignored: a stable signing identity. See CLAUDE.md.
+#include? "Local.xcconfig"
