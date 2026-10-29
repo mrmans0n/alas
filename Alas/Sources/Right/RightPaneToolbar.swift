@@ -21,10 +21,13 @@ struct RightPaneToolbar: View {
     var pluginCommands: [PluginCommandItem] = []
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     let onOpenPreview: () -> Void
+    /// Nil hides the button, for worktrees that cannot run a VM.
+    var onOpenVirtualMachine: (() -> Void)?
     let onNewRunScript: (RunScriptScope) -> Void
 
     @Environment(\.theme) private var theme
     @State private var previewHovered = false
+    @State private var vmHovered = false
     @State private var newScriptHovered = false
 
     var body: some View {
@@ -129,6 +132,26 @@ struct RightPaneToolbar: View {
             .help("Open web preview")
             .accessibilityLabel("Open web preview")
             .accessibilityIdentifier("run-open-preview")
+
+            if let onOpenVirtualMachine {
+                Button(action: onOpenVirtualMachine) {
+                    HStack(spacing: 5) {
+                        Icon(name: "desktopcomputer", size: 11)
+                        Text("VM")
+                            .font(.system(size: 11, weight: .medium))
+                    }
+                    .foregroundStyle(theme.color(vmHovered ? "fg" : "fg-muted"))
+                    .padding(.horizontal, 6)
+                    .frame(height: 22)
+                    .background(vmHovered ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.toolbarControl)
+                .onHover { vmHovered = $0 }
+                .help("Open VM")
+                .accessibilityLabel("Open VM")
+                .accessibilityIdentifier("run-open-vm")
+            }
 
             Menu {
                 Button("New Repo Script") { onNewRunScript(.repo) }

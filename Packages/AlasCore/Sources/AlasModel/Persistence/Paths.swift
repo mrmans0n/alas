@@ -193,6 +193,9 @@ public enum Paths: Sendable {
     public static var hostOpenSessionsFile: URL { appSupportRoot.appendingPathComponent("host-open-sessions.json") }
     /// The shells a headless host serves paired clients as consoles.
     public static var hostConsolesFile: URL { appSupportRoot.appendingPathComponent("host-consoles.json") }
+    /// Worktree VM storage: `golden/<build>/` and `worktrees/<sanitized worktree id>/`,
+    /// plus the cross-process `registry.json`.
+    public static var vmsRoot: URL { appSupportRoot.appendingPathComponent("vms", isDirectory: true) }
     public static var tabsDir: URL { appSupportRoot.appendingPathComponent("tabs", isDirectory: true) }
     public static var checkpointsRoot: URL { appSupportRoot.appendingPathComponent("checkpoints", isDirectory: true) }
 

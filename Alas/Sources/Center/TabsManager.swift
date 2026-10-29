@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import Virtualization
 
 struct TabsFile: Codable {
     var version: Int = 1
@@ -78,6 +79,9 @@ final class TabsManager {
     /// tabs, but are deliberately not persisted as part of the tab identity.
     private var ggSplitCommitDrafts: [TabID: GGSplitCommitDraft] = [:]
     @ObservationIgnored private var webPreviewBrowsers: [String: WebPreviewBrowser] = [:]
+    /// One display view per worktree VM tab, kept across tab switches so the
+    /// screen does not flash. Dropped when the tab closes; the VM keeps running.
+    @ObservationIgnored private var vmViews: [String: VZVirtualMachineView] = [:]
     private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
     @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
     @ObservationIgnored var onCreatedReview: ((String, ReviewPRTabState) -> Void)?
@@ -1191,6 +1195,29 @@ final class TabsManager {
         openWebPreview(worktreeId: owner.storageKey, url: url, remoteHost: remoteHost ?? Self.remoteHost(for: owner))
     }
 
+    func vmView(ownerKey: String) -> VZVirtualMachineView {
+        if let view = vmViews[ownerKey] { return view }
+        let view = VZVirtualMachineView()
+        view.capturesSystemKeys = true
+        view.automaticallyReconfiguresDisplay = true
+        vmViews[ownerKey] = view
+        return view
+    }
+
+    /// Opens or focuses the worktree's one VM tab.
+    @discardableResult
+    func openVirtualMachine(worktreeId: String) -> Tab {
+        let tab = Tab.virtualMachine(VirtualMachineTabState(ownerKey: worktreeId))
+        if var file = byWorktree[worktreeId], file.tabs.contains(where: { $0.id == tab.id }) {
+            file.activeTabId = tab.id
+            byWorktree[worktreeId] = file
+            persist(worktreeId)
+            return tab
+        }
+        append(tab, to: worktreeId)
+        return tab
+    }
+
     @discardableResult
     func updateWebPreviewURL(worktreeId: String, url: URL) -> Tab? {
         let ownerKey = worktreeId
@@ -2248,11 +2275,25 @@ final class TabsManager {
         file.stashedDraft = (hasSubject || hasBody || state.publishCheckpoint != nil) ? state : nil
     }
 
-    private func clearWebPreviewBrowsers(for tabs: some Sequence<Tab>) {
+    /// Releases the live views cached for closed tabs: web preview browsers
+    /// and VM screens. Closing a VM tab does not stop its VM.
+    private func clearCachedViews(for tabs: some Sequence<Tab>) {
         for tab in tabs {
-            guard case .webPreview(let state) = tab else { continue }
-            clearWebPreviewBrowser(ownerKey: state.ownerKey)
+            switch tab {
+            case .webPreview(let state):
+                clearWebPreviewBrowser(ownerKey: state.ownerKey)
+            case .virtualMachine(let state):
+                clearVMView(ownerKey: state.ownerKey)
+            default:
+                continue
+            }
         }
+    }
+
+    private func clearVMView(ownerKey: String) {
+        guard let view = vmViews.removeValue(forKey: ownerKey) else { return }
+        view.virtualMachine = nil
+        view.removeFromSuperview()
     }
 
     private func clearWebPreviewBrowser(ownerKey: String) {
@@ -2275,7 +2316,7 @@ final class TabsManager {
                 terminalRuntimeTitles.removeValue(forKey: leaf.id)
             }
         }
-        clearWebPreviewBrowsers(for: [tab])
+        clearCachedViews(for: [tab])
         if wasActive {
             file.activeTabId = Self.activeTabAfterClosing(at: idx, in: file.tabs)
         }
@@ -2316,7 +2357,7 @@ final class TabsManager {
             captureDraftIfNeeded(&file, removingTabId: id)
             ggSplitCommitDrafts.removeValue(forKey: id)
         }
-        clearWebPreviewBrowsers(for: closedTabs)
+        clearCachedViews(for: closedTabs)
         file.tabs = [kept]
         file.activeTabId = tabId
         byWorktree[worktreeId] = file
@@ -2332,7 +2373,7 @@ final class TabsManager {
             captureDraftIfNeeded(&file, removingTabId: id)
             ggSplitCommitDrafts.removeValue(forKey: id)
         }
-        clearWebPreviewBrowsers(for: closedTabs)
+        clearCachedViews(for: closedTabs)
         file.tabs = []
         file.activeTabId = nil
         byWorktree[worktreeId] = file
@@ -2349,7 +2390,7 @@ final class TabsManager {
             captureDraftIfNeeded(&file, removingTabId: id)
             ggSplitCommitDrafts.removeValue(forKey: id)
         }
-        clearWebPreviewBrowsers(for: closedTabs)
+        clearCachedViews(for: closedTabs)
         if let active = file.activeTabId, closed.contains(active) {
             file.activeTabId = tabId
         }
@@ -2368,7 +2409,7 @@ final class TabsManager {
             captureDraftIfNeeded(&file, removingTabId: id)
             ggSplitCommitDrafts.removeValue(forKey: id)
         }
-        clearWebPreviewBrowsers(for: closedTabs)
+        clearCachedViews(for: closedTabs)
         if let active = file.activeTabId, closed.contains(active) {
             file.activeTabId = tabId
         }

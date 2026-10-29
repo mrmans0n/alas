@@ -325,6 +325,16 @@ final class AppState {
     /// The models each ACP agent last advertised, for surfaces that configure
     /// a session before it exists (the schedule editor's model picker).
     let acpModelCatalog: ACPAgentModelCatalog
+    /// Worktree VMs (and the golden VM during its setup) this process runs.
+    @ObservationIgnored let vmManager = WorktreeVMManager()
+    /// The one installer; `vmManager` seals its golden image so no Alas
+    /// process can boot it meanwhile.
+    @ObservationIgnored private(set) lazy var goldenImageInstaller = GoldenImageInstaller(
+        root: vmManager.root,
+        seal: { [weak vmManager] bundle in
+            guard let vmManager else { throw WorktreeVMManager.VMError(message: "Alas is shutting down") }
+            try vmManager.sealGolden(bundle)
+        })
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
@@ -1838,6 +1848,10 @@ final class AppState {
         installStackShepherdEffects()
         installSessionRecap()
         startLocalTextObservers()
+        vmManager.isRemoteWorktree = { [weak self] worktreeID in
+            RemotePath.isReserved(worktreeID)
+                || self?.projectAndWorktree(withWorktreeId: worktreeID)?.project.host != nil
+        }
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
             await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
         }
@@ -1853,6 +1867,8 @@ final class AppState {
             await self?.flushAllACPComposerDrafts()
             await PluginStorage.flushAll()
             await self?.awaitSessionSummaryCleanup()
+            // Clears this process from the VM registry so its slots free up.
+            await self?.vmManager.stopAll()
         }
         Task.detached {
             RunScriptCompletionMonitor.cleanupStaleLocalFiles()
@@ -6630,6 +6646,8 @@ final class AppState {
         guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
             return
         }
+        // Only stopped: an archived worktree can come back with its VM.
+        Task { [vmManager] in await vmManager.stopVM(worktreeID: worktree.id) }
         refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
@@ -11648,6 +11666,8 @@ final class AppState {
         switch outcome {
         case .deleted, .deletedButNotSaved:
             removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
+            Task { [vmManager] in await vmManager.deleteVM(worktreeID: worktree.id) }
+            tabs.close(worktreeId: worktree.id, tabId: VirtualMachineTabState(ownerKey: worktree.id).id)
             // Callers that skip the refresh (batches, which refresh once at the
             // end) reconcile the selection themselves afterwards.
             if refreshAfter, selectedWorktreeId == worktree.id {

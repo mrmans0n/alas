@@ -736,6 +736,24 @@ struct TabsManagerTests {
         #expect(manager.activeTabId(forWorktree: "owner-a") == blank.id)
     }
 
+    @Test func openVirtualMachineIsOnePerWorktreeAndDropsItsViewOnClose() {
+        let manager = TabsManager(store: TestPersistenceStore())
+
+        let first = manager.openVirtualMachine(worktreeId: "wt")
+        let cachedView = manager.vmView(ownerKey: "wt")
+        let second = manager.openVirtualMachine(worktreeId: "wt")
+
+        #expect(first.id == "vm:wt")
+        #expect(second.id == first.id)
+        #expect(manager.tabs(forWorktree: "wt").map(\.id) == [first.id])
+        #expect(manager.vmView(ownerKey: "wt") === cachedView)
+
+        manager.close(worktreeId: "wt", tabId: first.id)
+
+        #expect(manager.tabs(forWorktree: "wt").isEmpty)
+        #expect(manager.vmView(ownerKey: "wt") !== cachedView)
+    }
+
     @Test func webPreviewURLUpdatePreservesRemoteHostAndActiveSelection() {
         let manager = TabsManager(store: TestPersistenceStore())
         let ownerKey = "owner-a"

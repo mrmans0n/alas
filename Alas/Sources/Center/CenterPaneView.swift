@@ -705,6 +705,10 @@ struct CenterPaneView: View {
                             .id(s.id + (s.remoteHost ?? ""))
                             .onAppear { completeStartupRecoveryIfActive(s.id) }
                             .task { completeStartupRecoveryIfActive(s.id) }
+                    case .virtualMachine(let s):
+                        VirtualMachineTabView(state: state, tab: s)
+                            .id(s.id)
+                            .onAppear { completeStartupRecoveryIfActive(s.id) }
                     case .visualAid(let s):
                         VisualAidTabView(state: state, tab: s)
                             .id(s.id)

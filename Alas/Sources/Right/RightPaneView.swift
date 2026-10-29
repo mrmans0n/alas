@@ -293,6 +293,8 @@ struct RightPaneView: View {
             pluginCommands: rps.activeTab == .changes ? state.pluginCommands(.changesToolbar, projectID: worktree.projectId) : [],
             onRunPluginCommand: { state.runPluginCommand($0, slot: .changesToolbar, worktreeID: worktree.id) },
             onOpenPreview: { state.openWebPreview(in: worktree) },
+            onOpenVirtualMachine: state.canOpenVirtualMachine(in: worktree)
+                ? { state.openVirtualMachine(in: worktree) } : nil,
             onNewRunScript: { state.newRunScript(scope: $0, in: worktree) }
         )
     }
