@@ -66,7 +66,11 @@ struct ACPV2SessionUpdateDeliveryTests {
                 count.withLock { $0 += 1 }
                 retained.withLock { $0 }?.acknowledgeDurableConsumption()
             })
-        retained.withLock { $0 = delivery }
+        let copy = delivery
+        #expect(copy.receiptID == delivery.receiptID)
+        let equalFrame = ACPV2SessionUpdateDelivery(frame: delivery.frame, connectionID: delivery.connectionID)
+        #expect(equalFrame.receiptID != delivery.receiptID)
+        retained.withLock { $0 = copy }
         await withTaskGroup(of: Void.self) { group in
             for _ in 0..<32 { group.addTask { delivery.acknowledgeDurableConsumption() } }
         }

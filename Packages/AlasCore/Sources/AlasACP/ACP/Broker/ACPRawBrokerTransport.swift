@@ -10,6 +10,13 @@ public struct ACPBrokerFrameProvenance: Equatable, Sendable {
     public let generation: ACPBrokerGeneration
     public let cursor: ACPBrokerEventCursor
     public let origin: Origin
+
+    public init(brokerID: ACPBrokerID, generation: ACPBrokerGeneration, cursor: ACPBrokerEventCursor, origin: Origin) {
+        self.brokerID = brokerID
+        self.generation = generation
+        self.cursor = cursor
+        self.origin = origin
+    }
 }
 
 /// Opaque inbound evidence. Receipt and request resolution are independent of consumption.

@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import Alas
 
@@ -10,6 +11,250 @@ struct ACPSessionStoreCRUDTests {
 
     private func tmp() throws -> ACPSessionStore {
         try ACPSessionStore(path: tmpURL().path)
+    }
+
+    private func journalFixture(source: ACPV2UpdateJournalSource? = nil) throws -> (ACPSessionStore, ACPSessionLeaseFence, ACPV2UpdateJournalStream) {
+        let store = try tmp()
+        try store.upsertSession(.init(id: "journal", agentId: "fixture", title: "Journal", autoRun: false,
+            acpBrokerId: "broker", acpBrokerGeneration: 7, acpBrokerWireContextJSON: try ACPBrokerWireContext.rawV2.persistedJSON(),
+            acpBrokerAcknowledgedCursor: 4, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        try store.seizeLease(sessionId: "journal", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let fence = ACPSessionLeaseFence(sessionId: "journal", ownerInstance: "A", token: "owner")
+        let stream = try store.registerV2UpdateJournal(sessionId: "journal", upstreamSessionId: "upstream",
+            source: source ?? .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 7)), fence: fence)
+        return (store, fence, stream)
+    }
+
+    private func brokerDelivery(_ bytes: Data, cursor: UInt64 = 5, origin: ACPBrokerFrameProvenance.Origin = .journal,
+        callback: ACPDurableConsumptionAcknowledgement? = nil) -> ACPV2SessionUpdateDelivery {
+        ACPV2SessionUpdateDelivery(frame: bytes, connectionID: UUID(),
+            brokerProvenance: .init(brokerID: .init(rawValue: "broker"), generation: .init(rawValue: 7),
+                cursor: .init(rawValue: cursor), origin: origin), durableConsumptionAcknowledgement: callback)
+    }
+
+    @Test func brokerReceiptRetriesRetainOriginalEvidenceAcrossReopenAndAck() throws {
+        let (store, fence, stream) = try journalFixture()
+        let bytes = Data(" \n{\"n\":1e999,\"n\":2,\"big\":123456789012345678901234567890}\n".utf8)
+        let first = try store.appendV2Update(brokerDelivery(bytes), to: stream, fence: fence)
+        #expect(first.wasInserted)
+        #expect(first.record.ordinal == 1)
+        #expect(try store.updateACPBrokerAcknowledgedCursor(sessionId: "journal", brokerId: "broker", generation: 7, cursor: 8, wireContext: .rawV2))
+        let reopened = try ACPSessionStore(path: store.path)
+        let registered = try reopened.registerV2UpdateJournal(sessionId: "journal", upstreamSessionId: "upstream", source: stream.source, fence: fence)
+        #expect(registered == stream)
+        #expect(registered.initialBrokerCursor?.rawValue == 4)
+        let retry = try reopened.appendV2Update(brokerDelivery(bytes, origin: .pendingSnapshot), to: registered, fence: fence)
+        #expect(!retry.wasInserted)
+        #expect(retry.record == first.record)
+        let next = try reopened.appendV2Update(brokerDelivery(Data([0, 255, 128]), cursor: 6), to: registered, fence: fence)
+        #expect(next.record.ordinal == 2)
+        #expect(next.record.frame == Data([0, 255, 128]))
+        #expect(throws: ACPV2UpdateJournalError.conflictingReceipt) {
+            try reopened.appendV2Update(brokerDelivery(Data("changed".utf8)), to: registered, fence: fence)
+        }
+        #expect(throws: ACPV2UpdateJournalError.incompatibleStream) {
+            try reopened.registerV2UpdateJournal(sessionId: "journal", upstreamSessionId: "different", source: stream.source, fence: fence)
+        }
+        #expect(try reopened.loadSession(id: "journal")?.acpBrokerAcknowledgedCursor == 8)
+    }
+
+    @Test(arguments: [Data(), Data([0, 255, 192, 128]), Data("  {\"n\":1e999}\n".utf8)])
+    func equalStdioChunksKeepDistinctReceiptsWhileCopiesRetryOnce(bytes: Data) throws {
+        let connection = UUID()
+        let (store, fence, stream) = try journalFixture(source: .stdio(connectionID: connection))
+        let original = ACPV2SessionUpdateDelivery(frame: bytes, connectionID: connection)
+        let copy = original
+        let a = try store.appendV2Update(original, to: stream, fence: fence)
+        let b = try store.appendV2Update(copy, to: stream, fence: fence)
+        let c = try store.appendV2Update(.init(frame: bytes, connectionID: connection), to: stream, fence: fence)
+        #expect(a.record == b.record)
+        #expect(!b.wasInserted)
+        #expect(c.record.ordinal == 2)
+        #expect(c.record.frame == bytes)
+        let row = try #require(try store.db.query("SELECT typeof(frame) AS kind, length(frame) AS size FROM acp_v2_update_records WHERE stream_id = ? AND ordinal = 1", bindings: [stream.id.uuidString]).first)
+        #expect(row["kind"] as? String == "blob")
+        #expect(row["size"] as? Int64 == Int64(bytes.count))
+    }
+
+    @Test(arguments: ["lease", "generation", "opaque", "legacy", "cursor-range", "wrong-session"])
+    func invalidJournalAuthorityCannotInsertOrAdvanceAck(reason: String) throws {
+        let (store, originalFence, stream) = try journalFixture()
+        var fence = originalFence
+        switch reason {
+        case "lease": try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        case "generation": _ = try store.updateACPBrokerState(sessionId: "journal", brokerId: "broker", generation: 8, acknowledgedCursor: 0, wireContext: .rawV2)
+        case "opaque": try store.db.exec("UPDATE sessions SET acp_broker_wire_context = '{future}' WHERE id = 'journal'")
+        case "legacy": try store.db.exec("UPDATE sessions SET acp_broker_wire_context = NULL WHERE id = 'journal'")
+        case "wrong-session": fence = .init(sessionId: "elsewhere", ownerInstance: "A", token: "owner")
+        default: break
+        }
+        let before = try store.loadSession(id: "journal")
+        let received = Mutex(0)
+        let delivery = brokerDelivery(Data("evidence".utf8), cursor: reason == "cursor-range" ? .max : 5,
+            callback: { received.withLock { $0 += 1 } })
+        #expect(throws: (any Error).self) { try store.appendV2Update(delivery, to: stream, fence: fence) }
+        #expect(try store.db.query("SELECT ordinal FROM acp_v2_update_records").isEmpty)
+        #expect(try store.loadSession(id: "journal") == before)
+        #expect(received.withLock { $0 } == 0)
+    }
+
+    @Test func failedJournalInsertRollsBackBeforeReceiptOrExplicitConsumption() throws {
+        let (store, fence, stream) = try journalFixture()
+        let consumed = Mutex(0)
+        let delivery = brokerDelivery(Data(), callback: { consumed.withLock { $0 += 1 } })
+        try store.db.exec("CREATE TRIGGER fail_receipt AFTER INSERT ON acp_v2_update_records BEGIN SELECT RAISE(ABORT, 'injected failure'); END")
+        #expect(throws: SQLiteError.self) { try store.appendV2Update(delivery, to: stream, fence: fence) }
+        #expect(try store.db.query("SELECT ordinal FROM acp_v2_update_records").isEmpty)
+        try store.db.exec("DROP TRIGGER fail_receipt")
+        let committed = try store.appendV2Update(delivery, to: stream, fence: fence)
+        #expect(committed.wasInserted)
+        #expect(committed.record.ordinal == 1)
+        #expect(consumed.withLock { $0 } == 0)
+        delivery.acknowledgeDurableConsumption()
+        #expect(consumed.withLock { $0 } == 1)
+        #expect(try store.loadSession(id: "journal")?.acpBrokerAcknowledgedCursor == 4)
+    }
+
+    @Test func replayPagesRespectBytesCountsAndStreamContinuations() throws {
+        let connection = UUID()
+        let (store, fence, stream) = try journalFixture(source: .stdio(connectionID: connection))
+        for size in [3, 3, 8, 0] {
+            _ = try store.appendV2Update(.init(frame: Data(repeating: UInt8(size), count: size), connectionID: connection), to: stream, fence: fence)
+        }
+        let first = try store.loadV2UpdateJournalPage(stream: stream, maxRecords: 3, maxBytes: 4)
+        #expect(first.records.map(\.ordinal) == [1])
+        #expect(!first.isAtEnd)
+        #expect(!first.containsOversizedRecord)
+        let second = try store.loadV2UpdateJournalPage(stream: stream, after: first.next, maxRecords: 1, maxBytes: 4)
+        #expect(second.records.map(\.ordinal) == [2])
+        let oversized = try store.loadV2UpdateJournalPage(stream: stream, after: second.next, maxRecords: 3, maxBytes: 1)
+        #expect(oversized.records.map(\.ordinal) == [3])
+        #expect(oversized.containsOversizedRecord)
+        #expect(!oversized.isAtEnd)
+        let last = try store.loadV2UpdateJournalPage(stream: stream, after: oversized.next, maxRecords: 3, maxBytes: 1)
+        #expect(last.records.map(\.ordinal) == [4])
+        #expect(last.records.first?.frame == Data())
+        #expect(last.isAtEnd)
+        #expect(last.next == nil)
+        #expect(!last.hasKnownMissingPrefix)
+        for invalid in [ACPV2UpdateJournalContinuation(streamID: UUID(), afterOrdinal: 1),
+            .init(streamID: stream.id, afterOrdinal: -1), .init(streamID: stream.id, afterOrdinal: 99)] {
+            #expect(throws: ACPV2UpdateJournalError.invalidInput) { try store.loadV2UpdateJournalPage(stream: stream, after: invalid) }
+        }
+        #expect(throws: ACPV2UpdateJournalError.invalidInput) { try store.loadV2UpdateJournalPage(stream: stream, maxRecords: 0) }
+        #expect(throws: ACPV2UpdateJournalError.invalidInput) { try store.loadV2UpdateJournalPage(stream: stream, maxBytes: .max) }
+    }
+
+    @Test(arguments: ["future-format", "future-context", "corrupt-receipt"])
+    func unreadableJournalMetadataFailsWithoutLosingEvidence(reason: String) throws {
+        let (store, fence, stream) = try journalFixture()
+        let receipt = try store.appendV2Update(brokerDelivery(Data([255, 0])), to: stream, fence: fence)
+        switch reason {
+        case "future-format": try store.db.exec("UPDATE acp_v2_update_streams SET format_version = 99")
+        case "future-context": try store.db.exec("UPDATE acp_v2_update_streams SET wire_context = '{future}'")
+        default: try store.db.exec("UPDATE acp_v2_update_records SET receipt_id = 'invalid'")
+        }
+        #expect(throws: (any Error).self) { try store.loadV2UpdateJournalPage(stream: stream) }
+        let rows = try store.db.query("SELECT frame FROM acp_v2_update_records")
+        #expect(rows.count == 1)
+        #expect(rows.first?["frame"] as? Data == receipt.record.frame)
+    }
+
+    @Test func oldGenerationsSurviveBrokerClearUntilSessionDeletion() throws {
+        let path = try { () -> String in
+            let (store, fence, stream) = try journalFixture()
+            _ = try store.appendV2Update(brokerDelivery(Data("old".utf8)), to: stream, fence: fence)
+            #expect(try store.clearACPBrokerState(sessionId: "journal"))
+            return store.path
+        }()
+        let store = try ACPSessionStore(path: path)
+        let original = try #require(try store.loadV2UpdateJournalStream(sessionId: "journal"))
+        let history = try store.loadV2UpdateJournalPage(stream: original)
+        #expect(history.records.map(\.frame) == [Data("old".utf8)])
+        #expect(history.hasKnownMissingPrefix)
+        #expect(try store.updateACPBrokerState(sessionId: "journal", brokerId: "broker", generation: 8, acknowledgedCursor: 0, wireContext: .rawV2))
+        let fence = ACPSessionLeaseFence(sessionId: "journal", ownerInstance: "A", token: "owner")
+        let newer = try store.registerV2UpdateJournal(sessionId: "journal", upstreamSessionId: "upstream",
+            source: .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 8)), fence: fence)
+        #expect(newer.id != original.id)
+        try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "successor")
+        let reopened = try ACPSessionStore(path: path)
+        let latest = try #require(try reopened.loadV2UpdateJournalStream(sessionId: "journal"))
+        let older = try #require(try reopened.loadV2UpdateJournalStream(sessionId: "journal", beforeStreamID: latest.id))
+        #expect(latest == newer)
+        #expect(older == original)
+        #expect(try reopened.loadV2UpdateJournalStream(sessionId: "journal", beforeStreamID: older.id) == nil)
+        #expect(throws: ACPV2UpdateJournalError.invalidInput) {
+            try reopened.loadV2UpdateJournalStream(sessionId: "different", beforeStreamID: older.id)
+        }
+        #expect(try reopened.loadV2UpdateJournalPage(stream: latest).records.isEmpty)
+        #expect(try reopened.loadV2UpdateJournalPage(stream: older).records.map(\.frame) == [Data("old".utf8)])
+        try store.deleteSession(id: "journal")
+        #expect(try store.db.query("SELECT id FROM acp_v2_update_streams").isEmpty)
+        #expect(try store.db.query("SELECT ordinal FROM acp_v2_update_records").isEmpty)
+        #expect(try reopened.loadV2UpdateJournalStream(sessionId: "journal") == nil)
+        #expect(throws: ACPV2UpdateJournalError.incompatibleStream) { try store.loadV2UpdateJournalPage(stream: original) }
+    }
+
+    @Test(arguments: ["upstream", "zero-generation", "huge-generation", "broker-id"])
+    func invalidJournalRegistrationNeverCreatesAStream(reason: String) throws {
+        let (store, fence, _) = try journalFixture()
+        try store.db.exec("DELETE FROM acp_v2_update_streams")
+        let source: ACPV2UpdateJournalSource
+        switch reason {
+        case "zero-generation": source = .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 0))
+        case "huge-generation": source = .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: .max))
+        case "broker-id": source = .broker(id: .init(rawValue: "bad/id"), generation: .init(rawValue: 7))
+        default: source = .stdio(connectionID: UUID())
+        }
+        #expect(throws: (any Error).self) {
+            try store.registerV2UpdateJournal(sessionId: "journal", upstreamSessionId: reason == "upstream" ? "" : "upstream", source: source, fence: fence)
+        }
+        #expect(try store.db.query("SELECT id FROM acp_v2_update_streams").isEmpty)
+    }
+
+    @Test func storedUpdatesRebuildFactsWithoutLiveCompletionOrConsumption() throws {
+        let connection = UUID()
+        let (store, fence, stream) = try journalFixture(source: .stdio(connectionID: connection))
+        let trace = [
+            #"{"sessionUpdate":"state_update","state":"running"}"#,
+            #"{"sessionUpdate":"agent_message_chunk","messageId":"m","content":{"type":"text","text":"x"}}"#,
+            #"{"sessionUpdate":"agent_message_chunk","messageId":"m","content":{"type":"text","text":"x"}}"#,
+            #"{"sessionUpdate":"tool_call_update","toolCallId":"t","rawInput":{"n":1e999}}"#,
+            #"{"sessionUpdate":"state_update","state":"idle","stopReason":"end_turn"}"#,
+            #"{"sessionUpdate":"future","n":1e999}"#,
+        ]
+        let liveContext = ACPV2MessageTranscript.Context(sessionID: "upstream", connectionID: connection)
+        let replayContext = ACPV2MessageTranscript.Context(sessionID: "upstream", connectionID: UUID())
+        var live = ACPV2SessionState(context: liveContext)
+        var replay = ACPV2SessionState(context: replayContext)
+        let consumed = Mutex(0)
+        for update in trace {
+            let frame = Data((#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":"# + update + "}}").utf8)
+            let delivery = ACPV2SessionUpdateDelivery(frame: frame, connectionID: connection,
+                durableConsumptionAcknowledgement: { consumed.withLock { $0 += 1 } })
+            _ = try live.apply(delivery.decode(), source: .live, context: liveContext)
+            _ = try store.appendV2Update(delivery, to: stream, fence: fence)
+        }
+        let malformed = ACPV2SessionUpdateDelivery(frame: Data("{broken".utf8), connectionID: connection)
+        _ = try store.appendV2Update(malformed, to: stream, fence: fence)
+        let reopened = try ACPSessionStore(path: store.path)
+        let page = try reopened.loadV2UpdateJournalPage(stream: stream)
+        for record in page.records.dropLast() {
+            let decoded = try ACPV2SessionUpdateDelivery(frame: record.frame, connectionID: replayContext.connectionID).decode()
+            _ = try replay.apply(decoded, source: .snapshot, context: replayContext)
+        }
+        #expect(replay.order == live.order)
+        #expect(replay.transcript.messages.first?.content == live.transcript.messages.first?.content)
+        #expect(replay.transcript.messages.first?.content.count == 2)
+        #expect(replay.activity.toolCall(id: "t")?.rawInput == .object(["n": .number("1e999")]))
+        #expect(live.lifecycle.lastForegroundCompletion != nil)
+        #expect(replay.lifecycle.lastForegroundCompletion == nil)
+        let malformedRecord = try #require(page.records.last)
+        #expect(malformedRecord.frame == Data("{broken".utf8))
+        #expect(throws: (any Error).self) { try ACPV2SessionUpdateDelivery(frame: malformedRecord.frame, connectionID: UUID()).decode() }
+        #expect(consumed.withLock { $0 } == 0)
+        #expect(try store.loadSession(id: "journal")?.acpBrokerAcknowledgedCursor == 4)
     }
 
     @Test("insert + load session round-trips fields")

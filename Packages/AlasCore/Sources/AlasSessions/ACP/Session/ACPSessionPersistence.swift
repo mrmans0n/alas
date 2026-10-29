@@ -175,6 +175,25 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         } ?? false
     }
 
+    public func registerV2UpdateJournal(sessionId: String, upstreamSessionId: String,
+        source: ACPV2UpdateJournalSource, fence: ACPSessionLeaseFence) throws -> ACPV2UpdateJournalStream {
+        try openedStore().registerV2UpdateJournal(sessionId: sessionId, upstreamSessionId: upstreamSessionId, source: source, fence: fence)
+    }
+
+    public func appendV2Update(_ delivery: ACPV2SessionUpdateDelivery, to stream: ACPV2UpdateJournalStream,
+        fence: ACPSessionLeaseFence) throws -> ACPV2UpdateJournalReceipt {
+        try openedStore().appendV2Update(delivery, to: stream, fence: fence)
+    }
+
+    public func loadV2UpdateJournalStream(sessionId: String, beforeStreamID: UUID? = nil) throws -> ACPV2UpdateJournalStream? {
+        try openedStore().loadV2UpdateJournalStream(sessionId: sessionId, beforeStreamID: beforeStreamID)
+    }
+
+    public func loadV2UpdateJournalPage(stream: ACPV2UpdateJournalStream,
+        after: ACPV2UpdateJournalContinuation? = nil, maxRecords: Int = 128, maxBytes: Int = 1_048_576) throws -> ACPV2UpdateJournalPage {
+        try openedStore().loadV2UpdateJournalPage(stream: stream, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
+    }
+
     public func upsertSession(_ row: ACPSessionRow, preserveTitle: Bool = false, preserveBrokerState: Bool = false) throws {
         try openedStore().upsertSession(row, preserveTitle: preserveTitle, preserveBrokerState: preserveBrokerState)
     }
