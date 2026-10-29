@@ -202,12 +202,13 @@ public final class VMGuestService {
     }
 }
 
-/// Runs `vm_run` commands with `/bin/zsh -lc` in their own process group, as the helper's user.
+/// Runs `vm_run` commands with `shellArguments` (`/bin/zsh -lc` by default) in their own process group, as the helper's user.
 public struct VMGuestShellRunner: VMGuestCommandRunning {
     /// Bytes kept from the end of each of stdout and stderr.
     public static let outputLimit = 256 * 1024
 
-    public var shell = "/bin/zsh"
+    /// The shell and its options; the command is appended as the last argument.
+    public var shellArguments = ["/bin/zsh", "-lc"]
     /// Between the SIGTERM and the SIGKILL of a timed-out or cancelled command's process group.
     public var killGrace: Duration = .seconds(2)
     /// After the SIGKILL, how long to keep waiting for the output to close. A process that left the
@@ -255,7 +256,8 @@ public struct VMGuestShellRunner: VMGuestCommandRunning {
         sigemptyset(&noSignals)
         posix_spawnattr_setsigmask(&attributes, &noSignals)
 
-        let arguments = ["zsh", "-lc", command]
+        guard let shell = shellArguments.first else { return Self.failure(ENOENT) }
+        let arguments = shellArguments + [command]
         let environment = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
         let argv = arguments.map { strdup($0) } + [nil]
         let envp = environment.map { strdup($0) } + [nil]

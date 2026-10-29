@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Installs the Alas VM Guest helper in this VM: copies it to /Applications, runs it at login
-# through a LaunchAgent, and opens the Accessibility settings to grant it.
+# through a LaunchAgent, and opens the Screen Recording and Accessibility settings to grant it.
 # Safe to run again: it replaces the app and reloads the agent.
 set -euo pipefail
 

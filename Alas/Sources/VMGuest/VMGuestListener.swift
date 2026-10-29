@@ -42,7 +42,12 @@ final class VMGuestListener: Sendable {
             while true {
                 let connection = accept(fd, nil, nil)
                 if connection < 0 {
-                    if errno != EINTR { Self.log.error("accept failed: errno \(errno, privacy: .public)") }
+                    let code = errno
+                    if code != EINTR {
+                        Self.log.error("accept failed: errno \(code, privacy: .public)")
+                        // Back off so a persistent error (EMFILE, say) doesn't spin a core.
+                        usleep(100_000)
+                    }
                     continue
                 }
                 Self.log.notice("host connected")

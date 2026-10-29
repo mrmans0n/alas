@@ -258,7 +258,7 @@ struct VMGuestClientTests {
         #expect(attempts.withLock { $0 } == 21)
     }
 
-    @Test func silentHelperTimesOutTheHello() async throws {
+    @Test(.timeLimit(.minutes(1))) func silentHelperTimesOutTheHello() async throws {
         let sleeper = GatedSleeper()
         let (client, _) = Self.connectedClient(answersHello: false, sleep: sleeper.sleep)
         let call = Task { await client.perform(ComputerUseCommand(action: .apps), sessionID: "a") }
@@ -269,7 +269,7 @@ struct VMGuestClientTests {
         #expect(await call.value == .error(VMGuestClient.Failure.helperUnresponsive.message))
     }
 
-    @Test func cancelledCallerStopsWaitingForTheSharedConnect() async throws {
+    @Test(.timeLimit(.minutes(1))) func cancelledCallerStopsWaitingForTheSharedConnect() async throws {
         let sleeper = GatedSleeper()
         let (client, guests) = Self.connectedClient(failedConnects: 1, sleep: sleeper.sleep)
         let cancelled = Task { await client.perform(ComputerUseCommand(action: .apps), sessionID: "a") }

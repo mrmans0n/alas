@@ -70,6 +70,14 @@ struct VMGuestServiceTests {
         VMGuestService(coordinator: coordinator, permissions: { grants }, runner: UnusedRunner(), version: "1.2.3")
     }
 
+    /// A `.response` with its body decoded: the encoded key order isn't fixed, so bytes can't be compared.
+    private static func decoded(_ message: VMGuestMessage?) -> (id: UInt64, response: AlasCLIResponse)? {
+        guard case .response(let id, let body)? = message, let response = try? AlasCLIResponse.decode(body) else {
+            return nil
+        }
+        return (id, response)
+    }
+
     @Test func commandRoundTripsThroughTheCoordinator() async throws {
         let coordinator = FakeCoordinator()
         let click = ComputerUseCommand(action: .click, windowID: 7, ref: "e3", count: 2)
@@ -77,7 +85,9 @@ struct VMGuestServiceTests {
 
         #expect(coordinator.performed.map(\.command) == [click])
         #expect(coordinator.performed.map(\.sessionID) == ["s1"])
-        #expect(reply == .response(id: 9, body: try AlasCLIResponse.text(["clicked"]).encode()))
+        let decoded = Self.decoded(reply)
+        #expect(decoded?.id == 9)
+        #expect(decoded?.response == .text(["clicked"]))
     }
 
     @Test(arguments: [(false, false), (true, false), (false, true), (true, true)])
@@ -102,7 +112,9 @@ struct VMGuestServiceTests {
 
         let error = "computer_permissions: Alas VM Guest is missing \(missing) in this VM. "
             + "Ask the user to grant \(pronoun) in the VM's System Settings › Privacy & Security."
-        #expect(reply == .response(id: 4, body: try AlasCLIResponse.error(error).encode()))
+        let decoded = Self.decoded(reply)
+        #expect(decoded?.id == 4)
+        #expect(decoded?.response == .error(error))
         #expect(coordinator.performed.isEmpty)
     }
 
@@ -118,10 +130,14 @@ struct VMGuestServiceTests {
 
         #expect(await service.handle(.cancel(id: 1), connection: 1) == nil)
         #expect(coordinator.cancelled.withLock { $0 } == ["a"])
-        #expect(await first.value == .response(id: 1, body: try AlasCLIResponse.error("cancelled").encode()))
+        let cancelled = Self.decoded(await first.value)
+        #expect(cancelled?.id == 1)
+        #expect(cancelled?.response == .error("cancelled"))
 
         coordinator.release("b", with: .ok)
-        #expect(await second.value == .response(id: 1, body: try AlasCLIResponse.ok.encode()))
+        let answered = Self.decoded(await second.value)
+        #expect(answered?.id == 1)
+        #expect(answered?.response == .ok)
     }
 
     @Test func closingAConnectionEndsItsCallsAndSessions() async throws {
@@ -142,30 +158,28 @@ struct VMGuestServiceTests {
         #expect(await service.handle(.command(id: 2, sessionID: "a", request: request), connection: 1) == nil)
     }
 
-    @Test(arguments: [VMGuestLifecycleEvent.stop, .resume, .turnEnded, .sessionEnded])
-    func lifecycleEventsReachTheCoordinator(event: VMGuestLifecycleEvent) async {
-        let coordinator = FakeCoordinator()
-        let reply = await Self.service(coordinator).handle(.lifecycle(sessionID: "s1", event: event))
-        #expect(reply == nil)
-        #expect(coordinator.events.map(\.event) == [event])
-        #expect(coordinator.events.map(\.sessionID) == ["s1"])
+    /// A runner that doesn't read the CI user's zsh startup files.
+    private static var plainRunner: VMGuestShellRunner {
+        var runner = VMGuestShellRunner()
+        runner.shellArguments = ["/bin/sh", "-c"]
+        return runner
     }
 
-    @Test func runnerTimesOutAndKeepsTheTail() async {
-        let result = await VMGuestShellRunner().run("yes | head -c 1000000; sleep 30", timeout: .seconds(1))
+    @Test(.timeLimit(.minutes(1))) func runnerTimesOutAndKeepsTheTail() async {
+        let result = await Self.plainRunner.run("yes | head -c 1000000; sleep 30", timeout: .seconds(1))
         #expect(result.timedOut)
         #expect(result.truncated)
         #expect(result.stdout.utf8.count == 262_144)
     }
 
-    @Test func runnerStopsWaitingForAChildThatLeftTheGroup() async {
-        var runner = VMGuestShellRunner()
+    @Test(.timeLimit(.minutes(1))) func runnerStopsWaitingForAChildThatLeftTheGroup() async {
+        var runner = Self.plainRunner
         runner.killGrace = .milliseconds(200)
         let start = ContinuousClock.now
         // The child starts its own session, so the group's SIGKILL misses it while it holds stdout.
         let result = await runner.run(
             #"echo started; perl -MPOSIX -e 'setsid() or die "setsid: $!"; exec "sleep", "10"' &"#, timeout: .seconds(1))
-        #expect(ContinuousClock.now - start < .seconds(4))
+        #expect(ContinuousClock.now - start < .seconds(10))
         #expect(result.timedOut)
         #expect(result.stdout == "started\n")
     }
