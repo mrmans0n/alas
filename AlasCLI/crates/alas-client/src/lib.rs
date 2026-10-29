@@ -277,6 +277,15 @@ pub enum Command {
     },
     Preview(PreviewCommand),
     Computer(ComputerCommand),
+    /// MCP-only: run a shell command in the calling session's worktree VM.
+    /// The app applies the default timeout when absent.
+    VmRun {
+        command: String,
+        timeout_seconds: Option<u32>,
+    },
+    /// MCP-only: whether the calling session's worktree has a running VM,
+    /// its guest helper, and the shared transfer folder.
+    VmStatus,
     Resolve,
 }
 
@@ -932,6 +941,24 @@ pub fn build_request(
         }
         Command::Preview(preview) => preview_request(preview),
         Command::Computer(computer) => computer_request(computer),
+        Command::VmRun {
+            command,
+            timeout_seconds,
+        } => {
+            let mut r = Request::new("vm_run");
+            let mut params = serde_json::Map::new();
+            params.insert("command".into(), serde_json::Value::String(command.clone()));
+            if let Some(timeout) = timeout_seconds {
+                params.insert("timeout_seconds".into(), serde_json::Value::from(*timeout));
+            }
+            r.params = Some(serde_json::Value::Object(params));
+            r
+        }
+        Command::VmStatus => {
+            let mut r = Request::new("vm_status");
+            r.params = Some(serde_json::json!({}));
+            r
+        }
         Command::Resolve => Request::new("resolve"),
     };
     req.session_id = session_id;
@@ -1403,10 +1430,24 @@ const READ_TIMEOUT: Duration = Duration::from_secs(30);
 /// closes the connection, so giving up sooner would cancel an approved call.
 pub const COMPUTER_READ_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// The guest's own bound on a `vm_run` command when the call gives none.
+pub const VM_RUN_DEFAULT_TIMEOUT_SECONDS: u32 = 120;
+
+/// How much longer than its command a `vm_run` waits, so the guest's
+/// timed-out reply arrives before the connection gives up.
+const VM_RUN_REPLY_GRACE: Duration = Duration::from_secs(30);
+
 /// How long `dispatch` waits for the reply to `command`.
 pub fn read_timeout(command: &Command) -> Duration {
     match command {
         Command::Computer(_) => COMPUTER_READ_TIMEOUT,
+        Command::VmRun {
+            timeout_seconds, ..
+        } => {
+            Duration::from_secs(u64::from(
+                timeout_seconds.unwrap_or(VM_RUN_DEFAULT_TIMEOUT_SECONDS),
+            )) + VM_RUN_REPLY_GRACE
+        }
         _ => READ_TIMEOUT,
     }
 }
@@ -2256,6 +2297,49 @@ mod tests {
         let apps = Command::Computer(ComputerCommand::Apps { call_id: None });
         assert_eq!(read_timeout(&apps), COMPUTER_READ_TIMEOUT);
         assert_eq!(read_timeout(&Command::Resolve), READ_TIMEOUT);
+    }
+
+    #[test]
+    fn vm_run_outwaits_its_guest_timeout() {
+        let run = |timeout_seconds| Command::VmRun {
+            command: "ls".into(),
+            timeout_seconds,
+        };
+        assert_eq!(read_timeout(&run(None)), Duration::from_secs(150));
+        assert_eq!(read_timeout(&run(Some(600))), Duration::from_secs(630));
+        assert_eq!(read_timeout(&Command::VmStatus), READ_TIMEOUT);
+    }
+
+    #[test]
+    fn vm_commands_serialize_as_params_only_requests() {
+        let run = build_request(
+            &Command::VmRun {
+                command: "open x.app".into(),
+                timeout_seconds: None,
+            },
+            Some("acp-1".into()),
+            Some("/wt".into()),
+        );
+        assert_eq!(run.command, "vm_run");
+        assert_eq!(
+            run.params,
+            Some(serde_json::json!({ "command": "open x.app" }))
+        );
+        let bounded = build_request(
+            &Command::VmRun {
+                command: "make".into(),
+                timeout_seconds: Some(5),
+            },
+            None,
+            Some("/wt".into()),
+        );
+        assert_eq!(
+            bounded.params,
+            Some(serde_json::json!({ "command": "make", "timeout_seconds": 5 }))
+        );
+        let status = build_request(&Command::VmStatus, Some("acp-1".into()), None);
+        assert_eq!(status.command, "vm_status");
+        assert_eq!(status.params, Some(serde_json::json!({})));
     }
 
     #[test]

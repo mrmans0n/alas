@@ -122,10 +122,7 @@ extension AppState {
     /// Routes one call: a session whose worktree has a VM talks to its guest and never reaches
     /// the host coordinator, so no host readiness, approvals, driver lock, or overlay apply.
     func performComputerUse(_ command: ComputerUseCommand, sessionID: String, worktreeID: String?) async -> AlasCLIResponse {
-        // A running VM answers without touching the registry; otherwise one lockless read.
-        let runningHere = worktreeID.map { vmManager.running($0) != nil } ?? false
-        let hasVM: Bool? = runningHere ? true : worktreeID.map(vmManager.hasVMRecord) ?? false
-        switch VMComputerUseRoute.resolve(worktreeID: worktreeID, hasVM: hasVM, runningHere: runningHere) {
+        switch vmRoute(worktreeID: worktreeID) {
         case .desktop:
             return await computerUse.perform(command, sessionID: sessionID)
         case .vmNotRunning:
@@ -150,6 +147,61 @@ extension AppState {
             // client tells the guest to cancel the call.
             return await client.perform(command, sessionID: sessionID)
         }
+    }
+
+    /// The route a VM tool call takes: a running VM answers without touching the registry,
+    /// otherwise one lockless registry read.
+    private func vmRoute(worktreeID: String?) -> VMComputerUseRoute {
+        let runningHere = worktreeID.map { vmManager.running($0) != nil } ?? false
+        let hasVM: Bool? = runningHere ? true : worktreeID.map(vmManager.hasVMRecord) ?? false
+        return VMComputerUseRoute.resolve(worktreeID: worktreeID, hasVM: hasVM, runningHere: runningHere)
+    }
+
+    /// `vm_run`: runs a shell command in the guest of the session's worktree VM. A session the
+    /// user stopped can't use it until resumed, like the computer tools.
+    func performVMRun(_ command: String, timeoutSeconds: Int, sessionID: String, worktreeID: String?) async -> AlasCLIResponse {
+        switch vmRoute(worktreeID: worktreeID) {
+        case .desktop:
+            return .error(VMComputerUseRoute.vmMissingMessage)
+        case .vmNotRunning:
+            return .error(VMComputerUseRoute.vmNotRunningMessage)
+        case .vmStateUnreadable:
+            return .error(VMComputerUseRoute.vmStateUnreadableMessage)
+        case .guest(let worktreeID):
+            if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
+                return .error(ComputerUseCoordinator.stoppedMessage)
+            }
+            guard let client = vmManager.guestClient(for: worktreeID) else {
+                return .error(VMComputerUseRoute.vmNotRunningMessage)
+            }
+            // Awaited in the request's own task, so a client disconnect cancels the guest call.
+            do {
+                return .text([VMComputerUseRoute.runReply(try await client.run(command, timeoutSeconds: timeoutSeconds))])
+            } catch {
+                return .error((error as? VMGuestClient.Failure ?? .stopped).message)
+            }
+        }
+    }
+
+    /// `vm_status`: whether the session's worktree has a VM, whether it runs here, its guest
+    /// helper (nil when it doesn't answer), and the transfer folder.
+    func vmStatus(worktreeID: String?) async -> AlasCLIResponse {
+        let route = vmRoute(worktreeID: worktreeID)
+        var helper: VMGuestHello?
+        if case .guest(let id) = route, let client = vmManager.guestClient(for: id) {
+            helper = try? await client.hello()
+        }
+        var transfer = ""
+        switch route {
+        case .guest(let id), .vmNotRunning(let id):
+            // Made at VM start; made here too so a copy before the first start lands.
+            let directory = vmManager.transferDirectory(forWorktree: id)
+            try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            transfer = directory.path
+        case .desktop, .vmStateUnreadable:
+            break
+        }
+        return .text([VMComputerUseRoute.statusReply(route: route, helper: helper, transferHostPath: transfer)])
     }
 
     /// Whether the badge shows a session as driving its VM.

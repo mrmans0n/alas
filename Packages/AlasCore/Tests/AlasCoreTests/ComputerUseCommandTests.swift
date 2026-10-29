@@ -132,6 +132,17 @@ struct ComputerUseCommandTests {
         #expect(throws: AlasCLIRequestError.self) { try decode(command, params) }
     }
 
+    @Test func decodesVMCommandsWithTheirTimeoutBounds() throws {
+        #expect(try decode("vm_run", #"{"command":"open x.app"}"#).command == .vmRun(command: "open x.app", timeoutSeconds: 120))
+        #expect(try decode("vm_run", #"{"command":"make","timeout_seconds":1}"#).command == .vmRun(command: "make", timeoutSeconds: 1))
+        #expect(try decode("vm_run", #"{"command":"make","timeout_seconds":600}"#).command == .vmRun(command: "make", timeoutSeconds: 600))
+        #expect(try decode("vm_status", "{}").command == .vmStatus)
+        #expect(try decode("vm_status", nil).command == .vmStatus)
+        for params in [nil, "{}", #"{"command":"  "}"#, #"{"command":"ls","timeout_seconds":0}"#, #"{"command":"ls","timeout_seconds":601}"#] {
+            #expect(throws: AlasCLIRequestError.self) { try decode("vm_run", params) }
+        }
+    }
+
     @Test(arguments: [
         ComputerUseCommand(action: .screenshot, windowID: 7, callID: "42-1"),
         ComputerUseCommand(action: .inspect, windowID: 42, query: "Save", limit: 50, maxDepth: 20),

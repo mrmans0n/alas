@@ -613,6 +613,7 @@ fn all_tool_definitions() -> Vec<Value> {
     ];
     tools.extend(preview_tool_definitions());
     tools.extend(computer_tool_definitions());
+    tools.extend(vm_tool_definitions());
     tools.extend(workspace_tool_definitions());
     tools
 }
@@ -809,6 +810,33 @@ fn computer_tool_definitions() -> Vec<Value> {
         }),
     ]
 }
+
+fn vm_tool_definitions() -> Vec<Value> {
+    vec![
+        json!({
+            "name": "vm_run",
+            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only).",
+            "annotations": { "readOnlyHint": false, "destructiveHint": true },
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "command": { "type": "string", "minLength": 1, "maxLength": VM_RUN_COMMAND_MAX_BYTES, "description": "The shell command to run." },
+                    "timeout_seconds": { "type": "integer", "minimum": 1, "maximum": 600, "description": "Default: 120." }
+                },
+                "required": ["command"]
+            }
+        }),
+        json!({
+            "name": "vm_status",
+            "description": "Report whether this worktree has a VM, whether it is running, its guest helper's version and permissions, and the transfer folder: copy a build to transfer_host_path on the Mac and it appears at transfer_guest_path in the VM.",
+            "annotations": { "readOnlyHint": true },
+            "inputSchema": { "type": "object", "properties": {} }
+        }),
+    ]
+}
+
+/// The longest `vm_run` command accepted.
+const VM_RUN_COMMAND_MAX_BYTES: usize = 64 * 1024;
 
 /// The input schema shared by the actions that operate a window and return a
 /// fresh read of it.
@@ -1040,6 +1068,7 @@ fn is_headless_hidden(name: &str) -> bool {
     name.starts_with("workspace_")
         || name.starts_with("preview_")
         || name.starts_with("computer_")
+        || name.starts_with("vm_")
         || matches!(name, "open" | "worktree_switch")
 }
 
@@ -1561,6 +1590,20 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(100),
                 call_id: None,
             }))
+        }
+        "vm_run" => {
+            reject_arguments(args, name, &["command", "timeout_seconds"])?;
+            let command = optional_limited_string_raw(args, "command", VM_RUN_COMMAND_MAX_BYTES)?
+                .ok_or_else(|| "command is required".to_string())?;
+            Ok(Command::VmRun {
+                command,
+                timeout_seconds: optional_bounded_u64(args, "timeout_seconds", 1, 600)?
+                    .map(|seconds| seconds as u32),
+            })
+        }
+        "vm_status" => {
+            reject_arguments(args, name, &[])?;
+            Ok(Command::VmStatus)
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
         "preview_open" => {
@@ -2113,7 +2156,8 @@ pub fn dispatch(env: &McpEnv, command: &Command) -> Result<Response, TransportEr
     } else if is_computer_call(command) {
         alas_client::send_with_timeout(&env.socket, &req, alas_client::COMPUTER_READ_TIMEOUT)
     } else {
-        alas_client::send(&env.socket, &req)
+        // Covers `vm_run`, which waits out its own command timeout.
+        alas_client::send_with_timeout(&env.socket, &req, alas_client::read_timeout(command))
     }
 }
 
@@ -2237,6 +2281,7 @@ fn success_message(command: &Command) -> String {
         Command::WorkspaceFocus { .. } => "Focused Workspace Checkout member.".into(),
         Command::Preview(_) => "Preview command completed.".into(),
         Command::Computer(_) => "Computer command completed.".into(),
+        Command::VmRun { .. } | Command::VmStatus => "OK".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -2348,7 +2393,7 @@ fn is_preview_command(command: &Command) -> bool {
 /// a worker so it keeps reading other calls and cancellations meanwhile.
 fn runs_on_worker(command: &Command) -> bool {
     is_preview_command(command)
-        || matches!(command, Command::Computer(_))
+        || matches!(command, Command::Computer(_) | Command::VmRun { .. })
         || publishes(command)
         || matches!(command, Command::SessionWait { .. })
 }
@@ -3187,6 +3232,8 @@ mod tests {
             "open",
             "preview_list",
             "computer_apps",
+            "vm_run",
+            "vm_status",
             "worktree_switch",
             "workspace_list",
             "workspace_focus",
@@ -3486,6 +3533,8 @@ mod tests {
                 "computer_drag",
                 "computer_open_app",
                 "computer_wait",
+                "vm_run",
+                "vm_status",
                 "workspace_list",
                 "workspace_show",
                 "workspace_switch",
@@ -4190,6 +4239,50 @@ mod tests {
         assert_eq!(content[1]["type"], json!("text"));
         assert!(content[1]["text"].as_str().unwrap().contains("\"url\""));
         assert!(!content[1]["text"].as_str().unwrap().contains("\"image\""));
+    }
+
+    #[test]
+    fn vm_tools_validate_arguments_and_map_to_commands() {
+        assert_eq!(
+            command_for_tool("vm_run", &json!({ "command": "open -a Safari" }), "/wt").unwrap(),
+            Command::VmRun {
+                command: "open -a Safari".into(),
+                timeout_seconds: None
+            }
+        );
+        let ranged = command_for_tool(
+            "vm_run",
+            &json!({ "command": "make", "timeout_seconds": 600 }),
+            "/wt",
+        )
+        .unwrap();
+        assert_eq!(
+            ranged,
+            Command::VmRun {
+                command: "make".into(),
+                timeout_seconds: Some(600)
+            }
+        );
+        // Up to ten minutes in the guest: never on the stdio loop.
+        assert!(runs_on_worker(&ranged));
+        assert_eq!(
+            command_for_tool("vm_status", &json!({}), "/wt").unwrap(),
+            Command::VmStatus
+        );
+        for (name, args) in [
+            ("vm_run", json!({})),
+            ("vm_run", json!({ "command": "  " })),
+            ("vm_run", json!({ "command": 7 })),
+            ("vm_run", json!({ "command": "ls", "timeout_seconds": 0 })),
+            ("vm_run", json!({ "command": "ls", "timeout_seconds": 601 })),
+            ("vm_run", json!({ "command": "ls", "cwd": "/tmp" })),
+            ("vm_status", json!({ "verbose": true })),
+        ] {
+            assert!(
+                command_for_tool(name, &args, "/wt").is_err(),
+                "{name} {args}"
+            );
+        }
     }
 
     #[test]

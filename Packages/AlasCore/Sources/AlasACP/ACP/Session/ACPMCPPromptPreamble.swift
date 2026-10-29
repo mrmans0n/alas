@@ -78,6 +78,7 @@ public enum ACPMCPPromptPreamble: Sendable {
         "computer_apps", "computer_screenshot", "computer_inspect",
         "computer_click", "computer_type", "computer_key", "computer_scroll", "computer_drag",
         "computer_open_app", "computer_wait",
+        "vm_run", "vm_status",
     ]
 
     /// The preamble text, or nil when no MCP server was attached.
@@ -249,6 +250,10 @@ public enum ACPMCPPromptPreamble: Sendable {
                     + "except once with delivery \"direct\" when the warning suggests it. "
                     + "computer_user_active means the user is working there: wait and retry later instead of switching apps. "
                     + "Secure fields can't be typed into; ask the user instead.")
+                lines.append("In a worktree with a VM, computer tools drive the VM instead of the user's Mac. "
+                    + "vm_status tells whether it runs and where to put builds (copy to transfer_host_path on the Mac, "
+                    + "find them at transfer_guest_path in the VM); vm_run runs a shell command in the VM, "
+                    + "for example to open a built app.")
             }
             if !isDelegated {
                 lines.append(visualPolicy)
