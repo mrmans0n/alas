@@ -38,7 +38,7 @@ On a host worktree, every one of these shows the same red note, "Binary files ca
    - A known binary that isn't an image, or any file the host finds binary, shows the local card: icon, name, kind and size.
    - Open with System and Reveal are hidden, as they are for remote files today.
 4. **Size is honest.**
-   - Images up to a cap of 8 MB raw (about 11 MB on the wire) are previewed.
+   - Images up to a cap of 5 MB raw (up to about 14 MB on the wire, as JSON escapes `/` in base64) are previewed.
    - Above that, the card says the file is too large to preview, with its size.
    - The 512 KB text cap is unchanged.
 5. **Same path rules as reading text.** No `.git`, nothing gitignored (except folder projects), no symlinks, contained in the worktree, regular files only.
@@ -76,7 +76,7 @@ On a host worktree, every one of these shows the same red note, "Binary files ca
 - **One new read, `HostWorktreeRead.fileBytes(path:revision:)`, under a new capability.**
   - `revision` is nil for the working-tree file. Otherwise it is one of the forms the host's diff reads already accept: the index, HEAD, the comparison ref, or a verified commit SHA (or its parent).
   - The reply is new: `.fileBytes(path, data, byteSize)`, or the existing `.fileUnavailable` with `.tooLarge` or `.notFound`.
-  - The host reuses the text read's path chain verbatim, with the cap raised to 8 MB and no binary or UTF-8 gate. Revisions are read with `git show <rev>:<path>` through `Process.gitData`, checked against the cap before replying.
+  - The host reuses the text read's path chain verbatim, with the cap raised to 5 MB and no binary or UTF-8 gate. Revisions are read with `git show <rev>:<path>` through `Process.gitData`, checked against the cap before replying.
 - **Bytes stay in memory on the Mac.** `NSImage(data:)` for previews and `GitService.imageSide(fromRawData:)` for diffs. No temp files.
 - **The Mac decides what to request by extension,** as local does with `ImageFileType` and `BinaryFileType`. The host's `.binary` reply to a text read also switches the document to the placeholder card, which now shows the `byteSize` it used to drop.
 - **The peer document area gets two new contents:** an image (with its footer), and an image diff built with the existing `ImageDiffView`. The placeholder reuses `BinaryPreviewTabView`'s layout without its buttons.

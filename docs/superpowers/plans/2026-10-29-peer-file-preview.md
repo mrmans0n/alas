@@ -4,7 +4,7 @@
 
 **Goal:** Preview a paired host worktree's images, image diffs and other binaries from the Mac, as locally.
 
-**Architecture:** A new `HostWorktreeRead.fileBytes(path:revision:)` returns raw bytes, capped at 8 MB, for the working tree or a validated revision. It reuses the text read's path chain. On the Mac, the peer document area gains three new contents: an image preview, an image diff (the existing `ImageDiffView`) and a placeholder card.
+**Architecture:** A new `HostWorktreeRead.fileBytes(path:revision:)` returns raw bytes, capped at 5 MB, for the working tree or a validated revision. It reuses the text read's path chain. On the Mac, the peer document area gains three new contents: an image preview, an image diff (the existing `ImageDiffView`) and a placeholder card.
 
 **Tech Stack:** Swift 5.9+, SwiftUI/AppKit, Swift Testing, AlasCore SwiftPM package.
 
@@ -44,7 +44,7 @@
   - `HostWorktreeRead.fileBytes(path: String, revision: HostFileRevision?)`, where nil means the working tree.
   - The reply is `RemoteServerMessage.fileBytes(sessionId:path:data:byteSize:)`, or the existing `.fileUnavailable` (`.tooLarge` carries `byteSize`, `.notFound` covers a missing side).
   - The capability is `HostProtocolCapability.worktreesFileBytesV1 = "host.worktrees.fileBytes.v1"`, served wherever `worktreesReadV1` is served.
-  - The cap is `RemoteWorktreeFileAccess.maxPreviewBytes = 8 * 1024 * 1024`.
+  - The cap is `RemoteWorktreeFileAccess.maxPreviewBytes = 5 * 1024 * 1024`.
 
 - [ ] **Step 1: Write the failing test** `aMacReadsAWorktreeFilesBytes`. Use a template repo with a committed PNG, then change the working-tree copy. Assert, in order:
   - The working tree returns its exact bytes and `byteSize`.

@@ -807,8 +807,10 @@ extension AlasCoreContext {
         guard let revision else {
             return await remoteWorkingTreeBytes(worktree, normalizedPath: normalizedPath, url: url, maxBytes: maxBytes)
         }
-        // A folder has no history; and a newline would end the batch request below.
-        guard !isFolderWorktree(worktree), !normalizedPath.contains("\n") else {
+        // A folder has no history; and a control character could end the batch request below.
+        guard !isFolderWorktree(worktree),
+              !normalizedPath.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F })
+        else {
             return .failure(reason: .pathRejected, byteSize: nil, message: nil)
         }
         let git = GitService()
@@ -828,9 +830,14 @@ extension AlasCoreContext {
                     ))
                 rev = commits.comparisonRef ?? "HEAD"
             case .commit(let sha), .parent(let sha):
-                guard RemoteWorktreeFileAccess.isCommitSHA(sha),
-                      let commit = try? await git.resolveRevision(at: worktree.path, ref: sha)
-                else {
+                guard RemoteWorktreeFileAccess.isCommitSHA(sha) else {
+                    return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+                }
+                let commit: String
+                do {
+                    commit = try await git.resolveRevision(at: worktree.path, ref: sha)
+                } catch let error as NSError where error.domain == "GitService.resolveRevision" {
+                    // git ran and names no such commit; anything else failed to run.
                     return .failure(reason: .pathRejected, byteSize: nil, message: nil)
                 }
                 rev = revision == .commit(sha: sha) ? commit : commit + "^"
@@ -843,8 +850,12 @@ extension AlasCoreContext {
             let check = try await Process.git(
                 ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
                 cwd: worktree.path, stdin: "\(rev):./\(normalizedPath)\n")
+            guard check.exitCode == 0 else {
+                return .failure(reason: .gitFailed, byteSize: nil, message: check.stderr)
+            }
+            // A missing object answers `<name> missing` on a clean exit.
             let fields = check.stdout.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            guard check.exitCode == 0, fields.count == 3, fields[1] == "blob", let byteSize = Int(fields[2]) else {
+            guard fields.count == 3, fields[1] == "blob", let byteSize = Int(fields[2]) else {
                 return .failure(reason: .notFound, byteSize: nil, message: nil)
             }
             guard byteSize <= maxBytes else { return .failure(reason: .tooLarge, byteSize: byteSize, message: nil) }

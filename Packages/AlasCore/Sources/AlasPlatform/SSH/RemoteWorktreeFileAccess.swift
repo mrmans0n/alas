@@ -46,7 +46,9 @@ public enum RemoteWorktreeFileAccess: Sendable {
 
     public static let maxFileBytes = 512 * 1024
     /// The cap on a file's raw bytes read for a preview, such as an image.
-    public static let maxPreviewBytes = 8 * 1024 * 1024
+    /// Sent as JSON base64, whose escaped `/` makes the worst case ~2.7x:
+    /// 5 MiB stays under the 16 MB WebSocket frame limit.
+    public static let maxPreviewBytes = 5 * 1024 * 1024
     public static let maxDiffLines = 2_000
     public static let maxChangedFiles = 500
     /// Caps a single directory listing (the root, or one expanded
