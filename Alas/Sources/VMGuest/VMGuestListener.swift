@@ -38,6 +38,7 @@ final class VMGuestListener: Sendable {
         Self.log.notice("listening on vsock port \(VMGuestPort.computerUse, privacy: .public)")
         let service = service
         Thread.detachNewThread {
+            var token: UInt64 = 0
             while true {
                 let connection = accept(fd, nil, nil)
                 if connection < 0 {
@@ -45,32 +46,47 @@ final class VMGuestListener: Sendable {
                     continue
                 }
                 Self.log.notice("host connected")
-                Connection(fd: connection, service: service).start()
+                token += 1
+                Connection(fd: connection, token: token, service: service).start()
             }
         }
     }
 }
 
+/// One host connection. `token` scopes its request ids and sessions in the service.
 private final class Connection: @unchecked Sendable {
     private let fd: Int32
+    private let token: UInt64
     private let service: VMGuestService
     private let writeLock = NSLock()
     /// Guarded by `writeLock`: set once the descriptor is closed, so no write reaches a reused one.
     private var closed = false
-    /// Commands dispatched and not answered yet; cancelled when the host goes away.
-    @MainActor private var pending: Set<UInt64> = []
     private static let log = Logger(subsystem: "io.nlopez.vmguest", category: "connection")
 
-    init(fd: Int32, service: VMGuestService) {
+    init(fd: Int32, token: UInt64, service: VMGuestService) {
         self.fd = fd
+        self.token = token
         self.service = service
     }
 
     func start() {
-        Thread.detachNewThread { self.readLoop() }
+        let (messages, continuation) = AsyncStream<VMGuestMessage>.makeStream()
+        Thread.detachNewThread { self.readLoop(into: continuation) }
+        // In arrival order; each message then runs in its own task, so a `cancel` is handled while
+        // its command runs.
+        Task { @MainActor in
+            for await message in messages {
+                Task { await self.dispatch(message) }
+            }
+            self.service.connectionClosed(self.token)
+            self.writeLock.withLock {
+                self.closed = true
+                close(self.fd)
+            }
+        }
     }
 
-    private func readLoop() {
+    private func readLoop(into messages: AsyncStream<VMGuestMessage>.Continuation) {
         var framer = VMGuestFramer()
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
@@ -81,28 +97,15 @@ private final class Connection: @unchecked Sendable {
             if output.malformedFrames > 0 {
                 Self.log.error("skipped \(output.malformedFrames, privacy: .public) malformed frame(s)")
             }
-            for message in output.messages {
-                Task { @MainActor in await self.dispatch(message) }
-            }
+            for message in output.messages { messages.yield(message) }
         }
         Self.log.notice("host disconnected")
-        Task { @MainActor in
-            // Nobody is waiting for these answers any more.
-            for id in self.pending { _ = await self.service.handle(.cancel(id: id)) }
-            self.pending.removeAll()
-            self.writeLock.withLock {
-                self.closed = true
-                close(self.fd)
-            }
-        }
+        messages.finish()
     }
 
     @MainActor
     private func dispatch(_ message: VMGuestMessage) async {
-        if case let .command(id, _, _) = message { pending.insert(id) }
-        let reply = await service.handle(message)
-        if case let .command(id, _, _) = message { pending.remove(id) }
-        if let reply { send(reply) }
+        if let reply = await service.handle(message, connection: token) { send(reply) }
     }
 
     /// The lock keeps frames whole when replies finish together.

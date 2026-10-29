@@ -38,19 +38,29 @@ public protocol VMGuestCommandRunning: Sendable {
 }
 
 /// Answers the host's messages inside the guest: computer-use calls through the coordinator,
-/// lifecycle events, and `vm_run` commands.
+/// lifecycle events, and `vm_run` commands. Request ids are the host's, so they are scoped to the
+/// connection they arrived on.
 @MainActor
 public final class VMGuestService {
     public static let defaultRunTimeoutSeconds = 120
     public static let maxRunTimeoutSeconds = 600
 
+    private struct RequestKey: Hashable {
+        var connection: UInt64
+        var id: UInt64
+    }
+
     private let coordinator: VMGuestCoordinating
     private let permissions: () -> (accessibility: Bool, screenRecording: Bool)
     private let runner: VMGuestCommandRunning
     private let version: String
-    /// In-flight commands by request id. Cancelling the task cancels the coordinator's call:
-    /// `perform` forwards its caller's cancellation to the call it runs.
-    private var inFlight: [UInt64: Task<AlasCLIResponse, Never>] = [:]
+    /// Commands and runs in flight. Cancelling one's task cancels the work: `perform` forwards its
+    /// caller's cancellation to the call it runs, and the runner ends the command's process group.
+    private var inFlight: [RequestKey: Task<VMGuestMessage, Never>] = [:]
+    /// The sessions each connection has used and not ended, so a disconnect can end them.
+    private var sessions: [UInt64: Set<String>] = [:]
+    /// Connections that closed: work still queued from them is dropped, not started.
+    private var closedConnections: Set<UInt64> = []
 
     private static let log = Logger(subsystem: "io.nlopez.vmguest", category: "service")
 
@@ -66,51 +76,91 @@ public final class VMGuestService {
         self.version = version
     }
 
-    /// The reply to send back, if the message has one.
-    public func handle(_ message: VMGuestMessage) async -> VMGuestMessage? {
+    /// The reply to send back on `connection`, if the message has one.
+    public func handle(_ message: VMGuestMessage, connection: UInt64 = 0) async -> VMGuestMessage? {
+        guard !closedConnections.contains(connection) else { return nil }
         switch message {
         case .hello:
             let grants = permissions()
             return .helloReply(
-                guestVersion: version, accessibility: grants.accessibility, screenRecording: grants.screenRecording)
+                guestVersion: version, protocolRevision: VMGuestProtocol.revision,
+                accessibility: grants.accessibility, screenRecording: grants.screenRecording)
         case let .command(id, sessionID, request):
-            return .response(id: id, body: Self.encode(await perform(id: id, sessionID: sessionID, request: request)))
+            sessions[connection, default: []].insert(sessionID)
+            let command: ComputerUseCommand
+            do {
+                command = try Self.decode(request)
+            } catch {
+                return .response(
+                    id: id, body: Self.encode(.error("computer_malformed: The VM guest helper couldn't read the request.")))
+            }
+            if command.action != .cancel, let refusal = Self.missingGrantsError(permissions()) {
+                return .response(id: id, body: Self.encode(.error(refusal)))
+            }
+            let coordinator = coordinator
+            return await track(RequestKey(connection: connection, id: id)) {
+                .response(id: id, body: Self.encode(await coordinator.perform(command, sessionID: sessionID)))
+            }
         case let .cancel(id):
-            inFlight[id]?.cancel()
+            inFlight[RequestKey(connection: connection, id: id)]?.cancel()
             return nil
         case let .lifecycle(sessionID, event):
             switch event {
             case .stop: await coordinator.stop(sessionID: sessionID)
             case .resume: coordinator.resume(sessionID: sessionID)
             case .turnEnded: coordinator.turnEnded(sessionID: sessionID)
-            case .sessionEnded: coordinator.sessionEnded(sessionID: sessionID)
+            case .sessionEnded:
+                sessions[connection]?.remove(sessionID)
+                coordinator.sessionEnded(sessionID: sessionID)
             }
             return nil
         case let .run(id, command, timeoutSeconds):
             let seconds = timeoutSeconds > 0 ? min(timeoutSeconds, Self.maxRunTimeoutSeconds) : Self.defaultRunTimeoutSeconds
-            let result = await runner.run(command, timeout: .seconds(seconds))
-            return .runResult(
-                id: id, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr,
-                truncated: result.truncated, timedOut: result.timedOut)
+            let runner = runner
+            return await track(RequestKey(connection: connection, id: id)) {
+                let result = await runner.run(command, timeout: .seconds(seconds))
+                return .runResult(
+                    id: id, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr,
+                    truncated: result.truncated, timedOut: result.timedOut)
+            }
         case .helloReply, .response, .runResult:
             Self.log.error("ignoring a guest-to-host message sent to the guest")
             return nil
         }
     }
 
-    private func perform(id: UInt64, sessionID: String, request: Data) async -> AlasCLIResponse {
-        let command: ComputerUseCommand
-        do {
-            command = try Self.decode(request)
-        } catch {
-            return .error("computer_malformed: The VM guest helper couldn't read the request.")
+    /// The host went away: nobody waits for the connection's answers, and its sessions would keep
+    /// the driver lock and their refs until a session that no longer exists ended them.
+    public func connectionClosed(_ connection: UInt64) {
+        closedConnections.insert(connection)
+        for (key, task) in inFlight where key.connection == connection { task.cancel() }
+        for sessionID in sessions.removeValue(forKey: connection) ?? [] {
+            coordinator.turnEnded(sessionID: sessionID)
+            coordinator.sessionEnded(sessionID: sessionID)
         }
-        let coordinator = coordinator
-        let task = Task { await coordinator.perform(command, sessionID: sessionID) }
-        inFlight[id] = task
-        let response = await task.value
-        if inFlight[id] == task { inFlight[id] = nil }
-        return response
+    }
+
+    private func track(
+        _ key: RequestKey, _ work: @escaping @MainActor () async -> VMGuestMessage
+    ) async -> VMGuestMessage {
+        let task = Task { await work() }
+        inFlight[key] = task
+        let reply = await task.value
+        if inFlight[key] == task { inFlight[key] = nil }
+        return reply
+    }
+
+    /// The guest's own grants, named for where they are given: the readiness text points at the
+    /// host's Alas Settings, which can't grant anything inside the VM.
+    static func missingGrantsError(_ grants: (accessibility: Bool, screenRecording: Bool)) -> String? {
+        var missing: [ComputerUsePermission] = []
+        if !grants.accessibility { missing.append(.accessibility) }
+        if !grants.screenRecording { missing.append(.screenRecording) }
+        guard !missing.isEmpty else { return nil }
+        let names = missing.map(\.displayName).joined(separator: " and ")
+        let pronoun = missing.count == 1 ? "it" : "them"
+        return "computer_permissions: Alas VM Guest is missing \(names) in this VM. "
+            + "Ask the user to grant \(pronoun) in the VM's System Settings › Privacy & Security."
     }
 
     /// `request` is `ComputerUseCommand.requestJSON()`: `{"command":"computer_<action>","params":{…}}`.
@@ -158,13 +208,17 @@ public struct VMGuestShellRunner: VMGuestCommandRunning {
     public static let outputLimit = 256 * 1024
 
     public var shell = "/bin/zsh"
-    /// Between the SIGTERM and the SIGKILL of a timed-out command's process group.
+    /// Between the SIGTERM and the SIGKILL of a timed-out or cancelled command's process group.
     public var killGrace: Duration = .seconds(2)
+    /// After the SIGKILL, how long to keep waiting for the output to close. A process that left the
+    /// group can hold it open indefinitely; the result then carries what arrived so far.
+    public var closeGrace: Duration = .milliseconds(500)
 
     public init() {}
 
     /// Returns once the shell has exited and both streams are closed, so a background child that
-    /// keeps them open runs into the timeout like the shell would.
+    /// keeps them open runs into the timeout like the shell would. A cancellation ends the
+    /// command's process group the way a timeout does.
     public func run(_ command: String, timeout: Duration) async -> VMGuestRunResult {
         var outPipe: [Int32] = [-1, -1]
         var errPipe: [Int32] = [-1, -1]
@@ -187,9 +241,9 @@ public struct VMGuestShellRunner: VMGuestCommandRunning {
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
         // Its own process group, so a timeout reaches the whole pipeline; no inherited descriptors
-        // beyond the three above, so a command never holds the host connection open.
-        // Default signal handling and an empty mask: the helper ignores SIGPIPE, and a pipeline
-        // like `yes | head` relies on it.
+        // beyond the three above, so a command never holds the host connection open. Default
+        // signal handling and an empty mask: the helper ignores SIGPIPE, and a pipeline like
+        // `yes | head` relies on it.
         posix_spawnattr_setflags(
             &attributes,
             Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_SETSIGMASK))
@@ -219,34 +273,50 @@ public struct VMGuestShellRunner: VMGuestCommandRunning {
             return Self.failure(spawned)
         }
 
-        let child = pid
-        let killGrace = killGrace
-        let killer = Task<Bool, Never> {
-            do { try await Task.sleep(for: timeout) } catch { return false }
-            killpg(child, SIGTERM)
-            do { try await Task.sleep(for: killGrace) } catch { return true }
-            killpg(child, SIGKILL)
-            return true
-        }
+        let group = ProcessGroup(leader: pid)
         let stdout = OutputTail(limit: Self.outputLimit)
         let stderr = OutputTail(limit: Self.outputLimit)
+        let finished = Latch()
         let outRead = outPipe[0]
         let errRead = errPipe[0]
-        async let outDone: Void = Self.drain(outRead, into: stdout)
-        async let errDone: Void = Self.drain(errRead, into: stderr)
-        let status = await Self.waitForExit(child)
-        _ = await (outDone, errDone)
-        killer.cancel()
-        let timedOut = await killer.value
+        Task {
+            async let outDone: Void = Self.drain(outRead, into: stdout)
+            async let errDone: Void = Self.drain(errRead, into: stderr)
+            await group.waitForLeaderExit()
+            _ = await (outDone, errDone)
+            finished.open()
+        }
+        let stopGroup = { [killGrace, closeGrace] (deadline: Bool) in
+            Task {
+                if deadline {
+                    do { try await Task.sleep(for: timeout) } catch { return }
+                    group.markTimedOut()
+                }
+                group.signal(SIGTERM)
+                try? await Task.sleep(for: killGrace)
+                group.signal(SIGKILL)
+                try? await Task.sleep(for: closeGrace)
+                // Whatever still holds the output left the group; stop waiting for it.
+                finished.open()
+            }
+        }
+        let deadline = stopGroup(true)
+        await withTaskCancellationHandler {
+            await finished.wait()
+        } onCancel: {
+            _ = stopGroup(false)
+        }
+        deadline.cancel()
 
+        let status = group.reap()
         // A wait status: the low 7 bits are the terminating signal, 0 for a normal exit.
         let exitCode: Int32? = status & 0x7F == 0 ? (status >> 8) & 0xFF : nil
-        let out = stdout.finish()
-        let err = stderr.finish()
+        let out = stdout.snapshot()
+        let err = stderr.snapshot()
         return VMGuestRunResult(
             exitCode: exitCode, stdout: String(decoding: out.bytes, as: UTF8.self),
             stderr: String(decoding: err.bytes, as: UTF8.self), truncated: out.truncated || err.truncated,
-            timedOut: timedOut)
+            timedOut: group.timedOut)
     }
 
     private static func failure(_ code: Int32) -> VMGuestRunResult {
@@ -275,19 +345,81 @@ public struct VMGuestShellRunner: VMGuestCommandRunning {
             }
         }
     }
+}
 
-    private static func waitForExit(_ pid: pid_t) async -> Int32 {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Int32, Never>) in
+/// A command's process group. The leader is left a zombie until `reap()`, so its pid, which is
+/// the group id, can't be recycled while the group may still be signalled; after `reap()` no
+/// signal is sent.
+private final class ProcessGroup: @unchecked Sendable {
+    private let lock = NSLock()
+    private let leader: pid_t
+    private var reaped = false
+    private var didTimeOut = false
+
+    init(leader: pid_t) { self.leader = leader }
+
+    var timedOut: Bool { lock.withLock { didTimeOut } }
+
+    func markTimedOut() { lock.withLock { didTimeOut = true } }
+
+    func signal(_ signal: Int32) {
+        lock.withLock {
+            if !reaped { killpg(leader, signal) }
+        }
+    }
+
+    /// Waits for the leader to exit without reaping it (`WNOWAIT`).
+    func waitForLeaderExit() async {
+        let leader = leader
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             Thread.detachNewThread {
-                var status: Int32 = 0
-                while waitpid(pid, &status, 0) < 0, errno == EINTR {}
-                continuation.resume(returning: status)
+                var info = siginfo_t()
+                while waitid(P_PID, id_t(leader), &info, WEXITED | WNOWAIT) < 0, errno == EINTR {}
+                continuation.resume()
             }
+        }
+    }
+
+    /// Reaps the leader and returns its wait status; the group is not signalled after this.
+    func reap() -> Int32 {
+        lock.withLock {
+            reaped = true
+            var status: Int32 = 0
+            while waitpid(leader, &status, 0) < 0, errno == EINTR {}
+            return status
         }
     }
 }
 
-/// The last `limit` bytes appended to it.
+/// Opens once; `wait()` returns as soon as it is open.
+private final class Latch: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        let resumed: [CheckedContinuation<Void, Never>] = lock.withLock {
+            guard !isOpen else { return [] }
+            isOpen = true
+            defer { waiters = [] }
+            return waiters
+        }
+        for waiter in resumed { waiter.resume() }
+    }
+
+    func wait() async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let ready = lock.withLock {
+                if !isOpen { waiters.append(continuation) }
+                return isOpen
+            }
+            if ready { continuation.resume() }
+        }
+    }
+}
+
+/// The last `limit` bytes appended to it. Appends may continue after a snapshot, from a reader
+/// still draining a stream a detached process holds open.
 private final class OutputTail: @unchecked Sendable {
     private let lock = NSLock()
     private let limit: Int
@@ -304,7 +436,7 @@ private final class OutputTail: @unchecked Sendable {
         }
     }
 
-    func finish() -> (bytes: [UInt8], truncated: Bool) {
+    func snapshot() -> (bytes: [UInt8], truncated: Bool) {
         lock.withLock {
             if bytes.count > limit { trim() }
             return (bytes, dropped)

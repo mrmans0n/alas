@@ -6,6 +6,7 @@ struct VMGuestProtocolTests {
     private let messages: [VMGuestMessage] = [
         .command(id: 1, sessionID: "s", request: Data(#"{"command":"computer_apps"}"#.utf8)),
         .runResult(id: 2, exitCode: nil, stdout: "out", stderr: "", truncated: false, timedOut: true),
+        .helloReply(guestVersion: "1.0", protocolRevision: VMGuestProtocol.revision, accessibility: true, screenRecording: false),
     ]
 
     @Test(arguments: [1, 3, 10_000])
@@ -30,5 +31,11 @@ struct VMGuestProtocolTests {
         let output = framer.append(stream)
         #expect(output.messages == [.cancel(id: 1), .cancel(id: 2)])
         #expect(output.malformedFrames == 1)
+    }
+
+    @Test func helloReplyFromBeforeRevisionsDecodesAsRevisionZero() throws {
+        let json = Data(#"{"type":"helloReply","guestVersion":"1.0","accessibility":true,"screenRecording":true}"#.utf8)
+        let message = try JSONDecoder().decode(VMGuestMessage.self, from: json)
+        #expect(message == .helloReply(guestVersion: "1.0", protocolRevision: 0, accessibility: true, screenRecording: true))
     }
 }

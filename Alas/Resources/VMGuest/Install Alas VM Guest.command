@@ -47,7 +47,19 @@ cat > "$agent_plist" <<PLIST
 PLIST
 
 echo "==> Starting the helper"
-launchctl bootstrap "$domain" "$agent_plist"
+# A bootout finishes asynchronously, so the first bootstrap can fail while the old copy exits.
+for attempt in 1 2 3 4 5; do
+  if launchctl bootstrap "$domain" "$agent_plist"; then
+    break
+  fi
+  if [[ $attempt == 5 ]]; then
+    echo "error: launchctl couldn't start $label" >&2
+    exit 1
+  fi
+  sleep 1
+done
 
-echo "==> Grant Accessibility and Screen Recording to Alas VM Guest"
+echo "==> Turn on Alas VM Guest under Screen Recording and Accessibility"
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+sleep 1
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"

@@ -11,7 +11,13 @@ import os
 signal(SIGPIPE, SIG_IGN)
 
 MainActor.assumeIsolated {
-    ComputerUsePlatform.shared = ComputerUseSystemPermissions.make()
+    let platform = ComputerUseSystemPermissions.make()
+    ComputerUsePlatform.shared = platform
+    // Asking once is what lists the helper under both Accessibility and Screen Recording, so the
+    // user only has to turn it on.
+    for permission in ComputerUsePermission.allCases where !platform.isGranted(permission) {
+        platform.request(permission)
+    }
     let app = NSApplication.shared
     app.setActivationPolicy(.accessory)
     let listener = VMGuestListener(service: VMGuestService.makeLive())

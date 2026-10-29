@@ -5,6 +5,12 @@ public enum VMGuestPort {
     public static let computerUse: UInt32 = 7041
 }
 
+/// The wire protocol's revision. The guest reports it in `helloReply`; the host treats a helper
+/// with a lower one as out of date. Bump it on any change the other side has to know about.
+public enum VMGuestProtocol {
+    public static let revision = 1
+}
+
 public enum VMGuestLifecycleEvent: String, Codable, Sendable { case stop, resume, turnEnded, sessionEnded }
 
 /// One message on the host/guest vsock stream. Encoded as `{"type":"<case>", …fields}`; `Data` fields
@@ -18,7 +24,8 @@ public enum VMGuestMessage: Codable, Equatable, Sendable {
     case lifecycle(sessionID: String, event: VMGuestLifecycleEvent)
     case run(id: UInt64, command: String, timeoutSeconds: Int)
     // Guest to host.
-    case helloReply(guestVersion: String, accessibility: Bool, screenRecording: Bool)
+    /// `protocolRevision` is `VMGuestProtocol.revision`; a helper from before it existed decodes as 0.
+    case helloReply(guestVersion: String, protocolRevision: Int, accessibility: Bool, screenRecording: Bool)
     /// `body` is an `AlasCLIResponse` encoding.
     case response(id: UInt64, body: Data)
     case runResult(id: UInt64, exitCode: Int32?, stdout: String, stderr: String, truncated: Bool, timedOut: Bool)
@@ -28,7 +35,7 @@ public enum VMGuestMessage: Codable, Equatable, Sendable {
     }
 
     private enum Key: String, CodingKey {
-        case type, hostVersion, guestVersion, id, sessionID, request, event, command, timeoutSeconds
+        case type, hostVersion, guestVersion, protocolRevision, id, sessionID, request, event, command, timeoutSeconds
         case accessibility, screenRecording, body, exitCode, stdout, stderr, truncated, timedOut
     }
 
@@ -57,6 +64,7 @@ public enum VMGuestMessage: Codable, Equatable, Sendable {
         case .helloReply:
             self = .helloReply(
                 guestVersion: try c.decode(String.self, forKey: .guestVersion),
+                protocolRevision: try c.decodeIfPresent(Int.self, forKey: .protocolRevision) ?? 0,
                 accessibility: try c.decode(Bool.self, forKey: .accessibility),
                 screenRecording: try c.decode(Bool.self, forKey: .screenRecording)
             )
@@ -94,9 +102,10 @@ public enum VMGuestMessage: Codable, Equatable, Sendable {
             try c.encode(id, forKey: .id)
             try c.encode(command, forKey: .command)
             try c.encode(timeoutSeconds, forKey: .timeoutSeconds)
-        case let .helloReply(guestVersion, accessibility, screenRecording):
+        case let .helloReply(guestVersion, protocolRevision, accessibility, screenRecording):
             try c.encode(Kind.helloReply, forKey: .type)
             try c.encode(guestVersion, forKey: .guestVersion)
+            try c.encode(protocolRevision, forKey: .protocolRevision)
             try c.encode(accessibility, forKey: .accessibility)
             try c.encode(screenRecording, forKey: .screenRecording)
         case let .response(id, body):

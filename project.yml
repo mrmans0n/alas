@@ -285,6 +285,8 @@ targets:
         PRODUCT_NAME: "Alas VM Guest"
         PRODUCT_BUNDLE_IDENTIFIER: io.nlopez.vmguest
         ENABLE_HARDENED_RUNTIME: YES
+        # One self-contained binary to copy into a VM, in Debug too.
+        ENABLE_DEBUG_DYLIB: NO
         SKIP_INSTALL: YES
 
   AlasTests:
