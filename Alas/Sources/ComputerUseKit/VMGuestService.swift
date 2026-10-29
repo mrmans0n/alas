@@ -288,7 +288,7 @@ public struct VMGuestShellRunner: VMGuestCommandRunning {
             _ = await (outDone, errDone)
             finished.open()
         }
-        let stopGroup = { [killGrace, closeGrace] (deadline: Bool) in
+        let stopGroup: @Sendable (Bool) -> Task<Void, Never> = { [killGrace, closeGrace] deadline in
             Task {
                 if deadline {
                     do { try await Task.sleep(for: timeout) } catch { return }
