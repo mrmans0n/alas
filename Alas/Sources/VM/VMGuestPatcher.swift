@@ -192,8 +192,13 @@ enum VMGuestPatcher {
             to: screensaver
         )
         let byHost = preferences.appendingPathComponent("ByHost")
-        let hostUUIDs = byHostUUIDs(in: byHost)
-        for uuid in hostUUIDs {
+        // A fresh guest has no user ByHost files yet; the system's per-host
+        // PowerManagement plists name the same host UUID.
+        let hosts = Set(
+            hostUUIDs(in: byHost)
+                + hostUUIDs(in: volume.url("Library/Preferences"), prefix: "com.apple.PowerManagement.")
+        ).sorted()
+        for uuid in hosts {
             try volume.writePlist(
                 VMGuestProvisioning.byHostScreensaverPreferences,
                 to: byHost.appendingPathComponent("com.apple.screensaver.\(uuid).plist")
@@ -209,7 +214,7 @@ enum VMGuestPatcher {
             VMGuestProvisioning.powerManagementPreferences,
             to: volume.url("Library/Preferences/com.apple.PowerManagement.plist")
         )
-        for uuid in hostUUIDs {
+        for uuid in hosts {
             try volume.writePlist(
                 VMGuestProvisioning.perHostPowerManagementPreferences,
                 to: volume.url("Library/Preferences/com.apple.PowerManagement.\(uuid).plist")
@@ -217,12 +222,13 @@ enum VMGuestPatcher {
         }
     }
 
-    /// The host UUIDs named by `ByHost/<domain>.<uuid>.plist` files.
-    private static func byHostUUIDs(in directory: URL) -> [String] {
+    /// The host UUIDs named by `<prefix><domain>.<uuid>.plist` files in `directory`.
+    private static func hostUUIDs(in directory: URL, prefix: String = "") -> [String] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
         let pattern = /([0-9A-Fa-f]{8}-(?:[0-9A-Fa-f]{4}-){3}[0-9A-Fa-f]{12})\.plist$/
-        return Set(names.compactMap { name in (try? pattern.firstMatch(in: name)).map { String($0.1).uppercased() } })
-            .sorted()
+        return names.filter { $0.hasPrefix(prefix) }.compactMap { name in
+            (try? pattern.firstMatch(in: name)).map { String($0.1).uppercased() }
+        }
     }
 
     // MARK: - TCC

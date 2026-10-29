@@ -30,6 +30,11 @@ final class VMDiskSession: @unchecked Sendable {
 
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "vm-disk-session")
     private static let ownerFileName = "owner.plist"
+    private static let attachTimeout: TimeInterval = 120
+    private static let detachTimeout: TimeInterval = 60
+    /// Session directory names this process has open, so the launch sweep
+    /// never takes one of its own live sessions for a crashed one.
+    private static let liveSessions = OSAllocatedUnfairLock(initialState: Set<String>())
 
     private init(dataVolume: URL, systemVolume: URL?, wholeDisk: String, sessionDirectory: URL) {
         self.dataVolume = dataVolume
@@ -42,23 +47,31 @@ final class VMDiskSession: @unchecked Sendable {
 
     static func open(diskImage: URL, root: URL = Paths.vmsRoot) throws -> VMDiskSession {
         let fm = FileManager.default
-        let session = root.appendingPathComponent("mnt/\(UUID().uuidString)", isDirectory: true)
+        let name = UUID().uuidString
+        liveSessions.withLock { _ = $0.insert(name) }
+        let session = root.appendingPathComponent("mnt/\(name)", isDirectory: true)
         let dataMount = session.appendingPathComponent("data", isDirectory: true)
         let systemMount = session.appendingPathComponent("system", isDirectory: true)
-        try fm.createDirectory(at: dataMount, withIntermediateDirectories: true)
-        try fm.createDirectory(at: systemMount, withIntermediateDirectories: true)
-        let owner: [String: Any] = ["pid": Int(getpid()), "image": diskImage.resolvingSymlinksInPath().path]
-        try PropertyListSerialization.data(fromPropertyList: owner, format: .xml, options: 0)
-            .write(to: session.appendingPathComponent(ownerFileName))
+        let imagePath = diskImage.resolvingSymlinksInPath().path
 
         let attached: [String: Any]
         do {
-            attached = try runPlist("/usr/bin/hdiutil", ["attach", "-readwrite", "-nomount", "-plist", diskImage.path])
+            // The owner file comes first: a sweep that sees the directory can always tell who owns it.
+            try fm.createDirectory(at: session, withIntermediateDirectories: true)
+            let owner: [String: Any] = ["pid": Int(getpid()), "image": imagePath]
+            try PropertyListSerialization.data(fromPropertyList: owner, format: .xml, options: 0)
+                .write(to: session.appendingPathComponent(ownerFileName))
+            try fm.createDirectory(at: dataMount, withIntermediateDirectories: false)
+            try fm.createDirectory(at: systemMount, withIntermediateDirectories: false)
+            attached = try runPlist(
+                "/usr/bin/hdiutil", ["attach", "-readwrite", "-nomount", "-plist", diskImage.path], timeout: attachTimeout
+            )
         } catch {
             removeSessionDirectory(session)
             throw error
         }
         guard let wholeDisk = Self.wholeDisk(inEntities: attached["system-entities"]) else {
+            detachImage(at: imagePath)
             removeSessionDirectory(session)
             throw Failure(message: "hdiutil attached \(diskImage.lastPathComponent) but reported no whole disk")
         }
@@ -70,10 +83,25 @@ final class VMDiskSession: @unchecked Sendable {
             guard let data = volumes.data else {
                 throw Failure(message: "No APFS Data volume in \(container) of \(diskImage.lastPathComponent)")
             }
-            try run("/usr/sbin/diskutil", ["mount", "-mountPoint", dataMount.path, data])
+            // nobrowse keeps Spotlight and Finder out of the guest; noowners
+            // lets the host write files the guest sees as its own.
+            try run(
+                "/usr/sbin/diskutil",
+                ["mount", "-mountOptions", "nobrowse,noowners", "-mountPoint", dataMount.path, data],
+                timeout: attachTimeout
+            )
+            let info = try runPlist("/usr/sbin/diskutil", ["info", "-plist", data])
+            guard ownershipDisabled(inInfo: info) else {
+                unmount(dataMount)
+                throw Failure(message: "The guest's Data volume mounted with ownership enabled")
+            }
             if let system = volumes.system {
                 do {
-                    try run("/usr/sbin/diskutil", ["mount", "readOnly", "-mountPoint", systemMount.path, system])
+                    try run(
+                        "/usr/sbin/diskutil",
+                        ["mount", "readOnly", "-mountOptions", "nobrowse", "-mountPoint", systemMount.path, system],
+                        timeout: attachTimeout
+                    )
                     systemMounted = true
                 } catch {
                     logger.error("system volume mount failed: \(error.localizedDescription, privacy: .public)")
@@ -133,7 +161,9 @@ final class VMDiskSession: @unchecked Sendable {
             let owner = (try? Data(contentsOf: session.appendingPathComponent(ownerFileName)))
                 .flatMap { try? PropertyListSerialization.propertyList(from: $0, options: [], format: nil) }
                 as? [String: Any]
-            if let pid = owner?["pid"] as? Int, pid != Int(getpid()), processIsAlive(pid_t(pid)) {
+            let ownSession = liveSessions.withLock { $0.contains(session.lastPathComponent) }
+            let ownerPID = owner?["pid"] as? Int
+            if ownSession || (ownerPID.map { $0 != Int(getpid()) && processIsAlive(pid_t($0)) } ?? false) {
                 if let image = owner?["image"] as? String { liveImages.insert(image) }
             } else {
                 staleSessions.append(session)
@@ -161,10 +191,22 @@ final class VMDiskSession: @unchecked Sendable {
 
     // MARK: - Parsing
 
-    /// The whole-disk device (`/dev/diskN`) among `hdiutil`'s system entities.
+    /// The whole-disk device (`/dev/diskN`) among `hdiutil`'s system entities:
+    /// the one holding the GUID partition scheme, else the lowest-numbered
+    /// whole disk.
     static func wholeDisk(inEntities entities: Any?) -> String? {
-        let devices = (entities as? [[String: Any]] ?? []).compactMap { $0["dev-entry"] as? String }
-        return devices.first { $0.wholeMatch(of: /\/dev\/disk\d+/) != nil }
+        let entities = entities as? [[String: Any]] ?? []
+        let wholeDisks = entities.compactMap { entity -> (device: String, number: Int, guid: Bool)? in
+            guard let device = entity["dev-entry"] as? String,
+                  let match = device.wholeMatch(of: /\/dev\/disk(\d+)/), let number = Int(match.1) else { return nil }
+            return (device, number, entity["content-hint"] as? String == "GUID_partition_scheme")
+        }
+        return (wholeDisks.first(where: \.guid) ?? wholeDisks.min { $0.number < $1.number })?.device
+    }
+
+    /// Whether `diskutil info -plist` reports the volume mounted with ownership off.
+    static func ownershipDisabled(inInfo info: [String: Any]) -> Bool {
+        info["GlobalPermissionsEnabled"] as? Bool == false
     }
 
     /// The Data and System volume devices in `diskutil apfs list -plist` output.
@@ -200,11 +242,24 @@ final class VMDiskSession: @unchecked Sendable {
 
     // MARK: - Tools
 
+    /// Detaches an image by path, for an attach whose output named no whole disk.
+    private static func detachImage(at imagePath: String) {
+        guard let info = try? runPlist("/usr/bin/hdiutil", ["info", "-plist"]) else { return }
+        for image in info["images"] as? [[String: Any]] ?? [] {
+            guard let path = image["image-path"] as? String,
+                  URL(fileURLWithPath: path).resolvingSymlinksInPath().path == imagePath else { continue }
+            let devices = (image["system-entities"] as? [[String: Any]] ?? []).compactMap { $0["dev-entry"] as? String }
+            if let device = wholeDisk(inEntities: image["system-entities"]) ?? devices.min() {
+                detach(device)
+            }
+        }
+    }
+
     private static func unmount(_ mountPoint: URL) {
         do {
-            try run("/usr/sbin/diskutil", ["unmount", mountPoint.path])
+            try run("/usr/sbin/diskutil", ["unmount", mountPoint.path], timeout: detachTimeout)
         } catch {
-            _ = try? run("/usr/sbin/diskutil", ["unmount", "force", mountPoint.path])
+            _ = try? run("/usr/sbin/diskutil", ["unmount", "force", mountPoint.path], timeout: detachTimeout)
         }
     }
 
@@ -212,7 +267,7 @@ final class VMDiskSession: @unchecked Sendable {
     private static func detach(_ device: String) {
         for attempt in 0 ..< 3 {
             do {
-                try run("/usr/bin/hdiutil", ["detach", device])
+                try run("/usr/bin/hdiutil", ["detach", device], timeout: detachTimeout)
                 return
             } catch {
                 logger.notice("detach \(device, privacy: .public) attempt \(attempt) failed: \(error.localizedDescription, privacy: .public)")
@@ -220,7 +275,7 @@ final class VMDiskSession: @unchecked Sendable {
             }
         }
         do {
-            try run("/usr/bin/hdiutil", ["detach", "-force", device])
+            try run("/usr/bin/hdiutil", ["detach", "-force", device], timeout: detachTimeout)
         } catch {
             logger.error("forced detach of \(device, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
         }
@@ -229,6 +284,7 @@ final class VMDiskSession: @unchecked Sendable {
     /// Removes a session directory without ever recursing into a mounted
     /// volume: only empty mount points and the owner file are deleted.
     private static func removeSessionDirectory(_ session: URL) {
+        defer { liveSessions.withLock { _ = $0.remove(session.lastPathComponent) } }
         for volume in ["data", "system"] { rmdir(session.appendingPathComponent(volume).path) }
         unlink(session.appendingPathComponent(ownerFileName).path)
         rmdir(session.path)
@@ -245,8 +301,10 @@ final class VMDiskSession: @unchecked Sendable {
         kill(pid, 0) == 0 || errno == EPERM
     }
 
-    private static func runPlist(_ tool: String, _ arguments: [String]) throws -> [String: Any] {
-        let output = try run(tool, arguments)
+    private static func runPlist(
+        _ tool: String, _ arguments: [String], timeout: TimeInterval = detachTimeout
+    ) throws -> [String: Any] {
+        let output = try run(tool, arguments, timeout: timeout)
         guard let plist = try PropertyListSerialization.propertyList(from: output, options: [], format: nil)
             as? [String: Any] else {
             throw Failure(message: "\(tool) \(arguments.joined(separator: " ")) did not return a property list")
@@ -254,9 +312,10 @@ final class VMDiskSession: @unchecked Sendable {
         return plist
     }
 
-    /// Runs a tool to completion and returns its stdout; throws with its stderr on failure.
+    /// Runs a tool to completion and returns its stdout; throws with its
+    /// stderr on failure, or after terminating it when it outlives `timeout`.
     @discardableResult
-    private static func run(_ tool: String, _ arguments: [String]) throws -> Data {
+    private static func run(_ tool: String, _ arguments: [String], timeout: TimeInterval = detachTimeout) throws -> Data {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: tool)
         process.arguments = arguments
@@ -265,28 +324,35 @@ final class VMDiskSession: @unchecked Sendable {
         process.standardOutput = stdout
         process.standardError = stderr
         process.standardInput = FileHandle.nullDevice
+        let exited = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in exited.signal() }
         try process.run()
 
-        // Drain stderr concurrently so a chatty tool can't fill its pipe and wedge.
-        let errorOutput = ErrorOutput()
-        let drained = DispatchSemaphore(value: 0)
-        DispatchQueue.global(qos: .utility).async {
-            errorOutput.data = stderr.fileHandleForReading.readDataToEndOfFile()
-            drained.signal()
+        // Drain both pipes concurrently so a chatty tool can't fill one and wedge.
+        let output = Output()
+        let drained = DispatchGroup()
+        for (pipe, keyPath) in [(stdout, \Output.stdout), (stderr, \Output.stderr)] {
+            DispatchQueue.global(qos: .utility).async(group: drained) {
+                output[keyPath: keyPath] = pipe.fileHandleForReading.readDataToEndOfFile()
+            }
         }
-        let output = stdout.fileHandleForReading.readDataToEndOfFile()
-        drained.wait()
-        process.waitUntilExit()
+        let command = "\((tool as NSString).lastPathComponent) \(arguments.joined(separator: " "))"
+        guard exited.wait(timeout: .now() + timeout) == .success else {
+            process.terminate()
+            if exited.wait(timeout: .now() + 5) == .timedOut { kill(process.processIdentifier, SIGKILL) }
+            throw Failure(message: "\(command) timed out after \(Int(timeout)) s")
+        }
+        _ = drained.wait(timeout: .now() + 5)
 
         guard process.terminationStatus == 0 else {
-            let message = String(decoding: errorOutput.data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-            throw Failure(message: "\((tool as NSString).lastPathComponent) \(arguments.joined(separator: " ")) failed "
-                + "(\(process.terminationStatus)): \(message)")
+            let message = String(decoding: output.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            throw Failure(message: "\(command) failed (\(process.terminationStatus)): \(message)")
         }
-        return output
+        return output.stdout
     }
 
-    private final class ErrorOutput: @unchecked Sendable {
-        var data = Data()
+    private final class Output: @unchecked Sendable {
+        var stdout = Data()
+        var stderr = Data()
     }
 }

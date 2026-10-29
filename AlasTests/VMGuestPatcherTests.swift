@@ -9,6 +9,7 @@ import Testing
 struct VMGuestPatcherTests {
     private static let csreq = Data([0xFA, 0xDE, 0x0C, 0x00, 0x00, 0x00, 0x00, 0x14, 0x01, 0x02, 0x03])
     private static let systemVersion = (product: "27.2", build: "26B123")
+    private static let hostUUID = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9"
 
     @Test func patchWritesEveryArtefactAndTwoGrants() throws {
         let volume = try Self.makeDataVolume()
@@ -74,6 +75,9 @@ struct VMGuestPatcherTests {
         #expect(FileManager.default.fileExists(
             atPath: volume.appendingPathComponent("Library/Preferences/com.apple.PowerManagement.plist").path
         ))
+        // The host UUID comes from the system's per-host power plist on a fresh guest.
+        #expect(try Self.plist(volume, "Users/alas/Library/Preferences/ByHost/com.apple.screensaver.\(Self.hostUUID).plist")["idleTime"] as? Int == 0)
+        #expect(try Self.plist(volume, "Library/Preferences/com.apple.PowerManagement.\(Self.hostUUID).plist")["AC Power"] != nil)
 
         let rows = try Self.tccRows(volume)
         #expect(rows.map(\.service) == ["kTCCServiceAccessibility", "kTCCServiceScreenCapture"])
@@ -124,6 +128,20 @@ struct VMGuestPatcherTests {
         #expect(SecStaticCodeCheckValidity(staticCode, [], try #require(requirement)) == errSecSuccess)
     }
 
+    @Test(
+        "the whole disk is the GUID-scheme entity, else the lowest-numbered disk",
+        arguments: [
+            ([("/dev/disk9", "Apple_APFS_Recovery"), ("/dev/disk10", "GUID_partition_scheme"), ("/dev/disk10s2", "Apple_APFS")],
+             "/dev/disk10"),
+            ([("/dev/disk11", "Apple_APFS"), ("/dev/disk9s1", "Apple_APFS_ISC"), ("/dev/disk10", "")], "/dev/disk10"),
+            ([("/dev/disk4s1", "Apple_APFS_ISC"), ("/dev/disk4s2", "Apple_APFS")], nil),
+        ] as [([(String, String)], String?)]
+    )
+    func wholeDiskSelection(entities: [(String, String)], expected: String?) {
+        let plist = entities.map { ["dev-entry": $0.0, "content-hint": $0.1] }
+        #expect(VMDiskSession.wholeDisk(inEntities: plist) == expected)
+    }
+
     // MARK: - Fixture
 
     /// A directory laid out like a freshly booted guest's Data volume.
@@ -148,6 +166,7 @@ struct VMGuestPatcherTests {
             ["com.example.kept": true],
             to: volume.appendingPathComponent("private/var/db/com.apple.xpc.launchd/disabled.plist")
         )
+        try writePlist([:], to: volume.appendingPathComponent("Library/Preferences/com.apple.PowerManagement.\(hostUUID).plist"))
         try fm.createDirectory(at: volume.appendingPathComponent("private/etc"), withIntermediateDirectories: true)
 
         let tcc = volume.appendingPathComponent("Library/Application Support/com.apple.TCC")
