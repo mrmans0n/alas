@@ -32,7 +32,7 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         while flock(fd, LOCK_EX) != 0 {
             guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         }
-        let (known, foreign) = try read()
+        let (known, foreign) = try load()
         var records = known
         for index in records.indices {
             if let owner = records[index].runOwner, !isAlive(owner) { records[index].runOwner = nil }
@@ -46,11 +46,22 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         try update { $0 }
     }
 
+    /// The records without taking the lock or writing: writes are atomic renames, so a reader
+    /// sees one whole file. Dead owners read as nil but stay in the file; an unparseable file
+    /// throws instead of being quarantined.
+    public func read() throws -> [WorktreeVMRecord] {
+        try load(quarantining: false).0.map { record in
+            var record = record
+            if let owner = record.runOwner, !isAlive(owner) { record.runOwner = nil }
+            return record
+        }
+    }
+
     /// Records this build decodes, plus raw JSON of those it cannot (for
     /// example a newer build's guest OS), which are preserved verbatim.
     /// Foreign records are not visible to `update` bodies or slot accounting.
-    /// An unparseable file is quarantined as `registry.json.corrupt`.
-    private func read() throws -> ([WorktreeVMRecord], [Any]) {
+    /// An unparseable file is quarantined as `registry.json.corrupt`, or throws when not quarantining.
+    private func load(quarantining: Bool = true) throws -> ([WorktreeVMRecord], [Any]) {
         let data: Data
         do {
             data = try Data(contentsOf: fileURL)
@@ -58,7 +69,9 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
             return ([], [])
         }
         guard let elements = (try? JSONSerialization.jsonObject(with: data)) as? [Any] else {
-            if !data.isEmpty { try quarantine() }
+            guard !data.isEmpty else { return ([], []) }
+            guard quarantining else { throw CocoaError(.fileReadCorruptFile) }
+            try quarantine()
             return ([], [])
         }
         var known: [WorktreeVMRecord] = []

@@ -158,9 +158,11 @@ final class WorktreeVMManager {
 
     // MARK: - Queries
 
-    func hasVM(_ worktreeID: String) -> Bool {
+    /// Whether the worktree has a VM, read without locking or writing the registry, so it is
+    /// cheap enough for every computer use call; nil when the registry can't be read.
+    func hasVMRecord(_ worktreeID: String) -> Bool? {
         guard vmsExist else { return false }
-        return (try? registry.snapshot().contains { $0.id == worktreeID }) ?? false
+        return (try? registry.read()).map { $0.contains { $0.id == worktreeID } }
     }
 
     /// False until the first VM is installed, so queries and worktree
@@ -169,6 +171,11 @@ final class WorktreeVMManager {
 
     func running(_ worktreeID: String) -> RunningVM? {
         runningVMs[worktreeID]
+    }
+
+    /// The guest client already made for a VM this process runs, without creating one.
+    func existingGuestClient(for worktreeID: String) -> VMGuestClient? {
+        runningVMs[worktreeID] == nil ? nil : guestClients[worktreeID]
     }
 
     /// The client for the guest helper of a VM this process runs; nil when it does not run here.

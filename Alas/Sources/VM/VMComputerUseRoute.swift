@@ -7,11 +7,19 @@ enum VMComputerUseRoute: Equatable {
     case guest(worktreeID: String)
     /// The worktree has a VM, but this process doesn't run it.
     case vmNotRunning(worktreeID: String)
+    /// Whether the worktree has a VM couldn't be read; never the desktop, which it may not mean.
+    case vmStateUnreadable(worktreeID: String)
 
     static let vmNotRunningMessage = "computer_vm_stopped: This worktree's VM isn't running. Start it from its VM tab."
+    static let vmStateUnreadableMessage = "computer_vm_stopped: Couldn't read this worktree's VM state. Try again."
 
-    static func resolve(worktreeID: String?, hasVM: Bool, runningHere: Bool) -> VMComputerUseRoute {
-        guard let worktreeID, hasVM else { return .desktop }
-        return runningHere ? .guest(worktreeID: worktreeID) : .vmNotRunning(worktreeID: worktreeID)
+    /// `hasVM` is nil when the VM registry couldn't be read.
+    static func resolve(worktreeID: String?, hasVM: Bool?, runningHere: Bool) -> VMComputerUseRoute {
+        guard let worktreeID else { return .desktop }
+        switch hasVM {
+        case nil: return .vmStateUnreadable(worktreeID: worktreeID)
+        case false?: return .desktop
+        case true?: return runningHere ? .guest(worktreeID: worktreeID) : .vmNotRunning(worktreeID: worktreeID)
+        }
     }
 }

@@ -328,11 +328,15 @@ final class AppState {
     let acpModelCatalog: ACPAgentModelCatalog
     /// Worktree VMs (and the golden VM during its setup) this process runs.
     @ObservationIgnored let vmManager = WorktreeVMManager()
-    /// Sessions whose computer use runs in their worktree's VM and that made a call this turn;
-    /// the badge shows for them as it does for the host driver.
-    var vmComputerUseSessions: [String: String] = [:]
+    /// Sessions that made a computer use call in their worktree's VM, by worktree id, until the
+    /// session ends; turn and session ends are forwarded to the guest only for them.
+    @ObservationIgnored var vmComputerUseSessions: [String: String] = [:]
+    /// VM sessions that made a call this turn; the badge shows for them as for the host driver.
+    var vmDrivingSessions: Set<String> = []
     /// VM sessions the user stopped from the badge; only a resume clears them.
     var vmStoppedSessions: Set<String> = []
+    /// Resumed VM sessions whose guest hasn't been told yet; told before their next guest call.
+    @ObservationIgnored var vmPendingResumes: Set<String> = []
     /// The one installer; `vmManager` seals its golden image so no Alas
     /// process can boot it meanwhile.
     @ObservationIgnored private(set) lazy var goldenImageInstaller = GoldenImageInstaller(

@@ -5,7 +5,7 @@ struct VMComputerUseRouteTests {
     struct Case: CustomTestStringConvertible, Sendable {
         let name: String
         let worktreeID: String?
-        let hasVM: Bool
+        let hasVM: Bool?
         let runningHere: Bool
         let expected: VMComputerUseRoute
 
@@ -21,6 +21,8 @@ struct VMComputerUseRouteTests {
              expected: .guest(worktreeID: "w")),
         Case(name: "VM not running here", worktreeID: "w", hasVM: true, runningHere: false,
              expected: .vmNotRunning(worktreeID: "w")),
+        Case(name: "unreadable VM state never falls back to the desktop", worktreeID: "w", hasVM: nil,
+             runningHere: false, expected: .vmStateUnreadable(worktreeID: "w")),
     ]
 
     @Test(arguments: cases)

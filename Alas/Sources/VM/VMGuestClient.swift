@@ -145,13 +145,16 @@ actor VMGuestClient {
     }
 
     /// Tells the guest about a session's lifecycle. Sent only over a live connection: when the
-    /// connection dropped, the guest already ended its sessions.
-    func lifecycle(_ event: VMGuestLifecycleEvent, sessionID: String) async {
-        guard let connection, !connection.lost, connection.hello != nil else { return }
+    /// connection dropped, the guest already ended its sessions. Returns whether it was sent.
+    @discardableResult
+    func lifecycle(_ event: VMGuestLifecycleEvent, sessionID: String) async -> Bool {
+        guard let connection, !connection.lost, connection.hello != nil else { return false }
         do {
             try await connection.transport.send(VMGuestFramer.frame(.lifecycle(sessionID: sessionID, event: event)))
+            return true
         } catch {
             Self.log.error("sending \(event.rawValue, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 

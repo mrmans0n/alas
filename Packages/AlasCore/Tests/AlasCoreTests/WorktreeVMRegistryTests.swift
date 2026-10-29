@@ -31,6 +31,25 @@ import Testing
         #expect(records.first { $0.id == "B" }?.runOwner == Self.me)
     }
 
+    @Test func readLeavesTheFileUntouchedAndReportsADeadOwnerAsNil() throws {
+        let (writer, dir) = tempRegistry()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try writer.update { $0 = [Self.record("A", owner: Self.other)] }
+        let url = dir.appendingPathComponent("registry.json")
+        let past = Date(timeIntervalSince1970: 5_000)
+        try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: url.path)
+        let before = try Data(contentsOf: url)
+
+        let reader = WorktreeVMRegistry(fileURL: url, isAlive: { _ in false })
+        let records = try reader.read()
+
+        #expect(records.map(\.id) == ["A"])
+        #expect(records.first?.runOwner == nil)
+        #expect(try Data(contentsOf: url) == before)
+        let modified = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+        #expect(modified == past)
+    }
+
     @Test func currentOwnerIsAliveAndBogusStartTimeIsNot() throws {
         let current = try #require(VMRunOwner.current(label: "Alas"))
         #expect(VMRunOwner.isAlive(current))
