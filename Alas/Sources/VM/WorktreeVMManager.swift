@@ -89,6 +89,12 @@ final class WorktreeVMManager {
     /// voids the evidence that its disk is consistent.
     @ObservationIgnored private var cleanlyShutDown: [String: Int] = [:]
 
+    /// Goldens whose disk this process has attached on the host for the
+    /// unattended setup. Their registry record names this process as owner,
+    /// so other processes see them as running; this set keeps this process
+    /// from taking that for a leftover and booting them.
+    @ObservationIgnored private var diskClaims: Set<String> = []
+
     private enum PendingAction { case stop, delete }
 
     init(
@@ -440,6 +446,34 @@ final class WorktreeVMManager {
         }
     }
 
+    /// Reserves the stopped golden's record for this process while its disk
+    /// is attached on the host: under the registry lock boot admission and
+    /// sealing take, the record gets this process as owner, so no Alas
+    /// process boots or seals it until `releaseGoldenDisk`.
+    func claimGoldenDisk(build: String) throws {
+        let id = Self.goldenIDPrefix + build
+        guard let me = VMRunOwner.current(label: ownerLabel) else {
+            throw VMError(message: "Could not identify this Alas process, so the VM cannot be tracked")
+        }
+        guard !diskClaims.contains(id) else { throw VMError(message: "The golden disk is already open") }
+        try registry.update { records in
+            guard !goldenRunsAnywhere(records) else {
+                throw VMError(message: "The golden VM is running")
+            }
+            guard let index = records.firstIndex(where: { $0.id == id }) else {
+                throw VMError(message: "The golden VM has no record")
+            }
+            records[index].runOwner = me
+        }
+        diskClaims.insert(id)
+    }
+
+    func releaseGoldenDisk(build: String) {
+        let id = Self.goldenIDPrefix + build
+        guard diskClaims.remove(id) != nil else { return }
+        clearOwner(id)
+    }
+
     /// Whether this process runs or boots the golden VM.
     func isGoldenRunning(build: String) -> Bool {
         let id = Self.goldenIDPrefix + build
@@ -515,6 +549,7 @@ final class WorktreeVMManager {
                 throw VMError(message: "macOS was powered off without shutting down. Start it, shut down macOS from the Apple menu, then click Done.")
             }
             try GoldenImageInstaller.writeSealedMarker(bundle)
+            try? FileManager.default.removeItem(at: Self.customizingMarker(of: bundle))
             records.removeAll { $0.id == id }
             // Spent: should the image be customized again, from this process
             // or another, sealing it needs a new clean shutdown.
@@ -550,6 +585,9 @@ final class WorktreeVMManager {
             }
             let build = golden.url.lastPathComponent
             let id = Self.goldenIDPrefix + build
+            // Before unsealing: an unsealed golden without it may be set up
+            // unattended, which would overwrite the user's changes.
+            try Data().write(to: Self.customizingMarker(of: golden))
             try FileManager.default.removeItem(at: golden.sealedMarker)
             // Sealing dropped the record. A recreated one starts above any
             // generation an earlier record reached, so no process's old
@@ -575,6 +613,18 @@ final class WorktreeVMManager {
         #else
         throw VMError(message: unsupportedMessage)
         #endif
+    }
+
+    /// Marks a golden unsealed by Customize: only the manual flow finishes it.
+    nonisolated static func customizingMarker(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent(".customizing")
+    }
+
+    /// Whether the unsealed golden `build` was reopened by Customize rather
+    /// than freshly installed, after a relaunch too.
+    func isGoldenCustomized(build: String) -> Bool {
+        FileManager.default.fileExists(
+            atPath: Self.customizingMarker(of: VMBundle(url: goldenBundleURL(build: build))).path)
     }
 
     private func goldenBundleURL(build: String) -> URL {
@@ -613,6 +663,9 @@ final class WorktreeVMManager {
         if let vm = runningVMs[id] { return .running(vm) }
         guard !starting.contains(id) else {
             throw VMError(message: "This VM is already starting")
+        }
+        guard !diskClaims.contains(id) else {
+            throw VMError(message: "macOS is being set up. Wait for it to finish.")
         }
         guard let me = VMRunOwner.current(label: ownerLabel) else {
             throw VMError(message: "Could not identify this Alas process, so the VM cannot be tracked")

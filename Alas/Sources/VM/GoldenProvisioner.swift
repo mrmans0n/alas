@@ -19,8 +19,8 @@ extension VMDiskSession: GoldenProvisioningDisk {}
 /// then shuts itself down so `seal` finds clean-shutdown evidence.
 ///
 /// Every step goes through an injected seam, so tests drive the pipeline
-/// without VMs, disks or SSH. Waits are counted in `sleep` intervals, never
-/// against a wall clock.
+/// without VMs, disks or SSH. Waits are bounded by deadlines on the injected
+/// clock, which counts the time each attempt takes as well as the sleeps.
 @MainActor
 struct GoldenProvisioner {
     enum Outcome: Equatable {
@@ -52,23 +52,33 @@ struct GoldenProvisioner {
     /// Powers the golden off, forced. Nothing booted by this pipeline is
     /// sealed unless the guest shut itself down.
     var stop: @MainActor (String) async -> Void
+    /// Attaches the stopped golden's disk on the host. The golden must not
+    /// boot, in any Alas process, until `closeDisk`.
     var openDisk: @MainActor (VMBundle) async throws -> any GoldenProvisioningDisk
+    var closeDisk: @MainActor (any GoldenProvisioningDisk) async -> Void
     var patch: @MainActor (any GoldenProvisioningDisk) async throws -> Void
+    /// Turns the guest's sshd off again offline, after a fallback that may
+    /// have left the patched (sshd on, known password) guest behind.
+    var disableSSHD: @MainActor (any GoldenProvisioningDisk) async throws -> Void
     /// The guest's address, if it has leased one yet.
     var guestIP: @MainActor (VMBundle) async -> String?
-    /// Runs a command over SSH as the guest user: (host, command).
-    var ssh: @MainActor (String, String) async throws -> (exit: Int32, stdout: String)
+    /// Runs a shell script (sent on stdin) over SSH as the guest user:
+    /// (host, script, timeout).
+    var ssh: @MainActor (String, String, Duration) async throws -> (exit: Int32, stdout: String)
     var helperHello: @MainActor (String) async throws -> VMGuestHello
     /// Asks the guest to shut itself down. Does not wait.
     var guestShutdown: @MainActor (String) async -> Void
     var isRunning: @MainActor (String) -> Bool
     var seal: @MainActor (VMBundle) throws -> Void
     var sleep: @MainActor (Duration) async -> Void
+    var now: @MainActor () -> ContinuousClock.Instant
 
     static let firstBootWait: Duration = .seconds(120)
     static let retryBootWait: Duration = .seconds(240)
     static let reachTimeout: Duration = .seconds(120)
     static let reachInterval: Duration = .seconds(5)
+    static let probeTimeout: Duration = .seconds(15)
+    static let installTimeout: Duration = .seconds(180)
     static let helperTimeout: Duration = .seconds(180)
     static let helperInterval: Duration = .seconds(3)
     static let shutdownTimeout: Duration = .seconds(120)
@@ -78,8 +88,10 @@ struct GoldenProvisioner {
 
     func run(bundle: VMBundle, onStep: @MainActor (Step) -> Void) async -> Outcome {
         let build = bundle.url.lastPathComponent
+        var patched = false
         do {
             try await materialiseAndPatch(bundle, build: build, onStep: onStep)
+            patched = true
 
             onStep(.finishing)
             try await bootOrFail(build, reason: Reason.vmStart)
@@ -104,6 +116,7 @@ struct GoldenProvisioner {
             let reason = (error as? Failure)?.reason ?? Reason.vmStart
             Self.logger.error("Unattended setup of golden \(build, privacy: .public) stopped: \(reason, privacy: .public)")
             await stop(build)
+            if patched { await turnSSHDOffOffline(bundle) }
             return .fallback(reason: reason)
         }
     }
@@ -122,21 +135,13 @@ struct GoldenProvisioner {
             await stop(build)
 
             onStep(.patching)
-            let disk: any GoldenProvisioningDisk
-            do {
-                disk = try await openDisk(bundle)
-            } catch {
-                Self.logger.error("Opening the golden disk failed: \(String(describing: error), privacy: .public)")
-                throw Failure(reason: Reason.disk)
-            }
             let result: Result<Void, Error>
             do {
-                try await patch(disk)
+                try await withDisk(bundle) { try await patch($0) }
                 result = .success(())
             } catch {
                 result = .failure(error)
             }
-            await Task.detached { disk.close() }.value
             switch result {
             case .success:
                 return
@@ -149,6 +154,30 @@ struct GoldenProvisioner {
             }
         }
         throw Failure(reason: Reason.firstStart)
+    }
+
+    private func withDisk(
+        _ bundle: VMBundle, _ body: @MainActor (any GoldenProvisioningDisk) async throws -> Void
+    ) async throws {
+        let disk = try await openDisk(bundle)
+        do {
+            try await body(disk)
+        } catch {
+            await closeDisk(disk)
+            throw error
+        }
+        await closeDisk(disk)
+    }
+
+    /// The finishing script switches sshd off; a fallback after the patch may
+    /// not have reached it, so a sealed-by-hand image would keep sshd on with
+    /// a known password. Logged, never thrown: the fallback stands either way.
+    private func turnSSHDOffOffline(_ bundle: VMBundle) async {
+        do {
+            try await withDisk(bundle) { try await disableSSHD($0) }
+        } catch {
+            Self.logger.error("Turning sshd off on the golden disk failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     private func bootOrFail(_ build: String, reason: String) async throws {
@@ -168,7 +197,7 @@ struct GoldenProvisioner {
         var host: String?
         let reached = await waitUntil(timeout: Self.reachTimeout, interval: Self.reachInterval) {
             guard let ip = await guestIP(bundle) else { return false }
-            guard let probe = try? await ssh(ip, "true"), probe.exit == 0 else { return false }
+            guard let probe = try? await ssh(ip, "true", Self.probeTimeout), probe.exit == 0 else { return false }
             host = ip
             return true
         }
@@ -176,7 +205,7 @@ struct GoldenProvisioner {
 
         let install: (exit: Int32, stdout: String)
         do {
-            install = try await ssh(host, Self.installHelperCommand(account: .alas))
+            install = try await ssh(host, Self.installHelperScript(account: .alas), Self.installTimeout)
         } catch {
             Self.logger.error("Installing the helper over SSH failed: \(String(describing: error), privacy: .public)")
             throw Failure(reason: Reason.network)
@@ -187,7 +216,8 @@ struct GoldenProvisioner {
         }
         // Belt and braces: it may be missing or need Full Disk Access, and
         // it may drop this very connection.
-        _ = try? await ssh(host, Self.sudo("/usr/sbin/systemsetup -f -setremotelogin off", account: .alas))
+        _ = try? await ssh(
+            host, Self.sudo("/usr/sbin/systemsetup -f -setremotelogin off", account: .alas), Self.probeTimeout)
     }
 
     private func waitForHelperGrants(_ build: String) async throws {
@@ -205,17 +235,18 @@ struct GoldenProvisioner {
         }
     }
 
-    /// Polls `condition` every `interval` until it holds or `timeout` worth
-    /// of intervals has been slept.
+    /// Polls `condition` every `interval` until it holds or `timeout` has
+    /// passed on the injected clock, attempts included. One attempt in flight
+    /// at the deadline may finish past it.
     private func waitUntil(
         timeout: Duration, interval: Duration, _ condition: @MainActor () async -> Bool
     ) async -> Bool {
-        var waited: Duration = .zero
+        let deadline = now() + timeout
         while true {
             if await condition() { return true }
-            guard waited < timeout else { return false }
-            await sleep(interval)
-            waited += interval
+            let remaining = deadline - now()
+            guard remaining > .zero else { return false }
+            await sleep(min(interval, remaining))
         }
     }
 
@@ -235,7 +266,7 @@ struct GoldenProvisioner {
     /// `com.apple.provenance` and launchd skips it), loads it into the GUI
     /// session (only root can over SSH), then disables sshd. Safe to run
     /// again: it unloads and replaces an earlier install.
-    nonisolated static func installHelperCommand(account: VMGuestAccount) -> String {
+    nonisolated static func installHelperScript(account: VMGuestAccount) -> String {
         let agent = "\(account.homeDirectory)/Library/LaunchAgents/\(helperLabel).plist"
         let plist = VMGuestProvisioning.launchAgentPlist(
             label: helperLabel, executable: "\(helperApp)/Contents/MacOS/Alas VM Guest")
@@ -328,8 +359,22 @@ extension GoldenProvisioner {
             },
             stop: { build in await manager.forceStopGolden(build: build) },
             openDisk: { bundle in
+                // Claimed in the registry first, so no Alas process boots
+                // the golden while its disk is attached here.
+                let build = bundle.url.lastPathComponent
+                try manager.claimGoldenDisk(build: build)
                 let image = bundle.diskImage
-                return try await Task.detached { try VMDiskSession.open(diskImage: image, root: root) }.value
+                do {
+                    let session = try await Task.detached { try VMDiskSession.open(diskImage: image, root: root) }.value
+                    return ClaimedGoldenDisk(session: session, build: build)
+                } catch {
+                    manager.releaseGoldenDisk(build: build)
+                    throw error
+                }
+            },
+            closeDisk: { disk in
+                await Task.detached { disk.close() }.value
+                if let claimed = disk as? ClaimedGoldenDisk { manager.releaseGoldenDisk(build: claimed.build) }
             },
             patch: { disk in
                 guard let helperApp else { throw Failure(reason: Reason.disk) }
@@ -341,6 +386,9 @@ extension GoldenProvisioner {
                         account: account)
                 }.value
             },
+            disableSSHD: { disk in
+                try await Task.detached { try VMGuestPatcher.disableSSH(dataVolume: disk.dataVolume) }.value
+            },
             guestIP: { bundle in
                 let macFile = bundle.macAddress
                 return await Task.detached {
@@ -350,8 +398,8 @@ extension GoldenProvisioner {
                     return GoldenProvisioner.leasedIP(forMAC: mac, leases: leases)
                 }.value
             },
-            ssh: { host, command in
-                try await GuestSSH.run(host: host, account: account, command: command)
+            ssh: { host, script, timeout in
+                try await GuestSSH.run(host: host, account: account, script: script, timeout: timeout)
             },
             helperHello: { build in try await manager.goldenHelperStatus(build: build) },
             guestShutdown: { build in
@@ -359,41 +407,50 @@ extension GoldenProvisioner {
             },
             isRunning: { build in manager.isGoldenRunning(build: build) },
             seal: { bundle in try manager.sealGolden(bundle) },
-            sleep: { duration in try? await Task.sleep(for: duration) })
+            sleep: { duration in try? await Task.sleep(for: duration) },
+            now: { ContinuousClock.now })
     }
 }
 
+/// A golden disk attached under a registry claim, released on close.
+private struct ClaimedGoldenDisk: GoldenProvisioningDisk {
+    let session: VMDiskSession
+    let build: String
+
+    var dataVolume: URL { session.dataVolume }
+    func systemVersion() throws -> (product: String, build: String) { try session.systemVersion() }
+    func close() { session.close() }
+}
+
 /// `/usr/bin/ssh` with password authentication answered by a throwaway
-/// `SSH_ASKPASS` script. Host keys are never persisted: every golden VM is a
-/// new, short-lived host.
+/// `SSH_ASKPASS` script. The user's ssh config, agent and keys are ignored,
+/// and host keys are never persisted: every golden VM is a new, short-lived
+/// host. The script goes on stdin, so the password `sudo -S` reads never
+/// shows in the host's process list.
 enum GuestSSH {
     struct Failure: LocalizedError {
         let message: String
         var errorDescription: String? { message }
     }
 
-    static let timeout: TimeInterval = 180
+    /// How long the output may keep draining after ssh exits, for a child
+    /// that inherited the pipes and lingers.
+    private static let drainGrace: TimeInterval = 5
 
-    static func run(host: String, account: VMGuestAccount, command: String) async throws -> (exit: Int32, stdout: String) {
-        try await Task.detached { try runBlocking(host: host, account: account, command: command) }.value
+    static func run(
+        host: String, account: VMGuestAccount, script: String, timeout: Duration
+    ) async throws -> (exit: Int32, stdout: String) {
+        let seconds = Double(timeout.components.seconds) + Double(timeout.components.attoseconds) / 1e18
+        return try await Task.detached {
+            try runBlocking(host: host, account: account, script: script, timeout: seconds)
+        }.value
     }
 
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "guest-ssh")
 
-    private static func runBlocking(host: String, account: VMGuestAccount, command: String) throws -> (exit: Int32, stdout: String) {
-        let fm = FileManager.default
-        let directory = fm.temporaryDirectory.appendingPathComponent("alas-askpass-\(UUID().uuidString)", isDirectory: true)
-        try fm.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
-        defer { try? fm.removeItem(at: directory) }
-        let askpass = directory.appendingPathComponent("askpass")
-        let script = "#!/bin/sh\nprintf '%s\\n' \(GoldenProvisioner.quote(account.password))\n"
-        guard fm.createFile(atPath: askpass.path, contents: Data(script.utf8), attributes: [.posixPermissions: 0o700]) else {
-            throw Failure(message: "Could not write \(askpass.path)")
-        }
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
-        process.arguments = [
+    static func arguments(host: String, account: VMGuestAccount) -> [String] {
+        [
+            "-F", "/dev/null",
             "-T",
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
@@ -401,52 +458,91 @@ enum GuestSSH {
             "-o", "PreferredAuthentications=password,keyboard-interactive",
             "-o", "NumberOfPasswordPrompts=1",
             "-o", "ConnectTimeout=8",
+            "-o", "ControlMaster=no",
+            "-o", "ControlPath=none",
+            "-o", "BatchMode=no",
+            "-o", "IdentitiesOnly=yes",
+            "-o", "IdentityAgent=none",
             "-o", "LogLevel=ERROR",
             "\(account.shortName)@\(host)",
-            command,
+            "/bin/zsh -s",
         ]
+    }
+
+    private static func runBlocking(
+        host: String, account: VMGuestAccount, script: String, timeout: TimeInterval
+    ) throws -> (exit: Int32, stdout: String) {
+        let fm = FileManager.default
+        let directory = fm.temporaryDirectory.appendingPathComponent("alas-askpass-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? fm.removeItem(at: directory) }
+        let askpass = directory.appendingPathComponent("askpass")
+        let askpassScript = "#!/bin/sh\nprintf '%s\\n' \(GoldenProvisioner.quote(account.password))\n"
+        guard fm.createFile(atPath: askpass.path, contents: Data(askpassScript.utf8), attributes: [.posixPermissions: 0o700]) else {
+            throw Failure(message: "Could not write \(askpass.path)")
+        }
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/ssh")
+        process.arguments = arguments(host: host, account: account)
         var environment = ProcessInfo.processInfo.environment
         environment["SSH_ASKPASS"] = askpass.path
         environment["SSH_ASKPASS_REQUIRE"] = "force"
         environment["DISPLAY"] = environment["DISPLAY"] ?? ":0"
+        environment.removeValue(forKey: "SSH_AUTH_SOCK")
         process.environment = environment
-        process.standardInput = FileHandle.nullDevice
+        let stdin = Pipe()
         let stdout = Pipe()
         let stderr = Pipe()
+        process.standardInput = stdin
         process.standardOutput = stdout
         process.standardError = stderr
         try process.run()
 
+        // The pipe buffer holds the whole script; closing ends the remote shell's input.
+        DispatchQueue.global().async {
+            try? stdin.fileHandleForWriting.write(contentsOf: Data(script.utf8))
+            try? stdin.fileHandleForWriting.close()
+        }
         // Both pipes drain concurrently so neither can fill and stall ssh.
         let group = DispatchGroup()
         let output = Output()
-        group.enter()
-        DispatchQueue.global().async {
-            output.stdout = stdout.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
-        }
-        group.enter()
-        DispatchQueue.global().async {
-            output.stderr = stderr.fileHandleForReading.readDataToEndOfFile()
-            group.leave()
+        for (pipe, isStdout) in [(stdout, true), (stderr, false)] {
+            group.enter()
+            DispatchQueue.global().async {
+                output.set(pipe.fileHandleForReading.readDataToEndOfFile(), isStdout: isStdout)
+                group.leave()
+            }
         }
         let killer = DispatchWorkItem { [process] in if process.isRunning { process.terminate() } }
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: killer)
         process.waitUntilExit()
         killer.cancel()
-        group.wait()
+        if group.wait(timeout: .now() + drainGrace) == .timedOut {
+            logger.notice("ssh \(host, privacy: .public) exited but its output stayed open; not waiting for it")
+        }
 
-        let out = String(decoding: output.stdout, as: UTF8.self)
-        let err = String(decoding: output.stderr, as: UTF8.self)
+        let (out, err) = output.snapshot()
         if process.terminationStatus != 0 {
             logger.notice("ssh \(host, privacy: .public) exited \(process.terminationStatus, privacy: .public): \(err, privacy: .public)")
         }
         return (process.terminationStatus, out)
     }
 
-    /// Written by one reader each, read after both finished.
+    /// Written by one reader each; read once both finished or the drain gave up.
     private final class Output: @unchecked Sendable {
-        var stdout = Data()
-        var stderr = Data()
+        private let lock = NSLock()
+        private var stdout = Data()
+        private var stderr = Data()
+
+        func set(_ data: Data, isStdout: Bool) {
+            lock.withLock {
+                if isStdout { stdout = data } else { stderr = data }
+            }
+        }
+
+        func snapshot() -> (stdout: String, stderr: String) {
+            lock.withLock { (String(decoding: stdout, as: UTF8.self), String(decoding: stderr, as: UTF8.self)) }
+        }
     }
 }

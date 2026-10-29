@@ -241,12 +241,13 @@ struct VirtualMachineTabView: View {
             .font(.system(size: 12)).padding(.horizontal, 8).padding(.top, 8)
         }
         header("Create a user that logs in automatically. Install the helper: open My Shared Files › helper › Install Alas VM Guest, then allow it in Accessibility and Screen Recording. Shut down macOS, then click Done.") {
-            // Customizing the base image is for the user's own changes.
-            if vms.customizingFrom == nil {
+            // Not for a golden the user runs, which it would force off, nor
+            // one reopened by Customize, which is for the user's own changes.
+            if !vms.isGoldenCustomized(build: build) {
                 Button("Set up automatically") {
                     Task { await installer.start() }
                 }
-                .disabled(finishingSetup)
+                .disabled(finishingSetup || vms.isGoldenRunning(build: build))
             }
             Button("Done") { finishGoldenSetup(build: build) }
                 .disabled(finishingSetup)

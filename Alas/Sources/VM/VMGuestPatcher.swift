@@ -37,6 +37,7 @@ enum VMGuestPatcher {
 
     static let tccDatabasePath = "Library/Application Support/com.apple.TCC/TCC.db"
     private static let dslocalPath = "private/var/db/dslocal/nodes/Default"
+    private static let launchdDisabledPath = "private/var/db/com.apple.xpc.launchd/disabled.plist"
 
     static func patch(
         dataVolume: URL,
@@ -65,6 +66,18 @@ enum VMGuestPatcher {
         try configureAutoLogin(account, volume: volume)
         try enableSSH(volume: volume)
         try configurePowerAndLock(account, volume: volume)
+    }
+
+    /// Turns sshd off again in the guest's launchd overrides, edited in
+    /// place. For a guest the patch left with sshd on whose in-guest
+    /// finishing step (which disables it) never ran.
+    static func disableSSH(dataVolume: URL) throws {
+        let volume = Volume(root: dataVolume)
+        let disabled = volume.url(launchdDisabledPath)
+        try volume.writePlist(
+            VMGuestProvisioning.sshdDisabled(disabledPlist: try volume.readPlistIfPresent(disabled)),
+            to: disabled, format: .xml
+        )
     }
 
     // MARK: - Directory services
@@ -170,7 +183,7 @@ enum VMGuestPatcher {
     }
 
     private static func enableSSH(volume: Volume) throws {
-        let disabled = volume.url("private/var/db/com.apple.xpc.launchd/disabled.plist")
+        let disabled = volume.url(launchdDisabledPath)
         try volume.touch(disabled.deletingLastPathComponent().appendingPathComponent("disabled.migrated"))
         try volume.writePlist(
             VMGuestProvisioning.sshdEnabled(disabledPlist: try volume.readPlistIfPresent(disabled)),
