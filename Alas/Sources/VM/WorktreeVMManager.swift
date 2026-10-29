@@ -54,6 +54,8 @@ final class WorktreeVMManager {
     @ObservationIgnored private let logger = Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
 
     private(set) var runningVMs: [String: RunningVM] = [:]
+    /// One client per running VM that something has talked to; closed when the VM stops.
+    @ObservationIgnored private var guestClients: [String: VMGuestClient] = [:]
     /// Observed so a VM tab can show a boot in progress.
     private var starting: Set<String> = []
     /// Stop or delete requests for VMs that were still booting, honoured once
@@ -112,6 +114,18 @@ final class WorktreeVMManager {
 
     func running(_ worktreeID: String) -> RunningVM? {
         runningVMs[worktreeID]
+    }
+
+    /// The client for the guest helper of a VM this process runs; nil when it does not run here.
+    func guestClient(for worktreeID: String) -> VMGuestClient? {
+        guard let vm = runningVMs[worktreeID] else { return nil }
+        if let client = guestClients[worktreeID] { return client }
+        let client = VMGuestClient(connect: { @MainActor [weak vm] in
+            guard let vm else { throw VMError(message: "The VM stopped") }
+            return try await vm.openGuestConnection(port: VMGuestPort.computerUse)
+        })
+        guestClients[worktreeID] = client
+        return client
     }
 
     /// One registry read for a VM tab: whether the worktree has a VM and
@@ -528,6 +542,9 @@ final class WorktreeVMManager {
     }
 
     private func didStop(_ id: String) {
+        if let client = guestClients.removeValue(forKey: id) {
+            Task { await client.close() }
+        }
         guard runningVMs.removeValue(forKey: id) != nil else { return }
         clearOwner(id)
     }

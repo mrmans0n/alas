@@ -110,6 +110,7 @@
 		0F556F82FA5BF1E8D50096E2 /* RemoteConfigTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3066B2C18213B0105D32213F /* RemoteConfigTests.swift */; };
 		0F560F9B2458B94C807E96A1 /* CodeTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBC01971BF41E6D0B9B317CF /* CodeTextView.swift */; };
 		0FD892082365E7FCFD0526F3 /* MarkdownFenceEditing.swift in Sources */ = {isa = PBXBuildFile; fileRef = CB90EF05C6A486F35ACD0E1B /* MarkdownFenceEditing.swift */; };
+		0FF4CC89C0E3DB1E0EC28127 /* VMGuestClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A91AD2A287FDE958C7F6E79 /* VMGuestClient.swift */; };
 		1006A5266E15634CD1763329 /* ACPPermissionPolicyBlockerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A472F2D3A6F6CDC253B7915B /* ACPPermissionPolicyBlockerTests.swift */; };
 		10190501C79554DA17FBC5F7 /* permission-request.json in Resources */ = {isa = PBXBuildFile; fileRef = C48DB0098D71F26ABF594615 /* permission-request.json */; };
 		10200E95CB31BF4C7CEC0139 /* RepoMCPExternalSyncTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD359A8BA13B462EA0F35208 /* RepoMCPExternalSyncTests.swift */; };
@@ -375,6 +376,7 @@
 		3326658AC801C394C43AC8A2 /* SearchKbd.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36992F601C8EB6C3D45B584F /* SearchKbd.swift */; };
 		33376EB37508D556E2385D33 /* ACPSessionUpdateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A5D62D907375A5CBAED1E698 /* ACPSessionUpdateTests.swift */; };
 		334369955BD935E0E1760E50 /* one-light.json in Resources */ = {isa = PBXBuildFile; fileRef = D2941EB128B2FE3FEA229472 /* one-light.json */; };
+		3350BDDA46BDED71D72FB0CF /* VMGuestClientTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E6980C00CA3BEB4546D31EC /* VMGuestClientTests.swift */; };
 		33A0FC862C45CDFF47053A04 /* ACPComposerActionButtonMetricsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2B7ADCB7C4178FE036A31214 /* ACPComposerActionButtonMetricsTests.swift */; };
 		33A617BC5DE8DAA9F67E239D /* DiffPaneDocumentCacheTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B98E7424CBFF07A59BCB703A /* DiffPaneDocumentCacheTests.swift */; };
 		33DA30A13B15E23387FDCD13 /* AppState+WorktreeCleanupReminders.swift in Sources */ = {isa = PBXBuildFile; fileRef = E327960BBFE5331FAA5AC507 /* AppState+WorktreeCleanupReminders.swift */; };
@@ -1883,10 +1885,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1904,10 +1906,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2487,6 +2489,7 @@
 		4E340D23D2484C570F8E4B7F /* FakeJSONRPCTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FakeJSONRPCTransport.swift; sourceTree = "<group>"; };
 		4E37F3595D63FBCED4B770E6 /* ComputerUseAXActionsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ComputerUseAXActionsTests.swift; sourceTree = "<group>"; };
 		4E678D9C5E3D9D39BDD2AA51 /* BinaryPreviewTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BinaryPreviewTabView.swift; sourceTree = "<group>"; };
+		4E6980C00CA3BEB4546D31EC /* VMGuestClientTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMGuestClientTests.swift; sourceTree = "<group>"; };
 		4EC688020FD7B6A2A4393B72 /* ReviewLoopHandoffBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewLoopHandoffBuilderTests.swift; sourceTree = "<group>"; };
 		4EDBC153EAE419F270EFF948 /* ACPRemoteNodeEnvironmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPRemoteNodeEnvironmentTests.swift; sourceTree = "<group>"; };
 		4F002B796231A05FD113BDA3 /* MermaidDiagramLayout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MermaidDiagramLayout.swift; sourceTree = "<group>"; };
@@ -2680,6 +2683,7 @@
 		69FDF153EFF1D022EE36AC0B /* FederatedSessionsProviderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FederatedSessionsProviderTests.swift; sourceTree = "<group>"; };
 		69FF8931D7DFF8D90ABB849D /* ACPPastedTextHover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPPastedTextHover.swift; sourceTree = "<group>"; };
 		6A190D4B29B35C457AA9829F /* SettingsBinding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsBinding.swift; sourceTree = "<group>"; };
+		6A91AD2A287FDE958C7F6E79 /* VMGuestClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMGuestClient.swift; sourceTree = "<group>"; };
 		6AB85E982EAC8EA36E0EC575 /* NativePeerNavigationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativePeerNavigationTests.swift; sourceTree = "<group>"; };
 		6ABBF6F7937294661A086925 /* ACPMessageActionsMenuTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMessageActionsMenuTests.swift; sourceTree = "<group>"; };
 		6B36DDBA0BE9D235925A7F8F /* EditorDisplayAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorDisplayAdapter.swift; sourceTree = "<group>"; };
@@ -4406,6 +4410,7 @@
 				708AB670AB611EFB9D216D7C /* UpdateThrottleTests.swift */,
 				FE1C40E1D58AE9F4A1AF386F /* UsageHistoryStoreTests.swift */,
 				F94E5F7FC1D724C4DD7F489C /* VMConfigurationFactoryTests.swift */,
+				4E6980C00CA3BEB4546D31EC /* VMGuestClientTests.swift */,
 				AF2DB338CB6309A753612B8A /* VMGuestServiceTests.swift */,
 				CA2CB1CFE73EDF0BDA6C8E18 /* VMTabScreenTests.swift */,
 				CF0005D9107053886C37A3AC /* WarningCharacterTests.swift */,
@@ -4478,6 +4483,7 @@
 				143995043B72B58B5F32ABCE /* VirtualMachineTabView.swift */,
 				C344B983ED8AD4748D280ABC /* VMConfigurationFactory.swift */,
 				F96397A9C2B512C8114AA551 /* VMDisplaySurface.swift */,
+				6A91AD2A287FDE958C7F6E79 /* VMGuestClient.swift */,
 				F140C7CC4EE7707DFC5557B2 /* VMTabScreen.swift */,
 				025657437F58CAE1E6E832D9 /* WorktreeVMManager.swift */,
 			);
@@ -7887,6 +7893,7 @@
 				B785053315764F42E3601F15 /* UpdateProgressSheet.swift in Sources */,
 				AFAB68532EEC0EA7DEB976B6 /* VMConfigurationFactory.swift in Sources */,
 				1B5B738D2FA0482EFDFB3D28 /* VMDisplaySurface.swift in Sources */,
+				0FF4CC89C0E3DB1E0EC28127 /* VMGuestClient.swift in Sources */,
 				56DEFFA9CA11863AB0F88EFB /* VMTabScreen.swift in Sources */,
 				C245DDADA1D81810E9302134 /* VerdictSheet.swift in Sources */,
 				DAA0AFA398C02EC663708825 /* ViewDragOut.swift in Sources */,
@@ -8908,6 +8915,7 @@
 				F43241F6CB024F703FA22971 /* UpstreamReferenceTestSupport.swift in Sources */,
 				6A37807C5F2C25FA756F17CB /* UsageHistoryStoreTests.swift in Sources */,
 				A1AB12DC6EFEDFDBCB95FF68 /* VMConfigurationFactoryTests.swift in Sources */,
+				3350BDDA46BDED71D72FB0CF /* VMGuestClientTests.swift in Sources */,
 				6842A416A8EBECAD7711B167 /* VMGuestServiceTests.swift in Sources */,
 				DC7A064D521B8A7C2BE77B78 /* VMTabScreenTests.swift in Sources */,
 				9D7DD578147C591E0403BEAD /* VisualAidWebPolicyTests.swift in Sources */,

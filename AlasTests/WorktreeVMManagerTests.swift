@@ -35,6 +35,7 @@ final class WorktreeVMManagerTests {
             if stopFails { throw StopRefused() }
             state = .stopped
         }
+        func openGuestConnection(port: UInt32) async throws -> VMGuestTransport { throw StopRefused() }
     }
 
     /// Holds one call until `release()`; streams instead of continuations
