@@ -5,7 +5,6 @@ import Testing
 @MainActor
 @Suite("ACP first-run connecting policy")
 struct ACPFirstRunConnectingPolicyTests {
-
     @Test("fresh hydrating empty sessions show checking setup")
     func freshHydratingEmptySessionShowsCheckingSetup() {
         let session = ACPSession(

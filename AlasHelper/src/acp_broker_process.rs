@@ -146,9 +146,9 @@ const BROKER_IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Keep diagnostics bounded even when an adapter writes an unterminated line.
 const MAX_ADAPTER_STDERR_BYTES: usize = 16 * 1024;
-/// EOF normally wakes the drain immediately. Descendants may inherit stderr,
-/// so waiting for it must have a deadline rather than requiring the pipe to close.
-const ADAPTER_STDERR_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
+/// EOF normally finishes immediately. Bound post-exit output draining because
+/// descendants can retain stdout or stderr after the adapter has died.
+const ADAPTER_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 
 #[derive(Debug)]
 pub struct AcpBrokerProcessError {
@@ -2023,7 +2023,7 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
             // A startup exit can close stdin before wait() observes the child.
             // Leave the operation pending for the output readers in that case,
             // rather than discarding its stderr in a transport-level error.
-            if !wait_for_adapter_exit(runtime, ADAPTER_STDERR_DRAIN_TIMEOUT) {
+            if !wait_for_adapter_exit(runtime, ADAPTER_OUTPUT_DRAIN_TIMEOUT) {
                 return Err(error);
             }
         }
@@ -2135,13 +2135,16 @@ fn spawn_stdout_reader(runtime: Runtime, stdout: std::process::ChildStdout) {
         // adapter-exit error can settle the remaining operations.
         let (lock, condvar) = &*runtime.state;
         let mut state = lock.lock().expect("broker state poisoned");
+        if state.adapter_output_drained {
+            return;
+        }
         // Legacy requests fail on process exit, not stdout closure. An adapter
         // can close stdout first and still write its final diagnostic later.
         while !raw && !state.adapter_exited && !state.closing {
             state = condvar.wait(state).expect("broker state poisoned");
         }
-        let deadline = std::time::Instant::now() + ADAPTER_STDERR_DRAIN_TIMEOUT;
-        while !state.adapter_stderr_drained && !state.closing {
+        let deadline = std::time::Instant::now() + ADAPTER_OUTPUT_DRAIN_TIMEOUT;
+        while !state.adapter_stderr_drained && !state.adapter_output_drained && !state.closing {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
                 break;
@@ -2151,17 +2154,7 @@ fn spawn_stdout_reader(runtime: Runtime, stdout: std::process::ChildStdout) {
                 .expect("broker state poisoned")
                 .0;
         }
-        state.adapter_output_drained = true;
-        complete_pending_operations_after_adapter_exit(&mut state);
-        if raw {
-            state
-                .broker
-                .add_adapter_notification("adapter/stdoutClosed", Value::Null);
-        } else if state.adapter_exited && !state.closing {
-            state
-                .broker
-                .add_adapter_notification("adapter/exit", json!({ "unexpected": true }));
-        }
+        finish_adapter_output(&mut state);
         condvar.notify_all();
     });
 }
@@ -2220,17 +2213,43 @@ fn spawn_waiter(runtime: Runtime, mut child: std::process::Child) {
         state.adapter_exited = true;
         if !state.closing {
             let _ = state.broker.set_turn_state(BrokerTurnState::Ambiguous);
-            complete_pending_operations_after_adapter_exit(&mut state);
-            if state.adapter_output_drained
-                && state.broker.metadata().wire_context != Some(BrokerWireContext::RawV2)
-            {
-                state
-                    .broker
-                    .add_adapter_notification("adapter/exit", json!({ "unexpected": true }));
+            // Let the reader route buffered final responses, but do not wait
+            // indefinitely for a descendant to close an inherited output pipe.
+            condvar.notify_all();
+            let deadline = std::time::Instant::now() + ADAPTER_OUTPUT_DRAIN_TIMEOUT;
+            while !state.adapter_output_drained && !state.closing {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                state = condvar
+                    .wait_timeout(state, remaining)
+                    .expect("broker state poisoned")
+                    .0;
+            }
+            if !state.closing {
+                finish_adapter_output(&mut state);
             }
         }
         condvar.notify_all();
     });
+}
+
+fn finish_adapter_output(state: &mut RuntimeState) {
+    if state.adapter_output_drained {
+        return;
+    }
+    state.adapter_output_drained = true;
+    complete_pending_operations_after_adapter_exit(state);
+    if state.broker.metadata().wire_context == Some(BrokerWireContext::RawV2) {
+        state
+            .broker
+            .add_adapter_notification("adapter/stdoutClosed", Value::Null);
+    } else if state.adapter_exited && !state.closing {
+        state
+            .broker
+            .add_adapter_notification("adapter/exit", json!({ "unexpected": true }));
+    }
 }
 
 fn complete_pending_operations_after_adapter_exit(state: &mut RuntimeState) {
@@ -3398,11 +3417,14 @@ mod tests {
 
     #[test]
     fn adapter_exit_keeps_pending_operations_until_stdout_has_been_drained() {
-        for raw in [false, true] {
+        for (raw, inherited_stdout) in [(false, false), (false, true), (true, false), (true, true)] {
+            let descendant = if inherited_stdout { "sleep 30 &" } else { "" };
+            let newline = if inherited_stdout { "\\n" } else { "" };
             let script = format!(
-                "IFS= read -r line; printf '%s' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"ready\":true}}}}'; printf '%s' '{STARTUP_DIAGNOSTIC}' >&2"
+                "IFS= read -r line; printf '%s{newline}' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"ready\":true}}}}'; {descendant} printf '%s' '{STARTUP_DIAGNOSTIC}' >&2"
             );
             let (runtime, mut child, stdout) = adapter_test_runtime(&script, raw);
+            let process_group = child.id();
             let params = json!({
                 "brokerId": "steering",
                 "generation": 1,
@@ -3414,10 +3436,15 @@ mod tests {
             // Force wait() to win while the valid final stdout frame is unread.
             child.wait().unwrap();
             spawn_waiter(runtime.clone(), child);
-            assert!(wait_for_adapter_exit(&runtime, Duration::from_secs(5)));
-            assert_eq!(lock_runtime(&runtime).pending_methods.len(), 1);
+            let exited = wait_for_adapter_exit(&runtime, Duration::from_secs(5));
+            let pending_before_read = lock_runtime(&runtime).pending_methods.len();
             spawn_stdout_reader(runtime.clone(), stdout);
-            assert!(wait_for_test_output_drain(&runtime));
+            let drained = wait_for_test_output_drain(&runtime);
+            if inherited_stdout {
+                signal_process_group(process_group, 9);
+            }
+            assert!(exited && drained);
+            assert_eq!(pending_before_read, 1);
             let response = broker_send(&runtime, Some(params)).unwrap();
             assert!(response.get("error").is_none(), "{response}");
             if raw {
@@ -3513,24 +3540,13 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn inherited_stderr_pipe_does_not_block_exit_completion() {
-        for raw in [false, true] {
+    fn inherited_output_pipes_do_not_block_exit_completion() {
+        for (raw, inherited_stdout) in [(false, false), (false, true), (true, false), (true, true)] {
+            let redirect = if inherited_stdout { "" } else { ">/dev/null" };
             let script = format!(
-                "sleep 30 >/dev/null & printf '%s' '{STARTUP_DIAGNOSTIC}' >&2; exit 42"
+                "IFS= read -r request; sleep 30 {redirect} & printf '%s' '{STARTUP_DIAGNOSTIC}' >&2; exit 42"
             );
             let (runtime, mut child, stdout) = adapter_test_runtime(&script, raw);
-            let process_group = child.id();
-            child.wait().unwrap();
-            spawn_waiter(runtime.clone(), child);
-            spawn_stdout_reader(runtime.clone(), stdout);
-            let drained = wait_for_test_output_drain(&runtime);
-            let state = lock_runtime(&runtime);
-            let inherited_pipe_still_open = !state.adapter_stderr_drained;
-            drop(state);
-            // Stop the descendant even when an assertion below fails.
-            signal_process_group(process_group, 9);
-            assert!(drained, "inherited stderr held terminal completion open");
-            assert!(inherited_pipe_still_open, "fixture must retain inherited stderr");
             let params = json!({
                 "brokerId": "steering",
                 "generation": 1,
@@ -3539,8 +3555,27 @@ mod tests {
                 "params": {}
             });
             broker_send(&runtime, Some(params.clone())).unwrap();
+            let process_group = child.id();
+            child.wait().unwrap();
+            spawn_waiter(runtime.clone(), child);
+            spawn_stdout_reader(runtime.clone(), stdout);
+            let drained = wait_for_test_output_drain(&runtime);
+            let inherited_pipe_still_open = !lock_runtime(&runtime).adapter_stderr_drained;
+            // Stop the descendant even when an assertion below fails.
+            signal_process_group(process_group, 9);
+            assert!(drained, "inherited output held terminal completion open: raw={raw}, stdout={inherited_stdout}");
+            assert!(inherited_pipe_still_open, "fixture must retain inherited stderr");
             let response = broker_send(&runtime, Some(params)).unwrap();
+            assert_eq!(response["error"]["code"], -32074, "{response}");
             assert_eq!(response["error"]["data"]["stderr"], STARTUP_DIAGNOSTIC);
+            let attached = broker_attach(&runtime, Some(json!({
+                "brokerId": "steering", "generation": 1, "acknowledgedCursor": 0
+            }))).unwrap();
+            let exit_method = if raw { "adapter/stdoutClosed" } else { "adapter/exit" };
+            assert!(attached["events"].as_array().unwrap().iter().any(|event|
+                event["kind"]["type"] == "adapterNotification"
+                    && event["kind"]["method"] == exit_method
+            ), "{attached}");
         }
     }
 
