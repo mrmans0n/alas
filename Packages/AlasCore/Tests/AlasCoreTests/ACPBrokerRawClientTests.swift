@@ -318,6 +318,37 @@ struct ACPBrokerRawClientTests {
         await transport.stop(close: false)
     }
 
+    @MainActor
+    @Test func orderedOwnerCanBindTheBrokerStreamBeforeReceivingAndDurablyConsumeIt() async throws {
+        let bytes = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"agent_message_chunk","messageId":"m","content":{"type":"text","text":"x"}}}}"#.utf8)
+        let service = RawBrokerFixture(rawBytes: bytes)
+        let client = makeClient(service)
+        let opened = try await client.start()
+        let connectionID = try #require(client.updateConnectionID)
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("alas-v2-broker-owner-\(UUID()).sqlite").path)
+        var row = ACPSessionRow(id: "s", agentId: "fixture", title: "Broker owner", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false)
+        row.acpBrokerId = "raw"
+        row.acpBrokerGeneration = 7
+        row.acpBrokerWireContextJSON = try ACPBrokerWireContext.rawV2.persistedJSON()
+        try await persistence.upsertSession(row)
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let owner = ACPV2SessionUpdateOwner(sessionId: "s", upstreamSessionId: "upstream",
+            attachment: try .init(brokerConnectionID: connectionID, opened: opened),
+            fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"), journal: persistence, isCurrent: { true })
+        #expect(await service.acks.isEmpty)
+        _ = owner.start(client.incomingV2Updates)
+        try await eventually { await MainActor.run { owner.lastAppliedOrdinal == 2 } }
+        try await client.replayRawBrokerEvents()
+        try await eventually { await service.acks.last == 2 }
+        owner.stop()
+        await client.detach()
+        await owner.waitUntilFinished()
+        #expect(owner.state.transcript.messages.first?.content.count == 2)
+        #expect(owner.latestApplication?.source == .snapshot)
+        let stream = try #require(owner.stream)
+        #expect(try await persistence.loadV2UpdateJournalPage(stream: stream).records.map(\.frame) == [bytes, bytes])
+    }
+
     private func makeClient(_ service: RawBrokerFixture, context: ACPBrokerWireContext = .rawV2) -> ACPBrokerClient {
         ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
             command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",

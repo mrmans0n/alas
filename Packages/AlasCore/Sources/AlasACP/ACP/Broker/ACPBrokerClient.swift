@@ -90,6 +90,8 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
     public let providesDurableOperationKeyDeduplication = true
 
     private let rawTransport: ACPRawBrokerTransport?
+    /// Immutable raw attachment identity, available before its first update.
+    public var updateConnectionID: UUID? { rawTransport?.connectionID }
     public let sessionUpdateProtocolVersion: ACPProtocolVersion
     public let incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery>
     public let incomingRawFrames: AsyncStream<ACPBrokerRawFrameDelivery>
