@@ -211,6 +211,8 @@ final class NativePeerSessions {
     /// one is already in `documentRequestsInFlight`. Cleared once the retry
     /// it queues has been sent.
     @ObservationIgnored private var documentRequestOutdated = false
+    /// The sides the open image diff was last read with, so a changes reply that moves them reads it again.
+    @ObservationIgnored private var imageDiffRead: (document: NativePeerWorkspace.Document, plan: NativePeerWorkspace.ImageDiffPlan)?
 
     init(
         federation: FederatedSessionsProvider,
@@ -484,6 +486,15 @@ final class NativePeerSessions {
     func revertOpenedHostFile() {
         guard let file = openedHostFile else { return }
         hostFileBuffers[file]?.revert()
+    }
+
+    /// The selected worktree on a host that serves file bytes, whether or not a tab is open: only the host
+    /// channel carries them.
+    var hostBytesTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard let selectedWorktree, let host = selectedWorktreeGroup?.host,
+              hosts?.servesFileBytes(serverId: selectedWorktree.serverId) == true
+        else { return nil }
+        return (selectedWorktree.serverId, host)
     }
 
     /// The selected tab-less worktree, read over its host's channel.
@@ -1252,7 +1263,24 @@ final class NativePeerSessions {
             return false
         }
         documentRequestsInFlight.insert(document)
-        let sent = switch document {
+        let sent = sendDocumentRead(document)
+        if !sent {
+            documentRequestsInFlight.remove(document)
+            workspace.markUnavailable()
+            return false
+        }
+        return true
+    }
+
+    /// Sends `document`'s read: an image diff's two sides when its host serves file bytes, else its text read.
+    private func sendDocumentRead(_ document: NativePeerWorkspace.Document) -> Bool {
+        imageDiffRead = nil
+        if let target = hostBytesTarget,
+           let plan = workspace.imageDiffPlan(for: document, comparisonMode: comparisonMode()) {
+            imageDiffRead = (document, plan)
+            return readImageDiff(document, plan: plan, target: target)
+        }
+        return switch document {
         case .diff(let path, let stage):
             routeWorkspaceRead(.fileDiff(path: path, stage: stage?.rawValue, comparisonMode: comparisonMode())) {
                 .fileDiff(
@@ -1265,16 +1293,14 @@ final class NativePeerSessions {
         case .commitDiff(let path, let sha):
             routeWorkspaceRead(.commitDiff(sha: sha, path: path)) { .commitFileDiff(sessionId: $0, sha: sha, path: path) }
         case .file(let path):
-            routeWorkspaceRead(.file(path: path)) { .readFile(sessionId: $0, path: path) }
+            if ImageFileType.isSupported(relativePath: path), let target = hostBytesTarget {
+                routeHostRead(.fileBytes(path: path, revision: nil), to: target)
+            } else {
+                routeWorkspaceRead(.file(path: path)) { .readFile(sessionId: $0, path: path) }
+            }
         case .stashDiff, .checkpointDiff:
             readHostDiff(document)
         }
-        if !sent {
-            documentRequestsInFlight.remove(document)
-            workspace.markUnavailable()
-            return false
-        }
-        return true
     }
 
     func closeDocument() {
@@ -1301,14 +1327,42 @@ final class NativePeerSessions {
         Task { [weak self] in
             let result = await read()
             guard let self, workspaceEpoch == epoch else { return }
-            documentRequestsInFlight.remove(document)
             workspace.finishDocument(document, with: result)
-            if documentRequestOutdated, workspace.document == document {
-                documentRequestOutdated = false
-                open(document)
-            }
+            hostDocumentReadLanded(document)
         }
         return true
+    }
+
+    /// Reads both sides of an image diff over `target`'s host channel.
+    private func readImageDiff(
+        _ document: NativePeerWorkspace.Document, plan: NativePeerWorkspace.ImageDiffPlan,
+        target: (serverId: String, worktree: PeerHostWorktree)
+    ) -> Bool {
+        guard let hosts else { return false }
+        func read(_ side: NativePeerWorkspace.ImageDiffPlan.Side?) async -> NativePeerWorkspace.ImageSide {
+            guard let side else { return .missing }
+            return NativePeerWorkspace.imageSide(await hosts.read(
+                .fileBytes(path: side.path, revision: side.revision), in: target.worktree, serverId: target.serverId))
+        }
+        let epoch = workspaceEpoch
+        Task { [weak self] in
+            // ponytail: the sides are read one after the other; read them together if the wait shows.
+            let before = await read(plan.before)
+            let after = await read(plan.after)
+            guard let self, workspaceEpoch == epoch else { return }
+            workspace.finishImageDiff(document, plan: plan, before: before, after: after)
+            hostDocumentReadLanded(document)
+        }
+        return true
+    }
+
+    /// Clears a landed host read's in-flight marker and sends a retry queued while it was out.
+    private func hostDocumentReadLanded(_ document: NativePeerWorkspace.Document) {
+        documentRequestsInFlight.remove(document)
+        if documentRequestOutdated, workspace.document == document {
+            documentRequestOutdated = false
+            open(document)
+        }
     }
 
     func openReview(_ sessionID: String, serverId: String, worktree: PeerHostWorktree) {
@@ -1460,7 +1514,13 @@ final class NativePeerSessions {
     /// host's channel. An answer after the selection moved is dropped.
     private func routeWorkspaceRead(_ read: HostWorktreeRead, session: (String) -> RemoteClientMessage) -> Bool {
         if selectedSessionId != nil { return routeWhileOnline(session) }
-        guard let hosts, let target = hostReadTarget else { return false }
+        guard let target = hostReadTarget else { return false }
+        return routeHostRead(read, to: target)
+    }
+
+    /// Sends `read` over `target`'s host channel and applies the answer, as a workspace reply.
+    private func routeHostRead(_ read: HostWorktreeRead, to target: (serverId: String, worktree: PeerHostWorktree)) -> Bool {
+        guard let hosts else { return false }
         let epoch = workspaceEpoch
         let worktreeId = target.worktree.snapshot.worktree.id
         Task { [weak self] in
@@ -1714,13 +1774,18 @@ final class NativePeerSessions {
             .diff(path: path, stage: stage.flatMap(ChangeStage.init(rawValue:)))
         case .commitDiffResult(_, let sha, let path, _, _, _), .commitDiffFailed(_, let sha, let path, _, _):
             .commitDiff(path: path, sha: sha)
-        case .fileContents(_, let path, _, _, _), .fileUnavailable(_, let path, _, _, _):
+        case .fileContents(_, let path, _, _, _), .fileUnavailable(_, let path, _, _, _), .fileBytes(_, let path, _, _):
             .file(path: path)
         default: nil
         }
         if let replyDocument { documentRequestsInFlight.remove(replyDocument) }
         let isDocumentReply = replyDocument != nil && replyDocument == workspace.document
         let handled = workspace.apply(message)
+        let isCommitFilesReply: Bool = switch message {
+        case .commitFiles, .commitFilesFailed: true
+        default: false
+        }
+        if isChangesReply || isCommitFilesReply { replanImageDiff() }
         if isChangesReply, changesRequestOutdated {
             changesRequestOutdated = false
             requestChanges()
@@ -1734,6 +1799,16 @@ final class NativePeerSessions {
             open(document)
         }
         return handled
+    }
+
+    /// Reads the open image diff again when the lists just landed move its sides: a reload plans it from the
+    /// rows it had, before their refresh arrives.
+    private func replanImageDiff() {
+        guard let read = imageDiffRead, read.document == workspace.document, openedReview == nil,
+              openedCommitEditor == nil,
+              workspace.imageDiffPlan(for: read.document, comparisonMode: comparisonMode()) != read.plan
+        else { return }
+        open(read.document)
     }
 
     /// Clears what was sent from the composer, leaving anything the user

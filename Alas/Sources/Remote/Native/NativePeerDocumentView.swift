@@ -17,6 +17,14 @@ struct NativePeerDocumentView: View {
     @State private var layoutMode: DiffLayoutMode = .split
     @State private var wrapLines = false
     @State private var showWhitespace = false
+    /// The `.image` content, decoded; nil before decoding or when it failed.
+    @State private var decodedImage: ImagePreviewInfo?
+    @State private var imageDecodeFailed = false
+    /// The `.imageDiff` content, decoded.
+    @State private var imageDiffPair: ImageDiffPair?
+    /// The content the images above were decoded from. A reload answering the same bytes keeps them, so
+    /// the image diff keeps its mode and zoom.
+    @State private var decodedContent: NativePeerWorkspace.DocumentContent?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,7 +33,10 @@ struct NativePeerDocumentView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
-        .task(id: content) { await buildDisplayModel() }
+        .task(id: content) {
+            decodeImages()
+            await buildDisplayModel()
+        }
     }
 
     private var badge: String {
@@ -67,8 +78,29 @@ struct NativePeerDocumentView: View {
         .overlay(Divider().opacity(0.5), alignment: .bottom)
     }
 
+    /// While a reload is in flight, or after it lands, the decoded images stay on screen in the same
+    /// place, so the image diff's state survives.
     @ViewBuilder
     private var documentBody: some View {
+        if keepsDecodedImages, let pair = imageDiffPair {
+            ImageDiffView(pair: pair, relativePath: document.path, onOpenFile: nil)
+        } else if keepsDecodedImages, let info = decodedImage {
+            // A host file has no local URL, so no Open with System or Reveal.
+            ImagePreviewBody(info: info, name: (document.path as NSString).lastPathComponent)
+        } else {
+            contentBody
+        }
+    }
+
+    private var keepsDecodedImages: Bool {
+        switch content {
+        case .idle, .loading, .loaded(.image), .loaded(.imageDiff): true
+        default: false
+        }
+    }
+
+    @ViewBuilder
+    private var contentBody: some View {
         switch content {
         case .idle, .loading:
             Spinner()
@@ -85,6 +117,24 @@ struct NativePeerDocumentView: View {
                 textColor: NSColor(theme.color("fg")),
                 backgroundColor: .clear
             )
+        case .loaded(.image):
+            if imageDecodeFailed {
+                FilePreviewMessage.decodeFailed()
+            } else {
+                Spinner()
+                    .frame(width: 16, height: 16)
+                    .padding()
+            }
+        case .loaded(.binary(let byteSize, let tooLarge)):
+            FilePreviewMessage(
+                title: (document.path as NSString).lastPathComponent,
+                detail: Self.binaryDetail(byteSize: byteSize, tooLarge: tooLarge),
+                icon: "doc.fill"
+            )
+        case .loaded(.imageDiff):
+            Spinner()
+                .frame(width: 16, height: 16)
+                .padding()
         case .loaded(.diff(let diff, let truncated)):
             if truncated { note("The peer cut off this diff.") }
             if diff.hunks.isEmpty {
@@ -107,6 +157,55 @@ struct NativePeerDocumentView: View {
                     .padding()
             }
         }
+    }
+
+    /// The card's kind, then the size when the host sent it.
+    private static func binaryDetail(byteSize: Int?, tooLarge: Bool) -> String {
+        let kind = tooLarge ? "Too large to preview" : "Binary file"
+        guard let byteSize else { return kind }
+        return "\(kind) | \(ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file))"
+    }
+
+    /// Decodes new image content; a reload in flight, or one answering the same bytes, keeps the images.
+    private func decodeImages() {
+        switch content {
+        case .idle, .loading: return
+        case .loaded(let loaded) where loaded == decodedContent: return
+        case .loaded(let loaded): decodedContent = loaded
+        case .failed: decodedContent = nil
+        }
+        decodeImage()
+        decodeImageDiff()
+    }
+
+    private func decodeImageDiff() {
+        guard case .loaded(.imageDiff(let before, let after, let kind, let oldPath)) = content else {
+            imageDiffPair = nil
+            return
+        }
+        imageDiffPair = ImageDiffPair(
+            before: Self.decodedSide(before), after: Self.decodedSide(after), oldPath: oldPath, kind: kind)
+    }
+
+    /// Decodes in memory: a host's LFS store is out of reach, so a pointer fails as "LFS", as local's does.
+    private static func decodedSide(_ side: NativePeerWorkspace.ImageSide) -> ImageDiffSide {
+        switch side {
+        case .data(let data):
+            NSImage(data: data).map(GitService.imageSide(forDecodedImage:))
+                ?? .failed(ImageDiffLoadFailure(message: GitService.isLFSPointer(data) ? "LFS" : "decode"))
+        case .missing: .missing
+        case .failed(let message): .failed(ImageDiffLoadFailure(message: message))
+        }
+    }
+
+    private func decodeImage() {
+        guard case .loaded(.image(let data)) = content else {
+            decodedImage = nil
+            imageDecodeFailed = false
+            return
+        }
+        decodedImage = ImagePreviewInfo(data: data)
+        imageDecodeFailed = decodedImage == nil
     }
 
     private func note(_ text: String, color: String = "fg-dim") -> some View {

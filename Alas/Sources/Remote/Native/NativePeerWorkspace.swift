@@ -29,7 +29,7 @@ struct NativePeerWorkspace: Equatable {
         var truncated: Bool
     }
 
-    enum Document: Hashable {
+    enum Document: Hashable, Sendable {
         /// A nil `stage` diffs against the comparison ref, matching
         /// `RemoteClientMessage.fileDiff`.
         case diff(path: String, stage: ChangeStage?)
@@ -51,6 +51,34 @@ struct NativePeerWorkspace: Equatable {
     enum DocumentContent: Equatable {
         case diff(ParsedDiff, truncated: Bool)
         case text(String, truncated: Bool)
+        /// A file's bytes, decoded by the view.
+        case image(Data)
+        /// A file shown as a placeholder card; `tooLarge` when it is an image above the preview cap.
+        case binary(byteSize: Int?, tooLarge: Bool)
+        /// An image diff's two sides, decoded by the view.
+        case imageDiff(before: ImageSide, after: ImageSide, kind: ImageDiffPairKind, oldPath: String?)
+    }
+
+    /// One side of a host image diff, before decoding.
+    enum ImageSide: Equatable {
+        case data(Data)
+        case missing
+        case failed(String)
+    }
+
+    /// Which stored sides of an image a diff document compares, as `HostWorktreeRead.fileBytes` reads them.
+    struct ImageDiffPlan: Equatable, Sendable {
+        struct Side: Equatable, Sendable {
+            var path: String
+            /// Nil for the working tree.
+            var revision: HostFileRevision?
+        }
+
+        /// Nil for a side the change has none of: an added file's before, a deleted file's after.
+        var before: Side?
+        var after: Side?
+        var kind: ImageDiffPairKind
+        var oldPath: String?
     }
 
     static let offlineMessage = "Peer is offline."
@@ -154,6 +182,79 @@ struct NativePeerWorkspace: Equatable {
             .loaded(.diff(ParsedDiff(hunks: diff.hunks.map(Self.hunk), metadataSummary: diff.note), truncated: diff.truncated))
         case .failure(let error): .failed(error.message)
         }
+    }
+
+    /// The sides an image path's diff `document` compares, from its row in the loaded lists; nil for
+    /// any other document.
+    func imageDiffPlan(
+        for document: Document, comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) -> ImageDiffPlan? {
+        var rows: [ChangedFile] = []
+        switch (document, changes) {
+        case (.diff(_, .staged?), .loaded(let loaded)): rows = loaded.staged
+        case (.diff(_, .unstaged?), .loaded(let loaded)): rows = loaded.unstaged
+        case (.diff(_, nil), .loaded(let loaded)): rows = loaded.branchFiles
+        case (.commitDiff(_, let sha), _):
+            if case .loaded(let loaded)? = commitFiles[sha] { rows = loaded.files }
+        default: break
+        }
+        let row = rows.first { $0.path == document.path }
+        return Self.imageDiffPlan(
+            for: document, status: row?.status ?? "M", renameFrom: row?.renameFrom, comparisonMode: comparisonMode)
+    }
+
+    /// The sides an image diff reads, as local's image diffs pick them: unstaged compares the index with
+    /// the working tree, staged HEAD with the index, a branch diff the comparison ref with the working
+    /// tree, and a commit its parent with itself. A rename's old side reads its old path.
+    static func imageDiffPlan(
+        for document: Document, status: String, renameFrom: String?,
+        comparisonMode: AppConfig.Changes.ChangesComparisonMode?
+    ) -> ImageDiffPlan? {
+        guard ImageFileType.isSupported(currentPath: document.path, originalPath: renameFrom) else { return nil }
+        let path = document.path
+        let resolution: ImageDiffPairResolver.Result
+        let revisions: (before: HostFileRevision?, after: HostFileRevision?)
+        switch document {
+        case .diff(_, let stage):
+            resolution = ImageDiffPairResolver.resolveWorkingCopy(
+                entry: ChangedFile(path: path, status: status, stage: stage ?? .unstaged, add: 0, del: 0,
+                                   renameFrom: renameFrom, conflict: nil),
+                fileExistsOnDisk: true, staged: stage == .staged)
+            revisions = switch stage {
+            case .staged?: (.head, .index)
+            case .unstaged?: (.index, nil)
+            case nil: (.base(comparisonMode: comparisonMode), nil)
+            }
+        case .commitDiff(_, let sha):
+            resolution = ImageDiffPairResolver.resolveCommit(
+                entry: CommitChangedFile(path: path, originalPath: renameFrom, status: status, add: 0, del: 0))
+            revisions = (.parent(sha: sha), .commit(sha: sha))
+        case .file, .stashDiff, .checkpointDiff:
+            return nil
+        }
+        return ImageDiffPlan(
+            before: resolution.kind == .added
+                ? nil : ImageDiffPlan.Side(path: resolution.oldPath ?? path, revision: revisions.before),
+            after: resolution.kind == .deleted ? nil : ImageDiffPlan.Side(path: path, revision: revisions.after),
+            kind: resolution.kind,
+            oldPath: resolution.oldPath
+        )
+    }
+
+    /// One side from a `fileBytes` reply: a file the host doesn't have at that side is missing.
+    static func imageSide(_ reply: RemoteServerMessage?) -> ImageSide {
+        switch reply {
+        case .fileBytes(_, _, let data, _)?: .data(data)
+        case .fileUnavailable(_, _, .notFound, _, _)?: .missing
+        case .fileUnavailable(_, _, let reason, _, let message)?: .failed(describe(reason, message: message))
+        default: .failed(offlineMessage)
+        }
+    }
+
+    /// Lands a host-served image diff for `document` if it is still the open one.
+    mutating func finishImageDiff(_ document: Document, plan: ImageDiffPlan, before: ImageSide, after: ImageSide) {
+        guard document == self.document else { return }
+        documentContent = .loaded(.imageDiff(before: before, after: after, kind: plan.kind, oldPath: plan.oldPath))
     }
 
     mutating func closeDocument() {
@@ -282,12 +383,22 @@ struct NativePeerWorkspace: Equatable {
             documentContent = .failed(Self.describe(reason, message: message))
         case .fileContents(_, let path, let text, let truncated, let version):
             guard document == .file(path: path) else { return true }
-            documentContent = .loaded(.text(text, truncated: truncated))
-            documentVersion = version
-        case .fileUnavailable(_, let path, let reason, _, let message):
+            // A known binary shows the card even when it reads as text, as it does locally.
+            if BinaryFileType.isKnownBinary(relativePath: path) {
+                documentContent = .loaded(.binary(byteSize: truncated ? nil : text.utf8.count, tooLarge: false))
+                documentVersion = nil
+            } else {
+                documentContent = .loaded(.text(text, truncated: truncated))
+                documentVersion = version
+            }
+        case .fileBytes(_, let path, let data, _):
             guard document == .file(path: path) else { return true }
             documentVersion = nil
-            documentContent = .failed(Self.describe(reason, message: message))
+            documentContent = .loaded(.image(data))
+        case .fileUnavailable(_, let path, let reason, let byteSize, let message):
+            guard document == .file(path: path) else { return true }
+            documentVersion = nil
+            documentContent = Self.unavailableContent(path: path, reason: reason, byteSize: byteSize, message: message)
         default:
             return false
         }
@@ -318,6 +429,23 @@ struct NativePeerWorkspace: Equatable {
                 in: tree, for: path, with: [], state: .notLoaded).nodes)
         }
         fileTreeRevision &+= 1
+    }
+
+    /// What a `.file` document the host would not serve shows: the local placeholder card for a binary
+    /// file, and for an image or known binary above the cap; a note for anything else.
+    private static func unavailableContent(
+        path: String, reason: RemoteFileAccessReason, byteSize: Int?, message: String?
+    ) -> Load<DocumentContent> {
+        switch reason {
+        case .binary:
+            return .loaded(.binary(byteSize: byteSize, tooLarge: false))
+        case .tooLarge where ImageFileType.isSupported(relativePath: path):
+            return .loaded(.binary(byteSize: byteSize, tooLarge: true))
+        case .tooLarge where BinaryFileType.isKnownBinary(relativePath: path):
+            return .loaded(.binary(byteSize: byteSize, tooLarge: false))
+        default:
+            return .failed(describe(reason, message: message))
+        }
     }
 
     static func describe(_ reason: RemoteFileAccessReason, message: String?) -> String {
