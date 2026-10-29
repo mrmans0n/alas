@@ -6,7 +6,7 @@ public enum VMGuestPort {
 }
 
 /// The wire protocol's revision. The guest reports it in `helloReply`; the host treats a helper
-/// with a lower one as out of date. Bump it on any change the other side has to know about.
+/// with a different revision as out of date. Bump it on any change the other side has to know about.
 public enum VMGuestProtocol {
     public static let revision = 1
 }

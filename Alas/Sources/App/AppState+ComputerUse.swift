@@ -137,7 +137,6 @@ extension AppState {
                 return .error(VMComputerUseRoute.vmNotRunningMessage)
             }
             vmComputerUseSessions[sessionID] = worktreeID
-            if command.action != .cancel { vmDrivingSessions.insert(sessionID) }
             if vmPendingResumes.contains(sessionID) {
                 // Connects first, so the resume goes out ahead of the call on the same connection.
                 _ = try? await client.hello()
@@ -145,7 +144,14 @@ extension AppState {
             }
             // Awaited in the request's own task, so a client disconnect cancels it and the
             // client tells the guest to cancel the call.
-            return await client.perform(command, sessionID: sessionID)
+            let response = await client.perform(command, sessionID: sessionID)
+            // The badge shows a session using its VM only once the guest has done something for
+            // it, and not again for a session the user stopped during the call.
+            let failed = if case .error = response { true } else { false }
+            if command.action != .cancel, !failed, !vmStoppedSessions.contains(sessionID) {
+                vmDrivingSessions.insert(sessionID)
+            }
+            return response
         }
     }
 
@@ -184,12 +190,16 @@ extension AppState {
     }
 
     /// `vm_status`: whether the session's worktree has a VM, whether it runs here, its guest
-    /// helper (nil when it doesn't answer), and the transfer folder.
+    /// helper (or why it doesn't answer), and the transfer folder.
     func vmStatus(worktreeID: String?) async -> AlasCLIResponse {
         let route = vmRoute(worktreeID: worktreeID)
-        var helper: VMGuestHello?
+        var helper: Result<VMGuestHello, VMGuestClient.Failure>?
         if case .guest(let id) = route, let client = vmManager.guestClient(for: id) {
-            helper = try? await client.hello()
+            do {
+                helper = .success(try await client.hello())
+            } catch {
+                helper = .failure(error as? VMGuestClient.Failure ?? .stopped)
+            }
         }
         var transfer = ""
         switch route {

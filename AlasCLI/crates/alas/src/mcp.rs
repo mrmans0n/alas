@@ -828,7 +828,7 @@ fn vm_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "vm_status",
-            "description": "Report whether this worktree has a VM, whether it is running, its guest helper's version and permissions, and the transfer folder: copy a build to transfer_host_path on the Mac and it appears at transfer_guest_path in the VM.",
+            "description": "Report whether this worktree has a VM, whether it is running, its guest helper's version and permissions (or helper_error when it doesn't answer), and the transfer folder: copy a build to transfer_host_path on the Mac and it appears at transfer_guest_path in the VM.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": { "type": "object", "properties": {} }
         }),
@@ -2393,7 +2393,10 @@ fn is_preview_command(command: &Command) -> bool {
 /// a worker so it keeps reading other calls and cancellations meanwhile.
 fn runs_on_worker(command: &Command) -> bool {
     is_preview_command(command)
-        || matches!(command, Command::Computer(_) | Command::VmRun { .. })
+        || matches!(
+            command,
+            Command::Computer(_) | Command::VmRun { .. } | Command::VmStatus
+        )
         || publishes(command)
         || matches!(command, Command::SessionWait { .. })
 }
@@ -4269,6 +4272,8 @@ mod tests {
             command_for_tool("vm_status", &json!({}), "/wt").unwrap(),
             Command::VmStatus
         );
+        // Waits on the guest helper's hello for seconds.
+        assert!(runs_on_worker(&Command::VmStatus));
         for (name, args) in [
             ("vm_run", json!({})),
             ("vm_run", json!({ "command": "  " })),

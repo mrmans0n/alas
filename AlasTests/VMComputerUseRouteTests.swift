@@ -36,21 +36,27 @@ struct VMComputerUseRouteTests {
         try #require(JSONSerialization.jsonObject(with: Data(line.utf8)) as? NSDictionary)
     }
 
-    private static let noVM = #"{"has_vm":false,"running":false,"helper":null,"transfer_host_path":null,"transfer_guest_path":null}"#
+    private static let noVM = #"{"has_vm":false,"running":false,"helper":null,"helper_error":null,"transfer_host_path":null,"transfer_guest_path":null}"#
+    private static let hello = VMGuestHello(guestVersion: "1.2", accessibility: true, screenRecording: false, protocolRevision: 1)
+    private static let answered = Result<VMGuestHello, VMGuestClient.Failure>.success(hello)
 
-    /// What `vm_status` reports per route: the transfer paths only where a VM is known to exist.
+    /// What `vm_status` reports per route: the helper only for a VM running here, and the
+    /// transfer paths only where a VM is known to exist.
     @Test(arguments: [
-        (VMComputerUseRoute.desktop, noVM),
-        (.vmStateUnreadable(worktreeID: "w"),
-         #"{"has_vm":null,"running":false,"helper":null,"transfer_host_path":null,"transfer_guest_path":null}"#),
-        (.vmNotRunning(worktreeID: "w"),
-         #"{"has_vm":true,"running":false,"helper":null,"transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
-        (.guest(worktreeID: "w"),
-         #"{"has_vm":true,"running":true,"helper":{"version":"1.2","accessibility":true,"screen_recording":false},"transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
+        (VMComputerUseRoute.desktop, answered, noVM),
+        (.vmStateUnreadable(worktreeID: "w"), answered,
+         #"{"has_vm":null,"running":false,"helper":null,"helper_error":null,"transfer_host_path":null,"transfer_guest_path":null}"#),
+        (.vmNotRunning(worktreeID: "w"), answered,
+         #"{"has_vm":true,"running":false,"helper":null,"helper_error":null,"transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
+        (.guest(worktreeID: "w"), answered,
+         #"{"has_vm":true,"running":true,"helper":{"version":"1.2","accessibility":true,"screen_recording":false},"helper_error":null,"transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
+        (.guest(worktreeID: "w"), .failure(.outdated),
+         #"{"has_vm":true,"running":true,"helper":null,"helper_error":"\#(VMGuestClient.Failure.outdated.message)","transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
     ])
-    func statusReply(route: VMComputerUseRoute, expected: String) throws {
-        let hello = VMGuestHello(guestVersion: "1.2", accessibility: true, screenRecording: false, protocolRevision: 1)
-        let reply = VMComputerUseRoute.statusReply(route: route, helper: hello, transferHostPath: "/host/t")
+    func statusReply(
+        route: VMComputerUseRoute, helper: Result<VMGuestHello, VMGuestClient.Failure>, expected: String
+    ) throws {
+        let reply = VMComputerUseRoute.statusReply(route: route, helper: helper, transferHostPath: "/host/t")
         #expect(try Self.object(reply) == Self.object(expected))
     }
 

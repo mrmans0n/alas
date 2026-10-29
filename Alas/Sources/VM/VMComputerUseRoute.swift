@@ -32,9 +32,11 @@ enum VMComputerUseRoute: Equatable {
 
     // MARK: - vm_* replies
 
-    /// The `vm_status` reply for this route. `helper` is used only when the VM runs here; the
-    /// transfer paths are given only when a VM is known to exist.
-    static func statusReply(route: VMComputerUseRoute, helper: VMGuestHello?, transferHostPath: String) -> String {
+    /// The `vm_status` reply for this route. `helper`, the guest's hello or why it failed, is used
+    /// only when the VM runs here; the transfer paths are given only when a VM is known to exist.
+    static func statusReply(
+        route: VMComputerUseRoute, helper: Result<VMGuestHello, VMGuestClient.Failure>?, transferHostPath: String
+    ) -> String {
         let null = NSNull()
         let hasVM: Any
         let running: Bool
@@ -44,14 +46,25 @@ enum VMComputerUseRoute: Equatable {
         case .vmNotRunning: (hasVM, running) = (true, false)
         case .guest: (hasVM, running) = (true, true)
         }
-        let helperObject: Any = running ? helper.map {
-            ["version": $0.guestVersion, "accessibility": $0.accessibility, "screen_recording": $0.screenRecording] as [String: Any]
-        } ?? null : null
+        var helperObject: Any = null
+        var helperError: Any = null
+        switch running ? helper : nil {
+        case .success(let hello):
+            helperObject = [
+                "version": hello.guestVersion, "accessibility": hello.accessibility,
+                "screen_recording": hello.screenRecording,
+            ] as [String: Any]
+        case .failure(let failure):
+            helperError = failure.message
+        case nil:
+            break
+        }
         let knownVM = (hasVM as? Bool) == true
         return jsonLine([
             "has_vm": hasVM,
             "running": running,
             "helper": helperObject,
+            "helper_error": helperError,
             "transfer_host_path": knownVM ? transferHostPath : null,
             "transfer_guest_path": knownVM ? transferGuestPath : null,
         ])
