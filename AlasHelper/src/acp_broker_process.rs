@@ -8,8 +8,8 @@ use crate::acp_broker_protocol::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::collections::{HashMap, VecDeque};
+use std::io::{self, BufRead, BufReader, BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -144,6 +144,12 @@ const BROKER_IPC_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// so neither bound is near what real traffic needs.
 const BROKER_IPC_WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Keep diagnostics bounded even when an adapter writes an unterminated line.
+const MAX_ADAPTER_STDERR_BYTES: usize = 16 * 1024;
+/// EOF normally finishes immediately. Bound post-exit output draining because
+/// descendants can retain stdout or stderr after the adapter has died.
+const ADAPTER_OUTPUT_DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
+
 #[derive(Debug)]
 pub struct AcpBrokerProcessError {
     pub code: i64,
@@ -216,6 +222,9 @@ struct RuntimeState {
     last_thread_status: Option<String>,
     adapter_process_group_id: Option<u32>,
     adapter_exited: bool,
+    adapter_stderr_tail: VecDeque<u8>,
+    adapter_stderr_drained: bool,
+    adapter_output_drained: bool,
     closing: bool,
 }
 
@@ -522,6 +531,9 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
                 last_thread_status: None,
                 adapter_process_group_id,
                 adapter_exited: false,
+                adapter_stderr_tail: VecDeque::new(),
+                adapter_stderr_drained: false,
+                adapter_output_drained: false,
                 closing: false,
             }),
             Condvar::new(),
@@ -1956,7 +1968,7 @@ fn broker_attach(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpB
 
 fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
     let params: AcpSendParams = decode(params)?;
-    let operation = {
+    let (operation, should_write) = {
         let mut state = lock_runtime(runtime);
         ensure_generation(&state, params.generation)?;
         let operation = state
@@ -1996,16 +2008,25 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
                 }
             }
         }
-        operation
+        complete_pending_operations_after_adapter_exit(&mut state);
+        let should_write = !state.adapter_exited && !state.adapter_output_drained;
+        (operation, should_write)
     };
 
-    if !operation.replayed {
-        write_adapter_request(
+    if !operation.replayed && should_write {
+        if let Err(error) = write_adapter_request(
             runtime,
             operation.adapter_request_id.value(),
             &params.method,
             params.params,
-        )?;
+        ) {
+            // A startup exit can close stdin before wait() observes the child.
+            // Leave the operation pending for the output readers in that case,
+            // rather than discarding its stderr in a transport-level error.
+            if !wait_for_adapter_exit(runtime, ADAPTER_OUTPUT_DRAIN_TIMEOUT) {
+                return Err(error);
+            }
+        }
     }
     Ok(json!({
         "requestId": operation.adapter_request_id,
@@ -2090,7 +2111,8 @@ fn broker_close(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBr
 
 fn spawn_stdout_reader(runtime: Runtime, stdout: std::process::ChildStdout) {
     std::thread::spawn(move || {
-        if lock_runtime(&runtime).broker.metadata().wire_context == Some(BrokerWireContext::RawV2) {
+        let raw = lock_runtime(&runtime).broker.metadata().wire_context == Some(BrokerWireContext::RawV2);
+        if raw {
             let mut reader = BufReader::new(stdout);
             loop {
                 let mut frame = Vec::new();
@@ -2104,32 +2126,83 @@ fn spawn_stdout_reader(runtime: Runtime, stdout: std::process::ChildStdout) {
                     }
                 }
             }
-            let mut state = lock_runtime(&runtime);
-            complete_pending_operations(
-                &mut state,
-                "adapter stdout closed before a response was observed",
-            );
-            state
-                .broker
-                .add_adapter_notification("adapter/stdoutClosed", Value::Null);
-            runtime.state.1.notify_all();
         } else {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 handle_adapter_stdout_line(&runtime, &line);
             }
         }
+        // Both transports must route every final stdout response before an
+        // adapter-exit error can settle the remaining operations.
+        let (lock, condvar) = &*runtime.state;
+        let mut state = lock.lock().expect("broker state poisoned");
+        if state.adapter_output_drained {
+            return;
+        }
+        // Legacy requests fail on process exit, not stdout closure. An adapter
+        // can close stdout first and still write its final diagnostic later.
+        while !raw && !state.adapter_exited && !state.closing {
+            state = condvar.wait(state).expect("broker state poisoned");
+        }
+        let deadline = std::time::Instant::now() + ADAPTER_OUTPUT_DRAIN_TIMEOUT;
+        while !state.adapter_stderr_drained && !state.adapter_output_drained && !state.closing {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            state = condvar
+                .wait_timeout(state, remaining)
+                .expect("broker state poisoned")
+                .0;
+        }
+        finish_adapter_output(&mut state);
+        condvar.notify_all();
     });
 }
 
-fn spawn_stderr_reader(runtime: Runtime, stderr: std::process::ChildStderr) {
+fn spawn_stderr_reader(runtime: Runtime, mut stderr: std::process::ChildStderr) {
     std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+        let mut chunk = [0u8; 4096];
+        let mut line = Vec::new();
+        loop {
+            let count = match stderr.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(count) => count,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
             let mut state = lock_runtime(&runtime);
-            state
-                .broker
-                .add_adapter_notification("adapter/stderr", json!({ "text": line }));
+            for &byte in &chunk[..count] {
+                if state.adapter_stderr_tail.len() == MAX_ADAPTER_STDERR_BYTES {
+                    state.adapter_stderr_tail.pop_front();
+                }
+                state.adapter_stderr_tail.push_back(byte);
+                if byte == b'\n' {
+                    add_stderr_notification(&mut state, &line);
+                    line.clear();
+                } else {
+                    line.push(byte);
+                    if line.len() == MAX_ADAPTER_STDERR_BYTES {
+                        add_stderr_notification(&mut state, &line);
+                        line.clear();
+                    }
+                }
+            }
         }
+        let mut state = lock_runtime(&runtime);
+        if !line.is_empty() {
+            add_stderr_notification(&mut state, &line);
+        }
+        state.adapter_stderr_drained = true;
+        runtime.state.1.notify_all();
     });
+}
+
+fn add_stderr_notification(state: &mut RuntimeState, line: &[u8]) {
+    let text = String::from_utf8_lossy(line);
+    state.broker.add_adapter_notification(
+        "adapter/stderr",
+        json!({ "text": text.trim_end_matches('\r') }),
+    );
 }
 
 fn spawn_waiter(runtime: Runtime, mut child: std::process::Child) {
@@ -2140,30 +2213,74 @@ fn spawn_waiter(runtime: Runtime, mut child: std::process::Child) {
         state.adapter_exited = true;
         if !state.closing {
             let _ = state.broker.set_turn_state(BrokerTurnState::Ambiguous);
-            complete_pending_operations_after_adapter_exit(&mut state);
-            if state.broker.metadata().wire_context != Some(BrokerWireContext::RawV2) {
-                state
-                    .broker
-                    .add_adapter_notification("adapter/exit", json!({ "unexpected": true }));
+            // Let the reader route buffered final responses, but do not wait
+            // indefinitely for a descendant to close an inherited output pipe.
+            condvar.notify_all();
+            let deadline = std::time::Instant::now() + ADAPTER_OUTPUT_DRAIN_TIMEOUT;
+            while !state.adapter_output_drained && !state.closing {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    break;
+                }
+                state = condvar
+                    .wait_timeout(state, remaining)
+                    .expect("broker state poisoned")
+                    .0;
+            }
+            if !state.closing {
+                finish_adapter_output(&mut state);
             }
         }
         condvar.notify_all();
     });
 }
 
-fn complete_pending_operations_after_adapter_exit(state: &mut RuntimeState) {
-    // Raw stdout owns final response routing. wait() may win the race with its reader.
-    if state.broker.metadata().wire_context == Some(BrokerWireContext::RawV2) {
+fn finish_adapter_output(state: &mut RuntimeState) {
+    if state.adapter_output_drained {
         return;
     }
-    complete_pending_operations(state, "adapter exited before completing request");
+    state.adapter_output_drained = true;
+    complete_pending_operations_after_adapter_exit(state);
+    if state.broker.metadata().wire_context == Some(BrokerWireContext::RawV2) {
+        state
+            .broker
+            .add_adapter_notification("adapter/stdoutClosed", Value::Null);
+    } else if state.adapter_exited && !state.closing {
+        state
+            .broker
+            .add_adapter_notification("adapter/exit", json!({ "unexpected": true }));
+    }
+}
+
+fn complete_pending_operations_after_adapter_exit(state: &mut RuntimeState) {
+    if !state.adapter_output_drained || state.closing {
+        return;
+    }
+    let raw = state.broker.metadata().wire_context == Some(BrokerWireContext::RawV2);
+    if raw {
+        complete_pending_operations(state, "adapter stdout closed before a response was observed");
+    } else if state.adapter_exited {
+        complete_pending_operations(state, "adapter exited before completing request");
+    }
 }
 
 fn complete_pending_operations(state: &mut RuntimeState, message: &str) {
+    if state.pending_methods.is_empty() {
+        return;
+    }
+    let bytes: Vec<_> = state.adapter_stderr_tail.iter().copied().collect();
+    let stderr = String::from_utf8_lossy(&bytes);
+    // A tail can begin in the middle of a UTF-8 scalar. Bound the decoded
+    // string too, since lossy replacement can expand invalid byte sequences.
+    let mut start = stderr.len().saturating_sub(MAX_ADAPTER_STDERR_BYTES);
+    while !stderr.is_char_boundary(start) {
+        start += 1;
+    }
+    let stderr = stderr[start..].trim();
     let outcome = AdapterRPCOutcome::error(JSONRPCErrorObject {
         code: -32074,
         message: message.to_string(),
-        data: None,
+        data: (!stderr.is_empty()).then(|| json!({ "stderr": stderr })),
     });
     let pending: Vec<_> = state
         .pending_methods
@@ -3295,33 +3412,214 @@ mod tests {
         }
     }
 
+    const STARTUP_DIAGNOSTIC: &str =
+        "error: Bun runtime must be >= 1.4.4 (found v1.4.2). Please upgrade: bun upgrade";
+
     #[test]
-    fn raw_exit_keeps_pending_operations_until_stdout_has_been_drained() {
+    fn adapter_exit_keeps_pending_operations_until_stdout_has_been_drained() {
+        for (raw, inherited_stdout) in [(false, false), (false, true), (true, false), (true, true)] {
+            let descendant = if inherited_stdout { "sleep 30 &" } else { "" };
+            let newline = if inherited_stdout { "\\n" } else { "" };
+            let script = format!(
+                "IFS= read -r line; printf '%s{newline}' '{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"ready\":true}}}}'; {descendant} printf '%s' '{STARTUP_DIAGNOSTIC}' >&2"
+            );
+            let (runtime, mut child, stdout) = adapter_test_runtime(&script, raw);
+            let process_group = child.id();
+            let params = json!({
+                "brokerId": "steering",
+                "generation": 1,
+                "operationKey": "last-response",
+                "method": "initialize",
+                "params": {}
+            });
+            assert_eq!(broker_send(&runtime, Some(params.clone())).unwrap()["pending"], true);
+            // Force wait() to win while the valid final stdout frame is unread.
+            child.wait().unwrap();
+            spawn_waiter(runtime.clone(), child);
+            let exited = wait_for_adapter_exit(&runtime, Duration::from_secs(5));
+            let pending_before_read = lock_runtime(&runtime).pending_methods.len();
+            spawn_stdout_reader(runtime.clone(), stdout);
+            let drained = wait_for_test_output_drain(&runtime);
+            if inherited_stdout {
+                signal_process_group(process_group, 9);
+            }
+            assert!(exited && drained);
+            assert_eq!(pending_before_read, 1);
+            let response = broker_send(&runtime, Some(params)).unwrap();
+            assert!(response.get("error").is_none(), "{response}");
+            if raw {
+                let frame: AcpRawJSONPayload =
+                    serde_json::from_value(response["rawFrame"].clone()).unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<Value>(frame.bytes()).unwrap()["result"]["ready"],
+                    true
+                );
+            } else {
+                assert_eq!(response["result"]["ready"], true);
+            }
+        }
+    }
+
+    #[test]
+    fn startup_exit_before_first_send_replays_bounded_stderr_or_silent_fallback() {
+        for raw in [false, true] {
+            for noisy in [false, true] {
+                let script = if noisy {
+                    format!(
+                        "printf '%20000s' '' | tr ' ' x >&2; printf '\\n%s' '{STARTUP_DIAGNOSTIC}' >&2; exit 42"
+                    )
+                } else {
+                    "exit 42".to_owned()
+                };
+                let (runtime, mut child, stdout) = adapter_test_runtime(&script, raw);
+                child.wait().unwrap();
+                spawn_waiter(runtime.clone(), child);
+                spawn_stdout_reader(runtime.clone(), stdout);
+                assert!(wait_for_adapter_exit(&runtime, Duration::from_secs(5)));
+                assert!(wait_for_test_output_drain(&runtime));
+                let params = json!({
+                    "brokerId": "steering",
+                    "generation": 1,
+                    "operationKey": "early-initialize",
+                    "method": "initialize",
+                    "params": {}
+                });
+                broker_send(&runtime, Some(params.clone())).unwrap();
+                let response = broker_send(&runtime, Some(params)).unwrap();
+                assert_eq!(response["error"]["code"], -32074, "{response}");
+                assert!(response.get("rawFrame").is_none(), "{response}");
+                if noisy {
+                    let stderr = response["error"]["data"]["stderr"].as_str().unwrap();
+                    assert_eq!(stderr.len(), MAX_ADAPTER_STDERR_BYTES);
+                    assert!(stderr.ends_with(STARTUP_DIAGNOSTIC), "{response}");
+                } else {
+                    assert!(response["error"].get("data").is_none_or(Value::is_null));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn startup_stdin_write_failure_keeps_the_terminal_stderr_diagnostic() {
+        for raw in [false, true] {
+            let script = format!("printf '%s' '{STARTUP_DIAGNOSTIC}' >&2; exit 42");
+            let (runtime, mut child, stdout) = adapter_test_runtime(&script, raw);
+            child.wait().unwrap();
+            let params = json!({
+                "brokerId": "steering",
+                "generation": 1,
+                "operationKey": "write-failed",
+                "method": "initialize",
+                "params": {}
+            });
+            // Hold stdin so the send registers before wait() observes the exit,
+            // then let its write hit the dead child's pipe.
+            let stdin = runtime.adapter_stdin.lock().unwrap();
+            let sending_runtime = runtime.clone();
+            let sending_params = params.clone();
+            let sender = std::thread::spawn(move || broker_send(&sending_runtime, Some(sending_params)));
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while lock_runtime(&runtime).pending_methods.is_empty()
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::yield_now();
+            }
+            let registered = !lock_runtime(&runtime).pending_methods.is_empty();
+            spawn_waiter(runtime.clone(), child);
+            let exited = wait_for_adapter_exit(&runtime, Duration::from_secs(5));
+            drop(stdin);
+            let sent = sender.join().unwrap();
+            spawn_stdout_reader(runtime.clone(), stdout);
+            assert!(wait_for_test_output_drain(&runtime));
+            assert!(registered && exited);
+            assert_eq!(sent.unwrap()["pending"], true);
+            let response = broker_send(&runtime, Some(params)).unwrap();
+            assert_eq!(response["error"]["data"]["stderr"], STARTUP_DIAGNOSTIC);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inherited_output_pipes_do_not_block_exit_completion() {
+        for (raw, inherited_stdout) in [(false, false), (false, true), (true, false), (true, true)] {
+            let redirect = if inherited_stdout { "" } else { ">/dev/null" };
+            let script = format!(
+                "IFS= read -r request; sleep 30 {redirect} & printf '%s' '{STARTUP_DIAGNOSTIC}' >&2; exit 42"
+            );
+            let (runtime, mut child, stdout) = adapter_test_runtime(&script, raw);
+            let params = json!({
+                "brokerId": "steering",
+                "generation": 1,
+                "operationKey": "inherited-initialize",
+                "method": "initialize",
+                "params": {}
+            });
+            broker_send(&runtime, Some(params.clone())).unwrap();
+            let process_group = child.id();
+            child.wait().unwrap();
+            spawn_waiter(runtime.clone(), child);
+            spawn_stdout_reader(runtime.clone(), stdout);
+            let drained = wait_for_test_output_drain(&runtime);
+            let inherited_pipe_still_open = !lock_runtime(&runtime).adapter_stderr_drained;
+            // Stop the descendant even when an assertion below fails.
+            signal_process_group(process_group, 9);
+            assert!(drained, "inherited output held terminal completion open: raw={raw}, stdout={inherited_stdout}");
+            assert!(inherited_pipe_still_open, "fixture must retain inherited stderr");
+            let response = broker_send(&runtime, Some(params)).unwrap();
+            assert_eq!(response["error"]["code"], -32074, "{response}");
+            assert_eq!(response["error"]["data"]["stderr"], STARTUP_DIAGNOSTIC);
+            let attached = broker_attach(&runtime, Some(json!({
+                "brokerId": "steering", "generation": 1, "acknowledgedCursor": 0
+            }))).unwrap();
+            let exit_method = if raw { "adapter/stdoutClosed" } else { "adapter/exit" };
+            assert!(attached["events"].as_array().unwrap().iter().any(|event|
+                event["kind"]["type"] == "adapterNotification"
+                    && event["kind"]["method"] == exit_method
+            ), "{attached}");
+        }
+    }
+
+
+    fn adapter_test_runtime(
+        script: &str,
+        raw: bool,
+    ) -> (Runtime, std::process::Child, std::process::ChildStdout) {
+        let mut command = Command::new("/bin/sh");
+        command.arg("-c").arg(script)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        let mut child = command.spawn().unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let stderr = child.stderr.take().unwrap();
         let mut state = steering_runtime_state();
-        let mut metadata = state.broker.metadata().clone();
-        metadata.wire_context = Some(BrokerWireContext::RawV2);
-        state.broker = ACPBrokerState::new(metadata);
-        let key = OperationKey::new("last-response");
-        let op = state
-            .broker
-            .begin_operation(key.clone(), "initialize", json!({}))
-            .unwrap();
-        state.pending_methods.insert(
-            op.adapter_request_id.value(),
-            PendingOperation {
-                operation_key: key.clone(),
-                method: "initialize".into(),
-            },
-        );
-        complete_pending_operations_after_adapter_exit(&mut state);
-        assert_eq!(state.pending_methods.len(), 1);
-        let frame =
-            AcpRawJSONPayload::new(br#"{"jsonrpc":"2.0","id":1,"result":{"n":1e999}}"#.to_vec());
-        state
-            .broker
-            .complete_raw_operation(&key, "initialize", frame.clone(), None)
-            .unwrap();
-        assert_eq!(state.broker.snapshot().initialize_raw_response, Some(frame));
+        if raw {
+            let mut metadata = state.broker.metadata().clone();
+            metadata.wire_context = Some(BrokerWireContext::RawV2);
+            state.broker = ACPBrokerState::new(metadata);
+        }
+        let runtime = Runtime {
+            state: Arc::new((Mutex::new(state), Condvar::new())),
+            adapter_stdin: Arc::new(Mutex::new(stdin)),
+        };
+        spawn_stderr_reader(runtime.clone(), stderr);
+        (runtime, child, stdout)
+    }
+
+    fn wait_for_test_output_drain(runtime: &Runtime) -> bool {
+        let (lock, condvar) = &*runtime.state;
+        let state = lock.lock().unwrap();
+        condvar
+            .wait_timeout_while(state, Duration::from_secs(5), |state| !state.adapter_output_drained)
+            .unwrap()
+            .0
+            .adapter_output_drained
     }
 
     fn steering_runtime_state() -> RuntimeState {
@@ -3342,6 +3640,9 @@ mod tests {
             last_thread_status: Some("idle".to_string()),
             adapter_process_group_id: None,
             adapter_exited: false,
+            adapter_stderr_tail: VecDeque::new(),
+            adapter_stderr_drained: false,
+            adapter_output_drained: false,
             closing: false,
         }
     }

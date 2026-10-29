@@ -4,6 +4,28 @@ import AlasCore
 @testable import AlasACP
 
 struct ACPBrokerRawClientTests {
+    @Test func brokerExitWithoutAdapterFrameSurfacesItsRecoveryDiagnostic() async throws {
+        let diagnostic = "Bun runtime is unsupported. Please upgrade: bun upgrade"
+        let rpc = JSONRPCError(code: -32074, message: "adapter stdout closed before a response was observed",
+            data: AnyCodable(["stderr": diagnostic]))
+        let service = RawBrokerFixture()
+        await service.failWithoutSource(rpc)
+        let client = makeClient(service)
+        _ = try await client.start()
+        do {
+            _ = try await client.send(ACPRequest(method: "initialize", brokerOperationKey: "key"))
+            Issue.record("Expected startup failure")
+        } catch ACPClientError.jsonrpc(let error) {
+            #expect(error == rpc)
+        } catch {
+            Issue.record("Startup diagnostics were replaced by \(error)")
+        }
+        await client.detach()
+        var frames: [ACPBrokerRawFrameDelivery] = []
+        for await frame in client.incomingRawFrames { frames.append(frame) }
+        #expect(frames.allSatisfy { $0.frame == RawBrokerFixture.first })
+    }
+
     @Test func rawReplayRequiresExplicitOrderedConsumptionAndFencesDetachedCallbacks() async throws {
         let service = RawBrokerFixture()
         let client = makeClient(service)
@@ -326,6 +348,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     func preloadOutcome(_ value: ACPBrokerRPCOutcome, cursor: UInt64) { outcome = value
     completionCursor = cursor }
     var outcome: ACPBrokerRPCOutcome?
+    private var syntheticFailure: JSONRPCError?
+    func failWithoutSource(_ error: JSONRPCError) { syntheticFailure = error }
     let context: ACPBrokerWireContext
     var acks: [UInt64] = []
     var closeCount = 0
@@ -400,6 +424,10 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         return result
     }
     func send(_ params: ACPBrokerSendParams) throws -> ACPBrokerSendResult {
+        if let syntheticFailure {
+            outcome = .init(result: nil, error: syntheticFailure)
+            return .init(requestId: .init(rawValue: 9), replayed: true, error: syntheticFailure)
+        }
         var value = ACPBrokerRPCOutcome(result: nil, error: isError ? JSONRPCError(code: -32044, message: "rejected", data: AnyCodable(["kind": "codex_hook_review_required"])) : nil)
         value.rawFrame = .init(bytes: isError ? Self.error : Data(#"{"jsonrpc":"2.0","id":9,"result":null}"#.utf8))
         outcome = value
