@@ -1250,8 +1250,7 @@ final class NativePeerSessions {
             documentRequestOutdated = false
             hostFileRefusals = [:]
         }
-        let bytesTarget = hostBytesTarget
-        workspace.beginDocument(document, previewsFiles: bytesTarget != nil)
+        workspace.beginDocument(document)
         guard !documentRequestsInFlight.contains(document) else {
             // A request for this exact document is already outstanding —
             // whether it's the one already open (a refresh) or one just
@@ -1275,7 +1274,7 @@ final class NativePeerSessions {
         case .commitDiff(let path, let sha):
             routeWorkspaceRead(.commitDiff(sha: sha, path: path)) { .commitFileDiff(sessionId: $0, sha: sha, path: path) }
         case .file(let path):
-            if ImageFileType.isSupported(relativePath: path), let target = bytesTarget {
+            if ImageFileType.isSupported(relativePath: path), let target = hostBytesTarget {
                 routeHostRead(.fileBytes(path: path, revision: nil), to: target)
             } else {
                 routeWorkspaceRead(.file(path: path)) { .readFile(sessionId: $0, path: path) }

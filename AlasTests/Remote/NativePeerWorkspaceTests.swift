@@ -267,27 +267,35 @@ struct NativePeerWorkspaceTests {
         #expect(workspace.documentVersion == (step == .reopenSameFile ? version : nil))
     }
 
-    /// A host that serves file bytes turns a binary refusal, or an image or known binary over the
-    /// cap, into the placeholder card with its size; an older host, a text file over the cap and
-    /// any other refusal keep the note. `tooLarge` is the card's flag, nil for the note.
+    /// A binary refusal, an image or known binary over the cap, and a known binary read as text show
+    /// the placeholder card with their size; other text shows, and other refusals keep the note.
+    /// `reason` nil is a text reply; `tooLarge` is the card's flag, nil for no card.
     @Test(arguments: [
-        ("a.dat", RemoteFileAccessReason.binary, true, false as Bool?),
-        ("a.png", .tooLarge, true, true),
-        ("a.pdf", .tooLarge, true, false),
-        ("a.log", .tooLarge, true, nil),
-        ("a.png", .notFound, true, nil),
-        ("a.dat", .binary, false, nil),
-        ("a.png", .tooLarge, false, nil),
+        ("a.dat", RemoteFileAccessReason.binary as RemoteFileAccessReason?, false as Bool?),
+        ("a.png", .tooLarge, true),
+        ("a.pdf", .tooLarge, false),
+        ("a.pdf", nil, false),
+        ("a.log", .tooLarge, nil),
+        ("a.png", .notFound, nil),
+        ("a.txt", nil, nil),
     ])
-    func unavailableFileShowsTheCardOnlyFromAHostThatServesBytes(
-        path: String, reason: RemoteFileAccessReason, previewsFiles: Bool, tooLarge: Bool?
-    ) {
-        let content = NativePeerWorkspace.unavailableContent(
-            path: path, reason: reason, byteSize: 42, message: nil, previewsFiles: previewsFiles)
-        let expected: NativePeerWorkspace.Load<NativePeerWorkspace.DocumentContent> = tooLarge.map {
-            .loaded(.binary(byteSize: 42, tooLarge: $0))
-        } ?? .failed(NativePeerWorkspace.describe(reason, message: nil))
-        #expect(content == expected)
+    func fileReplyShowsTheBinaryCardWithItsSize(path: String, reason: RemoteFileAccessReason?, tooLarge: Bool?) {
+        var workspace = NativePeerWorkspace()
+        workspace.beginDocument(.file(path: path))
+        let reply: RemoteServerMessage = if let refusal = reason {
+            .fileUnavailable(sessionId: "B:s", path: path, reason: refusal, byteSize: 3, message: nil)
+        } else {
+            .fileContents(sessionId: "B:s", path: path, text: "abc", truncated: false)
+        }
+        _ = workspace.apply(reply)
+        let expected: NativePeerWorkspace.Load<NativePeerWorkspace.DocumentContent> = if let flag = tooLarge {
+            .loaded(.binary(byteSize: 3, tooLarge: flag))
+        } else if let refusal = reason {
+            .failed(NativePeerWorkspace.describe(refusal, message: nil))
+        } else {
+            .loaded(.text("abc", truncated: false))
+        }
+        #expect(workspace.documentContent == expected)
     }
 
     enum Kind: Sendable, CaseIterable { case localChanges, commit, commitRange, branch, reviewRequest }
