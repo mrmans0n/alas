@@ -9,6 +9,25 @@ extension EnvironmentValues {
     @Entry var acpChatBackgroundIsMaterial = false
 }
 
+struct ACPStartupErrorPresentation: Equatable {
+    let title: String
+    let diagnostic: String?
+    let details: String
+
+    init?(error: String, agentDisplayName: String?) {
+        guard error.hasPrefix("ACP session attach failed:") else { return nil }
+        let name = agentDisplayName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        title = "\(name.flatMap { $0.isEmpty ? nil : $0 } ?? "Agent") couldn't start"
+        details = error
+        if let separator = error.range(of: "\nstderr:") {
+            let stderr = error[separator.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)
+            diagnostic = stderr.isEmpty ? nil : stderr
+        } else {
+            diagnostic = nil
+        }
+    }
+}
+
 struct ACPTabView: View {
     let sessionId: ACPSession.ID
     let state: AppState
@@ -1644,13 +1663,39 @@ private struct ACPSessionView: View {
     }
 
     private func errorBanner(_ err: String, dismissible: Bool = true) -> some View {
-        HStack(spacing: 8) {
+        let startup = ACPStartupErrorPresentation(
+            error: err,
+            agentDisplayName: state.agent(id: session.agentId)?.displayName
+        )
+        return HStack(spacing: 8) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(theme.color("del"))
-            Text(err)
-                .font(.system(size: 12))
-                .textSelection(.enabled)
+            if let startup {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(startup.title)
+                        .font(.system(size: 12, weight: .semibold))
+                    if let diagnostic = startup.diagnostic {
+                        Text(diagnostic)
+                            .font(.system(size: 12))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    DisclosureGroup("Details") {
+                        Text(startup.details)
+                            .font(.system(size: 11, design: .monospaced))
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .font(.system(size: 11))
+                }
                 .foregroundStyle(theme.color("fg"))
+            } else {
+                Text(err)
+                    .font(.system(size: 12))
+                    .textSelection(.enabled)
+                    .foregroundStyle(theme.color("fg"))
+            }
             Spacer()
             if case .failed = session.agentState,
                session.connectionRecoveryState == nil,

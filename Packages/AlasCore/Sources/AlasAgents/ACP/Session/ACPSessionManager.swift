@@ -8621,21 +8621,33 @@ extension ACPSessionManager {
                     downgradePersistenceError = error
                 }
             }
-            // Give stderr a moment to drain so the message is the real cause.
-            try? await Task.sleep(nanoseconds: 200_000_000)
+            // Direct stdio still delivers stderr separately. Broker failures carry
+            // their drained diagnostic in the terminal error itself.
+            if connection.client is ACPStdioClient {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+            }
             guard isCurrentAttachment(sessionId: sessionId, attempt: attempt, session: session) else {
                 await connection.shutdown()
                 return
             }
             stderrTask.cancel()
-            let tail = stderrBuffer.tail()
             let surfacedError = downgradePersistenceError
                 ?? terminalReplayError
                 ?? durableRetry?.underlying
                 ?? error
+            let rpc: JSONRPCError?
+            if let direct = surfacedError as? JSONRPCError { rpc = direct }
+            else if case ACPClientError.jsonrpc(let wrapped) = surfacedError { rpc = wrapped }
+            else if let raw = surfacedError as? ACPBrokerRawRPCError { rpc = raw.rpcError }
+            else if let replay = surfacedError as? ACPBrokerDurableCompletionReplayError { rpc = replay.outcome.error }
+            else { rpc = nil }
+            let brokerStderr = rpc?.code == -32074
+                ? (rpc?.data?.value as? [String: Any])?["stderr"] as? String
+                : nil
+            let tail = brokerStderr?.trimmingCharacters(in: .whitespacesAndNewlines) ?? stderrBuffer.tail()
             let authReason = ACPAuthFailure.message(from: surfacedError)
             let baseMessage = authReason
-                ?? (surfacedError as? JSONRPCError)?.message
+                ?? rpc.map { "ACP error \($0.code): \($0.message)" }
                 ?? surfacedError.localizedDescription
             let base = downgradePersistenceError == nil
                 ? "ACP session attach failed: \(baseMessage)"

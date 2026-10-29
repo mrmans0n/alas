@@ -40,6 +40,16 @@ struct SQLiteDatabaseTests {
         #expect(rows[0]["e"] == nil)
     }
 
+    @Test func emptyEvidenceBindsAsABlobRatherThanNull() throws {
+        let db = try SQLiteDatabase(path: tmp().path)
+        try db.exec("CREATE TABLE evidence (value BLOB NOT NULL)")
+        try db.exec("INSERT INTO evidence VALUES (?)", bindings: [Data()])
+        let value = try #require(try db.query("SELECT value, typeof(value) AS kind, length(value) AS size FROM evidence").first)
+        #expect(value["kind"] as? String == "blob")
+        #expect(value["size"] as? Int64 == 0)
+        #expect(value["value"] as? Data == Data())
+    }
+
     @Test("execChanges returns affected row count")
     func execChangesReturnsAffectedRowCount() throws {
         let url = tmp()

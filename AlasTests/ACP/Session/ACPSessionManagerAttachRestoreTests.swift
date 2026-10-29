@@ -6,6 +6,39 @@ import Testing
 @MainActor
 @Suite("ACPSessionManager attach restore", .serialized)
 struct ACPSessionManagerAttachRestoreTests {
+    @Test(arguments: ["direct", "client", "raw", "replay"])
+    func startupFailureShowsBrokerRecoveryDiagnostic(wrapper: String) async throws {
+        let store = try ACPSessionStore(path: tmpStorePath())
+        let client = ACPMockClient()
+        let diagnostic = "Bun runtime must be >= 1.4.4 (found v1.4.2). Please upgrade: bun upgrade"
+        let rpc = JSONRPCError(code: -32074, message: "adapter exited before completing request",
+            data: AnyCodable(["stderr": diagnostic]))
+        client.script(method: "initialize") { _ in
+            switch wrapper {
+            case "client": throw ACPClientError.jsonrpc(rpc)
+            case "raw":
+                throw ACPBrokerRawRPCError(frame: .init(bytes: Data()), rpcError: rpc)
+            case "replay":
+                throw ACPBrokerDurableCompletionReplayError(
+                    outcome: .init(result: nil, error: rpc), underlying: ACPClientError.notRunning)
+            default: throw rpc
+            }
+        }
+        let manager = manager(store: store, client: client)
+        let session = manager.createSession(agentId: "omp")
+        defer { manager.shutdownBackgroundTasks() }
+        await manager.attach(to: session.id, freshlyCreated: true)
+        let message = try #require(session.lastError)
+        #expect(message.hasPrefix("ACP session attach failed:"))
+        #expect(message.hasSuffix("\nstderr: " + diagnostic))
+        #expect(manager.runners[session.id] == nil)
+        if case .failed(let reason) = session.agentState {
+            #expect(reason == message)
+        } else {
+            Issue.record("A startup exit must leave a retryable failed session")
+        }
+    }
+
     @Test(arguments: [false, true])
     func unsupportedSavedBrokerBlocksAttachRestartAndTakeover(enabled: Bool) async throws {
         let store = try ACPSessionStore(path: tmpStorePath())

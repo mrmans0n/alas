@@ -10,6 +10,13 @@ public struct ACPBrokerFrameProvenance: Equatable, Sendable {
     public let generation: ACPBrokerGeneration
     public let cursor: ACPBrokerEventCursor
     public let origin: Origin
+
+    public init(brokerID: ACPBrokerID, generation: ACPBrokerGeneration, cursor: ACPBrokerEventCursor, origin: Origin) {
+        self.brokerID = brokerID
+        self.generation = generation
+        self.cursor = cursor
+        self.origin = origin
+    }
 }
 
 /// Opaque inbound evidence. Receipt and request resolution are independent of consumption.
@@ -356,6 +363,12 @@ actor ACPRawBrokerTransport {
             try await replay(requireFresh: result.pending != true)
             if result.pending == true { try await Task.sleep(for: .milliseconds(50))
             continue }
+            // A broker-generated exit has no adapter response bytes. Preserve
+            // its diagnostic without inventing a raw adapter frame.
+            if result.rawFrame == nil, result.result == nil,
+               let error = result.error, error.code == -32074 {
+                throw ACPClientError.jsonrpc(error)
+            }
             guard result.result == nil, let frame = result.rawFrame else {
                 throw ACPClientError.decoding("Raw broker operation has no source response; observation lost")
             }

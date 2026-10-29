@@ -5,6 +5,7 @@ import AlasCode
 /// An unconsumed frame from one immutable stdio connection. Decoding and model
 /// application do not prove durability; only the owner may consume the handle.
 public struct ACPV2SessionUpdateDelivery: Sendable {
+    public let receiptID = UUID()
     public let frame: Data
     public let brokerProvenance: ACPBrokerFrameProvenance?
     public let connectionID: UUID
