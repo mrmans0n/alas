@@ -173,52 +173,100 @@ final class VMDiskSession: @unchecked Sendable {
 
     // MARK: - Stale sessions
 
-    /// Detaches images under `root` and removes mount directories left by an
-    /// Alas process that died mid-session. Sessions whose owner is still
+    /// Detaches the images and removes the mount directories that an Alas
+    /// process left when it died mid-session, as named by their owner
+    /// records (see `staleSessionsToRemove`). Sessions whose owner is still
     /// running are left alone. Blocking: call off the main actor.
     static func detachStaleSessions(under root: URL) {
         let mnt = root.appendingPathComponent("mnt", isDirectory: true)
-        let sessions = (try? FileManager.default.contentsOfDirectory(
+        let directories = (try? FileManager.default.contentsOfDirectory(
             at: mnt, includingPropertiesForKeys: nil, options: .skipsHiddenFiles
         )) ?? []
         // A launch that never opened a session doesn't shell out.
-        guard !sessions.isEmpty else { return }
-
-        var liveImages = Set<String>()
-        var staleSessions: [URL] = []
-        for session in sessions {
-            let owner = (try? Data(contentsOf: session.appendingPathComponent(ownerFileName)))
+        guard !directories.isEmpty else { return }
+        func record(_ directory: URL) -> SessionRecord {
+            let owner = (try? Data(contentsOf: directory.appendingPathComponent(ownerFileName)))
                 .flatMap { try? PropertyListSerialization.propertyList(from: $0, options: [], format: nil) }
                 as? [String: Any]
-            let ownSession = liveSessions.withLock { $0.contains(session.lastPathComponent) }
-            let ownerPID = owner?["pid"] as? Int
-            if ownSession || (ownerPID.map { $0 != Int(getpid()) && processIsAlive(pid_t($0)) } ?? false) {
-                if let image = owner?["image"] as? String { liveImages.insert(image) }
-            } else {
-                staleSessions.append(session)
-            }
+            return SessionRecord(
+                name: directory.lastPathComponent, pid: owner?["pid"] as? Int, image: owner?["image"] as? String)
         }
-        guard !staleSessions.isEmpty else { return }
+        // Read from disk on every call, so the check right before a detach
+        // sees a session that came alive since the sweep started.
+        func isLive(_ session: SessionRecord) -> Bool {
+            if liveSessions.withLock({ $0.contains(session.name) }) { return true }
+            let current = record(mnt.appendingPathComponent(session.name, isDirectory: true))
+            return current.pid.map { $0 != Int(getpid()) && processIsAlive(pid_t($0)) } ?? false
+        }
+        let sessions = directories.map(record)
+        guard sessions.contains(where: { !isLive($0) }) else { return }
 
+        let info: [String: Any]
         do {
-            let info = try runPlist("/usr/bin/hdiutil", ["info", "-plist"])
-            for device in staleImageDevices(inInfo: info, under: root, excluding: liveImages) {
-                logger.notice("detaching stale guest disk \(device, privacy: .public)")
-                detach(device)
-            }
+            info = try runPlist("/usr/bin/hdiutil", ["info", "-plist"])
         } catch {
             // Its images may still be attached: keep the directories so the
             // next sweep tries again.
             logger.error("hdiutil info failed: \(error.localizedDescription, privacy: .public)")
             return
         }
-        for session in staleSessions {
+        let removable = staleSessionsToRemove(info: info, sessions: sessions, isLive: isLive) { device in
+            logger.notice("detaching stale guest disk \(device, privacy: .public)")
+            return detach(device)
+        }
+        for name in removable {
+            let session = mnt.appendingPathComponent(name, isDirectory: true)
             for volume in ["system", "data"] {
                 let mountPoint = session.appendingPathComponent(volume, isDirectory: true)
                 if isMountPoint(mountPoint) { unmount(mountPoint) }
             }
             removeSessionDirectory(session)
         }
+    }
+
+    /// A session directory's `owner.plist`: the process that opened it and
+    /// the image it attached. Both nil when the file is missing or unreadable.
+    struct SessionRecord: Equatable {
+        let name: String
+        let pid: Int?
+        let image: String?
+    }
+
+    /// Detaches the images of stale sessions and returns the stale session
+    /// directories that may go. Only an image a stale owner record names is
+    /// ever detached: never one a live session also names, nor anything
+    /// else attached from under the VM root. `isLive` is asked again right
+    /// before each detach. A session stays when its record names no image
+    /// (it may be one being created) or when its image may still be
+    /// attached, so the next sweep retries it.
+    static func staleSessionsToRemove(
+        info: [String: Any], sessions: [SessionRecord],
+        isLive: (SessionRecord) -> Bool, detach: (String) -> Bool
+    ) -> [String] {
+        func resolved(_ path: String) -> String { URL(fileURLWithPath: path).resolvingSymlinksInPath().path }
+        let liveImages = Set(sessions.filter(isLive).compactMap { $0.image.map(resolved) })
+        var attached: [String: [String]] = [:]
+        for image in info["images"] as? [[String: Any]] ?? [] {
+            guard let path = image["image-path"] as? String, let device = wholeDisk(inEntities: image["system-entities"])
+            else { continue }
+            attached[resolved(path), default: []].append(device)
+        }
+        var detachedImages = Set<String>()
+        var removable: [String] = []
+        for session in sessions where !isLive(session) {
+            guard let image = session.image.map(resolved) else { continue }
+            let devices = attached[image] ?? []
+            if devices.isEmpty || liveImages.contains(image) || detachedImages.contains(image) {
+                // Not attached, or attached for a live session, which keeps it.
+                removable.append(session.name)
+                continue
+            }
+            guard !isLive(session) else { continue }
+            guard devices.allSatisfy(detach) else { continue }
+            detachedImages.insert(image)
+            removable.append(session.name)
+        }
+        return removable
     }
 
     // MARK: - Parsing
@@ -248,17 +296,6 @@ final class VMDiskSession: @unchecked Sendable {
             volumes.first { ($0["Roles"] as? [String])?.contains(role) == true }?["DeviceIdentifier"] as? String
         }
         return (device(withRole: "Data"), device(withRole: "System"))
-    }
-
-    /// Whole-disk devices of images attached from under `root`, skipping
-    /// images a live session owns.
-    static func staleImageDevices(inInfo info: [String: Any], under root: URL, excluding live: Set<String>) -> [String] {
-        let prefix = root.resolvingSymlinksInPath().path + "/"
-        return (info["images"] as? [[String: Any]] ?? []).compactMap { image in
-            guard let path = (image["image-path"] as? String).map({ URL(fileURLWithPath: $0).resolvingSymlinksInPath().path }),
-                  path.hasPrefix(prefix), !live.contains(path) else { return nil }
-            return wholeDisk(inEntities: image["system-entities"])
-        }
     }
 
     private static func apfsContainer(entities: Any?, wholeDisk: String) throws -> String {

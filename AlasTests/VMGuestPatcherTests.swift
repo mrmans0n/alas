@@ -162,6 +162,50 @@ struct VMGuestPatcherTests {
         #expect(VMDiskSession.wholeDisk(inEntities: plist) == expected)
     }
 
+    struct SweepCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        /// The session's owner pid; 1 is live, 2 dead, nil no owner record.
+        let pid: Int?
+        let image: String?
+        var detachSucceeds = true
+        let detached: [String]
+        let removed: Bool
+        var testDescription: String { name }
+    }
+
+    nonisolated static let sweepCases: [SweepCase] = [
+        SweepCase(name: "stale record, image attached: detached", pid: 2, image: "/vms/worktrees/a/disk.img",
+                  detached: ["/dev/disk7"], removed: true),
+        SweepCase(name: "stale record, image not attached: removed", pid: 2, image: "/vms/worktrees/b/disk.img",
+                  detached: [], removed: true),
+        SweepCase(name: "live record: skipped", pid: 1, image: "/vms/worktrees/a/disk.img",
+                  detached: [], removed: false),
+        SweepCase(name: "no owner record: kept", pid: nil, image: nil, detached: [], removed: false),
+        SweepCase(name: "stale record but the detach fails: kept", pid: 2, image: "/vms/worktrees/a/disk.img",
+                  detachSucceeds: false, detached: ["/dev/disk7"], removed: false),
+    ]
+
+    @Test("the stale-session sweep detaches only images stale owner records name", arguments: sweepCases)
+    func staleSessionSweep(_ c: SweepCase) {
+        // `hand.img` is attached from under the VM root with no record: never touched.
+        let info: [String: Any] = ["images": [
+            ["image-path": "/vms/worktrees/a/disk.img", "system-entities": [["dev-entry": "/dev/disk7"]]],
+            ["image-path": "/vms/hand.img", "system-entities": [["dev-entry": "/dev/disk8"]]],
+        ]]
+        let session = VMDiskSession.SessionRecord(name: "S", pid: c.pid, image: c.image)
+        var detached: [String] = []
+
+        let removed = VMDiskSession.staleSessionsToRemove(
+            info: info, sessions: [session], isLive: { $0.pid == 1 }
+        ) { device in
+            detached.append(device)
+            return c.detachSucceeds
+        }
+
+        #expect(detached == c.detached)
+        #expect(removed == (c.removed ? ["S"] : []))
+    }
+
     // MARK: - Fixture
 
     /// A directory laid out like a freshly booted guest's Data volume.
