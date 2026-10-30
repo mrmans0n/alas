@@ -15,7 +15,7 @@ struct FileHistoryTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            FileHistoryHeader(relativePath: state.relativePath)
             content
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -28,41 +28,6 @@ struct FileHistoryTabView: View {
 
     private var loadKey: String {
         "\(worktreePath.path)\u{0}\(state.relativePath)"
-    }
-
-    private var header: some View {
-        HStack(spacing: 10) {
-            Text((state.relativePath as NSString).lastPathComponent)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(theme.color("fg"))
-
-            Text("History")
-                .font(.system(size: 9.5, weight: .semibold))
-                .padding(.horizontal, 5)
-                .padding(.vertical, 1)
-                .background(theme.color("accent").opacity(0.14))
-                .foregroundColor(theme.color("accent"))
-                .clipShape(RoundedRectangle(cornerRadius: 3))
-
-            if !directoryPath.isEmpty {
-                Text("·")
-                    .foregroundColor(theme.color("fg-faint"))
-                Text(directoryPath)
-                    .font(.system(size: 11))
-                    .foregroundColor(theme.color("fg-dim"))
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
-
-            Spacer()
-        }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(theme.color("bg-2"))
-    }
-
-    private var directoryPath: String {
-        (state.relativePath as NSString).deletingLastPathComponent
     }
 
     @ViewBuilder
@@ -128,5 +93,53 @@ struct FileHistoryTabView: View {
             self.error = (error as NSError).localizedDescription
             loaded = true
         }
+    }
+}
+
+/// A file history's header: its name, a "History" badge and its directory, with a close button when
+/// `onClose` is set.
+struct FileHistoryHeader: View {
+    let relativePath: String
+    var onClose: (() -> Void)?
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text((relativePath as NSString).lastPathComponent)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(theme.color("fg"))
+
+            Text("History")
+                .font(.system(size: 9.5, weight: .semibold))
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(theme.color("accent").opacity(0.14))
+                .foregroundColor(theme.color("accent"))
+                .clipShape(RoundedRectangle(cornerRadius: 3))
+
+            if !directoryPath.isEmpty {
+                Text("·")
+                    .foregroundColor(theme.color("fg-faint"))
+                Text(directoryPath)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer()
+
+            if let onClose {
+                ToolbarBtn(icon: "x", tooltip: "Close history", action: onClose)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(theme.color("bg-2"))
+    }
+
+    private var directoryPath: String {
+        (relativePath as NSString).deletingLastPathComponent
     }
 }

@@ -222,6 +222,28 @@ struct NativePeerCommitEditorSelection: Equatable {
     let comparisonMode: AppConfig.Changes.ChangesComparisonMode
 }
 
+/// A host file's history, opened over the peer center pane beside the selected commit's diff of the file.
+struct NativePeerFileHistory: Equatable {
+    struct Listing: Equatable {
+        var entries: [HostFileHistoryEntry]
+        var truncated: Bool
+    }
+
+    let worktreeId: String
+    let path: String
+    var listing: NativePeerWorkspace.Load<Listing> = .loading
+    var selectedSha: String?
+    /// The document open before, reopened on close.
+    let previousDocument: NativePeerWorkspace.Document?
+
+    /// The selected row's diff of the file, under the path it had in that commit.
+    var selectedDocument: NativePeerWorkspace.Document? {
+        guard case .loaded(let loaded) = listing,
+              let entry = loaded.entries.first(where: { $0.commit.sha == selectedSha }) else { return nil }
+        return .commitDiff(path: entry.pathAtCommit, sha: entry.commit.sha)
+    }
+}
+
 /// A host worktree's text file, edited in the editor over the peer center pane.
 /// Equal and hashed by server, worktree id and path only (by hand: `PeerHostWorktree` is only
 /// Equatable), so a refreshed host snapshot neither re-keys the buffer nor re-ids the view.

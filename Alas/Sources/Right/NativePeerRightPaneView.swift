@@ -353,6 +353,7 @@ struct NativePeerRightPaneView: View {
                     commitFiles: client.workspace.commitFiles,
                     onLoadCommitFiles: { client.loadCommitFiles(sha: $0) },
                     onOpen: { client.open($0) },
+                    onFileHistory: fileHistoryAction.map { history in { history($0.path) } },
                     git: gitActions
                 )
                 .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)
@@ -1082,7 +1083,7 @@ struct NativePeerRightPaneView: View {
                     worktreePath: URL(fileURLWithPath: client.workspaceWorktreePath ?? "/"),
                     openPaths: $openPaths,
                     onSelectFile: { client.open(.file(path: $0.path)) },
-                    onFileHistory: { _ in },
+                    onFileHistory: fileHistoryAction.map { history in { history($0.path) } },
                     onCreateFile: { createHostFile(in: $0) },
                     onCreateFolder: { createHostFolder(in: $0) },
                     shouldAutoLoadChildren: { client.workspace.shouldLoadChildren(path: $0, childrenState: $1) },
@@ -1152,6 +1153,11 @@ struct NativePeerRightPaneView: View {
 
     /// The selected worktree on a host that serves its git actions.
     private var gitTarget: (serverId: String, worktree: PeerHostWorktree)? { client.hostGitTarget }
+
+    /// Opens a path's history; nil, disabling File History, on a host that doesn't serve it.
+    private var fileHistoryAction: ((String) -> Void)? {
+        client.hostHistoryTarget == nil ? nil : { client.openFileHistory(path: $0) }
+    }
 
     private var gitTargetKey: String? {
         gitTarget.map { "\($0.serverId)/\($0.worktree.snapshot.worktree.id)" }

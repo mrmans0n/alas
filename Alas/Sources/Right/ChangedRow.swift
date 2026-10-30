@@ -75,6 +75,7 @@ struct ChangedRow: View {
                 FileContextMenuActions(
                     configuration: .readOnlyFile(kind: .file),
                     onOpenInAlas: onOpenFile,
+                    onFileHistory: onFileHistory,
                     onCopyRelativePath: onCopyRelative,
                     onCopyFullPath: onCopyFull
                 )
