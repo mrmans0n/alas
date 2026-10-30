@@ -329,12 +329,13 @@ struct NativePeerWorkspaceTests {
     }
 
     /// A host offers hunk actions on its staged and unstaged diffs only:
-    /// unstage on the staged one; stage, and discard unless the file is added
-    /// or deleted, on the unstaged one. A cut-off diff's last hunk is never offered.
+    /// unstage on the staged one; stage, and discard unless the file is added,
+    /// on the unstaged one. A deletion and a cut-off diff's last hunk are never offered.
     @Test(arguments: [
         (NativePeerWorkspace.Document.diff(path: "a", stage: .unstaged), 3, 3, 0, false, [HostHunkAction.stage, .discard]),
         (.diff(path: "a", stage: .unstaged), 0, 1, 0, false, [.stage]),
-        (.diff(path: "a", stage: .unstaged), 1, 0, 0, false, [.stage]),
+        (.diff(path: "a", stage: .unstaged), 1, 0, 0, false, []),
+        (.diff(path: "a", stage: .staged), 1, 0, 0, false, []),
         (.diff(path: "a", stage: .staged), 3, 3, 0, false, [.unstage]),
         (.diff(path: "a", stage: .staged), 3, 3, 1, true, []),
         (.diff(path: "a", stage: .unstaged), 3, 3, 0, true, [.stage, .discard]),

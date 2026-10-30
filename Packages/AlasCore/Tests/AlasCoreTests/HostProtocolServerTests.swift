@@ -1840,10 +1840,13 @@ struct HostProtocolServerTests {
         let notes = repo.appendingPathComponent("notes.txt")
         let lines = (1...20).map { "line \($0)" }
         try (lines.joined(separator: "\n") + "\n").write(to: notes, atomically: true, encoding: .utf8)
-        try "gone\n".write(to: repo.appendingPathComponent("gone.txt"), atomically: true, encoding: .utf8)
-        #expect(try await Process.git(["add", "notes.txt", "gone.txt"], cwd: repo).exitCode == 0)
+        for name in ["gone.txt", "removed.txt"] {
+            try "gone\n".write(to: repo.appendingPathComponent(name), atomically: true, encoding: .utf8)
+        }
+        #expect(try await Process.git(["add", "notes.txt", "gone.txt", "removed.txt"], cwd: repo).exitCode == 0)
         #expect(try await Process.git(["commit", "-q", "-m", "Add notes"], cwd: repo).exitCode == 0)
         try FileManager.default.removeItem(at: repo.appendingPathComponent("gone.txt"))
+        #expect(try await Process.git(["rm", "-q", "removed.txt"], cwd: repo).exitCode == 0)
         // One line over the cap: the Mac is sent it clamped.
         let longLine = String(repeating: "x", count: RemoteWorktreeFileAccess.maxDiffLineBytes + 1)
         try (longLine + "\n").write(to: repo.appendingPathComponent("long.txt"), atomically: true, encoding: .utf8)
@@ -1884,12 +1887,19 @@ struct HostProtocolServerTests {
         #expect(try await shown("notes.txt", .unstaged) == unstaged)
         #expect(try await act(.discard, "new.sh", .unstaged, 0)
             == .failure(error: .failed(message: "Discard new.sh as a whole file instead.")))
-        // The Mac is shown no diff of a missing file; the host refuses one named anyway.
-        let gone = try #require(await GitService().diff(worktreePath: repo, file: "gone.txt").hunks.first)
-        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .hunk(
-            path: "gone.txt", stage: .unstaged, index: 0, header: gone.header, linesHash: RemoteDiffHunk(gone).linesHash,
-            action: .discard
-        ))) == .failure(error: .failed(message: "Discard gone.txt as a whole file instead.")))
+        // A deletion is left to whole-file staging. Named by hand: the test's
+        // temporary root resolves through a symlink, so its diff read rejects a missing path.
+        for (path, stage, actions) in [
+            ("gone.txt", ChangeStage.unstaged, [HostHunkAction.stage, .discard]), ("removed.txt", .staged, [.unstage]),
+        ] {
+            let deletion = try #require(await GitService().diff(worktreePath: repo, file: path, staged: stage == .staged).hunks.first)
+            for action in actions {
+                #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .hunk(
+                    path: path, stage: stage, index: 0, header: deletion.header, linesHash: RemoteDiffHunk(deletion).linesHash,
+                    action: action
+                ))) == .failure(error: .failed(message: "Stage or unstage the whole file instead.")))
+            }
+        }
         #expect(try await act(.stage, "long.txt", .unstaged, 0)
             == .failure(error: .failed(message: "This hunk is too large to change from here.")))
 

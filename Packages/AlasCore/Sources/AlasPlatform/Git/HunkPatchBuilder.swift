@@ -120,3 +120,11 @@ public enum HunkPatchBuilder: Sendable {
         return false
     }
 }
+
+extension ParsedDiff.Hunk {
+    /// Whether this hunk empties its file from line 0: a deletion, which a
+    /// one-hunk patch cannot stage or unstage.
+    public var deletesWholeFile: Bool {
+        newStart == 0 && !lines.contains { $0.kind == .add }
+    }
+}

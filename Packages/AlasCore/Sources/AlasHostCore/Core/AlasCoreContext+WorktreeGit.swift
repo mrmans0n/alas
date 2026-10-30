@@ -194,6 +194,11 @@ extension AlasCoreContext {
         }
         let hunk = diff.hunks[index]
         guard hunk.header == header, !hunk.lines.isEmpty, RemoteDiffHunk(hunk).linesHash == linesHash else { throw changed }
+        // A deletion's hunk patch would leave an empty file in the index:
+        // whole-file staging removes the entry.
+        guard entry.status != "D", !hunk.deletesWholeFile else {
+            throw HostError.failed(message: "Stage or unstage the whole file instead.")
+        }
 
         let tracked = try await Process.git(["ls-files", "--error-unmatch", "--", path], cwd: root).exitCode == 0
         let arguments: [String]
@@ -201,9 +206,8 @@ extension AlasCoreContext {
         case .stage: arguments = ["apply", "--cached", "-"]
         case .unstage: arguments = ["apply", "--cached", "--reverse", "-"]
         case .discard:
-            // As locally: an untracked file is discarded whole, and a deleted
-            // file's patch has no side to reverse onto.
-            guard tracked, entry.status != "D" else {
+            // As locally: an untracked file is discarded whole.
+            guard tracked else {
                 throw HostError.failed(message: "Discard \(path) as a whole file instead.")
             }
             arguments = ["apply", "--reverse", "-"]
