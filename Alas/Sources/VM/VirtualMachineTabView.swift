@@ -321,7 +321,10 @@ struct VirtualMachineTabView: View {
     /// Boots the golden VM by itself once per setup; afterwards the Start
     /// button does.
     private func autoStartGoldenOnce() {
+        // Only for Customize: a golden awaiting setup otherwise stays off so
+        // "Set up automatically" can run; the manual flow starts it by hand.
         guard case .goldenSetup(let build) = screen,
+              vms.isGoldenCustomized(build: build),
               vms.runningGolden() == nil,
               !vms.isStarting(StartTarget.golden(build: build).id),
               vms.claimGoldenAutoStart(build: build)
