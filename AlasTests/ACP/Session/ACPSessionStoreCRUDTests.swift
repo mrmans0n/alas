@@ -13,6 +13,281 @@ struct ACPSessionStoreCRUDTests {
         try ACPSessionStore(path: tmpURL().path)
     }
 
+    private func submission(_ store: ACPSessionStore, fence: ACPSessionLeaseFence, id: UUID = UUID(),
+        row: UUID = UUID(), binding: ACPV2SubmissionBinding? = nil) throws -> ACPV2SubmissionRegistration {
+        try store.registerV2Submission(id: id, sessionId: "journal", upstreamSessionId: "upstream", localRowID: row,
+            binding: binding ?? .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 7), operationKey: .init(rawValue: UUID().uuidString)), fence: fence)
+    }
+
+    @Test(arguments: [JSONRPCID.number(-7), .string("prefix:7")])
+    func submissionRegistrationKeepsWireAndLocalIdentityAcrossReopen(wireID: JSONRPCID) throws {
+        let (store, fence, _) = try journalFixture()
+        let connection = UUID()
+        let binding = ACPV2SubmissionBinding.stdio(connectionID: connection, requestID: wireID)
+        let first = try submission(store, fence: fence, binding: binding)
+        let reopened = try ACPSessionStore(path: store.path)
+        let retry = try submission(reopened, fence: fence, id: first.id, row: first.localRowID, binding: binding)
+        #expect(retry == first)
+        #expect(first.sequence == 1)
+        let other = try submission(reopened, fence: fence, binding: .stdio(connectionID: UUID(), requestID: wireID))
+        #expect(other.sequence == 2)
+        #expect(other.localRowID != first.localRowID)
+        #expect(throws: ACPV2SubmissionLedgerError.conflict) { try submission(reopened, fence: fence, binding: binding) }
+        #expect(throws: ACPV2SubmissionLedgerError.conflict) { try submission(reopened, fence: fence, id: first.id, binding: binding) }
+        #expect(throws: ACPV2SubmissionLedgerError.conflict) {
+            try submission(reopened, fence: fence, row: first.localRowID, binding: .stdio(connectionID: connection, requestID: .number(8)))
+        }
+        let laterAttempt = try submission(reopened, fence: fence, row: first.localRowID,
+            binding: .stdio(connectionID: UUID(), requestID: wireID))
+        #expect(laterAttempt.sequence == 3)
+    }
+
+    @Test(arguments: ["lease", "session", "generation", "context", "id", "exhausted"])
+    func invalidSubmissionRegistrationCannotAllocateAnAttempt(reason: String) throws {
+        let (store, original, _) = try journalFixture()
+        var fence = original
+        var binding = ACPV2SubmissionBinding.broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 7), operationKey: .init(rawValue: "op"))
+        switch reason {
+        case "lease": try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        case "session": fence = .init(sessionId: "elsewhere", ownerInstance: "A", token: "owner")
+        case "generation": binding = .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: .max), operationKey: .init(rawValue: "op"))
+        case "context": try store.db.exec("UPDATE sessions SET acp_broker_wire_context = '{future}' WHERE id = 'journal'")
+        case "id": binding = .broker(id: .init(rawValue: "bad/id"), generation: .init(rawValue: 7), operationKey: .init(rawValue: "op"))
+        default:
+            _ = try submission(store, fence: fence)
+            try store.db.exec("UPDATE acp_v2_submissions SET sequence = ?", bindings: [Int64.max])
+        }
+        let count = try store.db.query("SELECT id FROM acp_v2_submissions").count
+        #expect(throws: (any Error).self) { try submission(store, fence: fence, binding: binding) }
+        #expect(try store.db.query("SELECT id FROM acp_v2_submissions").count == count)
+    }
+
+    private func submissionDelivery(_ registration: ACPV2SubmissionRegistration, frame: Data,
+        cursor: UInt64 = 5, requestID: UInt64 = .max, origin: ACPBrokerFrameProvenance.Origin = .journal,
+        callback: ACPDurableConsumptionAcknowledgement? = nil) -> ACPRawRPCDelivery {
+        switch registration.binding {
+        case .stdio(let connection, let id):
+            return .init(frame: frame, connectionID: connection, source: .stdio(requestID: id, method: "session/prompt"),
+                durableConsumptionAcknowledgement: callback)
+        case .broker(let id, let generation, let key):
+            return .init(frame: frame, connectionID: UUID(), source: .brokerOperation(operationKey: key,
+                requestID: .init(rawValue: requestID), method: "session/prompt"),
+                brokerProvenance: .init(brokerID: id, generation: generation, cursor: .init(rawValue: cursor), origin: origin),
+                durableConsumptionAcknowledgement: callback)
+        }
+    }
+
+    @Test(arguments: ["accepted", "error", "malformed", "wrong-id", "bad-result", "empty"])
+    func submissionOutcomesRetainExactEvidenceAndInterpretConservatively(kind: String) throws {
+        let (store, fence, _) = try journalFixture()
+        let registration = try submission(store, fence: fence)
+        let before = try #require(try store.loadV2Submission(id: registration.id))
+        #expect(before.recovery == .uncertain)
+        let text: String
+        switch kind {
+        case "accepted": text = " \n{\"jsonrpc\":\"2.0\",\"id\":18446744073709551615,\"result\":{\"messageId\":\"m\",\"future\":1e999}}\n"
+        case "error": text = #"{"jsonrpc":"2.0","id":18446744073709551615,"error":{"code":-32044,"message":"failed","data":{"n":1e999}}}"#
+        case "wrong-id": text = #"{"jsonrpc":"2.0","id":7,"result":{"messageId":"wrong"}}"#
+        case "bad-result": text = #"{"jsonrpc":"2.0","id":18446744073709551615,"result":null}"#
+        case "empty": text = ""
+        default: text = "{broken"
+        }
+        let bytes = Data(text.utf8)
+        let consumed = Mutex(0)
+        let delivery = submissionDelivery(registration, frame: bytes, callback: { consumed.withLock { $0 += 1 } })
+        let first = try store.retainV2SubmissionOutcome(delivery, for: registration, fence: fence)
+        #expect(first.wasInserted)
+        let outcome = try #require(first.record.outcome)
+        #expect(outcome.frame == bytes)
+        #expect(outcome.receiptID == delivery.receiptID)
+        let reopened = try ACPSessionStore(path: store.path)
+        #expect(try reopened.loadV2Submission(id: registration.id) == first.record)
+        switch first.record.recovery {
+        case .accepted(let acceptance):
+            #expect(kind == "accepted")
+            #expect(acceptance.messageID == "m")
+            guard case .object(let fields) = acceptance.rawValue else { Issue.record("Missing acceptance object")
+            return }
+            #expect(fields["future"] == .number("1e999"))
+        case .rpcFailure: #expect(kind == "error")
+        case .uninterpretable: #expect(!["accepted", "error"].contains(kind))
+        case .uncertain: Issue.record("Committed outcome became uncertain")
+        }
+        #expect(try reopened.updateACPBrokerAcknowledgedCursor(sessionId: "journal", brokerId: "broker", generation: 7, cursor: 8, wireContext: .rawV2))
+        let retry = try reopened.retainV2SubmissionOutcome(submissionDelivery(registration, frame: bytes, origin: .pendingSnapshot), for: registration, fence: fence)
+        #expect(!retry.wasInserted)
+        #expect(retry.record == first.record)
+        #expect(consumed.withLock { $0 } == 0)
+        delivery.acknowledgeDurableConsumption()
+        #expect(consumed.withLock { $0 } == 1)
+    }
+
+    @Test func reversedStdioResponsesPreserveExactLocalRowAssociations() throws {
+        let (store, fence, _) = try journalFixture()
+        let connection = UUID()
+        let a = try submission(store, fence: fence, binding: .stdio(connectionID: connection, requestID: .number(-7)))
+        let b = try submission(store, fence: fence, binding: .stdio(connectionID: connection, requestID: .string("prefix:7")))
+        for (registration, json) in [(b, #"{"jsonrpc":"2.0","id":"prefix:7","result":{"messageId":"b"}}"#),
+            (a, #"{"jsonrpc":"2.0","id":-7,"result":{"messageId":"a"}}"#)] {
+            let delivery = submissionDelivery(registration, frame: Data(json.utf8))
+            let receipt = try store.retainV2SubmissionOutcome(delivery, for: registration, fence: fence)
+            #expect(receipt.record.registration.localRowID == registration.localRowID)
+            #expect(try store.retainV2SubmissionOutcome(delivery, for: registration, fence: fence).wasInserted == false)
+        }
+        guard case .accepted(let acceptedA)? = try store.loadV2Submission(id: a.id)?.recovery,
+              case .accepted(let acceptedB)? = try store.loadV2Submission(id: b.id)?.recovery else { Issue.record("Lost acceptance")
+              return }
+        #expect(acceptedA.messageID == "a")
+        #expect(acceptedB.messageID == "b")
+    }
+
+    @Test(arguments: ["lease", "descriptor", "cache", "diagnostic", "method", "cursor", "request", "bytes"])
+    func rejectedSubmissionOutcomeCannotReplaceEvidenceOrConsume(reason: String) throws {
+        let (store, fence, _) = try journalFixture()
+        let registration = try submission(store, fence: fence)
+        let frame = Data(#"{"jsonrpc":"2.0","id":18446744073709551615,"result":{"messageId":"m"}}"#.utf8)
+        let original = try store.retainV2SubmissionOutcome(submissionDelivery(registration, frame: frame), for: registration, fence: fence)
+        let count = Mutex(0)
+        let callback: ACPDurableConsumptionAcknowledgement = { count.withLock { $0 += 1 } }
+        var delivery = submissionDelivery(registration, frame: reason == "bytes" ? Data([255]) : frame,
+            cursor: reason == "cursor" ? 6 : 5, requestID: reason == "request" ? 7 : .max, callback: callback)
+        switch reason {
+        case "lease": try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        case "descriptor": _ = try store.updateACPBrokerState(sessionId: "journal", brokerId: "broker", generation: 8, acknowledgedCursor: 0, wireContext: .rawV2)
+        case "cache", "diagnostic": delivery = .init(frame: frame, connectionID: UUID(), source: reason == "cache" ? .brokerSnapshotCache : .diagnostic, durableConsumptionAcknowledgement: callback)
+        case "method": delivery = .init(frame: frame, connectionID: UUID(), source: .brokerOperation(operationKey: .init(rawValue: "other"), requestID: .init(rawValue: .max), method: "initialize"), durableConsumptionAcknowledgement: callback)
+        default: break
+        }
+        #expect(throws: (any Error).self) { try store.retainV2SubmissionOutcome(delivery, for: registration, fence: fence) }
+        #expect(try store.loadV2Submission(id: registration.id) == original.record)
+        #expect(count.withLock { $0 } == 0)
+    }
+
+    @Test func failedSubmissionCommitLeavesNoOutcomeOrConsumption() throws {
+        let (store, fence, _) = try journalFixture()
+        let registration = try submission(store, fence: fence)
+        let consumed = Mutex(0)
+        let delivery = submissionDelivery(registration, frame: Data([255, 0]), callback: { consumed.withLock { $0 += 1 } })
+        try store.db.exec("CREATE TRIGGER fail_submission AFTER INSERT ON acp_v2_submission_outcomes BEGIN SELECT RAISE(ABORT, 'failure'); END")
+        #expect(throws: SQLiteError.self) { try store.retainV2SubmissionOutcome(delivery, for: registration, fence: fence) }
+        #expect(try store.loadV2Submission(id: registration.id)?.recovery == .uncertain)
+        try store.db.exec("DROP TRIGGER fail_submission")
+        #expect(try store.retainV2SubmissionOutcome(delivery, for: registration, fence: fence).wasInserted)
+        #expect(consumed.withLock { $0 } == 0)
+    }
+
+    @Test func oneTransportBindingCannotBeClaimedByAnotherLocalSession() throws {
+        let (store, fence, _) = try journalFixture()
+        let binding = ACPV2SubmissionBinding.stdio(connectionID: UUID(), requestID: .string("same:1"))
+        _ = try submission(store, fence: fence, binding: binding)
+        try store.upsertSession(.init(id: "other-local", agentId: "fixture", title: "Other", autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        try store.seizeLease(sessionId: "other-local", instanceId: "A", pid: 1, now: 1, leaseToken: "other")
+        #expect(throws: ACPV2SubmissionLedgerError.conflict) {
+            try store.registerV2Submission(id: UUID(), sessionId: "other-local", upstreamSessionId: "another-upstream", localRowID: UUID(),
+                binding: binding, fence: .init(sessionId: "other-local", ownerInstance: "A", token: "other"))
+        }
+    }
+
+    @Test func submissionRecoveryPagesBoundFramesAndRejectForeignPositions() throws {
+        let (store, fence, _) = try journalFixture()
+        let connection = UUID()
+        var registrations: [ACPV2SubmissionRegistration] = []
+        for index in 1...4 {
+            registrations.append(try submission(store, fence: fence, binding: .stdio(connectionID: connection, requestID: .number(index))))
+        }
+        for (registration, size) in zip(registrations, [3, 3, 8]) {
+            _ = try store.retainV2SubmissionOutcome(submissionDelivery(registration, frame: Data(repeating: 255, count: size)), for: registration, fence: fence)
+        }
+        let source = ACPV2SubmissionSource.stdio(connectionID: connection)
+        let first = try store.loadV2SubmissionPage(sessionId: "journal", upstreamSessionId: "upstream", source: source, maxRecords: 3, maxBytes: 4)
+        #expect(first.records.map(\.registration.sequence) == [1])
+        let second = try store.loadV2SubmissionPage(sessionId: "journal", upstreamSessionId: "upstream", source: source, after: first.next, maxRecords: 1, maxBytes: 4)
+        #expect(second.records.map(\.registration.sequence) == [2])
+        let oversized = try store.loadV2SubmissionPage(sessionId: "journal", upstreamSessionId: "upstream", source: source, after: second.next, maxBytes: 1)
+        #expect(oversized.records.map(\.registration.sequence) == [3])
+        #expect(oversized.containsOversizedRecord)
+        #expect(!oversized.isAtEnd)
+        let end = try store.loadV2SubmissionPage(sessionId: "journal", upstreamSessionId: "upstream", source: source, after: oversized.next, maxBytes: 1)
+        #expect(end.records.map(\.registration.sequence) == [4])
+        #expect(end.records.first?.recovery == .uncertain)
+        #expect(end.isAtEnd)
+        #expect(end.next == nil)
+        for bad in [ACPV2SubmissionContinuation(sessionId: "other", upstreamSessionId: "upstream", source: source, afterSequence: 1),
+            .init(sessionId: "journal", upstreamSessionId: "upstream", source: .stdio(connectionID: UUID()), afterSequence: 1),
+            .init(sessionId: "journal", upstreamSessionId: "upstream", source: source, afterSequence: 99),
+            .init(sessionId: "journal", upstreamSessionId: "upstream", source: source, afterSequence: -1)] {
+            #expect(throws: ACPV2SubmissionLedgerError.invalidInput) {
+                try store.loadV2SubmissionPage(sessionId: "journal", upstreamSessionId: "upstream", source: source, after: bad)
+            }
+        }
+        for (count, bytes) in [(0, 1), (1001, 1), (1, 0), (1, Int.max)] {
+            #expect(throws: ACPV2SubmissionLedgerError.invalidInput) {
+                try store.loadV2SubmissionPage(sessionId: "journal", upstreamSessionId: "upstream", source: source, maxRecords: count, maxBytes: bytes)
+            }
+        }
+        #expect(try store.loadV2SubmissionPage(sessionId: "journal", upstreamSessionId: "different", source: source).records.isEmpty)
+    }
+
+    @Test(arguments: ["format", "context", "source", "receipt", "interpretation", "broker-request"])
+    func corruptSubmissionMetadataFailsWithoutRewritingEvidence(reason: String) throws {
+        let (store, fence, _) = try journalFixture()
+        let registration = try submission(store, fence: fence)
+        _ = try store.retainV2SubmissionOutcome(submissionDelivery(registration, frame: Data()), for: registration, fence: fence)
+        switch reason {
+        case "format": try store.db.exec("UPDATE acp_v2_submissions SET format_version = 99")
+        case "context": try store.db.exec("UPDATE acp_v2_submissions SET wire_context = '{future}'")
+        case "source": try store.db.exec("UPDATE acp_v2_submissions SET source_key = 'wrong'")
+        case "receipt": try store.db.exec("UPDATE acp_v2_submission_outcomes SET receipt_id = 'wrong'")
+        case "interpretation": try store.db.exec("UPDATE acp_v2_submission_outcomes SET interpretation = 'accepted', message_id = 'fiction'")
+        default: try store.db.exec("UPDATE acp_v2_submission_outcomes SET broker_request_id = '18446744073709551616'")
+        }
+        #expect(throws: (any Error).self) { try store.loadV2Submission(id: registration.id) }
+        #expect(try store.db.query("SELECT frame FROM acp_v2_submission_outcomes").first?["frame"] as? Data == Data())
+    }
+
+    @Test func submissionHistorySurvivesBrokerReplacementUntilSessionDeletion() throws {
+        let (store, fence, _) = try journalFixture()
+        try store.enableReplicaExport(sessionId: "journal", recordId: "replica")
+        let serial = try store.db.query("SELECT serial FROM session_replica_serial").first?["serial"] as? Int64
+        let registration = try submission(store, fence: fence)
+        _ = try store.retainV2SubmissionOutcome(submissionDelivery(registration, frame: Data([0, 255])), for: registration, fence: fence)
+        #expect(try store.db.query("SELECT serial FROM session_replica_serial").first?["serial"] as? Int64 == serial)
+        #expect(try store.clearACPBrokerState(sessionId: "journal"))
+        #expect(try store.updateACPBrokerState(sessionId: "journal", brokerId: "broker", generation: 8, acknowledgedCursor: 0, wireContext: .rawV2))
+        _ = try submission(store, fence: fence, row: registration.localRowID,
+            binding: .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 8), operationKey: .init(rawValue: "new")))
+        try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        let reopened = try ACPSessionStore(path: store.path)
+        let history = try reopened.loadV2SubmissionPage(sessionId: "journal", upstreamSessionId: "upstream", source: registration.binding.source)
+        #expect(history.records.map(\.registration.id) == [registration.id])
+        #expect(history.records.first?.outcome?.frame == Data([0, 255]))
+        #expect(try reopened.loadV2Submission(id: registration.id) != nil)
+        try reopened.deleteSession(id: "journal")
+        #expect(try reopened.loadV2Submission(id: registration.id) == nil)
+        #expect(try reopened.db.query("SELECT submission_id FROM acp_v2_submission_outcomes").isEmpty)
+    }
+
+    @Test(arguments: [false, true])
+    func recoveredAcceptanceReconcilesEchoWithoutInventingForegroundCompletion(echoFirst: Bool) throws {
+        let (store, fence, _) = try journalFixture()
+        let registration = try submission(store, fence: fence)
+        let frame = Data(#"{"jsonrpc":"2.0","id":18446744073709551615,"result":{"messageId":"user"}}"#.utf8)
+        _ = try store.retainV2SubmissionOutcome(submissionDelivery(registration, frame: frame), for: registration, fence: fence)
+        let loaded = try #require(try ACPSessionStore(path: store.path).loadV2Submission(id: registration.id))
+        guard case .accepted(let accepted) = loaded.recovery else { Issue.record("Missing acceptance")
+        return }
+        let context = ACPV2SessionState.Context(sessionID: "upstream", connectionID: UUID())
+        var state = ACPV2SessionState(context: context)
+        #expect(state.register(requestID: loaded.registration.sequence, localRowID: loaded.registration.localRowID, context: context).disposition == .registered)
+        let echo = try ACPV2SessionUpdateEnvelope.decode(from: Data(#"{"sessionId":"upstream","update":{"sessionUpdate":"user_message","messageId":"user","content":[{"type":"text","text":"same"}]}}"#.utf8))
+        if echoFirst { _ = try state.apply(echo, source: .snapshot, context: context) }
+        #expect(state.accept(requestID: loaded.registration.sequence, response: accepted, context: context).disposition == .accepted)
+        if !echoFirst { _ = try state.apply(echo, source: .snapshot, context: context) }
+        #expect(state.transcript.messages.first?.localRowID == registration.localRowID)
+        #expect(state.lifecycle.lastForegroundCompletion == nil)
+    }
+
     private func journalFixture(source: ACPV2UpdateJournalSource? = nil) throws -> (ACPSessionStore, ACPSessionLeaseFence, ACPV2UpdateJournalStream) {
         let store = try tmp()
         try store.upsertSession(.init(id: "journal", agentId: "fixture", title: "Journal", autoRun: false,
