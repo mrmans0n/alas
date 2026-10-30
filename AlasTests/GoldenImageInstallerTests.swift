@@ -96,6 +96,34 @@ struct GoldenImageInstallerTests {
         #expect(guest.longestWait <= .seconds(240 + 15))
     }
 
+    // MARK: - Helper update
+
+    nonisolated static let helperUpdateCases: [PipelineCase] = [
+        PipelineCase(name: "all good", fallbackReason: nil),
+        PipelineCase(name: "guest never reachable over SSH", reachable: false,
+                     fallbackReason: "couldn't reach the VM over the network", sshdTurnedOffOffline: true),
+        PipelineCase(name: "helper without its grants", grants: (true, false), fallbackReason: "the helper didn't start",
+                     sshdTurnedOffOffline: true),
+    ]
+
+    @Test("a running VM's helper is reinstalled over SSH", arguments: helperUpdateCases)
+    func helperUpdateOutcome(_ c: PipelineCase) async {
+        let guest = FakeGuest(c)
+        guest.alreadyBooted(running: true)
+        let updater = VMHelperUpdater(
+            shutDown: { [guest] id in await guest.provisioner().stop(id) },
+            patchGrants: { [guest] disk in try await guest.provisioner().patch(disk) },
+            steps: guest.provisioner().steps)
+
+        let outcome = await updater.run(id: "/repo/wt", bundle: VMBundle(url: URL(fileURLWithPath: "/nonexistent")))
+
+        #expect(outcome == (c.fallbackReason.map { .failed(reason: $0) } ?? .updated))
+        #expect(guest.sshdTurnedOffOffline == c.sshdTurnedOffOffline)
+        // Updated: running again with the new helper. Failed: stopped with sshd off.
+        #expect(guest.running == (c.fallbackReason == nil))
+        #expect(guest.openDisks == 0)
+    }
+
     struct LeaseCase: CustomTestStringConvertible, Sendable {
         let name: String
         let mac: String
@@ -188,6 +216,12 @@ private final class FakeGuest {
     }
 
     private func stepDone() { waitStart = nil }
+
+    /// A VM that already ran (its Data volume has a TCC database).
+    func alreadyBooted(running: Bool) {
+        boots = 1
+        self.running = running
+    }
 
     func provisioner() -> GoldenProvisioner {
         GoldenProvisioner(

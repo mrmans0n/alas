@@ -95,6 +95,14 @@ final class WorktreeVMManager {
     /// from taking that for a leftover and booting them.
     @ObservationIgnored private var diskClaims: Set<String> = []
 
+    /// Running VMs whose guest helper was found missing or out of date, by
+    /// a VM tab's check or `vm_status`. Cleared when the VM stops.
+    private(set) var helpersNeedingUpdate: Set<String> = []
+    /// VMs whose helper `updateHelper` is reinstalling.
+    private(set) var updatingHelpers: Set<String> = []
+    /// Why the last helper update of a VM failed, until the next one or dismissal.
+    private(set) var helperUpdateFailures: [String: String] = [:]
+
     private enum PendingAction { case stop, delete }
 
     init(
@@ -408,6 +416,55 @@ final class WorktreeVMManager {
         }
     }
 
+    // MARK: - Guest helper
+
+    /// Records what the guest helper of a VM running here answered: missing
+    /// or unresponsive, or of another protocol revision, offers an update.
+    func noteHelperCheck(_ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>) {
+        guard runningVMs[id] != nil else { return }
+        if Self.helperNeedsUpdate(result) {
+            helpersNeedingUpdate.insert(id)
+        } else {
+            helpersNeedingUpdate.remove(id)
+        }
+    }
+
+    /// Whether a helper check result calls for Update helper. A stopped VM
+    /// or a cancelled check says nothing about the helper.
+    nonisolated static func helperNeedsUpdate(_ result: Result<VMGuestHello, VMGuestClient.Failure>) -> Bool {
+        switch result {
+        case .success(let hello): hello.protocolRevision != VMGuestProtocol.revision
+        case .failure(.helperMissing), .failure(.helperUnresponsive), .failure(.outdated): true
+        case .failure: false
+        }
+    }
+
+    func dismissHelperUpdateFailure(_ id: String) {
+        helperUpdateFailures.removeValue(forKey: id)
+    }
+
+    /// Reinstalls the helper in VM `id` (a worktree's, or a golden's awaiting
+    /// setup) through `VMHelperUpdater`: restarts the VM, which ends up
+    /// running with the new helper, or stopped with `helperUpdateFailures` set.
+    func updateHelper(_ id: String) async {
+        guard updatingHelpers.insert(id).inserted else { return }
+        defer { updatingHelpers.remove(id) }
+        helperUpdateFailures.removeValue(forKey: id)
+        let bundle: VMBundle
+        if id.hasPrefix(Self.goldenIDPrefix) {
+            bundle = VMBundle(url: goldenBundleURL(build: String(id.dropFirst(Self.goldenIDPrefix.count))))
+        } else {
+            let recorded = (try? registry.snapshot())?.first { $0.id == id }?.bundlePath
+            bundle = VMBundle(url: recorded.map { URL(fileURLWithPath: $0) } ?? Self.bundleURL(forWorktree: id, root: root))
+        }
+        switch await VMHelperUpdater.live(manager: self, id: id).run(id: id, bundle: bundle) {
+        case .updated:
+            helpersNeedingUpdate.remove(id)
+        case .failed(let reason):
+            helperUpdateFailures[id] = "Couldn't update the helper (\(reason)). Start the VM and try again, or install it from My Shared Files › helper › Install Alas VM Guest."
+        }
+    }
+
     // MARK: - Golden VM
 
     /// Boots the golden VM so the user can finish Setup Assistant. It takes a
@@ -434,42 +491,51 @@ final class WorktreeVMManager {
         }
     }
 
+    /// Powers a VM off at once, running or still booting. Only for a boot
+    /// whose disk need not be consistent: a worktree clone, or a golden that
+    /// will not be sealed from this run.
+    func forceStop(id: String) async {
+        do {
+            try await stop(id, force: true)
+        } catch {
+            logger.error("Forcing VM \(id, privacy: .public) off failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
     /// Powers the golden VM off at once, running or still booting. Only for
     /// boots whose disk will not be sealed from this run: the unattended
     /// setup's first boot, or giving up on it.
     func forceStopGolden(build: String) async {
-        let id = Self.goldenIDPrefix + build
-        do {
-            try await stop(id, force: true)
-        } catch {
-            logger.error("Forcing golden VM \(id, privacy: .public) off failed: \(String(describing: error), privacy: .public)")
-        }
+        await forceStop(id: Self.goldenIDPrefix + build)
     }
 
-    /// Reserves the stopped golden's record for this process while its disk
-    /// is attached on the host: under the registry lock boot admission and
+    /// Reserves a stopped VM's record for this process while its disk is
+    /// attached on the host: under the registry lock boot admission and
     /// sealing take, the record gets this process as owner, so no Alas
-    /// process boots or seals it until `releaseGoldenDisk`.
-    func claimGoldenDisk(build: String) throws {
-        let id = Self.goldenIDPrefix + build
+    /// process boots (or seals) it until `releaseDisk`.
+    func claimDisk(id: String) throws {
         guard let me = VMRunOwner.current(label: ownerLabel) else {
             throw VMError(message: "Could not identify this Alas process, so the VM cannot be tracked")
         }
-        guard !diskClaims.contains(id) else { throw VMError(message: "The golden disk is already open") }
+        guard !diskClaims.contains(id) else { throw VMError(message: "The VM's disk is already open") }
+        guard runningVMs[id] == nil, !starting.contains(id) else { throw VMError(message: "The VM is running") }
+        let isGolden = id.hasPrefix(Self.goldenIDPrefix)
         try registry.update { records in
-            guard !goldenRunsAnywhere(records) else {
+            if isGolden, goldenRunsAnywhere(records) {
                 throw VMError(message: "The golden VM is running")
             }
             guard let index = records.firstIndex(where: { $0.id == id }) else {
-                throw VMError(message: "The golden VM has no record")
+                throw VMError(message: "The VM has no record")
+            }
+            if let owner = records[index].runOwner {
+                throw VMError(message: "The VM is running in \(owner.label)")
             }
             records[index].runOwner = me
         }
         diskClaims.insert(id)
     }
 
-    func releaseGoldenDisk(build: String) {
-        let id = Self.goldenIDPrefix + build
+    func releaseDisk(id: String) {
         guard diskClaims.remove(id) != nil else { return }
         clearOwner(id)
     }
@@ -480,10 +546,10 @@ final class WorktreeVMManager {
         return runningVMs[id] != nil || starting.contains(id)
     }
 
-    /// The golden guest helper's current version and grants.
-    func goldenHelperStatus(build: String) async throws -> VMGuestHello {
-        guard let client = guestClient(for: Self.goldenIDPrefix + build) else {
-            throw VMError(message: "The golden VM is not running")
+    /// The guest helper's current version and grants in a VM this process runs.
+    func helperStatus(id: String) async throws -> VMGuestHello {
+        guard let client = guestClient(for: id) else {
+            throw VMError(message: "The VM is not running")
         }
         return try await client.status()
     }
@@ -792,6 +858,7 @@ final class WorktreeVMManager {
     }
 
     private func didStop(_ id: String) {
+        helpersNeedingUpdate.remove(id)
         if let client = guestClients.removeValue(forKey: id) {
             Task { await client.close() }
         }

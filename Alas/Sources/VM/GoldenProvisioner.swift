@@ -90,23 +90,31 @@ struct GoldenProvisioner {
 
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "golden-provisioner")
 
+    /// The steps this pipeline shares with `VMHelperUpdater`, keyed by build.
+    var steps: GuestSetupSteps {
+        GuestSetupSteps(
+            boot: boot, stop: stop, openDisk: openDisk, closeDisk: closeDisk, disableSSHD: disableSSHD,
+            guestIP: guestIP, ssh: ssh, helperHello: helperHello, sleep: sleep, now: now)
+    }
+
     func run(bundle: VMBundle, onStep: @MainActor (Step) -> Void) async -> Outcome {
         let build = bundle.url.lastPathComponent
+        let steps = steps
         var patched = false
         do {
-            try await materialiseAndPatch(bundle, build: build, onStep: onStep)
+            try await materialiseAndPatch(bundle, build: build, steps: steps, onStep: onStep)
             patched = true
 
             onStep(.finishing)
-            try await bootOrFail(build, reason: Reason.vmStart)
-            try await finishOverSSH(bundle, build: build)
+            try await steps.bootOrFail(build, reason: Reason.vmStart)
+            try await steps.finishOverSSH(bundle)
 
             onStep(.verifying)
-            try await waitForHelperGrants(build)
+            try await steps.waitForHelperGrants(build)
 
             onStep(.shuttingDown)
             await guestShutdown(build)
-            guard await waitUntil(timeout: Self.shutdownTimeout, interval: Self.shutdownInterval, { !isRunning(build) })
+            guard await steps.waitUntil(timeout: Self.shutdownTimeout, interval: Self.shutdownInterval, { !isRunning(build) })
             else { throw Failure(reason: Reason.shutdown) }
             do {
                 try seal(bundle)
@@ -121,28 +129,26 @@ struct GoldenProvisioner {
             Self.logger.error("Unattended setup of golden \(build, privacy: .public) stopped: \(reason, privacy: .public)")
             await stop(build)
             // A patch that failed part-way may already have turned sshd on.
-            if patched || reason == Reason.disk { await turnSSHDOffOffline(bundle) }
+            if patched || reason == Reason.disk { await steps.turnSSHDOffOffline(bundle) }
             return .fallback(reason: reason)
         }
     }
 
-    // MARK: - Steps
-
     /// First boot until the Data volume has a TCC database, then the offline
     /// patch. A slow first boot gets one longer retry.
     private func materialiseAndPatch(
-        _ bundle: VMBundle, build: String, onStep: @MainActor (Step) -> Void
+        _ bundle: VMBundle, build: String, steps: GuestSetupSteps, onStep: @MainActor (Step) -> Void
     ) async throws {
         for wait in [Self.firstBootWait, Self.retryBootWait] {
             onStep(.firstBoot)
-            try await bootOrFail(build, reason: Reason.firstStart)
+            try await steps.bootOrFail(build, reason: Reason.firstStart)
             await sleep(wait)
             await stop(build)
 
             onStep(.patching)
             let result: Result<Void, Error>
             do {
-                try await withDisk(bundle) { try await patch($0) }
+                try await steps.withDisk(bundle) { try await patch($0) }
                 result = .success(())
             } catch {
                 result = .failure(error)
@@ -161,113 +167,12 @@ struct GoldenProvisioner {
         throw Failure(reason: Reason.firstStart)
     }
 
-    private func withDisk(
-        _ bundle: VMBundle, _ body: @MainActor (any GoldenProvisioningDisk) async throws -> Void
-    ) async throws {
-        let disk = try await openDisk(bundle)
-        do {
-            try await body(disk)
-        } catch {
-            await closeDisk(disk)
-            throw error
-        }
-        await closeDisk(disk)
-    }
-
-    /// The finishing script switches sshd off; a fallback after the patch may
-    /// not have reached it, so a sealed-by-hand image would keep sshd on with
-    /// a known password. Logged, never thrown: the fallback stands either way.
-    private func turnSSHDOffOffline(_ bundle: VMBundle) async {
-        do {
-            try await withDisk(bundle) { try await disableSSHD($0) }
-        } catch {
-            Self.logger.error("Turning sshd off on the golden disk failed: \(String(describing: error), privacy: .public)")
-        }
-    }
-
-    private func bootOrFail(_ build: String, reason: String) async throws {
-        let deadline = now() + Self.storageLockTimeout
-        while true {
-            do {
-                try await boot(build)
-                return
-            } catch let failure as Failure {
-                throw failure
-            } catch where Self.isStorageLockFailure(error) && now() < deadline {
-                Self.logger.notice("Golden \(build, privacy: .public) storage still locked; retrying the boot")
-                await sleep(Self.storageLockInterval)
-            } catch {
-                Self.logger.error("Booting golden \(build, privacy: .public) failed: \(String(describing: error), privacy: .public)")
-                throw Failure(reason: reason)
-            }
-        }
-    }
-
     /// Virtualization's "Failed to lock auxiliary storage" (or the disk): the
     /// previous VM on this bundle hasn't let go of it yet.
     static func isStorageLockFailure(_ error: Error) -> Bool {
         let error = error as NSError
         guard error.domain == "VZErrorDomain" else { return false }
         return error.localizedDescription.localizedCaseInsensitiveContains("lock")
-    }
-
-    /// Waits for the guest's lease and sshd, then installs the helper and its
-    /// LaunchAgent from inside the guest and turns sshd off again.
-    private func finishOverSSH(_ bundle: VMBundle, build: String) async throws {
-        var host: String?
-        let reached = await waitUntil(timeout: Self.reachTimeout, interval: Self.reachInterval) {
-            guard let ip = await guestIP(bundle) else { return false }
-            guard let probe = try? await ssh(ip, "true", Self.probeTimeout), probe.exit == 0 else { return false }
-            host = ip
-            return true
-        }
-        guard reached, let host else { throw Failure(reason: Reason.network) }
-
-        let install: (exit: Int32, stdout: String)
-        do {
-            install = try await ssh(host, Self.installHelperScript(account: .alas), Self.installTimeout)
-        } catch {
-            Self.logger.error("Installing the helper over SSH failed: \(String(describing: error), privacy: .public)")
-            throw Failure(reason: Reason.network)
-        }
-        guard install.exit == 0 else {
-            Self.logger.error("Installing the helper exited \(install.exit, privacy: .public): \(install.stdout, privacy: .public)")
-            throw Failure(reason: Reason.helper)
-        }
-        // Belt and braces: it may be missing or need Full Disk Access, and
-        // it may drop this very connection.
-        _ = try? await ssh(
-            host, Self.sudo("/usr/sbin/systemsetup -f -setremotelogin off", account: .alas), Self.probeTimeout)
-    }
-
-    private func waitForHelperGrants(_ build: String) async throws {
-        var lastHello: VMGuestHello?
-        let ready = await waitUntil(timeout: Self.helperTimeout, interval: Self.helperInterval) {
-            guard let hello = try? await helperHello(build) else { return false }
-            lastHello = hello
-            return hello.accessibility && hello.screenRecording
-        }
-        guard ready else {
-            if let lastHello {
-                Self.logger.error("The golden helper answered without its grants: accessibility \(lastHello.accessibility, privacy: .public), screen recording \(lastHello.screenRecording, privacy: .public)")
-            }
-            throw Failure(reason: Reason.helper)
-        }
-    }
-
-    /// Polls `condition` every `interval` until it holds or `timeout` has
-    /// passed on the injected clock, attempts included. One attempt in flight
-    /// at the deadline may finish past it.
-    private func waitUntil(
-        timeout: Duration, interval: Duration, _ condition: @MainActor () async -> Bool
-    ) async -> Bool {
-        let deadline = now() + timeout
-        while true {
-            if await condition() { return true }
-            let remaining = deadline - now()
-            guard remaining > .zero else { return false }
-            await sleep(min(interval, remaining))
-        }
     }
 
     // MARK: - Guest commands
@@ -361,41 +266,24 @@ extension GoldenProvisioner {
     /// whose code requirement the offline grants name.
     static func live(
         manager: WorktreeVMManager,
-        helperApp: URL? = Bundle.main.resourceURL?
-            .appendingPathComponent("alas-vm-guest/Alas VM Guest.app", isDirectory: true)
+        helperApp: URL? = GuestSetupSteps.embeddedHelperApp
     ) -> GoldenProvisioner {
-        let root = manager.root
         let account = VMGuestAccount.alas
-        return GoldenProvisioner(
+        let steps = GuestSetupSteps.live(
+            manager: manager,
+            registryID: { WorktreeVMManager.goldenIDPrefix + $0 },
             boot: { build in
                 // A golden the manual flow booted (with a display) is
                 // replaced by a headless one.
                 await manager.forceStopGolden(build: build)
-                switch try await manager.startGolden(build: build) {
-                case .running: return
-                case .runningElsewhere(let label): throw Failure(reason: "macOS is running in \(label)")
-                case .needsUserChoice: throw Failure(reason: "no VM slot was free")
-                }
+                try GuestSetupSteps.requireRunning(try await manager.startGolden(build: build))
             },
-            stop: { build in await manager.forceStopGolden(build: build) },
-            openDisk: { bundle in
-                // Claimed in the registry first, so no Alas process boots
-                // the golden while its disk is attached here.
-                let build = bundle.url.lastPathComponent
-                try manager.claimGoldenDisk(build: build)
-                let image = bundle.diskImage
-                do {
-                    let session = try await Task.detached { try VMDiskSession.open(diskImage: image, root: root) }.value
-                    return ClaimedGoldenDisk(session: session, build: build)
-                } catch {
-                    manager.releaseGoldenDisk(build: build)
-                    throw error
-                }
-            },
-            closeDisk: { disk in
-                await Task.detached { disk.close() }.value
-                if let claimed = disk as? ClaimedGoldenDisk { manager.releaseGoldenDisk(build: claimed.build) }
-            },
+            stop: { build in await manager.forceStopGolden(build: build) })
+        return GoldenProvisioner(
+            boot: steps.boot,
+            stop: steps.stop,
+            openDisk: steps.openDisk,
+            closeDisk: steps.closeDisk,
             patch: { disk in
                 guard let helperApp else { throw Failure(reason: Reason.disk) }
                 try await Task.detached {
@@ -405,6 +293,202 @@ extension GoldenProvisioner {
                         helperCodeRequirement: HelperCodeRequirement.designatedRequirementData(of: helperApp),
                         account: account)
                 }.value
+            },
+            disableSSHD: steps.disableSSHD,
+            guestIP: steps.guestIP,
+            ssh: steps.ssh,
+            helperHello: steps.helperHello,
+            guestShutdown: { build in
+                manager.requestGoldenGuestCommand(build: build, Self.shutdownCommand(account: account))
+            },
+            isRunning: { build in manager.isGoldenRunning(build: build) },
+            seal: { bundle in try manager.sealGolden(bundle) },
+            sleep: steps.sleep,
+            now: steps.now)
+    }
+}
+
+/// The guest steps the golden pipeline and `VMHelperUpdater` share: booting
+/// past a storage lock the last VM still holds, attaching the stopped disk,
+/// installing the helper over SSH from inside the guest, waiting for its
+/// grants, and turning sshd off offline after a failure. `key` names the VM
+/// to the boot, stop and hello seams (a golden's build, or a worktree id).
+@MainActor
+struct GuestSetupSteps {
+    typealias Failure = GoldenProvisioner.Failure
+    typealias Reason = GoldenProvisioner.Reason
+
+    var boot: @MainActor (String) async throws -> Void
+    /// Powers the VM off, forced.
+    var stop: @MainActor (String) async -> Void
+    /// Attaches the stopped VM's disk on the host. The VM must not boot, in
+    /// any Alas process, until `closeDisk`.
+    var openDisk: @MainActor (VMBundle) async throws -> any GoldenProvisioningDisk
+    var closeDisk: @MainActor (any GoldenProvisioningDisk) async -> Void
+    var disableSSHD: @MainActor (any GoldenProvisioningDisk) async throws -> Void
+    var guestIP: @MainActor (VMBundle) async -> String?
+    /// (host, script, timeout); the script goes on stdin.
+    var ssh: @MainActor (String, String, Duration) async throws -> (exit: Int32, stdout: String)
+    var helperHello: @MainActor (String) async throws -> VMGuestHello
+    var sleep: @MainActor (Duration) async -> Void
+    var now: @MainActor () -> ContinuousClock.Instant
+
+    private static let logger = Logger(subsystem: "io.nlopez.alas", category: "guest-setup")
+
+    func bootOrFail(_ key: String, reason: String) async throws {
+        let deadline = now() + GoldenProvisioner.storageLockTimeout
+        while true {
+            do {
+                try await boot(key)
+                return
+            } catch let failure as Failure {
+                throw failure
+            } catch where GoldenProvisioner.isStorageLockFailure(error) && now() < deadline {
+                Self.logger.notice("VM \(key, privacy: .public) storage still locked; retrying the boot")
+                await sleep(GoldenProvisioner.storageLockInterval)
+            } catch {
+                Self.logger.error("Booting VM \(key, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                throw Failure(reason: reason)
+            }
+        }
+    }
+
+    func withDisk(
+        _ bundle: VMBundle, _ body: @MainActor (any GoldenProvisioningDisk) async throws -> Void
+    ) async throws {
+        let disk = try await openDisk(bundle)
+        do {
+            try await body(disk)
+        } catch {
+            await closeDisk(disk)
+            throw error
+        }
+        await closeDisk(disk)
+    }
+
+    /// The finishing script switches sshd off; a failure after the patch
+    /// may not have reached it, which would leave sshd on with a known
+    /// password. Logged, never thrown: the failure stands either way.
+    func turnSSHDOffOffline(_ bundle: VMBundle) async {
+        do {
+            try await withDisk(bundle) { try await disableSSHD($0) }
+        } catch {
+            Self.logger.error("Turning sshd off on the guest disk failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Waits for the guest's lease and sshd, then installs the helper and its
+    /// LaunchAgent from inside the guest and turns sshd off again.
+    func finishOverSSH(_ bundle: VMBundle) async throws {
+        var host: String?
+        let reached = await waitUntil(timeout: GoldenProvisioner.reachTimeout, interval: GoldenProvisioner.reachInterval) {
+            guard let ip = await guestIP(bundle) else { return false }
+            guard let probe = try? await ssh(ip, "true", GoldenProvisioner.probeTimeout), probe.exit == 0 else { return false }
+            host = ip
+            return true
+        }
+        guard reached, let host else { throw Failure(reason: Reason.network) }
+
+        let install: (exit: Int32, stdout: String)
+        do {
+            install = try await ssh(
+                host, GoldenProvisioner.installHelperScript(account: .alas), GoldenProvisioner.installTimeout)
+        } catch {
+            Self.logger.error("Installing the helper over SSH failed: \(String(describing: error), privacy: .public)")
+            throw Failure(reason: Reason.network)
+        }
+        guard install.exit == 0 else {
+            Self.logger.error("Installing the helper exited \(install.exit, privacy: .public): \(install.stdout, privacy: .public)")
+            throw Failure(reason: Reason.helper)
+        }
+        // Belt and braces: it may be missing or need Full Disk Access, and
+        // it may drop this very connection.
+        _ = try? await ssh(
+            host, GoldenProvisioner.sudo("/usr/sbin/systemsetup -f -setremotelogin off", account: .alas),
+            GoldenProvisioner.probeTimeout)
+    }
+
+    /// Waits until the helper answers with both grants and this build's
+    /// protocol revision.
+    func waitForHelperGrants(_ key: String) async throws {
+        var lastHello: VMGuestHello?
+        let ready = await waitUntil(timeout: GoldenProvisioner.helperTimeout, interval: GoldenProvisioner.helperInterval) {
+            guard let hello = try? await helperHello(key) else { return false }
+            lastHello = hello
+            return hello.accessibility && hello.screenRecording
+        }
+        guard ready else {
+            if let lastHello {
+                Self.logger.error("The helper in \(key, privacy: .public) answered without its grants: accessibility \(lastHello.accessibility, privacy: .public), screen recording \(lastHello.screenRecording, privacy: .public)")
+            }
+            throw Failure(reason: Reason.helper)
+        }
+    }
+
+    /// Polls `condition` every `interval` until it holds or `timeout` has
+    /// passed on the injected clock, attempts included. One attempt in flight
+    /// at the deadline may finish past it.
+    func waitUntil(
+        timeout: Duration, interval: Duration, _ condition: @MainActor () async -> Bool
+    ) async -> Bool {
+        let deadline = now() + timeout
+        while true {
+            if await condition() { return true }
+            let remaining = deadline - now()
+            guard remaining > .zero else { return false }
+            await sleep(min(interval, remaining))
+        }
+    }
+}
+
+// MARK: - Live seams
+
+extension GuestSetupSteps {
+    /// The guest helper bundle embedded in this app.
+    static var embeddedHelperApp: URL? {
+        Bundle.main.resourceURL?.appendingPathComponent("alas-vm-guest/Alas VM Guest.app", isDirectory: true)
+    }
+
+    /// Fails unless the VM now runs here.
+    static func requireRunning(_ outcome: VMStartOutcome) throws {
+        switch outcome {
+        case .running: return
+        case .runningElsewhere(let label): throw Failure(reason: "macOS is running in \(label)")
+        case .needsUserChoice: throw Failure(reason: "no VM slot was free")
+        }
+    }
+
+    /// The steps wired to `manager`, the host's disk tools and `/usr/bin/ssh`.
+    /// `registryID` maps a key, or the directory name of the bundle whose
+    /// disk is opened, to the VM's registry id.
+    static func live(
+        manager: WorktreeVMManager,
+        registryID: @escaping @MainActor (String) -> String,
+        boot: @escaping @MainActor (String) async throws -> Void,
+        stop: @escaping @MainActor (String) async -> Void
+    ) -> GuestSetupSteps {
+        let root = manager.root
+        let account = VMGuestAccount.alas
+        return GuestSetupSteps(
+            boot: boot,
+            stop: stop,
+            openDisk: { bundle in
+                // Claimed in the registry first, so no Alas process boots
+                // the VM while its disk is attached here.
+                let id = registryID(bundle.url.lastPathComponent)
+                try manager.claimDisk(id: id)
+                let image = bundle.diskImage
+                do {
+                    let session = try await Task.detached { try VMDiskSession.open(diskImage: image, root: root) }.value
+                    return ClaimedDisk(session: session, id: id)
+                } catch {
+                    manager.releaseDisk(id: id)
+                    throw error
+                }
+            },
+            closeDisk: { disk in
+                await Task.detached { disk.close() }.value
+                if let claimed = disk as? ClaimedDisk { manager.releaseDisk(id: claimed.id) }
             },
             disableSSHD: { disk in
                 try await Task.detached { try VMGuestPatcher.disableSSH(dataVolume: disk.dataVolume) }.value
@@ -421,21 +505,16 @@ extension GoldenProvisioner {
             ssh: { host, script, timeout in
                 try await GuestSSH.run(host: host, account: account, script: script, timeout: timeout)
             },
-            helperHello: { build in try await manager.goldenHelperStatus(build: build) },
-            guestShutdown: { build in
-                manager.requestGoldenGuestCommand(build: build, Self.shutdownCommand(account: account))
-            },
-            isRunning: { build in manager.isGoldenRunning(build: build) },
-            seal: { bundle in try manager.sealGolden(bundle) },
+            helperHello: { key in try await manager.helperStatus(id: registryID(key)) },
             sleep: { duration in try? await Task.sleep(for: duration) },
             now: { ContinuousClock.now })
     }
 }
 
-/// A golden disk attached under a registry claim, released on close.
-private struct ClaimedGoldenDisk: GoldenProvisioningDisk {
+/// A VM disk attached under a registry claim, released on close.
+private struct ClaimedDisk: GoldenProvisioningDisk {
     let session: VMDiskSession
-    let build: String
+    let id: String
 
     var dataVolume: URL { session.dataVolume }
     func systemVersion() throws -> (product: String, build: String) { try session.systemVersion() }

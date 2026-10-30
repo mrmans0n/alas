@@ -195,6 +195,7 @@
 		1A7DF776B85AA6F66B6FE2BD /* ComputerUseStopHotKey.swift in Sources */ = {isa = PBXBuildFile; fileRef = E32605F622E996AE3A5DA9AB /* ComputerUseStopHotKey.swift */; };
 		1A9F0F653615306A723315B0 /* ImageDiffPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3EC4DF5F82BE5F73A7551EFE /* ImageDiffPresentation.swift */; };
 		1ACB56B9AA0EC3C1C2AF5E18 /* ReviewThreadWriteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B87101C6F8F27B57AEDC187D /* ReviewThreadWriteTests.swift */; };
+		1AE53218A37CA5AA053571C6 /* VMHelperUpdater.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F0A93B24210931575BE814B /* VMHelperUpdater.swift */; };
 		1AE5FCAF7D44694876754813 /* HookInstallNudgeResolverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C54F4827435F746DC54616D0 /* HookInstallNudgeResolverTests.swift */; };
 		1B16FCB3621BB868C34334D7 /* ACPStreamingTextTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F16F771D1DD9CAC618459D41 /* ACPStreamingTextTests.swift */; };
 		1B197F39E826079635F843EB /* GitServiceHeadMessageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38F5019E0550FA05436EFC74 /* GitServiceHeadMessageTests.swift */; };
@@ -1892,10 +1893,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1913,10 +1914,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2275,6 +2276,7 @@
 		2EC021F0C3380762E45A5BB5 /* UpdateControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateControllerTests.swift; sourceTree = "<group>"; };
 		2EC0311F5824C51F14EC4278 /* ReviewDraftCommentActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewDraftCommentActions.swift; sourceTree = "<group>"; };
 		2EF18448EDA0DCC8B171F11D /* CommitDiffView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitDiffView.swift; sourceTree = "<group>"; };
+		2F0A93B24210931575BE814B /* VMHelperUpdater.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMHelperUpdater.swift; sourceTree = "<group>"; };
 		2F1CBD7C9E0119EC1656C1E2 /* GeminiInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GeminiInstallerTests.swift; sourceTree = "<group>"; };
 		2F5959FF98A5105FF7B17894 /* WorkingTreeChangeGroupTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkingTreeChangeGroupTests.swift; sourceTree = "<group>"; };
 		2F59C2CF9199EC099B1814AC /* CodexInstallerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CodexInstallerTests.swift; sourceTree = "<group>"; };
@@ -4505,6 +4507,7 @@
 				F96397A9C2B512C8114AA551 /* VMDisplaySurface.swift */,
 				6A91AD2A287FDE958C7F6E79 /* VMGuestClient.swift */,
 				DBF265AB1A28E9ED5920F831 /* VMGuestPatcher.swift */,
+				2F0A93B24210931575BE814B /* VMHelperUpdater.swift */,
 				F140C7CC4EE7707DFC5557B2 /* VMTabScreen.swift */,
 				025657437F58CAE1E6E832D9 /* WorktreeVMManager.swift */,
 			);
@@ -7920,6 +7923,7 @@
 				1B5B738D2FA0482EFDFB3D28 /* VMDisplaySurface.swift in Sources */,
 				0FF4CC89C0E3DB1E0EC28127 /* VMGuestClient.swift in Sources */,
 				AC3988E601103A1001CD5FAD /* VMGuestPatcher.swift in Sources */,
+				1AE53218A37CA5AA053571C6 /* VMHelperUpdater.swift in Sources */,
 				56DEFFA9CA11863AB0F88EFB /* VMTabScreen.swift in Sources */,
 				C245DDADA1D81810E9302134 /* VerdictSheet.swift in Sources */,
 				DAA0AFA398C02EC663708825 /* ViewDragOut.swift in Sources */,

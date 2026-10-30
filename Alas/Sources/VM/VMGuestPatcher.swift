@@ -68,6 +68,16 @@ enum VMGuestPatcher {
         try configurePowerAndLock(account, volume: volume)
     }
 
+    /// Only the helper's grants and sshd on, for a guest `patch` already set
+    /// up (its user exists) whose helper is reinstalled over SSH.
+    static func patchGrants(dataVolume: URL, helperCodeRequirement: Data) throws {
+        let volume = Volume(root: dataVolume)
+        let tccDatabase = volume.url(tccDatabasePath)
+        guard volume.exists(tccDatabase) else { throw PatchError.missingTCCDatabase(tccDatabase.path) }
+        try grant(VMGuestProvisioning.TCCGrant.helper(csreq: helperCodeRequirement), in: tccDatabase)
+        try enableSSH(volume: volume)
+    }
+
     /// Turns sshd off again in the guest's launchd overrides, edited in
     /// place. For a guest the patch left with sshd on whose in-guest
     /// finishing step (which disables it) never ran.

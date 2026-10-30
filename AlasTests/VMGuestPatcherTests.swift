@@ -101,6 +101,26 @@ struct VMGuestPatcherTests {
         #expect(try Self.tccRows(volume).count == 2)
     }
 
+    @Test func patchGrantsChangesOnlyTheGrantsAndSSHD() throws {
+        let volume = try Self.makeDataVolume()
+        defer { Self.remove(volume) }
+        // A guest that has booted before already migrated its launchd overrides.
+        let launchd = "private/var/db/com.apple.xpc.launchd/disabled.plist"
+        try Data().write(to: volume.appendingPathComponent("private/var/db/com.apple.xpc.launchd/disabled.migrated"))
+        let before = try Self.snapshot(volume)
+
+        try VMGuestPatcher.patchGrants(dataVolume: volume, helperCodeRequirement: Self.csreq)
+
+        let after = try Self.snapshot(volume)
+        #expect(Set(after.keys) == Set(before.keys))
+        #expect(Set(after.keys.filter { after[$0] != before[$0] })
+            == [launchd, "Library/Application Support/com.apple.TCC/TCC.db"])
+        #expect(try Self.plist(volume, launchd)["com.openssh.sshd"] as? Bool == false)
+        let rows = try Self.tccRows(volume)
+        #expect(rows.map(\.service) == ["kTCCServiceAccessibility", "kTCCServiceScreenCapture"])
+        #expect(rows.allSatisfy { $0.client == VMGuestProvisioning.helperBundleID && $0.csreq == Self.csreq })
+    }
+
     @Test func patchRefusesAVolumeWithoutTCCDatabase() throws {
         let volume = try Self.makeDataVolume()
         defer { Self.remove(volume) }
