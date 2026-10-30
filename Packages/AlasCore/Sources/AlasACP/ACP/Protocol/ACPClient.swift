@@ -20,6 +20,7 @@ public struct ACPRequest {
 }
 
 public struct ACPResponse: Sendable {
+    public let rawDelivery: ACPRawRPCDelivery?
     public let body: Data
     public let durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement?
 
@@ -27,8 +28,15 @@ public struct ACPResponse: Sendable {
         body: Data,
         durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil
     ) {
+        self.rawDelivery = nil
         self.body = body
         self.durableConsumptionAcknowledgement = durableConsumptionAcknowledgement
+    }
+
+    public init(body: Data, rawDelivery: ACPRawRPCDelivery) {
+        self.body = body
+        self.rawDelivery = rawDelivery
+        self.durableConsumptionAcknowledgement = rawDelivery.acknowledgement
     }
 
     public func acknowledgeDurableConsumption() {

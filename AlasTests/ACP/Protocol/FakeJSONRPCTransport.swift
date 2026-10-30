@@ -7,11 +7,26 @@ import Foundation
 final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable {
     private let cont: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
-    var requestIDPrefix: String?
-    private(set) var sentFrames: [Data] = []
-    private(set) var terminateCount = 0
-    var deferWriteCompletions = false
-    private var pendingWriteCompletions: [@Sendable () -> Void] = []
+    private struct State {
+        var requestIDPrefix: String?
+        var sentFrames: [Data] = []
+        var terminateCount = 0
+        var deferWriteCompletions = false
+        var pendingWriteCompletions: [@Sendable () -> Void] = []
+        var emitExitOnTerminate = true
+    }
+    private let lock = NSLock()
+    private var state = State()
+    var requestIDPrefix: String? {
+        get { lock.withLock { state.requestIDPrefix } }
+        set { lock.withLock { state.requestIDPrefix = newValue } }
+    }
+    var sentFrames: [Data] { lock.withLock { state.sentFrames } }
+    var terminateCount: Int { lock.withLock { state.terminateCount } }
+    var deferWriteCompletions: Bool {
+        get { lock.withLock { state.deferWriteCompletions } }
+        set { lock.withLock { state.deferWriteCompletions = newValue } }
+    }
     private let responseForRequest: (@Sendable (Data) -> JSONRPCStdioTransport.Incoming?)?
 
     init(responseForRequest: (@Sendable (Data) -> JSONRPCStdioTransport.Incoming?)? = nil) {
@@ -26,22 +41,26 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
     }
 
     func send(_ data: Data) throws {
-        sentFrames.append(data)
+        lock.withLock { state.sentFrames.append(data) }
         if let response = responseForRequest?(data) { cont.yield(response) }
     }
 
     func send(_ data: Data, onWritten: @escaping @Sendable () -> Void) throws {
         try send(data)
-        if deferWriteCompletions {
-            pendingWriteCompletions.append(onWritten)
-        } else {
-            onWritten()
+        let deferred = lock.withLock {
+            guard state.deferWriteCompletions else { return false }
+            state.pendingWriteCompletions.append(onWritten)
+            return true
         }
+        if !deferred { onWritten() }
     }
 
     func completePendingWrites() {
-        let completions = pendingWriteCompletions
-        pendingWriteCompletions.removeAll()
+        let completions = lock.withLock {
+            let completions = state.pendingWriteCompletions
+            state.pendingWriteCompletions.removeAll()
+            return completions
+        }
         for completion in completions {
             completion()
         }
@@ -50,11 +69,15 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
     /// When false, `terminate()` does not synthesise an `.exited` event —
     /// mirroring the real `JSONRPCStdioTransport`, whose SIGTERM is async and
     /// whose `.exited` is delivered later (or never, for a wedged adapter).
-    var emitExitOnTerminate = true
+    var emitExitOnTerminate: Bool {
+        get { lock.withLock { state.emitExitOnTerminate } }
+        set { lock.withLock { state.emitExitOnTerminate = newValue } }
+    }
 
     func terminate() {
-        terminateCount += 1
-        if emitExitOnTerminate {
+        let emitExit = lock.withLock { state.terminateCount += 1
+        return state.emitExitOnTerminate }
+        if emitExit {
             cont.yield(.exited(0))
         }
         cont.finish()
