@@ -295,23 +295,71 @@ final class WorktreeVMManagerTests {
         #expect(golden.isSealed == (lastStop == .guestShutdown))
     }
 
-    @Test("a worktree VM an interrupted setup left with sshd on gets it turned off offline before it boots")
-    func leftoverSSHDIsTurnedOffBeforeBoot() async throws {
-        let bundle = VMBundle(url: try addRecord("/repo/a"))
+    enum LeftoverSSHDStart: CaseIterable {
+        case worktree, golden
+        /// The unattended setup's or helper update's own boot, which needs sshd.
+        case goldenKeepingSSH
+    }
+
+    @Test(
+        "a VM an interrupted setup left with sshd on gets it turned off offline before it boots, unless the boot needs it",
+        arguments: LeftoverSSHDStart.allCases)
+    func leftoverSSHDIsTurnedOffBeforeBoot(_ start: LeftoverSSHDStart) async throws {
+        let bundle: VMBundle
+        switch start {
+        case .worktree:
+            bundle = try VMBundle(url: addRecord("/repo/a"))
+        case .golden, .goldenKeepingSSH:
+            bundle = try makeGoldenBundle()
+            try addRecord(WorktreeVMManager.goldenIDPrefix + "25A1")
+        }
         let marker = WorktreeVMManager.sshdEnabledMarker(of: bundle)
         try Data().write(to: marker)
         let manager = makeManager()
         let disabled = DisabledDisks()
         manager.disableSSHOffline = { [hypervisor] bundle in disabled.record(bundle.url, bootsSoFar: hypervisor.boots) }
 
-        guard case .running = try await manager.startVM(worktreeID: "/repo/a") else {
+        let outcome = switch start {
+        case .worktree: try await manager.startVM(worktreeID: "/repo/a")
+        case .golden: try await manager.startGolden(build: "25A1")
+        case .goldenKeepingSSH: try await manager.startGolden(build: "25A1", keepingSSH: true)
+        }
+
+        guard case .running = outcome else {
             Issue.record("the VM did not start")
             return
         }
+        let turnedOff = start != .goldenKeepingSSH
+        #expect(disabled.bundles == (turnedOff ? [bundle.url] : []))
+        #expect(disabled.bootsBefore == (turnedOff ? [0] : []))
+        #expect(FileManager.default.fileExists(atPath: marker.path) == !turnedOff)
+    }
 
-        #expect(disabled.bundles == [bundle.url])
-        #expect(disabled.bootsBefore == [0])
-        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    @Test("a VM whose disk stays attached on the host stays claimed", arguments: [true, false])
+    func failedDetachKeepsTheClaim(_ detached: Bool) async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        try manager.claimDisk(id: "/repo/a")
+
+        await GuestSetupSteps.closeClaimed(
+            ClaimedDisk(disk: FakeDisk(detaches: detached), id: "/repo/a"), manager: manager)
+
+        #expect(try (registry.snapshot().first?.runOwner == nil) == detached)
+        if detached {
+            _ = try await manager.startVM(worktreeID: "/repo/a")
+            #expect(manager.running("/repo/a") != nil)
+        } else {
+            await #expect(throws: WorktreeVMManager.VMError.self) {
+                _ = try await manager.startVM(worktreeID: "/repo/a")
+            }
+        }
+    }
+
+    private struct FakeDisk: GoldenProvisioningDisk {
+        let detaches: Bool
+        var dataVolume: URL { URL(fileURLWithPath: "/nonexistent") }
+        func systemVersion() throws -> (product: String, build: String) { ("27.2", "25A1") }
+        func close() -> Bool { detaches }
     }
 
     @MainActor

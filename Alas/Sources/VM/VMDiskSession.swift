@@ -20,6 +20,11 @@ final class VMDiskSession: @unchecked Sendable {
         var errorDescription: String? { message }
     }
 
+    /// The image may still be attached after `close()`.
+    struct DetachFailed: LocalizedError {
+        var errorDescription: String? { "The VM disk could not be detached" }
+    }
+
     let dataVolume: URL
     let systemVolume: URL?
 
@@ -43,7 +48,7 @@ final class VMDiskSession: @unchecked Sendable {
         self.sessionDirectory = sessionDirectory
     }
 
-    deinit { close() }
+    deinit { _ = close() }
 
     static func open(diskImage: URL, root: URL = Paths.vmsRoot) throws -> VMDiskSession {
         let fm = FileManager.default
@@ -138,16 +143,19 @@ final class VMDiskSession: @unchecked Sendable {
         return (product, build)
     }
 
-    /// Unmounts both volumes and detaches the image. Safe to call twice.
-    func close() {
+    /// Unmounts both volumes and detaches the image. Safe to call again:
+    /// when the detach failed it returns false and keeps the session
+    /// directory, so a later close or the next launch's sweep retries it.
+    func close() -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        guard !closed else { return }
-        closed = true
+        guard !closed else { return true }
         if let systemVolume { Self.unmount(systemVolume) }
         Self.unmount(dataVolume)
-        Self.detach(wholeDisk)
+        guard Self.detach(wholeDisk) else { return false }
+        closed = true
         Self.removeSessionDirectory(sessionDirectory)
+        return true
     }
 
     // MARK: - Stale sessions
@@ -282,12 +290,14 @@ final class VMDiskSession: @unchecked Sendable {
         }
     }
 
-    /// `hdiutil detach`, retried while diskutil briefly holds the device, then forced.
-    private static func detach(_ device: String) {
+    /// `hdiutil detach`, retried while diskutil briefly holds the device, then
+    /// forced. False when even the forced detach failed.
+    @discardableResult
+    private static func detach(_ device: String) -> Bool {
         for attempt in 0 ..< 3 {
             do {
                 try run("/usr/bin/hdiutil", ["detach", device], timeout: detachTimeout)
-                return
+                return true
             } catch {
                 logger.notice("detach \(device, privacy: .public) attempt \(attempt) failed: \(error.localizedDescription, privacy: .public)")
                 Thread.sleep(forTimeInterval: 0.5)
@@ -295,8 +305,10 @@ final class VMDiskSession: @unchecked Sendable {
         }
         do {
             try run("/usr/bin/hdiutil", ["detach", "-force", device], timeout: detachTimeout)
+            return true
         } catch {
             logger.error("forced detach of \(device, privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
     }
 

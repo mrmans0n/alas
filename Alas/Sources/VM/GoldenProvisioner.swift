@@ -6,8 +6,9 @@ import os
 protocol GoldenProvisioningDisk: Sendable {
     var dataVolume: URL { get }
     func systemVersion() throws -> (product: String, build: String)
-    /// Unmounts and detaches. Blocking.
-    func close()
+    /// Unmounts and detaches. Blocking. False when the image may still be
+    /// attached: the VM must then stay claimed.
+    func close() -> Bool
 }
 
 extension VMDiskSession: GoldenProvisioningDisk {}
@@ -302,7 +303,7 @@ extension GoldenProvisioner {
                 // A golden the manual flow booted (with a display) is
                 // replaced by a headless one.
                 await manager.forceStopGolden(build: build)
-                try GuestSetupSteps.requireRunning(try await manager.startGolden(build: build))
+                try GuestSetupSteps.requireRunning(try await manager.startGolden(build: build, keepingSSH: true))
             },
             stop: { build in await manager.forceStopGolden(build: build) })
         return GoldenProvisioner(
@@ -530,16 +531,13 @@ extension GuestSetupSteps {
                 let image = bundle.diskImage
                 do {
                     let session = try await Task.detached { try VMDiskSession.open(diskImage: image, root: root) }.value
-                    return ClaimedDisk(session: session, id: id)
+                    return ClaimedDisk(disk: session, id: id)
                 } catch {
                     manager.releaseDisk(id: id)
                     throw error
                 }
             },
-            closeDisk: { disk in
-                await Task.detached { disk.close() }.value
-                if let claimed = disk as? ClaimedDisk { manager.releaseDisk(id: claimed.id) }
-            },
+            closeDisk: { disk in await closeClaimed(disk, manager: manager) },
             disableSSHD: { disk in
                 try await Task.detached { try VMGuestPatcher.disableSSH(dataVolume: disk.dataVolume) }.value
             },
@@ -561,14 +559,29 @@ extension GuestSetupSteps {
     }
 }
 
-/// A VM disk attached under a registry claim, released on close.
-private struct ClaimedDisk: GoldenProvisioningDisk {
-    let session: VMDiskSession
+extension GuestSetupSteps {
+    /// Closes a disk `live` opened. The VM's claim is released only once its
+    /// image is detached; one that may still be attached (and writable) stays
+    /// claimed until a relaunch's dead-owner sweep.
+    static func closeClaimed(_ disk: any GoldenProvisioningDisk, manager: WorktreeVMManager) async {
+        let detached = await Task.detached { disk.close() }.value
+        guard let claimed = disk as? ClaimedDisk else { return }
+        guard detached else {
+            logger.error("VM \(claimed.id, privacy: .public)'s disk stayed attached; keeping its claim")
+            return
+        }
+        manager.releaseDisk(id: claimed.id)
+    }
+}
+
+/// A VM disk attached under a registry claim, released on a detaching close.
+struct ClaimedDisk: GoldenProvisioningDisk {
+    let disk: any GoldenProvisioningDisk
     let id: String
 
-    var dataVolume: URL { session.dataVolume }
-    func systemVersion() throws -> (product: String, build: String) { try session.systemVersion() }
-    func close() { session.close() }
+    var dataVolume: URL { disk.dataVolume }
+    func systemVersion() throws -> (product: String, build: String) { try disk.systemVersion() }
+    func close() -> Bool { disk.close() }
 }
 
 /// `/usr/bin/ssh` with password authentication answered by a throwaway

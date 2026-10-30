@@ -268,7 +268,10 @@ private final class FakeGuest {
         let dataVolume = URL(fileURLWithPath: "/nonexistent")
         let disks: OpenDisks
         func systemVersion() throws -> (product: String, build: String) { ("27.2", "25A1") }
-        func close() { disks.add(-1) }
+        func close() -> Bool {
+            disks.add(-1)
+            return true
+        }
     }
 
     /// Advances the clock, as a sleep or a slow attempt does, and tracks the
@@ -331,7 +334,7 @@ private final class FakeGuest {
                 disks.add(1)
                 return Disk(disks: disks)
             },
-            closeDisk: { disk in disk.close() },
+            closeDisk: { disk in _ = disk.close() },
             patch: { [self] _ in
                 switch c.patchFails {
                 case .writeFailed: throw PatchFailed()

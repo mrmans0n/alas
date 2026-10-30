@@ -127,8 +127,9 @@ final class WorktreeVMManager {
         let image = bundle.diskImage
         try await Task.detached {
             let session = try VMDiskSession.open(diskImage: image, root: root)
-            defer { session.close() }
-            try VMGuestPatcher.disableSSH(dataVolume: session.dataVolume)
+            let result = Result { try VMGuestPatcher.disableSSH(dataVolume: session.dataVolume) }
+            guard session.close() else { throw VMDiskSession.DetachFailed() }
+            try result.get()
         }.value
     }
 
@@ -332,14 +333,17 @@ final class WorktreeVMManager {
     }
 
     /// `keepingSSH` is only for `VMHelperUpdater`, whose boot needs the sshd
-    /// it just turned on; every other start of a worktree VM first turns off
-    /// sshd an interrupted setup or update left on.
+    /// it just turned on; every other start first turns off sshd an
+    /// interrupted setup or update left on.
     func startVM(worktreeID: String, keepingSSH: Bool = false) async throws -> VMStartOutcome {
-        if !keepingSSH, !worktreeID.hasPrefix(Self.goldenIDPrefix),
-           runningVMs[worktreeID] == nil, !starting.contains(worktreeID) {
-            try await turnOffLeftoverSSH(id: worktreeID)
-        }
+        if !keepingSSH { try await turnOffLeftoverSSHBeforeBoot(id: worktreeID) }
         return try await startRecorded(id: worktreeID, ensureRecord: nil)
+    }
+
+    /// A VM already running or booting here keeps its disk to itself.
+    private func turnOffLeftoverSSHBeforeBoot(id: String) async throws {
+        guard runningVMs[id] == nil, !starting.contains(id) else { return }
+        try await turnOffLeftoverSSH(id: id)
     }
 
     /// Stops `other` (which must run in this process) and starts `worktreeID`.
@@ -514,13 +518,18 @@ final class WorktreeVMManager {
         let marker = Self.sshdEnabledMarker(of: bundle)
         guard FileManager.default.fileExists(atPath: marker.path) else { return }
         try claimDisk(id: id)
-        defer { releaseDisk(id: id) }
         do {
             try await disableSSHOffline(bundle)
+        } catch is VMDiskSession.DetachFailed {
+            // Still attached on the host: the claim stays so nothing boots it.
+            logger.error("VM \(id, privacy: .public)'s disk stayed attached after turning sshd off; keeping its claim")
+            throw VMError(message: "The VM's disk couldn't be detached from this Mac. Restart Alas, then try again.")
         } catch {
+            releaseDisk(id: id)
             logger.error("Turning leftover sshd off in VM \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
             throw VMError(message: "SSH is still on in this VM and couldn't be turned off (\(error.localizedDescription)). Try again.")
         }
+        releaseDisk(id: id)
         try? FileManager.default.removeItem(at: marker)
         logger.notice("Turned leftover sshd off in VM \(id, privacy: .public)")
     }
@@ -530,13 +539,15 @@ final class WorktreeVMManager {
     /// Boots the golden VM so the user can finish Setup Assistant. It takes a
     /// slot like any worktree VM.
     /// Refuses a sealed image: worktree VMs clone its disk, so it must not
-    /// change after sealing.
-    func startGolden(build: String) async throws -> VMStartOutcome {
+    /// change after sealing. `keepingSSH` is only for the unattended setup's
+    /// and `VMHelperUpdater`'s own boots, which log in over SSH.
+    func startGolden(build: String, keepingSSH: Bool = false) async throws -> VMStartOutcome {
         let id = Self.goldenIDPrefix + build
         let bundleURL = goldenBundleURL(build: build)
         guard !VMBundle(url: bundleURL).isSealed else {
             throw VMError(message: "This macOS image is already set up")
         }
+        if !keepingSSH { try await turnOffLeftoverSSHBeforeBoot(id: id) }
         let bundlePath = bundleURL.path
         return try await startRecorded(id: id) { records in
             // Checked again under the registry lock: sealing happens under

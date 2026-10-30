@@ -105,7 +105,8 @@ extension VMHelperUpdater {
             registryID: { _ in id },
             boot: { id in
                 let outcome = if let goldenBuild {
-                    try await manager.startGolden(build: goldenBuild)
+                    // Its sshd is on on purpose: the next step logs in with it.
+                    try await manager.startGolden(build: goldenBuild, keepingSSH: true)
                 } else {
                     // Its sshd is on on purpose: the next step logs in with it.
                     try await manager.startVM(worktreeID: id, keepingSSH: true)
