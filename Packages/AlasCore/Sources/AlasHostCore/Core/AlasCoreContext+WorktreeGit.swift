@@ -200,7 +200,7 @@ extension AlasCoreContext {
             throw HostError.failed(message: "Stage or unstage the whole file instead.")
         }
 
-        let tracked = try await Process.git(["ls-files", "--error-unmatch", "--", path], cwd: root).exitCode == 0
+        let tracked = try await Process.git(["--literal-pathspecs", "ls-files", "--error-unmatch", "--", path], cwd: root).exitCode == 0
         let arguments: [String]
         switch action {
         case .stage: arguments = ["apply", "--cached", "-"]
@@ -218,7 +218,7 @@ extension AlasCoreContext {
         let mode: String
         if unstagesAddition {
             // `<mode> <sha> <stage>\t<path>`
-            let listed = try await Process.git(["ls-files", "-s", "--", path], cwd: root).stdout
+            let listed = try await Process.git(["--literal-pathspecs", "ls-files", "-s", "--", path], cwd: root).stdout
             mode = listed.split(separator: " ", maxSplits: 1).first.map(String.init) ?? HunkPatchBuilder.defaultUntrackedMode
         } else {
             mode = HunkPatchBuilder.fileMode(at: root.appendingPathComponent(path))
@@ -355,7 +355,7 @@ extension AlasCoreContext {
     /// taking a side on it would restore every merged file in it.
     private static func refuseUnlessConflicted(_ path: String, at root: URL) async throws {
         // `<mode> <sha> <stage>\t<path>`, NUL-terminated.
-        let unmerged = try await Process.git(["ls-files", "-u", "-z", "--", path], cwd: root)
+        let unmerged = try await Process.git(["--literal-pathspecs", "ls-files", "-u", "-z", "--", path], cwd: root)
         let paths = unmerged.stdout.split(separator: "\0").compactMap { $0.split(separator: "\t", maxSplits: 1).last }
         guard unmerged.exitCode == 0, paths.contains(where: { $0 == path }) else {
             throw HostError.failed(message: "The conflict on \(path) changed; refresh and try again.")
