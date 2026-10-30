@@ -1434,7 +1434,11 @@ final class NativePeerSessions {
         guard let history = openedFileHistory, let target = hostHistoryTarget,
               target.worktree.snapshot.worktree.id == history.worktreeId else { return }
         openedFileHistory?.listing = .loading
-        if !routeHostRead(.fileHistory(path: history.path), to: target) {
+        // A replaced or reloaded history of the same file must not take this read's answer.
+        let load = UUID()
+        openedFileHistory?.load = load
+        let stillWanted: @MainActor () -> Bool = { [weak self] in self?.openedFileHistory?.load == load }
+        if !routeHostRead(.fileHistory(path: history.path), to: target, stillWanted: stillWanted) {
             openedFileHistory?.listing = .failed(NativePeerWorkspace.offlineMessage)
         }
     }
@@ -1588,7 +1592,11 @@ final class NativePeerSessions {
     }
 
     /// Sends `read` over `target`'s host channel and applies the answer, as a workspace reply.
-    private func routeHostRead(_ read: HostWorktreeRead, to target: (serverId: String, worktree: PeerHostWorktree)) -> Bool {
+    /// `stillWanted` drops an answer its caller has since superseded, beyond a selection change.
+    private func routeHostRead(
+        _ read: HostWorktreeRead, to target: (serverId: String, worktree: PeerHostWorktree),
+        stillWanted: @escaping @MainActor () -> Bool = { true }
+    ) -> Bool {
         guard let hosts else { return false }
         let epoch = workspaceEpoch
         let worktreeId = target.worktree.snapshot.worktree.id
@@ -1597,7 +1605,7 @@ final class NativePeerSessions {
             // The selection moved since: the answer is no longer wanted. A
             // lost host channel is not a selection change, so its failure
             // still clears this read's in-flight marker below.
-            guard let self, workspaceEpoch == epoch else { return }
+            guard let self, workspaceEpoch == epoch, stillWanted() else { return }
             // Unanswered, refused, or cut off by a disconnect: fail just this
             // read, as a failure reply would.
             let answer = reply.flatMap { $0.sessionId == worktreeId ? $0 : nil } ?? Self.unserved(read, worktreeId: worktreeId)

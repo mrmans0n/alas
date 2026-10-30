@@ -233,6 +233,8 @@ struct NativePeerFileHistory: Equatable {
     let path: String
     var listing: NativePeerWorkspace.Load<Listing> = .loading
     var selectedSha: String?
+    /// The read whose answer this history takes.
+    var load = UUID()
     /// The document open before, reopened on close.
     let previousDocument: NativePeerWorkspace.Document?
 
