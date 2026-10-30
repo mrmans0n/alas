@@ -13,8 +13,28 @@ struct WebPreviewBrowserTests {
         for value in ["file:///etc/passwd", "alas://session/new", "javascript:alert(1)", "data:text/html,hello"] {
             #expect(!WebPreviewNavigation.allows(URL(string: value)!, remoteHost: nil))
         }
-        #expect(!WebPreviewNavigation.allows(URL(string: "http://127.0.0.1:3000")!, remoteHost: "devbox"))
         #expect(WebPreviewNavigation.allows(URL(string: "http://devbox:3000")!, remoteHost: "devbox"))
+    }
+
+    @Test(arguments: [
+        ("http://127.0.0.1:3000", nil, nil, true),
+        ("http://127.0.0.1:3000", "devbox", nil, false),
+        ("http://127.0.0.1:51234/x", "devbox", 51234, true),
+        ("http://localhost:51234", "devbox", 51234, true),
+        ("http://127.0.0.1:3000", "devbox", 51234, false),
+        ("http://localhost:8080", "devbox", 51234, false),
+        ("http://0.0.0.0:51234", "devbox", 51234, false),
+        ("http://[::1]:3000", "devbox", 51234, false),
+        ("https://example.com", "devbox", 51234, true),
+    ] as [(String, String?, Int?, Bool)])
+    func aPinnedLoopbackPortIsTheOnlyLoopbackAllowed(url: String, remoteHost: String?, pin: Int?, allowed: Bool) async {
+        let target = URL(string: url)!
+        #expect(WebPreviewNavigation.allows(target, remoteHost: remoteHost, allowedLoopbackPort: pin) == allowed)
+        // Loopback names resolve to themselves, as `WebPreviewHostLookup` answers them.
+        let resolved = await WebPreviewNavigation.allowsResolved(target, remoteHost: remoteHost, allowedLoopbackPort: pin) {
+            RunEndpointPolicy.isLoopbackHost($0) ? [$0] : ["192.0.2.1"]
+        }
+        #expect(resolved == allowed)
     }
 
     @Test func browserStorageIsPrivateAndNotShared() {

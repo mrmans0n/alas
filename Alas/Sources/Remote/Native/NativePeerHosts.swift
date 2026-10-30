@@ -56,6 +56,8 @@ final class NativePeerHosts {
     /// Run endpoint forwards, by peer and run. A forward lives while its run
     /// is `.running` and its peer stays online: a reconnect starts clean.
     @ObservationIgnored private var forwards: [ForwardKey: Forward] = [:]
+    /// Told of each forward that stops, so a preview showing it can close.
+    @ObservationIgnored var onForwardStopped: (@MainActor (ForwardKey) -> Void)?
 
     init(
         send: @escaping @MainActor (_ serverId: String, HostClientMessage) -> Void,
@@ -206,6 +208,7 @@ final class NativePeerHosts {
         for (key, forward) in forwards where matching(key) {
             forwards[key] = nil
             forward.forwarder.stop()
+            onForwardStopped?(key)
         }
     }
 
