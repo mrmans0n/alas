@@ -72,13 +72,17 @@ final class GoldenImageInstaller: ObservableObject {
 
     /// Re-reads a settled phase from disk, which another Alas process may
     /// have changed (sealing the golden image, say). Leaves an install in
-    /// progress or a failure message alone.
+    /// progress alone, and a failure message unless a golden awaits setup.
     func reloadFromDisk() {
+        let onDisk = Self.settledPhase(in: goldenRoot) ?? .idle
         switch phase {
-        case .downloading, .installing, .provisioning, .failed: return
+        case .downloading, .installing, .provisioning: return
+        case .failed:
+            // A stale failure would hide an installed golden that still
+            // needs its setup finished.
+            guard case .awaitingSetup = onDisk else { return }
         case .idle, .awaitingSetup, .sealed: break
         }
-        let onDisk = Self.settledPhase(in: goldenRoot) ?? .idle
         if onDisk != phase { phase = onDisk }
         if case .awaitingSetup = onDisk {} else { failureNote = nil }
     }
@@ -136,7 +140,11 @@ final class GoldenImageInstaller: ObservableObject {
         // by a newer download that would orphan it.
         var resuming: String?
         if case .awaitingSetup(let build)? = Self.settledPhase(in: goldenRoot) {
-            guard provisioner != nil else {
+            // One reopened by Customize holds the user's changes: only the
+            // manual flow finishes it.
+            let customizing = WorktreeVMManager.customizingMarker(
+                of: VMBundle(url: goldenRoot.appendingPathComponent(build, isDirectory: true)))
+            guard provisioner != nil, !FileManager.default.fileExists(atPath: customizing.path) else {
                 phase = .awaitingSetup(build: build)
                 return
             }

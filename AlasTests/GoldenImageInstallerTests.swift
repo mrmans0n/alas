@@ -26,6 +26,32 @@ struct GoldenImageInstallerTests {
         #expect(FileManager.default.fileExists(atPath: partial.path))
     }
 
+    @Test("a golden reopened by Customize is never set up unattended, and a stale failure doesn't hide it")
+    func customizedGoldenIsLeftToTheUser() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("GoldenImageInstallerTests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let golden = VMBundle(url: root.appendingPathComponent("golden/25A1", isDirectory: true))
+        try FileManager.default.createDirectory(at: golden.url, withIntermediateDirectories: true)
+        let guest = FakeGuest(PipelineCase(name: "customized", fallbackReason: nil))
+        let installer = GoldenImageInstaller(root: root, provisioner: guest.provisioner())
+        // Another process holds the install lock: start fails before it resumes the golden.
+        let otherInstall = try ComputerUseDriverLock.acquire(
+            at: root.appendingPathComponent("install.lock"), label: "Alas Dev")
+        await installer.start()
+        otherInstall.release()
+        #expect(installer.phase == .failed("macOS is being set up in another Alas."))
+        installer.reloadFromDisk()
+        #expect(installer.phase == .awaitingSetup(build: "25A1"))
+
+        try Data().write(to: WorktreeVMManager.customizingMarker(of: golden))
+        await installer.start()
+
+        #expect(installer.phase == .awaitingSetup(build: "25A1"))
+        #expect(guest.boots == 0)
+        #expect(!guest.sealed)
+    }
+
     // MARK: - Unattended setup
 
     struct PipelineCase: CustomTestStringConvertible, Sendable {
