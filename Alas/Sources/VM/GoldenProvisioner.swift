@@ -660,7 +660,7 @@ enum GuestSSH {
         }
         // Both pipes drain concurrently so neither can fill and stall ssh.
         let group = DispatchGroup()
-        let output = Output()
+        let output = ProcessOutput()
         for (pipe, isStdout) in [(stdout, true), (stderr, false)] {
             group.enter()
             DispatchQueue.global().async {
@@ -678,25 +678,26 @@ enum GuestSSH {
 
         let (out, err) = output.snapshot()
         if process.terminationStatus != 0 {
-            logger.notice("ssh \(host, privacy: .public) exited \(process.terminationStatus, privacy: .public): \(err, privacy: .public)")
+            logger.notice("ssh \(host, privacy: .public) exited \(process.terminationStatus, privacy: .public): \(String(decoding: err, as: UTF8.self), privacy: .public)")
         }
-        return (process.terminationStatus, out)
+        return (process.terminationStatus, String(decoding: out, as: UTF8.self))
+    }
+}
+
+/// A child process's stdout and stderr, written by one reader each and read
+/// once both finished or the drain gave up on them.
+final class ProcessOutput: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stdout = Data()
+    private var stderr = Data()
+
+    func set(_ data: Data, isStdout: Bool) {
+        lock.withLock {
+            if isStdout { stdout = data } else { stderr = data }
+        }
     }
 
-    /// Written by one reader each; read once both finished or the drain gave up.
-    private final class Output: @unchecked Sendable {
-        private let lock = NSLock()
-        private var stdout = Data()
-        private var stderr = Data()
-
-        func set(_ data: Data, isStdout: Bool) {
-            lock.withLock {
-                if isStdout { stdout = data } else { stderr = data }
-            }
-        }
-
-        func snapshot() -> (stdout: String, stderr: String) {
-            lock.withLock { (String(decoding: stdout, as: UTF8.self), String(decoding: stderr, as: UTF8.self)) }
-        }
+    func snapshot() -> (stdout: Data, stderr: Data) {
+        lock.withLock { (stdout, stderr) }
     }
 }

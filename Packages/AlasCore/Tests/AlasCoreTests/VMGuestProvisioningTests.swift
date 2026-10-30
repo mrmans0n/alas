@@ -43,6 +43,13 @@ struct VMGuestProvisioningTests {
         #expect(pbkdf2("not-alas", salt: storedSalt, iterations: iterations) != entropy)
     }
 
+    @Test("an iteration count PBKDF2 can't take throws instead of trapping", arguments: [0, Int(UInt32.max) + 1])
+    func shadowHashRejectsOutOfRangeIterations(_ iterations: Int) {
+        #expect(throws: VMGuestProvisioningError.invalidIterations(iterations)) {
+            try VMGuestProvisioning.shadowHashData(password: "alas", salt: Data(count: 32), iterations: iterations)
+        }
+    }
+
     @Test
     func loginwindowEditKeepsOtherKeysAndDropsFirstLogins() throws {
         let existing: [String: Any] = [

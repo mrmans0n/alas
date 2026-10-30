@@ -126,9 +126,10 @@ enum VMGuestPatcher {
               let pbkdf2 = (plist as? [String: Any])?["SALTED-SHA512-PBKDF2"] as? [String: Any],
               let salt = pbkdf2["salt"] as? Data, salt.count == VMGuestProvisioning.saltLength,
               let iterations = pbkdf2["iterations"] as? Int, iterations > 0,
-              let entropy = pbkdf2["entropy"] as? Data
+              let entropy = pbkdf2["entropy"] as? Data,
+              // An iteration count PBKDF2 can't take doesn't verify: rehash.
+              let candidate = try? VMGuestProvisioning.shadowHashData(password: password, salt: salt, iterations: iterations)
         else { return nil }
-        let candidate = try VMGuestProvisioning.shadowHashData(password: password, salt: salt, iterations: iterations)
         let candidateEntropy = ((try PropertyListSerialization.propertyList(from: candidate, options: [], format: nil)
                 as? [String: Any])?["SALTED-SHA512-PBKDF2"] as? [String: Any])?["entropy"] as? Data
         return candidateEntropy == entropy ? data : nil

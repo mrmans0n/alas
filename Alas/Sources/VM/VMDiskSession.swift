@@ -186,7 +186,10 @@ final class VMDiskSession: @unchecked Sendable {
                 detach(device)
             }
         } catch {
+            // Its images may still be attached: keep the directories so the
+            // next sweep tries again.
             logger.error("hdiutil info failed: \(error.localizedDescription, privacy: .public)")
+            return
         }
         for session in staleSessions {
             for volume in ["system", "data"] {
@@ -345,11 +348,11 @@ final class VMDiskSession: @unchecked Sendable {
         try process.run()
 
         // Drain both pipes concurrently so a chatty tool can't fill one and wedge.
-        let output = Output()
+        let output = ProcessOutput()
         let drained = DispatchGroup()
-        for (pipe, keyPath) in [(stdout, \Output.stdout), (stderr, \Output.stderr)] {
+        for (pipe, isStdout) in [(stdout, true), (stderr, false)] {
             DispatchQueue.global(qos: .utility).async(group: drained) {
-                output[keyPath: keyPath] = pipe.fileHandleForReading.readDataToEndOfFile()
+                output.set(pipe.fileHandleForReading.readDataToEndOfFile(), isStdout: isStdout)
             }
         }
         let command = "\((tool as NSString).lastPathComponent) \(arguments.joined(separator: " "))"
@@ -359,16 +362,13 @@ final class VMDiskSession: @unchecked Sendable {
             throw Failure(message: "\(command) timed out after \(Int(timeout)) s")
         }
         _ = drained.wait(timeout: .now() + 5)
+        // A reader still running after the wait gave up writes under the lock.
+        let (out, err) = output.snapshot()
 
         guard process.terminationStatus == 0 else {
-            let message = String(decoding: output.stderr, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+            let message = String(decoding: err, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
             throw Failure(message: "\(command) failed (\(process.terminationStatus)): \(message)")
         }
-        return output.stdout
-    }
-
-    private final class Output: @unchecked Sendable {
-        var stdout = Data()
-        var stderr = Data()
+        return out
     }
 }

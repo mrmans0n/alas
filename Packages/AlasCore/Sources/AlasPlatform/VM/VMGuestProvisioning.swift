@@ -24,6 +24,7 @@ public struct VMGuestAccount: Equatable, Sendable {
 public enum VMGuestProvisioningError: Error, Equatable {
     case invalidSalt(length: Int)
     case keyDerivationFailed(status: Int32)
+    case invalidIterations(Int)
 }
 
 /// Pure content for patching a stopped macOS guest's Data volume offline.
@@ -64,6 +65,10 @@ public enum VMGuestProvisioning {
         password: String, salt: Data, iterations: Int = defaultIterations
     ) throws -> Data {
         guard salt.count == saltLength else { throw VMGuestProvisioningError.invalidSalt(length: salt.count) }
+        // A corrupt record may hold any count; PBKDF2 takes a positive UInt32.
+        guard let rounds = UInt32(exactly: iterations), rounds > 0 else {
+            throw VMGuestProvisioningError.invalidIterations(iterations)
+        }
         let passwordBytes = Array(password.utf8)
         var entropy = [UInt8](repeating: 0, count: entropyLength)
         let status = salt.withUnsafeBytes { saltBuffer in
@@ -73,7 +78,7 @@ public enum VMGuestProvisioning {
                     passwordBuffer.baseAddress.map { UnsafeRawPointer($0).assumingMemoryBound(to: Int8.self) },
                     passwordBytes.count,
                     saltBuffer.bindMemory(to: UInt8.self).baseAddress, salt.count,
-                    CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA512), UInt32(iterations),
+                    CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA512), rounds,
                     &entropy, entropy.count
                 )
             }
