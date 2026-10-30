@@ -187,7 +187,11 @@ extension AlasCoreContext {
         guard !diff.isBinary else { throw HostError.failed(message: "A binary file has no hunks.") }
         // Only a hunk the Mac was sent whole, as `remoteFileDiff` caps it.
         let shown = RemoteWorktreeFileAccess.truncateHunks(diff.hunks).hunks
-        guard shown.indices.contains(index), shown[index] == diff.hunks[index] else { throw changed }
+        guard shown.indices.contains(index) else { throw changed }
+        // A line past the cap was clamped: the Mac never saw the whole hunk.
+        guard shown[index] == diff.hunks[index] else {
+            throw HostError.failed(message: "This hunk is too large to change from here.")
+        }
         let hunk = diff.hunks[index]
         guard hunk.header == header, !hunk.lines.isEmpty, RemoteDiffHunk(hunk).linesHash == linesHash else { throw changed }
 

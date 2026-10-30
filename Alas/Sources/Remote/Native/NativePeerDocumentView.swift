@@ -29,6 +29,8 @@ struct NativePeerDocumentView: View {
     /// the image diff keeps its mode and zoom.
     @State private var decodedContent: NativePeerWorkspace.DocumentContent?
     @State private var hunkInFlight = false
+    /// The host answered the change in flight; its reload has yet to land.
+    @State private var hunkAnswered = false
     @State private var hunkError: String?
     @State private var confirmingDiscard: (index: Int, hunk: ParsedDiff.Hunk)?
 
@@ -40,6 +42,17 @@ struct NativePeerDocumentView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(theme.color("bg-1"))
         .task(id: content) {
+            switch content {
+            case .idle, .loading: break
+            default:
+                // The change's own reload keeps its refusal; any other new content clears it.
+                if hunkAnswered {
+                    hunkAnswered = false
+                    hunkInFlight = false
+                } else if !hunkInFlight {
+                    hunkError = nil
+                }
+            }
             decodeImages()
             await buildDisplayModel()
         }
@@ -75,14 +88,15 @@ struct NativePeerDocumentView: View {
         return actions
     }
 
-    /// One change at a time: the buttons do nothing while one is in flight.
+    /// One change at a time: the diff is blocked from the click until the
+    /// reload `applyHunk` starts lands.
     private func runHunk(_ action: HostHunkAction, _ index: Int, _ hunk: ParsedDiff.Hunk) {
         guard let applyHunk, !hunkInFlight else { return }
         hunkInFlight = true
         hunkError = nil
         Task { @MainActor in
             hunkError = await applyHunk(action, index, hunk)
-            hunkInFlight = false
+            hunkAnswered = true
         }
     }
 
@@ -199,6 +213,8 @@ struct NativePeerDocumentView: View {
                     allowsReviewLineSelection: false,
                     hunkActions: { hunkActions($0, in: diff, truncated: truncated) }
                 )
+                .opacity(hunkInFlight ? 0.5 : 1)
+                .allowsHitTesting(!hunkInFlight)
             } else {
                 Spinner()
                     .frame(width: 16, height: 16)

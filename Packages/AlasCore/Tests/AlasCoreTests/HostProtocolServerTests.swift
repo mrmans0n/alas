@@ -1840,8 +1840,13 @@ struct HostProtocolServerTests {
         let notes = repo.appendingPathComponent("notes.txt")
         let lines = (1...20).map { "line \($0)" }
         try (lines.joined(separator: "\n") + "\n").write(to: notes, atomically: true, encoding: .utf8)
-        #expect(try await Process.git(["add", "notes.txt"], cwd: repo).exitCode == 0)
+        try "gone\n".write(to: repo.appendingPathComponent("gone.txt"), atomically: true, encoding: .utf8)
+        #expect(try await Process.git(["add", "notes.txt", "gone.txt"], cwd: repo).exitCode == 0)
         #expect(try await Process.git(["commit", "-q", "-m", "Add notes"], cwd: repo).exitCode == 0)
+        try FileManager.default.removeItem(at: repo.appendingPathComponent("gone.txt"))
+        // One line over the cap: the Mac is sent it clamped.
+        let longLine = String(repeating: "x", count: RemoteWorktreeFileAccess.maxDiffLineBytes + 1)
+        try (longLine + "\n").write(to: repo.appendingPathComponent("long.txt"), atomically: true, encoding: .utf8)
         let edited = ["first"] + lines.dropFirst().dropLast() + ["last"]
         try (edited.joined(separator: "\n") + "\n").write(to: notes, atomically: true, encoding: .utf8)
         let script = repo.appendingPathComponent("new.sh")
@@ -1877,10 +1882,16 @@ struct HostProtocolServerTests {
             return
         }
         #expect(try await shown("notes.txt", .unstaged) == unstaged)
-        guard case .failure(.failed) = try await act(.discard, "new.sh", .unstaged, 0) else {
-            Issue.record("expected discard of an untracked hunk refused")
-            return
-        }
+        #expect(try await act(.discard, "new.sh", .unstaged, 0)
+            == .failure(error: .failed(message: "Discard new.sh as a whole file instead.")))
+        // The Mac is shown no diff of a missing file; the host refuses one named anyway.
+        let gone = try #require(await GitService().diff(worktreePath: repo, file: "gone.txt").hunks.first)
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .hunk(
+            path: "gone.txt", stage: .unstaged, index: 0, header: gone.header, linesHash: RemoteDiffHunk(gone).linesHash,
+            action: .discard
+        ))) == .failure(error: .failed(message: "Discard gone.txt as a whole file instead.")))
+        #expect(try await act(.stage, "long.txt", .unstaged, 0)
+            == .failure(error: .failed(message: "This hunk is too large to change from here.")))
 
         #expect(try await act(.stage, "new.sh", .unstaged, 0) == .done)
         #expect(try await Process.git(["ls-files", "-s", "new.sh"], cwd: repo).stdout.hasPrefix("100755 "))
