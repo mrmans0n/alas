@@ -61,7 +61,7 @@ struct WebPreviewTabView: View {
                     .accessibilityLabel("Preview URL")
                 tool("Open in external browser", icon: "arrow.up.right.square", disabled: browser.webView.url == nil) {
                     if let url = browser.webView.url, WebPreviewNavigation.allows(
-                        url, remoteHost: browser.remoteHost, allowedLoopbackPort: browser.allowedLoopbackPort
+                        url, remoteHost: browser.remoteHost, allowedLoopback: browser.allowedLoopback
                     ) {
                         NSWorkspace.shared.open(url)
                     }

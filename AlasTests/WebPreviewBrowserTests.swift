@@ -19,24 +19,27 @@ struct WebPreviewBrowserTests {
     @Test(arguments: [
         ("http://127.0.0.1:3000", nil, nil, true),
         ("http://127.0.0.1:3000", "devbox", nil, false),
-        ("http://127.0.0.1:51234/x", "devbox", 51234, true),
-        ("http://localhost:51234", "devbox", 51234, true),
-        ("http://127.0.0.1:3000", "devbox", 51234, false),
-        ("http://localhost:8080", "devbox", 51234, false),
-        ("http://0.0.0.0:51234", "devbox", 51234, false),
-        ("http://[::1]:3000", "devbox", 51234, false),
-        ("http://[::1]:51234", "devbox", 51234, true),
-        ("http://alias.test:51234", "devbox", 51234, true),
-        ("http://alias.test:3000", "devbox", 51234, false),
-        ("https://example.com", "devbox", 51234, true),
-    ] as [(String, String?, Int?, Bool)])
-    func aPinnedLoopbackPortIsTheOnlyLoopbackAllowed(url: String, remoteHost: String?, pin: Int?, allowed: Bool) async {
+        ("http://127.0.0.1:51234/x", "devbox", "http://127.0.0.1:51234", true),
+        ("http://127.0.0.1:3000", "devbox", "http://127.0.0.1:51234", false),
+        ("http://localhost:51234", "devbox", "http://127.0.0.1:51234", false),
+        ("http://[::1]:51234", "devbox", "http://127.0.0.1:51234", false),
+        ("http://0.0.0.0:51234", "devbox", "http://127.0.0.1:51234", false),
+        ("http://localhost:51234", "devbox", "http://localhost:51234", true),
+        ("http://localhost:8080", "devbox", "http://localhost:51234", false),
+        ("http://127.0.0.1:51234", "devbox", "http://localhost:51234", false),
+        ("http://[::1]:51234", "devbox", "http://[::1]:51234", true),
+        ("http://[::1]:3000", "devbox", "http://[::1]:51234", false),
+        ("http://alias.test:51234", "devbox", "http://127.0.0.1:51234", false),
+        ("https://example.com", "devbox", "http://127.0.0.1:51234", true),
+    ] as [(String, String?, String?, Bool)])
+    func aPinnedLoopbackAddressIsTheOnlyLoopbackAllowed(url: String, remoteHost: String?, forward: String?, allowed: Bool) async {
         let target = URL(string: url)!
+        let pin = forward.flatMap { WebPreviewLoopbackPin(URL(string: $0)!) }
         // Only DNS reveals that `alias.test` is loopback.
         let isAlias = target.host == "alias.test"
-        #expect(WebPreviewNavigation.allows(target, remoteHost: remoteHost, allowedLoopbackPort: pin) == (allowed || isAlias))
+        #expect(WebPreviewNavigation.allows(target, remoteHost: remoteHost, allowedLoopback: pin) == (allowed || isAlias))
         // Loopback names resolve to themselves, as `WebPreviewHostLookup` answers them.
-        let resolved = await WebPreviewNavigation.allowsResolved(target, remoteHost: remoteHost, allowedLoopbackPort: pin) {
+        let resolved = await WebPreviewNavigation.allowsResolved(target, remoteHost: remoteHost, allowedLoopback: pin) {
             RunEndpointPolicy.isLoopbackHost($0) ? [$0] : $0 == "alias.test" ? ["127.0.0.1"] : ["192.0.2.1"]
         }
         #expect(resolved == allowed)

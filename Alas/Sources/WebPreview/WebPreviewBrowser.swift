@@ -6,36 +6,54 @@ import WebKit
 enum WebPreviewNavigation {
     typealias HostResolver = @MainActor (String) async -> [String]?
 
-    /// `allowedLoopbackPort` pins the one Mac loopback port a remote owner may
+    /// `allowedLoopback` pins the one Mac loopback address a remote owner may
     /// load (a paired host's forwarded endpoint). Nil keeps loopback refused.
-    static func allows(_ url: URL, remoteHost: String?, allowedLoopbackPort: Int? = nil) -> Bool {
+    static func allows(_ url: URL, remoteHost: String?, allowedLoopback: WebPreviewLoopbackPin? = nil) -> Bool {
         guard RunEndpointPolicy.endpoint(from: url.absoluteString) != nil else { return false }
         guard remoteHost != nil, RunEndpointPolicy.isLoopback(url) else { return true }
-        return isPinnedLoopback(url.host(percentEncoded: false) ?? "", url: url, allowedLoopbackPort: allowedLoopbackPort)
+        return allowedLoopback?.matches(url) == true
     }
 
     @MainActor
-    static func allowsResolved(_ url: URL, remoteHost: String?, allowedLoopbackPort: Int? = nil,
+    static func allowsResolved(_ url: URL, remoteHost: String?, allowedLoopback: WebPreviewLoopbackPin? = nil,
                                resolveHost: HostResolver) async -> Bool {
-        guard allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort) else { return false }
+        guard allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else { return false }
         guard remoteHost != nil else { return true }
         guard let host = url.host(percentEncoded: false),
               let addresses = await resolveHost(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))),
               !addresses.isEmpty else { return false }
-        return addresses.allSatisfy {
-            !RunEndpointPolicy.isLoopbackHost($0) || isPinnedLoopback($0, url: url, allowedLoopbackPort: allowedLoopbackPort)
-        }
-    }
-
-    private static func isPinnedLoopback(_ host: String, url: URL, allowedLoopbackPort: Int?) -> Bool {
-        guard let allowedLoopbackPort, url.runEndpointPort == allowedLoopbackPort else { return false }
-        return PeerPortForwardEndpoint.isLoopbackHost(host)
+        // Only the pinned address itself may resolve to loopback, never another name for it.
+        let pinned = allowedLoopback?.matches(url) == true
+        return addresses.allSatisfy { pinned || !RunEndpointPolicy.isLoopbackHost($0) }
     }
 
     static func captureRect(_ rect: CGRect, viewport: CGSize) -> CGRect? {
         let clipped = rect.standardized.intersection(CGRect(origin: .zero, size: viewport))
         guard !clipped.isNull, clipped.width >= 1, clipped.height >= 1 else { return nil }
         return clipped
+    }
+}
+
+/// The one loopback address, host and port, a host run's forward listens on.
+/// The forward binds only that host's address family, so another spelling of
+/// loopback on the same port could reach a different service on this Mac.
+struct WebPreviewLoopbackPin: Equatable {
+    let host: String
+    let port: Int
+
+    init?(_ url: URL) {
+        guard let host = url.host(percentEncoded: false), let port = url.runEndpointPort else { return nil }
+        self.host = Self.normalized(host)
+        self.port = port
+    }
+
+    func matches(_ url: URL) -> Bool {
+        guard let host = url.host(percentEncoded: false) else { return false }
+        return Self.normalized(host) == self.host && url.runEndpointPort == port
+    }
+
+    private static func normalized(_ host: String) -> String {
+        host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
     }
 }
 
@@ -123,8 +141,8 @@ enum WebPreviewHostLookup {
 final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     let ownerKey: String
     let remoteHost: String?
-    /// The single Mac loopback port this remote-owned browser may load.
-    let allowedLoopbackPort: Int?
+    /// The single Mac loopback address this remote-owned browser may load.
+    let allowedLoopback: WebPreviewLoopbackPin?
     let automationID = UUID().uuidString
     let webView: WKWebView
     var address = ""
@@ -144,11 +162,11 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     let automationState = WebPreviewBrowserAutomationState()
     var automationDocumentGeneration: Int { navigationGeneration }
 
-    init(ownerKey: String, remoteHost: String?, allowedLoopbackPort: Int? = nil,
+    init(ownerKey: String, remoteHost: String?, allowedLoopback: WebPreviewLoopbackPin? = nil,
          resolveHost: @escaping WebPreviewNavigation.HostResolver = { await WebPreviewHostLookup.resolve($0) }) {
         self.ownerKey = ownerKey
         self.remoteHost = remoteHost
-        self.allowedLoopbackPort = allowedLoopbackPort
+        self.allowedLoopback = allowedLoopback
         self.resolveHost = resolveHost
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
@@ -168,7 +186,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         urlObservation = webView.observe(\.url, options: [.new]) { [weak self] _, _ in
             Task { @MainActor [weak self] in
                 guard let self, let url = self.webView.url,
-                      WebPreviewNavigation.allows(url, remoteHost: self.remoteHost, allowedLoopbackPort: self.allowedLoopbackPort) else { return }
+                      WebPreviewNavigation.allows(url, remoteHost: self.remoteHost, allowedLoopback: self.allowedLoopback) else { return }
                 self.address = url.absoluteString
                 self.canGoBack = self.webView.canGoBack
                 self.canGoForward = self.webView.canGoForward
@@ -198,9 +216,9 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     @discardableResult
     func navigate(_ url: URL) -> WKNavigation? {
         guard !isClosed else { return nil }
-        guard WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort) else {
+        guard WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else {
             if let remoteHost, RunEndpointPolicy.isLoopback(url) {
-                error = allowedLoopbackPort.map { "This preview can only open the forwarded port \($0) on this Mac." }
+                error = allowedLoopback.map { "This preview can only open its forwarded address, \($0.host) port \($0.port), on this Mac." }
                     ?? "This endpoint is on \(remoteHost). Enter a remotely reachable URL; localhost would open a service on this Mac."
             } else {
                 error = "Only HTTP and HTTPS pages can be opened in previews."
@@ -219,7 +237,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             return
         }
         guard let url = navigationAction.request.url,
-              WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort) else {
+              WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else {
             error = "Navigation blocked. Previews accept HTTP(S) pages and cannot open remote localhost endpoints."
             decisionHandler(.cancel)
             return
@@ -234,7 +252,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             return
         }
         guard let url = navigationResponse.response.url,
-              WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort), navigationResponse.canShowMIMEType else {
+              WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback), navigationResponse.canShowMIMEType else {
             error = "This response cannot be displayed in a web preview."
             decisionHandler(.cancel)
             return
@@ -252,7 +270,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             guard !isClosed else { completion(false)
             return }
             let allowed = await WebPreviewNavigation.allowsResolved(
-                url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort, resolveHost: resolveHost)
+                url, remoteHost: remoteHost, allowedLoopback: allowedLoopback, resolveHost: resolveHost)
             guard !isClosed, generation == navigationGeneration else { completion(false)
             return }
             if !allowed {
@@ -285,7 +303,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         loading = false
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
-        guard let url = webView.url, WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort) else {
+        guard let url = webView.url, WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else {
             error = "Endpoint unavailable: WebKit could not display this URL."
             return
         }
@@ -315,7 +333,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
 
     func captureRegion(_ selection: CGRect? = nil, elementAt point: CGPoint? = nil) {
         guard !isClosed, !capturing, !loading, let url = webView.url,
-              WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort) else { return }
+              WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else { return }
         capturing = true
         let generation = navigationGeneration
         let viewport = webView.bounds.size

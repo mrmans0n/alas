@@ -370,7 +370,7 @@ extension WebPreviewBrowser {
     }
 
     private func automationURL(_ string: String) throws -> URL {
-        guard let url = URL(string: string), WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort) else {
+        guard let url = URL(string: string), WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else {
             throw WebPreviewBrowserAutomationError.invalidArgument("url must be an allowed HTTP(S) preview URL")
         }
         return url
@@ -383,7 +383,7 @@ extension WebPreviewBrowser {
                 throw WebPreviewBrowserAutomationError.captureUnavailable(error)
             }
         }
-        guard let url = webView.url, WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort) else {
+        guard let url = webView.url, WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else {
             throw WebPreviewBrowserAutomationError.unsupported("no loaded document")
         }
     }
@@ -401,7 +401,7 @@ extension WebPreviewBrowser {
                 throw WebPreviewBrowserAutomationError.captureUnavailable(error)
             }
             sawNavigationStart = sawNavigationStart || automationDocumentGeneration > startingGeneration
-            if !loading, !webView.isLoading, let url = webView.url, WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopbackPort: allowedLoopbackPort) {
+            if !loading, !webView.isLoading, let url = webView.url, WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) {
                 let urlChanged = initialURL.map { $0 != url } ?? false
                 let reachedTarget = urlChanged && (targetURL.map { $0 == url } ?? true)
                 if let historyItem {
