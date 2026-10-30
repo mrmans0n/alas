@@ -164,8 +164,10 @@ final class GoldenImageInstaller: ObservableObject {
         failureNote = nil
         let build: String? = if let resuming { resuming } else { await install() }
         if let build { await provision(build: build) }
+        #endif
     }
 
+    #if arch(arm64)
     /// Downloads and installs the newest macOS. Returns the build to set up,
     /// or nil when the phase is already settled (sealed or failed).
     private func install() async -> String? {
@@ -242,8 +244,8 @@ final class GoldenImageInstaller: ObservableObject {
             failureNote = "Automatic setup couldn't finish (\(reason)). Finish it by hand:"
             phase = .awaitingSetup(build: build)
         }
-        #endif
     }
+    #endif
 
     /// Seals the golden bundle awaiting setup (or, after a relaunch, the newest
     /// unsealed one). The golden VM must be stopped so its disk is consistent;
