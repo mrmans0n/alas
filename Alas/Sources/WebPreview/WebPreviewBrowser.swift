@@ -28,8 +28,8 @@ enum WebPreviewNavigation {
     }
 
     private static func isPinnedLoopback(_ host: String, url: URL, allowedLoopbackPort: Int?) -> Bool {
-        guard let allowedLoopbackPort, url.port == allowedLoopbackPort else { return false }
-        return ["127.0.0.1", "localhost"].contains(host.lowercased())
+        guard let allowedLoopbackPort, url.runEndpointPort == allowedLoopbackPort else { return false }
+        return PeerPortForwardEndpoint.isLoopbackHost(host)
     }
 
     static func captureRect(_ rect: CGRect, viewport: CGSize) -> CGRect? {

@@ -25,14 +25,19 @@ struct WebPreviewBrowserTests {
         ("http://localhost:8080", "devbox", 51234, false),
         ("http://0.0.0.0:51234", "devbox", 51234, false),
         ("http://[::1]:3000", "devbox", 51234, false),
+        ("http://[::1]:51234", "devbox", 51234, true),
+        ("http://alias.test:51234", "devbox", 51234, true),
+        ("http://alias.test:3000", "devbox", 51234, false),
         ("https://example.com", "devbox", 51234, true),
     ] as [(String, String?, Int?, Bool)])
     func aPinnedLoopbackPortIsTheOnlyLoopbackAllowed(url: String, remoteHost: String?, pin: Int?, allowed: Bool) async {
         let target = URL(string: url)!
-        #expect(WebPreviewNavigation.allows(target, remoteHost: remoteHost, allowedLoopbackPort: pin) == allowed)
+        // Only DNS reveals that `alias.test` is loopback.
+        let isAlias = target.host == "alias.test"
+        #expect(WebPreviewNavigation.allows(target, remoteHost: remoteHost, allowedLoopbackPort: pin) == (allowed || isAlias))
         // Loopback names resolve to themselves, as `WebPreviewHostLookup` answers them.
         let resolved = await WebPreviewNavigation.allowsResolved(target, remoteHost: remoteHost, allowedLoopbackPort: pin) {
-            RunEndpointPolicy.isLoopbackHost($0) ? [$0] : ["192.0.2.1"]
+            RunEndpointPolicy.isLoopbackHost($0) ? [$0] : $0 == "alias.test" ? ["127.0.0.1"] : ["192.0.2.1"]
         }
         #expect(resolved == allowed)
     }

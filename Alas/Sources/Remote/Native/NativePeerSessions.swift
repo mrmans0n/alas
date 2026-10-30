@@ -1422,9 +1422,16 @@ final class NativePeerSessions {
         workspace.closeDocument()
         openedReview = nil
         openedCommitEditor = nil
-        let browser = openedWebPreview.flatMap {
-            $0.serverId == serverId && $0.runID == runID && $0.url.port == url.port ? $0.browser : nil
-        } ?? WebPreviewBrowser(ownerKey: "peer:\(serverId):\(runID)", remoteHost: hostName, allowedLoopbackPort: url.port)
+        let port = url.runEndpointPort
+        if let reused = openedWebPreview.flatMap({
+            $0.serverId == serverId && $0.runID == runID && $0.browser.allowedLoopbackPort == port ? $0.browser : nil
+        }) {
+            // Open returns to the endpoint, even when the page moved on.
+            reused.navigate(url)
+            openedWebPreview = NativePeerWebPreview(serverId: serverId, runID: runID, url: url, browser: reused)
+            return
+        }
+        let browser = WebPreviewBrowser(ownerKey: "peer:\(serverId):\(runID)", remoteHost: hostName, allowedLoopbackPort: port)
         openedWebPreview = NativePeerWebPreview(serverId: serverId, runID: runID, url: url, browser: browser)
     }
 
