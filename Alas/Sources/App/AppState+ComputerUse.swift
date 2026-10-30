@@ -126,7 +126,9 @@ extension AppState {
         case .desktop:
             return await computerUse.perform(command, sessionID: sessionID)
         case .vmNotRunning:
-            return .error(VMComputerUseRoute.vmNotRunningMessage)
+            // A VM record on Intel came with data migrated from Apple silicon; it can't run here.
+            return .error(WorktreeVMManager.isSupported
+                ? VMComputerUseRoute.vmNotRunningMessage : VMComputerUseRoute.vmUnsupportedMessage)
         case .vmStateUnreadable:
             return .error(VMComputerUseRoute.vmStateUnreadableMessage)
         case .guest(let worktreeID):
@@ -166,6 +168,7 @@ extension AppState {
     /// `vm_run`: runs a shell command in the guest of the session's worktree VM. A session the
     /// user stopped can't use it until resumed, like the computer tools.
     func performVMRun(_ command: String, timeoutSeconds: Int, sessionID: String, worktreeID: String?) async -> AlasCLIResponse {
+        guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
         switch vmRoute(worktreeID: worktreeID) {
         case .desktop:
             return .error(VMComputerUseRoute.vmMissingMessage)
@@ -192,6 +195,7 @@ extension AppState {
     /// `vm_status`: whether the session's worktree has a VM, whether it runs here, its guest
     /// helper (or why it doesn't answer), and the transfer folder.
     func vmStatus(worktreeID: String?) async -> AlasCLIResponse {
+        guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
         let route = vmRoute(worktreeID: worktreeID)
         var helper: Result<VMGuestHello, VMGuestClient.Failure>?
         if case .guest(let id) = route, let client = vmManager.guestClient(for: id) {
