@@ -1264,10 +1264,8 @@ final class NativePeerSessions {
         guard canReadWorkspace else { return false }
         openedReview = nil
         openedCommitEditor = nil
-        // A refresh, or the history's own row or the document it covers (a reconnect reopens it), keeps the
-        // history open; any other document replaces it.
-        if let history = openedFileHistory, document != workspace.document, document != history.selectedDocument,
-           document != history.previousDocument {
+        // A refresh, or the history's own row, keeps the history open; any other document replaces it.
+        if let history = openedFileHistory, document != workspace.document, document != history.selectedDocument {
             openedFileHistory = nil
         }
         if document != workspace.document {
@@ -1427,6 +1425,7 @@ final class NativePeerSessions {
             // Opened again from within a history: closing still returns to what was open before the first.
             previousDocument: openedFileHistory?.previousDocument ?? workspace.document
         )
+        workspace.closeDocument()
         loadFileHistory()
     }
 
@@ -1454,9 +1453,8 @@ final class NativePeerSessions {
     func closeFileHistory() {
         guard let history = openedFileHistory else { return }
         openedFileHistory = nil
-        if let previous = history.previousDocument {
-            open(previous)
-        } else {
+        // Unreadable now: close the history's diff rather than leave it as the plain document.
+        if history.previousDocument.map({ open($0) }) != true {
             closeDocument()
         }
     }

@@ -353,7 +353,8 @@ struct NativePeerRightPaneView: View {
                     commitFiles: client.workspace.commitFiles,
                     onLoadCommitFiles: { client.loadCommitFiles(sha: $0) },
                     onOpen: { client.open($0) },
-                    onFileHistory: fileHistoryAction.map { history in { history($0.path) } },
+                    // A rename's history follows its old path, as locally.
+                    onFileHistory: fileHistoryAction.map { history in { history($0.renameFrom ?? $0.path) } },
                     git: gitActions
                 )
                 .id(client.selectedSessionId ?? client.selectedWorktree?.worktreeId)

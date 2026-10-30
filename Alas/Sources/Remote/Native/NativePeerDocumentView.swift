@@ -308,6 +308,7 @@ struct NativePeerFileHistoryView: View {
                         onCopySHA: { Clipboard.copy(entry.commit.sha) }
                     )
                     .background(rowBackground(entry))
+                    .accessibilityAddTraits(entry.commit.sha == history.selectedSha ? .isSelected : [])
                 }
                 if listing.truncated {
                     Text("Showing the latest \(RemoteWorktreeFileAccess.maxHistoryEntries)")
