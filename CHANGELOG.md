@@ -6,15 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.22.2] - 2026-10-30
+
+### ✨ Features
+
+- Give a worktree its own macOS VM, shown live in a tab, and let agent sessions drive it with the computer-use tools plus `vm_run` and `vm_status`, without approval cards and without touching your desktop (#2249, #2262).
+- Preview a paired host's images, image diffs and other binary files on the Mac (#2259, #2260).
+- Forward a paired host run's loopback web endpoint to the Mac and open it from the host Run tab (#2253, #2254).
+
 ### 🐛 Fixes
 
-- Offer reconnect in the MCP popover when changed settings need a new session attachment.
-- Show agent startup diagnostics, including runtime requirements and recovery commands, above expandable ACP error details instead of a bare protocol error.
-- Bound adapter output draining after process exit so descendants holding stdout or stderr open cannot leave agent requests pending indefinitely.
+- Detect manually launched Claude Code and Codex in persistent terminal panes again, restoring their running status and the hook-install prompt (#2255).
+- Offer reconnect in the MCP popover when changed settings need a new session attachment (#2257).
+- Show agent startup diagnostics, including runtime requirements and recovery commands, above expandable ACP error details instead of a bare protocol error (#2258).
+- Bound adapter output draining after process exit so descendants holding stdout or stderr open cannot leave agent requests pending indefinitely (#2258).
 
 ### 🏗️ Internal
 
-- Update the embedded Ghostty to 1.4.0, built with Zig 0.17, and adopt its MIME-aware clipboard API.
+- Update the embedded Ghostty to 1.4.0, built with Zig 0.17, and adopt its MIME-aware clipboard API (#2261).
+- Add the disabled-by-default ACP 2 durable update journal and its ordered update owner (#2256, #2264).
+- Update the Clojure tree-sitter grammar (#2263).
 
 ## [0.22.1] - 2026-10-28
 
