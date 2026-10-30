@@ -586,6 +586,52 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// A file's history follows its renames, naming the file as each commit
+    /// had it, and is cut at the cap with `truncated` set.
+    @Test func aMacReadsAFilesHistory() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        let id = worktree.id
+        func git(_ arguments: String...) async throws {
+            let result = try await Process.git(arguments, cwd: repo)
+            #expect(result.exitCode == 0, "\(arguments): \(result.stderr)")
+        }
+        func write(_ text: String, _ path: String) throws {
+            try text.write(to: repo.appendingPathComponent(path), atomically: true, encoding: .utf8)
+        }
+        try write("1\n2\n3\n", "a.txt")
+        try await git("add", "a.txt")
+        try await git("commit", "-q", "-m", "feat: add a")
+        try write("1\n2\n3\n4\n", "a.txt")
+        try await git("commit", "-q", "-am", "Edit a")
+        try await git("mv", "a.txt", "b.txt")
+        try await git("commit", "-q", "-m", "Rename a to b")
+        try write("1\n2\nx\n4\n", "b.txt")
+        try await git("commit", "-q", "-am", "Edit b")
+        try write("new\n", "untracked.txt")
+
+        guard case .worktreeRead(.fileHistory(id, "b.txt", let entries, false)) =
+            try await fixture.request(.readWorktree(worktree: ref, read: .fileHistory(path: "b.txt")))
+        else {
+            Issue.record("expected b.txt's history")
+            return
+        }
+        #expect(entries.map(\.commit.rawSubject) == ["Edit b", "Rename a to b", "Edit a", "feat: add a"])
+        #expect(entries.map(\.pathAtCommit) == ["b.txt", "b.txt", "a.txt", "a.txt"])
+        #expect(entries.map { [$0.commit.insertions, $0.commit.deletions] } == [[1, 1], [0, 0], [1, 0], [3, 0]])
+
+        let capped = await fixture.core.remoteFileHistory(in: .found(worktree), path: "b.txt", limit: 2)
+        #expect(capped == .success(entries: Array(entries.prefix(2)), truncated: true))
+        #expect(await fixture.core.remoteFileHistory(in: .found(worktree), path: "untracked.txt")
+            == .success(entries: [], truncated: false))
+        for path in [".git/config", "../x", "/etc/passwd"] {
+            #expect(try await fixture.request(.readWorktree(worktree: ref, read: .fileHistory(path: path)))
+                == .worktreeRead(reply: .fileHistoryFailed(sessionId: id, path: path, reason: .pathRejected, message: nil)))
+        }
+    }
+
     /// A range is read as a commit is, its replies named by the range. Refs
     /// must be SHAs, as stored review targets pin them, or a root's parent.
     @Test(arguments: [false, true])

@@ -1557,6 +1557,7 @@ final class NativePeerSessions {
                 reason: .unknown, message: nil)
         case .file(let path), .fileBytes(let path, _):
             .fileUnavailable(sessionId: id, path: path, reason: .unknown, byteSize: nil, message: nil)
+        case .fileHistory(let path): .fileHistoryFailed(sessionId: id, path: path, reason: .unknown, message: nil)
         }
     }
 

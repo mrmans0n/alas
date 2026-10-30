@@ -50,6 +50,8 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// 5 MiB stays under the 16 MB WebSocket frame limit.
     public static let maxPreviewBytes = 5 * 1024 * 1024
     public static let maxDiffLines = 2_000
+    /// The most commits a file's history lists, as local File History does.
+    public static let maxHistoryEntries = 200
     public static let maxChangedFiles = 500
     /// Caps a single directory listing (the root, or one expanded
     /// subdirectory — `fileTreeChildren` returns immediate children only,
