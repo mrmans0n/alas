@@ -7,7 +7,8 @@ import os
 /// (launchd skips host-written ones), and waits for both grants. sshd still
 /// listening afterwards gets one guest restart to go away. A failure after
 /// sshd was turned on leaves the VM stopped with sshd off again; a VM
-/// without the `alas` account is left untouched.
+/// without the `alas` account is left untouched (and running, when its
+/// helper can tell before the shutdown).
 @MainActor
 struct VMHelperUpdater {
     enum Outcome: Equatable {
@@ -21,6 +22,9 @@ struct VMHelperUpdater {
     typealias Failure = GoldenProvisioner.Failure
     typealias Reason = GoldenProvisioner.Reason
 
+    /// True only when the running VM's helper answered that the guest has
+    /// no `alas` user, so the VM need not be stopped to find out.
+    var guestLacksAccount: @MainActor (String) async -> Bool
     /// Shuts the VM down: gracefully, then forced.
     var shutDown: @MainActor (String) async -> Void
     /// Whether the stopped VM's disk has the `alas` user record.
@@ -36,6 +40,10 @@ struct VMHelperUpdater {
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "vm-helper-updater")
 
     func run(id: String, bundle: VMBundle) async -> Outcome {
+        if await guestLacksAccount(id) {
+            Self.logger.error("Not updating the helper in \(id, privacy: .public): the guest has no alas user")
+            return .failed(reason: Reason.noAccount)
+        }
         var sshdMayBeOn = false
         do {
             await shutDown(id)
@@ -43,6 +51,7 @@ struct VMHelperUpdater {
                 try await steps.withDisk(bundle) { disk in
                     // Without it the SSH step can't log in: write nothing.
                     guard await hasAccount(disk) else { throw Failure(reason: Reason.noAccount) }
+                    try steps.markSSHDEnabled(bundle)
                     sshdMayBeOn = true
                     try await patchGrants(disk)
                 }
@@ -98,13 +107,23 @@ extension VMHelperUpdater {
                 let outcome = if let goldenBuild {
                     try await manager.startGolden(build: goldenBuild)
                 } else {
-                    try await manager.startVM(worktreeID: id)
+                    // Its sshd is on on purpose: the next step logs in with it.
+                    try await manager.startVM(worktreeID: id, keepingSSH: true)
                 }
                 try GuestSetupSteps.requireRunning(outcome)
             },
             stop: { id in await manager.forceStop(id: id) })
         let account = VMGuestAccount.alas
         return VMHelperUpdater(
+            guestLacksAccount: { id in
+                // A helper that doesn't answer (missing, out of date) says
+                // nothing: the disk check after the shutdown decides.
+                guard let client = manager.guestClient(for: id),
+                      let result = try? await client.run("/usr/bin/id \(account.shortName)", timeoutSeconds: 10),
+                      let exit = result.exitCode, !result.timedOut
+                else { return false }
+                return exit != 0
+            },
             shutDown: { id in await manager.stopVM(worktreeID: id) },
             hasAccount: { disk in
                 await Task.detached {

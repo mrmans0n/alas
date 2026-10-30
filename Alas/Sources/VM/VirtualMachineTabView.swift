@@ -20,6 +20,8 @@ struct VirtualMachineTabView: View {
     @State private var errorMessage: String?
     @State private var finishingSetup = false
     @State private var confirmingCustomize = false
+    /// The VM whose Update helper awaits confirmation.
+    @State private var confirmingHelperUpdate: String?
 
     private struct RunningElsewhere {
         let target: StartTarget
@@ -129,6 +131,15 @@ struct VirtualMachineTabView: View {
         } message: {
             Text("New VMs will use your changes. Existing VMs are not affected.")
         }
+        .alert("Update the helper?", isPresented: Binding(
+            get: { confirmingHelperUpdate != nil },
+            set: { if !$0 { confirmingHelperUpdate = nil } }
+        ), presenting: confirmingHelperUpdate) { id in
+            Button("Update") { updateHelper(id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This restarts the VM; unsaved work inside it is lost.")
+        }
     }
 
     private var awaitingSetupBuild: String? {
@@ -154,7 +165,7 @@ struct VirtualMachineTabView: View {
         case .running(let canUpdateHelper):
             header("Running") {
                 if canUpdateHelper {
-                    Button("Update helper") { updateHelper(worktreeID) }
+                    Button("Update helper") { confirmingHelperUpdate = worktreeID }
                 }
                 Button("Stop") { stop(worktreeID) }
             }
@@ -291,7 +302,7 @@ struct VirtualMachineTabView: View {
                 .disabled(finishingSetup || vms.isGoldenRunning(build: build))
             }
             if canUpdateHelper {
-                Button("Update helper") { updateHelper(StartTarget.golden(build: build).id) }
+                Button("Update helper") { confirmingHelperUpdate = StartTarget.golden(build: build).id }
                     .disabled(finishingSetup)
             }
             Button("Done") { finishGoldenSetup(build: build) }
@@ -483,6 +494,8 @@ struct VirtualMachineTabView: View {
             switch await vms.shutDownGoldenForSealing(build: build) {
             case .clean:
                 do {
+                    // An interrupted helper update may have left sshd on.
+                    try await vms.turnOffLeftoverSSH(id: StartTarget.golden(build: build).id)
                     try installer.markSetupDone()
                 } catch {
                     errorMessage = error.localizedDescription

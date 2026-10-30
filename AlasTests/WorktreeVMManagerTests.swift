@@ -249,6 +249,9 @@ final class WorktreeVMManagerTests {
         /// Clean shutdown here, then another process booted the golden and
         /// was reaped (crashed) without a clean shutdown of its own.
         case bootedElsewhereAfterCleanShutdown
+        /// Clean shutdown, but a setup or helper update that turned sshd on
+        /// never turned it off.
+        case guestShutdownWithSSHDLeftOn
     }
 
     @Test(
@@ -260,6 +263,9 @@ final class WorktreeVMManagerTests {
         switch lastStop {
         case .guestShutdown:
             _ = try await manager.startGolden(build: "25A1")
+        case .guestShutdownWithSSHDLeftOn:
+            _ = try await manager.startGolden(build: "25A1")
+            try Data().write(to: WorktreeVMManager.sshdEnabledMarker(of: makeGoldenBundle()))
         case .forcedOff:
             _ = try await manager.startGolden(build: "25A1")
             try await #require(manager.running(id)).forceStop()
@@ -281,11 +287,41 @@ final class WorktreeVMManagerTests {
         let golden = try makeGoldenBundle()
         let sealed = (try? manager.sealGolden(golden)) != nil
 
-        let sawCleanShutdown = [.guestShutdown, .bootedElsewhereAfterCleanShutdown].contains(lastStop)
+        let sawCleanShutdown = [.guestShutdown, .bootedElsewhereAfterCleanShutdown, .guestShutdownWithSSHDLeftOn]
+            .contains(lastStop)
         #expect(shutdown == (sawCleanShutdown ? .clean : .forcedOff))
         #expect(manager.running(id) == nil)
         #expect(sealed == (lastStop == .guestShutdown))
         #expect(golden.isSealed == (lastStop == .guestShutdown))
+    }
+
+    @Test("a worktree VM an interrupted setup left with sshd on gets it turned off offline before it boots")
+    func leftoverSSHDIsTurnedOffBeforeBoot() async throws {
+        let bundle = VMBundle(url: try addRecord("/repo/a"))
+        let marker = WorktreeVMManager.sshdEnabledMarker(of: bundle)
+        try Data().write(to: marker)
+        let manager = makeManager()
+        let disabled = DisabledDisks()
+        manager.disableSSHOffline = { [hypervisor] bundle in disabled.record(bundle.url, bootsSoFar: hypervisor.boots) }
+
+        guard case .running = try await manager.startVM(worktreeID: "/repo/a") else {
+            Issue.record("the VM did not start")
+            return
+        }
+
+        #expect(disabled.bundles == [bundle.url])
+        #expect(disabled.bootsBefore == [0])
+        #expect(!FileManager.default.fileExists(atPath: marker.path))
+    }
+
+    @MainActor
+    private final class DisabledDisks {
+        private(set) var bundles: [URL] = []
+        private(set) var bootsBefore: [Int] = []
+        func record(_ bundle: URL, bootsSoFar: Int) {
+            bundles.append(bundle)
+            bootsBefore.append(bootsSoFar)
+        }
     }
 
     @Test("a golden VM another process booted after a clean shutdown here is not sealed")

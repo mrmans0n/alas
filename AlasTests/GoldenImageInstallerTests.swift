@@ -58,7 +58,7 @@ struct GoldenImageInstallerTests {
         let name: String
         /// Boots after which the guest Data volume has a TCC database.
         var tccAfterBoots: Int? = 1
-        var patchFails = false
+        var patchFails: PatchFailure?
         var reachable = true
         /// The helper's (accessibility, screen recording) grants.
         var grants = (true, true)
@@ -80,13 +80,17 @@ struct GoldenImageInstallerTests {
     }
 
     enum SSHAfterFinish: Sendable { case off, untilRestart, evenAfterRestart }
+    enum PatchFailure: Sendable { case writeFailed, uidTaken }
 
     nonisolated static let pipelineCases: [PipelineCase] = [
         PipelineCase(name: "all good", fallbackReason: nil),
         PipelineCase(name: "TCC.db only after the longer retry boot", tccAfterBoots: 2, fallbackReason: nil),
         PipelineCase(name: "storage still locked right after install", lockedBoots: 3, fallbackReason: nil),
         PipelineCase(name: "no TCC.db twice", tccAfterBoots: nil, fallbackReason: "macOS didn't finish its first start"),
-        PipelineCase(name: "patch throws", patchFails: true, fallbackReason: "couldn't write the setup onto the disk",
+        PipelineCase(name: "patch throws", patchFails: .writeFailed,
+                     fallbackReason: "couldn't write the setup onto the disk", sshdTurnedOffOffline: true),
+        PipelineCase(name: "another user already has the uid", patchFails: .uidTaken,
+                     fallbackReason: "this image already has a different user; finish it by hand",
                      sshdTurnedOffOffline: true),
         PipelineCase(name: "guest never reachable over SSH", reachable: false,
                      fallbackReason: "couldn't reach the VM over the network", sshdTurnedOffOffline: true),
@@ -123,6 +127,9 @@ struct GoldenImageInstallerTests {
             #expect(guest.sealed)
         }
         #expect(guest.sshdTurnedOffOffline == c.sshdTurnedOffOffline)
+        // Every path ends with sshd off, so nothing has to turn it off before sealing.
+        #expect(!FileManager.default.fileExists(atPath: WorktreeVMManager.sshdEnabledMarker(
+            of: VMBundle(url: root.appendingPathComponent("golden/25A1", isDirectory: true))).path))
         // Every path leaves the golden stopped and the disk detached, and no
         // wait runs far past its bound: one attempt at most.
         #expect(!guest.running)
@@ -151,20 +158,25 @@ struct GoldenImageInstallerTests {
     ]
 
     @Test("a running VM's helper is reinstalled over SSH", arguments: helperUpdateCases)
-    func helperUpdateOutcome(_ c: PipelineCase) async {
+    func helperUpdateOutcome(_ c: PipelineCase) async throws {
+        let bundle = VMBundle(url: FileManager.default.temporaryDirectory
+            .appendingPathComponent("GoldenImageInstallerTests-\(UUID().uuidString)", isDirectory: true))
+        try FileManager.default.createDirectory(at: bundle.url, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bundle.url) }
         let guest = FakeGuest(c)
         guest.alreadyBooted(running: true)
 
-        let outcome = await guest.updater().run(
-            id: "/repo/wt", bundle: VMBundle(url: URL(fileURLWithPath: "/nonexistent")))
+        let outcome = await guest.updater().run(id: "/repo/wt", bundle: bundle)
 
         #expect(outcome == (c.fallbackReason.map { .failed(reason: $0) } ?? .updated))
         #expect(guest.sshdTurnedOffOffline == c.sshdTurnedOffOffline)
+        #expect(!FileManager.default.fileExists(atPath: WorktreeVMManager.sshdEnabledMarker(of: bundle).path))
         // Without the account nothing is written: no grants, sshd untouched.
         #expect(guest.grantsPatched == c.hasAccount)
         #expect(!guest.sshListening)
-        // Updated: running again with the new helper. Failed: stopped with sshd off.
-        #expect(guest.running == (c.fallbackReason == nil))
+        // Updated: running again with the new helper. Failed: stopped with
+        // sshd off. No account, as its helper says: never stopped.
+        #expect(guest.running == (c.fallbackReason == nil || !c.hasAccount))
         #expect(guest.openDisks == 0)
     }
 
@@ -269,6 +281,7 @@ private final class FakeGuest {
     func updater() -> VMHelperUpdater {
         let provisioner = provisioner()
         return VMHelperUpdater(
+            guestLacksAccount: { [self] _ in running && !c.hasAccount },
             shutDown: { [self] id in await provisioner.stop(id) },
             hasAccount: { [self] _ in c.hasAccount },
             patchGrants: { [self] disk in
@@ -311,7 +324,11 @@ private final class FakeGuest {
             },
             closeDisk: { disk in disk.close() },
             patch: { [self] _ in
-                if c.patchFails { throw PatchFailed() }
+                switch c.patchFails {
+                case .writeFailed: throw PatchFailed()
+                case .uidTaken: throw VMGuestPatcher.PatchError.uidTaken(uid: 501, by: "admin")
+                case nil: break
+                }
                 guard let after = c.tccAfterBoots, boots >= after else {
                     throw VMGuestPatcher.PatchError.missingTCCDatabase("TCC.db")
                 }

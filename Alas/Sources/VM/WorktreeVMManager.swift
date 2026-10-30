@@ -66,6 +66,9 @@ final class WorktreeVMManager {
     /// The guest helper and its installer, shared read-only with every VM.
     @ObservationIgnored private let helperDirectory: URL?
     @ObservationIgnored private let logger = Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
+    /// Turns sshd off on a stopped VM's disk, attached on the host. Called
+    /// under a disk claim by `turnOffLeftoverSSH`.
+    @ObservationIgnored var disableSSHOffline: @MainActor (VMBundle) async throws -> Void
 
     private(set) var runningVMs: [String: RunningVM] = [:]
     /// The worktree whose tab asked to customize the base image, or
@@ -117,6 +120,16 @@ final class WorktreeVMManager {
         self.ownerLabel = ownerLabel
         self.helperDirectory = helperDirectory
         self.start = start
+        disableSSHOffline = { bundle in try await Self.disableSSHOnDisk(bundle, root: root) }
+    }
+
+    private static func disableSSHOnDisk(_ bundle: VMBundle, root: URL) async throws {
+        let image = bundle.diskImage
+        try await Task.detached {
+            let session = try VMDiskSession.open(diskImage: image, root: root)
+            defer { session.close() }
+            try VMGuestPatcher.disableSSH(dataVolume: session.dataVolume)
+        }.value
     }
 
     static var defaultOwnerLabel: String {
@@ -318,8 +331,15 @@ final class WorktreeVMManager {
         }
     }
 
-    func startVM(worktreeID: String) async throws -> VMStartOutcome {
-        try await startRecorded(id: worktreeID, ensureRecord: nil)
+    /// `keepingSSH` is only for `VMHelperUpdater`, whose boot needs the sshd
+    /// it just turned on; every other start of a worktree VM first turns off
+    /// sshd an interrupted setup or update left on.
+    func startVM(worktreeID: String, keepingSSH: Bool = false) async throws -> VMStartOutcome {
+        if !keepingSSH, !worktreeID.hasPrefix(Self.goldenIDPrefix),
+           runningVMs[worktreeID] == nil, !starting.contains(worktreeID) {
+            try await turnOffLeftoverSSH(id: worktreeID)
+        }
+        return try await startRecorded(id: worktreeID, ensureRecord: nil)
     }
 
     /// Stops `other` (which must run in this process) and starts `worktreeID`.
@@ -460,19 +480,49 @@ final class WorktreeVMManager {
         guard updatingHelpers.insert(id).inserted else { return }
         defer { updatingHelpers.remove(id) }
         helperUpdateFailures.removeValue(forKey: id)
-        let bundle: VMBundle
-        if id.hasPrefix(Self.goldenIDPrefix) {
-            bundle = VMBundle(url: goldenBundleURL(build: String(id.dropFirst(Self.goldenIDPrefix.count))))
-        } else {
-            let recorded = (try? registry.snapshot())?.first { $0.id == id }?.bundlePath
-            bundle = VMBundle(url: recorded.map { URL(fileURLWithPath: $0) } ?? Self.bundleURL(forWorktree: id, root: root))
-        }
-        switch await VMHelperUpdater.live(manager: self, id: id).run(id: id, bundle: bundle) {
+        switch await VMHelperUpdater.live(manager: self, id: id).run(id: id, bundle: bundle(forID: id)) {
         case .updated:
             helpersNeedingUpdate.remove(id)
         case .failed(let reason):
             helperUpdateFailures[id] = "Couldn't update the helper (\(reason)). Start the VM and try again, or install it from My Shared Files › helper › Install Alas VM Guest."
         }
+    }
+
+    /// The bundle of VM `id`, a worktree's or a golden's.
+    private func bundle(forID id: String) -> VMBundle {
+        if id.hasPrefix(Self.goldenIDPrefix) {
+            return VMBundle(url: goldenBundleURL(build: String(id.dropFirst(Self.goldenIDPrefix.count))))
+        }
+        let recorded = (try? registry.snapshot())?.first { $0.id == id }?.bundlePath
+        return VMBundle(url: recorded.map { URL(fileURLWithPath: $0) } ?? Self.bundleURL(forWorktree: id, root: root))
+    }
+
+    // MARK: - Leftover sshd
+
+    /// Written into a bundle before a patch turns the guest's sshd on, and
+    /// removed once the in-guest finishing step or an offline edit turned it
+    /// off again. Left behind, the guest may run sshd with a known password.
+    nonisolated static func sshdEnabledMarker(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent(".sshd-enabled")
+    }
+
+    /// Turns sshd off on stopped VM `id`'s disk when a setup or helper
+    /// update that turned it on was interrupted (Alas quit, or the offline
+    /// fix failed). The disk is claimed meanwhile, so no Alas process boots it.
+    func turnOffLeftoverSSH(id: String) async throws {
+        let bundle = bundle(forID: id)
+        let marker = Self.sshdEnabledMarker(of: bundle)
+        guard FileManager.default.fileExists(atPath: marker.path) else { return }
+        try claimDisk(id: id)
+        defer { releaseDisk(id: id) }
+        do {
+            try await disableSSHOffline(bundle)
+        } catch {
+            logger.error("Turning leftover sshd off in VM \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            throw VMError(message: "SSH is still on in this VM and couldn't be turned off (\(error.localizedDescription)). Try again.")
+        }
+        try? FileManager.default.removeItem(at: marker)
+        logger.notice("Turned leftover sshd off in VM \(id, privacy: .public)")
     }
 
     // MARK: - Golden VM
@@ -623,6 +673,10 @@ final class WorktreeVMManager {
                   records.first(where: { $0.id == id })?.bootGeneration == generation
             else {
                 throw VMError(message: "macOS was powered off without shutting down. Start it, shut down macOS from the Apple menu, then click Done.")
+            }
+            // Every clone would run sshd with the known password.
+            guard !FileManager.default.fileExists(atPath: Self.sshdEnabledMarker(of: bundle).path) else {
+                throw VMError(message: "SSH is still enabled on this image; click Set up automatically or try again")
             }
             try GoldenImageInstaller.writeSealedMarker(bundle)
             try? FileManager.default.removeItem(at: Self.customizingMarker(of: bundle))

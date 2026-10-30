@@ -46,6 +46,7 @@ struct GoldenProvisioner {
         static let vmStart = "the VM couldn't start"
         static let noAccount = "this VM doesn't have the alas account; install the helper from My Shared Files › helper in the VM"
         static let sshStillOn = "the helper is updated but SSH is still on; restart the VM"
+        static let uidTaken = "this image already has a different user; finish it by hand"
     }
 
     typealias Step = GoldenImageInstaller.ProvisioningStep
@@ -132,7 +133,7 @@ struct GoldenProvisioner {
             Self.logger.error("Unattended setup of golden \(build, privacy: .public) stopped: \(reason, privacy: .public)")
             await stop(build)
             // A patch that failed part-way may already have turned sshd on.
-            if patched || reason == Reason.disk { await steps.turnSSHDOffOffline(bundle) }
+            if patched || steps.sshdMayBeOn(bundle) { await steps.turnSSHDOffOffline(bundle) }
             return .fallback(reason: reason)
         }
     }
@@ -151,7 +152,10 @@ struct GoldenProvisioner {
             onStep(.patching)
             let result: Result<Void, Error>
             do {
-                try await steps.withDisk(bundle) { try await patch($0) }
+                try await steps.withDisk(bundle) { disk in
+                    try steps.markSSHDEnabled(bundle)
+                    try await patch(disk)
+                }
                 result = .success(())
             } catch {
                 result = .failure(error)
@@ -161,7 +165,12 @@ struct GoldenProvisioner {
                 return
             case .failure(VMGuestPatcher.PatchError.missingTCCDatabase):
                 Self.logger.notice("Golden \(build, privacy: .public) has no TCC database yet after \(wait, privacy: .public)")
+                // Checked before the patch writes anything.
+                steps.clearSSHDMarker(bundle)
                 continue
+            case .failure(VMGuestPatcher.PatchError.uidTaken):
+                Self.logger.error("The golden disk already has another user at the alas account's uid")
+                throw Failure(reason: Reason.uidTaken)
             case .failure(let error):
                 Self.logger.error("Patching the golden disk failed: \(String(describing: error), privacy: .public)")
                 throw Failure(reason: Reason.disk)
@@ -384,12 +393,33 @@ struct GuestSetupSteps {
         await closeDisk(disk)
     }
 
+    /// Records, before a patch turns the guest's sshd on, that it may be on
+    /// (`WorktreeVMManager.sshdEnabledMarker`). Without it nothing is patched.
+    func markSSHDEnabled(_ bundle: VMBundle) throws {
+        do {
+            try Data().write(to: WorktreeVMManager.sshdEnabledMarker(of: bundle))
+        } catch {
+            Self.logger.error("Writing the sshd marker of \(bundle.url.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            throw Failure(reason: Reason.disk)
+        }
+    }
+
+    /// Once sshd is off again, in the guest or offline.
+    func clearSSHDMarker(_ bundle: VMBundle) {
+        try? FileManager.default.removeItem(at: WorktreeVMManager.sshdEnabledMarker(of: bundle))
+    }
+
+    func sshdMayBeOn(_ bundle: VMBundle) -> Bool {
+        FileManager.default.fileExists(atPath: WorktreeVMManager.sshdEnabledMarker(of: bundle).path)
+    }
+
     /// The finishing script switches sshd off; a failure after the patch
     /// may not have reached it, which would leave sshd on with a known
     /// password. Logged, never thrown: the failure stands either way.
     func turnSSHDOffOffline(_ bundle: VMBundle) async {
         do {
             try await withDisk(bundle) { try await disableSSHD($0) }
+            clearSSHDMarker(bundle)
         } catch {
             Self.logger.error("Turning sshd off on the guest disk failed: \(String(describing: error), privacy: .public)")
         }
@@ -421,6 +451,8 @@ struct GuestSetupSteps {
             Self.logger.error("Installing the helper exited \(install.exit, privacy: .public): \(install.stdout, privacy: .public)")
             throw Failure(reason: Reason.helper)
         }
+        // The script ended by disabling sshd.
+        clearSSHDMarker(bundle)
         // Belt and braces: the script only disabled sshd for future loads.
         // Either command may fail or drop this very connection.
         _ = try? await ssh(host, GoldenProvisioner.sshdOffScript(account: .alas), GoldenProvisioner.probeTimeout)
