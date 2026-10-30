@@ -64,7 +64,7 @@ struct VirtualMachineTabView: View {
             goldenAvailable: goldenAvailable,
             installerPhase: installer.phase,
             helper: helperUpdate(worktreeID),
-            goldenHelper: awaitingSetupBuild.map { helperUpdate(StartTarget.golden(build: $0).id) } ?? .none
+            goldenHelper: customizedGoldenID.map(helperUpdate) ?? .none
         )
     }
 
@@ -73,13 +73,20 @@ struct VirtualMachineTabView: View {
         return vms.helpersNeedingUpdate.contains(id) ? .available : .none
     }
 
+    /// The golden awaiting setup when Customize reopened it. A golden
+    /// awaiting its first setup has no `alas` account or helper to update.
+    private var customizedGoldenID: String? {
+        guard let build = awaitingSetupBuild, vms.isGoldenCustomized(build: build) else { return nil }
+        return StartTarget.golden(build: build).id
+    }
+
     /// The VM running here whose helper this tab checks: its own, or the
-    /// golden it shows setup for.
+    /// customized golden it shows setup for.
     private var helperCheckTarget: String? {
         switch screen {
         case .running: worktreeID
-        case .goldenSetup(let build, _):
-            vms.running(StartTarget.golden(build: build).id) != nil ? StartTarget.golden(build: build).id : nil
+        case .goldenSetup:
+            customizedGoldenID.flatMap { vms.running($0) != nil ? $0 : nil }
         default: nil
         }
     }

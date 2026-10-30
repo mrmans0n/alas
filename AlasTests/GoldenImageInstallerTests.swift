@@ -43,9 +43,16 @@ struct GoldenImageInstallerTests {
         let fallbackReason: String?
         /// A fallback after the patch turned sshd on must turn it off offline.
         var sshdTurnedOffOffline = false
+        /// Whether the VM to update has the `alas` account.
+        var hasAccount = true
+        /// Whether sshd still listens after the finishing script (until a
+        /// restart, or for good).
+        var sshAfterFinish: SSHAfterFinish = .off
 
         var testDescription: String { name }
     }
+
+    enum SSHAfterFinish: Sendable { case off, untilRestart, evenAfterRestart }
 
     nonisolated static let pipelineCases: [PipelineCase] = [
         PipelineCase(name: "all good", fallbackReason: nil),
@@ -104,21 +111,29 @@ struct GoldenImageInstallerTests {
                      fallbackReason: "couldn't reach the VM over the network", sshdTurnedOffOffline: true),
         PipelineCase(name: "helper without its grants", grants: (true, false), fallbackReason: "the helper didn't start",
                      sshdTurnedOffOffline: true),
+        PipelineCase(name: "sshd still listening until the guest restarts", fallbackReason: nil,
+                     sshAfterFinish: .untilRestart),
+        PipelineCase(name: "sshd still listening after the restart", fallbackReason:
+            "the helper is updated but SSH is still on; restart the VM", sshdTurnedOffOffline: true,
+            sshAfterFinish: .evenAfterRestart),
+        PipelineCase(name: "no alas account", fallbackReason:
+            "this VM doesn't have the alas account; install the helper from My Shared Files › helper in the VM",
+            hasAccount: false),
     ]
 
     @Test("a running VM's helper is reinstalled over SSH", arguments: helperUpdateCases)
     func helperUpdateOutcome(_ c: PipelineCase) async {
         let guest = FakeGuest(c)
         guest.alreadyBooted(running: true)
-        let updater = VMHelperUpdater(
-            shutDown: { [guest] id in await guest.provisioner().stop(id) },
-            patchGrants: { [guest] disk in try await guest.provisioner().patch(disk) },
-            steps: guest.provisioner().steps)
 
-        let outcome = await updater.run(id: "/repo/wt", bundle: VMBundle(url: URL(fileURLWithPath: "/nonexistent")))
+        let outcome = await guest.updater().run(
+            id: "/repo/wt", bundle: VMBundle(url: URL(fileURLWithPath: "/nonexistent")))
 
         #expect(outcome == (c.fallbackReason.map { .failed(reason: $0) } ?? .updated))
         #expect(guest.sshdTurnedOffOffline == c.sshdTurnedOffOffline)
+        // Without the account nothing is written: no grants, sshd untouched.
+        #expect(guest.grantsPatched == c.hasAccount)
+        #expect(!guest.sshListening)
         // Updated: running again with the new helper. Failed: stopped with sshd off.
         #expect(guest.running == (c.fallbackReason == nil))
         #expect(guest.openDisks == 0)
@@ -217,6 +232,27 @@ private final class FakeGuest {
 
     private func stepDone() { waitStart = nil }
 
+    private(set) var grantsPatched = false
+    /// Whether the guest's port 22 answers.
+    private(set) var sshListening = false
+
+    /// The updater for this guest, already set up once.
+    func updater() -> VMHelperUpdater {
+        let provisioner = provisioner()
+        return VMHelperUpdater(
+            shutDown: { [self] id in await provisioner.stop(id) },
+            hasAccount: { [self] _ in c.hasAccount },
+            patchGrants: { [self] disk in
+                grantsPatched = true
+                try await provisioner.patch(disk)
+            },
+            sshPortOpen: { [self] _ in sshListening },
+            restartGuest: { [self] _ in
+                if c.sshAfterFinish == .untilRestart { sshListening = false }
+            },
+            steps: provisioner.steps)
+    }
+
     /// A VM that already ran (its Data volume has a TCC database).
     func alreadyBooted(running: Bool) {
         boots = 1
@@ -238,6 +274,7 @@ private final class FakeGuest {
             stop: { [self] _ in
                 stepDone()
                 running = false
+                sshListening = false
             },
             openDisk: { [disks] _ in
                 disks.add(1)
@@ -253,12 +290,13 @@ private final class FakeGuest {
             disableSSHD: { [self] _ in sshdTurnedOffOffline = true },
             // Leased, but sshd may not answer.
             guestIP: { _ in "192.168.64.3" },
-            ssh: { [self] _, _, timeout in
+            ssh: { [self] _, script, timeout in
                 guard c.reachable else {
                     advance(timeout)
                     throw Unreachable()
                 }
                 stepDone()
+                if script != "true" { sshListening = c.sshAfterFinish != .off }
                 return (exit: 0, stdout: "")
             },
             helperHello: { [self] _ in

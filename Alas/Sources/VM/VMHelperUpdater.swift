@@ -4,8 +4,10 @@ import os
 /// Reinstalls the guest helper in an existing VM: shuts it down, writes the
 /// helper's grants and turns sshd on offline (the user already exists), boots
 /// it, installs the helper and its LaunchAgent over SSH from inside the guest
-/// (launchd skips host-written ones), and waits for both grants. A failure
-/// after sshd was turned on leaves the VM stopped with sshd off again.
+/// (launchd skips host-written ones), and waits for both grants. sshd still
+/// listening afterwards gets one guest restart to go away. A failure after
+/// sshd was turned on leaves the VM stopped with sshd off again; a VM
+/// without the `alas` account is left untouched.
 @MainActor
 struct VMHelperUpdater {
     enum Outcome: Equatable {
@@ -21,7 +23,13 @@ struct VMHelperUpdater {
 
     /// Shuts the VM down: gracefully, then forced.
     var shutDown: @MainActor (String) async -> Void
+    /// Whether the stopped VM's disk has the `alas` user record.
+    var hasAccount: @MainActor (any GoldenProvisioningDisk) async -> Bool
     var patchGrants: @MainActor (any GoldenProvisioningDisk) async throws -> Void
+    /// Whether the guest at this address accepts connections on port 22.
+    var sshPortOpen: @MainActor (String) async -> Bool
+    /// Asks the guest, through its helper, to restart. Does not wait.
+    var restartGuest: @MainActor (String) async -> Void
     /// Keyed by the VM's registry id.
     var steps: GuestSetupSteps
 
@@ -33,16 +41,21 @@ struct VMHelperUpdater {
             await shutDown(id)
             do {
                 try await steps.withDisk(bundle) { disk in
+                    // Without it the SSH step can't log in: write nothing.
+                    guard await hasAccount(disk) else { throw Failure(reason: Reason.noAccount) }
                     sshdMayBeOn = true
                     try await patchGrants(disk)
                 }
+            } catch let failure as Failure {
+                throw failure
             } catch {
                 Self.logger.error("Patching the helper grants of \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
                 throw Failure(reason: Reason.disk)
             }
             try await steps.bootOrFail(id, reason: Reason.vmStart)
-            try await steps.finishOverSSH(bundle)
+            let host = try await steps.finishOverSSH(bundle)
             try await steps.waitForHelperGrants(id)
+            try await ensureSSHDStopped(id, host: host)
             Self.logger.info("Updated the helper in \(id, privacy: .public)")
             return .updated
         } catch {
@@ -52,6 +65,21 @@ struct VMHelperUpdater {
             if sshdMayBeOn { await steps.turnSSHDOffOffline(bundle) }
             return .failed(reason: reason)
         }
+    }
+
+    /// `launchctl disable` only stops sshd loading again, and the bootout
+    /// may not have run. A restart from inside, through the helper, ends it;
+    /// the helper must then come back with both grants and port 22 stay shut.
+    private func ensureSSHDStopped(_ id: String, host: String) async throws {
+        guard await sshPortOpen(host) else { return }
+        Self.logger.notice("sshd still listens in \(id, privacy: .public); restarting the guest")
+        await restartGuest(id)
+        let went = await steps.waitUntil(
+            timeout: GoldenProvisioner.helperTimeout, interval: GoldenProvisioner.helperInterval
+        ) { await !sshPortOpen(host) }
+        guard went else { throw Failure(reason: Reason.sshStillOn) }
+        try await steps.waitForHelperGrants(id)
+        guard await !sshPortOpen(host) else { throw Failure(reason: Reason.sshStillOn) }
     }
 }
 
@@ -75,8 +103,14 @@ extension VMHelperUpdater {
                 try GuestSetupSteps.requireRunning(outcome)
             },
             stop: { id in await manager.forceStop(id: id) })
+        let account = VMGuestAccount.alas
         return VMHelperUpdater(
             shutDown: { id in await manager.stopVM(worktreeID: id) },
+            hasAccount: { disk in
+                await Task.detached {
+                    (try? VMGuestPatcher.hasAccount(account, dataVolume: disk.dataVolume)) ?? false
+                }.value
+            },
             patchGrants: { disk in
                 guard let helperApp else { throw Failure(reason: Reason.disk) }
                 try await Task.detached {
@@ -84,6 +118,10 @@ extension VMHelperUpdater {
                         dataVolume: disk.dataVolume,
                         helperCodeRequirement: HelperCodeRequirement.designatedRequirementData(of: helperApp))
                 }.value
+            },
+            sshPortOpen: { host in await GuestSSH.portOpen(host: host, port: 22, timeout: .seconds(3)) },
+            restartGuest: { id in
+                manager.requestGuestCommand(id: id, GoldenProvisioner.restartCommand(account: account))
             },
             steps: steps)
     }

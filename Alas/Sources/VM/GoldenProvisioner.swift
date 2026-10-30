@@ -43,6 +43,8 @@ struct GoldenProvisioner {
         static let helper = "the helper didn't start"
         static let shutdown = "macOS didn't shut down cleanly"
         static let vmStart = "the VM couldn't start"
+        static let noAccount = "this VM doesn't have the alas account; install the helper from My Shared Files › helper in the VM"
+        static let sshStillOn = "the helper is updated but SSH is still on; restart the VM"
     }
 
     typealias Step = GoldenImageInstaller.ProvisioningStep
@@ -216,6 +218,20 @@ struct GoldenProvisioner {
         """
     }
 
+    /// Stops the running sshd too, which `launchctl disable` leaves loaded.
+    /// `systemsetup` may be missing or need Full Disk Access.
+    nonisolated static func sshdOffScript(account: VMGuestAccount) -> String {
+        """
+        \(sudo("/usr/sbin/systemsetup -f -setremotelogin off", account: account)) 2>/dev/null || true
+        \(sudo("/bin/launchctl bootout system/com.openssh.sshd", account: account)) 2>/dev/null || true
+        """
+    }
+
+    /// The command that restarts the guest from inside, run by the helper.
+    nonisolated static func restartCommand(account: VMGuestAccount) -> String {
+        sudo("/sbin/shutdown -r now", account: account)
+    }
+
     /// `command` as root, with the password fed to `sudo -S` (its prompt
     /// goes to stderr; `-p ''` keeps it empty).
     nonisolated static func sudo(_ command: String, account: VMGuestAccount) -> String {
@@ -299,7 +315,8 @@ extension GoldenProvisioner {
             ssh: steps.ssh,
             helperHello: steps.helperHello,
             guestShutdown: { build in
-                manager.requestGoldenGuestCommand(build: build, Self.shutdownCommand(account: account))
+                manager.requestGuestCommand(
+                    id: WorktreeVMManager.goldenIDPrefix + build, Self.shutdownCommand(account: account))
             },
             isRunning: { build in manager.isGoldenRunning(build: build) },
             seal: { bundle in try manager.sealGolden(bundle) },
@@ -378,8 +395,10 @@ struct GuestSetupSteps {
     }
 
     /// Waits for the guest's lease and sshd, then installs the helper and its
-    /// LaunchAgent from inside the guest and turns sshd off again.
-    func finishOverSSH(_ bundle: VMBundle) async throws {
+    /// LaunchAgent from inside the guest and turns sshd off again. Returns
+    /// the guest's address.
+    @discardableResult
+    func finishOverSSH(_ bundle: VMBundle) async throws -> String {
         var host: String?
         let reached = await waitUntil(timeout: GoldenProvisioner.reachTimeout, interval: GoldenProvisioner.reachInterval) {
             guard let ip = await guestIP(bundle) else { return false }
@@ -401,11 +420,10 @@ struct GuestSetupSteps {
             Self.logger.error("Installing the helper exited \(install.exit, privacy: .public): \(install.stdout, privacy: .public)")
             throw Failure(reason: Reason.helper)
         }
-        // Belt and braces: it may be missing or need Full Disk Access, and
-        // it may drop this very connection.
-        _ = try? await ssh(
-            host, GoldenProvisioner.sudo("/usr/sbin/systemsetup -f -setremotelogin off", account: .alas),
-            GoldenProvisioner.probeTimeout)
+        // Belt and braces: the script only disabled sshd for future loads.
+        // Either command may fail or drop this very connection.
+        _ = try? await ssh(host, GoldenProvisioner.sshdOffScript(account: .alas), GoldenProvisioner.probeTimeout)
+        return host
     }
 
     /// Waits until the helper answers with both grants and this build's
@@ -546,6 +564,41 @@ enum GuestSSH {
     }
 
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "guest-ssh")
+
+    /// Whether `host` (an IPv4 address) accepts a TCP connection on `port`
+    /// within `timeout`.
+    static func portOpen(host: String, port: UInt16, timeout: Duration) async -> Bool {
+        let milliseconds = Int32(timeout.components.seconds * 1000
+            + timeout.components.attoseconds / 1_000_000_000_000_000)
+        return await Task.detached { probe(host: host, port: port, timeoutMilliseconds: milliseconds) }.value
+    }
+
+    private static func probe(host: String, port: UInt16, timeoutMilliseconds: Int32) -> Bool {
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_port = port.bigEndian
+        guard inet_pton(AF_INET, host, &address.sin_addr) == 1 else { return false }
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        var noSIGPIPE: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &noSIGPIPE, socklen_t(MemoryLayout<Int32>.size))
+        let connected = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
+        }
+        if connected == 0 { return true }
+        guard errno == EINPROGRESS else { return false }
+        var descriptor = pollfd(fd: fd, events: Int16(POLLOUT), revents: 0)
+        guard poll(&descriptor, 1, timeoutMilliseconds) == 1 else { return false }
+        var error: Int32 = 0
+        var length = socklen_t(MemoryLayout<Int32>.size)
+        guard getsockopt(fd, SOL_SOCKET, SO_ERROR, &error, &length) == 0 else { return false }
+        return error == 0
+    }
 
     static func arguments(host: String, account: VMGuestAccount) -> [String] {
         [

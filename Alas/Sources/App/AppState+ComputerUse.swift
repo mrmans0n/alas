@@ -204,8 +204,9 @@ extension AppState {
             } catch {
                 helper = .failure(error as? VMGuestClient.Failure ?? .stopped)
             }
-            // The VM tab offers Update helper for a missing or outdated one.
-            if let helper { vmManager.noteHelperCheck(id, helper) }
+            // The VM tab offers Update helper for an outdated one. A missing
+            // one may still be starting: the tab's own check waits for it.
+            if case .success(let hello) = helper { vmManager.noteHelperCheck(id, .success(hello)) }
         }
         var transfer = ""
         switch route {

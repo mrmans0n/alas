@@ -367,6 +367,10 @@ final class WorktreeVMManager {
     /// removes its bundle and record. A VM another process is running is left
     /// alone; one still booting is deleted once its boot returns.
     func deleteVM(worktreeID: String) async {
+        guard !diskClaims.contains(worktreeID) else {
+            logger.error("Not deleting VM \(worktreeID, privacy: .public): its disk is attached for an update")
+            return
+        }
         if starting.contains(worktreeID) {
             pendingAfterBoot[worktreeID] = .delete
             return
@@ -447,6 +451,12 @@ final class WorktreeVMManager {
     /// setup) through `VMHelperUpdater`: restarts the VM, which ends up
     /// running with the new helper, or stopped with `helperUpdateFailures` set.
     func updateHelper(_ id: String) async {
+        if id.hasPrefix(Self.goldenIDPrefix),
+           !isGoldenCustomized(build: String(id.dropFirst(Self.goldenIDPrefix.count))) {
+            // A golden awaiting its first setup has no helper to update yet.
+            helperUpdateFailures[id] = "Couldn't update the helper: set up this macOS image first."
+            return
+        }
         guard updatingHelpers.insert(id).inserted else { return }
         defer { updatingHelpers.remove(id) }
         helperUpdateFailures.removeValue(forKey: id)
@@ -554,18 +564,18 @@ final class WorktreeVMManager {
         return try await client.status()
     }
 
-    /// Runs `command` in the golden guest through its helper without waiting
+    /// Runs `command` in a guest this process runs, through its helper, without waiting
     /// for the result: a command that shuts the guest down drops the
     /// connection before it can answer. The guest stopping by itself is
     /// recorded as a clean shutdown, as for one from the Apple menu.
-    func requestGoldenGuestCommand(build: String, _ command: String) {
-        guard let client = guestClient(for: Self.goldenIDPrefix + build) else { return }
+    func requestGuestCommand(id: String, _ command: String) {
+        guard let client = guestClient(for: id) else { return }
         let logger = logger
         Task {
             do {
                 _ = try await client.run(command, timeoutSeconds: 60)
             } catch {
-                logger.notice("Golden guest command ended without a reply: \(String(describing: error), privacy: .public)")
+                logger.notice("Guest command ended without a reply: \(String(describing: error), privacy: .public)")
             }
         }
     }
@@ -731,7 +741,7 @@ final class WorktreeVMManager {
             throw VMError(message: "This VM is already starting")
         }
         guard !diskClaims.contains(id) else {
-            throw VMError(message: "macOS is being set up. Wait for it to finish.")
+            throw VMError(message: "This VM's disk is being updated. Wait for it to finish.")
         }
         guard let me = VMRunOwner.current(label: ownerLabel) else {
             throw VMError(message: "Could not identify this Alas process, so the VM cannot be tracked")

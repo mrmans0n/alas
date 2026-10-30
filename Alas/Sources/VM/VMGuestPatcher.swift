@@ -68,6 +68,17 @@ enum VMGuestPatcher {
         try configurePowerAndLock(account, volume: volume)
     }
 
+    /// Whether the guest has `account`'s user record, so a helper reinstalled
+    /// over SSH as that user can work. Only restores the search bit `patch`
+    /// set on the dslocal directories, should the host see them without it.
+    static func hasAccount(_ account: VMGuestAccount, dataVolume: URL) throws -> Bool {
+        let volume = Volume(root: dataVolume)
+        for directory in ["", "/users"] {
+            try volume.ensureDirectoryExecutable(volume.url(dslocalPath + directory))
+        }
+        return volume.exists(volume.url("\(dslocalPath)/users/\(account.shortName).plist"))
+    }
+
     /// Only the helper's grants and sshd on, for a guest `patch` already set
     /// up (its user exists) whose helper is reinstalled over SSH.
     static func patchGrants(dataVolume: URL, helperCodeRequirement: Data) throws {
