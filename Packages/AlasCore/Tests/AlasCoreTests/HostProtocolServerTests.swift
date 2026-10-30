@@ -1895,6 +1895,10 @@ struct HostProtocolServerTests {
 
         #expect(try await act(.stage, "new.sh", .unstaged, 0) == .done)
         #expect(try await Process.git(["ls-files", "-s", "new.sh"], cwd: repo).stdout.hasPrefix("100755 "))
+        // Unstaging a new file's only hunk takes it out of the index, not to an empty file.
+        #expect(try await act(.unstage, "new.sh", .staged, 0) == .done)
+        #expect(try await Process.git(["ls-files", "new.sh"], cwd: repo).stdout.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: script.path))
         #expect(try await act(.stage, "notes.txt", .unstaged, 1) == .done)
         #expect(try await shown("notes.txt", .unstaged) == [unstaged[0]])
         #expect(try await shown("notes.txt", .staged).map(\.linesHash) == [unstaged[1].linesHash])

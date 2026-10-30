@@ -208,9 +208,19 @@ extension AlasCoreContext {
             }
             arguments = ["apply", "--reverse", "-"]
         }
+        // A new file's staged diff is its one hunk from /dev/null: unstaged
+        // as a new-file patch, it leaves the index rather than staying empty.
+        let unstagesAddition = action == .unstage && entry.status == "A" && hunk.oldStart == 0
+        let mode: String
+        if unstagesAddition {
+            // `<mode> <sha> <stage>\t<path>`
+            let listed = try await Process.git(["ls-files", "-s", "--", path], cwd: root).stdout
+            mode = listed.split(separator: " ", maxSplits: 1).first.map(String.init) ?? HunkPatchBuilder.defaultUntrackedMode
+        } else {
+            mode = HunkPatchBuilder.fileMode(at: root.appendingPathComponent(path))
+        }
         let patch = HunkPatchBuilder.patch(
-            file: path, hunk: hunk, tracked: action != .stage || tracked,
-            untrackedMode: HunkPatchBuilder.fileMode(at: root.appendingPathComponent(path)))
+            file: path, hunk: hunk, tracked: action == .stage ? tracked : !unstagesAddition, untrackedMode: mode)
         // Git's own context check is the last word on a stale hunk.
         guard try await Process.git(arguments, cwd: root, stdin: patch).exitCode == 0 else { throw changed }
     }
