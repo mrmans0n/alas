@@ -737,7 +737,11 @@ final class NativePeerSessions {
 
     func selectConsole(serverId: String, consoleId: String) {
         if let viewer = consoles?.viewer, viewer.serverId == serverId, viewer.consoleId == consoleId,
-           !viewer.isEnded { return }
+           !viewer.isEnded {
+            // Already live: only reveal it again from under a preview.
+            openedWebPreview = nil
+            return
+        }
         clearSelection()
         noteSelected(.console(consoleId), serverId: serverId)
         consoles?.select(serverId: serverId, consoleId: consoleId)
