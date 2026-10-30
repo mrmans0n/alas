@@ -1423,7 +1423,7 @@ final class NativePeerSessions {
         openedFileHistory = NativePeerFileHistory(
             worktreeId: target.worktree.snapshot.worktree.id, path: path,
             // Opened again from within a history: closing still returns to what was open before the first.
-            previousDocument: openedFileHistory?.previousDocument ?? workspace.document
+            previousDocument: openedFileHistory.map(\.previousDocument) ?? workspace.document
         )
         workspace.closeDocument()
         loadFileHistory()
@@ -1453,8 +1453,11 @@ final class NativePeerSessions {
     func closeFileHistory() {
         guard let history = openedFileHistory else { return }
         openedFileHistory = nil
-        // Unreadable now: close the history's diff rather than leave it as the plain document.
-        if history.previousDocument.map({ open($0) }) != true {
+        // `open` also declines a document whose read is still in flight, which it keeps showing; only a
+        // workspace that can't be read leaves the history's diff behind as the plain document.
+        if let previous = history.previousDocument, canReadWorkspace {
+            open(previous)
+        } else {
             closeDocument()
         }
     }
