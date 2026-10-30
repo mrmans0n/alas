@@ -1831,6 +1831,68 @@ struct HostProtocolServerTests {
         #expect(try await Process.git(["log", "--format=%s", "-2"], cwd: repo).stdout == "Above\nEdit notes\n")
     }
 
+    /// The host stages, unstages or discards only the hunk the Mac was shown,
+    /// rebuilt from its own diff of that side.
+    @Test func aMacStagesUnstagesAndDiscardsAHunk() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let notes = repo.appendingPathComponent("notes.txt")
+        let lines = (1...20).map { "line \($0)" }
+        try (lines.joined(separator: "\n") + "\n").write(to: notes, atomically: true, encoding: .utf8)
+        #expect(try await Process.git(["add", "notes.txt"], cwd: repo).exitCode == 0)
+        #expect(try await Process.git(["commit", "-q", "-m", "Add notes"], cwd: repo).exitCode == 0)
+        let edited = ["first"] + lines.dropFirst().dropLast() + ["last"]
+        try (edited.joined(separator: "\n") + "\n").write(to: notes, atomically: true, encoding: .utf8)
+        let script = repo.appendingPathComponent("new.sh")
+        try "#!/bin/sh\n".write(to: script, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+        func shown(_ path: String, _ stage: ChangeStage) async throws -> [RemoteDiffHunk] {
+            guard case .worktreeRead(.fileDiffResult(_, _, _, let hunks, _, _)) = try await fixture.request(
+                .readWorktree(worktree: ref, read: .fileDiff(path: path, stage: stage.rawValue, comparisonMode: nil))
+            ) else { throw HostError.failed(message: "expected \(path)'s diff") }
+            return hunks
+        }
+        func act(
+            _ action: HostHunkAction, _ path: String, _ stage: ChangeStage, _ index: Int,
+            header: String? = nil, linesHash: String? = nil
+        ) async throws -> HostResponse {
+            let hunks = try await shown(path, stage)
+            let hunk = hunks[min(index, hunks.count - 1)]
+            return try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .hunk(
+                path: path, stage: stage, index: index, header: header ?? hunk.header,
+                linesHash: linesHash ?? hunk.linesHash, action: action
+            )))
+        }
+        let unstaged = try await shown("notes.txt", .unstaged)
+        try #require(unstaged.count == 2)
+        let stale = HostResponse.failure(error: .failed(message: "The file changed since it was shown. Refresh and try again."))
+
+        #expect(try await act(.stage, "notes.txt", .unstaged, 1, linesHash: unstaged[0].linesHash) == stale)
+        #expect(try await act(.stage, "notes.txt", .unstaged, 1, header: unstaged[0].header) == stale)
+        #expect(try await act(.discard, "notes.txt", .unstaged, 2) == stale)
+        guard case .failure(.invalidRequest) = try await act(.unstage, "notes.txt", .unstaged, 0) else {
+            Issue.record("expected unstage of an unstaged hunk refused")
+            return
+        }
+        #expect(try await shown("notes.txt", .unstaged) == unstaged)
+        guard case .failure(.failed) = try await act(.discard, "new.sh", .unstaged, 0) else {
+            Issue.record("expected discard of an untracked hunk refused")
+            return
+        }
+
+        #expect(try await act(.stage, "new.sh", .unstaged, 0) == .done)
+        #expect(try await Process.git(["ls-files", "-s", "new.sh"], cwd: repo).stdout.hasPrefix("100755 "))
+        #expect(try await act(.stage, "notes.txt", .unstaged, 1) == .done)
+        #expect(try await shown("notes.txt", .unstaged) == [unstaged[0]])
+        #expect(try await shown("notes.txt", .staged).map(\.linesHash) == [unstaged[1].linesHash])
+        #expect(try await act(.unstage, "notes.txt", .staged, 0) == .done)
+        #expect(try await shown("notes.txt", .unstaged) == unstaged)
+        #expect(try await act(.discard, "notes.txt", .unstaged, 0) == .done)
+        #expect(try String(contentsOf: notes, encoding: .utf8) == (lines.dropLast() + ["last"]).joined(separator: "\n") + "\n")
+    }
+
     enum StaleEdit: CaseIterable { case notASHA, belowTheFold, otherHunk, unseenHunk, outsidePath, dirtyTree, renamedFile }
 
     /// The host edits only a commit above its own fold, named by SHA, and

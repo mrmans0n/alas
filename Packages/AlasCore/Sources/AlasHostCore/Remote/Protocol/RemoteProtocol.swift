@@ -1555,6 +1555,8 @@ public enum HostProtocolCapability: Sendable {
     /// Hosts that serve the merge and rebase changes of `mutateWorktree`.
     /// Only a headless host.
     public static let worktreesIntegrateV1 = "host.worktrees.integrate.v1"
+    /// Hosts that serve the hunk change of `mutateWorktree`. Only a headless host.
+    public static let worktreesHunksV1 = "host.worktrees.hunks.v1"
     /// Hosts whose `createWorktreeSession` takes `repoHook`, answering
     /// `worktreeSessionNeedsRepoHookApproval` for a hook the client's user
     /// must approve first.
@@ -1566,7 +1568,8 @@ public enum HostProtocolCapability: Sendable {
     ]
     /// What only a headless host serves.
     public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1,
-                                       worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1]
+                                       worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1,
+                                       worktreesHunksV1]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

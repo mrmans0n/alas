@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -869,6 +870,16 @@ public struct RemoteDiffHunk: Codable, Equatable, Sendable {
         self.oldStart = oldStart
         self.newStart = newStart
         self.lines = lines
+    }
+
+    /// SHA-256 of `lines` as the wire carries them, hex: a host and a Mac
+    /// agree on a hunk's content without the Mac sending it back.
+    public var linesHash: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+        // Strings, integers and booleans always encode.
+        let data = (try? encoder.encode(lines)) ?? Data()
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
 
