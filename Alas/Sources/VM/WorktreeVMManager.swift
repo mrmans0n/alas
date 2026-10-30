@@ -44,6 +44,15 @@ final class WorktreeVMManager {
     /// Registry ids at or under this prefix are golden VMs, not worktrees.
     nonisolated static let goldenIDPrefix = "golden:"
 
+    /// macOS guests need Apple silicon: Virtualization.framework has no Mac
+    /// platform on Intel, so there the VM feature is unavailable.
+    #if arch(arm64)
+    nonisolated static let isSupported = true
+    #else
+    nonisolated static let isSupported = false
+    #endif
+    nonisolated static let unsupportedMessage = "macOS VMs need a Mac with Apple silicon"
+
     @ObservationIgnored private let registry: WorktreeVMRegistry
     @ObservationIgnored let root: URL
     @ObservationIgnored private let start: StartVM
@@ -111,12 +120,14 @@ final class WorktreeVMManager {
             shares: shares)
         // Diagnostic for suspend and resume, which a later plan builds on:
         // whether this configuration, shares included, supports save/restore.
+        #if arch(arm64)
         do {
             try configuration.validateSaveRestoreSupport()
             vmLogger.notice("VM \(worktreeID, privacy: .public) supports save/restore with \(shares.count) shares")
         } catch {
             vmLogger.notice("VM \(worktreeID, privacy: .public) does not support save/restore with \(shares.count) shares: \(String(describing: error), privacy: .public)")
         }
+        #endif
         let vm = RunningVM(worktreeID: worktreeID, machine: VirtualizationMachine(configuration: configuration))
         try await vm.start()
         return vm
@@ -279,7 +290,7 @@ final class WorktreeVMManager {
             do {
                 bundle = try VMBundle.cloneForWorktree(
                     golden: golden, to: destination,
-                    newMachineIdentifier: VZMacMachineIdentifier().dataRepresentation,
+                    newMachineIdentifier: Self.newMachineIdentifier(),
                     newMACAddress: VZMACAddress.randomLocallyAdministered().string)
             } catch let error as NSError
                 where error.domain == NSPOSIXErrorDomain && [Int(EXDEV), Int(ENOTSUP)].contains(error.code)
@@ -513,6 +524,15 @@ final class WorktreeVMManager {
             autoStartedGoldenBuilds.remove(build)
         }
         customizingFrom = worktreeID
+    }
+
+    /// A fresh machine identifier for a worktree clone of the golden image.
+    private static func newMachineIdentifier() throws -> Data {
+        #if arch(arm64)
+        return VZMacMachineIdentifier().dataRepresentation
+        #else
+        throw VMError(message: unsupportedMessage)
+        #endif
     }
 
     private func goldenBundleURL(build: String) -> URL {

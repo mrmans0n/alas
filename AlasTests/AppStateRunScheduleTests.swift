@@ -450,7 +450,8 @@ struct AppStateRunScheduleTests {
 
     private func makeComposedState(
         repo: URL,
-        installedAgentIDs: Set<String>
+        installedAgentIDs: Set<String>,
+        kind: ProjectKind = .git
     ) async throws -> (AppState, ProjectConfig, LocationBox) {
         let locations = LocationBox()
         var openCount = 0
@@ -499,7 +500,9 @@ struct AppStateRunScheduleTests {
         state.runScheduleScriptDiscovery = { root, _ in
             .scripts(RunScriptStore.scripts(worktreeRoot: root, globalDir: repo.appendingPathComponent("no-globals")))
         }
-        let project = try await state.projectsManager.addProject(path: repo, displayName: "compose", color: "#5fb7c4")
+        let project = try await state.projectsManager.addProject(
+            path: repo, displayName: "compose", icon: ProjectIcon.default(color: "#5fb7c4"), kind: kind
+        )
         try await state.projectsManager.refreshWorktrees(projectId: project.id)
         return (state, project, locations)
     }
@@ -872,6 +875,28 @@ struct AppStateRunScheduleTests {
         let created = try #require(state.projectsManager.worktrees(projectId: project.id).first { $0.id != main.id })
         #expect(state.tabs.tabs(forWorktree: created.id).count == 1)
         #expect(locations.locations.isEmpty)
+    }
+
+    /// A folder cannot have worktrees, so its schedule launches the agent in
+    /// the folder itself — and an all-projects fan-out no longer skips it.
+    @Test func inPlaceCompositionLaunchesTheAgentInAFolder() async throws {
+        let repo = try await makeRepo()
+        defer { try? FileManager.default.removeItem(at: repo) }
+        let (state, project, _) = try await makeComposedState(
+            repo: repo, installedAgentIDs: ["term-agent"], kind: .folder
+        )
+        defer { try? FileManager.default.removeItem(atPath: state.config.worktrees.rootPath) }
+        let folder = try #require(state.projectsManager.visibleMainWorktree(projectId: project.id))
+
+        let outcome = await state.runSchedule(schedule(
+            target: .allProjects,
+            scriptKey: nil,
+            composition: RunScheduleComposition(createsWorktree: false, agentId: "term-agent")
+        )).outcome
+        await state.flushRunHistoryPersistence()
+        #expect(outcome == .succeeded)
+        #expect(state.projectsManager.worktrees(projectId: project.id).map(\.id) == [folder.id])
+        #expect(state.tabs.tabs(forWorktree: folder.id).count == 1)
     }
 
     /// The prompt is typed into the agent's own terminal once the agent is

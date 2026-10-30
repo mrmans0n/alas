@@ -98,7 +98,7 @@ targets:
         AlasGitSHA: ""
         AlasReleaseTrack: stable
         CFBundleDevelopmentRegion: en
-        CFBundleShortVersionString: "0.22.2"
+        CFBundleShortVersionString: "0.22.3"
         CFBundleVersion: "1"
         CFBundleName: "$(ALAS_DISPLAY_NAME)"
         CFBundleDisplayName: "$(ALAS_DISPLAY_NAME)"

@@ -194,6 +194,27 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         try openedStore().loadV2UpdateJournalPage(stream: stream, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
     }
 
+    public func registerV2Submission(id: UUID, sessionId: String, upstreamSessionId: String,
+        localRowID: UUID, binding: ACPV2SubmissionBinding, fence: ACPSessionLeaseFence) throws -> ACPV2SubmissionRegistration {
+        try openedStore().registerV2Submission(id: id, sessionId: sessionId, upstreamSessionId: upstreamSessionId,
+            localRowID: localRowID, binding: binding, fence: fence)
+    }
+
+    public func retainV2SubmissionOutcome(_ delivery: ACPRawRPCDelivery, for registration: ACPV2SubmissionRegistration,
+        fence: ACPSessionLeaseFence) throws -> ACPV2SubmissionReceipt {
+        try openedStore().retainV2SubmissionOutcome(delivery, for: registration, fence: fence)
+    }
+
+    public func loadV2Submission(id: UUID) throws -> ACPV2SubmissionRecord? {
+        try openedStore().loadV2Submission(id: id)
+    }
+
+    public func loadV2SubmissionPage(sessionId: String, upstreamSessionId: String, source: ACPV2SubmissionSource,
+        after: ACPV2SubmissionContinuation? = nil, maxRecords: Int = 128, maxBytes: Int = 1_048_576) throws -> ACPV2SubmissionPage {
+        try openedStore().loadV2SubmissionPage(sessionId: sessionId, upstreamSessionId: upstreamSessionId, source: source,
+            after: after, maxRecords: maxRecords, maxBytes: maxBytes)
+    }
+
     public func upsertSession(_ row: ACPSessionRow, preserveTitle: Bool = false, preserveBrokerState: Bool = false) throws {
         try openedStore().upsertSession(row, preserveTitle: preserveTitle, preserveBrokerState: preserveBrokerState)
     }

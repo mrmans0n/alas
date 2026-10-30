@@ -72,7 +72,9 @@ extension AlasCoreContext {
         switch resolveScheduleTargets(schedule.target, invocation: invocation) {
         case .targets(let resolved):
             // A worktree-creating schedule skips folders, which cannot have one.
-            targets = schedule.composition == nil ? resolved : resolved.filter { !$0.project.isFolder }
+            targets = schedule.composition?.createsWorktree == true
+                ? resolved.filter { !$0.project.isFolder }
+                : resolved
             guard !targets.isEmpty else {
                 return RunScheduleRunReport(outcome: .skipped(reason: Self.folderWorktreeCreationMessage))
             }
@@ -169,7 +171,7 @@ extension AlasCoreContext {
         }
 
         var worktree = originWorktree
-        if let composition = schedule.composition {
+        if let composition = schedule.composition, composition.createsWorktree {
             switch await createScheduledWorktree(for: schedule, composition: composition, project: project) {
             case .success(let created):
                 worktree = created

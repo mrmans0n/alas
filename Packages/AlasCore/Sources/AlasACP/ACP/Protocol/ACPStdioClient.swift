@@ -7,6 +7,7 @@ import AlasCode
 
 public final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
+    private let rawRPCDiagnosticsCont: AsyncStream<ACPRawRPCDelivery>.Continuation
     private let v2UpdatesCont: AsyncStream<ACPV2SessionUpdateDelivery>.Continuation
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
     private let permsCont: AsyncStream<(id: JSONRPCID, params: ACPPermissionRequestParams)>.Continuation
@@ -23,6 +24,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
 
     public let sessionUpdateProtocolVersion: ACPProtocolVersion
     public let updateConnectionID = UUID()
+    public let incomingRawRPCDiagnostics: AsyncStream<ACPRawRPCDelivery>
     public let incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery>
     public let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
     public var yieldedUpdateCount: Int {
@@ -45,7 +47,11 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
     private let stateLock = NSLock()
     private var nextId: Int = 0
     private var _yieldedUpdateCount = 0
-    private var pending: [JSONRPCID: CheckedContinuation<ACPResponse, Error>] = [:]
+    private struct Pending {
+        let method: String
+        let continuation: CheckedContinuation<ACPResponse, Error>
+    }
+    private var pending: [JSONRPCID: Pending] = [:]
     private var pendingInboundConsumptions: [JSONRPCID: ACPDurableConsumptionAcknowledgement] = [:]
     private var cursorTodosByToolCallId: [String: [ACPCursorTodo]] = [:]
     private var didDrainPending = false
@@ -69,6 +75,11 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var uC: AsyncStream<ACPSessionUpdateParams>.Continuation!
         self.incomingUpdates = AsyncStream { uC = $0 }
         self.updatesCont = uC
+
+        let diagnostics = AsyncStream<ACPRawRPCDelivery>.makeStream()
+        self.incomingRawRPCDiagnostics = diagnostics.stream
+        self.rawRPCDiagnosticsCont = diagnostics.continuation
+        if sessionUpdateProtocolVersion == .v1 { diagnostics.continuation.finish() }
 
         let v2 = AsyncStream<ACPV2SessionUpdateDelivery>.makeStream()
         self.incomingV2Updates = v2.stream
@@ -130,6 +141,11 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         var uC: AsyncStream<ACPSessionUpdateParams>.Continuation!
         self.incomingUpdates = AsyncStream { uC = $0 }
         self.updatesCont = uC
+
+        let diagnostics = AsyncStream<ACPRawRPCDelivery>.makeStream()
+        self.incomingRawRPCDiagnostics = diagnostics.stream
+        self.rawRPCDiagnosticsCont = diagnostics.continuation
+        if sessionUpdateProtocolVersion == .v1 { diagnostics.continuation.finish() }
 
         let v2 = AsyncStream<ACPV2SessionUpdateDelivery>.makeStream()
         self.incomingV2Updates = v2.stream
@@ -194,6 +210,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
             for await event in self.transport.incoming {
                 self.handle(event)
             }
+            if self.sessionUpdateProtocolVersion == .v2 { self.drainPending(with: ACPClientError.notRunning) }
         }
     }
 
@@ -245,20 +262,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
     }
 
     private func handleFrame(_ data: Data, onConsumed: (@Sendable () -> Void)?) {
-        // Recognize v2 updates before generic ID decoding. Even an invalid
-        // notification ID or params belongs to the consumer's explicit decode.
-        if sessionUpdateProtocolVersion == .v2, Self.isSessionUpdateFrame(data) {
-            stateLock.lock()
-            defer { stateLock.unlock() }
-            guard !didDrainPending else { return }
-            _yieldedUpdateCount += 1
-            v2UpdatesCont.yield(.init(
-                frame: data,
-                connectionID: updateConnectionID,
-                durableConsumptionAcknowledgement: onConsumed
-            ))
-            return
-        }
+        if sessionUpdateProtocolVersion == .v2, handleV2Frame(data, onConsumed: onConsumed) { return }
         var acknowledgeAfterDispatch = true
         defer {
             if acknowledgeAfterDispatch {
@@ -268,7 +272,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         guard let head = try? JSONDecoder().decode(AnyEnvelopeHead.self, from: data) else { return }
         if let id = head.id, head.method == nil {
             stateLock.lock()
-            let cont = pending.removeValue(forKey: id)
+            let cont = pending.removeValue(forKey: id)?.continuation
             stateLock.unlock()
             guard let cont else { return }
             if let env = try? JSONDecoder().decode(JSONRPCErrorEnvelope.self, from: data),
@@ -493,6 +497,85 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         }
     }
 
+    /// Returns false only for a valid inbound method envelope, whose separate
+    /// ID namespace remains owned by the existing request/notification handlers.
+    private func handleV2Frame(_ data: Data, onConsumed: ACPDurableConsumptionAcknowledgement?) -> Bool {
+        guard case .object(let fields) = try? LSPJSONValue.decode(from: data) else {
+            // Existing raw session/update evidence remains exclusive, including
+            // parser rejection. A fallback header must never bind a response ID.
+            if Self.isSessionUpdateFrame(data) { publishV2Update(data, onConsumed: onConsumed) }
+            else { publishRPCDiagnostic(data, onConsumed: onConsumed) }
+            return true
+        }
+        if fields["method"] != nil, fields["result"] != nil || fields["error"] != nil {
+            publishRPCDiagnostic(data, onConsumed: onConsumed)
+            return true
+        }
+        if fields["method"] == .string("session/update") {
+            publishV2Update(data, onConsumed: onConsumed)
+            return true
+        }
+        if let method = fields["method"] {
+            let supportedID = fields["id"].map { ACPRawRPCDelivery.stdioID($0) != nil } ?? true
+            if case .string = method, fields["jsonrpc"] == .string("2.0"), supportedID { return false }
+            publishRPCDiagnostic(data, onConsumed: onConsumed)
+            return true
+        }
+        guard let rawID = fields["id"], let id = ACPRawRPCDelivery.stdioID(rawID) else {
+            publishRPCDiagnostic(data, onConsumed: onConsumed)
+            return true
+        }
+        stateLock.lock()
+        let request = pending.removeValue(forKey: id)
+        stateLock.unlock()
+        guard let request else {
+            publishRPCDiagnostic(data, onConsumed: onConsumed)
+            return true
+        }
+        let delivery = rpcDelivery(data, source: .stdio(requestID: id, method: request.method), onConsumed: onConsumed)
+        do {
+            let decoded = try delivery.decode()
+            if let error = decoded.error {
+                request.continuation.resume(throwing: ACPRawRPCError(delivery: delivery, rpcError: error))
+            } else if let result = decoded.result {
+                request.continuation.resume(returning: ACPResponse(body: result, rawDelivery: delivery))
+            } else {
+                request.continuation.resume(throwing: ACPRawRPCError(delivery: delivery, rpcError: nil))
+            }
+        } catch {
+            request.continuation.resume(throwing: ACPRawRPCError(delivery: delivery, rpcError: nil))
+        }
+        return true
+    }
+
+    private func publishV2Update(_ data: Data, onConsumed: ACPDurableConsumptionAcknowledgement?) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !didDrainPending else { return }
+        _yieldedUpdateCount += 1
+        v2UpdatesCont.yield(.init(frame: data, connectionID: updateConnectionID, durableConsumptionAcknowledgement: onConsumed))
+    }
+
+    private func publishRPCDiagnostic(_ data: Data, onConsumed: ACPDurableConsumptionAcknowledgement?) {
+        rawRPCDiagnosticsCont.yield(rpcDelivery(data, source: .diagnostic, onConsumed: onConsumed))
+    }
+
+    private func rpcDelivery(_ data: Data, source: ACPRawRPCDelivery.Source,
+        onConsumed: ACPDurableConsumptionAcknowledgement?) -> ACPRawRPCDelivery {
+        let acknowledgement: ACPDurableConsumptionAcknowledgement?
+        if let onConsumed {
+            acknowledgement = { [weak self] in
+                guard let self else { return }
+                self.stateLock.lock()
+                let active = !self.didDrainPending
+                self.stateLock.unlock()
+                if active { onConsumed() }
+            }
+        } else { acknowledgement = nil }
+        return .init(frame: data, connectionID: updateConnectionID, source: source,
+            durableConsumptionAcknowledgement: acknowledgement)
+    }
+
     /// Extracts the raw JSON bytes of the `result` field from a full envelope.
     private static func extractResultBytes(from envelope: Data) -> Data? {
         guard case .object(let fields) = try? LSPJSONValue.decode(from: envelope),
@@ -521,7 +604,7 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 cont.resume(throwing: ACPClientError.notRunning)
                 return
             }
-            pending[id] = cont
+            pending[id] = Pending(method: request.method, continuation: cont)
             stateLock.unlock()
             do {
                 try transport.send(body)
@@ -738,10 +821,11 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
         }
         didDrainPending = true
         v2UpdatesCont.finish()
+        rawRPCDiagnosticsCont.finish()
         let snapshot = pending
         pending.removeAll()
         stateLock.unlock()
-        for (_, cont) in snapshot { cont.resume(throwing: error) }
+        for (_, request) in snapshot { request.continuation.resume(throwing: error) }
     }
 
     public func shutdown() async {

@@ -975,6 +975,10 @@ private struct RootReviewMergePresentationHandlers: ViewModifier {
 
 private struct RootUpdatePresentationHandlers: ViewModifier {
     @Bindable var state: AppState
+    /// AppKit refuses to quit while a window has a sheet attached (it beeps
+    /// instead), so Relaunch closes the progress sheet and relaunches once
+    /// it is gone.
+    @State private var relaunchAfterProgressDismiss = false
 
     func body(content: Content) -> some View {
         content
@@ -1002,7 +1006,11 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                 .environment(\.theme, state.themeStore.current)
                 .modifier(RepoHookApprovalPresentationHandler(approvalQueue: state.repoHookApprovalQueue))
             }
-            .sheet(isPresented: $state.presentUpdateProgress) {
+            .sheet(isPresented: $state.presentUpdateProgress, onDismiss: {
+                guard relaunchAfterProgressDismiss else { return }
+                relaunchAfterProgressDismiss = false
+                AppRelaunch.relaunch()
+            }) {
                 UpdateProgressSheet(
                     updater: state.selfUpdater,
                     update: state.updates.availableUpdate,
@@ -1011,7 +1019,10 @@ private struct RootUpdatePresentationHandlers: ViewModifier {
                         state.selfUpdater.reset()
                         Task { await state.runSelfUpdate() }
                     },
-                    onRelaunch: { AppRelaunch.relaunch() },
+                    onRelaunch: {
+                        relaunchAfterProgressDismiss = true
+                        state.presentUpdateProgress = false
+                    },
                     onDone: {
                         state.selfUpdater.reset()
                         state.presentUpdateProgress = false

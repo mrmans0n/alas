@@ -74,7 +74,7 @@ actor ACPRawBrokerTransport {
     nonisolated let frames: AsyncStream<ACPBrokerRawFrameDelivery>
     private let updatesCont: AsyncStream<ACPV2SessionUpdateDelivery>.Continuation
     private let framesCont: AsyncStream<ACPBrokerRawFrameDelivery>.Continuation
-    private let connectionID = UUID()
+    nonisolated let connectionID = UUID()
     private let service: ACPBrokerServicing
     private var openParams: ACPBrokerOpenParams
     private let prefix: String
@@ -342,9 +342,7 @@ actor ACPRawBrokerTransport {
         guard !terminated else { throw CancellationError() }
         try handoff()
         if let cache = method == "initialize" ? initializeCache : (["session/new", "session/load", "session/resume"].contains(method) ? sessionCache : nil) {
-            let decoded = try ACPBrokerRawResponse.decode(cache)
-            if let error = decoded.error { throw ACPBrokerRawRPCError(frame: cache, rpcError: error) }
-            return .init(body: try requireResult(decoded))
+            return try response(ACPRawRPCDelivery(frame: cache.bytes, connectionID: connectionID, source: .brokerSnapshotCache))
         }
         operationIndex += 1
         let key = ACPBrokerOperationKey(rawValue: operationKey ?? "\(prefix):raw:\(operationIndex):\(method)")
@@ -382,19 +380,25 @@ actor ACPRawBrokerTransport {
                 throw ACPClientError.decoding("Raw completion missing journal origin")
             }
             protected.insert(cursor)
-            let ack = acknowledgement(cursor)
-            do {
-                let decoded = try ACPBrokerRawResponse.decode(frame, expectedID: result.requestId.rawValue, projectedError: result.error)
-                if let error = decoded.error { throw ACPBrokerRawRPCError(frame: frame, rpcError: error, acknowledgement: ack) }
-                return .init(body: try requireResult(decoded), durableConsumptionAcknowledgement: ack)
-            } catch let error as ACPBrokerRawRPCError { throw error }
-            catch { throw ACPBrokerRawRPCError(frame: frame, rpcError: nil, acknowledgement: ack) }
+            let delivery = ACPRawRPCDelivery(frame: frame.bytes, connectionID: connectionID,
+                source: .brokerOperation(operationKey: key, requestID: result.requestId, method: method),
+                brokerProvenance: .init(brokerID: openParams.brokerId, generation: generation, cursor: cursor, origin: .journal),
+                durableConsumptionAcknowledgement: acknowledgement(cursor))
+            return try response(delivery, projectedError: result.error)
         }
         throw CancellationError()
     }
-    private func requireResult(_ decoded: ACPBrokerRawResponse) throws -> Data {
-        guard let result = decoded.result else { throw ACPClientError.decoding("Missing raw result") }
-        return result
+    private func response(_ delivery: ACPRawRPCDelivery, projectedError: JSONRPCError? = nil) throws -> ACPResponse {
+        do {
+            let decoded = try delivery.decode()
+            guard projectedError == nil || projectedError == decoded.error else {
+                throw ACPClientError.decoding("Contradictory raw error projection")
+            }
+            if let error = decoded.error { throw ACPBrokerRawRPCError(rawDelivery: delivery, rpcError: error) }
+            guard let result = decoded.result else { throw ACPClientError.decoding("Missing raw result") }
+            return ACPResponse(body: result, rawDelivery: delivery)
+        } catch let error as ACPBrokerRawRPCError { throw error }
+        catch { throw ACPBrokerRawRPCError(rawDelivery: delivery, rpcError: nil) }
     }
     func notify(method: String, params: ACPBrokerJSONValue) async throws {
         guard !terminated, let generation else { throw ACPClientError.notRunning }

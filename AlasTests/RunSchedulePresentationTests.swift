@@ -77,6 +77,8 @@ struct RunSchedulePresentationTests {
         let composition = RunScheduleComposition()
         #expect(RunSchedulePresentation.actionLabel(scriptName: nil, composition: composition, agentName: "Claude") == "New worktree → Launch Claude")
         #expect(RunSchedulePresentation.actionLabel(scriptName: "setup", composition: composition, agentName: nil) == "New worktree → Run setup → Launch default agent")
+        let inPlace = RunScheduleComposition(createsWorktree: false)
+        #expect(RunSchedulePresentation.actionLabel(scriptName: "setup", composition: inPlace, agentName: "Claude") == "Run setup → Launch Claude")
         #expect(RunSchedulePresentation.scriptDisplayName("repo:build.sh") == "build.sh (repo)")
         #expect(RunSchedulePresentation.scriptDisplayName("global:lint") == "lint (global)")
         #expect(RunSchedulePresentation.scriptDisplayName("odd") == "odd")
@@ -112,10 +114,10 @@ struct RunSchedulePresentationTests {
         var draft = RunScheduleDraft(projectID: "p1", worktreeID: "w1", isMainWorktree: false)
         #expect(draft.validationError == "Give the schedule a name.")
         draft.name = "Nightly"
-        #expect(draft.validationError == "Pick a script, or create a worktree with an agent.")
-        draft.createsWorktree = true
+        #expect(draft.validationError == "Pick a script, or launch an agent.")
+        draft.launchesAgent = true
         #expect(draft.isValid)
-        draft.createsWorktree = false
+        draft.launchesAgent = false
         draft.scriptKey = "repo:test.sh"
         #expect(draft.isValid)
         draft.targetKind = .thisWorktree
@@ -160,9 +162,16 @@ struct RunSchedulePresentationTests {
         var draft = RunScheduleDraft(schedule: original)
         #expect(draft.targetKind == .thisWorktree)
         #expect(draft.weekdays == Set(2...6))
+        #expect(draft.launchesAgent)
         #expect(draft.createsWorktree)
         let rebuilt = draft.makeSchedule(existing: original)
         #expect(rebuilt == original)
+
+        // A folder's agent runs in place, and editing must not turn that
+        // into a worktree-creating schedule.
+        var inPlace = original
+        inPlace.composition = RunScheduleComposition(createsWorktree: false, agentId: "claude")
+        #expect(RunScheduleDraft(schedule: inPlace).makeSchedule(existing: inPlace) == inPlace)
 
         // A daily time-of-day schedule stores an empty weekday set.
         draft.weekdays = Set(1...7)
@@ -209,6 +218,7 @@ struct RunSchedulePresentationTests {
         #expect(decoded == RunScheduleComposition(branchTemplate: "nightly", agentId: "claude"))
         #expect(decoded?.sendsPromptAutomatically == true)
         #expect(decoded?.modelId == nil)
+        #expect(decoded?.createsWorktree == true)
     }
 
     @Test func weekdayPresetsNameTheRowAndTogglingLeavesThem() {

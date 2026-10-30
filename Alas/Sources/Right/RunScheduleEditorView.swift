@@ -5,7 +5,7 @@ import SwiftUI
 /// uses, so a remote project lists what actually launches there.
 ///
 /// Laid out as three hairline-separated sections — where, when, and the
-/// optional worktree + agent step — with the trigger composed inside a card
+/// optional agent step — with the trigger composed inside a card
 /// that keeps a live "Runs weekdays at 09:00 · Next: Tomorrow" summary, so
 /// the schedule reads back as a sentence before it is saved.
 struct RunScheduleEditorView: View {
@@ -62,10 +62,8 @@ struct RunScheduleEditorView: View {
                 whereSection
                 sectionRule
                 whenSection
-                if !targetsFolder {
-                    sectionRule
-                    compositionSection
-                }
+                sectionRule
+                compositionSection
                 if let message = errorMessage ?? draft.validationError, !draft.name.isEmpty || errorMessage != nil {
                     Text(message)
                         .font(.system(size: 11))
@@ -165,7 +163,8 @@ struct RunScheduleEditorView: View {
         }
     }
 
-    /// A folder project cannot have worktrees, so it cannot create one.
+    /// A folder project cannot have worktrees, so its agent runs in the
+    /// folder itself instead of in a new one.
     private var targetsFolder: Bool {
         draft.targetKind != .allProjects
             && draft.projectID.flatMap { id in state.projects.first { $0.id == id } }?.isFolder == true
@@ -173,8 +172,11 @@ struct RunScheduleEditorView: View {
 
     private var compositionSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ScheduleCheckbox(isOn: $draft.createsWorktree, label: "Create a new worktree and launch an agent")
-            if draft.createsWorktree {
+            ScheduleCheckbox(
+                isOn: $draft.launchesAgent,
+                label: targetsFolder ? "Launch an agent in the folder" : "Create a new worktree and launch an agent"
+            )
+            if draft.launchesAgent {
                 compositionFields
             }
         }
@@ -372,7 +374,7 @@ struct RunScheduleEditorView: View {
     }
 
     private var scriptPicker: some View {
-        let noneTitle = draft.createsWorktree ? "None (just launch the agent)" : "Choose a script"
+        let noneTitle = draft.launchesAgent ? "None (just launch the agent)" : "Choose a script"
         let selectedTitle: String = {
             guard let key = draft.scriptKey else { return noneTitle }
             if let script = scripts.first(where: { $0.key == key }) {
@@ -499,21 +501,23 @@ struct RunScheduleEditorView: View {
 
     private var compositionFields: some View {
         VStack(alignment: .leading, spacing: 12) {
-            DialogField(label: "Branch template") {
-                VStack(alignment: .leading, spacing: 4) {
-                    AlasField(text: $draft.branchTemplate, placeholder: RunScheduleComposition.defaultBranchTemplate, monospaced: true)
-                    (Text("Variables ")
-                        + Text("{name}").font(.system(size: 10.5, design: .monospaced))
-                        + Text(" ")
-                        + Text("{date}").font(.system(size: 10.5, design: .monospaced))
-                        + Text(" ")
-                        + Text("{time}").font(.system(size: 10.5, design: .monospaced))
-                        + Text(" · Preview ")
-                        + Text(branchPreview).font(.system(size: 10.5, design: .monospaced)))
-                        .font(.system(size: 11))
-                        .foregroundColor(theme.color("fg-faint"))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            if !targetsFolder {
+                DialogField(label: "Branch template") {
+                    VStack(alignment: .leading, spacing: 4) {
+                        AlasField(text: $draft.branchTemplate, placeholder: RunScheduleComposition.defaultBranchTemplate, monospaced: true)
+                        (Text("Variables ")
+                            + Text("{name}").font(.system(size: 10.5, design: .monospaced))
+                            + Text(" ")
+                            + Text("{date}").font(.system(size: 10.5, design: .monospaced))
+                            + Text(" ")
+                            + Text("{time}").font(.system(size: 10.5, design: .monospaced))
+                            + Text(" · Preview ")
+                            + Text(branchPreview).font(.system(size: 10.5, design: .monospaced)))
+                            .font(.system(size: 11))
+                            .foregroundColor(theme.color("fg-faint"))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
                 }
             }
             DialogField(label: "Agent") {
@@ -547,7 +551,7 @@ struct RunScheduleEditorView: View {
                     ))
                 }
             }
-            helpText(RunSchedulePresentation.compositionHint(surface: agentSurface))
+            helpText(RunSchedulePresentation.compositionHint(surface: agentSurface, createsWorktree: !targetsFolder))
         }
         .padding(.leading, 23)
         .padding(.top, 2)
@@ -629,7 +633,7 @@ struct RunScheduleEditorView: View {
     }
 
     private func submit() {
-        if targetsFolder { draft.createsWorktree = false }
+        draft.createsWorktree = !targetsFolder
         guard let built = draft.makeSchedule(existing: schedule) else {
             errorMessage = draft.validationError
             return
