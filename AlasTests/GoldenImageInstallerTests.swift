@@ -37,6 +37,8 @@ struct GoldenImageInstallerTests {
         /// The helper's (accessibility, screen recording) grants.
         var grants = (true, true)
         var shutsDownCleanly = true
+        /// Boots that fail first because the last VM still holds the storage lock.
+        var lockedBoots = 0
         /// Nil: sealed. Otherwise the reason in the failure note.
         let fallbackReason: String?
         /// A fallback after the patch turned sshd on must turn it off offline.
@@ -48,6 +50,7 @@ struct GoldenImageInstallerTests {
     nonisolated static let pipelineCases: [PipelineCase] = [
         PipelineCase(name: "all good", fallbackReason: nil),
         PipelineCase(name: "TCC.db only after the longer retry boot", tccAfterBoots: 2, fallbackReason: nil),
+        PipelineCase(name: "storage still locked right after install", lockedBoots: 3, fallbackReason: nil),
         PipelineCase(name: "no TCC.db twice", tccAfterBoots: nil, fallbackReason: "macOS didn't finish its first start"),
         PipelineCase(name: "patch throws", patchFails: true, fallbackReason: "couldn't write the setup onto the disk",
                      sshdTurnedOffOffline: true),
@@ -140,6 +143,7 @@ struct GoldenImageInstallerTests {
 private final class FakeGuest {
     private let c: GoldenImageInstallerTests.PipelineCase
     private(set) var boots = 0
+    private var lockedBootsLeft: Int
     private(set) var running = false
     private(set) var sealed = false
     private(set) var sshdTurnedOffOffline = false
@@ -152,7 +156,10 @@ private final class FakeGuest {
     private let disks = OpenDisks()
     var openDisks: Int { disks.count }
 
-    init(_ c: GoldenImageInstallerTests.PipelineCase) { self.c = c }
+    init(_ c: GoldenImageInstallerTests.PipelineCase) {
+        self.c = c
+        lockedBootsLeft = c.lockedBoots
+    }
 
     private struct Unreachable: Error {}
     private struct PatchFailed: Error {}
@@ -185,6 +192,11 @@ private final class FakeGuest {
     func provisioner() -> GoldenProvisioner {
         GoldenProvisioner(
             boot: { [self] _ in
+                if lockedBootsLeft > 0 {
+                    lockedBootsLeft -= 1
+                    throw NSError(domain: "VZErrorDomain", code: 2,
+                                  userInfo: [NSLocalizedDescriptionKey: "Failed to lock auxiliary storage."])
+                }
                 stepDone()
                 boots += 1
                 running = true

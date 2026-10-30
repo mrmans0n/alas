@@ -83,6 +83,10 @@ struct GoldenProvisioner {
     static let helperInterval: Duration = .seconds(3)
     static let shutdownTimeout: Duration = .seconds(120)
     static let shutdownInterval: Duration = .seconds(2)
+    /// A VM that just stopped (or the installer's VM) releases its storage locks
+    /// asynchronously, so a boot right after can fail to lock the auxiliary storage.
+    static let storageLockTimeout: Duration = .seconds(30)
+    static let storageLockInterval: Duration = .seconds(2)
 
     private static let logger = Logger(subsystem: "io.nlopez.alas", category: "golden-provisioner")
 
@@ -182,14 +186,29 @@ struct GoldenProvisioner {
     }
 
     private func bootOrFail(_ build: String, reason: String) async throws {
-        do {
-            try await boot(build)
-        } catch let failure as Failure {
-            throw failure
-        } catch {
-            Self.logger.error("Booting golden \(build, privacy: .public) failed: \(String(describing: error), privacy: .public)")
-            throw Failure(reason: reason)
+        let deadline = now() + Self.storageLockTimeout
+        while true {
+            do {
+                try await boot(build)
+                return
+            } catch let failure as Failure {
+                throw failure
+            } catch where Self.isStorageLockFailure(error) && now() < deadline {
+                Self.logger.notice("Golden \(build, privacy: .public) storage still locked; retrying the boot")
+                await sleep(Self.storageLockInterval)
+            } catch {
+                Self.logger.error("Booting golden \(build, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                throw Failure(reason: reason)
+            }
         }
+    }
+
+    /// Virtualization's "Failed to lock auxiliary storage" (or the disk): the
+    /// previous VM on this bundle hasn't let go of it yet.
+    static func isStorageLockFailure(_ error: Error) -> Bool {
+        let error = error as NSError
+        guard error.domain == "VZErrorDomain" else { return false }
+        return error.localizedDescription.localizedCaseInsensitiveContains("lock")
     }
 
     /// Waits for the guest's lease and sshd, then installs the helper and its
