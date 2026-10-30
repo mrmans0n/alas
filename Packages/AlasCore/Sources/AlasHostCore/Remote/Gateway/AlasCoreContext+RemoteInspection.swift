@@ -976,7 +976,9 @@ extension AlasCoreContext {
 }
 
 extension RemoteDiffHunk {
-    init(_ hunk: ParsedDiff.Hunk) {
+    /// As the host sends `hunk`; a Mac rebuilds it from the parsed hunk to
+    /// name it by `linesHash`.
+    public init(_ hunk: ParsedDiff.Hunk) {
         self.init(
             header: hunk.header,
             oldStart: hunk.oldStart,

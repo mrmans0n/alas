@@ -629,6 +629,11 @@ enum AppKitDiffReviewRowPlanBuilder {
                 state.actionRelay.hunkActions(for: group.sourceHunk).dropFromCommit?()
             })
         }
+        if hunkActions.unstage != nil {
+            actions.append(.init(symbol: "minus.circle", tooltip: "Unstage hunk") {
+                state.actionRelay.hunkActions(for: group.sourceHunk).unstage?()
+            })
+        }
         return actions
     }
 

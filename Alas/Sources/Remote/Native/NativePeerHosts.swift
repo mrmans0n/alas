@@ -452,6 +452,11 @@ final class NativePeerHosts {
         ) { if case .commitEdited(let result) = $0 { result } else { nil } }
     }
 
+    /// Whether `serverId` stages, unstages and discards single hunks of its worktrees' diffs.
+    func servesHunks(serverId: String) -> Bool {
+        servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesHunksV1)
+    }
+
     /// Whether `serverId` lists, inspects, takes, deletes and restores its worktrees' checkpoints.
     func servesCheckpoints(serverId: String) -> Bool {
         servesGit(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesCheckpointsV1)

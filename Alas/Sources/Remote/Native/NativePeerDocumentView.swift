@@ -10,6 +10,9 @@ struct NativePeerDocumentView: View {
     var codeFontSize: CGFloat = 13
     /// Why a host file that could be edited shows read-only.
     var readOnlyNote: String?
+    /// Stages, unstages or discards hunk `index` of the diff on the host,
+    /// answering its refusal, nil once done. Nil where the host has none.
+    var applyHunk: (@MainActor (HostHunkAction, Int, ParsedDiff.Hunk) async -> String?)?
     let onClose: () -> Void
 
     @Environment(\.theme) private var theme
@@ -25,6 +28,9 @@ struct NativePeerDocumentView: View {
     /// The content the images above were decoded from. A reload answering the same bytes keeps them, so
     /// the image diff keeps its mode and zoom.
     @State private var decodedContent: NativePeerWorkspace.DocumentContent?
+    @State private var hunkInFlight = false
+    @State private var hunkError: String?
+    @State private var confirmingDiscard: (index: Int, hunk: ParsedDiff.Hunk)?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,6 +42,47 @@ struct NativePeerDocumentView: View {
         .task(id: content) {
             decodeImages()
             await buildDisplayModel()
+        }
+        .alert(
+            "Discard this hunk in \u{201C}\((document.path as NSString).lastPathComponent)\u{201D}?",
+            isPresented: Binding(get: { confirmingDiscard != nil }, set: { if !$0 { confirmingDiscard = nil } }),
+            actions: {
+                Button("Discard", role: .destructive) {
+                    if let pending = confirmingDiscard {
+                        confirmingDiscard = nil
+                        runHunk(.discard, pending.index, pending.hunk)
+                    }
+                }
+                Button("Cancel", role: .cancel) { confirmingDiscard = nil }
+            },
+            message: {
+                Text("This permanently removes the selected hunk from the host's working copy. This cannot be undone.")
+            }
+        )
+    }
+
+    /// The header buttons for `hunk`, its position in `diff` naming it to the host.
+    private func hunkActions(_ hunk: ParsedDiff.Hunk, in diff: ParsedDiff, truncated: Bool) -> DiffPaneHunkActions {
+        guard applyHunk != nil, let index = diff.hunks.firstIndex(of: hunk) else { return DiffPaneHunkActions() }
+        var actions = DiffPaneHunkActions()
+        for action in document.hunkActions(for: hunk, index: index, of: diff.hunks.count, truncated: truncated) {
+            switch action {
+            case .stage: actions.stage = { runHunk(.stage, index, hunk) }
+            case .unstage: actions.unstage = { runHunk(.unstage, index, hunk) }
+            case .discard: actions.discard = { if !hunkInFlight { confirmingDiscard = (index, hunk) } }
+            }
+        }
+        return actions
+    }
+
+    /// One change at a time: the buttons do nothing while one is in flight.
+    private func runHunk(_ action: HostHunkAction, _ index: Int, _ hunk: ParsedDiff.Hunk) {
+        guard let applyHunk, !hunkInFlight else { return }
+        hunkInFlight = true
+        hunkError = nil
+        Task { @MainActor in
+            hunkError = await applyHunk(action, index, hunk)
+            hunkInFlight = false
         }
     }
 
@@ -137,6 +184,7 @@ struct NativePeerDocumentView: View {
                 .padding()
         case .loaded(.diff(let diff, let truncated)):
             if truncated { note("The peer cut off this diff.") }
+            if let hunkError { note(hunkError, color: "del") }
             if diff.hunks.isEmpty {
                 note(diff.metadataSummary ?? "No changes for \(document.path)")
             } else if let displayModel {
@@ -149,7 +197,7 @@ struct NativePeerDocumentView: View {
                     codeFontFamily: codeFontFamily,
                     codeFontSize: codeFontSize,
                     allowsReviewLineSelection: false,
-                    hunkActions: { _ in DiffPaneHunkActions() }
+                    hunkActions: { hunkActions($0, in: diff, truncated: truncated) }
                 )
             } else {
                 Spinner()
