@@ -1042,6 +1042,12 @@ struct NativePeerRightPaneView: View {
     /// Recovers the host's interrupted restore, as the local Recover does, then lists the checkpoints again.
     private func recoverCheckpointRestore(on target: (serverId: String, worktree: PeerHostWorktree)) async {
         guard let hosts = client.hosts, !checkpointInFlight else { return }
+        // Recovery rolls files back on the host, as a restore does: never under unsaved host edits.
+        let unsaved = client.unsavedHostFilePaths(serverId: target.serverId, worktreeID: target.worktree.snapshot.worktree.id)
+        if let refusal = NativePeerSessions.restoreRefusal(unsavedPaths: unsaved) {
+            checkpointRecoveryError = refusal
+            return
+        }
         checkpointInFlight = true
         let key = gitTargetKey
         let error = await hosts.mutate(.recoverCheckpointRestore, in: target.worktree, serverId: target.serverId)
