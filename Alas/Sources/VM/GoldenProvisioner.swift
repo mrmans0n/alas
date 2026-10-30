@@ -524,17 +524,9 @@ extension GuestSetupSteps {
             boot: boot,
             stop: stop,
             openDisk: { bundle in
-                // Claimed in the registry first, so no Alas process boots
-                // the VM while its disk is attached here.
-                let id = registryID(bundle.url.lastPathComponent)
-                try manager.claimDisk(id: id)
                 let image = bundle.diskImage
-                do {
-                    let session = try await Task.detached { try VMDiskSession.open(diskImage: image, root: root) }.value
-                    return ClaimedDisk(disk: session, id: id)
-                } catch {
-                    manager.releaseDisk(id: id)
-                    throw error
+                return try await openClaimed(id: registryID(bundle.url.lastPathComponent), manager: manager) {
+                    try await Task.detached { try VMDiskSession.open(diskImage: image, root: root) }.value
                 }
             },
             closeDisk: { disk in await closeClaimed(disk, manager: manager) },
@@ -560,6 +552,24 @@ extension GuestSetupSteps {
 }
 
 extension GuestSetupSteps {
+    /// Claims VM `id` in the registry, so no Alas process boots it while its
+    /// disk is attached here, then opens the disk. A failed open releases
+    /// the claim, unless the image may still be attached.
+    static func openClaimed(
+        id: String, manager: WorktreeVMManager, open: @MainActor () async throws -> any GoldenProvisioningDisk
+    ) async throws -> any GoldenProvisioningDisk {
+        try manager.claimDisk(id: id)
+        do {
+            return try ClaimedDisk(disk: await open(), id: id)
+        } catch let error as VMDiskSession.DetachFailed {
+            logger.error("VM \(id, privacy: .public)'s disk stayed attached after a failed open; keeping its claim")
+            throw error
+        } catch {
+            manager.releaseDisk(id: id)
+            throw error
+        }
+    }
+
     /// Closes a disk `live` opened. The VM's claim is released only once its
     /// image is detached; one that may still be attached (and writable) stays
     /// claimed until a relaunch's dead-owner sweep.

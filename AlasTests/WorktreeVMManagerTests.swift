@@ -335,14 +335,28 @@ final class WorktreeVMManagerTests {
         #expect(FileManager.default.fileExists(atPath: marker.path) == !turnedOff)
     }
 
-    @Test("a VM whose disk stays attached on the host stays claimed", arguments: [true, false])
-    func failedDetachKeepsTheClaim(_ detached: Bool) async throws {
+    enum DiskStep: CaseIterable { case close, failedOpen }
+
+    @Test(
+        "a VM whose disk stays attached on the host stays claimed",
+        arguments: DiskStep.allCases, [true, false])
+    func failedDetachKeepsTheClaim(_ step: DiskStep, _ detached: Bool) async throws {
         try addRecord("/repo/a")
         let manager = makeManager()
-        try manager.claimDisk(id: "/repo/a")
 
-        await GuestSetupSteps.closeClaimed(
-            ClaimedDisk(disk: FakeDisk(detaches: detached), id: "/repo/a"), manager: manager)
+        switch step {
+        case .close:
+            try manager.claimDisk(id: "/repo/a")
+            await GuestSetupSteps.closeClaimed(
+                ClaimedDisk(disk: FakeDisk(detaches: detached), id: "/repo/a"), manager: manager)
+        case .failedOpen:
+            // Attached, then the mount failed, and its cleanup detached or not.
+            let failure: any Error = detached
+                ? VMDiskSession.Failure(message: "mount failed") : VMDiskSession.DetachFailed(underlying: "mount failed")
+            await #expect(throws: (any Error).self) {
+                _ = try await GuestSetupSteps.openClaimed(id: "/repo/a", manager: manager) { throw failure }
+            }
+        }
 
         #expect(try (registry.snapshot().first?.runOwner == nil) == detached)
         if detached {

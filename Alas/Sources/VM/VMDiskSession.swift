@@ -20,9 +20,15 @@ final class VMDiskSession: @unchecked Sendable {
         var errorDescription: String? { message }
     }
 
-    /// The image may still be attached after `close()`.
+    /// The image may still be attached, after `close()` or a failed `open`
+    /// whose cleanup could not detach it. Its session directory stays for
+    /// the next sweep, and its VM must stay claimed.
     struct DetachFailed: LocalizedError {
-        var errorDescription: String? { "The VM disk could not be detached" }
+        /// Why `open` gave up, when it did.
+        var underlying: String?
+        var errorDescription: String? {
+            "The VM disk could not be detached" + (underlying.map { " after: \($0)" } ?? "")
+        }
     }
 
     let dataVolume: URL
@@ -79,14 +85,11 @@ final class VMDiskSession: @unchecked Sendable {
             )
         } catch {
             // A killed or failed attach may still have attached the image; never leave our attach behind.
-            if attemptedAttach { detachImage(at: imagePath) }
-            removeSessionDirectory(session)
-            throw error
+            throw abandon(session, detached: !attemptedAttach || detachImage(at: imagePath), error)
         }
         guard let wholeDisk = Self.wholeDisk(inEntities: attached["system-entities"]) else {
-            detachImage(at: imagePath)
-            removeSessionDirectory(session)
-            throw Failure(message: "hdiutil attached \(diskImage.lastPathComponent) but reported no whole disk")
+            throw abandon(session, detached: detachImage(at: imagePath), Failure(
+                message: "hdiutil attached \(diskImage.lastPathComponent) but reported no whole disk"))
         }
 
         var systemMounted = false
@@ -121,14 +124,24 @@ final class VMDiskSession: @unchecked Sendable {
                 }
             }
         } catch {
-            detach(wholeDisk)
-            removeSessionDirectory(session)
-            throw error
+            throw abandon(session, detached: detach(wholeDisk), error)
         }
         return VMDiskSession(
             dataVolume: dataMount, systemVolume: systemMounted ? systemMount : nil,
             wholeDisk: wholeDisk, sessionDirectory: session
         )
+    }
+
+    /// The error a failed `open` throws. Once the image is detached the
+    /// session directory goes; otherwise it stays, owner file included, so
+    /// the next launch's sweep retries the detach.
+    private static func abandon(_ session: URL, detached: Bool, _ error: Error) -> Error {
+        guard detached else {
+            logger.error("Could not detach after a failed open: \(error.localizedDescription, privacy: .public)")
+            return DetachFailed(underlying: error.localizedDescription)
+        }
+        removeSessionDirectory(session)
+        return error
     }
 
     /// The guest's macOS version, from the read-only System volume.
@@ -270,16 +283,19 @@ final class VMDiskSession: @unchecked Sendable {
     }
 
     /// Detaches an image by path, for an attach whose output named no whole disk.
-    private static func detachImage(at imagePath: String) {
-        guard let info = try? runPlist("/usr/bin/hdiutil", ["info", "-plist"]) else { return }
+    /// False when it may still be attached: `hdiutil info` failed, or a detach did.
+    private static func detachImage(at imagePath: String) -> Bool {
+        guard let info = try? runPlist("/usr/bin/hdiutil", ["info", "-plist"]) else { return false }
+        var detached = true
         for image in info["images"] as? [[String: Any]] ?? [] {
             guard let path = image["image-path"] as? String,
                   URL(fileURLWithPath: path).resolvingSymlinksInPath().path == imagePath else { continue }
             let devices = (image["system-entities"] as? [[String: Any]] ?? []).compactMap { $0["dev-entry"] as? String }
-            if let device = wholeDisk(inEntities: image["system-entities"]) ?? devices.min() {
-                detach(device)
+            if let device = wholeDisk(inEntities: image["system-entities"]) ?? devices.min(), !detach(device) {
+                detached = false
             }
         }
+        return detached
     }
 
     private static func unmount(_ mountPoint: URL) {
