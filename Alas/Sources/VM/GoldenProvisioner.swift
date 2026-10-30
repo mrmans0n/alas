@@ -41,6 +41,7 @@ struct GoldenProvisioner {
         static let disk = "couldn't write the setup onto the disk"
         static let network = "couldn't reach the VM over the network"
         static let helper = "the helper didn't start"
+        static let helperOutdated = "the helper is out of date"
         static let shutdown = "macOS didn't shut down cleanly"
         static let vmStart = "the VM couldn't start"
         static let noAccount = "this VM doesn't have the alas account; install the helper from My Shared Files › helper in the VM"
@@ -169,12 +170,12 @@ struct GoldenProvisioner {
         throw Failure(reason: Reason.firstStart)
     }
 
-    /// Virtualization's "Failed to lock auxiliary storage" (or the disk): the
-    /// previous VM on this bundle hasn't let go of it yet.
-    static func isStorageLockFailure(_ error: Error) -> Bool {
-        let error = error as NSError
-        guard error.domain == "VZErrorDomain" else { return false }
-        return error.localizedDescription.localizedCaseInsensitiveContains("lock")
+    /// A start Virtualization refused, such as "Failed to lock auxiliary
+    /// storage" while the previous VM on this bundle still holds it. Matched
+    /// by domain, not by its localized text; `bootOrFail` retries these only
+    /// within `storageLockTimeout`.
+    static func isVirtualizationFailure(_ error: Error) -> Bool {
+        (error as NSError).domain == "VZErrorDomain"
     }
 
     // MARK: - Guest commands
@@ -360,8 +361,8 @@ struct GuestSetupSteps {
                 return
             } catch let failure as Failure {
                 throw failure
-            } catch where GoldenProvisioner.isStorageLockFailure(error) && now() < deadline {
-                Self.logger.notice("VM \(key, privacy: .public) storage still locked; retrying the boot")
+            } catch where GoldenProvisioner.isVirtualizationFailure(error) && now() < deadline {
+                Self.logger.notice("VM \(key, privacy: .public) failed to start (VZError \((error as NSError).code, privacy: .public)), its storage may still be locked; retrying the boot")
                 await sleep(GoldenProvisioner.storageLockInterval)
             } catch {
                 Self.logger.error("Booting VM \(key, privacy: .public) failed: \(String(describing: error), privacy: .public)")
@@ -433,13 +434,12 @@ struct GuestSetupSteps {
         let ready = await waitUntil(timeout: GoldenProvisioner.helperTimeout, interval: GoldenProvisioner.helperInterval) {
             guard let hello = try? await helperHello(key) else { return false }
             lastHello = hello
-            return hello.accessibility && hello.screenRecording
+            return hello.accessibility && hello.screenRecording && hello.protocolRevision == VMGuestProtocol.revision
         }
         guard ready else {
-            if let lastHello {
-                Self.logger.error("The helper in \(key, privacy: .public) answered without its grants: accessibility \(lastHello.accessibility, privacy: .public), screen recording \(lastHello.screenRecording, privacy: .public)")
-            }
-            throw Failure(reason: Reason.helper)
+            guard let lastHello else { throw Failure(reason: Reason.helper) }
+            Self.logger.error("The helper in \(key, privacy: .public) answered with revision \(lastHello.protocolRevision, privacy: .public), accessibility \(lastHello.accessibility, privacy: .public), screen recording \(lastHello.screenRecording, privacy: .public)")
+            throw Failure(reason: lastHello.protocolRevision == VMGuestProtocol.revision ? Reason.helper : Reason.helperOutdated)
         }
     }
 

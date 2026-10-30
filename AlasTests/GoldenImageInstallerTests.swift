@@ -36,6 +36,7 @@ struct GoldenImageInstallerTests {
         var reachable = true
         /// The helper's (accessibility, screen recording) grants.
         var grants = (true, true)
+        var helperRevision = VMGuestProtocol.revision
         var shutsDownCleanly = true
         /// Boots that fail first because the last VM still holds the storage lock.
         var lockedBoots = 0
@@ -111,6 +112,8 @@ struct GoldenImageInstallerTests {
                      fallbackReason: "couldn't reach the VM over the network", sshdTurnedOffOffline: true),
         PipelineCase(name: "helper without its grants", grants: (true, false), fallbackReason: "the helper didn't start",
                      sshdTurnedOffOffline: true),
+        PipelineCase(name: "helper of another protocol revision", helperRevision: VMGuestProtocol.revision + 1,
+                     fallbackReason: "the helper is out of date", sshdTurnedOffOffline: true),
         PipelineCase(name: "sshd still listening until the guest restarts", fallbackReason: nil,
                      sshAfterFinish: .untilRestart),
         PipelineCase(name: "sshd still listening after the restart", fallbackReason:
@@ -264,8 +267,8 @@ private final class FakeGuest {
             boot: { [self] _ in
                 if lockedBootsLeft > 0 {
                     lockedBootsLeft -= 1
-                    throw NSError(domain: "VZErrorDomain", code: 2,
-                                  userInfo: [NSLocalizedDescriptionKey: "Failed to lock auxiliary storage."])
+                    // Matched by domain: the localized text varies.
+                    throw NSError(domain: "VZErrorDomain", code: 2)
                 }
                 stepDone()
                 boots += 1
@@ -303,7 +306,7 @@ private final class FakeGuest {
                 // A connect that finds no helper spends its retry window.
                 advance(.seconds(10))
                 return VMGuestHello(guestVersion: "1", accessibility: c.grants.0, screenRecording: c.grants.1,
-                                    protocolRevision: 1)
+                                    protocolRevision: c.helperRevision)
             },
             guestShutdown: { [self] _ in
                 if c.shutsDownCleanly { running = false }
