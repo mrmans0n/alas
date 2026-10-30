@@ -159,12 +159,21 @@ final class GoldenImageInstaller: ObservableObject {
             installLock = try ComputerUseDriverLock.acquire(
                 at: root.appendingPathComponent("install.lock"), label: WorktreeVMManager.defaultOwnerLabel)
         } catch {
+            let message: String
             switch error {
             case .held:
-                phase = .failed("macOS is being set up in another Alas.")
+                message = "macOS is being set up in another Alas."
             case .unavailable(let reason):
                 logger.error("Golden image install lock unavailable: \(reason, privacy: .public)")
-                phase = .failed("macOS cannot be set up: \(reason)")
+                message = "macOS cannot be set up: \(reason)"
+            }
+            // An installed golden keeps its setup screen, with the reason as
+            // its note: a failure would give way to it on the next reload.
+            if let resuming {
+                failureNote = message
+                phase = .awaitingSetup(build: resuming)
+            } else {
+                phase = .failed(message)
             }
             return
         }

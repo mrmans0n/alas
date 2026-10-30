@@ -31,18 +31,22 @@ struct GoldenImageInstallerTests {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("GoldenImageInstallerTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let golden = VMBundle(url: root.appendingPathComponent("golden/25A1", isDirectory: true))
-        try FileManager.default.createDirectory(at: golden.url, withIntermediateDirectories: true)
         let guest = FakeGuest(PipelineCase(name: "customized", fallbackReason: nil))
         let installer = GoldenImageInstaller(root: root, provisioner: guest.provisioner())
-        // Another process holds the install lock: start fails before it resumes the golden.
+        // Fails while another process installs; then its golden appears.
         let otherInstall = try ComputerUseDriverLock.acquire(
             at: root.appendingPathComponent("install.lock"), label: "Alas Dev")
         await installer.start()
-        otherInstall.release()
         #expect(installer.phase == .failed("macOS is being set up in another Alas."))
+        let golden = VMBundle(url: root.appendingPathComponent("golden/25A1", isDirectory: true))
+        try FileManager.default.createDirectory(at: golden.url, withIntermediateDirectories: true)
         installer.reloadFromDisk()
         #expect(installer.phase == .awaitingSetup(build: "25A1"))
+        // Set up again while it still holds the lock: the setup screen stays, saying why.
+        await installer.start()
+        #expect(installer.phase == .awaitingSetup(build: "25A1"))
+        #expect(installer.failureNote == "macOS is being set up in another Alas.")
+        otherInstall.release()
 
         try Data().write(to: WorktreeVMManager.customizingMarker(of: golden))
         await installer.start()
@@ -72,6 +76,8 @@ struct GoldenImageInstallerTests {
         var sshdTurnedOffOffline = false
         /// Whether the VM to update has the `alas` account.
         var hasAccount = true
+        /// Whether the running VM's helper answers the account check.
+        var helperAnswersAccountCheck = true
         /// Whether sshd still listens after the finishing script (until a
         /// restart, or for good).
         var sshAfterFinish: SSHAfterFinish = .off
@@ -155,6 +161,9 @@ struct GoldenImageInstallerTests {
         PipelineCase(name: "no alas account", fallbackReason:
             "this VM doesn't have the alas account; install the helper from My Shared Files › helper in the VM",
             hasAccount: false),
+        PipelineCase(name: "no alas account, helper silent", fallbackReason:
+            "this VM doesn't have the alas account; install the helper from My Shared Files › helper in the VM",
+            hasAccount: false, helperAnswersAccountCheck: false),
     ]
 
     @Test("a running VM's helper is reinstalled over SSH", arguments: helperUpdateCases)
@@ -176,7 +185,7 @@ struct GoldenImageInstallerTests {
         #expect(!guest.sshListening)
         // Updated: running again with the new helper. Failed: stopped with
         // sshd off. No account, as its helper says: never stopped.
-        #expect(guest.running == (c.fallbackReason == nil || !c.hasAccount))
+        #expect(guest.running == (c.fallbackReason == nil || (!c.hasAccount && c.helperAnswersAccountCheck)))
         #expect(guest.openDisks == 0)
     }
 
@@ -281,7 +290,7 @@ private final class FakeGuest {
     func updater() -> VMHelperUpdater {
         let provisioner = provisioner()
         return VMHelperUpdater(
-            guestLacksAccount: { [self] _ in running && !c.hasAccount },
+            guestLacksAccount: { [self] _ in running && !c.hasAccount && c.helperAnswersAccountCheck },
             shutDown: { [self] id in await provisioner.stop(id) },
             hasAccount: { [self] _ in c.hasAccount },
             patchGrants: { [self] disk in
