@@ -81,7 +81,7 @@ public struct ACPBrokerReplayedOperationCompletion: Sendable {
     }
 }
 
-public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Sendable {
+public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSending, @unchecked Sendable {
     private enum TerminationRequest {
         case detach
         case close
@@ -476,6 +476,22 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, @unchecked Senda
         _ = try await attachAndReplay()
         startBackgroundPolling()
         return opened
+    }
+
+    public var v2PromptEndpoint: ACPV2PromptEndpoint? {
+        guard let connection = updateConnectionID, let generation = currentBrokerGeneration,
+              sessionUpdateProtocolVersion == .v2 else { return nil }
+        return .broker(connectionID: connection, id: brokerId, generation: generation)
+    }
+
+    public func sendV2Prompt(_ params: ACPSessionPromptParams, operationKey: ACPBrokerOperationKey?,
+        gate: ACPV2PromptHandoffGate,
+        prepare: @escaping @Sendable (ACPV2PreparedPrompt) async throws -> Void) async throws -> ACPResponse {
+        guard let raw = rawTransport else { throw ACPV2PromptDispatchError.unsupported }
+        guard let operationKey, !operationKey.rawValue.isEmpty else { throw ACPV2PromptDispatchError.missingOperationKey }
+        return try await withTaskCancellationHandler {
+            try await raw.sendPreparedPrompt(params, operationKey: operationKey, gate: gate, prepare: prepare)
+        } onCancel: { gate.invalidate() }
     }
 
     public func send(_ request: ACPRequest) async throws -> ACPResponse {

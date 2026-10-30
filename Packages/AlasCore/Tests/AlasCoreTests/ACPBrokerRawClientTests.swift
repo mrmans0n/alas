@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 import AlasCore
 @testable import AlasACP
@@ -393,6 +394,88 @@ struct ACPBrokerRawClientTests {
         #expect(try await persistence.loadV2UpdateJournalPage(stream: stream).records.map(\.frame) == [bytes, bytes])
     }
 
+    @Test func preparedBrokerPromptPersistsItsExplicitKeyBeforeSending() async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service)
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        let entered = Mutex<ACPV2PreparedPrompt?>(nil)
+        let release = AsyncStream<Void>.makeStream()
+        let sending = Task {
+            try await client.sendV2Prompt(.init(sessionId: "upstream", prompt: [.text("x")]), operationKey: .init(rawValue: "explicit"), gate: .init()) { value in
+                entered.withLock { $0 = value }
+                for await _ in release.stream { break }
+            }
+        }
+        defer { release.continuation.finish()
+        sending.cancel() }
+        try await eventually { entered.withLock { $0 != nil } }
+        let value = try #require(entered.withLock { $0 })
+        #expect(value.binding == .broker(operationKey: .init(rawValue: "explicit")))
+        #expect(value.endpoint == .broker(connectionID: try #require(client.updateConnectionID), id: .init(rawValue: "raw"), generation: .init(rawValue: 7)))
+        #expect(await service.sentRequests.isEmpty)
+        release.continuation.yield(())
+        let response = try await sending.value
+        #expect(await service.sentRequests.map(\.operationKey.rawValue) == ["explicit"])
+        #expect(response.rawDelivery?.source == .brokerOperation(operationKey: .init(rawValue: "explicit"), requestID: .init(rawValue: 9), method: "session/prompt"))
+        await client.detach()
+    }
+
+    @MainActor
+    @Test func concreteBrokerSubmissionCommitsAcceptanceBeforeItsCompletionAck() async throws {
+        let update = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"idle"}}}"#.utf8)
+        let service = RawBrokerFixture(rawBytes: update, acceptedMessageID: "accepted")
+        let client = makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        let connection = try #require(client.updateConnectionID)
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("alas-broker-submission-\(UUID()).sqlite").path)
+        try await persistence.upsertSession(.init(id: "s", agentId: "fixture", title: "Broker", autoRun: false,
+            acpBrokerId: "raw", acpBrokerGeneration: 7, acpBrokerWireContextJSON: try ACPBrokerWireContext.rawV2.persistedJSON(),
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let owner = ACPV2SessionUpdateOwner(sessionId: "s", upstreamSessionId: "upstream",
+            attachment: try .init(brokerConnectionID: connection, opened: opened), fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"),
+            journal: persistence, submissions: .init(sender: client, journal: persistence), isCurrent: { true })
+        _ = owner.start(client.incomingV2Updates)
+        defer { owner.stop() }
+        try await eventually { await MainActor.run { owner.status == .live } }
+        let id = UUID()
+        let record = try await owner.submit(id: id, localRowID: UUID(), params: .init(sessionId: "upstream", prompt: [.text("x")]), operationKey: .init(rawValue: "owned"))
+        #expect(record.outcome?.source == .brokerOperation(operationKey: .init(rawValue: "owned"), requestID: .init(rawValue: 9), method: "session/prompt"))
+        #expect(try await persistence.loadV2Submission(id: id) == record)
+        #expect(owner.state.lifecycle.submission(record.registration.sequence) == .accepted(messageID: "accepted"))
+        try await eventually { await service.acks.last == 3 }
+        #expect(owner.state.lifecycle.lastForegroundCompletion == nil)
+        await client.detach()
+    }
+
+    @Test(arguments: ["cancel", "detach", "invalidate"])
+    func brokerPreparationInvalidationCannotDispatch(action: String) async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service)
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        let entered = Mutex(false)
+        let release = AsyncStream<Void>.makeStream()
+        let gate = ACPV2PromptHandoffGate()
+        let sending = Task {
+            try await client.sendV2Prompt(.init(sessionId: "upstream", prompt: []), operationKey: .init(rawValue: "unused"), gate: gate) { _ in
+                entered.withLock { $0 = true }
+                for await _ in release.stream { break }
+            }
+        }
+        defer { release.continuation.finish()
+        sending.cancel() }
+        try await eventually { entered.withLock { $0 } }
+        if action == "cancel" { sending.cancel() }
+        if action == "detach" { await client.detach() }
+        if action == "invalidate" { gate.invalidate() }
+        release.continuation.yield(())
+        if case .success = await sending.result { Issue.record("Invalidated broker prompt dispatched") }
+        #expect(await service.sentRequests.isEmpty)
+    }
+
     private func makeClient(_ service: RawBrokerFixture, context: ACPBrokerWireContext = .rawV2) -> ACPBrokerClient {
         ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
             command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",
@@ -410,10 +493,13 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     func waitForHeldAttach() async { var events = capturedAttach.stream.makeAsyncIterator()
     _ = await events.next() }
     func releaseHeldAttach() { releaseAttach.continuation.yield(()) }
+    let acceptedMessageID: String?
     let replaceHookDuringSend: Bool
     let rawBytes: Data
     let cached: Bool
     let delayOpen: Bool
+    var sentRequests: [ACPBrokerSendParams] = []
+    private var lastOperationKey = ACPBrokerOperationKey(rawValue: "key")
     var openCount = 0
     private let openGate = AsyncStream<Void>.makeStream()
     func releaseOpen() { openGate.continuation.yield(()) }
@@ -428,7 +514,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     let context: ACPBrokerWireContext
     var acks: [UInt64] = []
     var closeCount = 0
-    init(context: ACPBrokerWireContext = .rawV2, isError: Bool = false, pending: Bool = false, cached: Bool = false, delayOpen: Bool = false, rawBytes: Data = RawBrokerFixture.first, replaceHookDuringSend: Bool = false) {
+    init(context: ACPBrokerWireContext = .rawV2, isError: Bool = false, pending: Bool = false, cached: Bool = false, delayOpen: Bool = false, rawBytes: Data = RawBrokerFixture.first, replaceHookDuringSend: Bool = false, acceptedMessageID: String? = nil) {
+        self.acceptedMessageID = acceptedMessageID
         self.context = context
         self.isError = isError
         self.pending = pending
@@ -464,7 +551,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
             turnState: .unknown("unknown"), acknowledgedCursor: .init(rawValue: acks.last ?? 0),
             journalTail: .init(rawValue: outcome == nil ? 2 : completionCursor), pendingRequests: pending ? [pendingRequest()] : [], operations: [])
         if let outcome {
-            var op = ACPBrokerOperationSnapshot(operationKey: .init(rawValue: "key"), adapterRequestId: .init(rawValue: 9), method: "session/prompt", terminalOutcome: outcome)
+            var op = ACPBrokerOperationSnapshot(operationKey: lastOperationKey, adapterRequestId: .init(rawValue: 9), method: "session/prompt", terminalOutcome: outcome)
             op.completedCursor = .init(rawValue: completionCursor)
             snapshot = ACPBrokerSnapshot(metadata: metadata, initializeResult: nil, remoteSessionResult: nil,
                 turnState: .unknown("unknown"), acknowledgedCursor: snapshot.acknowledgedCursor,
@@ -487,7 +574,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
             events[index] = .init(cursor: .init(rawValue: 1), kind: .pendingRequest(pendingRequest()))
         }
         if let outcome, (params.replayAfterCursor?.rawValue ?? 0) < completionCursor {
-            events.append(.init(cursor: .init(rawValue: completionCursor), kind: .operationCompleted(operationKey: .init(rawValue: "key"), outcome: outcome)))
+            events.append(.init(cursor: .init(rawValue: completionCursor), kind: .operationCompleted(operationKey: lastOperationKey, outcome: outcome)))
         }
         let result = ACPBrokerAttachResult(snapshot: snapshot(), events: events)
         if shouldHoldAttach {
@@ -499,12 +586,17 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         return result
     }
     func send(_ params: ACPBrokerSendParams) throws -> ACPBrokerSendResult {
+        sentRequests.append(params)
+        lastOperationKey = params.operationKey
         if let syntheticFailure {
             outcome = .init(result: nil, error: syntheticFailure)
             return .init(requestId: .init(rawValue: 9), replayed: true, error: syntheticFailure)
         }
         var value = ACPBrokerRPCOutcome(result: nil, error: isError ? JSONRPCError(code: -32044, message: "rejected", data: AnyCodable(["kind": "codex_hook_review_required"])) : nil)
         value.rawFrame = .init(bytes: isError ? Self.error : Data(#"{"jsonrpc":"2.0","id":9,"result":null}"#.utf8))
+        if let acceptedMessageID {
+            value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"messageId\":\"\(acceptedMessageID)\"}}".utf8))
+        }
         outcome = value
         if replaceHookDuringSend {
             var newer = ACPBrokerRPCOutcome(result: nil, error: nil)

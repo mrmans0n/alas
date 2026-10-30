@@ -109,6 +109,13 @@ public struct ACPSessionLifecycle: Sendable {
         return [.accepted(requestID: requestID, messageID: response.messageID)]
     }
 
+    /// A failed/lost RPC says nothing about insertion or foreground activity.
+    public mutating func markSubmissionUncertain(_ requestID: Int) -> [Effect] {
+        guard protocolVersion == .v2, submissions[requestID] == .pending else { return [] }
+        submissions[requestID] = .uncertain
+        return [.uncertain(requestID: requestID)]
+    }
+
     public mutating func reject(_ requestID: Int) -> [Effect] {
         guard protocolVersion == .v2,
               submissions[requestID] == .pending || submissions[requestID] == .uncertain else { return [] }
