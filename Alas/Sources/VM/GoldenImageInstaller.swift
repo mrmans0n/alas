@@ -96,6 +96,9 @@ final class GoldenImageInstaller: ObservableObject {
     }
 
     func start() async {
+        #if !arch(arm64)
+        phase = .failed(WorktreeVMManager.unsupportedMessage)
+        #else
         switch phase {
         case .downloading, .installing: return
         default: break
@@ -173,6 +176,7 @@ final class GoldenImageInstaller: ObservableObject {
             logger.error("Golden image install failed: \(String(describing: error), privacy: .public)")
             phase = .failed(error.localizedDescription)
         }
+        #endif
     }
 
     /// Seals the golden bundle awaiting setup (or, after a relaunch, the newest
@@ -195,6 +199,7 @@ final class GoldenImageInstaller: ObservableObject {
         try Data(bundle.url.lastPathComponent.utf8).write(to: bundle.sealedMarker, options: .atomic)
     }
 
+    #if arch(arm64)
     /// Install errors that blame the restore image itself, so the cached
     /// download must not be reused.
     private static let restoreImageErrors: Set<VZError.Code> = [.restoreImageLoadFailed, .invalidRestoreImage]
@@ -285,6 +290,7 @@ final class GoldenImageInstaller: ObservableObject {
         defer { installProgressObservation = nil }
         try await installer.install()
     }
+    #endif
 }
 
 /// Streams a large file into `<destination>.partial`, resuming with an HTTP

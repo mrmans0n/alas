@@ -32,10 +32,14 @@ enum VMConfigurationFactory {
     /// come from the bundle, plus a virtio disk, NAT networking with the
     /// bundle's MAC address, a display, keyboard, trackpad, a vsock device and,
     /// when `shares` is not empty, one auto-mounted virtio file system holding
-    /// them all. No audio device is attached.
+    /// them all. No audio device is attached. Throws on Intel, which cannot
+    /// run macOS guests.
     static func macOS(
         bundle: VMBundle, cpuCount: Int, memoryBytes: UInt64, display: VMDisplaySize, shares: [VMShare] = []
     ) throws -> VZVirtualMachineConfiguration {
+        #if !arch(arm64)
+        throw ConfigurationError(message: WorktreeVMManager.unsupportedMessage)
+        #else
         let platform = VZMacPlatformConfiguration()
         guard let hardwareModel = VZMacHardwareModel(
             dataRepresentation: try Data(contentsOf: bundle.hardwareModel))
@@ -95,6 +99,7 @@ enum VMConfigurationFactory {
 
         try configuration.validate()
         return configuration
+        #endif
     }
 
     /// Half the host CPUs (2...8) and a quarter of its memory (4...16 GiB),

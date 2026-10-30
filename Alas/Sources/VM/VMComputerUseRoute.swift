@@ -17,6 +17,7 @@ enum VMComputerUseRoute: Equatable {
     static let vmStateUnreadableMessage = "computer_vm_stopped: Couldn't read this worktree's VM state. Try again."
 
     static let vmMissingMessage = "computer_vm_missing: This worktree has no VM. Create one from its VM tab."
+    static let vmUnsupportedMessage = "computer_vm_unsupported: \(WorktreeVMManager.unsupportedMessage)."
     /// Where the guest sees the worktree VM's transfer folder.
     static let transferGuestPath = "/Volumes/My Shared Files/transfer"
 

@@ -159,9 +159,11 @@ extension AppState {
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 
-    /// VMs run on this Mac, so worktrees on a remote host have none.
+    /// VMs run on this Mac, so worktrees on a remote host have none, and
+    /// neither does an Intel Mac, which cannot run macOS guests.
     func canOpenVirtualMachine(in worktree: Worktree) -> Bool {
-        !RemotePath.isReserved(worktree.id) && webPreviewRemoteHost(for: worktree) == nil
+        WorktreeVMManager.isSupported
+            && !RemotePath.isReserved(worktree.id) && webPreviewRemoteHost(for: worktree) == nil
     }
 
     /// Opens the worktree's VM tab, creating the VM first when a golden image
