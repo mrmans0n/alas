@@ -119,14 +119,18 @@ public protocol RemoteWorktreeInspecting: AnyObject {
     func remoteCommitDiff(sessionId: String, sha: String, path: String) async -> RemoteFileDiffResult
     func remoteFileContents(sessionId: String, path: String) async -> RemoteFileContentsResult
     func remoteFileBytes(sessionId: String, path: String, revision: HostFileRevision?) async -> RemoteFileBytesResult
+    func remoteFileHistory(sessionId: String, path: String) async -> RemoteFileHistoryResult
     func remoteRangeFiles(sessionId: String, base: String, head: String, threeDot: Bool) async -> RemoteCommitFilesResult
     func remoteRangeDiff(
         sessionId: String, base: String, head: String, threeDot: Bool, path: String, originalPath: String?
     ) async -> RemoteFileDiffResult
 }
 
-/// A reader without range or byte reads answers them as it would an unknown session.
+/// A reader without range, byte or history reads answers them as it would an unknown session.
 extension RemoteWorktreeInspecting {
+    public func remoteFileHistory(sessionId: String, path: String) async -> RemoteFileHistoryResult {
+        .failure(reason: .sessionUnknown, message: nil)
+    }
     public func remoteFileBytes(sessionId: String, path: String, revision: HostFileRevision?) async -> RemoteFileBytesResult {
         .failure(reason: .sessionUnknown, byteSize: nil, message: nil)
     }
@@ -224,6 +228,13 @@ extension RemoteWorktreeInspecting {
                 return .fileBytes(sessionId: id, path: path, data: data, byteSize: data.count)
             case .failure(let reason, let byteSize, let message):
                 return .fileUnavailable(sessionId: id, path: path, reason: reason, byteSize: byteSize, message: message)
+            }
+        case .fileHistory(let path):
+            switch await remoteFileHistory(sessionId: id, path: path) {
+            case .success(let entries, let truncated):
+                return .fileHistory(sessionId: id, path: path, entries: entries, truncated: truncated)
+            case .failure(let reason, let message):
+                return .fileHistoryFailed(sessionId: id, path: path, reason: reason, message: message)
             }
         }
     }

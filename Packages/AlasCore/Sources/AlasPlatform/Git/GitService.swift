@@ -1960,6 +1960,71 @@ extension GitService {
         return Self.parseFileHistoryCommitInfoRecords(log.stdout)
     }
 
+    /// Up to `limit + 1` of `fileHistory`'s commits, so a caller can tell the
+    /// list was cut, each with the file's path in that commit, which differs
+    /// before a rename. `relativePath` is a literal path, never a pathspec.
+    public func fileHistoryWithPaths(
+        worktreePath: URL, relativePath: String, limit: Int
+    ) async throws -> [(commit: CommitInfo, path: String)] {
+        let format = "%x1e%H%x1f%h%x1f%an%x1f%aI%x1f%s"
+        // `-z` leaves paths unquoted and gives a rename as `adds\tdels\t`, `old`, `new`.
+        let log = try await Process.git(
+            ["log", "--follow", "-z", "-n", String(max(1, limit) + 1),
+             "--pretty=tformat:\(format)", "--numstat", "--", ":(literal)\(relativePath)"],
+            cwd: worktreePath
+        )
+        guard log.exitCode == 0 else {
+            throw NSError(
+                domain: "GitService.fileHistory",
+                code: Int(log.exitCode),
+                userInfo: [NSLocalizedDescriptionKey: log.stderr.isEmpty ? "git log failed" : log.stderr]
+            )
+        }
+        let isoFormatter = ISO8601DateFormatter()
+        isoFormatter.formatOptions = [.withInternetDateTime]
+        // A commit with no numstat line keeps the path of the commit after it.
+        var path = relativePath
+        var entries: [(commit: CommitInfo, path: String)] = []
+        for record in log.stdout.split(separator: "\u{1e}") {
+            var tokens = record.split(separator: "\0", omittingEmptySubsequences: false)[...]
+            guard let header = tokens.popFirst() else { continue }
+            let fields = header.split(separator: "\u{1f}", maxSplits: 4, omittingEmptySubsequences: false)
+            guard fields.count == 5 else { continue }
+            var adds = 0, dels = 0, filesChanged = 0
+            while let token = tokens.popFirst() {
+                // The first numstat line follows the header's newline.
+                let parts = (token.first == "\n" ? token.dropFirst() : token)
+                    .split(separator: "\t", maxSplits: 2, omittingEmptySubsequences: false)
+                guard parts.count == 3 else { continue }
+                filesChanged += 1
+                adds += Int(parts[0]) ?? 0
+                dels += Int(parts[1]) ?? 0
+                if !parts[2].isEmpty {
+                    path = String(parts[2])
+                } else if tokens.count >= 2 {
+                    tokens.removeFirst()
+                    path = String(tokens.removeFirst())
+                }
+            }
+            let author = String(fields[2])
+            let (tag, subject) = CommitInfo.parseConventional(subject: String(fields[4]))
+            entries.append((CommitInfo(
+                sha: String(fields[0]),
+                shortSha: String(fields[1]),
+                author: author,
+                authorInitials: CommitInfo.initials(for: author),
+                date: isoFormatter.date(from: String(fields[3])) ?? Date(timeIntervalSince1970: 0),
+                subject: subject,
+                rawSubject: String(fields[4]),
+                conventionalTag: tag,
+                filesChanged: filesChanged,
+                insertions: adds,
+                deletions: dels
+            ), path))
+        }
+        return entries
+    }
+
     private static func parseFileHistoryCommitInfoRecords(_ stdout: String) -> [CommitInfo] {
         let records = stdout
             .split(separator: "\u{1e}", omittingEmptySubsequences: true)

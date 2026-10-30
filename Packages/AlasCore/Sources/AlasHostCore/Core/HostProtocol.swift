@@ -281,11 +281,26 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
     /// A file's raw bytes, for a preview: the working tree's when `revision`
     /// is nil. Answered as `.fileBytes` or `.fileUnavailable`.
     case fileBytes(path: String, revision: HostFileRevision?)
+    /// The commits that touched a file, newest first and following renames,
+    /// up to `RemoteWorktreeFileAccess.maxHistoryEntries`. Answered as
+    /// `.fileHistory` or `.fileHistoryFailed`.
+    case fileHistory(path: String)
 
     /// How a range's replies name it: `base..head`, or `base...head` for
     /// a branch comparison from their merge base.
     public static func rangeSpec(base: String, head: String, threeDot: Bool) -> String {
         "\(base)\(threeDot ? "..." : "..")\(head)"
+    }
+}
+
+/// One commit of a file's history, with the file's path in it, which differs before a rename.
+public struct HostFileHistoryEntry: Codable, Equatable, Sendable {
+    public var commit: CommitInfo
+    public var pathAtCommit: String
+
+    public init(commit: CommitInfo, pathAtCommit: String) {
+        self.commit = commit
+        self.pathAtCommit = pathAtCommit
     }
 }
 
