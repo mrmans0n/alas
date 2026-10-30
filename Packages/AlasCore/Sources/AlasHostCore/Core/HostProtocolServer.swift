@@ -408,7 +408,7 @@ public final class HostProtocolConnection {
                 sha, in: try servedWorktree(ref, capability: HostProtocolCapability.worktreesCommitEditV1)
             ))
         case .listCheckpoints(let ref):
-            return .checkpoints(catalog: try await host.core.checkpointCatalog(in: try checkpointWorktree(ref)))
+            return try await host.core.checkpointCatalog(in: try checkpointWorktree(ref))
         case .checkpointManifest(let ref, let id):
             return .checkpointManifest(manifest: try await host.core.checkpointManifest(id, in: try checkpointWorktree(ref)))
         case .checkpointDiff(let ref, let id, let path):

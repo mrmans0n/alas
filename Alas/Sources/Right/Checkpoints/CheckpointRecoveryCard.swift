@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct CheckpointRecoveryCard: View {
-    let journal: CheckpointRestoreJournal
+    /// Nil on a paired Mac, which knows only that a host's restore was interrupted.
+    let journal: CheckpointRestoreJournal?
     let inFlight: Bool
     let error: String?
     let status: String?
@@ -12,21 +13,25 @@ struct CheckpointRecoveryCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Interrupted restore \(CheckpointRecoveryPresentation.operationSuffix(journal.id))")
+                Text(journal.map { "Interrupted restore \(CheckpointRecoveryPresentation.operationSuffix($0.id))" } ?? "Interrupted restore")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Text(CheckpointRecoveryPresentation.phase(journal.phase))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundColor(theme.color("fg-muted"))
+                if let journal {
+                    Text(CheckpointRecoveryPresentation.phase(journal.phase))
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(theme.color("fg-muted"))
+                }
             }
             Text("Recover the pre-restore state before creating, deleting, or restoring another checkpoint.")
                 .font(.system(size: 10))
                 .foregroundColor(theme.color("fg-muted"))
-            DisclosureGroup(CheckpointRecoveryPresentation.affectedPathsSummary(journal.selectedPaths)) {
-                Text(CheckpointRecoveryPresentation.affectedPathsText(journal.selectedPaths))
-                    .font(.system(size: 10, design: .monospaced))
-                    .foregroundColor(theme.color("fg-muted"))
-                    .textSelection(.enabled)
+            if let journal {
+                DisclosureGroup(CheckpointRecoveryPresentation.affectedPathsSummary(journal.selectedPaths)) {
+                    Text(CheckpointRecoveryPresentation.affectedPathsText(journal.selectedPaths))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(theme.color("fg-muted"))
+                        .textSelection(.enabled)
+                }
             }
             if let status {
                 Text(status)

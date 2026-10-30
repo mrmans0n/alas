@@ -588,12 +588,15 @@ final class NativePeerHosts {
     /// The copy for a checkpoint the host no longer lists.
     private static let checkpointGone = (what: "checkpoint ", message: "This checkpoint is no longer on the host. Refresh and try again.")
 
-    /// `worktree`'s checkpoints, newest first. Nil for a refusal or no answer.
-    func checkpoints(in worktree: PeerHostWorktree, serverId: String) async -> CheckpointCatalogSnapshot? {
+    /// `worktree`'s checkpoints, newest first, and whether a restore there
+    /// awaits recovery that this host serves. Nil for a refusal or no answer.
+    func checkpoints(
+        in worktree: PeerHostWorktree, serverId: String
+    ) async -> (catalog: CheckpointCatalogSnapshot, interruptedRestore: Bool)? {
         guard servesCheckpoints(serverId: serverId), let channel = channels[serverId],
-              case .checkpoints(let catalog) = await channel.request(.listCheckpoints(worktree: Self.ref(worktree)))
+              case .checkpoints(let catalog, let interrupted) = await channel.request(.listCheckpoints(worktree: Self.ref(worktree)))
         else { return nil }
-        return catalog
+        return (catalog, interrupted == true && supports(serverId, HostProtocolCapability.worktreesCheckpointRecoveryV1))
     }
 
     func checkpointManifest(

@@ -36,7 +36,7 @@ extension AlasCoreContext {
                 else { throw changed }
             }
             guard isWorktreeIdle(listed) else { throw WorktreeBusyError() }
-            if await environment.checkpointRecoveryBlocksRemoval(listed, in: self) {
+            if change != .recoverCheckpointRestore, await environment.checkpointRecoveryBlocksRemoval(listed, in: self) {
                 throw HostError.failed(message: "A checkpoint restore is pending on the host; finish it there first.")
             }
             return try await Process.$gitLiteralPathspecs.withValue(true) { try await apply(change, to: listed) }
@@ -53,7 +53,7 @@ extension AlasCoreContext {
             }
         case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash, .continueOperation, .skipOperation,
              .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .editCommit, .createCheckpoint, .deleteCheckpoint,
-             .restoreCheckpoint:
+             .restoreCheckpoint, .recoverCheckpointRestore:
             break
         }
         switch change {
@@ -156,7 +156,7 @@ extension AlasCoreContext {
             try await relistBranch(of: worktree)
         case .editCommit(let sha, let edit, let comparisonMode):
             return .commitEdited(result: try await editCommit(sha, edit: edit, comparisonMode: comparisonMode, at: root))
-        case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint:
+        case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint, .recoverCheckpointRestore:
             return try await applyCheckpointChange(change, to: worktree)
         }
         return .done
@@ -186,7 +186,7 @@ extension AlasCoreContext {
             try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .continueOperation, .skipOperation, .abortOperation, .useOurs,
              .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert, .merge, .rebase, .editCommit, .createCheckpoint,
-             .deleteCheckpoint, .restoreCheckpoint:
+             .deleteCheckpoint, .restoreCheckpoint, .recoverCheckpointRestore:
             preconditionFailure("not a stash change")
         }
     }

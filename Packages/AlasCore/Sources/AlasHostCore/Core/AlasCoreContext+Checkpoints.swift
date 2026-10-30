@@ -106,8 +106,13 @@ extension AlasCoreContext {
         return id
     }
 
-    func checkpointCatalog(in worktree: Worktree) async throws -> CheckpointCatalogSnapshot {
-        try await checkpoints.summaries(target: requireCheckpointTarget(for: worktree))
+    /// The answer to `listCheckpoints`, with whether a restore awaits recovery.
+    func checkpointCatalog(in worktree: Worktree) async throws -> HostResponse {
+        let target = try requireCheckpointTarget(for: worktree)
+        return .checkpoints(
+            catalog: try await checkpoints.summaries(target: target),
+            interruptedRestore: try await !checkpoints.nonterminalJournals(target: target).isEmpty
+        )
     }
 
     func checkpointManifest(_ id: CheckpointID, in worktree: Worktree) async throws -> WorktreeCheckpointManifest {
@@ -166,6 +171,19 @@ extension AlasCoreContext {
                 _ = try await checkpoints.restore(target: target, preview: preview, selectedGroupIDs: groupIDs, coordination: coordination)
             } catch {
                 throw HostError.failed(message: CheckpointRestoreErrorPresentation.message(error))
+            }
+        case .recoverCheckpointRestore:
+            // As the app's Recover, for each interrupted restore in journal
+            // order, held as a restore is; none left is already done.
+            let hold = UUID()
+            defer { checkpointRestoreHolds[hold] = nil }
+            let coordination = await checkpointCoordination(for: worktree, holding: hold)
+            for journal in try await checkpoints.nonterminalJournals(target: target) {
+                do {
+                    _ = try await checkpoints.recoverInterruptedRestore(target: target, operationID: journal.id, coordination: coordination)
+                } catch {
+                    throw HostError.failed(message: CheckpointRestoreErrorPresentation.message(error))
+                }
             }
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .stash, .applyStash, .popStash, .dropStash,
              .continueOperation, .skipOperation, .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .cherryPick,
