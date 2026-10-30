@@ -56,12 +56,19 @@ public enum RunScheduleMissedRunPolicy: String, Codable, CaseIterable, Sendable 
     case runLatest
 }
 
-/// Optional "new worktree + agent" step. The worktree is created through the
-/// standard creation path (worktree-create script included), the script runs
-/// inside it, and the agent is launched on it afterwards: as an ACP chat
-/// session when the agent speaks ACP, otherwise in a terminal.
+/// Optional agent step, normally on a new worktree. The worktree is created
+/// through the standard creation path (worktree-create script included), the
+/// script runs inside it, and the agent is launched on it afterwards: as an
+/// ACP chat session when the agent speaks ACP, otherwise in a terminal.
+///
+/// A folder project cannot have worktrees, so its schedules launch the agent
+/// in the folder itself instead (`createsWorktree == false`).
 public struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
+    /// Whether each firing creates a new worktree for the script and agent,
+    /// or runs both in the schedule's own target.
+    public var createsWorktree: Bool
     /// Branch name template. Supports `{name}`, `{date}` and `{time}`.
+    /// Unused when `createsWorktree` is false.
     public var branchTemplate: String
     /// Explicit agent, or nil for the project/repo/global default.
     public var agentId: String?
@@ -80,12 +87,14 @@ public struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     public static let defaultBranchTemplate = "scheduled/{name}-{date}-{time}"
 
     public init(
+        createsWorktree: Bool = true,
         branchTemplate: String = RunScheduleComposition.defaultBranchTemplate,
         agentId: String? = nil,
         modelId: String? = nil,
         prompt: String? = nil,
         sendsPromptAutomatically: Bool = true
     ) {
+        self.createsWorktree = createsWorktree
         self.branchTemplate = branchTemplate
         self.agentId = agentId
         self.modelId = modelId
@@ -121,14 +130,16 @@ public struct RunScheduleComposition: Codable, Equatable, Hashable, Sendable {
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case branchTemplate, agentId, modelId, prompt, sendsPromptAutomatically
+        case createsWorktree, branchTemplate, agentId, modelId, prompt, sendsPromptAutomatically
     }
 
-    /// Written by hand because the prompt and model fields arrived after the
-    /// first release: a file without them must still decode, or the lenient
-    /// per-schedule decoder in `RunSchedulesFile` drops the whole schedule.
+    /// Written by hand because the prompt, model and in-place fields arrived
+    /// after the first release: a file without them must still decode, or the
+    /// lenient per-schedule decoder in `RunSchedulesFile` drops the whole
+    /// schedule. Every composition written before then created a worktree.
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        createsWorktree = try c.decodeIfPresent(Bool.self, forKey: .createsWorktree) ?? true
         branchTemplate = try c.decodeIfPresent(String.self, forKey: .branchTemplate) ?? Self.defaultBranchTemplate
         agentId = try c.decodeIfPresent(String.self, forKey: .agentId)
         modelId = try c.decodeIfPresent(String.self, forKey: .modelId)
@@ -142,8 +153,7 @@ public struct RunSchedule: Codable, Identifiable, Equatable, Hashable, Sendable 
     public var name: String
     public var target: RunScheduleTarget
     /// `RunScript.key` (`repo:file` / `global:file`). Nil is only valid when
-    /// `composition` is set: the schedule then just opens a worktree with an
-    /// agent.
+    /// `composition` is set: the schedule then just launches an agent.
     public var scriptKey: String?
     public var trigger: RunScheduleTrigger
     public var missedRunPolicy: RunScheduleMissedRunPolicy
@@ -173,8 +183,8 @@ public struct RunSchedule: Codable, Identifiable, Equatable, Hashable, Sendable 
         self.createdAt = createdAt
     }
 
-    /// A schedule has to do *something*: run a script, open a worktree with
-    /// an agent, or both.
+    /// A schedule has to do *something*: run a script, launch an agent, or
+    /// both.
     public var hasAction: Bool { scriptKey != nil || composition != nil }
 }
 

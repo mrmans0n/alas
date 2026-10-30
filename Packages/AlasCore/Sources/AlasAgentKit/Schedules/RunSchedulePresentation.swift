@@ -211,13 +211,14 @@ public enum RunSchedulePresentation: Sendable {
         }
     }
 
-    /// The one-line summary of the worktree + agent step, under its fields.
-    public static func compositionHint(surface: AgentSurface) -> String {
+    /// The one-line summary of the agent step, under its fields.
+    public static func compositionHint(surface: AgentSurface, createsWorktree: Bool = true) -> String {
         let opening: String = switch surface {
         case .chat: "the agent opens in a chat session there once it succeeds."
         case .terminal: "the agent opens in a terminal there once it succeeds."
         case .resolvedAtFireTime: "the agent opens there once it succeeds, in a chat session if it supports ACP and otherwise in a terminal."
         }
+        guard createsWorktree else { return "The script above runs first, if any; \(opening)" }
         return "The worktree-create script runs first; the script above runs in the new worktree; \(opening)"
     }
 
@@ -342,7 +343,7 @@ public enum RunSchedulePresentation: Sendable {
 
     public static func actionLabel(scriptName: String?, composition: RunScheduleComposition?, agentName: String?) -> String {
         var parts: [String] = []
-        if composition != nil { parts.append("New worktree") }
+        if composition?.createsWorktree == true { parts.append("New worktree") }
         if let scriptName { parts.append("Run \(scriptName)") }
         if let composition {
             let launch = "Launch \(agentName ?? "default agent")"

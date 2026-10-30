@@ -106,7 +106,7 @@ extension AppState {
         worktree originWorktree: Worktree
     ) async -> RunScheduleRunReport {
         var worktree = originWorktree
-        if let composition = schedule.composition {
+        if let composition = schedule.composition, composition.createsWorktree {
             switch await createScheduledWorktree(for: schedule, composition: composition, project: project) {
             case .success(let created):
                 worktree = created

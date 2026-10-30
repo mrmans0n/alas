@@ -72,7 +72,11 @@ public struct RunScheduleDraft: Equatable, Sendable {
     public var minute = 0
     public var weekdays: Set<Int> = Set(1...7)
     public var missedRunPolicy: RunScheduleMissedRunPolicy = .skip
-    public var createsWorktree = false
+    /// Whether the schedule launches an agent at all.
+    public var launchesAgent = false
+    /// Whether that agent gets a new worktree, or runs in the target itself.
+    /// The editor clears it for a folder project, which has no worktrees.
+    public var createsWorktree = true
     public var branchTemplate = RunScheduleComposition.defaultBranchTemplate
     public var agentID: String?
     public var modelID: String?
@@ -116,7 +120,8 @@ public struct RunScheduleDraft: Equatable, Sendable {
         }
         missedRunPolicy = schedule.missedRunPolicy
         if let composition = schedule.composition {
-            createsWorktree = true
+            launchesAgent = true
+            createsWorktree = composition.createsWorktree
             branchTemplate = composition.branchTemplate
             agentID = composition.agentId
             modelID = composition.modelId
@@ -187,10 +192,11 @@ public struct RunScheduleDraft: Equatable, Sendable {
     }
 
     public var composition: RunScheduleComposition? {
-        guard createsWorktree else { return nil }
+        guard launchesAgent else { return nil }
         let template = branchTemplate.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedPrompt = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         return RunScheduleComposition(
+            createsWorktree: createsWorktree,
             branchTemplate: template.isEmpty ? RunScheduleComposition.defaultBranchTemplate : template,
             agentId: agentID,
             // A model belongs to one agent; "Project default" is resolved at
@@ -206,7 +212,7 @@ public struct RunScheduleDraft: Equatable, Sendable {
     public var validationError: String? {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "Give the schedule a name." }
         if target == nil { return "Pick a project and worktree." }
-        if scriptKey == nil, !createsWorktree { return "Pick a script, or create a worktree with an agent." }
+        if scriptKey == nil, !launchesAgent { return "Pick a script, or launch an agent." }
         switch triggerKind {
         case .interval:
             if intervalValue < 1 { return "Interval must be at least 1." }
