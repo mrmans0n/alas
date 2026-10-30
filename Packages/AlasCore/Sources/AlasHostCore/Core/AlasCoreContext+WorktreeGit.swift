@@ -37,7 +37,7 @@ extension AlasCoreContext {
             }
             guard isWorktreeIdle(listed) else { throw WorktreeBusyError() }
             if change != .recoverCheckpointRestore, await environment.checkpointRecoveryBlocksRemoval(listed, in: self) {
-                throw HostError.failed(message: "A checkpoint restore is pending on the host; finish it there first.")
+                throw HostError.failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")
             }
             return try await Process.$gitLiteralPathspecs.withValue(true) { try await apply(change, to: listed) }
         }

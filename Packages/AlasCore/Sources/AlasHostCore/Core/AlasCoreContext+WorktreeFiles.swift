@@ -22,7 +22,7 @@ extension AlasCoreContext {
                 throw HostError.failed(message: "A checkpoint restore is running on the host; save again once it finishes.")
             }
             if await environment.checkpointRecoveryBlocksRemoval(listed, in: self) {
-                throw HostError.failed(message: "A checkpoint restore is pending on the host; finish it there first.")
+                throw HostError.failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")
             }
             return try await body(listed)
         }

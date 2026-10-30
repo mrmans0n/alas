@@ -15,7 +15,7 @@ struct HostProtocolTests {
     }
 
     /// A reply over the send budget goes out as its request's failure, with
-    /// checkpoint copy for a checkpoint's; an event over it is dropped.
+    /// checkpoint copy for a checkpoint's; an event batch over it, a resync.
     @Test func aMessageOverTheSendBudgetIsReplacedOrDropped() throws {
         let manifest = try WorktreeCheckpointManifest(
             kind: .manual, label: "Big", createdAt: Date(timeIntervalSince1970: 0), byteCount: 0, lineageID: "l", capturedPath: "/srv/feature", repositoryName: "r",
@@ -28,13 +28,14 @@ struct HostProtocolTests {
 
         #expect(try sent(reply, budget: RemoteServerMessage.sendBudget) == reply)
         #expect(try sent(reply, budget: 100) == .host(.response(id: 7, result: .failure(
-            error: .failed(message: "This checkpoint has too many files to show from a paired Mac.")
+            error: .failed(message: "This checkpoint has too many files to show from a paired Mac. It may have been saved; check the list.")
         ))))
         #expect(try sent(.host(.response(id: 8, result: .stashes(stashes: []))), budget: 10) == .host(.response(id: 8, result: .failure(
             error: .failed(message: "This reply is too large to send to a paired Mac.")
         ))))
-        #expect(try sent(.host(.events(events: [], cursor: HostCursor(generation: UUID(), sequence: 1))), budget: 10) == nil)
-        #expect(RemoteServerMessage.sendBudget < WebSocketFrame.maxPayloadLength)
+        let cursor = HostCursor(generation: UUID(), sequence: 1)
+        #expect(try sent(.host(.events(events: [.resync, .resync], cursor: cursor)), budget: 10)
+            == .host(.events(events: [.resync], cursor: cursor)))
     }
 
     private static let worktreePath = URL(fileURLWithPath: "/srv/feature")

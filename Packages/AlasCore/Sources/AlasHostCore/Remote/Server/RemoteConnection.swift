@@ -755,17 +755,27 @@ extension RemoteServerMessage {
     static let sendBudget = 15_000_000
 
     /// The message's encoding when it fits `budget`. A host reply that does
-    /// not becomes its request's failure, so the link stays up; anything
-    /// else over it is dropped (nil), as is a message that does not encode.
+    /// not becomes its request's failure, and a host event batch a `resync`
+    /// at its cursor, so the link stays up and nothing is lost for good;
+    /// anything else over it is dropped (nil), as is a message that does not encode.
     func encodedForSending(budget: Int = sendBudget) -> Data? {
         guard let data = try? JSONEncoder().encode(self) else { return nil }
         guard data.count > budget else { return data }
-        guard case .host(.response(let id, let result)) = self else {
+        let id: Int, result: HostResponse
+        switch self {
+        case .host(.response(let replyID, let reply)):
+            (id, result) = (replyID, reply)
+        case .host(.events(_, let cursor)):
+            sendLogger.error("Replaced a \(data.count, privacy: .public)-byte event batch with a resync")
+            return try? JSONEncoder().encode(Self.host(.events(events: [.resync], cursor: cursor)))
+        default:
             sendLogger.error("Dropped a \(data.count, privacy: .public)-byte message over the send budget")
             return nil
         }
         let message = switch result {
-        case .checkpointManifest, .checkpointRestorePreview: "This checkpoint has too many files to show from a paired Mac."
+        case .checkpointManifest:
+            "This checkpoint has too many files to show from a paired Mac. It may have been saved; check the list."
+        case .checkpointRestorePreview: "This checkpoint has too many files to show from a paired Mac."
         default: "This reply is too large to send to a paired Mac."
         }
         sendLogger.error("Replaced a \(data.count, privacy: .public)-byte reply to request \(id, privacy: .public) with a failure")

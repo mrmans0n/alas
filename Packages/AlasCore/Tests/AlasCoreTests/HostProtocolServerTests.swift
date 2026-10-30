@@ -754,7 +754,7 @@ struct HostProtocolServerTests {
             change = .commit(subject: "Empty", body: "", amend: false)
             expected = .failed(message: "Nothing is staged to commit.")
         case .pendingCheckpoint:
-            expected = .failed(message: "A checkpoint restore is pending on the host; finish it there first.")
+            expected = .failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")
         case .appHost:
             expected = .invalidRequest(reason: "This host does not serve git actions.")
             guard case .capabilities(let capabilities) = try await fixture.request(.capabilities) else {
@@ -1304,7 +1304,7 @@ struct HostProtocolServerTests {
             fixture.core.checkpointRestoreHolds[UUID()] = [SessionOwnerID.worktree(id).storageKey]
             expected = .failed(message: "A checkpoint restore is running on the host; save again once it finishes.")
         case .pendingRecovery:
-            expected = .failed(message: "A checkpoint restore is pending on the host; finish it there first.")
+            expected = .failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")
         case .overCap:
             text = String(repeating: "a", count: RemoteWorktreeFileAccess.maxFileBytes + 1)
             expected = .invalidRequest(reason: "The host edits files up to 512 KB.")
@@ -1659,7 +1659,7 @@ struct HostProtocolServerTests {
         }
         #expect(interrupted == true)
         #expect(try await fixture.request(stage)
-            == .failure(error: .failed(message: "A checkpoint restore is pending on the host; finish it there first.")))
+            == .failure(error: .failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")))
 
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .recoverCheckpointRestore)) == .done)
         #expect(try String(contentsOf: file, encoding: .utf8) == "two\n")

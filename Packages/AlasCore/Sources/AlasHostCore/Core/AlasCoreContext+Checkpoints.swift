@@ -106,12 +106,14 @@ extension AlasCoreContext {
         return id
     }
 
-    /// The answer to `listCheckpoints`, with whether a restore awaits recovery.
+    /// The answer to `listCheckpoints`, with whether a restore awaits recovery:
+    /// not while one runs, whose journal is open too.
     func checkpointCatalog(in worktree: Worktree) async throws -> HostResponse {
         let target = try requireCheckpointTarget(for: worktree)
+        let catalog = try await checkpoints.summaries(target: target)
+        let journals = try await checkpoints.nonterminalJournals(target: target)
         return .checkpoints(
-            catalog: try await checkpoints.summaries(target: target),
-            interruptedRestore: try await !checkpoints.nonterminalJournals(target: target).isEmpty
+            catalog: catalog, interruptedRestore: !journals.isEmpty && !isHeldByCheckpointRestore(.worktree(worktree.id))
         )
     }
 
