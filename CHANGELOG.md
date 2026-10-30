@@ -25,6 +25,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - Update the embedded Ghostty to 1.4.0, built with Zig 0.17, and adopt its MIME-aware clipboard API (#2261).
 - Add the disabled-by-default ACP 2 durable update journal and its ordered update owner (#2256, #2264).
+- Preserve raw ACP 2 RPC response deliveries with their request binding and broker provenance (#2265).
 - Update the Clojure tree-sitter grammar (#2263).
 
 ## [0.22.1] - 2026-10-28
