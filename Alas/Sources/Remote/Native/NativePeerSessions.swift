@@ -1413,7 +1413,12 @@ final class NativePeerSessions {
 
     /// Opens `url`, `runID`'s forwarded endpoint on this Mac, over the center
     /// pane. Only that port on this Mac's loopback is reachable from it.
-    func openWebPreview(_ url: URL, serverId: String, runID: String, hostName: String) {
+    /// Nothing opens once `selection`, the worktree that asked, is no longer
+    /// selected or the run stopped while its forward started.
+    func openWebPreview(_ url: URL, serverId: String, runID: String, hostName: String,
+                        from selection: NativePeerWorktreeSelection?) {
+        guard selection != nil, selectedWorktree == selection,
+              hosts?.isRunning(runID, serverId: serverId) == true else { return }
         workspace.closeDocument()
         openedReview = nil
         openedCommitEditor = nil

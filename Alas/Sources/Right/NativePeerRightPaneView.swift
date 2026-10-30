@@ -335,10 +335,10 @@ struct NativePeerRightPaneView: View {
                 refreshGeneration: runRefreshGeneration,
                 consoleIds: Set(client.consoles?.consoles[runTarget.serverId]?.map(\.consoleId) ?? []),
                 openConsole: { client.selectConsole(serverId: runTarget.serverId, consoleId: $0) },
-                openPreview: { url, runID in
+                openPreview: { [asking = client.selectedWorktree] url, runID in
                     client.openWebPreview(
                         url, serverId: runTarget.serverId, runID: runID,
-                        hostName: client.selectedWorktreePeer?.name ?? runTarget.serverId
+                        hostName: client.selectedWorktreePeer?.name ?? runTarget.serverId, from: asking
                     )
                 }
             )

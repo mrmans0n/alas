@@ -212,7 +212,7 @@ final class NativePeerHosts {
         }
     }
 
-    private func isRunning(_ runID: String, serverId: String) -> Bool {
+    func isRunning(_ runID: String, serverId: String) -> Bool {
         runs[serverId]?.contains { $0.id == runID && $0.status == .running } == true
     }
 
