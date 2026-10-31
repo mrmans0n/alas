@@ -1,3 +1,4 @@
+import AlasCore
 import CryptoKit
 import Foundation
 
@@ -232,18 +233,40 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
     }
 }
 
-/// A worktree's VM screen. Restores on relaunch; the VM itself does not
-/// boot until the user starts it.
+/// A worktree's VM screen, one per guest. Restores on relaunch; the VM
+/// itself does not boot until the user starts it.
 struct VirtualMachineTabState: Codable, Equatable, Identifiable {
     let id: TabID
     /// Worktree id.
     let ownerKey: String
+    let guest: VMGuestOS
 
-    var title: String { "VM" }
+    var title: String {
+        switch guest {
+        case .macOS: "VM · macOS"
+        case .linux: "VM · Linux"
+        }
+    }
 
-    init(ownerKey: String) {
+    init(ownerKey: String, guest: VMGuestOS = .macOS) {
         self.ownerKey = ownerKey
-        self.id = "vm:\(ownerKey)"
+        self.guest = guest
+        self.id = switch guest {
+        case .macOS: "vm:\(ownerKey)"
+        case .linux: "vm-linux:\(ownerKey)"
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, ownerKey, guest
+    }
+
+    /// Tabs saved before Linux guests have no `guest`: they are macOS.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            ownerKey: try container.decode(String.self, forKey: .ownerKey),
+            guest: try container.decodeIfPresent(VMGuestOS.self, forKey: .guest) ?? .macOS)
     }
 }
 

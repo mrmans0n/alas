@@ -1,3 +1,4 @@
+import AlasCore
 import SwiftUI
 
 /// The right pane's context row. The selected rail tab already names the
@@ -22,7 +23,7 @@ struct RightPaneToolbar: View {
     var onRunPluginCommand: (PluginCommandItem) -> Void = { _ in }
     let onOpenPreview: () -> Void
     /// Nil hides the button, for worktrees that cannot run a VM.
-    var onOpenVirtualMachine: (() -> Void)?
+    var onOpenVirtualMachine: ((VMGuestOS) -> Void)?
     let onNewRunScript: (RunScriptScope) -> Void
 
     @Environment(\.theme) private var theme
@@ -134,7 +135,10 @@ struct RightPaneToolbar: View {
             .accessibilityIdentifier("run-open-preview")
 
             if let onOpenVirtualMachine {
-                Button(action: onOpenVirtualMachine) {
+                Menu {
+                    Button("Open macOS VM") { onOpenVirtualMachine(.macOS) }
+                    Button("Open Linux VM") { onOpenVirtualMachine(.linux) }
+                } label: {
                     HStack(spacing: 5) {
                         Icon(name: "desktopcomputer", size: 11)
                         Text("VM")
@@ -146,7 +150,9 @@ struct RightPaneToolbar: View {
                     .background(vmHovered ? theme.color("bg-3") : .clear, in: RoundedRectangle(cornerRadius: 5))
                     .contentShape(Rectangle())
                 }
-                .buttonStyle(.toolbarControl)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
                 .onHover { vmHovered = $0 }
                 .help("Open VM")
                 .accessibilityLabel("Open VM")

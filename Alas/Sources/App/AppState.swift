@@ -346,6 +346,8 @@ final class AppState {
             try vmManager.sealGolden(bundle)
         },
         provisioner: GoldenProvisioner.live(manager: vmManager))
+    /// The one Ubuntu image installer, shared by every Linux VM tab.
+    @ObservationIgnored private(set) lazy var linuxGoldenInstaller = LinuxGoldenInstaller(root: vmManager.root)
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
@@ -11696,7 +11698,9 @@ final class AppState {
         case .deleted, .deletedButNotSaved:
             removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
             Task { [vmManager] in await vmManager.deleteVMs(forWorktree: worktree.id) }
-            tabs.close(worktreeId: worktree.id, tabId: VirtualMachineTabState(ownerKey: worktree.id).id)
+            for guest in [VMGuestOS.macOS, .linux] {
+                tabs.close(worktreeId: worktree.id, tabId: VirtualMachineTabState(ownerKey: worktree.id, guest: guest).id)
+            }
             // Callers that skip the refresh (batches, which refresh once at the
             // end) reconcile the selection themselves afterwards.
             if refreshAfter, selectedWorktreeId == worktree.id {

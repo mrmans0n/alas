@@ -16,9 +16,11 @@ import Virtualization
 /// without downloads, disks or VMs. Waits are bounded on the injected clock.
 @MainActor
 final class LinuxGoldenInstaller: ObservableObject {
-    enum Phase: Equatable {
+    enum Phase: Equatable, Sendable {
         case idle
         case downloading(Double)
+        /// Checking the downloaded image against its checksum.
+        case checking
         case converting(Double)
         /// The seeded first start, which sets Ubuntu up and powers it off.
         case firstBoot
@@ -257,6 +259,7 @@ final class LinuxGoldenInstaller: ObservableObject {
             }
             try Task.checkCancellation()
         }
+        phase = .checking
         guard try await steps.verify(image, LinuxGoldenImage.sha256) else {
             try? FileManager.default.removeItem(at: image)
             throw InstallerError(message: Reason.checksum)

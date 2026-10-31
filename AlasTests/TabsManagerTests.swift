@@ -1,3 +1,4 @@
+import AlasCore
 import Testing
 import Foundation
 @testable import Alas
@@ -736,22 +737,37 @@ struct TabsManagerTests {
         #expect(manager.activeTabId(forWorktree: "owner-a") == blank.id)
     }
 
-    @Test func openVirtualMachineIsOnePerWorktreeAndDropsItsViewOnClose() {
+    @Test func openVirtualMachineIsOnePerWorktreeAndGuest() {
         let manager = TabsManager(store: TestPersistenceStore())
 
-        let first = manager.openVirtualMachine(worktreeId: "wt")
-        let cachedView = manager.vmView(ownerKey: "wt")
-        let second = manager.openVirtualMachine(worktreeId: "wt")
+        let mac = manager.openVirtualMachine(worktreeId: "wt")
+        let linux = manager.openVirtualMachine(worktreeId: "wt", guest: .linux)
+        let macView = manager.vmView(tabID: mac.id)
+        let linuxView = manager.vmView(tabID: linux.id)
+        #expect(manager.openVirtualMachine(worktreeId: "wt").id == mac.id)
+        #expect(manager.openVirtualMachine(worktreeId: "wt", guest: .linux).id == linux.id)
 
-        #expect(first.id == "vm:wt")
-        #expect(second.id == first.id)
-        #expect(manager.tabs(forWorktree: "wt").map(\.id) == [first.id])
-        #expect(manager.vmView(ownerKey: "wt") === cachedView)
+        #expect(mac.id == "vm:wt")
+        #expect(linux.id == "vm-linux:wt")
+        #expect(manager.tabs(forWorktree: "wt").map(\.id) == [mac.id, linux.id])
+        #expect(manager.activeTabId(forWorktree: "wt") == linux.id)
+        #expect(macView !== linuxView)
+        #expect(manager.vmView(tabID: mac.id) === macView)
 
-        manager.close(worktreeId: "wt", tabId: first.id)
+        manager.close(worktreeId: "wt", tabId: mac.id)
 
-        #expect(manager.tabs(forWorktree: "wt").isEmpty)
-        #expect(manager.vmView(ownerKey: "wt") !== cachedView)
+        #expect(manager.tabs(forWorktree: "wt").map(\.id) == [linux.id])
+        #expect(manager.vmView(tabID: mac.id) !== macView)
+        #expect(manager.vmView(tabID: linux.id) === linuxView)
+    }
+
+    @Test func persistedVirtualMachineTabWithoutGuestRestoresAsMacOS() throws {
+        let json = #"{"virtualMachine":{"_0":{"id":"vm:wt","ownerKey":"wt"}}}"#
+
+        let tab = try JSONDecoder().decode(Tab.self, from: Data(json.utf8))
+
+        #expect(tab == .virtualMachine(VirtualMachineTabState(ownerKey: "wt")))
+        #expect(tab.id == "vm:wt")
     }
 
     @Test func webPreviewURLUpdatePreservesRemoteHostAndActiveSelection() {
