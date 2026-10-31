@@ -654,7 +654,13 @@ struct ACPSubagentRoutingTests {
                 sessionId: update.sessionId, update: update.update,
                 durableConsumptionAcknowledgement: { failed.value = true }))
         }
+        // A child update whose own rows encode to nothing still answers for
+        // the parent write queued ahead of it.
+        let emptyChildWrite = Acknowledged()
+        runner.persistIndices([0], participatesInLifecycleBatch: true)
+        runner.persistSubagentIndices([99], subagentSessionId: "agent_n") { if $0 { emptyChildWrite.value = true } }
         await runner.flushPersistence()
+        #expect(emptyChildWrite.value == false)
         try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
         #expect(try store.loadSubagentMessages(sessionId: "s").count == 1)
         #expect(failed.value == false)

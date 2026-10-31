@@ -1654,13 +1654,11 @@ public final class ACPSessionRunner {
         completion: ((Bool) -> Void)? = nil
     ) -> Bool {
         guard holdsLeaseForWrite() else { return false }
-        guard let run = session.subagentRun(subagentSessionId), !indices.isEmpty else {
-            completion?(true)
-            return true
-        }
-        let messages = run.messages
+        let run = session.subagentRun(subagentSessionId)
+        let messages = run?.messages ?? []
         var rows: [ACPStoredSubagentMessage] = []
         for index in indices.sorted() {
+            guard let run else { break }
             guard index >= 0, index < messages.count else { continue }
             let message = messages[index]
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
@@ -1682,7 +1680,12 @@ public final class ACPSessionRunner {
                 payload: payload,
                 createdAt: Int64(run.createdAt(at: index).timeIntervalSince1970)))
         }
-        guard !rows.isEmpty else {
+        // Nothing to write still has to answer for the batch when it carries
+        // the acknowledgement: a parent-row write queued just before it (a
+        // child's observed facts) may yet fail, and acknowledging right away
+        // would skip that outcome. The empty write below orders behind it and
+        // folds it in, like `acknowledgeAfterQueuedPersistence`.
+        if rows.isEmpty, completion == nil || !participatesInLifecycleBatch {
             completion?(true)
             return true
         }
@@ -1709,7 +1712,7 @@ public final class ACPSessionRunner {
             // bump it in SQLite, so the two would disagree. The spawn and
             // the terminal state both write parent rows, so a subagent run
             // still registers as activity at both ends.
-            if persisted == true {
+            if persisted == true, !subagentRows.isEmpty {
                 self.onPersist?()
             }
             guard participatesInLifecycleBatch else {
