@@ -56,6 +56,8 @@ final class NativePeerHosts {
     /// Run endpoint forwards, by peer and run. A forward lives while its run
     /// is `.running` and its peer stays online: a reconnect starts clean.
     @ObservationIgnored private var forwards: [ForwardKey: Forward] = [:]
+    /// Told of each forward that stops, so a preview showing it can close.
+    @ObservationIgnored var onForwardStopped: (@MainActor (ForwardKey) -> Void)?
 
     init(
         send: @escaping @MainActor (_ serverId: String, HostClientMessage) -> Void,
@@ -211,10 +213,11 @@ final class NativePeerHosts {
         for (key, forward) in forwards where matching(key) {
             forwards[key] = nil
             forward.forwarder.stop()
+            onForwardStopped?(key)
         }
     }
 
-    private func isRunning(_ runID: String, serverId: String) -> Bool {
+    func isRunning(_ runID: String, serverId: String) -> Bool {
         runs[serverId]?.contains { $0.id == runID && $0.status == .running } == true
     }
 
@@ -593,12 +596,15 @@ final class NativePeerHosts {
     /// The copy for a checkpoint the host no longer lists.
     private static let checkpointGone = (what: "checkpoint ", message: "This checkpoint is no longer on the host. Refresh and try again.")
 
-    /// `worktree`'s checkpoints, newest first. Nil for a refusal or no answer.
-    func checkpoints(in worktree: PeerHostWorktree, serverId: String) async -> CheckpointCatalogSnapshot? {
+    /// `worktree`'s checkpoints, newest first, and whether a restore there
+    /// awaits recovery that this host serves. Nil for a refusal or no answer.
+    func checkpoints(
+        in worktree: PeerHostWorktree, serverId: String
+    ) async -> (catalog: CheckpointCatalogSnapshot, interruptedRestore: Bool)? {
         guard servesCheckpoints(serverId: serverId), let channel = channels[serverId],
-              case .checkpoints(let catalog) = await channel.request(.listCheckpoints(worktree: Self.ref(worktree)))
+              case .checkpoints(let catalog, let interrupted) = await channel.request(.listCheckpoints(worktree: Self.ref(worktree)))
         else { return nil }
-        return catalog
+        return (catalog, interrupted == true && supports(serverId, HostProtocolCapability.worktreesCheckpointRecoveryV1))
     }
 
     func checkpointManifest(

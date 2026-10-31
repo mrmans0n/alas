@@ -168,6 +168,11 @@ final class NativePeerSessions {
     private(set) var openedCommitEditor: NativePeerCommitEditorSelection?
     /// A host file's history opened over the center pane, its selected row's diff the open document.
     private(set) var openedFileHistory: NativePeerFileHistory?
+    /// A host run's forwarded endpoint opened in the web preview over the
+    /// center pane. Its browser closes when it stops showing.
+    private(set) var openedWebPreview: NativePeerWebPreview? {
+        didSet { if oldValue?.browser !== openedWebPreview?.browser { oldValue?.browser.close() } }
+    }
     /// A checkpoint the transcript asked to restore, until the right pane takes it.
     private(set) var pendingCheckpointRestore: CheckpointID?
     /// The selected row's worktree summary when changes were last requested.
@@ -237,6 +242,11 @@ final class NativePeerSessions {
         consoles?.onOpened = { [weak self] in self?.selectConsole(serverId: $0, consoleId: $1) }
         hosts?.onChange = { [weak self] in self?.rebuildSnapshot() }
         hosts?.onRunsChanged = { [weak consoles] in consoles?.refresh(serverId: $0) }
+        hosts?.onForwardStopped = { [weak self] key in
+            guard let self, let preview = openedWebPreview,
+                  preview.serverId == key.serverId, preview.runID == key.runID else { return }
+            openedWebPreview = nil
+        }
     }
 
     /// Only the sidebar model: console lists change nothing a selected
@@ -287,6 +297,7 @@ final class NativePeerSessions {
         openedReview = nil
         openedCommitEditor = nil
         openedFileHistory = nil
+        openedWebPreview = nil
         let tabs = worktree.tabs
         if let tab = lastTabs[selection].flatMap({ tabs.contains($0) ? $0 : nil }) ?? tabs.first {
             selectTab(tab, in: selection)
@@ -398,7 +409,7 @@ final class NativePeerSessions {
 
     /// The open `.file` document on `hostFileTarget`, while documents show and no review or commit covers them.
     private var hostFileDocument: NativePeerHostFile? {
-        guard canReadWorkspace, openedReview == nil, openedCommitEditor == nil, openedFileHistory == nil,
+        guard canReadWorkspace, openedReview == nil, openedCommitEditor == nil, openedFileHistory == nil, openedWebPreview == nil,
               let target = hostFileTarget,
               case .file(let path)? = workspace.document
         else { return nil }
@@ -603,6 +614,7 @@ final class NativePeerSessions {
         openedReview = nil
         openedCommitEditor = nil
         openedFileHistory = nil
+        openedWebPreview = nil
         selectedSessionId = nil
         transcript = nil
         snapshot = .init(groups: [], attentionRows: [])
@@ -714,6 +726,7 @@ final class NativePeerSessions {
             openedReview = nil
             openedCommitEditor = nil
             openedFileHistory = nil
+            openedWebPreview = nil
             refresh()
             return
         }
@@ -738,7 +751,11 @@ final class NativePeerSessions {
 
     func selectConsole(serverId: String, consoleId: String) {
         if let viewer = consoles?.viewer, viewer.serverId == serverId, viewer.consoleId == consoleId,
-           !viewer.isEnded { return }
+           !viewer.isEnded {
+            // Already live: only reveal it again from under a preview.
+            openedWebPreview = nil
+            return
+        }
         clearSelection()
         noteSelected(.console(consoleId), serverId: serverId)
         consoles?.select(serverId: serverId, consoleId: consoleId)
@@ -749,6 +766,7 @@ final class NativePeerSessions {
         openedReview = nil
         openedCommitEditor = nil
         openedFileHistory = nil
+        openedWebPreview = nil
         pendingCheckpointRestore = nil
         selectedWorktreeTabs = []
         consoles?.clearSelection()
@@ -1264,6 +1282,7 @@ final class NativePeerSessions {
         guard canReadWorkspace else { return false }
         openedReview = nil
         openedCommitEditor = nil
+        openedWebPreview = nil
         // A refresh, or the history's own row, keeps the history open; any other document replaces it.
         if let history = openedFileHistory, document != workspace.document, document != history.selectedDocument {
             openedFileHistory = nil
@@ -1389,6 +1408,7 @@ final class NativePeerSessions {
         workspace.closeDocument()
         openedCommitEditor = nil
         openedFileHistory = nil
+        openedWebPreview = nil
         openedReview = NativePeerReviewSelection(serverId: serverId, worktree: worktree, sessionID: sessionID)
     }
 
@@ -1408,6 +1428,7 @@ final class NativePeerSessions {
         workspace.closeDocument()
         openedReview = nil
         openedFileHistory = nil
+        openedWebPreview = nil
         openedCommitEditor = selection
     }
 
@@ -1420,6 +1441,7 @@ final class NativePeerSessions {
         guard let target = hostHistoryTarget else { return }
         openedReview = nil
         openedCommitEditor = nil
+        openedWebPreview = nil
         openedFileHistory = NativePeerFileHistory(
             worktreeId: target.worktree.snapshot.worktree.id, path: path,
             // Opened again from within a history: closing still returns to what was open before the first.
@@ -1464,6 +1486,35 @@ final class NativePeerSessions {
         } else {
             closeDocument()
         }
+    }
+
+    /// Opens `url`, `runID`'s forwarded endpoint on this Mac, over the center
+    /// pane. Only that port on this Mac's loopback is reachable from it.
+    /// Nothing opens once `selection`, the worktree that asked, is no longer
+    /// selected or the run stopped while its forward started.
+    func openWebPreview(_ url: URL, serverId: String, runID: String, hostName: String,
+                        from selection: NativePeerWorktreeSelection?) {
+        guard selection != nil, selectedWorktree == selection,
+              hosts?.isRunning(runID, serverId: serverId) == true else { return }
+        workspace.closeDocument()
+        openedReview = nil
+        openedCommitEditor = nil
+        openedFileHistory = nil
+        let pin = WebPreviewLoopbackPin(url)
+        if let reused = openedWebPreview.flatMap({
+            $0.serverId == serverId && $0.runID == runID && $0.browser.allowedLoopback == pin ? $0.browser : nil
+        }) {
+            // Open returns to the endpoint, even when the page moved on.
+            reused.navigate(url)
+            openedWebPreview = NativePeerWebPreview(serverId: serverId, runID: runID, url: url, browser: reused)
+            return
+        }
+        let browser = WebPreviewBrowser(ownerKey: "peer:\(serverId):\(runID)", remoteHost: hostName, allowedLoopback: pin)
+        openedWebPreview = NativePeerWebPreview(serverId: serverId, runID: runID, url: url, browser: browser)
+    }
+
+    func closeWebPreview() {
+        openedWebPreview = nil
     }
 
     func requestCheckpointRestore(_ id: CheckpointID) {
@@ -1904,7 +1955,7 @@ final class NativePeerSessions {
     /// rows it had, before their refresh arrives.
     private func replanImageDiff() {
         guard let read = imageDiffRead, read.document == workspace.document, openedReview == nil,
-              openedCommitEditor == nil,
+              openedCommitEditor == nil, openedWebPreview == nil,
               workspace.imageDiffPlan(for: read.document, comparisonMode: comparisonMode()) != read.plan
         else { return }
         open(read.document)
@@ -1939,4 +1990,12 @@ struct NativePeerAttachment: Identifiable, Equatable {
     var wire: RemoteAttachment {
         RemoteAttachment(name: name, mimeType: mimeType, dataBase64: data.base64EncodedString())
     }
+}
+
+/// A paired host run's forwarded endpoint, shown in a web preview.
+struct NativePeerWebPreview {
+    let serverId: String
+    let runID: String
+    let url: URL
+    let browser: WebPreviewBrowser
 }

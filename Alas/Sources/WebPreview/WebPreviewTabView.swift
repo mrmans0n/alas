@@ -4,6 +4,8 @@ import WebKit
 struct WebPreviewTabView: View {
     let state: AppState
     let tab: WebPreviewTabState
+    /// Shows a close button; a preview tab closes as tabs do instead.
+    var onClose: (() -> Void)?
     @State private var browser: WebPreviewBrowser
     @State private var selectionMode = SelectionMode.browse
     @State private var dragStart: CGPoint?
@@ -29,9 +31,16 @@ struct WebPreviewTabView: View {
     }
 
     init(state: AppState, tab: WebPreviewTabState) {
+        self.init(state: state, tab: tab,
+                  browser: state.tabs.webPreviewBrowser(ownerKey: tab.ownerKey, remoteHost: tab.remoteHost))
+    }
+
+    /// Shows a browser owned outside `TabsManager`, such as a paired host's forwarded endpoint.
+    init(state: AppState, tab: WebPreviewTabState, browser: WebPreviewBrowser, onClose: (() -> Void)? = nil) {
         self.state = state
         self.tab = tab
-        _browser = State(initialValue: state.tabs.webPreviewBrowser(ownerKey: tab.ownerKey, remoteHost: tab.remoteHost))
+        self.onClose = onClose
+        _browser = State(initialValue: browser)
     }
 
     var body: some View {
@@ -51,10 +60,13 @@ struct WebPreviewTabView: View {
                     .onSubmit(openAddress)
                     .accessibilityLabel("Preview URL")
                 tool("Open in external browser", icon: "arrow.up.right.square", disabled: browser.webView.url == nil) {
-                    if let url = browser.webView.url, WebPreviewNavigation.allows(url, remoteHost: tab.remoteHost) {
+                    if let url = browser.webView.url, WebPreviewNavigation.allows(
+                        url, remoteHost: browser.remoteHost, allowedLoopback: browser.allowedLoopback
+                    ) {
                         NSWorkspace.shared.open(url)
                     }
                 }
+                if let onClose { tool("Close preview", icon: "xmark.circle", action: onClose) }
             }
             .padding(8)
             Divider()

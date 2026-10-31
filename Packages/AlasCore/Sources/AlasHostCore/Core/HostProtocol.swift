@@ -217,6 +217,10 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     /// Restore the groups `groupIDs` of a listed checkpoint, as previewed at
     /// `fingerprint`, after a recovery checkpoint (`host.worktrees.checkpoints.v1`).
     case restoreCheckpoint(id: CheckpointID, groupIDs: Set<UUID>, fingerprint: String)
+    /// Recover the worktree's interrupted checkpoint restores, back to the
+    /// state each saved first; the one change a pending recovery lets through
+    /// (`host.worktrees.checkpointRecovery.v1`).
+    case recoverCheckpointRestore
 
     /// The capability beyond host.worktrees.git.v1 a change needs; nil for the original seven.
     public var capability: String? {
@@ -229,6 +233,7 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
         case .editCommit: HostProtocolCapability.worktreesCommitEditV1
         case .merge, .rebase: HostProtocolCapability.worktreesIntegrateV1
         case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint: HostProtocolCapability.worktreesCheckpointsV1
+        case .recoverCheckpointRestore: HostProtocolCapability.worktreesCheckpointRecoveryV1
         }
     }
 
@@ -576,8 +581,9 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case commitDetails(details: CommitDetails)
     /// The answer to an `editCommit` change.
     case commitEdited(result: CommitEditResult)
-    /// The answer to `listCheckpoints`.
-    case checkpoints(catalog: CheckpointCatalogSnapshot)
+    /// The answer to `listCheckpoints`. `interruptedRestore` is nil from a
+    /// host older than `host.worktrees.checkpointRecovery.v1`.
+    case checkpoints(catalog: CheckpointCatalogSnapshot, interruptedRestore: Bool? = nil)
     /// The answer to `checkpointManifest` and a `createCheckpoint` change.
     case checkpointManifest(manifest: WorktreeCheckpointManifest)
     /// The answer to `checkpointRestorePreview`.

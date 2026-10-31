@@ -7,6 +7,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 import AlasAgents
+import os
 
 /// What a gateway gets from its socket: who authenticated, and two ways to
 /// send. `sendTracked` reports when the frame has been written, which peer
@@ -599,7 +600,7 @@ public final class RemoteConnection: @unchecked Sendable {
         // with ACP state mutation for main-thread time.
         onQueue { [weak self] in
             guard let self else { return }
-            guard let data = try? JSONEncoder().encode(msg) else {
+            guard let data = msg.encodedForSending() else {
                 onWritten()
                 return
             }
@@ -743,5 +744,41 @@ private final class SingleResume<T: Sendable> {
         guard !fired else { return }
         fired = true
         continuation.resume(returning: value)
+    }
+}
+
+private let sendLogger = Logger(subsystem: "io.nlopez.alas", category: "RemoteConnection")
+
+extension RemoteServerMessage {
+    /// The most a sent message encodes to: under the peer's frame cap,
+    /// `WebSocketFrame.maxPayloadLength`, which it fails its socket over.
+    static let sendBudget = 15_000_000
+
+    /// The message's encoding when it fits `budget`. A host reply that does
+    /// not becomes its request's failure, and a host event batch a `resync`
+    /// at its cursor, so the link stays up and nothing is lost for good;
+    /// anything else over it is dropped (nil), as is a message that does not encode.
+    func encodedForSending(budget: Int = sendBudget) -> Data? {
+        guard let data = try? JSONEncoder().encode(self) else { return nil }
+        guard data.count > budget else { return data }
+        let id: Int, result: HostResponse
+        switch self {
+        case .host(.response(let replyID, let reply)):
+            (id, result) = (replyID, reply)
+        case .host(.events(_, let cursor)):
+            sendLogger.error("Replaced a \(data.count, privacy: .public)-byte event batch with a resync")
+            return try? JSONEncoder().encode(Self.host(.events(events: [.resync], cursor: cursor)))
+        default:
+            sendLogger.error("Dropped a \(data.count, privacy: .public)-byte message over the send budget")
+            return nil
+        }
+        let message = switch result {
+        case .checkpointManifest:
+            "This checkpoint has too many files to show from a paired Mac. It may have been saved; check the list."
+        case .checkpointRestorePreview: "This checkpoint has too many files to show from a paired Mac."
+        default: "This reply is too large to send to a paired Mac."
+        }
+        sendLogger.error("Replaced a \(data.count, privacy: .public)-byte reply to request \(id, privacy: .public) with a failure")
+        return try? JSONEncoder().encode(Self.host(.response(id: id, result: .failure(error: .failed(message: message)))))
     }
 }
