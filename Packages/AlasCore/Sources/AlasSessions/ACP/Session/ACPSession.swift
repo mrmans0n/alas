@@ -1671,7 +1671,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         replayCreatedMetadataTerminalIds.removeAll()
         suppressedReplayInsertionCursor = 0
         replayedContinuationEcho = nil
-        for run in subagents.values { run.beginReplayReconciliation() }
+        for run in subagents.values {
+            run.beginReplayReconciliation()
+            // Whatever the replay resends is history, and whatever an
+            // earlier connection reported is no longer confirmed.
+            run.markObservationsHistorical()
+        }
     }
 
     public func endSuppressedReplaySideEffects() {
@@ -2371,9 +2376,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         let id = spawn.subagentSessionId
         guard !id.isEmpty else { return [] }
         nextPromptActivity.send()
+        // A spawn reached here without flushing replay candidates only while
+        // `session/load` replay is suppressed: its directories are history.
+        let live = flushingReplayCandidates
         if let existing = subagents[id] {
             let before = descriptor(for: existing)
-            existing.merge(spawn: spawn)
+            existing.merge(spawn: spawn, live: live)
             let after = descriptor(for: existing)
             guard before != after else { return [] }
             return refreshSubagentRow(for: existing, at: timestamp)
@@ -2385,6 +2393,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             state: spawn.initialState,
             capabilities: spawn.capabilities,
             startedAt: timestamp)
+        run.merge(spawn: spawn, live: live)
         subagents[id] = run
         subagentOrder.append(id)
         clearRestoredContextRecoveryStatus()
@@ -2555,6 +2564,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @discardableResult
     public func markSubagentsDisconnected(at timestamp: Date = Date()) -> Set<Int> {
         var dirty: Set<Int> = []
+        // Every child's observations, finished ones included, came from the
+        // connection that just dropped.
+        for run in orderedSubagents { run.markObservationsHistorical() }
         for run in orderedSubagents where run.isRunning {
             nextPromptActivity.send()
             run.apply(state: .disconnected, at: timestamp)
@@ -2570,7 +2582,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
             task: run.task,
             state: run.state,
             capabilities: run.capabilities,
-            lastError: run.lastError)
+            lastError: run.lastError,
+            configOptions: run.configOptions,
+            cwd: run.cwd,
+            additionalDirectories: run.additionalDirectories)
     }
 
     private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {

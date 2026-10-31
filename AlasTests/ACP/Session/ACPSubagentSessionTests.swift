@@ -1007,17 +1007,74 @@ struct ACPSubagentSessionTests {
     }
 
     @Test("a child's session-level updates never touch the parent's chrome")
-    func childStateUpdatesAreIgnored() {
+    func childStateUpdatesAreIgnored() throws {
         let session = makeSession()
         session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
         session.applySubagentUpdate(.currentModelUpdate(modelId: "child-model"), subagentSessionId: "child-1")
         session.applySubagentUpdate(
             .usageUpdate(.init(used: 10, size: 100, cost: nil)),
             subagentSessionId: "child-1")
+        session.applySubagentUpdate(.sessionConfigOptionsUpdate([modelOption("child")]), subagentSessionId: "child-1")
 
         #expect(session.currentModel == nil)
+        #expect(session.availableConfigOptions.isEmpty)
         #expect(session.contextUsage == nil)
-        #expect(session.subagentRun("child-1")?.messages.isEmpty == true)
+
+        session.apply(.sessionConfigOptionsUpdate([modelOption("parent")]))
+
+        let run = try #require(session.subagentRun("child-1"))
+        #expect(session.availableConfigOptions.map(\.currentStringValue) == ["parent"])
+        #expect(run.configOptions.map(\.currentStringValue) == ["child"])
+        #expect(run.messages.isEmpty)
+    }
+
+    @Test("directory patches replace, keep, then clear the child's directories")
+    func directoryPatchesApplyToRun() throws {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(
+            subagentSessionId: "child-1", cwd: "/w/pkg",
+            additionalDirectories: ["/w/shared"], replacesAdditionalDirectories: true)))
+        let run = try #require(session.subagentRun("child-1"))
+        #expect(run.cwd == "/w/pkg")
+        #expect(run.additionalDirectories == ["/w/shared"])
+
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+        #expect(run.cwd == "/w/pkg")
+        #expect(run.additionalDirectories == ["/w/shared"])
+
+        session.apply(.subagentSpawned(.init(
+            subagentSessionId: "child-1", clearsCwd: true, replacesAdditionalDirectories: true)))
+        #expect(run.cwd == nil)
+        #expect(run.additionalDirectories.isEmpty)
+    }
+
+    @Test("only a live observation confirms a child's config; replay and disconnect leave it historical")
+    func observationConfirmationLifecycle() throws {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+        let run = try #require(session.subagentRun("child-1"))
+
+        session.applySubagentUpdate(.sessionConfigOptionsUpdate([modelOption("live")]), subagentSessionId: "child-1")
+        #expect(run.isConfigConfirmed)
+
+        // A replayed snapshot is older than what this connection reported.
+        session.applySubagentReplayedUpdate(
+            .sessionConfigOptionsUpdate([modelOption("older")]), subagentSessionId: "child-1")
+        #expect(run.configOptions.map(\.currentStringValue) == ["live"])
+        #expect(run.isConfigConfirmed)
+
+        session.markSubagentsDisconnected()
+        #expect(run.configOptions.map(\.currentStringValue) == ["live"])
+        #expect(run.isConfigConfirmed == false)
+
+        session.beginSuppressedReplaySideEffects()
+        session.applySubagentReplayedUpdate(
+            .sessionConfigOptionsUpdate([modelOption("replayed")]), subagentSessionId: "child-1")
+        #expect(run.configOptions.map(\.currentStringValue) == ["replayed"])
+        #expect(run.isConfigConfirmed == false)
+
+        session.applySubagentUpdate(.sessionConfigOptionsUpdate([modelOption("replayed")]), subagentSessionId: "child-1")
+        #expect(run.isConfigConfirmed)
     }
 
     @Test("a replayed terminal state reconciles a child left running by a crash")
@@ -1164,14 +1221,17 @@ struct ACPSubagentSessionTests {
             toolCallId: "t1", title: "Read", status: "completed"))))
     }
 
-    @Test("the row descriptor survives an encode/decode round trip")
-    func descriptorRoundTrips() throws {
+    @Test("the row descriptor survives an encode/decode round trip", arguments: [false, true])
+    func descriptorRoundTrips(withObservations: Bool) throws {
         let descriptor = ACPSubagentRowDescriptor(
             subagentSessionId: "child-1",
             name: "Explore",
             task: "Find the router",
             state: .cancelled,
-            capabilities: .cancellable)
+            capabilities: .cancellable,
+            configOptions: withObservations ? [modelOption("gpt-5")] : [],
+            cwd: withObservations ? "/w/pkg" : nil,
+            additionalDirectories: withObservations ? ["/w/shared"] : [])
         let toolCall = descriptor.toolCall(executionStartedAt: nil, executionFinishedAt: nil)
         let encoded = try JSONEncoder().encode(toolCall)
         let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: encoded)
@@ -1276,6 +1336,12 @@ struct ACPSubagentSessionTests {
 
     private func makeSession() -> ACPSession {
         ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+    }
+
+    private func modelOption(_ current: String) -> ACPConfigOption {
+        ACPConfigOption(
+            id: "model", name: "Model", category: "model", currentValue: .string(current),
+            options: [.init(id: current, name: current)])
     }
 
     private func subagentRowDescriptor(in session: ACPSession, at index: Int) -> ACPSubagentRowDescriptor? {

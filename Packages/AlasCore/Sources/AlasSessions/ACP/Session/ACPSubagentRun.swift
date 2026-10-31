@@ -39,6 +39,18 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// updates that don't themselves carry a new error, so the reason a
     /// row failed survives whatever housekeeping update lands after it.
     @Tracked public private(set) var lastError: String?
+    /// The child's own latest config snapshot, replaced whole. Never the
+    /// parent's: a child's options must not leak into the parent session's
+    /// chips or persisted values, nor be inferred from them.
+    @Tracked public private(set) var configOptions: [ACPConfigOption] = []
+    /// The child's own working directory; nil means it inherits the parent's.
+    @Tracked public private(set) var cwd: String? = nil
+    @Tracked public private(set) var additionalDirectories: [String] = []
+    /// Whether `configOptions` / the directories were observed live on the
+    /// current connection. Restored, replayed and pre-disconnect values are
+    /// historical. Never persisted.
+    @Tracked public private(set) var isConfigConfirmed = false
+    @Tracked public private(set) var areDirectoriesConfirmed = false
     /// The child's own transcript, in arrival order.
     @Tracked public private(set) var messages: [ACPMessage] = []
 
@@ -143,7 +155,12 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// explicit spawn message, so Alas synthesizes one for every child
     /// notification — this must therefore be idempotent, and must never
     /// resurrect a child that already reported a terminal state.
-    public func merge(spawn: ACPSubagentSpawn) {
+    ///
+    /// Directory patches follow the same observation rule as
+    /// `observe(config:live:)`: a replayed (`live: false`) patch never
+    /// overrides directories this connection already reported.
+    public func merge(spawn: ACPSubagentSpawn, live: Bool = true) {
+        mergeDirectories(from: spawn, live: live)
         if let incoming = spawn.name, !incoming.isEmpty, incoming != name {
             name = incoming
         } else if spawn.clearsName, name != nil {
@@ -159,6 +176,40 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         }
     }
 
+    /// Absent members keep the current value, `null` (`clearsCwd`, or an
+    /// empty replacing list) returns to inheriting the parent's, and a value
+    /// replaces.
+    private func mergeDirectories(from spawn: ACPSubagentSpawn, live: Bool) {
+        let patchesCwd = spawn.cwd != nil || spawn.clearsCwd
+        let patchesDirectories = spawn.replacesAdditionalDirectories || !spawn.additionalDirectories.isEmpty
+        guard patchesCwd || patchesDirectories else { return }
+        if !live && areDirectoriesConfirmed { return }
+        if patchesCwd {
+            let incoming = spawn.clearsCwd ? nil : spawn.cwd
+            if incoming != cwd { cwd = incoming }
+        }
+        if patchesDirectories, spawn.additionalDirectories != additionalDirectories {
+            additionalDirectories = spawn.additionalDirectories
+        }
+        if areDirectoriesConfirmed != live { areDirectoriesConfirmed = live }
+    }
+
+    /// Records the child's own config snapshot. A replayed snapshot is older
+    /// than anything this connection reported, so it never replaces a
+    /// confirmed one.
+    public func observe(config options: [ACPConfigOption], live: Bool) {
+        if !live && isConfigConfirmed { return }
+        if options != configOptions { configOptions = options }
+        if isConfigConfirmed != live { isConfigConfirmed = live }
+    }
+
+    /// Demotes every observation to history: the connection that reported
+    /// it is gone, or a `session/load` replay is about to resend it.
+    public func markObservationsHistorical() {
+        if isConfigConfirmed { isConfigConfirmed = false }
+        if areDirectoriesConfirmed { areDirectoriesConfirmed = false }
+    }
+
     /// Adopts the facts persisted on the parent row. Used when a session is
     /// re-hydrated (open, or a read-only mirror's refresh) so an existing
     /// run keeps its identity — and therefore the row's expanded state —
@@ -169,6 +220,13 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         if state != descriptor.state { state = descriptor.state }
         if capabilities != descriptor.capabilities { capabilities = descriptor.capabilities }
         if lastError != descriptor.lastError { lastError = descriptor.lastError }
+        if configOptions != descriptor.configOptions { configOptions = descriptor.configOptions }
+        if cwd != descriptor.cwd { cwd = descriptor.cwd }
+        if additionalDirectories != descriptor.additionalDirectories {
+            additionalDirectories = descriptor.additionalDirectories
+        }
+        // Persisted facts are history, whichever connection reported them.
+        markObservationsHistorical()
         if let startedAt { self.startedAt = startedAt }
         // Mirrors `apply(state:)`: only a terminal child has a finish time.
         if !descriptor.state.isTerminal {
@@ -340,8 +398,12 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 return [index]
             }
             return [append(.plan(id: UUID(), items), at: timestamp)]
+        case .sessionConfigOptionsUpdate(let options):
+            // Kept on the run as an observation; it adds no transcript row.
+            observe(config: options, live: true)
+            return []
         case .availableModelsUpdate, .currentModeUpdate, .currentModelUpdate,
-             .sessionConfigOptionsUpdate, .availableCommandsUpdate, .usageUpdate,
+             .availableCommandsUpdate, .usageUpdate,
              .sessionInfoUpdate, .compactionUpdate, .compactionSummaryChunk,
              .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
             // Session-level state of a child session has no UI of its own:
@@ -423,6 +485,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 replayCursor = max(replayCursor, index + 1)
             }
             return dirty
+        case .sessionConfigOptionsUpdate(let options):
+            observe(config: options, live: false)
+            return []
         default:
             return apply(update, at: timestamp)
         }

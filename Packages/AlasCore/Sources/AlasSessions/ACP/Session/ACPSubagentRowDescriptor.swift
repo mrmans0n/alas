@@ -28,6 +28,12 @@ public struct ACPSubagentRowDescriptor: Equatable, Sendable {
     /// provided one. Carried in the row's own metadata so it survives
     /// persistence and hydration rather than living only in memory.
     public let lastError: String?
+    /// The child's own last observed config snapshot and directories. Absent
+    /// from rows written before they were tracked, which decode as empty.
+    /// Whether they were confirmed live is deliberately not stored.
+    public let configOptions: [ACPConfigOption]
+    public let cwd: String?
+    public let additionalDirectories: [String]
 
     public init(
         subagentSessionId: String,
@@ -35,7 +41,10 @@ public struct ACPSubagentRowDescriptor: Equatable, Sendable {
         task: String?,
         state: ACPSubagentState,
         capabilities: ACPSubagentCapabilities,
-        lastError: String? = nil
+        lastError: String? = nil,
+        configOptions: [ACPConfigOption] = [],
+        cwd: String? = nil,
+        additionalDirectories: [String] = []
     ) {
         self.subagentSessionId = subagentSessionId
         self.name = name
@@ -43,6 +52,9 @@ public struct ACPSubagentRowDescriptor: Equatable, Sendable {
         self.state = state
         self.capabilities = capabilities
         self.lastError = lastError
+        self.configOptions = configOptions
+        self.cwd = cwd
+        self.additionalDirectories = additionalDirectories
     }
 
     /// Reads the descriptor back off a transcript row. Returns nil for every
@@ -59,6 +71,11 @@ public struct ACPSubagentRowDescriptor: Equatable, Sendable {
         task = Self.string(facts["task"])
         state = Self.string(facts["state"]).map(ACPSubagentState.init(rawValue:)) ?? .running
         lastError = Self.string(facts["lastError"])
+        configOptions = facts["config"]
+            .flatMap { try? JSONEncoder().encode($0) }
+            .flatMap { try? JSONDecoder().decode([ACPConfigOption].self, from: $0) } ?? []
+        cwd = Self.string(facts["cwd"])
+        additionalDirectories = Self.strings(facts["additionalDirectories"])
         let capabilities = Self.object(facts["capabilities"]) ?? [:]
         self.capabilities = .init(
             cancel: Self.bool(capabilities["cancel"]) == true ? .init() : nil,
@@ -93,6 +110,15 @@ public struct ACPSubagentRowDescriptor: Equatable, Sendable {
         if let name { facts["name"] = AnyCodable(name) }
         if let task { facts["task"] = AnyCodable(task) }
         if let lastError { facts["lastError"] = AnyCodable(lastError) }
+        if !configOptions.isEmpty,
+           let data = try? JSONEncoder().encode(configOptions),
+           let json = try? JSONSerialization.jsonObject(with: data) {
+            facts["config"] = AnyCodable(json)
+        }
+        if let cwd { facts["cwd"] = AnyCodable(cwd) }
+        if !additionalDirectories.isEmpty {
+            facts["additionalDirectories"] = AnyCodable(additionalDirectories.map(AnyCodable.init))
+        }
         var capabilityFacts: [String: AnyCodable] = [:]
         if capabilities.supportsCancel { capabilityFacts["cancel"] = AnyCodable(true) }
         if capabilities.supportsClose { capabilityFacts["close"] = AnyCodable(true) }
@@ -128,6 +154,12 @@ public struct ACPSubagentRowDescriptor: Equatable, Sendable {
 
     private static func string(_ value: AnyCodable?) -> String? {
         value?.value as? String
+    }
+
+    private static func strings(_ value: AnyCodable?) -> [String] {
+        if let values = value?.value as? [AnyCodable] { return values.compactMap { $0.value as? String } }
+        if let values = value?.value as? [Any] { return values.compactMap { $0 as? String } }
+        return []
     }
 
     private static func int(_ value: AnyCodable?) -> Int? {
