@@ -628,9 +628,13 @@ struct HostProtocolServerTests {
             == refused("icon.png", .pathRejected))
 
         // Unchanged since HEAD when the checkpoint was taken: HEAD's bytes, not the working file's.
+        // Even with the working file unreadable now.
         let unchanged = try await fixture.checkpoint("Unchanged", in: ref).id
+        try FileManager.default.removeItem(at: icon)
         try checkpointed.write(to: icon)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: icon.path)
         #expect(try await read("icon.png", at: .checkpoint(id: unchanged)) == bytes(changed))
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: icon.path)
         let checkpoint = try await fixture.checkpoint("Before", in: ref).id
         try untracked.write(to: repo.appendingPathComponent("new.png"))
         #expect(try await read("icon.png", at: .checkpoint(id: checkpoint)) == bytes(checkpointed))

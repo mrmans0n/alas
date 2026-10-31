@@ -206,24 +206,36 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             }
             let saved = try await store.load(id: id, lineageID: target.lineageID)
             _ = try snapshotter.fileSystem.validateRelativePath(path, under: target.path)
-            guard let baseline = try await baseline(of: path, in: saved, target: target) else {
-                return .unavailable("The checkpoint baseline is unavailable for this path.")
+            if let state = saved.paths.first(where: { $0.relativePath == path })?.worktree {
+                if state.kind == .absent { return .absent }
+                guard state.kind == .regular, let blob = state.blob else { return .unavailable("Not a regular file.") }
+                guard blob.byteCount <= Int64(maxBytes) else { return .tooLarge(byteCount: blob.byteCount) }
+                return try await checkpointDiffPayload(state, lineageID: target.lineageID).map { .data($0) } ?? .absent
             }
-            if baseline.state.kind == .absent { return .absent }
-            guard baseline.state.kind == .regular, let blob = baseline.state.blob else { return .unavailable("Not a regular file.") }
-            guard blob.byteCount <= Int64(maxBytes) else { return .tooLarge(byteCount: blob.byteCount) }
-            if baseline.stored {
-                return try await checkpointDiffPayload(baseline.state, lineageID: target.lineageID).map { .data($0) } ?? .absent
-            }
-            // HEAD's blob, by the checkpoint's HEAD, which `baseline` matched: the working file is never read.
-            let read = try await Process.gitData(["cat-file", "blob", "\(saved.headOID):./\(path)"], cwd: target.path)
-            guard read.exitCode == 0, read.stdout.count <= maxBytes else {
-                return .unavailable("The checkpoint file could not be read.")
-            }
-            return .data(read.stdout)
+            return try await headBytes(of: path, at: saved.headOID, root: target.path, maxBytes: maxBytes)
         } catch {
             return .unavailable("The checkpoint file could not be read.")
         }
+    }
+
+    /// An unstored path's bytes as the checkpoint's recorded HEAD has them.
+    /// Read from that commit whether or not HEAD moved since, as it is what
+    /// the path was then; the working file is never read.
+    private func headBytes(of path: String, at headOID: String, root: URL, maxBytes: Int) async throws -> CheckpointBaselineBytes {
+        guard headOID.count >= 40, headOID.allSatisfy(\.isHexDigit) else { return .unavailable("The checkpoint baseline is unavailable for this path.") }
+        // `<mode> <type> <oid> <size>\t<path>`; nothing for a path HEAD lacks.
+        let tree = try await Process.git(["--literal-pathspecs", "ls-tree", "-z", "--long", headOID, "--", path], cwd: root)
+        guard tree.exitCode == 0 else { return .unavailable("The checkpoint baseline is unavailable for this path.") }
+        guard let entry = tree.stdout.split(separator: "\0").first(where: { $0.split(separator: "\t", maxSplits: 1).last == Substring(path) })
+        else { return .absent }
+        let fields = entry.split(separator: "\t", maxSplits: 1)[0].split(separator: " ", omittingEmptySubsequences: true)
+        guard fields.count == 4, fields[0] == "100644" || fields[0] == "100755", fields[1] == "blob",
+              let byteCount = Int64(fields[3])
+        else { return .unavailable("Not a regular file.") }
+        guard byteCount <= Int64(maxBytes) else { return .tooLarge(byteCount: byteCount) }
+        let read = try await Process.gitData(["cat-file", "blob", String(fields[2])], cwd: root)
+        guard read.exitCode == 0, read.stdout.count <= maxBytes else { return .unavailable("The checkpoint file could not be read.") }
+        return .data(read.stdout)
     }
 
     /// What `path` was at checkpoint `saved`: as the checkpoint stored it, else
