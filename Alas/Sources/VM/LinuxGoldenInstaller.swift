@@ -212,9 +212,12 @@ final class LinuxGoldenInstaller: ObservableObject {
                 throw error
             }
             logger.info("Linux golden \(serial, privacy: .public) set up unattended")
+            // The image can be downloaded again; its disk space matters more.
+            try? FileManager.default.removeItem(at: imageRoot)
             phase = .sealed(serial: serial)
         } catch {
             if booted { await steps.stop() }
+            if !Task.isCancelled { keepConsoleLog(of: partial, serial: serial) }
             try? FileManager.default.removeItem(at: partial.url)
             if Task.isCancelled {
                 logger.info("Linux golden setup cancelled")
@@ -225,6 +228,18 @@ final class LinuxGoldenInstaller: ObservableObject {
             phase = .failed(error.localizedDescription)
         }
         #endif
+    }
+
+    /// Moves a failed build's serial console log out of the bundle about to
+    /// be discarded, into the images folder the next sealed build empties.
+    private func keepConsoleLog(of bundle: LinuxVMBundle, serial: String) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: bundle.consoleLog.path) else { return }
+        let kept = imageRoot.appendingPathComponent("console-\(serial).log")
+        try? fm.createDirectory(at: imageRoot, withIntermediateDirectories: true)
+        try? fm.removeItem(at: kept)
+        guard (try? fm.moveItem(at: bundle.consoleLog, to: kept)) != nil else { return }
+        logger.notice("The failed Linux golden's console log is at \(kept.path, privacy: .public)")
     }
 
     /// The cached image for `serial`, downloaded first when missing, and
@@ -356,7 +371,7 @@ extension LinuxGoldenInstaller {
             },
             requestGuestPoweroff: {
                 #if arch(arm64)
-                await machine.requestPoweroff()
+                machine.requestPoweroff()
                 #endif
             },
             stop: {
@@ -481,11 +496,20 @@ private final class LinuxGoldenMachine {
         return try await client.hello()
     }
 
-    func requestPoweroff() async {
+    /// Sends the poweroff and returns at once: the connection drops as the
+    /// guest goes down, so the reply may never come, and the caller's
+    /// shutdown bound must apply regardless.
+    func requestPoweroff() {
         guard let client else { return }
-        // The connection drops as the guest goes down; no reply is expected.
-        _ = try? await client.run("sudo poweroff", timeoutSeconds: 60)
+        Task { _ = try? await client.run(Self.poweroffCommand, timeoutSeconds: 60) }
     }
+
+    /// Generalizes the guest before sealing: an empty machine-id makes
+    /// systemd generate a fresh one on each clone's first boot, and removed
+    /// SSH host keys are regenerated where sshd exists. `rm -f` succeeds
+    /// when there are none, so the poweroff always runs.
+    static let poweroffCommand =
+        "sudo truncate -s0 /etc/machine-id && sudo rm -f /etc/ssh/ssh_host_* && sudo poweroff"
 
     func forceStop() async {
         try? await vm?.forceStop()

@@ -105,8 +105,9 @@ enum VMConfigurationFactory {
     /// A Linux guest booted through EFI: the bundle's variable store, generic
     /// machine identifier and MAC address, a cached virtio disk, the seed ISO
     /// read-only when given, a virtio GPU with one scanout, a USB keyboard and
-    /// absolute pointer, a vsock device, a SPICE agent console port for the
-    /// clipboard and, when `shares` is not empty, one virtio file system
+    /// absolute pointer, a vsock device, an entropy device, a SPICE agent
+    /// console port for the clipboard, the serial console in the bundle's
+    /// `console.log` and, when `shares` is not empty, one virtio file system
     /// tagged `alas` holding them all. No audio device is attached.
     static func linux(
         bundle: LinuxVMBundle, cpuCount: Int, memoryBytes: UInt64, display: VMDisplaySize,
@@ -168,6 +169,12 @@ enum VMConfigurationFactory {
         spice.attachment = agent
         console.ports[0] = spice
         configuration.consoleDevices = [console]
+
+        // Ubuntu cloud images log the kernel and cloud-init to hvc0.
+        let serial = VZVirtioConsoleDeviceSerialPortConfiguration()
+        serial.attachment = try VZFileSerialPortAttachment(url: bundle.consoleLog, append: false)
+        configuration.serialPorts = [serial]
+        configuration.entropyDevices = [VZVirtioEntropyDeviceConfiguration()]
 
         if !shares.isEmpty {
             let fileSystem = VZVirtioFileSystemDeviceConfiguration(tag: LinuxCloudInit.shareTag)

@@ -15,6 +15,8 @@ struct LinuxVMBundle: Sendable {
     var machineIdentifier: URL { url.appendingPathComponent("machine-id.bin") }
     var macAddress: URL { url.appendingPathComponent("mac.txt") }
     var sealedMarker: URL { url.appendingPathComponent(".sealed") }
+    /// The guest's serial console (hvc0), rewritten on every boot.
+    var consoleLog: URL { url.appendingPathComponent("console.log") }
 
     var isSealed: Bool { FileManager.default.fileExists(atPath: sealedMarker.path) }
 

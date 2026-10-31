@@ -44,6 +44,9 @@ struct LinuxGoldenInstallerTests {
             .appendingPathComponent("LinuxGoldenInstallerTests-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let guest = FakeLinuxGuest(c)
+        let imageRoot = root.appendingPathComponent("linux-images", isDirectory: true)
+        try FileManager.default.createDirectory(at: imageRoot, withIntermediateDirectories: true)
+        try Data("old".utf8).write(to: imageRoot.appendingPathComponent("20250101.img.partial"))
         let installer = LinuxGoldenInstaller(root: root, steps: guest.steps())
         guest.cancel = { [weak installer] in installer?.cancel() }
 
@@ -68,8 +71,12 @@ struct LinuxGoldenInstallerTests {
             #expect(!guest.sealed)
             #expect(!FileManager.default.fileExists(atPath: golden.url.path))
         }
-        // A damaged download is dropped; any other keeps it for the next Set up.
-        #expect(FileManager.default.fileExists(atPath: guest.downloaded?.path ?? "/") == c.checksumMatches)
+        // A sealed golden drops every downloaded image, of any serial. A damaged
+        // download is dropped; any other failure keeps it for the next Set up.
+        let images = (try? FileManager.default.contentsOfDirectory(atPath: root.appendingPathComponent("linux-images").path)) ?? []
+        #expect(images.isEmpty == (c.expected == .sealed))
+        #expect(FileManager.default.fileExists(atPath: guest.downloaded?.path ?? "/")
+            == (c.checksumMatches && c.expected != .sealed))
         #expect(!FileManager.default.fileExists(
             atPath: root.appendingPathComponent("golden-linux/\(serial).partial").path))
         #expect(!guest.running)
