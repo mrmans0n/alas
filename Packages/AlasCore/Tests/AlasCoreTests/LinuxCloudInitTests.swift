@@ -44,6 +44,12 @@ struct LinuxCloudInitTests {
         #expect(user.contains("loginctl enable-linger alas"))
         #expect(user.contains("touch /etc/cloud/cloud-init.disabled"))
         #expect(user.contains("systemctl set-default graphical.target"))
+        // The power button (the host's Stop) shuts down rather than being swallowed by Xfce.
+        #expect(user.contains("path: /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml"))
+        #expect(user.contains(#"<property name="power-button-action" type="uint" value="4"/>"#))
+        // A clone regenerates the SSH host keys the golden's seal removed, before sshd's own check.
+        #expect(user.contains("path: /etc/systemd/system/ssh.service.d/alas-host-keys.conf"))
+        #expect(user.contains("ExecStartPre=\n      ExecStartPre=/usr/bin/ssh-keygen -A\n      ExecStartPre=/usr/sbin/sshd -t\n"))
         #expect(user.contains("power_state:\n  mode: poweroff"))
         // Power off only once setup really happened; otherwise the host's deadline fails the build.
         #expect(!user.contains("condition: true"))

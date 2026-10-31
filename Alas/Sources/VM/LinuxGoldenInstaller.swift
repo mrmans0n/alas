@@ -508,9 +508,11 @@ private final class LinuxGoldenMachine {
     }
 
     /// Generalizes the guest before sealing: an empty machine-id makes
-    /// systemd generate a fresh one on each clone's first boot, and removed
-    /// SSH host keys are regenerated where sshd exists. `rm -f` succeeds
-    /// when there are none, so the poweroff always runs.
+    /// systemd generate a fresh one on each clone's first boot, and the SSH
+    /// host keys are removed so clones don't share them. Cloud-init is off by
+    /// then; the seed's `ssh.service` drop-in runs `ssh-keygen -A` to make
+    /// each clone's own. `rm -f` succeeds when there are none, so the
+    /// poweroff always runs.
     static let poweroffCommand =
         "sudo truncate -s0 /etc/machine-id && sudo rm -f /etc/ssh/ssh_host_* && sudo poweroff"
 

@@ -115,6 +115,27 @@ public enum LinuxCloudInit {
               autologin-user=\(name)
               autologin-session=xfce
               user-session=xfce
+          # Xfce's power manager takes the power key from logind and by default does
+          # nothing, so the host's Stop (an ACPI power button press) would end in a
+          # forced power-off. 4 is XFPM_DO_SHUTDOWN, which powers off through logind.
+          - path: /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml
+            defer: true
+            content: |
+              <?xml version="1.0" encoding="UTF-8"?>
+              <channel name="xfce4-power-manager" version="1.0">
+                <property name="xfce4-power-manager" type="empty">
+                  <property name="power-button-action" type="uint" value="4"/>
+                </property>
+              </channel>
+          # The golden image is sealed without SSH host keys, and cloud-init no longer
+          # runs in clones, so sshd makes them; ahead of its own `sshd -t`, which fails
+          # without them.
+          - path: /etc/systemd/system/ssh.service.d/alas-host-keys.conf
+            content: |
+              [Service]
+              ExecStartPre=
+              ExecStartPre=/usr/bin/ssh-keygen -A
+              ExecStartPre=/usr/sbin/sshd -t
           - path: \(stagedUnit)
             content: |
               [Unit]
