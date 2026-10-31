@@ -245,7 +245,7 @@ final class WorktreeVMManagerTests {
           arguments: [true, false])
     func stopAsksTheGuestFirst(guestTakesIt: Bool) async throws {
         let machine = FakeMachine(hypervisor: hypervisor, stopFails: false, guestStopError: nil)
-        let vm = RunningVM(worktreeID: "/repo/a#linux", machine: machine)
+        let vm = RunningVM(worktreeID: "linux:/repo/a", machine: machine)
         try await vm.start()
 
         try await vm.stop(requestingShutdown: {
@@ -527,8 +527,8 @@ final class WorktreeVMManagerTests {
         try manager.createVM(worktreeID: "/repo/a")
 
         let records = try registry.snapshot()
-        #expect(Set(records.map(\.id)) == ["/repo/a", "/repo/a#linux"])
-        #expect(records.first { $0.id == "/repo/a#linux" }?.guestOS == .linux)
+        #expect(Set(records.map(\.id)) == ["/repo/a", "linux:/repo/a"])
+        #expect(records.first { $0.id == "linux:/repo/a" }?.guestOS == .linux)
         let bundles = [VMGuestOS.macOS, .linux].map { WorktreeVMManager.bundleURL(forWorktree: "/repo/a", guest: $0, root: root) }
         #expect(Set(bundles).count == 2)
         #expect(bundles.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })

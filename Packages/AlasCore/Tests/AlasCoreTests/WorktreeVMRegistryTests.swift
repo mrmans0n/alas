@@ -88,15 +88,19 @@ import Testing
     @Test func slotsCountMacOSOnly() {
         let records = [
             Self.record("/w/new", age: 10, owner: Self.me), Self.record("/w/old", age: 500, owner: Self.other),
-            Self.record("/w/l#linux", guest: .linux, age: 900, owner: Self.me),
+            Self.record("linux:/w/l", guest: .linux, age: 900, owner: Self.me),
         ]
         #expect(
             VMSlotPolicy.decide(requesting: "/w/c", records: records, me: Self.me)
                 == .needsUserChoice(candidates: ["/w/old", "/w/new"]))
-        #expect(VMSlotPolicy.decide(requesting: "/w/c#linux", records: records, me: Self.me) == .start)
+        #expect(VMSlotPolicy.decide(requesting: "linux:/w/c", records: records, me: Self.me) == .start)
     }
 
-    @Test(arguments: [("/w/a", VMGuestOS.macOS, "/w/a"), ("/w/a", VMGuestOS.linux, "/w/a#linux")])
+    @Test(arguments: [
+        ("/w/a", VMGuestOS.macOS, "/w/a"), ("/w/a", VMGuestOS.linux, "linux:/w/a"),
+        // A worktree path may itself end in what a suffix scheme would read as a guest.
+        ("/w/a#linux", VMGuestOS.macOS, "/w/a#linux"), ("/w/a#linux", VMGuestOS.linux, "linux:/w/a#linux"),
+    ])
     func recordIDsRoundTrip(worktree: String, guest: VMGuestOS, id: String) {
         #expect(VMIdentity.recordID(worktree: worktree, guest: guest) == id)
         let parsed = VMIdentity.parse(recordID: id)
@@ -112,7 +116,7 @@ import Testing
         defer { try? FileManager.default.removeItem(at: dir) }
         let file = dir.appendingPathComponent("registry.json")
         // A stale stub from an earlier sync must go when the set no longer calls for it.
-        try registry.update { $0 = [Self.record("/w/a#linux", guest: .linux)] }
+        try registry.update { $0 = [Self.record("linux:/w/a", guest: .linux)] }
         try registry.syncLinuxAlias(worktree: "/w/a")
         try registry.update(syncingLinuxAliasFor: "/w/a") { records in
             records = guests.map { Self.record(VMIdentity.recordID(worktree: "/w/a", guest: $0), guest: $0) }
