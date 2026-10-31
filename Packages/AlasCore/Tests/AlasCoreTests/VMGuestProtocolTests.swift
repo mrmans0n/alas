@@ -38,4 +38,17 @@ struct VMGuestProtocolTests {
         let message = try JSONDecoder().decode(VMGuestMessage.self, from: json)
         #expect(message == .helloReply(guestVersion: "1.0", protocolRevision: 0, accessibility: true, screenRecording: true))
     }
+
+    @Test func helloReplyCarriesGuestKindAdditively() throws {
+        let macOS = VMGuestMessage.helloReply(
+            guestVersion: "1.0", protocolRevision: 1, accessibility: true, screenRecording: true)
+        let encoded = try #require(String(data: JSONEncoder().encode(macOS), encoding: .utf8))
+        #expect(!encoded.contains("guestKind"))
+        #expect(!encoded.contains("capabilities"))
+
+        let linux = VMGuestMessage.helloReply(
+            guestVersion: "0.1", protocolRevision: 1, accessibility: false, screenRecording: false,
+            guestKind: "linux", capabilities: ["run"])
+        #expect(try JSONDecoder().decode(VMGuestMessage.self, from: JSONEncoder().encode(linux)) == linux)
+    }
 }

@@ -3,6 +3,7 @@ import Foundation
 
 public enum VMGuestOS: String, Codable, Sendable {
     case macOS
+    case linux
 }
 
 /// The process currently running a VM. Identified by pid plus process start
@@ -49,7 +50,7 @@ public struct VMRunOwner: Codable, Equatable, Sendable {
 }
 
 public struct WorktreeVMRecord: Codable, Equatable, Sendable, Identifiable {
-    /// Worktree id.
+    /// `VMIdentity.recordID(worktree:guest:)`: the worktree id for a macOS VM.
     public var id: String
     public var guestOS: VMGuestOS
     public var goldenBuild: String

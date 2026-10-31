@@ -20,6 +20,31 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
     }
 
     public func update<T>(_ body: (inout [WorktreeVMRecord]) throws -> T) throws -> T {
+        try withLock { records, _ in try body(&records) }
+    }
+
+    /// Keeps a stub record with `worktree`'s plain id while it has a Linux VM and no macOS VM, so
+    /// builds that predate Linux guests (and see neither id they know) still count it as having a
+    /// VM. The stub's guest OS no build decodes, so every build preserves it verbatim.
+    public func syncLinuxAlias(worktree: String) throws {
+        try withLock { records, foreign in
+            foreign.removeAll { element in
+                guard let object = element as? [String: Any] else { return false }
+                return object["id"] as? String == worktree
+                    && object["guestOS"] as? String == VMIdentity.aliasGuestRaw
+            }
+            let ids = Set(records.map(\.id))
+            guard ids.contains(VMIdentity.recordID(worktree: worktree, guest: .linux)),
+                !ids.contains(VMIdentity.recordID(worktree: worktree, guest: .macOS))
+            else { return }
+            foreign.append([
+                "id": worktree, "guestOS": VMIdentity.aliasGuestRaw, "goldenBuild": "", "bundlePath": "",
+                "createdAt": 0, "lastUsedAt": 0,
+            ] as [String: Any])
+        }
+    }
+
+    private func withLock<T>(_ body: (inout [WorktreeVMRecord], inout [Any]) throws -> T) throws -> T {
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let fd = open(lockURL.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
@@ -32,12 +57,11 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         while flock(fd, LOCK_EX) != 0 {
             guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         }
-        let (known, foreign) = try load()
-        var records = known
+        var (records, foreign) = try load()
         for index in records.indices {
             if let owner = records[index].runOwner, !isAlive(owner) { records[index].runOwner = nil }
         }
-        let result = try body(&records)
+        let result = try body(&records, &foreign)
         try write(records, foreign: foreign)
         return result
     }

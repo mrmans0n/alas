@@ -380,7 +380,7 @@ actor VMGuestClient {
 
     private func deliver(_ message: VMGuestMessage, on connection: Connection) {
         switch message {
-        case let .helloReply(guestVersion, protocolRevision, accessibility, screenRecording):
+        case let .helloReply(guestVersion, protocolRevision, accessibility, screenRecording, _, _):
             let hello = VMGuestHello(
                 guestVersion: guestVersion, accessibility: accessibility, screenRecording: screenRecording,
                 protocolRevision: protocolRevision)

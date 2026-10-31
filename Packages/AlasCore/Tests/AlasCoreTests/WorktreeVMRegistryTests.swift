@@ -6,9 +6,11 @@ import Testing
     private static let me = VMRunOwner(pid: 100, processStart: Date(timeIntervalSince1970: 1_000), label: "Alas")
     private static let other = VMRunOwner(pid: 200, processStart: Date(timeIntervalSince1970: 2_000), label: "Alas Dev")
 
-    private static func record(_ id: String, age: TimeInterval = 0, owner: VMRunOwner? = nil) -> WorktreeVMRecord {
+    private static func record(
+        _ id: String, guest: VMGuestOS = .macOS, age: TimeInterval = 0, owner: VMRunOwner? = nil
+    ) -> WorktreeVMRecord {
         WorktreeVMRecord(
-            id: id, goldenBuild: "b1", bundlePath: "/vms/\(id)",
+            id: id, guestOS: guest, goldenBuild: "b1", bundlePath: "/vms/\(id)",
             createdAt: Date(timeIntervalSince1970: 0), lastUsedAt: Date(timeIntervalSince1970: 10_000 - age),
             runOwner: owner)
     }
@@ -83,6 +85,54 @@ import Testing
         #expect(VMSlotPolicy.decide(requesting: "x", records: scenario.records, me: Self.me) == scenario.expected)
     }
 
+    @Test func slotsCountMacOSOnly() {
+        let records = [
+            Self.record("/w/new", age: 10, owner: Self.me), Self.record("/w/old", age: 500, owner: Self.other),
+            Self.record("/w/l#linux", guest: .linux, age: 900, owner: Self.me),
+        ]
+        #expect(
+            VMSlotPolicy.decide(requesting: "/w/c", records: records, me: Self.me)
+                == .needsUserChoice(candidates: ["/w/old", "/w/new"]))
+        #expect(VMSlotPolicy.decide(requesting: "/w/c#linux", records: records, me: Self.me) == .start)
+    }
+
+    @Test(arguments: [("/w/a", VMGuestOS.macOS, "/w/a"), ("/w/a", VMGuestOS.linux, "/w/a#linux")])
+    func recordIDsRoundTrip(worktree: String, guest: VMGuestOS, id: String) {
+        #expect(VMIdentity.recordID(worktree: worktree, guest: guest) == id)
+        let parsed = VMIdentity.parse(recordID: id)
+        #expect(parsed.worktree == worktree)
+        #expect(parsed.guest == guest)
+    }
+
+    @Test(arguments: [
+        ([VMGuestOS.linux], true), ([.linux, .macOS], false), ([.macOS], false), ([], false),
+    ])
+    func linuxAliasTracksTheVMSet(guests: [VMGuestOS], stubExpected: Bool) throws {
+        let (registry, dir) = tempRegistry()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("registry.json")
+        // A stale stub from an earlier sync must go when the set no longer calls for it.
+        try registry.update { $0 = [Self.record("/w/a#linux", guest: .linux)] }
+        try registry.syncLinuxAlias(worktree: "/w/a")
+        try registry.update { records in
+            records = guests.map { Self.record(VMIdentity.recordID(worktree: "/w/a", guest: $0), guest: $0) }
+        }
+        try registry.syncLinuxAlias(worktree: "/w/a")
+        try registry.syncLinuxAlias(worktree: "/w/a")
+
+        let elements = try #require(
+            JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [[String: Any]])
+        let stubs = elements.filter { $0["guestOS"] as? String == VMIdentity.aliasGuestRaw }
+        #expect(stubs.count == (stubExpected ? 1 : 0))
+        #expect(stubs.allSatisfy { $0["id"] as? String == "/w/a" })
+        // Builds that predate Linux guests cannot decode the stub either, so they keep it as a
+        // foreign record and still see that the worktree has a VM.
+        #expect(VMGuestOS(rawValue: VMIdentity.aliasGuestRaw) == nil)
+        #expect(try registry.snapshot().map(\.guestOS).sorted { $0.rawValue < $1.rawValue }
+            == guests.sorted { $0.rawValue < $1.rawValue })
+        #expect(try registry.recordIDs().contains("/w/a") == !guests.isEmpty)
+    }
+
     @Test func concurrentUpdatesDoNotLoseWrites() async throws {
         let (first, dir) = tempRegistry()
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -104,7 +154,7 @@ import Testing
         let file = dir.appendingPathComponent("registry.json")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let newer = """
-            [{"id":"L","guestOS":"linux","goldenBuild":"x","bundlePath":"/l","createdAt":0,"lastUsedAt":0}]
+            [{"id":"L","guestOS":"plan9","goldenBuild":"x","bundlePath":"/l","createdAt":0,"lastUsedAt":0}]
             """
         try Data(newer.utf8).write(to: file)
         #expect(try registry.recordIDs() == ["L"])
@@ -112,7 +162,7 @@ import Testing
         try registry.update { $0.append(Self.record("A")) }
         #expect(try registry.snapshot().map(\.id) == ["A"])
         let kept = try String(contentsOf: file, encoding: .utf8)
-        #expect(kept.contains("\"linux\""))
+        #expect(kept.contains("\"plan9\""))
 
         try Data("not json {".utf8).write(to: file)
         #expect(try registry.snapshot().isEmpty)
