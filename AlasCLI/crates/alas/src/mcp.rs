@@ -833,7 +833,7 @@ fn computer_tools_without_vm() -> Vec<Value> {
 
 fn vm_tool_definitions() -> Vec<Value> {
     with_vm_argument(
-        "Which of this worktree's VMs to use, needed when it has a macOS and a Linux VM. Default: its only VM.",
+        "Which of this worktree's VMs to use. Default: its only VM. vm_run needs it when the worktree has a macOS and a Linux VM; vm_status then lists both.",
         vm_tools_without_vm(),
     )
 }
@@ -855,7 +855,7 @@ fn vm_tools_without_vm() -> Vec<Value> {
         }),
         json!({
             "name": "vm_status",
-            "description": "Report whether this worktree has a VM, whether it is running, its guest helper's version and permissions (or helper_error when it doesn't answer), and the transfer folder: copy a build to transfer_host_path on the Mac and it appears at transfer_guest_path in the VM.",
+            "description": "Report whether this worktree has a VM, whether it is running, its guest helper's version and permissions (capabilities in a Linux VM), or helper_error when it doesn't answer, and the transfer folder: copy a build to transfer_host_path on the Mac and it appears at transfer_guest_path in the VM. When the worktree has a macOS and a Linux VM and vm is omitted, returns {\"vms\": [...]} with one such status per VM, each naming its vm.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": { "type": "object", "properties": {} }
         }),
