@@ -14,6 +14,25 @@ public enum HunkPatchBuilder: Sendable {
     /// file.
     public static let defaultUntrackedMode = "100644"
 
+    /// Map a worktree file to the git mode string used in a `new file mode`
+    /// patch header. Symlinks → "120000", executable regular files → "100755",
+    /// everything else → "100644". Falls back to "100644" when the file isn't
+    /// readable (caller probably already errored out elsewhere).
+    public static func fileMode(at url: URL) -> String {
+        do {
+            let attrs = try FileManager.default.attributesOfItem(atPath: url.path)
+            if let type = attrs[.type] as? FileAttributeType, type == .typeSymbolicLink {
+                return "120000"
+            }
+            if let perms = attrs[.posixPermissions] as? NSNumber, perms.uintValue & 0o111 != 0 {
+                return "100755"
+            }
+        } catch {
+            // Fall through to default.
+        }
+        return defaultUntrackedMode
+    }
+
     public static func patch(
         file: String,
         hunk: ParsedDiff.Hunk,
@@ -99,5 +118,13 @@ public enum HunkPatchBuilder: Sendable {
             if byte >= 0x80 { return true } // non-ASCII → git quotes by default
         }
         return false
+    }
+}
+
+extension ParsedDiff.Hunk {
+    /// Whether this hunk empties its file from line 0: a deletion, which a
+    /// one-hunk patch cannot stage or unstage.
+    public var deletesWholeFile: Bool {
+        newStart == 0 && !lines.contains { $0.kind == .add }
     }
 }

@@ -328,6 +328,28 @@ struct NativePeerWorkspaceTests {
             before: before, after: after, kind: kind, oldPath: kind == .renamed ? renameFrom : nil))
     }
 
+    /// A host offers hunk actions on its staged and unstaged diffs only:
+    /// unstage on the staged one; stage, and discard unless the file is added,
+    /// on the unstaged one. A deletion and a cut-off diff's last hunk are never offered.
+    @Test(arguments: [
+        (NativePeerWorkspace.Document.diff(path: "a", stage: .unstaged), 3, 3, 0, false, [HostHunkAction.stage, .discard]),
+        (.diff(path: "a", stage: .unstaged), 0, 1, 0, false, [.stage]),
+        (.diff(path: "a", stage: .unstaged), 1, 0, 0, false, []),
+        (.diff(path: "a", stage: .staged), 1, 0, 0, false, []),
+        (.diff(path: "a", stage: .staged), 3, 3, 0, false, [.unstage]),
+        (.diff(path: "a", stage: .staged), 3, 3, 1, true, []),
+        (.diff(path: "a", stage: .unstaged), 3, 3, 0, true, [.stage, .discard]),
+        (.diff(path: "a", stage: nil), 3, 3, 0, false, []),
+        (.commitDiff(path: "a", sha: "abc"), 3, 3, 0, false, []),
+    ])
+    func hunkActionsFitTheDiff(
+        document: NativePeerWorkspace.Document, oldStart: Int, newStart: Int, index: Int, truncated: Bool,
+        expected: [HostHunkAction]
+    ) {
+        let hunk = ParsedDiff.Hunk(header: "@@", oldStart: oldStart, newStart: newStart, lines: [])
+        #expect(document.hunkActions(for: hunk, index: index, of: 2, truncated: truncated) == expected)
+    }
+
     enum Kind: Sendable, CaseIterable { case localChanges, commit, commitRange, branch, reviewRequest }
 
     /// A comment the host files, an agent's or a Mac's, lands on the file and

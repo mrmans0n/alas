@@ -221,6 +221,11 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     /// state each saved first; the one change a pending recovery lets through
     /// (`host.worktrees.checkpointRecovery.v1`).
     case recoverCheckpointRestore
+    /// Stage, unstage or discard the `index`th hunk of `path`'s `stage` diff
+    /// as the Mac was shown it, with `header` and `RemoteDiffHunk.linesHash`
+    /// `linesHash` (`host.worktrees.hunks.v1`). Unstage takes the staged diff,
+    /// stage and discard the unstaged one.
+    case hunk(path: String, stage: ChangeStage, index: Int, header: String, linesHash: String, action: HostHunkAction)
 
     /// The capability beyond host.worktrees.git.v1 a change needs; nil for the original seven.
     public var capability: String? {
@@ -234,6 +239,7 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
         case .merge, .rebase: HostProtocolCapability.worktreesIntegrateV1
         case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint: HostProtocolCapability.worktreesCheckpointsV1
         case .recoverCheckpointRestore: HostProtocolCapability.worktreesCheckpointRecoveryV1
+        case .hunk: HostProtocolCapability.worktreesHunksV1
         }
     }
 
@@ -244,6 +250,11 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
         default: false
         }
     }
+}
+
+/// What `HostWorktreeChange.hunk` does with its hunk.
+public enum HostHunkAction: String, Codable, Sendable {
+    case stage, unstage, discard
 }
 
 /// One edit of a commit, as a paired Mac asks it.

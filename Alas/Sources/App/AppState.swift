@@ -344,7 +344,8 @@ final class AppState {
         seal: { [weak vmManager] bundle in
             guard let vmManager else { throw WorktreeVMManager.VMError(message: "Alas is shutting down") }
             try vmManager.sealGolden(bundle)
-        })
+        },
+        provisioner: GoldenProvisioner.live(manager: vmManager))
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
@@ -1889,6 +1890,10 @@ final class AppState {
         let cleanupProjects = projectsFile.projects
         Task.detached(priority: .utility) {
             WorktreeTrashCleaner.sweep(projects: cleanupProjects)
+        }
+        // A guest disk left attached by a crash mid-patch would hold the VM bundle.
+        Task.detached(priority: .utility) {
+            VMDiskSession.detachStaleSessions(under: Paths.vmsRoot)
         }
 
         // Kick off a background resolution of the user's login-shell PATH so

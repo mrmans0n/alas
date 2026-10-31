@@ -401,6 +401,26 @@ struct RootView: View {
         }
     }
 
+    /// Applies a hunk action to `document`'s diff on its host, then reloads
+    /// the workspace; nil unless the host serves hunks and this is a staged or unstaged diff.
+    private func peerHunkApplier(
+        _ document: NativePeerWorkspace.Document, client: NativePeerSessions
+    ) -> (@MainActor (HostHunkAction, Int, ParsedDiff.Hunk) async -> String?)? {
+        guard case .diff(let path, let stage?) = document, let target = client.hostGitTarget, let hosts = client.hosts,
+              hosts.servesHunks(serverId: target.serverId)
+        else { return nil }
+        return { action, index, hunk in
+            // The header and hash of the hunk as the host sent it.
+            let change = HostWorktreeChange.hunk(
+                path: path, stage: stage, index: index, header: hunk.header,
+                linesHash: RemoteDiffHunk(hunk).linesHash, action: action
+            )
+            let error = await hosts.mutate(change, in: target.worktree, serverId: target.serverId)
+            client.reloadWorkspace()
+            return error
+        }
+    }
+
     /// The selected peer tab's content. A peer review or document opens over it.
     @ViewBuilder
     private func peerCenterContent(_ client: NativePeerSessions) -> some View {
@@ -471,6 +491,7 @@ struct RootView: View {
                 codeFontFamily: state.config.code.fontFamily,
                 codeFontSize: CGFloat(state.config.code.fontSize),
                 readOnlyNote: client.hostFileReadOnlyNote,
+                applyHunk: peerHunkApplier(document, client: client),
                 onClose: { client.closeDocument() }
             )
             .id(document)
