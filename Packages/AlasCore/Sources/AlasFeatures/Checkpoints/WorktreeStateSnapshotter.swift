@@ -90,6 +90,9 @@ public struct WorktreeStateSnapshotter: Sendable {
     public static let defaultRetainedPayloadByteLimit: Int64 = 100 * 1024 * 1024
     /// A leaf changed this close before a snapshot started may have changed
     /// again within the timestamp granularity, so a verifying pass re-reads it.
+    /// Same limits as git's racy check: writers through mmap whose timestamps
+    /// lag the write, and network file systems with coarse timestamps or a
+    /// server clock more than this behind can still hide a change.
     public static let racyWindow: TimeInterval = 2
     public let git: any CheckpointGitRunning
     public let fileSystem: any CheckpointFileSystem

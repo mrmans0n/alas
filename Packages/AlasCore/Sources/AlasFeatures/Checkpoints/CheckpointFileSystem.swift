@@ -147,7 +147,11 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
     public func regularFileReference(root: URL, relativePath: String) throws -> CheckpointBlobReference {
         let leaf = try validateRelativePath(relativePath, under: root)
         let descriptor = Darwin.open(leaf.path, O_RDONLY | O_NOFOLLOW)
-        guard descriptor >= 0 else { throw posixError("open") }
+        guard descriptor >= 0 else {
+            // Swapped for a symlink since the caller's lstat: retry the capture.
+            if errno == ELOOP { throw CheckpointSnapshotError.stateChanged }
+            throw posixError("open")
+        }
         defer { _ = Darwin.close(descriptor) }
         var attributes = stat()
         guard Darwin.fstat(descriptor, &attributes) == 0 else { throw posixError("fstat") }
@@ -155,7 +159,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
 
         var hasher = SHA256()
         var byteCount: Int64 = 0
-        var buffer = [UInt8](repeating: 0, count: 1024 * 1024)
+        var buffer = [UInt8](repeating: 0, count: Int(min(1024 * 1024, max(attributes.st_size, 1))))
         while true {
             let count = Darwin.read(descriptor, &buffer, buffer.count)
             if count == 0 { break }
