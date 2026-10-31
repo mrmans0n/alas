@@ -117,10 +117,12 @@ plain HTTP, and Bonjour discovery stays off, so clients enter the address. A
 command-line program can serve the LAN without macOS's local network permission:
 accepting incoming TCP connections does not need it (Apple TN3179).
 
-The host prints its address:
+The host prints its addresses: loopback and, when it listens beyond loopback,
+the addresses a pairing link offers, one per line:
 
 ```
 remote http://127.0.0.1:8765
+remote http://192.168.1.20:8765
 ```
 
 Other ways to reach a loopback host:

@@ -360,11 +360,15 @@ if let listen = config.hostRemoteListen {
         protocolServer.remotePairing = port == nil ? nil : pairing
         guard let port, port != servedPort else { return }
         servedPort = port
-        print("remote http://127.0.0.1:\(port)")
-        fflush(stdout)
         tailscaleServe?.stop()
         tailscaleServe = nil
         tailnetHTTPSHost = nil
+        print("remote http://127.0.0.1:\(port)")
+        // A host listening beyond loopback is reached at the addresses a pairing link offers.
+        for address in advertisedAddresses(port: port) where address.kind != .localhost {
+            print("remote \(address.url)")
+        }
+        fflush(stdout)
         Task { @MainActor in
             // The proxy's requests name the tailnet host, which the policy
             // must allow; a status that cannot be read leaves loopback only.
