@@ -204,7 +204,8 @@ struct ACPSubagentProtocolTests {
     ])
     func revisedDirectoryPatches(members: String, cwd: String?, clearsCwd: Bool, dirs: [String], replacesDirs: Bool) throws {
         let updates = try Self.frame(#"{"sessionId":"root","update":{"sessionUpdate":"subagent_update","sessionId":"agent_n",\#(members)}}"#)
-        guard case .subagentSpawned(let spawn) = updates.first?.update else { Issue.record("expected a spawn"); return }
+        guard case .subagentSpawned(let spawn) = updates.first?.update else { Issue.record("expected a spawn")
+        return }
         #expect(spawn.cwd == cwd)
         #expect(spawn.clearsCwd == clearsCwd)
         #expect(spawn.additionalDirectories == dirs)

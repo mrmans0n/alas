@@ -2485,7 +2485,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .sessionConfigOptionsUpdate(let options):
             guard let run = subagents[subagentSessionId] else { return [] }
             run.observe(config: options, live: live)
-            return refreshSubagentRow(for: run, at: timestamp)
+            return persistableSubagentRow(for: run, at: timestamp)
         default:
             return []
         }
@@ -2585,8 +2585,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
         }
         delegationLinks[link.messageId] = merged
         var dirty: Set<Int> = []
-        for run in announcedChildren(of: merged) where run.record(merged) {
-            dirty.formUnion(refreshSubagentRow(for: run, at: timestamp))
+        for run in announcedChildren(of: merged) {
+            run.record(merged)
+            dirty.formUnion(persistableSubagentRow(for: run, at: timestamp))
         }
         return dirty
     }
@@ -2714,6 +2715,17 @@ public final class ACPSession: ChangeTracking, Identifiable {
             cwd: run.cwd,
             additionalDirectories: run.additionalDirectories,
             links: run.delegationLinks)
+    }
+
+    /// The child's parent row, refreshed, for a fact the adapter reported
+    /// about the child. Returned even when the fact changed nothing: a
+    /// durable replay re-delivers an update whose earlier row write failed,
+    /// and the row must be written again before that update is acknowledged.
+    private func persistableSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {
+        let refreshed = refreshSubagentRow(for: run, at: timestamp)
+        guard refreshed.isEmpty else { return refreshed }
+        let toolCallId = ACPSubagentRowDescriptor.toolCallId(subagentSessionId: run.subagentSessionId)
+        return transcript.toolCallIndex(toolCallId: toolCallId).map { [$0] } ?? []
     }
 
     private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {

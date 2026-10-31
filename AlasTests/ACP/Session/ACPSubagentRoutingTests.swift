@@ -637,7 +637,7 @@ struct ACPSubagentRoutingTests {
         #expect(runner.session.subagentRun("grandchild")?.state == .completed)
     }
 
-    @Test("a child update's parent-row write gates its acknowledgement; a replayed config stays history")
+    @Test("a child update's parent-row write gates its acknowledgement, also on redelivery; a replayed config stays history")
     func childFactsGateTheAcknowledgement() async throws {
         let (runner, store, _) = try makeRunner()
         feed(runner, Self.revisedAnnounce)
@@ -664,6 +664,22 @@ struct ACPSubagentRoutingTests {
         try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
         #expect(try store.loadSubagentMessages(sessionId: "s").count == 1)
         #expect(failed.value == false)
+
+        // The durable replay of that launch changes nothing in memory, yet
+        // its parent row must be written before it is acknowledged.
+        let redelivered = Acknowledged()
+        for update in launch.updates {
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: update.sessionId, update: update.update,
+                durableConsumptionAcknowledgement: { redelivered.value = true }))
+        }
+        await runner.flushPersistence()
+        #expect(redelivered.value)
+        let storedLinks = try store.loadMessages(sessionId: "s").compactMap {
+            (try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: $0.payload))
+                .flatMap(ACPSubagentRowDescriptor.init(toolCall:))
+        }.first { $0.subagentSessionId == "agent_n" }?.links.map(\.messageId)
+        #expect(storedLinks == ["toolu_launch"])
 
         runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
         let acknowledged = Acknowledged()

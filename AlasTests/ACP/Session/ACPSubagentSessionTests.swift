@@ -1116,9 +1116,15 @@ struct ACPSubagentSessionTests {
                                 senderMessageId: "toolu_1"))), subagentSessionId: "c1", live: true)
         }
         switch order {
-        case .outgoingFirst: _ = announce(); _ = outgoing(); _ = incoming()
-        case .incomingFirst: _ = announce(); _ = incoming(); _ = outgoing()
-        case .outgoingBeforeAnnounce: _ = outgoing(); _ = announce(); _ = incoming()
+        case .outgoingFirst: _ = announce()
+        _ = outgoing()
+        _ = incoming()
+        case .incomingFirst: _ = announce()
+        _ = incoming()
+        _ = outgoing()
+        case .outgoingBeforeAnnounce: _ = outgoing()
+        _ = announce()
+        _ = incoming()
         }
 
         let expected = ACPDelegationLink(messageId: "toolu_1", senderSessionId: "root", recipientSessionId: "c1",
