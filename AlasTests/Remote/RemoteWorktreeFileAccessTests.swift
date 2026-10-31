@@ -36,6 +36,21 @@ struct RemoteWorktreeFileAccessTests {
         #expect(resolved?.lastPathComponent == "a.txt")
     }
 
+    /// The temporary root sits under a symlinked `/var`: a path that doesn't exist yet resolves the
+    /// same way as one that does, and still can't escape through a symlinked directory.
+    @Test func resolvesAMissingPathUnderASymlinkedRoot() throws {
+        let root = try makeRoot()
+        let outside = try makeRoot()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("escape"), withDestinationURL: outside)
+
+        #expect(RemoteWorktreeFileAccess.resolve(path: "new/b.txt", in: root)?.lastPathComponent == "b.txt")
+        #expect(RemoteWorktreeFileAccess.resolve(path: "escape/new.txt", in: root) == nil)
+    }
+
     @Test func rejectsTraversalAbsoluteAndEmptyPaths() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
