@@ -38,6 +38,9 @@ struct NativePeerRightPaneView: View {
     @State private var pendingCommitAction: (kind: HostOperationKind, commit: RemoteCommit)?
     /// The git target's checkpoints, as the host lists them; nil while it serves none.
     @State private var checkpoints: CheckpointCatalogSnapshot?
+    /// Whether a restore on the host was interrupted, and the last Recover's error.
+    @State private var checkpointRestoreInterrupted = false
+    @State private var checkpointRecoveryError: String?
     @State private var checkpointsExpanded = true
     /// Each expanded checkpoint's manifest, and the page of its files shown, by id.
     @State private var checkpointManifests: [CheckpointID: NativePeerWorkspace.Load<WorktreeCheckpointManifest>] = [:]
@@ -125,6 +128,8 @@ struct NativePeerRightPaneView: View {
             stashes = nil
             stashFiles = [:]
             checkpoints = nil
+            checkpointRestoreInterrupted = false
+            checkpointRecoveryError = nil
             checkpointManifests = [:]
             checkpointPages = [:]
             creatingCheckpoint = false
@@ -361,7 +366,7 @@ struct NativePeerRightPaneView: View {
                 if let gitTarget, reviewsKey != nil {
                     reviewsSection(gitTarget)
                 }
-                if let gitTarget, let catalog = checkpoints, !catalog.summaries.isEmpty {
+                if let gitTarget, let catalog = checkpoints, !catalog.summaries.isEmpty || checkpointRestoreInterrupted {
                     checkpointsSection(gitTarget, catalog: catalog)
                 }
                 if let gitTarget, reviewLoop.snapshot != nil {
@@ -837,6 +842,13 @@ struct NativePeerRightPaneView: View {
             .disabled(checkpointInFlight)
             .accessibilityLabel("Create checkpoint")
         }
+        // Outside the fold, as the local one is.
+        if checkpointRestoreInterrupted {
+            CheckpointRecoveryCard(
+                journal: nil, inFlight: checkpointInFlight, error: checkpointRecoveryError, status: nil,
+                onRecover: { Task { await recoverCheckpointRestore(on: target) } }
+            )
+        }
         if checkpointsExpanded {
             // Bounded, as the reviews are.
             ScrollView {
@@ -864,8 +876,8 @@ struct NativePeerRightPaneView: View {
             manifest: manifest,
             manifestLoading: load == .loading,
             manifestError: manifestError,
-            mutationsDisabled: checkpointInFlight,
-            blockedReason: nil,
+            mutationsDisabled: checkpointInFlight || checkpointRestoreInterrupted,
+            blockedReason: checkpointRestoreInterrupted ? "Recover the interrupted restore first." : nil,
             fileListPageIndex: page,
             onToggle: { toggleCheckpoint(checkpoint.id, on: target) },
             onPreviousFilePage: { checkpointPages[checkpoint.id] = max(0, page - 1) },
@@ -893,17 +905,20 @@ struct NativePeerRightPaneView: View {
         let generation = checkpointReadGeneration
         guard checkpointsKey != nil, let gitTarget, let hosts = client.hosts else {
             checkpoints = nil
+            checkpointRestoreInterrupted = false
             checkpointManifests = [:]
             checkpointPages = [:]
             return
         }
         let key = gitTargetKey
-        let listed = await hosts.checkpoints(in: gitTarget.worktree, serverId: gitTarget.serverId)
-        guard !Task.isCancelled, generation == checkpointReadGeneration, gitTargetKey == key, let listed else { return }
+        let read = await hosts.checkpoints(in: gitTarget.worktree, serverId: gitTarget.serverId)
+        guard !Task.isCancelled, generation == checkpointReadGeneration, gitTargetKey == key, let read else { return }
+        let listed = read.catalog
         let ids = Set(listed.summaries.map(\.id))
         checkpointManifests = checkpointManifests.filter { ids.contains($0.key) }
         checkpointPages = checkpointPages.filter { ids.contains($0.key) }
         checkpoints = listed
+        checkpointRestoreInterrupted = read.interruptedRestore
         if case .checkpointDiff(_, let shown)? = client.workspace.document, !ids.contains(shown) {
             client.closeDocument()
         }
@@ -1022,6 +1037,25 @@ struct NativePeerRightPaneView: View {
         checkpointRestoreError = error
         if error == nil { checkpointRestorePreview = nil }
         return error == nil
+    }
+
+    /// Recovers the host's interrupted restore, as the local Recover does, then lists the checkpoints again.
+    private func recoverCheckpointRestore(on target: (serverId: String, worktree: PeerHostWorktree)) async {
+        guard let hosts = client.hosts, !checkpointInFlight else { return }
+        // Recovery rolls files back on the host, as a restore does: never under unsaved host edits.
+        let unsaved = client.unsavedHostFilePaths(serverId: target.serverId, worktreeID: target.worktree.snapshot.worktree.id)
+        if let refusal = NativePeerSessions.restoreRefusal(unsavedPaths: unsaved) {
+            checkpointRecoveryError = refusal
+            return
+        }
+        checkpointInFlight = true
+        let key = gitTargetKey
+        let error = await hosts.mutate(.recoverCheckpointRestore, in: target.worktree, serverId: target.serverId)
+        checkpointInFlight = false
+        guard gitTargetKey == key else { return }
+        checkpointRecoveryError = error
+        client.reloadWorkspace()
+        await readCheckpoints()
     }
 
     /// Runs a checkpoint `change`, then lists the checkpoints again.

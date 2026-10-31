@@ -1578,6 +1578,9 @@ public enum HostProtocolCapability: Sendable {
     /// `checkpointDiff`, `checkpointRestorePreview` and the checkpoint changes
     /// of `mutateWorktree`. Only a headless host.
     public static let worktreesCheckpointsV1 = "host.worktrees.checkpoints.v1"
+    /// Hosts that report an interrupted checkpoint restore in `listCheckpoints`
+    /// and serve the `recoverCheckpointRestore` change. Only a headless host.
+    public static let worktreesCheckpointRecoveryV1 = "host.worktrees.checkpointRecovery.v1"
     /// Hosts that serve `writeFile`, `createFolder`, `followFile` and `unfollowFile`, and send the
     /// `fileChanged` event. Only a headless host.
     public static let worktreesFilesV1 = "host.worktrees.files.v1"
@@ -1595,7 +1598,8 @@ public enum HostProtocolCapability: Sendable {
     ]
     /// What only a headless host serves.
     public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1,
-                                       worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1]
+                                       worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1,
+                                       worktreesCheckpointRecoveryV1]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

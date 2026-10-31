@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @_spi(Testing) @testable import AlasCore
 @_spi(Testing) @_spi(AppHost) @testable import AlasHostCore
@@ -799,7 +800,7 @@ struct HostProtocolServerTests {
             change = .commit(subject: "Empty", body: "", amend: false)
             expected = .failed(message: "Nothing is staged to commit.")
         case .pendingCheckpoint:
-            expected = .failed(message: "A checkpoint restore is pending on the host; finish it there first.")
+            expected = .failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")
         case .appHost:
             expected = .invalidRequest(reason: "This host does not serve git actions.")
             guard case .capabilities(let capabilities) = try await fixture.request(.capabilities) else {
@@ -1349,7 +1350,7 @@ struct HostProtocolServerTests {
             fixture.core.checkpointRestoreHolds[UUID()] = [SessionOwnerID.worktree(id).storageKey]
             expected = .failed(message: "A checkpoint restore is running on the host; save again once it finishes.")
         case .pendingRecovery:
-            expected = .failed(message: "A checkpoint restore is pending on the host; finish it there first.")
+            expected = .failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")
         case .overCap:
             text = String(repeating: "a", count: RemoteWorktreeFileAccess.maxFileBytes + 1)
             expected = .invalidRequest(reason: "The host edits files up to 512 KB.")
@@ -1611,7 +1612,7 @@ struct HostProtocolServerTests {
 
         let manifest = try await fixture.checkpoint("  Before  ", in: ref)
         #expect(manifest.label == "Before")
-        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+        guard case .checkpoints(let catalog, _) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
             Issue.record("expected checkpoints")
             return
         }
@@ -1626,7 +1627,7 @@ struct HostProtocolServerTests {
         #expect(try await fixture.request(.mutateWorktree(
             worktree: ref, branch: "main", change: .deleteCheckpoint(id: manifest.id)
         )) == .done)
-        guard case .checkpoints(let after) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+        guard case .checkpoints(let after, _) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
             Issue.record("expected checkpoints")
             return
         }
@@ -1666,11 +1667,54 @@ struct HostProtocolServerTests {
             id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: preview.currentFingerprint
         ))) == .done)
         #expect(try String(contentsOf: file, encoding: .utf8) == "one\n")
-        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+        guard case .checkpoints(let catalog, _) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
             Issue.record("expected checkpoints")
             return
         }
         #expect(catalog.summaries.contains { $0.kind == .recovery && $0.label == "Before checkpoint restore" })
+    }
+
+    /// A restore that died midway, its rollback too, blocks git on the host
+    /// until a Mac recovers it, back to the state before the restore.
+    @Test func aMacRecoversAnInterruptedHostRestore() async throws {
+        let interrupting = Mutex(true)
+        let fixture = try await RepoFixture(restoreFaults: CheckpointRestoreFaultInjector { point in
+            guard interrupting.withLock({ $0 }) else { return }
+            if point == .beforeIndexInstall { throw HostError.failed(message: "interrupted") }
+            if case .duringRollback = point { throw HostError.failed(message: "interrupted") }
+        })
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let file = repo.appendingPathComponent("a.txt")
+        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        let manifest = try await fixture.checkpoint("Before", in: ref)
+        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+        let preview = try await fixture.restorePreview(manifest.id, in: ref)
+        guard case .failure = try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
+            id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: preview.currentFingerprint
+        ))) else {
+            Issue.record("expected the restore to fail")
+            return
+        }
+        interrupting.withLock { $0 = false }
+        let stage = HostRequest.mutateWorktree(worktree: ref, branch: "main", change: .stage(paths: ["a.txt"]))
+
+        guard case .checkpoints(_, let interrupted) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(interrupted == true)
+        #expect(try await fixture.request(stage)
+            == .failure(error: .failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")))
+
+        #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .recoverCheckpointRestore)) == .done)
+        #expect(try String(contentsOf: file, encoding: .utf8) == "two\n")
+        guard case .checkpoints(_, let after) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(after == false)
+        #expect(try await fixture.request(stage) == .done)
     }
 
     /// A restore keeps new sessions out of its worktree from the moment it
@@ -1812,7 +1856,7 @@ struct HostProtocolServerTests {
         #expect(try await fixture.request(.checkpointDiff(worktree: ref, id: other.id, path: "a.txt")) == unknown)
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .deleteCheckpoint(id: other.id)))
             == unknown)
-        guard case .checkpoints(let catalog) = try await fixture.request(.listCheckpoints(worktree: otherRef)) else {
+        guard case .checkpoints(let catalog, _) = try await fixture.request(.listCheckpoints(worktree: otherRef)) else {
             Issue.record("expected checkpoints")
             return
         }
@@ -2630,7 +2674,8 @@ struct HostProtocolServerTests {
 
         init(
             environment: (any AlasHostEnvironment)? = nil, aheadOfOrigin: Bool = false,
-            checkpointGit: any CheckpointGitRunning = WorktreeStateSnapshotter.live.git
+            checkpointGit: any CheckpointGitRunning = WorktreeStateSnapshotter.live.git,
+            restoreFaults: CheckpointRestoreFaultInjector = .none
         ) async throws {
             root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-remove-\(UUID().uuidString)")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -2671,7 +2716,9 @@ struct HostProtocolServerTests {
                 orchestrationPersistence: ACPOrchestrationPersistence(path: root.appendingPathComponent("orchestration.sqlite").path),
                 reviewDrafts: ReviewDraftCommentStore(url: root.appendingPathComponent("review-drafts.json")),
                 reviewSessions: ReviewSessionStore(url: root.appendingPathComponent("review-sessions.json")),
-                checkpoints: WorktreeCheckpointService(store: .init(root: checkpointsRoot), snapshotter: .init(git: checkpointGit))
+                checkpoints: WorktreeCheckpointService(
+                    store: .init(root: checkpointsRoot), snapshotter: .init(git: checkpointGit), restoreFaultInjector: restoreFaults
+                )
             )
             host = AlasHost(core: core)
             connection = HostProtocolServer(host: host).connect(caller: .localUser(uid: 501), send: client.receive)
