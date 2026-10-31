@@ -6,6 +6,7 @@ use crate::acp_broker_protocol::{
     AcpAckParams, AcpAttachParams, AcpCloseParams, AcpDetachParams, AcpNotifyParams, AcpOpenParams,
     AcpOpenResult, AcpRawJSONPayload, AcpRespondParams, AcpSendParams, BrokerWireContext,
 };
+use crate::acp_raw_reply::{ReplyAttempts, ReplyRejection, ReplyResult, ReplyStatus, RespondExactParams};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::collections::{HashMap, VecDeque};
@@ -226,6 +227,8 @@ struct RuntimeState {
     adapter_stderr_drained: bool,
     adapter_output_drained: bool,
     closing: bool,
+    reply_attempts: ReplyAttempts,
+    writer_poisoned: bool,
 }
 
 impl RuntimeState {
@@ -403,6 +406,11 @@ pub fn handle_control_request(
     method: &str,
     params: Option<Value>,
 ) -> Result<Value, AcpBrokerProcessError> {
+    // The exact reply path owns generation/origin/attempt and writer locking.
+    // It must not hold the general broker lock across a blocked pipe write.
+    if method == "acp/raw/respondExact" {
+        return dispatch_control_request(method, params);
+    }
     // The id is copied out before locking so `params` can be *moved* into the
     // dispatch below. Borrowing it across the lock instead would force a clone,
     // and these payloads are the large ones — a maximal image prompt is ~267
@@ -535,6 +543,8 @@ fn run_broker_supervisor_inner(dir: PathBuf) -> Result<(), AcpBrokerProcessError
                 adapter_stderr_drained: false,
                 adapter_output_drained: false,
                 closing: false,
+                reply_attempts: ReplyAttempts::default(),
+                writer_poisoned: false,
             }),
             Condvar::new(),
         )),
@@ -595,7 +605,7 @@ fn raw_control_request(
     }
     if !matches!(
         method,
-        "attach" | "send" | "notify" | "respond" | "ack" | "detach"
+        "attach" | "send" | "notify" | "respond" | "respondExact" | "ack" | "detach"
     ) {
         return Err(broker_error(-32601, "unknown raw broker method"));
     }
@@ -1657,6 +1667,14 @@ fn handle_connection(
         let mut reader = ipc_reader(&stream)?;
         read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)?
     };
+    if serde_json::from_str::<BrokerIpcRequest>(&line)
+        .is_ok_and(|request| request.method == "raw/respondExact")
+    {
+        // Release this reservation before I/O. Ordinary prompt/cancel ordering
+        // stays intact, while close can invalidate a blocked reply writer.
+        drop(reservation);
+        return handle_ipc_line(runtime, stream, line);
+    }
     let _turn = reservation.claim();
     handle_ipc_line(runtime, stream, line)
 }
@@ -1909,6 +1927,7 @@ fn handle_ipc_request(
         "send" => broker_send(runtime, request.params),
         "notify" => broker_notify(runtime, request.params),
         "respond" => broker_respond(runtime, request.params),
+        "respondExact" => broker_respond_exact(runtime, request.params),
         "ack" => broker_ack(runtime, request.params),
         "close" => broker_close(runtime, request.params),
         "detach" => {
@@ -1971,6 +1990,11 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
     let (operation, should_write) = {
         let mut state = lock_runtime(runtime);
         ensure_generation(&state, params.generation)?;
+        if state.broker.metadata().wire_context == Some(BrokerWireContext::RawV2)
+            && state.writer_poisoned
+        {
+            return Err(reply_error(ReplyRejection::Unavailable));
+        }
         let operation = state
             .broker
             .begin_operation(
@@ -1986,7 +2010,10 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
                     "replayed": true,
                 });
                 apply_outcome_fields(&mut response, outcome);
-                state.broker.consume_hook_review_rejection(&params.operation_key, operation.adapter_request_id);
+                state.broker.consume_hook_review_rejection(
+                    &params.operation_key,
+                    operation.adapter_request_id,
+                );
                 return Ok(response);
             }
         } else {
@@ -2020,6 +2047,9 @@ fn broker_send(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBro
             &params.method,
             params.params,
         ) {
+            if lock_runtime(runtime).writer_poisoned {
+                return Err(error);
+            }
             // A startup exit can close stdin before wait() observes the child.
             // Leave the operation pending for the output readers in that case,
             // rather than discarding its stderr in a transport-level error.
@@ -2056,6 +2086,9 @@ fn broker_respond(
     runtime: &Runtime,
     params: Option<Value>,
 ) -> Result<Value, AcpBrokerProcessError> {
+    if lock_runtime(runtime).broker.metadata().wire_context == Some(BrokerWireContext::RawV2) {
+        return Err(reply_error(ReplyRejection::Unavailable));
+    }
     let params: AcpRespondParams = decode(params)?;
     let request_key = request_id_key(&params.request_id);
     let outcome = params
@@ -2071,6 +2104,152 @@ fn broker_respond(
     }
     write_adapter_response(runtime, params.request_id, outcome)?;
     Ok(json!({ "ok": true }))
+}
+
+fn reply_error(reason: ReplyRejection) -> AcpBrokerProcessError {
+    broker_error(reason.code(), format!("raw reply rejected: {reason:?}"))
+}
+
+fn preflight_exact_reply(
+    runtime: &Runtime,
+    params: &RespondExactParams,
+) -> Result<Option<ReplyStatus>, AcpBrokerProcessError> {
+    params.validate().map_err(reply_error)?;
+    let state = lock_runtime(runtime);
+    if state.broker.metadata().broker_id != params.broker_id
+        || state.broker.metadata().generation != params.generation
+        || state.broker.metadata().wire_context != Some(BrokerWireContext::RawV2)
+    {
+        return Err(reply_error(ReplyRejection::StaleOrigin));
+    }
+    state.reply_attempts.lookup(params).map_err(reply_error)
+}
+
+fn broker_respond_exact(
+    runtime: &Runtime,
+    params: Option<Value>,
+) -> Result<Value, AcpBrokerProcessError> {
+    let params: RespondExactParams =
+        decode(params).map_err(|_| reply_error(ReplyRejection::Invalid))?;
+    if let Some(status) = preflight_exact_reply(runtime, &params)? {
+        return Ok(json!(params.result(status)));
+    }
+    write_exact_reply(runtime, &params)
+}
+
+fn write_exact_reply(
+    runtime: &Runtime,
+    params: &RespondExactParams,
+) -> Result<Value, AcpBrokerProcessError> {
+    // Try the writer before taking runtime state. Waiters recheck the attempt
+    // on claim/completion, including callers that raced before the first claim.
+    loop {
+        match runtime.adapter_stdin.try_lock() {
+            Ok(mut writer) => {
+                let result = perform_exact_reply(runtime, params, &mut *writer);
+                drop(writer);
+                runtime.state.1.notify_all();
+                return result.map(|result| json!(result));
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {
+                return Err(reply_error(ReplyRejection::Unavailable));
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                let state = lock_runtime(runtime);
+                if let Some(status) = state.reply_attempts.lookup(params).map_err(reply_error)? {
+                    return Ok(json!(params.result(status)));
+                }
+                if state.closing || state.adapter_exited || state.writer_poisoned {
+                    return Err(reply_error(ReplyRejection::Unavailable));
+                }
+                // Generic writes predate this path; a bounded wait also covers
+                // their lock release without relying on a particular notifier.
+                drop(
+                    runtime
+                        .state
+                        .1
+                        .wait_timeout(state, Duration::from_millis(100))
+                        .unwrap_or_else(|error| error.into_inner()),
+                );
+            }
+        }
+    }
+}
+
+fn perform_exact_reply(
+    runtime: &Runtime,
+    params: &RespondExactParams,
+    writer: &mut impl Write,
+) -> Result<ReplyResult, AcpBrokerProcessError> {
+    if let Some(status) = preflight_exact_reply(runtime, params)? {
+        return Ok(params.result(status));
+    }
+    {
+        let mut state = lock_runtime(runtime);
+        // Repeat lookup inside the claim lock in case another writer won.
+        if let Some(status) = state.reply_attempts.lookup(params).map_err(reply_error)? {
+            return Ok(params.result(status));
+        }
+        if state.closing
+            || state.adapter_exited
+            || state.adapter_output_drained
+            || state.writer_poisoned
+        {
+            return Err(reply_error(ReplyRejection::Unavailable));
+        }
+        let pending = state
+            .broker
+            .pending_request(&params.pending_request_id)
+            .cloned()
+            .ok_or_else(|| reply_error(ReplyRejection::StaleOrigin))?;
+        state
+            .reply_attempts
+            .claim(params, &pending)
+            .map_err(reply_error)?;
+        runtime.state.1.notify_all();
+    }
+    let result = writer
+        .write_all(params.frame.bytes())
+        .and_then(|_| writer.write_all(b"\n"))
+        .and_then(|_| writer.flush());
+    let mut state = lock_runtime(runtime);
+    let status = if result.is_ok() {
+        ReplyStatus::Written
+    } else {
+        ReplyStatus::WriteUncertain
+    };
+    state.reply_attempts.finish(&params.operation_key, status);
+    if status == ReplyStatus::Written {
+        // No unfenced raw responder can remove/replace this claimed origin.
+        if state
+            .broker
+            .pending_request(&params.pending_request_id)
+            .is_some_and(|pending| pending.origin_cursor == Some(params.origin_cursor))
+        {
+            state
+                .broker
+                .respond_to_pending_request(
+                    &params.pending_request_id,
+                    AdapterRPCOutcome {
+                        raw_frame: Some(params.frame.clone()),
+                        result: None,
+                        error: None,
+                    },
+                )
+                .map_err(domain_error)?;
+        }
+    } else {
+        state.writer_poisoned = true;
+        state
+            .broker
+            .add_adapter_notification("adapter/writeUncertain", Value::Null);
+        complete_pending_operations(
+            &mut state,
+            "adapter writer became unusable after an uncertain reply write",
+        );
+    }
+    runtime.state.1.notify_all();
+    Ok(params.result(status))
 }
 
 fn broker_ack(runtime: &Runtime, params: Option<Value>) -> Result<Value, AcpBrokerProcessError> {
@@ -2667,6 +2846,17 @@ fn write_adapter_line(runtime: &Runtime, value: &Value) -> Result<(), AcpBrokerP
         .adapter_stdin
         .lock()
         .map_err(|_| broker_error(-32074, "adapter stdin lock poisoned"))?;
+    {
+        let state = lock_runtime(runtime);
+        if state.broker.metadata().wire_context == Some(BrokerWireContext::RawV2)
+            && (state.writer_poisoned
+                || state.closing
+                || state.adapter_exited
+                || state.adapter_output_drained)
+        {
+            return Err(reply_error(ReplyRejection::Unavailable));
+        }
+    }
     writeln!(stdin, "{value}")
         .map_err(|error| broker_error(-32074, format!("adapter write failed: {error}")))?;
     stdin
@@ -3346,6 +3536,322 @@ mod tests {
         assert_eq!(error.code, -32076);
     }
 
+    fn reply_fixture(runtime: &Runtime) -> crate::acp_raw_reply::RespondExactParams {
+        let mut state = lock_runtime(runtime);
+        route_raw_adapter_frame(
+            &mut state,
+            br#"{"jsonrpc":"2.0","id":7,"method":"peer/request"}"#.to_vec(),
+        );
+        let pending = state.broker.snapshot().pending_requests.remove(0);
+        serde_json::from_value(json!({"brokerId":"steering","generation":1,"pendingRequestId":pending.request_id,
+            "originCursor":pending.origin_cursor,"operationKey":"answer", "wireContext":{"acpVersion":2,"payloadFormat":"alas.acp.raw-json.v1"},
+            "frame":AcpRawJSONPayload::new(br#" {"jsonrpc":"2.0","id":7,"result":{"n":1e999}} "#.to_vec())})).unwrap()
+    }
+
+    #[test]
+    fn claim_racing_after_preflight_does_not_strand_a_writer_waiter() {
+        let (runtime, mut child, _) = adapter_test_runtime("exit 0", true);
+        child.wait().unwrap();
+        let params = reply_fixture(&runtime);
+        assert_eq!(preflight_exact_reply(&runtime, &params).unwrap(), None);
+        let writer = runtime.adapter_stdin.lock().unwrap();
+        {
+            let mut state = lock_runtime(&runtime);
+            let pending = state
+                .broker
+                .pending_request(&params.pending_request_id)
+                .unwrap()
+                .clone();
+            state.reply_attempts.claim(&params, &pending).unwrap();
+        }
+        let waiting = runtime.clone();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker =
+            std::thread::spawn(move || sender.send(write_exact_reply(&waiting, &params)).unwrap());
+        let result = receiver.recv_timeout(Duration::from_secs(5));
+        drop(writer);
+        worker.join().unwrap();
+        assert_eq!(result.unwrap().unwrap()["status"], "inFlight");
+    }
+
+    #[test]
+    fn concurrent_exact_retry_returns_in_flight_without_reentering_writer() {
+        let (runtime, mut child, _) = adapter_test_runtime("exit 0", true);
+        child.wait().unwrap();
+        let params = reply_fixture(&runtime);
+        let (entered, waiting) = std::sync::mpsc::channel();
+        let (release, unblock) = std::sync::mpsc::channel();
+        struct GateWriter {
+            entered: Option<std::sync::mpsc::Sender<()>>,
+            unblock: std::sync::mpsc::Receiver<()>,
+        }
+        impl Write for GateWriter {
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                if let Some(entered) = self.entered.take() {
+                    entered.send(()).unwrap();
+                    self.unblock.recv_timeout(Duration::from_secs(5)).unwrap();
+                }
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let sending = runtime.clone();
+        let original = params.clone();
+        let worker = std::thread::spawn(move || {
+            let _writer = sending.adapter_stdin.lock().unwrap();
+            perform_exact_reply(
+                &sending,
+                &original,
+                &mut GateWriter {
+                    entered: Some(entered),
+                    unblock,
+                },
+            )
+            .unwrap()
+        });
+        waiting.recv_timeout(Duration::from_secs(5)).unwrap();
+        let result =
+            broker_respond_exact(&runtime, Some(serde_json::to_value(&params).unwrap())).unwrap();
+        assert_eq!(result["status"], "inFlight");
+        release.send(()).unwrap();
+        assert_eq!(worker.join().unwrap().status, ReplyStatus::Written);
+    }
+
+    #[test]
+    fn exact_reply_ipc_writes_original_bytes_and_resolution_evidence() {
+        let (runtime, mut child, stdout) =
+            adapter_test_runtime("IFS= read -r line; printf '%s\\n' \"$line\"", true);
+        let params = reply_fixture(&runtime);
+        let result = handle_ipc_request(
+            &runtime,
+            BrokerIpcRequest {
+                method: "raw/respondExact".into(),
+                params: Some(serde_json::to_value(&params).unwrap()),
+            },
+        )
+        .unwrap();
+        assert_eq!(result["status"], "written");
+        let mut bytes = vec![];
+        BufReader::new(stdout)
+            .read_until(b'\n', &mut bytes)
+            .unwrap();
+        let mut expected = params.frame.bytes().to_vec();
+        expected.push(b'\n');
+        assert_eq!(bytes, expected);
+        child.wait().unwrap();
+        let state = lock_runtime(&runtime);
+        let journal = state.broker.replay_after_ack();
+        assert!(journal.iter().any(|event| matches!(&event.kind,crate::acp_broker::BrokerEventKind::PendingRequestResolved{response,..}
+            if response.raw_frame.as_ref()==Some(&params.frame))));
+    }
+
+    #[test]
+    fn exact_write_resolves_only_after_flush_and_retries_never_target_reused_id() {
+        let (runtime, mut child, _) = adapter_test_runtime("exit 0", true);
+        child.wait().unwrap();
+        let params = reply_fixture(&runtime);
+        struct ObservedWriter<'a> {
+            runtime: &'a Runtime,
+            params: &'a crate::acp_raw_reply::RespondExactParams,
+            bytes: Vec<u8>,
+        }
+        impl Write for ObservedWriter<'_> {
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                assert_eq!(
+                    lock_runtime(self.runtime)
+                        .broker
+                        .snapshot()
+                        .pending_requests
+                        .len(),
+                    1
+                );
+                assert_eq!(
+                    preflight_exact_reply(self.runtime, self.params).unwrap(),
+                    Some(crate::acp_raw_reply::ReplyStatus::InFlight)
+                );
+                self.bytes.extend(b);
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                assert_eq!(
+                    lock_runtime(self.runtime)
+                        .broker
+                        .snapshot()
+                        .pending_requests
+                        .len(),
+                    1
+                );
+                lock_runtime(self.runtime).closing = true; // close after claim cannot revoke completed bytes
+                Ok(())
+            }
+        }
+        let mut writer = ObservedWriter {
+            runtime: &runtime,
+            params: &params,
+            bytes: vec![],
+        };
+        let result = perform_exact_reply(&runtime, &params, &mut writer).unwrap();
+        assert_eq!(result.status, crate::acp_raw_reply::ReplyStatus::Written);
+        let mut expected = params.frame.bytes().to_vec();
+        expected.push(b'\n');
+        assert_eq!(writer.bytes, expected);
+        {
+            let mut state = lock_runtime(&runtime);
+            assert!(state.broker.snapshot().pending_requests.is_empty());
+            let tail = state.broker.journal_tail();
+            state.broker.ack(tail).unwrap();
+            state.closing = false;
+            route_raw_adapter_frame(
+                &mut state,
+                br#"{"jsonrpc":"2.0","id":7,"method":"new/request"}"#.to_vec(),
+            );
+        }
+        assert_eq!(
+            preflight_exact_reply(&runtime, &params).unwrap(),
+            Some(crate::acp_raw_reply::ReplyStatus::Written)
+        );
+        let mut wrong = params.clone();
+        wrong.operation_key = OperationKey::new("late");
+        assert!(perform_exact_reply(&runtime, &wrong, &mut Vec::new()).is_err());
+        assert_eq!(
+            lock_runtime(&runtime)
+                .broker
+                .snapshot()
+                .pending_requests
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn failed_exact_write_stays_uncertain_and_poisons_later_adapter_writes() {
+        for flush_failure in [false, true] {
+            let (runtime, mut child, _) = adapter_test_runtime("exit 0", true);
+            child.wait().unwrap();
+            let params = reply_fixture(&runtime);
+            struct FailedWriter {
+                flush_failure: bool,
+                calls: usize,
+            }
+            impl Write for FailedWriter {
+                fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                    self.calls += 1;
+                    if self.flush_failure {
+                        Ok(b.len())
+                    } else if self.calls == 1 {
+                        Ok(1)
+                    } else {
+                        Err(io::Error::other("partial"))
+                    }
+                }
+                fn flush(&mut self) -> io::Result<()> {
+                    Err(io::Error::other("flush"))
+                }
+            }
+            let mut writer = FailedWriter {
+                flush_failure,
+                calls: 0,
+            };
+            {
+                let mut state = lock_runtime(&runtime);
+                let key = OperationKey::new("racing-send");
+                let operation = state
+                    .broker
+                    .begin_operation(key.clone(), "session/prompt", json!({}))
+                    .unwrap();
+                state.pending_methods.insert(
+                    operation.adapter_request_id.0,
+                    PendingOperation {
+                        operation_key: key,
+                        method: "session/prompt".into(),
+                    },
+                );
+            }
+            let result = perform_exact_reply(&runtime, &params, &mut writer).unwrap();
+            assert_eq!(
+                result.status,
+                crate::acp_raw_reply::ReplyStatus::WriteUncertain
+            );
+            assert_eq!(
+                lock_runtime(&runtime)
+                    .broker
+                    .snapshot()
+                    .pending_requests
+                    .len(),
+                1
+            );
+            let calls = writer.calls;
+            assert_eq!(
+                perform_exact_reply(&runtime, &params, &mut writer).unwrap(),
+                result
+            );
+            assert_eq!(writer.calls, calls);
+            assert!(write_adapter_notification(&runtime, "another", Value::Null).is_err());
+            for _ in 0..2 {
+                assert!(
+                    broker_send(
+                        &runtime,
+                        Some(json!({"brokerId":"steering","generation":1,
+                    "operationKey":"after-poison","method":"session/prompt","params":{}}))
+                    )
+                    .is_err()
+                );
+            }
+            assert!(lock_runtime(&runtime).pending_methods.is_empty());
+        }
+    }
+
+    #[test]
+    fn exact_reply_rejects_close_and_stale_generation_before_claim() {
+        let (runtime, mut child, _) = adapter_test_runtime("exit 0", true);
+        child.wait().unwrap();
+        let params = reply_fixture(&runtime);
+        for generation in [1, 2] {
+            lock_runtime(&runtime).closing = generation == 1;
+            let mut wrong = params.clone();
+            wrong.generation = BrokerGeneration(generation);
+            let mut bytes = vec![];
+            assert!(perform_exact_reply(&runtime, &wrong, &mut bytes).is_err());
+            assert!(bytes.is_empty());
+        }
+        assert_eq!(
+            lock_runtime(&runtime)
+                .broker
+                .snapshot()
+                .pending_requests
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn unfenced_raw_reply_cannot_resolve_or_target_a_reused_request() {
+        let (runtime, mut child, _) = adapter_test_runtime("exit 0", true);
+        child.wait().unwrap();
+        {
+            let mut state = lock_runtime(&runtime);
+            route_raw_adapter_frame(
+                &mut state,
+                br#"{"jsonrpc":"2.0","id":7,"method":"peer/request"}"#.to_vec(),
+            );
+        }
+        let before = lock_runtime(&runtime).broker.snapshot().pending_requests;
+        assert!(
+            broker_respond(
+                &runtime,
+                Some(json!({"brokerId":"steering", "generation":1,
+            "requestId":7, "operationKey":"old-answer", "result":null}))
+            )
+            .is_err()
+        );
+        assert_eq!(
+            lock_runtime(&runtime).broker.snapshot().pending_requests,
+            before
+        );
+    }
+
     #[test]
     fn raw_adapter_requests_preserve_signed_ids_through_snapshot_and_resolution() {
         for id in [i64::MIN, -1, 0, i64::MAX] {
@@ -3644,6 +4150,8 @@ mod tests {
             adapter_stderr_drained: false,
             adapter_output_drained: false,
             closing: false,
+            reply_attempts: ReplyAttempts::default(),
+            writer_poisoned: false,
         }
     }
 

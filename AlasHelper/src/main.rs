@@ -265,6 +265,7 @@ fn capabilities() -> Value {
         ,
         "acp": true,
         "acpRawFrames": 1,
+        "acpRawReplies": 1,
         "sessionCoordination": 1,
         "visualMCPRelay": 1,
         "remoteMCPTools": 1
@@ -649,6 +650,12 @@ fn dispatch_acp_job(
         }
     }
 
+    // Exact replies have their own origin/attempt and writer fences. Keeping a
+    // blocked pipe write on the session queue would also block retries/close.
+    if job.method == "acp/raw/respondExact" {
+        answer_off_thread(job, responses);
+        return;
+    }
     let Some(broker_id) = job.broker_id() else {
         answer_off_thread(job, responses);
         return;

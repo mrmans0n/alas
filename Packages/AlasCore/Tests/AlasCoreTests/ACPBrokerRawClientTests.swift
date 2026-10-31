@@ -646,6 +646,63 @@ struct ACPBrokerRawClientTests {
         await client.detach()
     }
 
+    @Test(arguments: ["written", "uncertain", "foreign", "proof", "invalid", "cancel", "legacy"])
+    func exactReplyHandoffKeepsExplicitOriginAndUncertainOutcomes(reason: String) async throws {
+        let service = RawBrokerFixture(context: reason == "legacy" ? .legacyV1 : .rawV2)
+        let client = makeClient(service, context: reason == "legacy" ? .legacyV1 : .rawV2)
+        if reason != "legacy" { _ = try await client.start() }
+        defer { Task { await client.detach() } }
+        await service.configureReply(fail: reason == "uncertain", wrongProof: reason == "proof")
+        let params = ACPBrokerRespondExactParams(brokerId: .init(rawValue: "raw"), generation: .init(rawValue: 7),
+            pendingRequestId: "p", originCursor: .init(rawValue: 1), operationKey: .init(rawValue: "explicit"),
+            frame: .init(bytes: Data((reason == "invalid" ? "{}" : #" {"jsonrpc":"2.0","id":"wire","result":{"n":1e999}} "#).utf8)))
+        let expected = reason == "foreign" || reason == "legacy" ? UUID() : try #require(client.updateConnectionID)
+        let worker = Task {
+            if reason == "cancel" { withUnsafeCurrentTask { $0?.cancel() } }
+            return try await client.respondToRawRequestExact(expectedConnectionID: expected, params: params)
+        }
+        if reason == "written" {
+            #expect(try await worker.value.status == .written)
+        } else {
+            do { _ = try await worker.value
+            Issue.record("Expected reply handoff to fail") }
+            catch let error as ACPBrokerRawReplyError {
+                if reason == "uncertain" || reason == "proof" { if case .uncertain = error {} else { Issue.record("Write outcome lost its uncertainty") } }
+            }
+        }
+        let requests = await service.exactReplies
+        #expect(requests.count == (["written", "uncertain", "proof"].contains(reason) ? 1 : 0))
+        if let sent = requests.first { #expect(sent.frame.bytes == params.frame.bytes)
+        #expect(sent.operationKey == params.operationKey) }
+        #expect(await service.sentResponses.isEmpty)
+        await #expect(throws: ACPBrokerRawReplyError.rejected(.unavailable)) {
+            try await client.respondToRawRequest(id: .string("wire"), result: .null)
+        }
+        await client.detach()
+    }
+
+    @Test(arguments: ["cancel", "detach"])
+    func replyResultAfterHandoffCannotReviveInvalidatedAttachment(action: String) async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service)
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        await service.holdReply()
+        let params = ACPBrokerRespondExactParams(brokerId: .init(rawValue: "raw"), generation: .init(rawValue: 7), pendingRequestId: "p",
+            originCursor: .init(rawValue: 1), operationKey: .init(rawValue: "reply"), frame: .init(bytes: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)))
+        let connection = try #require(client.updateConnectionID)
+        let worker = Task { try await client.respondToRawRequestExact(expectedConnectionID: connection, params: params) }
+        defer { worker.cancel() }
+        try await eventually { await service.exactReplies.count == 1 }
+        if action == "cancel" { worker.cancel() } else { await client.detach() }
+        await service.releaseReply()
+        do { _ = try await worker.value
+        Issue.record("Invalidated attachment published reply success") }
+        catch let error as ACPBrokerRawReplyError { if case .uncertain = error {} else { Issue.record("Handoff became a pre-write rejection") } }
+        #expect(await service.exactReplies.count == 1)
+        await client.detach()
+    }
+
     private func makeClient(_ service: RawBrokerFixture, context: ACPBrokerWireContext = .rawV2) -> ACPBrokerClient {
         ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
             command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",
@@ -668,6 +725,23 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     let rawBytes: Data
     let cached: Bool
     let delayOpen: Bool
+    var exactReplies: [ACPBrokerRespondExactParams] = []
+    private var shouldHoldReply = false
+    private let replyRelease = AsyncStream<Void>.makeStream()
+    func holdReply() { shouldHoldReply = true }
+    func releaseReply() { replyRelease.continuation.yield(()) }
+    private var failReply = false
+    private var wrongReplyProof = false
+    func configureReply(fail: Bool, wrongProof: Bool) { failReply = fail
+    wrongReplyProof = wrongProof }
+    func respondExact(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
+        exactReplies.append(params)
+        if shouldHoldReply { for await _ in replyRelease.stream { break } }
+        if failReply { throw ACPClientError.notRunning }
+        let proof = wrongReplyProof ? ACPBrokerRespondExactParams(brokerId: params.brokerId, generation: params.generation,
+            pendingRequestId: params.pendingRequestId, originCursor: .init(rawValue: 99), operationKey: params.operationKey, frame: params.frame) : params
+        return .init(params: proof, status: .written)
+    }
     var sentResponses: [ACPBrokerRespondParams] = []
     var sentRequests: [ACPBrokerSendParams] = []
     private var lastOperationKey = ACPBrokerOperationKey(rawValue: "key")
@@ -790,6 +864,40 @@ private actor RawBrokerFixture: ACPBrokerServicing {
 }
 
 struct ACPBrokerRawHelperTests {
+    @Test(arguments: ["cancel", "replacement"])
+    func capabilityWaitCannotHandoffAReplyAfterInvalidation(action: String) async throws {
+        let transport = RawHelperTransport(supported: true, replies: true, holdHello: true)
+        let client = RemoteHelperClient(host: "local", idleShutdownNanoseconds: 0, transportFactory: { transport })
+        _ = try await client.ping()
+        let params = ACPBrokerRespondExactParams(brokerId: .init(rawValue: "b"), generation: .init(rawValue: 1), pendingRequestId: "p",
+            originCursor: .init(rawValue: 1), operationKey: .init(rawValue: "answer"), frame: .init(bytes: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)))
+        let worker = Task { try await client.respondExactACPBroker(params) }
+        defer { worker.cancel() }
+        try await eventually { transport.methods.contains("hello") }
+        if action == "cancel" { worker.cancel() } else { await client.reconnectAfterUpgrade() }
+        transport.releaseHello()
+        await #expect(throws: ACPBrokerRawReplyError.rejected(.unavailable)) { try await worker.value }
+        #expect(transport.methods == ["ping", "hello"])
+        await client.shutdown()
+    }
+
+    @Test(arguments: [false, true])
+    func exactRepliesRequireTheirOwnCapabilityBeforeHandoff(supported: Bool) async throws {
+        let transport = RawHelperTransport(supported: true, replies: supported)
+        let client = RemoteHelperClient(host: "local", idleShutdownNanoseconds: 0, transportFactory: { transport })
+        _ = try await client.hello()
+        let params = ACPBrokerRespondExactParams(brokerId: .init(rawValue: "b"), generation: .init(rawValue: 1), pendingRequestId: "p",
+            originCursor: .init(rawValue: 1), operationKey: .init(rawValue: "answer"), frame: .init(bytes: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)))
+        if supported {
+            #expect(try await client.respondExactACPBroker(params).status == .written)
+            #expect(transport.methods == ["hello", "acp/raw/respondExact"])
+        } else {
+            await #expect(throws: ACPBrokerRawReplyError.rejected(.unavailable)) { try await client.respondExactACPBroker(params) }
+            #expect(transport.methods == ["hello"])
+        }
+        await client.shutdown()
+    }
+
     @Test(arguments: [false, true])
     func rawNamespaceRequiresCurrentHelperCapability(supported: Bool) async throws {
         let transport = RawHelperTransport(supported: supported)
@@ -813,10 +921,18 @@ private final class RawHelperTransport: JSONRPCStdioTransporting, @unchecked Sen
     private let lock = NSLock()
     private var sent: [String] = []
     private let supported: Bool
+    private let replies: Bool
+    private let holdHello: Bool
+    private let heldHello = Mutex<Data?>(nil)
+    func releaseHello() { if let data = heldHello.withLock({ value in let data = value
+    value = nil
+    return data }) { continuation.yield(.frame(data)) } }
     var methods: [String] { lock.lock()
     defer { lock.unlock() }
     return sent }
-    init(supported: Bool) {
+    init(supported: Bool, replies: Bool = false, holdHello: Bool = false) {
+        self.holdHello = holdHello
+        self.replies = replies
         self.supported = supported
         let stream = AsyncStream<JSONRPCStdioTransport.Incoming>.makeStream()
         incoming = stream.stream
@@ -833,10 +949,15 @@ private final class RawHelperTransport: JSONRPCStdioTransporting, @unchecked Sen
         if method == "hello" {
             var capabilities: [String: Any] = ["watchKinds": [], "fs": ["read": true, "write": true, "stat": true], "ping": true]
             if supported { capabilities["acpRawFrames"] = 1 }
+            if replies { capabilities["acpRawReplies"] = 1 }
             result = ["name": "fixture", "protocolVersion": 1, "binaryVersion": "fixture", "capabilities": capabilities]
+        } else if method == "acp/raw/respondExact" {
+            let params = try JSONDecoder().decode(ACPBrokerRespondExactParams.self, from: JSONSerialization.data(withJSONObject: object["params"]!))
+            result = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(ACPBrokerRawReplyResult(params: params, status: .written))) as? [String: Any])
         } else { result = ["ok": true] }
         let response = try JSONSerialization.data(withJSONObject: ["jsonrpc": "2.0", "id": object["id"]!, "result": result])
-        continuation.yield(.frame(response))
+        if method == "hello", holdHello { heldHello.withLock { $0 = response } }
+        else { continuation.yield(.frame(response)) }
     }
     func terminate() { continuation.finish() }
 }

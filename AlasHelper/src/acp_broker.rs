@@ -640,6 +640,10 @@ impl ACPBrokerState {
         Ok(self.push_event(BrokerEventKind::PendingRequest { request }))
     }
 
+    pub fn pending_request(&self, request_id: &str) -> Option<&PendingClientRequest> {
+        self.pending_requests.get(request_id)
+    }
+
     pub fn respond_to_pending_request(
         &mut self,
         request_id: &str,
