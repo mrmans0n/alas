@@ -13,6 +13,324 @@ struct ACPSessionStoreCRUDTests {
         try ACPSessionStore(path: tmpURL().path)
     }
 
+    private func inboundFixture(source: ACPV2InboundLedgerSource? = nil) throws -> (ACPSessionStore, ACPSessionLeaseFence, ACPV2InboundLedgerStream) {
+        let (store, fence, _) = try journalFixture()
+        let stream = try store.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream",
+            source: source ?? .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 7)), fence: fence)
+        return (store, fence, stream)
+    }
+
+    private func inbound(_ frame: Data, cursor: UInt64 = 5, pending: String? = "opaque-helper",
+        origin: ACPBrokerFrameProvenance.Origin = .journal, callback: ACPDurableConsumptionAcknowledgement? = nil) -> ACPV2InboundDelivery {
+        .init(frame: frame, connectionID: UUID(), source: .broker(provenance: .init(brokerID: .init(rawValue: "broker"),
+            generation: .init(rawValue: 7), cursor: .init(rawValue: cursor), origin: origin), pendingRequestID: pending),
+            durableConsumptionAcknowledgement: callback)
+    }
+
+    @Test(arguments: [false, true])
+    func inboundRegistrationKeepsOneSourceContextAcrossSessionsAndAck(broker: Bool) throws {
+        let source: ACPV2InboundLedgerSource = broker ? .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 7)) : .stdio(connectionID: UUID())
+        let (store, fence, stream) = try inboundFixture(source: source)
+        #expect(try store.updateACPBrokerAcknowledgedCursor(sessionId: "journal", brokerId: "broker", generation: 7, cursor: 8, wireContext: .rawV2))
+        let reopened = try ACPSessionStore(path: store.path)
+        #expect(try reopened.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream", source: source, fence: fence) == stream)
+        #expect(stream.initialBrokerCursor?.rawValue == (broker ? 4 : nil))
+        #expect(throws: ACPV2InboundLedgerError.incompatibleStream) {
+            try reopened.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "other", source: source, fence: fence)
+        }
+        try reopened.upsertSession(.init(id: "other", agentId: "fixture", title: "Other", autoRun: false,
+            acpBrokerId: "broker", acpBrokerGeneration: 7, acpBrokerWireContextJSON: try ACPBrokerWireContext.rawV2.persistedJSON(),
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        try reopened.seizeLease(sessionId: "other", instanceId: "A", pid: 1, now: 1, leaseToken: "other")
+        #expect(throws: ACPV2InboundLedgerError.incompatibleStream) {
+            try reopened.registerV2InboundLedger(sessionId: "other", upstreamSessionId: "upstream", source: source,
+                fence: .init(sessionId: "other", ownerInstance: "A", token: "other"))
+        }
+        #expect(try reopened.db.query("SELECT id FROM acp_v2_inbound_streams").count == 1)
+        if broker {
+            for invalid in [ACPV2InboundLedgerSource.broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 0)),
+                .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: .max)),
+                .broker(id: .init(rawValue: "bad/id"), generation: .init(rawValue: 7))] {
+                #expect(throws: ACPV2InboundLedgerError.invalidInput) {
+                    try reopened.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream", source: invalid, fence: fence)
+                }
+            }
+        }
+        let unicodeSource = ACPV2InboundLedgerSource.stdio(connectionID: UUID())
+        let unicodeStream = try reopened.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "\u{feff}upstream-\u{e9}", source: unicodeSource, fence: fence)
+        #expect(try reopened.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "\u{feff}upstream-\u{e9}", source: unicodeSource, fence: fence) == unicodeStream)
+        #expect(throws: ACPV2InboundLedgerError.incompatibleStream) {
+            try reopened.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "\u{feff}upstream-e\u{301}", source: unicodeSource, fence: fence)
+        }
+    }
+
+    @Test(arguments: [Data(), Data([0, 255, 128]), Data(" \n{\"jsonrpc\":\"2.0\",\"id\":-7,\"method\":\"peer/future\",\"params\":{\"n\":1e999,\"n\":2}}\n".utf8)])
+    func inboundStdioCopiesRetryWhileEqualCapturesStayDistinct(bytes: Data) throws {
+        let connection = UUID()
+        let (store, fence, stream) = try inboundFixture(source: .stdio(connectionID: connection))
+        let count = Mutex(0)
+        let delivery = ACPV2InboundDelivery(frame: bytes, connectionID: connection, source: .stdio,
+            durableConsumptionAcknowledgement: { count.withLock { $0 += 1 } })
+        let first = try store.retainV2Inbound(delivery, to: stream, fence: fence)
+        let reopened = try ACPSessionStore(path: store.path)
+        let copy = try reopened.retainV2Inbound(delivery, to: stream, fence: fence)
+        let equal = try reopened.retainV2Inbound(.init(frame: bytes, connectionID: connection, source: .stdio), to: stream, fence: fence)
+        #expect(first.wasInserted && !copy.wasInserted && equal.wasInserted)
+        #expect(first.record == copy.record)
+        #expect(equal.record.ordinal == 2)
+        #expect(first.record.frame == bytes)
+        #expect(first.record.receiptID == delivery.receiptID)
+        #expect(first.record.source == .stdio)
+        let row = try #require(try reopened.db.query("SELECT typeof(frame) AS kind, length(frame) AS bytes FROM acp_v2_inbound_records WHERE ordinal = 1").first)
+        #expect(row["kind"] as? String == "blob")
+        #expect(row["bytes"] as? Int64 == Int64(bytes.count))
+        #expect(throws: ACPV2InboundLedgerError.incompatibleStream) {
+            try reopened.retainV2Inbound(.init(frame: bytes, connectionID: UUID(), source: .stdio), to: stream, fence: fence)
+        }
+        #expect(count.withLock { $0 } == 0)
+        delivery.acknowledgeDurableConsumption()
+        #expect(count.withLock { $0 } == 1)
+    }
+
+    @Test func inboundBrokerRetriesKeepOriginalEvidenceWithoutMergingReusedPendingIDs() throws {
+        let (store, fence, stream) = try inboundFixture()
+        let bytes = Data(#"{"jsonrpc":"2.0","id":"wire-id","method":"unknown","params":true}"#.utf8)
+        let pendingID = "\u{feff}opaque-\u{e9}\0id"
+        let original = inbound(bytes, pending: pendingID)
+        let first = try store.retainV2Inbound(original, to: stream, fence: fence)
+        let reopened = try ACPSessionStore(path: store.path)
+        let retry = try reopened.retainV2Inbound(inbound(bytes, pending: pendingID, origin: .pendingSnapshot), to: stream, fence: fence)
+        #expect(!retry.wasInserted)
+        #expect(retry.record == first.record)
+        #expect(retry.record.connectionID == original.connectionID)
+        #expect(retry.record.source == original.source)
+        if case .broker(_, let stored) = retry.record.source {
+            #expect(stored.map { Data($0.utf8) } == Data(pendingID.utf8))
+        }
+        #expect(try reopened.retainV2Inbound(inbound(bytes, cursor: 6, pending: pendingID), to: stream, fence: fence).record.ordinal == 2)
+        for pending in [nil, "different", "\u{feff}opaque-e\u{301}\0id"] as [String?] {
+            #expect(throws: ACPV2InboundLedgerError.conflictingReceipt) {
+                try reopened.retainV2Inbound(inbound(bytes, pending: pending), to: stream, fence: fence)
+            }
+        }
+        #expect(throws: ACPV2InboundLedgerError.conflictingReceipt) {
+            try reopened.retainV2Inbound(inbound(Data("changed".utf8)), to: stream, fence: fence)
+        }
+        #expect(try reopened.loadSession(id: "journal")?.acpBrokerAcknowledgedCursor == 4)
+    }
+
+    @Test(arguments: ["lease", "session", "generation", "context", "legacy", "cursor", "source", "descriptor"])
+    func inboundAuthorityFailureCannotRetainOrConsume(reason: String) throws {
+        let (store, originalFence, stream) = try inboundFixture()
+        var fence = originalFence
+        switch reason {
+        case "lease": try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        case "session": fence = .init(sessionId: "other", ownerInstance: "A", token: "owner")
+        case "generation": _ = try store.updateACPBrokerState(sessionId: "journal", brokerId: "broker", generation: 8, acknowledgedCursor: 0, wireContext: .rawV2)
+        case "context": try store.db.exec("UPDATE sessions SET acp_broker_wire_context = '{future}'")
+        case "legacy": try store.db.exec("UPDATE sessions SET acp_broker_wire_context = NULL")
+        case "descriptor": try store.db.exec("UPDATE acp_v2_inbound_streams SET upstream_session_id = 'changed'")
+        default: break
+        }
+        let count = Mutex(0)
+        let delivery = reason == "source" ? ACPV2InboundDelivery(frame: Data(), connectionID: UUID(), source: .stdio) : inbound(Data(), cursor: reason == "cursor" ? .max : 5, callback: { count.withLock { $0 += 1 } })
+        let before = try store.loadSession(id: "journal")
+        #expect(throws: (any Error).self) { try store.retainV2Inbound(delivery, to: stream, fence: fence) }
+        #expect(try store.db.query("SELECT ordinal FROM acp_v2_inbound_records").isEmpty)
+        #expect(try store.loadSession(id: "journal") == before)
+        #expect(count.withLock { $0 } == 0)
+        if ["lease", "context", "legacy", "generation"].contains(reason) {
+            #expect(throws: (any Error).self) { try store.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream", source: stream.source, fence: fence) }
+        }
+    }
+
+    @Test func failedInboundInsertRollsBackBeforeDurableProofOrConsumption() throws {
+        let (store, fence, stream) = try inboundFixture()
+        let count = Mutex(0)
+        let delivery = inbound(Data(), callback: { count.withLock { $0 += 1 } })
+        try store.db.exec("CREATE TRIGGER fail_inbound AFTER INSERT ON acp_v2_inbound_records BEGIN SELECT RAISE(ABORT, 'injected'); END")
+        #expect(throws: SQLiteError.self) { try store.retainV2Inbound(delivery, to: stream, fence: fence) }
+        #expect(try store.db.query("SELECT ordinal FROM acp_v2_inbound_records").isEmpty)
+        try store.db.exec("DROP TRIGGER fail_inbound")
+        #expect(try store.retainV2Inbound(delivery, to: stream, fence: fence).record.ordinal == 1)
+        #expect(count.withLock { $0 } == 0)
+    }
+
+    @Test func inboundRecoveryPagesKeepBytesAndMakeOversizedProgress() throws {
+        let (store, fence, stream) = try inboundFixture()
+        let consumed = Mutex(0)
+        let known = Data(#"{"jsonrpc":"2.0","id":-7,"method":"session/request_permission","params":{"n":1e999}}"#.utf8)
+        let frames = [Data(), Data([1, 2]), Data(repeating: 255, count: 6), known]
+        var originals: [ACPV2InboundLedgerRecord] = []
+        for (index, frame) in frames.enumerated() {
+            originals.append(try store.retainV2Inbound(inbound(frame, cursor: UInt64(index + 5), pending: nil,
+                callback: { consumed.withLock { $0 += 1 } }), to: stream, fence: fence).record)
+        }
+        let reopened = try ACPSessionStore(path: store.path)
+        let first = try reopened.loadV2InboundLedgerPage(stream: stream, maxRecords: 3, maxBytes: 2)
+        #expect(first.records == Array(originals.prefix(2)))
+        #expect(!first.isAtEnd && first.hasKnownMissingPrefix && !first.containsOversizedRecord)
+        let afterFirst = try #require(first.next)
+        #expect(afterFirst.afterOrdinal == 2)
+        let second = try reopened.loadV2InboundLedgerPage(stream: stream, after: afterFirst, maxRecords: 3, maxBytes: 2)
+        #expect(second.records == [originals[2]])
+        #expect(second.containsOversizedRecord && !second.isAtEnd)
+        let third = try reopened.loadV2InboundLedgerPage(stream: stream, after: second.next, maxRecords: 1)
+        #expect(third.records == [originals[3]])
+        #expect(third.isAtEnd && third.next == nil)
+        let header = try #require(third.records.first).decodeHeader()
+        #expect(header.id == .number(-7))
+        #expect(header.params == .object(["n": .number("1e999")]))
+        #expect(throws: (any Error).self) { try originals[2].decodeHeader() }
+        let empty = try reopened.loadV2InboundLedgerPage(stream: stream, after: .init(streamID: stream.id, afterOrdinal: 4))
+        #expect(empty.isAtEnd && empty.records.isEmpty)
+        let countPage = try reopened.loadV2InboundLedgerPage(stream: stream, maxRecords: 1)
+        #expect(countPage.records == [originals[0]] && countPage.next?.afterOrdinal == 1)
+        #expect(consumed.withLock { $0 } == 0)
+        #expect(try reopened.loadSession(id: "journal")?.acpBrokerAcknowledgedCursor == 4)
+    }
+
+    @Test func inboundRecoveryRejectsForeignPositionsAndInvalidBudgets() throws {
+        let (store, fence, stream) = try inboundFixture()
+        _ = try store.retainV2Inbound(inbound(Data()), to: stream, fence: fence)
+        let other = try store.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "other", source: .stdio(connectionID: UUID()), fence: fence)
+        for after in [ACPV2InboundLedgerContinuation(streamID: stream.id, afterOrdinal: 0),
+            .init(streamID: stream.id, afterOrdinal: 2), .init(streamID: other.id, afterOrdinal: 1)] {
+            #expect(throws: ACPV2InboundLedgerError.invalidInput) { try store.loadV2InboundLedgerPage(stream: stream, after: after) }
+        }
+        for (records, bytes) in [(0, 1), (1001, 1), (1, 0), (1, Int(Int32.max) + 1)] {
+            #expect(throws: ACPV2InboundLedgerError.invalidInput) { try store.loadV2InboundLedgerPage(stream: stream, maxRecords: records, maxBytes: bytes) }
+        }
+        #expect(throws: ACPV2InboundLedgerError.invalidInput) { try store.loadV2InboundLedgerStream(sessionId: "other", beforeStreamID: stream.id) }
+        #expect(throws: ACPV2InboundLedgerError.invalidInput) { try store.loadV2InboundLedgerStream(sessionId: "journal", beforeStreamID: UUID()) }
+    }
+
+    @Test(arguments: ["format", "context", "stream-uuid", "source-key", "baseline", "receipt-uuid", "connection-uuid", "cursor", "origin", "receipt-key", "pending-type", "frame-type"])
+    func inboundRecoveryFailsExplicitlyOnUnsupportedOrCorruptMetadata(reason: String) throws {
+        let (store, fence, stream) = try inboundFixture()
+        _ = try store.retainV2Inbound(inbound(Data([255])), to: stream, fence: fence)
+        let statement: String
+        switch reason {
+        case "format": statement = "UPDATE acp_v2_inbound_streams SET format_version = 99"
+        case "context": statement = "UPDATE acp_v2_inbound_streams SET wire_context = '{future}'"
+        case "stream-uuid": statement = "UPDATE acp_v2_inbound_streams SET id = lower(id)"
+        case "source-key": statement = "UPDATE acp_v2_inbound_streams SET source_key = 'wrong'"
+        case "baseline": statement = "UPDATE acp_v2_inbound_streams SET initial_cursor = -1"
+        case "receipt-uuid": statement = "UPDATE acp_v2_inbound_records SET receipt_id = 'bad'"
+        case "connection-uuid": statement = "UPDATE acp_v2_inbound_records SET connection_id = 'bad'"
+        case "cursor": statement = "UPDATE acp_v2_inbound_records SET broker_cursor = -1"
+        case "origin": statement = "UPDATE acp_v2_inbound_records SET broker_origin = 'future'"
+        case "receipt-key": statement = "UPDATE acp_v2_inbound_records SET receipt_key = 'different'"
+        case "pending-type": statement = "UPDATE acp_v2_inbound_records SET pending_request_id = x'ff'"
+        default: statement = "UPDATE acp_v2_inbound_records SET frame = 'text'"
+        }
+        if reason == "stream-uuid" { try store.db.exec("PRAGMA foreign_keys = OFF") }
+        try store.db.exec(statement)
+        let expected: ACPV2InboundLedgerError = ["format", "context"].contains(reason) ? .unsupportedFormat : .corruptRecord
+        if ["format", "context", "stream-uuid", "source-key", "baseline"].contains(reason) {
+            #expect(throws: expected) { try store.loadV2InboundLedgerStream(sessionId: "journal") }
+        } else {
+            #expect(throws: expected) { try store.loadV2InboundLedgerPage(stream: stream) }
+        }
+        #expect(try store.db.query("SELECT frame FROM acp_v2_inbound_records").count == 1)
+    }
+
+    @Test func inboundHistoricalDiscoverySurvivesSourceReplacementUntilSessionDeletion() throws {
+        let (store, fence, old) = try inboundFixture()
+        try store.enableReplicaExport(sessionId: "journal", recordId: "replica")
+        let serial = try store.db.query("SELECT serial FROM session_replica_serial").first?["serial"] as? Int64
+        let captured = inbound(Data(#"{"jsonrpc":"2.0","id":1,"method":"m"}"#.utf8), origin: .pendingSnapshot)
+        let original = try store.retainV2Inbound(captured, to: old, fence: fence)
+        #expect(try store.db.query("SELECT serial FROM session_replica_serial").first?["serial"] as? Int64 == serial)
+        #expect(try store.updateACPBrokerAcknowledgedCursor(sessionId: "journal", brokerId: "broker", generation: 7, cursor: 8, wireContext: .rawV2))
+        let ackedRetry = try store.retainV2Inbound(inbound(captured.frame, origin: .pendingSnapshot), to: old, fence: fence)
+        #expect(ackedRetry.record == original.record && !ackedRetry.wasInserted)
+        try store.clearACPBrokerState(sessionId: "journal")
+        let reopened = try ACPSessionStore(path: store.path)
+        #expect(try reopened.loadV2InboundLedgerStream(sessionId: "journal") == old)
+        #expect(try reopened.updateACPBrokerState(sessionId: "journal", brokerId: "broker", generation: 8, acknowledgedCursor: 0, wireContext: .rawV2))
+        try reopened.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        let current = try reopened.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream", source: .broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 8)),
+            fence: .init(sessionId: "journal", ownerInstance: "B", token: "new"))
+        #expect(try reopened.loadV2InboundLedgerStream(sessionId: "journal") == current)
+        #expect(try reopened.loadV2InboundLedgerStream(sessionId: "journal", beforeStreamID: current.id) == old)
+        #expect(try reopened.loadV2InboundLedgerStream(sessionId: "journal", beforeStreamID: old.id) == nil)
+        let before = try reopened.loadSession(id: "journal")
+        let replica = try reopened.db.query("SELECT serial FROM session_replica_serial").first?["serial"] as? Int64
+        let recovered = try reopened.loadV2InboundLedgerPage(stream: old)
+        #expect(recovered.records == [original.record] && recovered.hasKnownMissingPrefix)
+        #expect(try reopened.loadV2InboundLedgerPage(stream: current).hasKnownMissingPrefix == false)
+        #expect(try reopened.loadSession(id: "journal") == before)
+        #expect(try reopened.db.query("SELECT serial FROM session_replica_serial").first?["serial"] as? Int64 == replica)
+        try reopened.deleteSession(id: "journal")
+        #expect(try reopened.loadV2InboundLedgerStream(sessionId: "journal") == nil)
+        #expect(try reopened.db.query("SELECT stream_id FROM acp_v2_inbound_records").isEmpty)
+    }
+
+    @Test(arguments: ["delivery", "stored-key"])
+    func inboundBrokerIdentityCannotUseUnicodeEquivalenceToChangeItsSource(path: String) throws {
+        let (store, fence, _) = try inboundFixture()
+        #expect(try store.updateACPBrokerState(sessionId: "journal", brokerId: "K", generation: 7, acknowledgedCursor: 4, wireContext: .rawV2))
+        let source = ACPV2InboundLedgerSource.broker(id: .init(rawValue: "K"), generation: .init(rawValue: 7))
+        let stream = try store.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream", source: source, fence: fence)
+        let count = Mutex(0)
+        if path == "delivery" {
+            let delivery = ACPV2InboundDelivery(frame: Data(), connectionID: UUID(), source: .broker(provenance: .init(brokerID: .init(rawValue: "\u{212a}"),
+                generation: .init(rawValue: 7), cursor: .init(rawValue: 5), origin: .journal), pendingRequestID: "p"),
+                durableConsumptionAcknowledgement: { count.withLock { $0 += 1 } })
+            #expect(throws: ACPV2InboundLedgerError.incompatibleStream) { try store.retainV2Inbound(delivery, to: stream, fence: fence) }
+        } else {
+            try store.db.exec("UPDATE acp_v2_inbound_streams SET source_key = ? WHERE id = ?", bindings: ["broker:\u{212a}:7", stream.id.uuidString])
+            #expect(throws: ACPV2InboundLedgerError.corruptRecord) { try store.loadV2InboundLedgerStream(sessionId: "journal") }
+            #expect(throws: ACPV2InboundLedgerError.corruptRecord) {
+                try store.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream", source: source, fence: fence)
+            }
+        }
+        #expect(count.withLock { $0 } == 0)
+        #expect(try store.db.query("SELECT ordinal FROM acp_v2_inbound_records").isEmpty)
+        #expect(try store.db.query("SELECT id FROM acp_v2_inbound_streams").count == 2)
+    }
+
+    @Test(arguments: [false, true])
+    func corruptCurrentBrokerAckCannotBecomeAZeroLedgerBaseline(retention: Bool) throws {
+        let (store, fence, _) = try journalFixture()
+        let source = ACPV2InboundLedgerSource.broker(id: .init(rawValue: "broker"), generation: .init(rawValue: 7))
+        let stream = retention ? try store.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream", source: source, fence: fence) : nil
+        try store.db.exec("UPDATE sessions SET acp_broker_acknowledged_cursor = 'corrupt' WHERE id = 'journal'")
+        let count = Mutex(0)
+        if let stream {
+            #expect(throws: ACPV2InboundLedgerError.incompatibleStream) {
+                try store.retainV2Inbound(inbound(Data(), callback: { count.withLock { $0 += 1 } }), to: stream, fence: fence)
+            }
+        } else {
+            #expect(throws: ACPV2InboundLedgerError.incompatibleStream) {
+                try store.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "upstream", source: source, fence: fence)
+            }
+        }
+        #expect(try store.db.query("SELECT ordinal FROM acp_v2_inbound_records").isEmpty)
+        #expect(try store.db.query("SELECT id FROM acp_v2_inbound_streams").count == (retention ? 1 : 0))
+        #expect(count.withLock { $0 } == 0)
+    }
+
+    @Test(arguments: ["pending", "upstream"])
+    func inboundOpaqueMetadataCannotRecoverThroughLossyUTF8Repair(field: String) throws {
+        let (store, fence, stream) = try inboundFixture()
+        let delivery = inbound(Data([255]), pending: "\u{fffd}")
+        _ = try store.retainV2Inbound(delivery, to: stream, fence: fence)
+        if field == "pending" {
+            try store.db.exec("UPDATE acp_v2_inbound_records SET pending_request_id = CAST(x'ff' AS TEXT)")
+            #expect(throws: ACPV2InboundLedgerError.corruptRecord) { try store.loadV2InboundLedgerPage(stream: stream) }
+            #expect(throws: ACPV2InboundLedgerError.corruptRecord) { try store.retainV2Inbound(delivery, to: stream, fence: fence) }
+        } else {
+            try store.db.exec("UPDATE acp_v2_inbound_streams SET upstream_session_id = CAST(x'ff' AS TEXT)")
+            #expect(throws: ACPV2InboundLedgerError.corruptRecord) { try store.loadV2InboundLedgerStream(sessionId: "journal") }
+            #expect(throws: ACPV2InboundLedgerError.corruptRecord) {
+                try store.registerV2InboundLedger(sessionId: "journal", upstreamSessionId: "\u{fffd}", source: stream.source, fence: fence)
+            }
+        }
+        #expect(try store.db.query("SELECT frame FROM acp_v2_inbound_records").first?["frame"] as? Data == Data([255]))
+    }
+
     private func submission(_ store: ACPSessionStore, fence: ACPSessionLeaseFence, id: UUID = UUID(),
         row: UUID = UUID(), binding: ACPV2SubmissionBinding? = nil) throws -> ACPV2SubmissionRegistration {
         try store.registerV2Submission(id: id, sessionId: "journal", upstreamSessionId: "upstream", localRowID: row,

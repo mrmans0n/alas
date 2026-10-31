@@ -9,6 +9,30 @@ struct ACPSessionStoreSchemaTests {
         return try ACPSessionStore(path: url.path)
     }
 
+    @Test func inboundMigrationPreservesOtherJournalsAndStartsWithoutReceipts() throws {
+        let store = try tmpStore()
+        try store.upsertSession(.init(id: "inbound-migration", agentId: "fixture", title: "Saved", autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        try store.seizeLease(sessionId: "inbound-migration", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let fence = ACPSessionLeaseFence(sessionId: "inbound-migration", ownerInstance: "A", token: "owner")
+        let connection = UUID()
+        let updateStream = try store.registerV2UpdateJournal(sessionId: "inbound-migration", upstreamSessionId: "u", source: .stdio(connectionID: connection), fence: fence)
+        let update = try store.appendV2Update(.init(frame: Data([255]), connectionID: connection), to: updateStream, fence: fence)
+        let submission = try store.registerV2Submission(id: UUID(), sessionId: "inbound-migration", upstreamSessionId: "u", localRowID: UUID(),
+            binding: .stdio(connectionID: connection, requestID: .number(1)), fence: fence)
+        let saved = try store.loadSession(id: "inbound-migration")
+        try store.db.exec("DROP TABLE IF EXISTS acp_v2_inbound_records")
+        try store.db.exec("DROP TABLE IF EXISTS acp_v2_inbound_streams")
+        try store.db.exec("UPDATE schema_version SET version = 32")
+        let reopened = try ACPSessionStore(path: store.path)
+        #expect(try reopened.currentSchemaVersion() == 33)
+        #expect(try reopened.loadSession(id: "inbound-migration") == saved)
+        #expect(try reopened.loadV2UpdateJournalPage(stream: updateStream).records == [update.record])
+        #expect(try reopened.loadV2Submission(id: submission.id)?.registration == submission)
+        #expect(try reopened.db.query("SELECT id FROM acp_v2_inbound_streams").isEmpty)
+        #expect(try reopened.db.query("SELECT ordinal FROM acp_v2_inbound_records").isEmpty)
+    }
+
     @Test func submissionMigrationPreservesLegacyRowsWithoutCreatingAttempts() throws {
         let store = try tmpStore()
         try store.upsertSession(.init(id: "legacy-submission", agentId: "fixture", title: "Legacy", autoRun: false,
@@ -22,7 +46,7 @@ struct ACPSessionStoreSchemaTests {
         try store.db.exec("UPDATE schema_version SET version = 31")
         let reopened = try ACPSessionStore(path: store.path)
         #expect(try reopened.loadSession(id: "legacy-submission") == original)
-        #expect(try reopened.currentSchemaVersion() == 32)
+        #expect(try reopened.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
         #expect(try reopened.db.query("SELECT id FROM acp_v2_submissions").isEmpty)
         #expect(try reopened.db.query("SELECT submission_id FROM acp_v2_submission_outcomes").isEmpty)
         #expect(try reopened.loadV2UpdateJournalStream(sessionId: "legacy-submission") == stream)

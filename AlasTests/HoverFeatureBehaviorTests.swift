@@ -111,20 +111,21 @@ struct HoverFeatureBehaviorTests {
         #expect(feature.isShowingPopover == false)
     }
 
-    @Test func dwellOverSymbolFiresRequestAfterTimer() async {
+    @Test func dwellOverSymbolFiresRequestAfterTimer() async throws {
         let textView = makeTextView()
         let recorder = HoverRequestRecorder()
         recorder.queueResponse(.plainText("foo: Int"))
         let feature = makeFeature(textView: textView, recorder: recorder)
+        defer { feature.tearDown() }
 
         feature.simulateMouseMoved(at: point(forCharacterAt: 12, in: textView))
-        try? await Task.sleep(nanoseconds: 250_000_000)
-        #expect(await recorder.calls.count == 0)
+        let timer = try #require(Mirror(reflecting: feature).children.first { $0.label == "dwellTimer" }?.value as? Task<Void, Never>)
+        #expect(recorder.calls.isEmpty)
         #expect(feature.isShowingPopover == false)
 
-        try? await Task.sleep(nanoseconds: 700_000_000)
-        #expect(await recorder.calls.count == 1)
-        #expect(feature.isShowingPopover == true)
+        await timer.value
+        try await eventually("hover response after dwell") { feature.isShowingPopover }
+        #expect(recorder.calls.count == 1)
     }
 
     @Test func mouseExitsSymbolBeforeDwellCancelsTimer() async {

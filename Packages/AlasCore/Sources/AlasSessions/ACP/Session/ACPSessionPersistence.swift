@@ -215,6 +215,25 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
             after: after, maxRecords: maxRecords, maxBytes: maxBytes)
     }
 
+    public func registerV2InboundLedger(sessionId: String, upstreamSessionId: String,
+        source: ACPV2InboundLedgerSource, fence: ACPSessionLeaseFence) throws -> ACPV2InboundLedgerStream {
+        try openedStore().registerV2InboundLedger(sessionId: sessionId, upstreamSessionId: upstreamSessionId, source: source, fence: fence)
+    }
+
+    public func retainV2Inbound(_ delivery: ACPV2InboundDelivery, to stream: ACPV2InboundLedgerStream,
+        fence: ACPSessionLeaseFence) throws -> ACPV2InboundLedgerReceipt {
+        try openedStore().retainV2Inbound(delivery, to: stream, fence: fence)
+    }
+
+    public func loadV2InboundLedgerStream(sessionId: String, beforeStreamID: UUID? = nil) throws -> ACPV2InboundLedgerStream? {
+        try openedStore().loadV2InboundLedgerStream(sessionId: sessionId, beforeStreamID: beforeStreamID)
+    }
+
+    public func loadV2InboundLedgerPage(stream: ACPV2InboundLedgerStream, after: ACPV2InboundLedgerContinuation? = nil,
+        maxRecords: Int = 128, maxBytes: Int = 1_048_576) throws -> ACPV2InboundLedgerPage {
+        try openedStore().loadV2InboundLedgerPage(stream: stream, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
+    }
+
     public func upsertSession(_ row: ACPSessionRow, preserveTitle: Bool = false, preserveBrokerState: Bool = false) throws {
         try openedStore().upsertSession(row, preserveTitle: preserveTitle, preserveBrokerState: preserveBrokerState)
     }

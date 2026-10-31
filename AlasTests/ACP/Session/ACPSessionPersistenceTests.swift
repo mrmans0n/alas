@@ -28,6 +28,32 @@ private final class SQLiteWriteLock: Sendable {
 @MainActor
 @Suite("ACP session persistence")
 struct ACPSessionPersistenceTests {
+    @Test func concurrentInboundCopiesCommitOneReceiptWithoutTransportAuthority() async throws {
+        let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await persistence.upsertSession(row(id: "inbound"))
+        let lease = try await persistence.seizeLease(sessionId: "inbound", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let owner = fence(for: lease)
+        let connection = UUID()
+        let stream = try await persistence.registerV2InboundLedger(sessionId: "inbound", upstreamSessionId: "upstream", source: .stdio(connectionID: connection), fence: owner)
+        let delivery = ACPV2InboundDelivery(frame: Data([255, 0]), connectionID: connection, source: .stdio)
+        let receipts = try await withThrowingTaskGroup(of: ACPV2InboundLedgerReceipt.self) { group in
+            for _ in 0..<16 { group.addTask { try await persistence.retainV2Inbound(delivery, to: stream, fence: owner) } }
+            var result: [ACPV2InboundLedgerReceipt] = []
+            for try await receipt in group { result.append(receipt) }
+            return result
+        }
+        #expect(receipts.filter(\.wasInserted).count == 1)
+        #expect(receipts.allSatisfy { $0.record.ordinal == 1 && $0.record.frame == delivery.frame })
+        _ = try await persistence.seizeLease(sessionId: "inbound", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        await #expect(throws: ACPV2InboundLedgerError.staleLease) {
+            try await persistence.retainV2Inbound(delivery, to: stream, fence: owner)
+        }
+        let reopened = ACPSessionPersistence(path: persistence.path)
+        #expect(try await reopened.loadV2InboundLedgerStream(sessionId: "inbound") == stream)
+        let first = try #require(receipts.first)
+        #expect(try await reopened.loadV2InboundLedgerPage(stream: stream).records == [first.record])
+    }
+
     @Test func concurrentSubmissionCopiesCommitOnePassiveOutcome() async throws {
         let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
         try await persistence.upsertSession(row(id: "submission"))
