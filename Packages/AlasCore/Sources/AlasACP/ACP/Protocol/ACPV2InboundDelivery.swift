@@ -34,7 +34,10 @@ public struct ACPV2InboundDelivery: Sendable {
 
     /// Interprets the header without granting method-specific payload validity.
     /// Params remain opaque, including omission versus explicit null.
-    public func decodeHeader() throws -> Header {
+    public func decodeHeader() throws -> Header { try Self.decodeHeader(from: frame) }
+
+    /// Pure interpretation of retained evidence without creating a receipt handle.
+    public static func decodeHeader(from frame: Data) throws -> Header {
         let raw = try LSPJSONValue.decode(from: frame)
         guard case .object(let fields) = raw, fields["jsonrpc"] == .string("2.0"),
               case .string(let method)? = fields["method"], fields["result"] == nil, fields["error"] == nil else {
