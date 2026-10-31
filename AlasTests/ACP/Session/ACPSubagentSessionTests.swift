@@ -1014,7 +1014,8 @@ struct ACPSubagentSessionTests {
         session.applySubagentUpdate(
             .usageUpdate(.init(used: 10, size: 100, cost: nil)),
             subagentSessionId: "child-1")
-        session.applySubagentUpdate(.sessionConfigOptionsUpdate([modelOption("child")]), subagentSessionId: "child-1")
+        session.applySubagentSessionFacts(
+            .sessionConfigOptionsUpdate([modelOption("child")]), subagentSessionId: "child-1", live: true)
 
         #expect(session.currentModel == nil)
         #expect(session.availableConfigOptions.isEmpty)
@@ -1054,12 +1055,13 @@ struct ACPSubagentSessionTests {
         session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
         let run = try #require(session.subagentRun("child-1"))
 
-        session.applySubagentUpdate(.sessionConfigOptionsUpdate([modelOption("live")]), subagentSessionId: "child-1")
+        session.applySubagentSessionFacts(
+            .sessionConfigOptionsUpdate([modelOption("live")]), subagentSessionId: "child-1", live: true)
         #expect(run.isConfigConfirmed)
 
         // A replayed snapshot is older than what this connection reported.
-        session.applySubagentReplayedUpdate(
-            .sessionConfigOptionsUpdate([modelOption("older")]), subagentSessionId: "child-1")
+        session.applySubagentSessionFacts(
+            .sessionConfigOptionsUpdate([modelOption("older")]), subagentSessionId: "child-1", live: false)
         #expect(run.configOptions.map(\.currentStringValue) == ["live"])
         #expect(run.isConfigConfirmed)
 
@@ -1068,12 +1070,13 @@ struct ACPSubagentSessionTests {
         #expect(run.isConfigConfirmed == false)
 
         session.beginSuppressedReplaySideEffects()
-        session.applySubagentReplayedUpdate(
-            .sessionConfigOptionsUpdate([modelOption("replayed")]), subagentSessionId: "child-1")
+        session.applySubagentSessionFacts(
+            .sessionConfigOptionsUpdate([modelOption("replayed")]), subagentSessionId: "child-1", live: false)
         #expect(run.configOptions.map(\.currentStringValue) == ["replayed"])
         #expect(run.isConfigConfirmed == false)
 
-        session.applySubagentUpdate(.sessionConfigOptionsUpdate([modelOption("replayed")]), subagentSessionId: "child-1")
+        session.applySubagentSessionFacts(
+            .sessionConfigOptionsUpdate([modelOption("replayed")]), subagentSessionId: "child-1", live: true)
         #expect(run.isConfigConfirmed)
     }
 
@@ -1093,9 +1096,9 @@ struct ACPSubagentSessionTests {
                 recipientMessageId: "toolu_1", isOutgoing: true))))
         }
         let incoming = {
-            session.applySubagentUpdate(.userMessageChunk(.init(messageId: "toolu_1", content: .text("Fix the build"),
+            session.applySubagentSessionFacts(.userMessageChunk(.init(messageId: "toolu_1", content: .text("Fix the build"),
                 directed: .init(senderSessionId: "root", recipientSessionId: "c1", replacesContent: true,
-                                senderMessageId: "toolu_1"))), subagentSessionId: "c1")
+                                senderMessageId: "toolu_1"))), subagentSessionId: "c1", live: true)
         }
         switch order {
         case .outgoingFirst: _ = announce(); _ = outgoing(); _ = incoming()
@@ -1119,6 +1122,7 @@ struct ACPSubagentSessionTests {
         session.remoteSessionId = "root"
         session.apply(.subagentSpawned(.init(subagentSessionId: "c1", name: "Explore")))
         let applyToChild = { (update: ACPSessionUpdate) in
+            session.applySubagentSessionFacts(update, subagentSessionId: "c1", live: !replaying)
             _ = replaying
                 ? session.applySubagentReplayedUpdate(update, subagentSessionId: "c1")
                 : session.applySubagentUpdate(update, subagentSessionId: "c1")

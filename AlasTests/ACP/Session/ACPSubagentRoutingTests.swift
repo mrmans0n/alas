@@ -91,21 +91,7 @@ struct ACPSubagentRoutingTests {
         #expect(stored.allSatisfy { $0.subagentSessionId == "child-1" })
         #expect(stored.map(\.kind) == ["agent", "tool_call"])
 
-        // Reload the way a relaunch does: hydrate, then rebuild the runs.
-        let hydrated = try await ACPSessionHydrator(path: path).hydrate(sessionId: "s")
-        #expect(hydrated.subagentMessages.count == 2)
-
-        let reopened = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
-        var rows: [ACPMessage.ToolCall] = []
-        for message in hydrated.messages {
-            if case .toolCall(let toolCall) = message.wire { rows.append(toolCall) }
-        }
-        var restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]] = [:]
-        for message in hydrated.subagentMessages {
-            restored[message.subagentSessionId, default: []]
-                .append((message.wire.toMessage(), message.createdAt, message.seq))
-        }
-        reopened.restoreSubagents(rows: rows, messages: restored)
+        let reopened = try await reopen(path)
 
         let run = try #require(reopened.subagentRun("child-1"))
         #expect(run.name == "Explore")
@@ -118,6 +104,29 @@ struct ACPSubagentRoutingTests {
             return
         }
         #expect(buffer.value == "persisted output")
+    }
+
+    @Test("a child's config, directories and delegation link persist on its parent row and survive a reload")
+    func childConfigPersistsOnParentRowAndSurvivesReload() async throws {
+        let (runner, store, path) = try makeRunner()
+        feed(runner, Self.revisedAnnounce)
+        feed(runner, Self.childConfig(model: "gpt-5.5", effort: "high"))
+        feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","cwd":"/w/pkg"}}"#)
+        feed(runner, Self.launch(messageId: "toolu_launch", text: "Fix the build"))
+        // A config frame alone must rewrite the parent row.
+        feed(runner, Self.childConfig(model: "gpt-5.5", effort: "low"))
+        await runner.flushPersistence()
+
+        let reopened = try await reopen(path)
+
+        let run = try #require(reopened.subagentRun("agent_n"))
+        #expect(run.configOptions.map(\.currentStringValue) == ["gpt-5.5", "low"])
+        #expect(run.isConfigConfirmed == false)
+        #expect(run.cwd == "/w/pkg")
+        #expect(reopened.delegationLink(messageId: "toolu_launch")?.senderMessageId == "toolu_launch")
+        // The child's config never leaks into the parent's own options.
+        #expect(runner.session.availableConfigOptions.isEmpty)
+        #expect(try store.loadSession(id: "s")?.configOptionValues.isEmpty == true)
     }
 
     @Test("a child row is rewritten in place rather than appended per chunk")
@@ -600,7 +609,7 @@ struct ACPSubagentRoutingTests {
 
     @Test("a replayed nested lifecycle update is reconciled, its content is not")
     func replayReconcilesNestedLifecycleOnly() async throws {
-        let (runner, _, _) = try makeRunner()
+        let (runner, store, _) = try makeRunner()
         runner.applyIncomingUpdateForTesting(.init(
             sessionId: "remote-parent",
             update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
@@ -626,6 +635,67 @@ struct ACPSubagentRoutingTests {
 
         #expect(runner.session.subagentRun("grandchild")?.messages.count == 1)
         #expect(runner.session.subagentRun("grandchild")?.state == .completed)
+
+        // A replayed config snapshot is history, and the parent-row write
+        // that carries it gates the acknowledgement.
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        let failed = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "grandchild",
+            update: .sessionConfigOptionsUpdate([Self.effortOption("low")]),
+            durableConsumptionAcknowledgement: { failed.value = true }))
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+        #expect(failed.value == false)
+
+        let acknowledged = Acknowledged()
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "grandchild",
+            update: .sessionConfigOptionsUpdate([Self.effortOption("high")]),
+            durableConsumptionAcknowledgement: { acknowledged.value = true }))
+        await runner.flushPersistence()
+        #expect(acknowledged.value)
+        let run = try #require(runner.session.subagentRun("grandchild"))
+        #expect(run.configOptions.map(\.currentStringValue) == ["high"])
+        #expect(run.isConfigConfirmed == false)
+        let stored = try store.loadMessages(sessionId: "s").compactMap {
+            (try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: $0.payload))
+                .flatMap(ACPSubagentRowDescriptor.init(toolCall:))
+        }
+        #expect(stored.first { $0.subagentSessionId == "grandchild" }?
+            .configOptions.map(\.currentStringValue) == ["high"])
+    }
+
+    @Test("an unsuppressed session/load replay leaves a child's observations historical until it ends")
+    func unsuppressedLoadReplayIsHistorical() async throws {
+        let (runner, _, _) = try makeRunner()
+        // A load whose replay is not suppressed (nothing was hydrated) still
+        // resends history through the live path.
+        runner.treatLoadReplayAsHistory(throughYieldedUpdateCount: 3)
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "remote-parent",
+            update: .subagentSpawned(.init(subagentSessionId: "child-1", cwd: "/w/pkg"))))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1", update: .sessionConfigOptionsUpdate([Self.effortOption("low")])))
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1", update: .agentMessageChunk(.text("replayed output"))))
+        let run = try #require(runner.session.subagentRun("child-1"))
+        #expect(run.cwd == "/w/pkg")
+        #expect(run.areDirectoriesConfirmed == false)
+        #expect(run.configOptions.map(\.currentStringValue) == ["low"])
+        #expect(run.isConfigConfirmed == false)
+        #expect(run.messages.count == 1)
+
+        runner.applyIncomingUpdateForTesting(.init(
+            sessionId: "child-1", update: .sessionConfigOptionsUpdate([Self.effortOption("high")])))
+        #expect(run.configOptions.map(\.currentStringValue) == ["high"])
+        #expect(run.isConfigConfirmed)
+    }
+
+    private static func effortOption(_ current: String) -> ACPConfigOption {
+        ACPConfigOption(
+            id: "reasoning_effort", name: "Effort", category: "thought_level", currentValue: .string(current),
+            options: [.init(id: current, name: current)])
     }
 
     @Test("tearing the runner down stops running children and records it")
@@ -931,9 +1001,9 @@ struct ACPSubagentRoutingTests {
     @Test("a revised-form child keeps one row and transcript across a SendMessage resume")
     func revisedResumeKeepsChildIdentity() async throws {
         let (runner, _, _) = try makeRunner()
-        let announce = #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"general-purpose","capabilities":{"cancel":{}},"state":{"state":"running"}}}"#
+        let announce = Self.revisedAnnounce
         feed(runner, announce)
-        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_launch","senderSessionId":"remote-parent","recipientSessionId":"agent_n","content":[{"type":"text","text":"Fix the build"}]}}"#)
+        feed(runner, Self.launch(messageId: "toolu_launch", text: "Fix the build"))
         feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"agent_message_chunk","messageId":"m1","content":{"type":"text","text":"Fixed."}}}"#)
         feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"requires_action"}}}"#)
         let run = try #require(runner.session.subagentRun("agent_n"))
@@ -941,11 +1011,12 @@ struct ACPSubagentRoutingTests {
         #expect(run.isRunning)
         feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"idle","stopReason":"end_turn"}}}"#)
         #expect(run.state == .completed)
+        feed(runner, Self.childConfig(model: "gpt-5.5", effort: "high"))
 
         // SendMessage resumes the SAME session; an adapter restart may also
         // re-announce it. Neither may open a second row or reset the child.
         feed(runner, announce)
-        feed(runner, #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_send","senderSessionId":"remote-parent","recipientSessionId":"agent_n","content":[{"type":"text","text":"Now run the tests"}]}}"#)
+        feed(runner, Self.launch(messageId: "toolu_send", text: "Now run the tests"))
         #expect(run.state == .running)
         #expect(run.finishedAt == nil)
         feed(runner, #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","state":{"state":"idle","stopReason":"end_turn"}}}"#)
@@ -957,6 +1028,8 @@ struct ACPSubagentRoutingTests {
         #expect(run.state == .completed)
         #expect(Self.prompts(in: run) == ["Fix the build", "Now run the tests"])
         #expect(run.messages.count == 3)
+        #expect(run.delegationLinks.map(\.messageId) == ["toolu_launch", "toolu_send"])
+        #expect(run.configOptions.map(\.currentStringValue) == ["gpt-5.5", "high"])
     }
 
     @Test("cancelling one child addresses session/cancel to it alone, leaving its siblings running")
@@ -1040,6 +1113,18 @@ struct ACPSubagentRoutingTests {
         }
     }
 
+    private static let revisedAnnounce = #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","title":"general-purpose","capabilities":{"cancel":{}},"state":{"state":"running"}}}"#
+
+    /// A Codex child's own `config_option_update`: model and reasoning effort.
+    private static func childConfig(model: String, effort: String) -> String {
+        #"{"sessionId":"agent_n","update":{"sessionUpdate":"config_option_update","configOptions":[{"id":"model","name":"Model","category":"model","type":"select","currentValue":"\#(model)","options":[{"value":"gpt-5.5","name":"GPT-5.5"},{"value":"gpt-5.4","name":"GPT-5.4"}]},{"id":"reasoning_effort","name":"Effort","category":"thought_level","type":"select","currentValue":"\#(effort)","options":[{"value":"low","name":"Low"},{"value":"high","name":"High"}]}]}}"#
+    }
+
+    /// The child's incoming view of a parent's delegation message.
+    private static func launch(messageId: String, text: String) -> String {
+        #"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"\#(messageId)","senderSessionId":"remote-parent","recipientSessionId":"agent_n","senderMessageId":"\#(messageId)","content":[{"type":"text","text":"\#(text)"}]}}"#
+    }
+
     private func feed(_ runner: ACPSessionRunner, _ json: String) {
         do {
             let frame = try JSONDecoder().decode(ACPSessionUpdateFrame.self, from: Data(json.utf8))
@@ -1047,6 +1132,23 @@ struct ACPSubagentRoutingTests {
         } catch {
             Issue.record("undecodable frame: \(error)")
         }
+    }
+
+    /// Reloads the way a relaunch does: hydrate, then rebuild the runs.
+    private func reopen(_ path: String) async throws -> ACPSession {
+        let hydrated = try await ACPSessionHydrator(path: path).hydrate(sessionId: "s")
+        let reopened = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        var rows: [ACPMessage.ToolCall] = []
+        for message in hydrated.messages {
+            if case .toolCall(let toolCall) = message.wire { rows.append(toolCall) }
+        }
+        var restored: [String: [(message: ACPMessage, createdAt: Date, seq: Int64)]] = [:]
+        for message in hydrated.subagentMessages {
+            restored[message.subagentSessionId, default: []]
+                .append((message.wire.toMessage(), message.createdAt, message.seq))
+        }
+        reopened.restoreSubagents(rows: rows, messages: restored)
+        return reopened
     }
 
     private struct StoredText: Decodable {

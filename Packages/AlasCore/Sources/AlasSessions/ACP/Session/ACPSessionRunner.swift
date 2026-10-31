@@ -299,6 +299,9 @@ public final class ACPSessionRunner {
     private let usageWaitSleep: @Sendable (Duration) async -> Void
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
+    /// The last yielded update of a `session/load` replay that is applied
+    /// live rather than suppressed. See `treatLoadReplayAsHistory`.
+    private var unsuppressedLoadReplayTarget: Int?
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
     /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so a queue
@@ -552,6 +555,9 @@ public final class ACPSessionRunner {
 
     public func start() {
         session.clearRetryStatus()
+        // The session outlives runners: a window marked by an attempt that
+        // never started must not leak into this one.
+        session.isApplyingUnsuppressedLoadReplay = unsuppressedLoadReplayTarget != nil
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
@@ -1237,6 +1243,7 @@ public final class ACPSessionRunner {
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
+        defer { endUnsuppressedLoadReplayIfReached() }
         if case .asyncTask(let update) = params.update {
             let root = session.remoteSessionId ?? sessionId
             if params.sessionId == root || session.subagentRun(params.sessionId) != nil {
@@ -1538,18 +1545,38 @@ public final class ACPSessionRunner {
             // its first replayed touch and rebuilds it from what replay
             // actually sends, so an already-complete row is unaffected and
             // a partially- or fully-lost one is recovered.
+            //
+            // Facts about the child itself (its config, delegation links)
+            // live on its PARENT row. Any `session/load` replay resends
+            // them as history, suppressed or not.
+            let parentDirty = session.applySubagentSessionFacts(
+                params.update,
+                subagentSessionId: params.sessionId,
+                live: !suppressingLoadReplay && !session.isApplyingUnsuppressedLoadReplay)
             let dirty = suppressingLoadReplay
                 ? session.applySubagentReplayedUpdate(
                     params.update, subagentSessionId: params.sessionId)
                 : session.applySubagentUpdate(
                     params.update, subagentSessionId: params.sessionId)
-            if dirty.isEmpty {
-                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
-            } else {
+            let acknowledgement = persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
+            if !parentDirty.isEmpty {
+                // Never `persistSessionRow`: the root's own
+                // `config_option_values` must not pick up a child's config.
+                // In the same lifecycle batch as the child write below, so a
+                // failed parent write withholds the shared acknowledgement.
+                flushStreamingPersist()
+                persistIndices(
+                    parentDirty,
+                    participatesInLifecycleBatch: true,
+                    completion: dirty.isEmpty ? acknowledgement : nil)
+            }
+            if !dirty.isEmpty {
                 persistSubagentIndices(
                     dirty,
                     subagentSessionId: params.sessionId,
-                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+                    completion: acknowledgement)
+            } else if parentDirty.isEmpty {
+                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
             }
         }
     }
@@ -1731,6 +1758,21 @@ public final class ACPSessionRunner {
         loadReplaySuppressionTarget = max(loadReplaySuppressionTarget ?? 0, target)
     }
 
+    /// Marks the updates yielded so far as a `session/load` replay that is
+    /// applied live — there was no hydrated transcript to suppress it
+    /// against — so the child observations it resends stay historical.
+    public func treatLoadReplayAsHistory(throughYieldedUpdateCount target: Int) {
+        guard target > observedUpdateCount else { return }
+        unsuppressedLoadReplayTarget = max(unsuppressedLoadReplayTarget ?? 0, target)
+        session.isApplyingUnsuppressedLoadReplay = true
+    }
+
+    private func endUnsuppressedLoadReplayIfReached() {
+        guard let target = unsuppressedLoadReplayTarget, observedUpdateCount >= target else { return }
+        unsuppressedLoadReplayTarget = nil
+        session.isApplyingUnsuppressedLoadReplay = false
+    }
+
     public func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
         guard suppressingLoadReplay else { return }
         loadReplaySuppressionTarget = target
@@ -1752,6 +1794,8 @@ public final class ACPSessionRunner {
 
     public func stop() {
         stopped = true
+        unsuppressedLoadReplayTarget = nil
+        session.isApplyingUnsuppressedLoadReplay = false
         session.pendingQueuePersistenceCount -= deferredQueueAcknowledgements.count
         deferredQueueAcknowledgements.removeAll()
         invalidateNativeSteering()

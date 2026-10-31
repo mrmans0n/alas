@@ -7875,6 +7875,13 @@ extension ACPSessionManager {
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
+                    } else if !restored.resumed {
+                        // Nothing was hydrated to suppress the replay against,
+                        // so it is applied live once the runner starts — but
+                        // it is still history.
+                        runner.treatLoadReplayAsHistory(
+                            throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                        )
                     }
                     if !pendingRecovery {
                         session.contextRecoveryStatus = nil
@@ -7898,6 +7905,13 @@ extension ACPSessionManager {
                         runner.finishSuppressingLoadReplay(
                             throughYieldedUpdateCount: connection.client.yieldedUpdateCount
                         )
+                        if !shouldSuppressLoadReplay {
+                            // See `.loadStrict`: an unsuppressed replay is
+                            // still history.
+                            runner.treatLoadReplayAsHistory(
+                                throughYieldedUpdateCount: connection.client.yieldedUpdateCount
+                            )
+                        }
                         if !pendingRecovery {
                             session.contextRecoveryStatus = nil
                         }

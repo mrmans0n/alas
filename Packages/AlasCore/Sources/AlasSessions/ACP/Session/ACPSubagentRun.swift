@@ -417,9 +417,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 return [index]
             }
             return [append(.plan(id: UUID(), items), at: timestamp)]
-        case .sessionConfigOptionsUpdate(let options):
-            // Kept on the run as an observation; it adds no transcript row.
-            observe(config: options, live: true)
+        case .sessionConfigOptionsUpdate:
+            // An observation, not a row: `ACPSession.applySubagentSessionFacts`
+            // records it, knowing whether it is live or replayed.
             return []
         case .availableModelsUpdate, .currentModeUpdate, .currentModelUpdate,
              .availableCommandsUpdate, .usageUpdate,
@@ -504,9 +504,6 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 replayCursor = max(replayCursor, index + 1)
             }
             return dirty
-        case .sessionConfigOptionsUpdate(let options):
-            observe(config: options, live: false)
-            return []
         default:
             return apply(update, at: timestamp)
         }
