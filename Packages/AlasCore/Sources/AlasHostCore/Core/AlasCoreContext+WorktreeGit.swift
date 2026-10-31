@@ -53,7 +53,7 @@ extension AlasCoreContext {
             }
         case .stage, .unstage, .discard, .fetch, .stash, .applyStash, .popStash, .dropStash, .continueOperation, .skipOperation,
              .abortOperation, .useOurs, .useTheirs, .keepDeleted, .markResolved, .editCommit, .createCheckpoint, .deleteCheckpoint,
-             .restoreCheckpoint, .recoverCheckpointRestore:
+             .restoreCheckpoint, .recoverCheckpointRestore, .hunk:
             break
         }
         switch change {
@@ -158,8 +158,75 @@ extension AlasCoreContext {
             return .commitEdited(result: try await editCommit(sha, edit: edit, comparisonMode: comparisonMode, at: root))
         case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint, .recoverCheckpointRestore:
             return try await applyCheckpointChange(change, to: worktree)
+        case .hunk(let path, let stage, let index, let header, let linesHash, let action):
+            try await Self.applyHunk(
+                path: path, stage: stage, index: index, header: header, linesHash: linesHash, action: action, at: root)
         }
         return .done
+    }
+
+    /// As `editCommit`'s `dropHunk`: the host re-reads the diff the Mac was
+    /// shown, as `remoteFileDiff` reads it, and builds the patch from its own
+    /// hunk, which must still have `header` and `linesHash`.
+    private static func applyHunk(
+        path: String, stage: ChangeStage, index: Int, header: String, linesHash: String, action: HostHunkAction, at root: URL
+    ) async throws {
+        try await refuseOutside([path], of: root)
+        guard (action == .unstage) == (stage == .staged) else {
+            throw HostError.invalidRequest(reason: "A hunk is staged or discarded from the unstaged diff, and unstaged from the staged one.")
+        }
+        let changed = HostError.failed(message: "The file changed since it was shown. Refresh and try again.")
+        let git = GitService()
+        // Only a path the Changes list shows on that side: never an ignored file.
+        let entries = try await git.statusIdentity(worktreePath: root).filter { $0.path == path }
+        guard let identity = entries.first, let entry = entries.first(where: { $0.stage == stage }) else { throw changed }
+        guard identity.conflict == nil else { throw HostError.failed(message: "Resolve the conflict on \(path) first.") }
+        let diff = try await git.remoteDiff(
+            worktreePath: root, file: path, staged: stage == .staged, originalPath: identity.renameFrom,
+            maxOutputBytes: RemoteWorktreeFileAccess.maxDiffSubprocessBytes)
+        guard !diff.isBinary else { throw HostError.failed(message: "A binary file has no hunks.") }
+        // Only a hunk the Mac was sent whole, as `remoteFileDiff` caps it.
+        let shown = RemoteWorktreeFileAccess.truncateHunks(diff.hunks).hunks
+        guard shown.indices.contains(index) else { throw changed }
+        // A line past the cap was clamped: the Mac never saw the whole hunk.
+        guard shown[index] == diff.hunks[index] else {
+            throw HostError.failed(message: "This hunk is too large to change from here.")
+        }
+        let hunk = diff.hunks[index]
+        guard hunk.header == header, !hunk.lines.isEmpty, RemoteDiffHunk(hunk).linesHash == linesHash else { throw changed }
+        // A deletion's hunk patch would leave an empty file in the index:
+        // whole-file staging removes the entry.
+        guard entry.status != "D", !hunk.deletesWholeFile else {
+            throw HostError.failed(message: "Stage or unstage the whole file instead.")
+        }
+
+        let tracked = try await Process.git(["--literal-pathspecs", "ls-files", "--error-unmatch", "--", path], cwd: root).exitCode == 0
+        let arguments: [String]
+        switch action {
+        case .stage: arguments = ["apply", "--cached", "-"]
+        case .unstage: arguments = ["apply", "--cached", "--reverse", "-"]
+        case .discard:
+            // As locally: an untracked file is discarded whole.
+            guard tracked else {
+                throw HostError.failed(message: "Discard \(path) as a whole file instead.")
+            }
+            arguments = ["apply", "--reverse", "-"]
+        }
+        // A new file's staged diff is its one hunk from /dev/null: unstaged
+        // as a new-file patch, it leaves the index rather than staying empty.
+        let unstagesAddition = action == .unstage && entry.status == "A" && hunk.oldStart == 0
+        let mode: String
+        if unstagesAddition {
+            // `<mode> <sha> <stage>\t<path>`
+            let listed = try await Process.git(["--literal-pathspecs", "ls-files", "-s", "--", path], cwd: root).stdout
+            mode = listed.split(separator: " ", maxSplits: 1).first.map(String.init) ?? HunkPatchBuilder.defaultUntrackedMode
+        } else {
+            mode = HunkPatchBuilder.fileMode(at: root.appendingPathComponent(path))
+        }
+        let patch = HunkPatchBuilder.patch(
+            file: path, hunk: hunk, tracked: action == .stage ? tracked : !unstagesAddition, untrackedMode: mode)
+        // Git's own context check is the last word on a stale hunk.
+        guard try await Process.git(arguments, cwd: root, stdin: patch).exitCode == 0 else { throw changed }
     }
 
     /// A rebase that ended restores its branch, which a listing read
@@ -186,7 +253,7 @@ extension AlasCoreContext {
             try await git.dropStash(worktreePath: root, stash: listedStash(stash, at: root))
         case .stage, .unstage, .discard, .commit, .push, .pull, .fetch, .continueOperation, .skipOperation, .abortOperation, .useOurs,
              .useTheirs, .keepDeleted, .markResolved, .cherryPick, .revert, .merge, .rebase, .editCommit, .createCheckpoint,
-             .deleteCheckpoint, .restoreCheckpoint, .recoverCheckpointRestore:
+             .deleteCheckpoint, .restoreCheckpoint, .recoverCheckpointRestore, .hunk:
             preconditionFailure("not a stash change")
         }
     }
@@ -288,7 +355,7 @@ extension AlasCoreContext {
     /// taking a side on it would restore every merged file in it.
     private static func refuseUnlessConflicted(_ path: String, at root: URL) async throws {
         // `<mode> <sha> <stage>\t<path>`, NUL-terminated.
-        let unmerged = try await Process.git(["ls-files", "-u", "-z", "--", path], cwd: root)
+        let unmerged = try await Process.git(["--literal-pathspecs", "ls-files", "-u", "-z", "--", path], cwd: root)
         let paths = unmerged.stdout.split(separator: "\0").compactMap { $0.split(separator: "\t", maxSplits: 1).last }
         guard unmerged.exitCode == 0, paths.contains(where: { $0 == path }) else {
             throw HostError.failed(message: "The conflict on \(path) changed; refresh and try again.")

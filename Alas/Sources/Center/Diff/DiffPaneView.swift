@@ -5,6 +5,7 @@ struct DiffPaneHunkActions {
     var stage: (() -> Void)?
     var discard: (() -> Void)?
     var dropFromCommit: (() -> Void)?
+    var unstage: (() -> Void)?
 }
 
 enum DiffSelectionController {

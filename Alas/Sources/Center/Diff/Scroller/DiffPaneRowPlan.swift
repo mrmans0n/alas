@@ -75,11 +75,13 @@ struct DiffPaneHunkActionPresence: Equatable {
     let canStage: Bool
     let canDiscard: Bool
     let canDropFromCommit: Bool
+    let canUnstage: Bool
 
     init(_ actions: DiffPaneHunkActions) {
         canStage = actions.stage != nil
         canDiscard = actions.discard != nil
         canDropFromCommit = actions.dropFromCommit != nil
+        canUnstage = actions.unstage != nil
     }
 }
 
@@ -369,7 +371,7 @@ struct DiffPaneHunkRow: View {
     private var hasHeaderActions: Bool {
         let actions = state.actionRelay.hunkActions(for: group.sourceHunk)
         return !DiffCollapsedContextController.collapsedRowIDs(in: group).isEmpty
-            || actions.stage != nil || actions.discard != nil || actions.dropFromCommit != nil
+            || actions.stage != nil || actions.discard != nil || actions.dropFromCommit != nil || actions.unstage != nil
     }
 
     private var hunkHeader: some View {
@@ -399,6 +401,11 @@ struct DiffPaneHunkRow: View {
             if actions.dropFromCommit != nil {
                 hunkActionButton(systemName: "minus.circle", tooltip: "Drop from commit") {
                     state.actionRelay.hunkActions(for: group.sourceHunk).dropFromCommit?()
+                }
+            }
+            if actions.unstage != nil {
+                hunkActionButton(systemName: "minus.circle", tooltip: "Unstage hunk") {
+                    state.actionRelay.hunkActions(for: group.sourceHunk).unstage?()
                 }
             }
         }

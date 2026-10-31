@@ -40,6 +40,19 @@ struct NativePeerWorkspace: Equatable {
         /// How `path` changed since a checkpoint; served over the host channel only.
         case checkpointDiff(path: String, checkpointID: CheckpointID)
 
+        /// What a host offers on hunk `index` of `count` of this document: stage
+        /// and discard on an unstaged diff, unstage on a staged one. The last
+        /// hunk of a cut-off diff may be partial, so it is not offered. As
+        /// locally, an added or deleted file's hunk is not discarded, and a
+        /// deletion is left to whole-file staging.
+        func hunkActions(for hunk: ParsedDiff.Hunk, index: Int, of count: Int, truncated: Bool) -> [HostHunkAction] {
+            guard case .diff(_, let stage?) = self, !truncated || index < count - 1, !hunk.deletesWholeFile else { return [] }
+            switch stage {
+            case .staged: return [.unstage]
+            case .unstaged: return hunk.oldStart == 0 || hunk.newStart == 0 ? [.stage] : [.stage, .discard]
+            }
+        }
+
         var path: String {
             switch self {
             case .diff(let path, _), .commitDiff(let path, _), .file(let path), .stashDiff(let path, _),
