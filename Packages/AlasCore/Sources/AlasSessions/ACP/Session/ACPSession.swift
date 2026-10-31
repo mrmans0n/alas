@@ -315,9 +315,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Every delegation message seen so far, both views merged, keyed by
     /// message id. The runs hold (and persist) the links naming them.
     private var delegationLinks: [String: ACPDelegationLink] = [:]
-    /// Message ids, in arrival order, of links naming a child that has not
-    /// been announced yet. `registerSubagent` hands them to the new run.
-    private var pendingDelegationLinks: [String] = []
+    /// The keys of `delegationLinks` in arrival order, so a child announced
+    /// after its links adopts them in the order they were sent.
+    private var delegationLinkOrder: [String] = []
     /// True while a `session/load` replay that is NOT suppressed (nothing
     /// was hydrated to reconcile against) flows through the live apply
     /// paths. What it resends is still history, so the child observations
@@ -2410,7 +2410,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         run.merge(spawn: spawn, live: live)
         subagents[id] = run
         subagentOrder.append(id)
-        adoptPendingDelegationLinks(for: run)
+        adoptDelegationLinks(for: run)
         clearRestoredContextRecoveryStatus()
         // A subagent row closes the current output run the same way a tool
         // call does, so held replay candidates must land ahead of it —
@@ -2479,8 +2479,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
     ) -> Set<Int> {
         switch update {
         case .userMessageChunk(let chunk):
-            // Recorded even before the child is announced: the link waits
-            // for it in `pendingDelegationLinks`.
+            // Recorded even before the child is announced: registration
+            // hands it the links already naming it.
             return recordDelegationLink(from: chunk, at: timestamp)
         case .sessionConfigOptionsUpdate(let options):
             guard let run = subagents[subagentSessionId] else { return [] }
@@ -2565,28 +2565,28 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     /// Merges one view of a delegation message into its link and stores the
-    /// result on every child it names, so the link travels in that child's
-    /// row. A child not announced yet gets it on registration. Returns the
-    /// parent rows that changed.
+    /// result on every announced child it names, so the link travels in that
+    /// child's row. Any other participant is either the root, under whatever
+    /// id it had when the message was sent (context recovery gives it a new
+    /// one), or a child not announced yet, which adopts the link on
+    /// registration. Returns the parent rows that changed.
+    ///
+    /// Both views join on `messageId` because the adapter gives them the same
+    /// one: the Claude fork reuses the sending tool use id as the message id
+    /// on the sender's and the recipient's side alike.
     @discardableResult
     public func recordDelegationLink(_ link: ACPDelegationLink, at timestamp: Date = Date()) -> Set<Int> {
-        var merged = delegationLinks[link.messageId] ?? link
-        merged.merge(link)
+        var merged = link
+        if let known = delegationLinks[link.messageId] {
+            merged = known
+            merged.merge(link)
+        } else {
+            delegationLinkOrder.append(link.messageId)
+        }
         delegationLinks[link.messageId] = merged
         var dirty: Set<Int> = []
-        var waitsForChild = false
-        for id in delegationChildIds(of: merged) {
-            guard let run = subagents[id] else {
-                waitsForChild = true
-                continue
-            }
-            if run.record(merged) { dirty.formUnion(refreshSubagentRow(for: run, at: timestamp)) }
-        }
-        let pending = pendingDelegationLinks.contains(merged.messageId)
-        if waitsForChild, !pending {
-            pendingDelegationLinks.append(merged.messageId)
-        } else if !waitsForChild, pending {
-            pendingDelegationLinks.removeAll { $0 == merged.messageId }
+        for run in announcedChildren(of: merged) where run.record(merged) {
+            dirty.formUnion(refreshSubagentRow(for: run, at: timestamp))
         }
         return dirty
     }
@@ -2598,28 +2598,24 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return recordDelegationLink(link, at: timestamp)
     }
 
-    /// The participants of `link` other than the root, each a child that
-    /// should carry it.
-    private func delegationChildIds(of link: ACPDelegationLink) -> [String] {
-        var ids: [String] = []
+    /// The announced children `link` names, each of which carries it.
+    private func announcedChildren(of link: ACPDelegationLink) -> [ACPSubagentRun] {
+        var runs: [ACPSubagentRun] = []
         for id in [link.senderSessionId, link.recipientSessionId].compactMap({ $0 })
-        where id != remoteSessionId && !ids.contains(id) {
-            ids.append(id)
+        where !runs.contains(where: { $0.subagentSessionId == id }) {
+            if let run = subagents[id] { runs.append(run) }
         }
-        return ids
+        return runs
     }
 
-    private func adoptPendingDelegationLinks(for run: ACPSubagentRun) {
-        guard !pendingDelegationLinks.isEmpty else { return }
-        for messageId in pendingDelegationLinks {
+    /// Hands a newly announced (or restored) child every link naming it.
+    private func adoptDelegationLinks(for run: ACPSubagentRun) {
+        let id = run.subagentSessionId
+        for messageId in delegationLinkOrder {
             guard let link = delegationLinks[messageId],
-                  delegationChildIds(of: link).contains(run.subagentSessionId)
+                  link.senderSessionId == id || link.recipientSessionId == id
             else { continue }
             run.record(link)
-        }
-        pendingDelegationLinks.removeAll { messageId in
-            guard let link = delegationLinks[messageId] else { return true }
-            return delegationChildIds(of: link).allSatisfy { subagents[$0] != nil }
         }
     }
 
@@ -2662,22 +2658,30 @@ public final class ACPSession: ChangeTracking, Identifiable {
             rebuilt[descriptor.subagentSessionId] = run
             order.append(descriptor.subagentSessionId)
         }
+        // The persisted rows are authoritative for every link a child carries;
+        // only a link naming no announced child exists nowhere else.
+        let carriers = Set(subagents.keys).union(rebuilt.keys)
+        var links: [String: ACPDelegationLink] = [:]
+        var linkOrder: [String] = []
+        for messageId in delegationLinkOrder {
+            guard let link = delegationLinks[messageId],
+                  ![link.senderSessionId, link.recipientSessionId].contains(where: { $0.map(carriers.contains) ?? false })
+            else { continue }
+            links[messageId] = link
+            linkOrder.append(messageId)
+        }
         subagents = rebuilt
         subagentOrder = order
-        // The persisted rows are authoritative; only links still waiting for
-        // a child exist nowhere else.
-        var links: [String: ACPDelegationLink] = [:]
-        for messageId in pendingDelegationLinks {
-            links[messageId] = delegationLinks[messageId]
-        }
         for run in order.compactMap({ rebuilt[$0] }) {
             for link in run.delegationLinks {
+                if links[link.messageId] == nil { linkOrder.append(link.messageId) }
                 links[link.messageId, default: link].merge(link)
             }
         }
         delegationLinks = links
-        // A link still waiting may name a child only the restored rows know.
-        for run in order.compactMap({ rebuilt[$0] }) { adoptPendingDelegationLinks(for: run) }
+        delegationLinkOrder = linkOrder
+        // A restored row may predate a link another child's row carries.
+        for run in order.compactMap({ rebuilt[$0] }) { adoptDelegationLinks(for: run) }
     }
 
     /// Marks every still-running child as disconnected when the agent

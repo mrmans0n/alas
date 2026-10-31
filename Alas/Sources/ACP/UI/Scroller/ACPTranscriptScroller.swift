@@ -737,8 +737,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             guard snapshot.messages.indices.contains(row.index) else { return nil }
             let message = snapshot.messages[row.index]
             let expansion = Self.rowExpansion(of: message, stableId: row.stableId, store: rowExpansionStore)
-            // `mayBeNative` is false for any row that stays live.
-            let nativeContent = mayBeNative ? ACPTranscriptNativeRows.content(
+            let delegationAction = revealDelegation == nil ? nil : Self.rootDelegationAction(host: host, message: message)
+            // `mayBeNative` is false for any row that stays live. A native row
+            // has no room for the delegation button.
+            let nativeContent = mayBeNative && delegationAction == nil ? ACPTranscriptNativeRows.content(
                 for: message,
                 isLive: snapshot.liveNarrationIndex == row.index,
                 isCommentary: ACPTranscriptRowContent.presentationPhase(of: message) == .commentary,
@@ -750,7 +752,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     key: Self.messageRowKey(
                         host: host, snapshot: snapshot, row: row, message: message,
                         availableRowContentWidth: availableRowContentWidth,
-                        availableTrailingGutterWidth: availableTrailingGutterWidth
+                        availableTrailingGutterWidth: availableTrailingGutterWidth,
+                        delegationAction: delegationAction
                     ),
                     inToolCallGroup: inToolCallGroup,
                     canCancelSubagent: host.onCancelSubagent != nil,
@@ -773,7 +776,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             availableTrailingGutterWidth: availableTrailingGutterWidth,
                             isExpanded: expansion?.isExpanded ?? false,
                             onExpandedChange: expansion?.setExpanded,
-                            onRevealDelegation: revealDelegation
+                            onRevealDelegation: revealDelegation,
+                            delegationAction: delegationAction
                         )
                         if inToolCallGroup {
                             ACPToolCallGroupMemberRow { card }
@@ -990,7 +994,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             row: ACPTranscriptVisibleRow,
             message: ACPMessage,
             availableRowContentWidth: CGFloat,
-            availableTrailingGutterWidth: CGFloat
+            availableTrailingGutterWidth: CGFloat,
+            delegationAction: ACPDelegationAction?
         ) -> ACPTranscriptRowContent.EqualityKey {
             ACPTranscriptRowContent.equalityKey(
                 stableId: row.stableId, message: message,
@@ -1004,8 +1009,23 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 isForkEligible: snapshot.canFork(row.index),
                 forkTargets: host.forkTargets,
                 isLiveNarration: snapshot.liveNarrationIndex == row.index,
-                delegatedLabel: delegatedLabel(host: host, message: message)
+                delegatedLabel: delegatedLabel(host: host, message: message),
+                delegationAction: delegationAction
             )
+        }
+
+        /// The reveal button for a root tool call that sent a delegation
+        /// message (Agent, SendMessage), once the child's view has joined it.
+        /// The link shares the tool call's id.
+        private static func rootDelegationAction(host: ACPTranscriptScroller, message: ACPMessage) -> ACPDelegationAction? {
+            guard case .toolCall(let call) = message,
+                  let link = host.session.delegationLink(messageId: call.toolCallId),
+                  ACPSubagentRowDescriptor(toolCall: call) == nil
+            else { return nil }
+            let session = host.session
+            return ACPSubagentRowPolicy.delegationAction(
+                link: link, viewingSessionId: session.remoteSessionId ?? session.id,
+                parentToolCallIds: [], childNames: session.subagents.mapValues(\.displayName))
         }
 
         /// The caption for a delegated prompt, resolved here because the
@@ -1134,7 +1154,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             availableTrailingGutterWidth: CGFloat? = nil,
             isExpanded: Bool = false,
             onExpandedChange: ((Bool) -> Void)? = nil,
-            onRevealDelegation: ((ACPDelegationNavigationTarget) -> Void)? = nil
+            onRevealDelegation: ((ACPDelegationNavigationTarget) -> Void)? = nil,
+            delegationAction: ACPDelegationAction? = nil
         ) -> some View {
             ACPTranscriptRowContent(
                 stableId: row.stableId,
@@ -1162,6 +1183,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onOpenSubagentLink: host.onOpenSubagentLink,
                 onRevealDelegation: onRevealDelegation,
                 delegatedLabel: delegatedLabel(host: host, message: message),
+                delegationAction: delegationAction,
                 visualAidActions: host.visualAidActions,
                 isExpanded: isExpanded,
                 onExpandedChange: onExpandedChange

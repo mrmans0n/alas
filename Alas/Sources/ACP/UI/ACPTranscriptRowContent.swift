@@ -78,6 +78,10 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// it folds in the sender's agent display name, which lives outside
     /// `message`.
     var delegatedLabel: String? = nil
+    /// The child copy of a delegation this root tool call sent, shown as a
+    /// button that reveals it. Compared, because the link joins outside
+    /// `message`.
+    var delegationAction: ACPDelegationAction? = nil
     /// Not compared, like the other callbacks. `canAnswer` is a closure the
     /// card re-reads (and re-reads when `changes` fires), so a mounted row
     /// follows writer ownership without a new value reaching this struct.
@@ -103,7 +107,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             trustedImageRoot: lhs.trustedImageRoot,
             isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets,
             isLiveNarration: lhs.isLiveNarration,
-            delegatedLabel: lhs.delegatedLabel
+            delegatedLabel: lhs.delegatedLabel,
+            delegationAction: lhs.delegationAction
         )
         == equalityKey(
             stableId: rhs.stableId, message: rhs.message,
@@ -116,7 +121,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             trustedImageRoot: rhs.trustedImageRoot,
             isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets,
             isLiveNarration: rhs.isLiveNarration,
-            delegatedLabel: rhs.delegatedLabel
+            delegatedLabel: rhs.delegatedLabel,
+            delegationAction: rhs.delegationAction
         )
     }
 
@@ -135,7 +141,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         isForkEligible: Bool = false,
         forkTargets: [ACPSessionForkTarget] = [],
         isLiveNarration: Bool = false,
-        delegatedLabel: String? = nil
+        delegatedLabel: String? = nil,
+        delegationAction: ACPDelegationAction? = nil
     ) -> EqualityKey {
         EqualityKey(
             stableId: stableId, message: message,
@@ -148,7 +155,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             typography: typography, trustedImageRoot: trustedImageRoot,
             isForkEligible: isForkEligible, forkTargets: forkTargets,
             isLiveNarration: isLiveNarration,
-            delegatedLabel: delegatedLabel
+            delegatedLabel: delegatedLabel,
+            delegationAction: delegationAction
         )
     }
 
@@ -170,6 +178,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         let forkTargets: [ACPSessionForkTarget]
         let isLiveNarration: Bool
         let delegatedLabel: String?
+        let delegationAction: ACPDelegationAction?
     }
 
     static func presentationPhase(of message: ACPMessage) -> ACPMessagePhase? {
@@ -214,9 +223,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         let session = session
         let transcript = transcript
         return ACPSubagentDelegationContext(
-            rootSessionId: session.remoteSessionId ?? session.id,
             rootAgentId: session.agentId,
-            knownChildIds: { Set(session.subagents.keys) },
             childNames: { session.subagents.mapValues(\.displayName) },
             renderedParentToolCallIds: { link in
                 Set([link.senderMessageId, link.messageId].compactMap { $0 }.filter {
@@ -341,15 +348,14 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     // exactly like the ordinary tool-call path below.
                     .environment(\.acpTerminalHost, session.terminalHost)
                     .environment(\.acpTrustedImageRoot, trustedImageRoot)
+            } else if let delegationAction, let onRevealDelegation {
+                VStack(alignment: .leading, spacing: 4) {
+                    toolCallCard(tc)
+                    ACPSubagentDelegationBadgeView(badge: .init(action: (
+                        delegationAction.label, { onRevealDelegation(delegationAction.target) })))
+                }
             } else {
-                ACPToolCallCard(
-                    toolCall: tc,
-                    messageCreatedAt: messageCreatedAt,
-                    trustedImageRoot: trustedImageRoot,
-                    loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil,
-                    initiallyExpanded: isExpanded,
-                    onExpandedChange: onExpandedChange)
-                    .environment(\.acpTerminalHost, session.terminalHost)
+                toolCallCard(tc)
             }
         case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: onOpenDiff)
@@ -363,6 +369,17 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                 sendStatus: session.visualAidSendStatus(for: visual.id), actions: visualAidActions,
                 typography: typography)
         }
+    }
+
+    private func toolCallCard(_ tc: ACPMessage.ToolCall) -> some View {
+        ACPToolCallCard(
+            toolCall: tc,
+            messageCreatedAt: messageCreatedAt,
+            trustedImageRoot: trustedImageRoot,
+            loadFullContent: tc.isContentTruncated ? onLoadFullToolCallContent : nil,
+            initiallyExpanded: isExpanded,
+            onExpandedChange: onExpandedChange)
+            .environment(\.acpTerminalHost, session.terminalHost)
     }
 
     private func forkBoundary(kind: ACPForkMessageBoundary.Kind) -> ACPForkMessageBoundary? {

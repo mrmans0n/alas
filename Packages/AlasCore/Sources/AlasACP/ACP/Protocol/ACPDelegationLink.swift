@@ -55,42 +55,43 @@ public enum ACPDelegationNavigationTarget: Equatable, Sendable {
 public enum ACPDelegationNavigation {
     /// The other side of `link`, seen from `viewingSessionId`.
     ///
+    /// Any participant that is not in `knownChildIds` is the root: context
+    /// recovery gives the root a new session id, and links recorded before it
+    /// still name the old one. That includes the viewer, so the root's own view
+    /// needs no id of its own.
+    ///
     /// The root never shows a delegation as a row of its own, so from the root
     /// the target is always the child's row for it. From a child that received
-    /// the message, the root's sending tool call is the target only while it is
-    /// in `parentToolCallIds` (rendered); otherwise the child's own row stands
-    /// in. Unknown participants, and a child's view of its own handback to the
-    /// root (which has no root row), resolve to nil.
+    /// the message from the root, the root's sending tool call is the target
+    /// only while it is in `parentToolCallIds` (rendered); otherwise the
+    /// child's own row stands in. A message between two children leads to the
+    /// other child's copy of it, in either direction. A missing participant,
+    /// and a child's view of its own handback to the root (which has no root
+    /// row), resolve to nil.
     public static func counterpart(
-        of link: ACPDelegationLink, viewingSessionId: String, rootSessionId: String,
+        of link: ACPDelegationLink, viewingSessionId: String,
         parentToolCallIds: Set<String>, knownChildIds: Set<String>
     ) -> ACPDelegationNavigationTarget? {
         let sender = link.senderSessionId
         let recipient = link.recipientSessionId
-        func isChild(_ id: String?) -> Bool { id.map(knownChildIds.contains) ?? false }
+        let senderChild = sender.flatMap { knownChildIds.contains($0) ? $0 : nil }
+        let recipientChild = recipient.flatMap { knownChildIds.contains($0) ? $0 : nil }
+        let senderCopy = link.senderMessageId ?? link.messageId
+        let recipientCopy = link.recipientMessageId ?? link.messageId
 
-        if viewingSessionId == rootSessionId {
-            if let recipient, isChild(recipient) {
-                return .childMessage(subagentSessionId: recipient, messageId: link.recipientMessageId ?? link.messageId)
-            }
-            if let sender, isChild(sender), recipient == rootSessionId {
-                return .childMessage(subagentSessionId: sender, messageId: link.senderMessageId ?? link.messageId)
-            }
+        guard knownChildIds.contains(viewingSessionId) else {
+            if let recipientChild { return .childMessage(subagentSessionId: recipientChild, messageId: recipientCopy) }
+            if let senderChild { return .childMessage(subagentSessionId: senderChild, messageId: senderCopy) }
             return nil
         }
-        guard isChild(viewingSessionId) else { return nil }
-        if viewingSessionId == recipient {
-            if sender == rootSessionId {
-                let toolCallId = link.senderMessageId ?? link.messageId
-                return parentToolCallIds.contains(toolCallId)
-                    ? .parentToolCall(toolCallId: toolCallId)
-                    : .subagentRow(subagentSessionId: viewingSessionId)
-            }
-            if let sender, isChild(sender) { return .subagentRow(subagentSessionId: sender) }
-            return nil
+        if viewingSessionId == recipient, sender != nil {
+            if let senderChild { return .childMessage(subagentSessionId: senderChild, messageId: senderCopy) }
+            return parentToolCallIds.contains(senderCopy)
+                ? .parentToolCall(toolCallId: senderCopy)
+                : .subagentRow(subagentSessionId: viewingSessionId)
         }
-        if viewingSessionId == sender, let recipient, isChild(recipient) {
-            return .childMessage(subagentSessionId: recipient, messageId: link.recipientMessageId ?? link.messageId)
+        if viewingSessionId == sender, let recipientChild {
+            return .childMessage(subagentSessionId: recipientChild, messageId: recipientCopy)
         }
         return nil
     }

@@ -90,13 +90,13 @@ enum ACPSubagentRowPolicy {
 
     /// "From parent" / "From <name>" / "Sent to parent" / "Sent to <name>"
     /// for a row that carried a delegation message, seen from
-    /// `viewingSessionId`.
+    /// `viewingSessionId`. A participant that is not a known child is the
+    /// parent, whichever id it had when the message was sent.
     static func delegationCaption(
-        link: ACPDelegationLink, viewingSessionId: String, rootSessionId: String, childNames: [String: String]
+        link: ACPDelegationLink, viewingSessionId: String, childNames: [String: String]
     ) -> String {
         func name(_ id: String?) -> String? {
-            guard let id else { return nil }
-            return id == rootSessionId ? "parent" : (childNames[id] ?? "Subagent")
+            id.map { childNames[$0] ?? "parent" }
         }
         if link.recipientSessionId == viewingSessionId {
             return name(link.senderSessionId).map { "From \($0)" } ?? "Received message"
@@ -107,16 +107,33 @@ enum ACPSubagentRowPolicy {
         return "Delegated message"
     }
 
-    /// Where a delegated row inside `viewingSessionId`'s transcript can
-    /// navigate. The child's own row in the parent is the row the user is
+    /// What a delegated row inside `viewingSessionId`'s transcript (a child,
+    /// or the root's own tool call) offers to show, labelled by where it
+    /// lands. The child's own row in the parent is the row the user is
     /// already inside, so that fallback is dropped rather than offered.
-    static func delegationTarget(
-        link: ACPDelegationLink, viewingSessionId: String, rootSessionId: String,
-        parentToolCallIds: Set<String>, knownChildIds: Set<String>
-    ) -> ACPDelegationNavigationTarget? {
-        let target = ACPDelegationNavigation.counterpart(
-            of: link, viewingSessionId: viewingSessionId, rootSessionId: rootSessionId,
-            parentToolCallIds: parentToolCallIds, knownChildIds: knownChildIds)
-        return target == .subagentRow(subagentSessionId: viewingSessionId) ? nil : target
+    /// `childNames` holds every known child.
+    static func delegationAction(
+        link: ACPDelegationLink, viewingSessionId: String,
+        parentToolCallIds: Set<String>, childNames: [String: String]
+    ) -> ACPDelegationAction? {
+        guard let target = ACPDelegationNavigation.counterpart(
+            of: link, viewingSessionId: viewingSessionId,
+            parentToolCallIds: parentToolCallIds, knownChildIds: Set(childNames.keys)),
+            target != .subagentRow(subagentSessionId: viewingSessionId)
+        else { return nil }
+        let label: String
+        switch target {
+        case .parentToolCall:
+            label = "Show request"
+        case .subagentRow(let id), .childMessage(let id, _):
+            label = "Show in \(childNames[id] ?? "subagent")"
+        }
+        return ACPDelegationAction(label: label, target: target)
     }
+}
+
+/// A button that reveals the other side of a delegation message.
+struct ACPDelegationAction: Equatable {
+    let label: String
+    let target: ACPDelegationNavigationTarget
 }

@@ -93,14 +93,9 @@ struct ACPSubagentRowView: View {
     private func delegationBadge(for message: ACPMessage) -> ACPSubagentDelegationBadge? {
         guard let delegation else { return nil }
         let messageId: String?
-        let actionLabel: String
         switch message {
-        case .user(_, let id, _, _, _, _):
+        case .user(_, let id, _, _, _, _), .agent(_, let id, _):
             messageId = id
-            actionLabel = "Show request"
-        case .agent(_, let id, _):
-            messageId = id
-            actionLabel = "Show reply"
         default:
             return nil
         }
@@ -108,17 +103,17 @@ struct ACPSubagentRowView: View {
             return nil
         }
         let viewing = descriptor.subagentSessionId
+        let childNames = delegation.childNames()
         let caption = ACPSubagentRowPolicy.delegationCaption(
-            link: link, viewingSessionId: viewing,
-            rootSessionId: delegation.rootSessionId, childNames: delegation.childNames())
-        let action: (() -> Void)? = delegation.onReveal.flatMap { reveal in
-            ACPSubagentRowPolicy.delegationTarget(
-                link: link, viewingSessionId: viewing, rootSessionId: delegation.rootSessionId,
+            link: link, viewingSessionId: viewing, childNames: childNames)
+        let action = delegation.onReveal.flatMap { reveal in
+            ACPSubagentRowPolicy.delegationAction(
+                link: link, viewingSessionId: viewing,
                 parentToolCallIds: delegation.renderedParentToolCallIds(link),
-                knownChildIds: delegation.knownChildIds()
-            ).map { target in { reveal(target) } }
+                childNames: childNames
+            ).map { action in (action.label, { reveal(action.target) }) }
         }
-        return ACPSubagentDelegationBadge(caption: caption, actionLabel: actionLabel, action: action)
+        return ACPSubagentDelegationBadge(caption: caption, action: action)
     }
 
     var body: some View {
@@ -322,11 +317,10 @@ private struct ACPSubagentMessageRow: View {
 /// navigate delegation links. Closures, so they read the session when the
 /// row renders rather than when the parent row was built.
 struct ACPSubagentDelegationContext {
-    /// The root's ACP session id, as delegation links name it.
-    let rootSessionId: String
     /// Children run in the root's adapter, so its id decodes their config.
     let rootAgentId: String
-    let knownChildIds: () -> Set<String>
+    /// Every known child's display name, keyed by child session id. A link
+    /// participant not in it is the root.
     let childNames: () -> [String: String]
     /// The link's candidate sending tool calls present in the parent transcript.
     let renderedParentToolCallIds: (ACPDelegationLink) -> Set<String>
@@ -335,13 +329,13 @@ struct ACPSubagentDelegationContext {
 }
 
 struct ACPSubagentDelegationBadge {
-    let caption: String
-    let actionLabel: String
+    /// Nil shows the action alone.
+    var caption: String?
     /// Nil when nothing outside this row answers to the message.
-    let action: (() -> Void)?
+    let action: (label: String, perform: () -> Void)?
 }
 
-private struct ACPSubagentDelegationBadgeView: View {
+struct ACPSubagentDelegationBadgeView: View {
     let badge: ACPSubagentDelegationBadge
     @Environment(\.theme) private var theme
 
@@ -349,10 +343,12 @@ private struct ACPSubagentDelegationBadgeView: View {
         HStack(spacing: 6) {
             Image(systemName: "arrow.left.arrow.right")
                 .font(.system(size: 9))
-            Text(badge.caption)
-                .font(.system(size: 10, weight: .medium))
+            if let caption = badge.caption {
+                Text(caption)
+                    .font(.system(size: 10, weight: .medium))
+            }
             if let action = badge.action {
-                Button(badge.actionLabel, action: action)
+                Button(action.label, action: action.perform)
                     .buttonStyle(.plain)
                     .font(.system(size: 10))
                     .underline()

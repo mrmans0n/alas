@@ -19,26 +19,54 @@ struct ACPSubagentObservationTests {
         #expect(ACPSubagentConfigSummary.make(agentId: "codex", configOptions: [], isConfirmed: true) == nil)
     }
 
-    @Test("a delegation's counterpart prefers a visible tool call, else the child's own row", arguments: [
-        (Set(["toolu_1"]), ACPDelegationNavigationTarget.parentToolCall(toolCallId: "toolu_1")),
-        (Set<String>(), .subagentRow(subagentSessionId: "c1")),
-    ])
-    func navigationTargets(toolCalls: Set<String>, expected: ACPDelegationNavigationTarget) {
-        let link = ACPDelegationLink(messageId: "toolu_1", senderSessionId: "root", recipientSessionId: "c1", senderMessageId: "toolu_1")
-        #expect(ACPDelegationNavigation.counterpart(of: link, viewingSessionId: "c1", rootSessionId: "root",
-                parentToolCallIds: toolCalls, knownChildIds: ["c1"]) == expected)
-        #expect(ACPDelegationNavigation.counterpart(of: link, viewingSessionId: "root", rootSessionId: "root",
-                parentToolCallIds: toolCalls, knownChildIds: ["c1"]) == .childMessage(subagentSessionId: "c1", messageId: "toolu_1"))
+    struct NavigationCase: Sendable, CustomTestStringConvertible {
+        let label: String
+        let link: ACPDelegationLink
+        let viewing: String
+        var toolCalls: Set<String> = []
+        var knownChildren: Set<String> = ["c1", "c2"]
+        let expected: ACPDelegationNavigationTarget?
+        var testDescription: String { label }
     }
 
-    @Test("a child's handback, seen from the root, leads to the child's own row for it")
-    func handbackNavigatesToChildMessage() {
-        let link = ACPDelegationLink(messageId: "toolu_h", senderSessionId: "c1", recipientSessionId: "root",
-                                     senderMessageId: "toolu_h")
-        #expect(ACPDelegationNavigation.counterpart(of: link, viewingSessionId: "root", rootSessionId: "root",
-                parentToolCallIds: [], knownChildIds: ["c1"]) == .childMessage(subagentSessionId: "c1", messageId: "toolu_h"))
-        #expect(ACPDelegationNavigation.counterpart(of: link, viewingSessionId: "root", rootSessionId: "root",
-                parentToolCallIds: [], knownChildIds: []) == nil)
+    static let navigationCases: [NavigationCase] = {
+        let launch = ACPDelegationLink(messageId: "toolu_1", senderSessionId: "root", recipientSessionId: "c1",
+                                       senderMessageId: "toolu_1")
+        // Context recovery gave the root a new id; the link still names the old one.
+        let recoveredLaunch = ACPDelegationLink(messageId: "toolu_1", senderSessionId: "root-old",
+                                                recipientSessionId: "c1", senderMessageId: "toolu_1")
+        let handback = ACPDelegationLink(messageId: "toolu_h", senderSessionId: "c1", recipientSessionId: "root",
+                                         senderMessageId: "toolu_h")
+        let sibling = ACPDelegationLink(messageId: "toolu_s", senderSessionId: "c2", recipientSessionId: "c1",
+                                        senderMessageId: "toolu_s2", recipientMessageId: "toolu_s1")
+        return [
+            .init(label: "launch, from the child, tool call rendered", link: launch, viewing: "c1",
+                  toolCalls: ["toolu_1"], expected: .parentToolCall(toolCallId: "toolu_1")),
+            .init(label: "launch, from the child, tool call hidden", link: launch, viewing: "c1",
+                  expected: .subagentRow(subagentSessionId: "c1")),
+            .init(label: "launch, from the root", link: launch, viewing: "root",
+                  expected: .childMessage(subagentSessionId: "c1", messageId: "toolu_1")),
+            .init(label: "launch naming a recovered root, from the child", link: recoveredLaunch, viewing: "c1",
+                  toolCalls: ["toolu_1"], expected: .parentToolCall(toolCallId: "toolu_1")),
+            .init(label: "launch naming a recovered root, from the root", link: recoveredLaunch, viewing: "root-new",
+                  expected: .childMessage(subagentSessionId: "c1", messageId: "toolu_1")),
+            .init(label: "handback, from the root", link: handback, viewing: "root",
+                  expected: .childMessage(subagentSessionId: "c1", messageId: "toolu_h")),
+            .init(label: "handback from an unknown child, from the root", link: handback, viewing: "root",
+                  knownChildren: [], expected: nil),
+            .init(label: "handback, from the child", link: handback, viewing: "c1", expected: nil),
+            .init(label: "sibling message, from the recipient", link: sibling, viewing: "c1",
+                  expected: .childMessage(subagentSessionId: "c2", messageId: "toolu_s2")),
+            .init(label: "sibling message, from the sender", link: sibling, viewing: "c2",
+                  expected: .childMessage(subagentSessionId: "c1", messageId: "toolu_s1")),
+        ]
+    }()
+
+    @Test("a delegation's counterpart is the other side's copy of it", arguments: navigationCases)
+    func navigationTargets(_ c: NavigationCase) {
+        #expect(ACPDelegationNavigation.counterpart(
+            of: c.link, viewingSessionId: c.viewing,
+            parentToolCallIds: c.toolCalls, knownChildIds: c.knownChildren) == c.expected)
     }
 
     @Test("two partial views of a delegation merge without overwriting a known member")
