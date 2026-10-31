@@ -6164,8 +6164,10 @@ struct ACPSessionManagerAttachRestoreTests {
         try await waitUntil {
             client.sent.map(\.method) == ["initialize", "session/load", "session/prompt"]
                 && session.contextRestoreWarning == nil
+                && session.contextRecoveryStatus == .restored
         }
         #expect(session.contextRecoveryStatus == .restored)
+        await manager.flushAllPersistence()
         #expect(try store.loadSession(id: "local")?.contextRecoveryPending == false)
     }
 
