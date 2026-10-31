@@ -9,41 +9,86 @@ import Testing
 struct VMGuestClientTests {
     private struct ConnectRefused: Error {}
 
+    /// A FIFO of byte chunks with one reader. Locked rather than a stored `AsyncStream`
+    /// iterator: calling a mutating `next()` on a class property across a suspension isn't
+    /// safe under concurrency and crashed on CI when a close raced a read.
+    private final class ByteChannel: @unchecked Sendable {
+        private let lock = NSLock()
+        private var buffer: [Data] = []
+        private var waiter: CheckedContinuation<Data?, Never>?
+        private var finished = false
+
+        /// False once finished.
+        @discardableResult
+        func yield(_ data: Data) -> Bool {
+            lock.lock()
+            guard !finished else { lock.unlock()
+            return false }
+            if let waiter {
+                self.waiter = nil
+                lock.unlock()
+                waiter.resume(returning: data)
+            } else {
+                buffer.append(data)
+                lock.unlock()
+            }
+            return true
+        }
+
+        func finish() {
+            lock.lock()
+            finished = true
+            let waiter = waiter
+            self.waiter = nil
+            lock.unlock()
+            waiter?.resume(returning: nil)
+        }
+
+        func next() async -> Data? {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Data?, Never>) in
+                lock.lock()
+                if !buffer.isEmpty {
+                    let data = buffer.removeFirst()
+                    lock.unlock()
+                    continuation.resume(returning: data)
+                } else if finished {
+                    lock.unlock()
+                    continuation.resume(returning: nil)
+                } else {
+                    waiter = continuation
+                    lock.unlock()
+                }
+            }
+        }
+    }
+
     /// One end of an in-memory byte pipe pair. `close()` ends both directions, like a socket.
     private final class PipeEnd: VMGuestTransport, @unchecked Sendable {
-        /// Read by one task at a time: the client's reader or the fake guest's loop.
-        private var iterator: AsyncStream<Data>.Iterator
-        private let outbound: AsyncStream<Data>.Continuation
-        private let inboundContinuation: AsyncStream<Data>.Continuation
+        private let inbound: ByteChannel
+        private let outbound: ByteChannel
 
-        init(inbound: AsyncStream<Data>, inboundContinuation: AsyncStream<Data>.Continuation,
-             outbound: AsyncStream<Data>.Continuation)
-        {
-            iterator = inbound.makeAsyncIterator()
-            self.inboundContinuation = inboundContinuation
+        init(inbound: ByteChannel, outbound: ByteChannel) {
+            self.inbound = inbound
             self.outbound = outbound
         }
 
         static func pair() -> (host: PipeEnd, guest: PipeEnd) {
-            let (toGuest, toGuestContinuation) = AsyncStream<Data>.makeStream()
-            let (toHost, toHostContinuation) = AsyncStream<Data>.makeStream()
-            return (
-                PipeEnd(inbound: toHost, inboundContinuation: toHostContinuation, outbound: toGuestContinuation),
-                PipeEnd(inbound: toGuest, inboundContinuation: toGuestContinuation, outbound: toHostContinuation)
-            )
+            let toGuest = ByteChannel()
+            let toHost = ByteChannel()
+            return (PipeEnd(inbound: toHost, outbound: toGuest), PipeEnd(inbound: toGuest, outbound: toHost))
         }
 
         func send(_ data: Data) async throws {
-            guard case .enqueued = outbound.yield(data) else { throw ConnectRefused() }
+            guard outbound.yield(data) else { throw ConnectRefused() }
         }
 
         func receive() async throws -> Data? {
-            await iterator.next()
+            await inbound.next()
         }
 
         func close() {
             outbound.finish()
-            inboundContinuation.finish()
+            inbound.finish()
         }
     }
 
@@ -97,16 +142,12 @@ struct VMGuestClientTests {
     /// reply and asked for more, so the reply always lands before the client starts waiting for it.
     private final class EagerHelloTransport: VMGuestTransport, @unchecked Sendable {
         /// Read only by the client's reader.
-        private var chunks: AsyncStream<Data>.Iterator
-        private let inbound: AsyncStream<Data>.Continuation
+        private let inbound = ByteChannel()
         private let receiveCount = Mutex(0)
         private let receiveCalls: AsyncStream<Void>
         private let receiveCallsContinuation: AsyncStream<Void>.Continuation
 
         init() {
-            let (stream, inbound) = AsyncStream<Data>.makeStream()
-            chunks = stream.makeAsyncIterator()
-            self.inbound = inbound
             (receiveCalls, receiveCallsContinuation) = AsyncStream<Void>.makeStream()
         }
 
@@ -122,7 +163,7 @@ struct VMGuestClientTests {
         func receive() async throws -> Data? {
             receiveCount.withLock { $0 += 1 }
             receiveCallsContinuation.yield()
-            return await chunks.next()
+            return await inbound.next()
         }
 
         func close() { inbound.finish() }

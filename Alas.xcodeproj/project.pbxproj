@@ -1143,6 +1143,7 @@
 		9E4B32E154B18BD2285F0D34 /* CommitDiffView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2EF18448EDA0DCC8B171F11D /* CommitDiffView.swift */; };
 		9E890302990A7709343D11F6 /* RightPaneToolbarModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 911C47748187EEA25C56E1C9 /* RightPaneToolbarModelTests.swift */; };
 		9ED684E261871342BA6DFAC9 /* MergeWordDiffTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72970A1D2817539DB5243058 /* MergeWordDiffTests.swift */; };
+		9F0B7876CCAC7225FD522B2A /* VMChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = 355C44C36494D5E96823EAE1 /* VMChrome.swift */; };
 		9FD539228216762192A02C69 /* DialogChrome.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAEDACEB27E6AF219054496E /* DialogChrome.swift */; };
 		9FDF577BDD6D5C47635229DE /* ACPSessionByteAccountingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 52B5F3FFF8AEF13BC48DCFBD /* ACPSessionByteAccountingTests.swift */; };
 		9FE6B05DF450CFD427AD24A2 /* GitServiceStackCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DB1415E5F17DB2DF2038EE54 /* GitServiceStackCommitTests.swift */; };
@@ -1893,10 +1894,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1914,10 +1915,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2325,6 +2326,7 @@
 		34AC28A28C8E0990208E09C8 /* AppState+PromptCards.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "AppState+PromptCards.swift"; sourceTree = "<group>"; };
 		3519B5A28746C49C35D9DAF9 /* SearchInputRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchInputRow.swift; sourceTree = "<group>"; };
 		35543E9F4994774A3743BC12 /* EditorBufferStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferStoreTests.swift; sourceTree = "<group>"; };
+		355C44C36494D5E96823EAE1 /* VMChrome.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMChrome.swift; sourceTree = "<group>"; };
 		35A13D9B95A126987AD92885 /* ACPSessionManagerDisposalTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSessionManagerDisposalTests.swift; sourceTree = "<group>"; };
 		360ABD30E1401D712723D0E0 /* ACPSubagentRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSubagentRowView.swift; sourceTree = "<group>"; };
 		362981F0D01E8EAE39C1EAC5 /* RightPaneToolbar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneToolbar.swift; sourceTree = "<group>"; };
@@ -4501,6 +4503,7 @@
 				65BECB867D8F4F3BE679BE4D /* HelperCodeRequirement.swift */,
 				F4D0638B08DC886A68F75760 /* RunningVM.swift */,
 				143995043B72B58B5F32ABCE /* VirtualMachineTabView.swift */,
+				355C44C36494D5E96823EAE1 /* VMChrome.swift */,
 				EDD659E65B7BE7A52C105821 /* VMComputerUseRoute.swift */,
 				C344B983ED8AD4748D280ABC /* VMConfigurationFactory.swift */,
 				5C2A2CE2145C46D0A3D9953C /* VMDiskSession.swift */,
@@ -7917,6 +7920,7 @@
 				E1EEC0425D8F30D85CDB35EE /* UpdateAvailableSheet.swift in Sources */,
 				C4466064F783E6667C5FD25D /* UpdateController.swift in Sources */,
 				B785053315764F42E3601F15 /* UpdateProgressSheet.swift in Sources */,
+				9F0B7876CCAC7225FD522B2A /* VMChrome.swift in Sources */,
 				98706A863E4258672BF39950 /* VMComputerUseRoute.swift in Sources */,
 				AFAB68532EEC0EA7DEB976B6 /* VMConfigurationFactory.swift in Sources */,
 				5624DD4D16B5C0D5A8DA2D7D /* VMDiskSession.swift in Sources */,

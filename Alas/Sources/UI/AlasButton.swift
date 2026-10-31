@@ -10,6 +10,8 @@ struct AlasButton: View {
     var tint: Color? = nil
     /// Stretches the button to the width its container offers.
     var fillsWidth = false
+    /// 24 pt tall instead of 28, for toolbars and status bars.
+    var compact = false
     let action: () -> Void
     @Environment(\.theme) var theme
 
@@ -19,9 +21,9 @@ struct AlasButton: View {
                 if let icon { Icon(name: icon, size: 11, color: foreground) }
                 Text(title).font(.system(size: 12, weight: .medium))
             }
-            .padding(.horizontal, 12)
+            .padding(.horizontal, compact ? 10 : 12)
             .frame(maxWidth: fillsWidth ? .infinity : nil)
-            .frame(height: 28)
+            .frame(height: compact ? 24 : 28)
             .background(background)
             .overlay(
                 RoundedRectangle(cornerRadius: 6)

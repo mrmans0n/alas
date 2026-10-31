@@ -44,6 +44,13 @@ final class GoldenImageInstaller: ObservableObject {
     /// Why the unattended setup gave up, shown above the manual setup
     /// instructions while the golden awaits setup.
     @Published private(set) var failureNote: String?
+    /// The macOS build being installed or set up, once known.
+    @Published private(set) var setupBuild: String?
+    /// Cancel was asked for and the running setup is winding down.
+    @Published private(set) var cancelling = false
+
+    /// The note for a provisioning run the user cancelled.
+    static let cancelledNote = "Automatic setup was cancelled. Finish it by hand or click Set up automatically."
 
     private static let diskImageSize: UInt64 = 64 << 30
     private nonisolated static let partialSuffix = ".partial"
@@ -58,6 +65,8 @@ final class GoldenImageInstaller: ObservableObject {
     private let provisioner: GoldenProvisioner?
     private let logger = Logger(subsystem: "io.nlopez.alas", category: "golden-image-installer")
     private var installProgressObservation: NSKeyValueObservation?
+    /// The running `start()`, so `cancelSetup()` can cancel it.
+    private var setupTask: Task<Void, Never>?
 
     init(
         root: URL = Paths.vmsRoot,
@@ -129,6 +138,27 @@ final class GoldenImageInstaller: ObservableObject {
     /// golden still awaiting setup (after a relaunch or a fallback) is
     /// set up again from its first boot, never redownloaded.
     func start() async {
+        // The work runs in its own task so `cancelSetup()` cancels it and
+        // not the caller's.
+        guard setupTask == nil else { return }
+        let task = Task { await setUp() }
+        setupTask = task
+        await task.value
+        setupTask = nil
+        cancelling = false
+    }
+
+    /// Stops a download, install or unattended setup in progress. A
+    /// download keeps its partial restore image for the next Set up; an
+    /// interrupted install is discarded; an unattended setup leaves the
+    /// golden stopped and awaiting the manual setup.
+    func cancelSetup() {
+        guard let setupTask, !cancelling else { return }
+        cancelling = true
+        setupTask.cancel()
+    }
+
+    private func setUp() async {
         #if !arch(arm64)
         phase = .failed(WorktreeVMManager.unsupportedMessage)
         #else
@@ -179,6 +209,8 @@ final class GoldenImageInstaller: ObservableObject {
         }
         defer { installLock.release() }
         failureNote = nil
+        setupBuild = resuming
+        defer { setupBuild = nil }
         let build: String? = if let resuming { resuming } else { await install() }
         if let build { await provision(build: build) }
         #endif
@@ -193,7 +225,9 @@ final class GoldenImageInstaller: ObservableObject {
         do {
             try removeStalePartialBundles()
             let image = try await VZMacOSRestoreImage.latestSupported
+            try Task.checkCancellation()
             let build = image.buildVersion
+            setupBuild = build
             let bundleURL = goldenRoot.appendingPathComponent(build, isDirectory: true)
             if FileManager.default.fileExists(atPath: bundleURL.path) {
                 guard VMBundle(url: bundleURL).isSealed else { return build }
@@ -207,7 +241,9 @@ final class GoldenImageInstaller: ObservableObject {
             }
 
             let ipsw = try await downloadRestoreImage(from: image.url, build: build)
+            try Task.checkCancellation()
             try await validateRestoreImage(at: ipsw, build: build)
+            try Task.checkCancellation()
 
             phase = .installing(0)
             let partial = goldenRoot.appendingPathComponent(build + Self.partialSuffix, isDirectory: true)
@@ -223,7 +259,8 @@ final class GoldenImageInstaller: ObservableObject {
                 display: .default)
             do {
                 try await install(configuration: configuration, restoreImage: ipsw)
-            } catch let error as VZError where Self.restoreImageErrors.contains(error.code) {
+                try Task.checkCancellation()
+            } catch let error as VZError where !Task.isCancelled && Self.restoreImageErrors.contains(error.code) {
                 discardRestoreImage(at: ipsw)
                 throw InstallerError(message: "The macOS restore image could not be installed (\(error.localizedDescription)). Click Set up to download it again.")
             }
@@ -235,6 +272,13 @@ final class GoldenImageInstaller: ObservableObject {
         } catch {
             installProgressObservation = nil
             if let partialBundle { try? FileManager.default.removeItem(at: partialBundle) }
+            // A cancelled download surfaces as URLError.cancelled, an
+            // install as Virtualization's own error: the task says which.
+            if Task.isCancelled {
+                logger.info("Golden image install cancelled")
+                phase = Self.settledPhase(in: goldenRoot) ?? .idle
+                return nil
+            }
             logger.error("Golden image install failed: \(String(describing: error), privacy: .public)")
             phase = .failed(error.localizedDescription)
             return nil
@@ -258,7 +302,10 @@ final class GoldenImageInstaller: ObservableObject {
             failureNote = nil
             phase = .sealed(build: build)
         case .fallback(let reason):
-            failureNote = "Automatic setup couldn't finish (\(reason)). Finish it by hand:"
+            failureNote = "Automatic setup couldn't finish (\(reason))."
+            phase = .awaitingSetup(build: build)
+        case .cancelled:
+            failureNote = Self.cancelledNote
             phase = .awaitingSetup(build: build)
         }
     }
@@ -374,7 +421,13 @@ final class GoldenImageInstaller: ObservableObject {
             }
         }
         defer { installProgressObservation = nil }
-        try await installer.install()
+        // Cancelling the installer's progress aborts the install.
+        nonisolated(unsafe) let progress = installer.progress
+        try await withTaskCancellationHandler {
+            try await installer.install()
+        } onCancel: {
+            progress.cancel()
+        }
     }
     #endif
 }

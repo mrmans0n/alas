@@ -167,7 +167,7 @@ final class WorktreeVMManagerTests {
         _ = try await manager.startVM(worktreeID: "/repo/a")
         #expect(try registry.snapshot().first?.runOwner != nil)
 
-        await manager.deleteVM(worktreeID: "/repo/a")
+        #expect(await manager.deleteVM(worktreeID: "/repo/a") == nil)
 
         #expect(manager.running("/repo/a") == nil)
         #expect(try registry.snapshot().isEmpty)
