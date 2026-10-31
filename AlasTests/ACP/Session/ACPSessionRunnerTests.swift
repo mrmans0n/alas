@@ -6015,10 +6015,10 @@ struct ACPSessionRunnerTests {
     }
 
     /// The cost of an autonomous cycle, sent after its task finished, is reported as a background usage row of its
-    /// own, never charged to the prompt before or after it. An adapter that does not settle at its result has no
-    /// such cycles: its prompts keep every cost.
-    @Test(arguments: [true, false])
-    func autonomousUsageIsReportedApart(settles: Bool) async throws {
+    /// own, never charged to the prompt before or after it, whether the cycle ended on its own or was stopped. An
+    /// adapter that does not settle at its result has no such cycles: its prompts keep every cost.
+    @Test(arguments: [(true, "completed"), (true, "stopped"), (false, "completed")])
+    func autonomousUsageIsReportedApart(settles: Bool, cycleEnd: String) async throws {
         var usage: [ACPTurnCompletion] = []
         var completions: [ACPTurnCompletion] = []
         let second = AsyncGate()
@@ -6036,14 +6036,14 @@ struct ACPSessionRunnerTests {
         try await waitUntil { usage.count == 1 }
 
         mock.emit(followUpCycle("async_task_spawned", state: "running"))
-        mock.emit(followUpCycle("async_task_state_update", state: "completed"))
+        mock.emit(followUpCycle("async_task_state_update", state: cycleEnd))
         mock.emit(usageUpdate(3.0))
         if settles {
             try await waitUntil { usage.count == 2 }
             #expect(usage.last?.result == .completed)
             #expect(await usage.last?.cost?.resolve() == .init(amount: 3.0, currency: "USD"))
         } else {
-            try await waitUntil { runner.session.backgroundTasks.first?.state == "completed" }
+            try await waitUntil { runner.session.backgroundTasks.first?.state == cycleEnd }
         }
         #expect(completions.count == 1)
 

@@ -1812,8 +1812,9 @@ public final class ACPSessionRunner {
     }
 
     /// An adapter that settles a turn at its result announces each autonomous follow-up cycle as a root-owned `turn`
-    /// task. A live one starting is new output, so its text may cross the streaming boundary; one finishing outside
-    /// any prompt leaves its cost to report on its own. A prompt sent meanwhile took the cycle over and owns its cost.
+    /// task. A live one starting is new output, so its text may cross the streaming boundary; one ending outside any
+    /// prompt, on its own or stopped, leaves its cost to report on its own. A prompt sent meanwhile took the cycle
+    /// over and owns its cost.
     private func noteAutonomousCycle(identity: String, wasKnown: Bool, wasActive: Bool) {
         guard session.settlesAtResult, !suppressingLoadReplay,
               let task = session.backgroundTasks.first(where: { $0.id == identity }), task.taskType == "turn"
@@ -1825,7 +1826,7 @@ public final class ACPSessionRunner {
         }
         guard wasActive, !task.isActive else { return }
         guard takenOverCycles.remove(identity) == nil,
-              ["completed", "failed"].contains(task.state), activePromptID == nil else { return }
+              ["completed", "failed", "stopped"].contains(task.state), activePromptID == nil else { return }
         // A cycle whose cost never came is reported with what did before the next one replaces it.
         reportAutonomousUsage(cost: nil)
         pendingAutonomousUsage = (
