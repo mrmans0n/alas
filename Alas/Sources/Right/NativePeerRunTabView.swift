@@ -13,6 +13,8 @@ struct NativePeerRunTabView: View {
     /// The host's listed consoles, so a run's console can be opened.
     let consoleIds: Set<String>
     let openConsole: (String) -> Void
+    /// Opens a run's forwarded endpoint, by run id, in the in-app preview.
+    let openPreview: (URL, String) -> Void
 
     @Environment(\.theme) private var theme
     @State private var scripts: [HostRunScript]?
@@ -132,17 +134,18 @@ struct NativePeerRunTabView: View {
         }
     }
 
-    /// A loopback endpoint opens through the host's forward; any other as declared.
+    /// A loopback endpoint opens in the app through the host's forward; any
+    /// other in the default browser, as declared.
     private func openEndpoint(_ endpoint: URL, of row: PeerRuns.Row) {
         guard PeerPortForwardEndpoint.isLoopback(endpoint), let runID = row.record?.id else {
             // Never the Mac's own services: the row offers no other loopback spelling.
             if !RunEndpointPolicy.isLoopback(endpoint) { NSWorkspace.shared.open(endpoint) }
             return
         }
-        let hosts = hosts, serverId = serverId
+        let hosts = hosts, serverId = serverId, openPreview = openPreview
         Task {
             guard let local = await hosts.forwardedEndpoint(endpoint, runID: runID, serverId: serverId) else { return }
-            NSWorkspace.shared.open(local)
+            openPreview(local, runID)
         }
     }
 }

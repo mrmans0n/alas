@@ -339,7 +339,13 @@ struct NativePeerRightPaneView: View {
                 hostName: client.selectedWorktreePeer?.name ?? "The host",
                 refreshGeneration: runRefreshGeneration,
                 consoleIds: Set(client.consoles?.consoles[runTarget.serverId]?.map(\.consoleId) ?? []),
-                openConsole: { client.selectConsole(serverId: runTarget.serverId, consoleId: $0) }
+                openConsole: { client.selectConsole(serverId: runTarget.serverId, consoleId: $0) },
+                openPreview: { [asking = client.selectedWorktree] url, runID in
+                    client.openWebPreview(
+                        url, serverId: runTarget.serverId, runID: runID,
+                        hostName: client.selectedWorktreePeer?.name ?? runTarget.serverId, from: asking
+                    )
+                }
             )
         } else if !client.canReadWorkspace {
             // Changes and files are served per session, or per worktree by a
