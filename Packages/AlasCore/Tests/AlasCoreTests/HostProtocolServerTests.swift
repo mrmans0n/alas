@@ -1873,14 +1873,16 @@ struct HostProtocolServerTests {
         let (repo, ref) = try await fixture.mainWorktree()
         try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
         _ = try await fixture.checkpoint("Old", in: ref)
+        let listed = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
 
         try FileManager.default.removeItem(at: repo)
         try await GitTemplate.repository(at: repo)
+        #expect(await fixture.core.captureAutomaticCheckpoint(listed, prompt: "p", hasAttachments: false) != nil)
         guard case .checkpoints(let catalog, _) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
             Issue.record("expected checkpoints")
             return
         }
-        #expect(catalog.summaries.isEmpty)
+        #expect(catalog.summaries.map(\.kind) == [.automatic])
         #expect(try await fixture.checkpoint("New", in: ref).label == "New")
     }
 

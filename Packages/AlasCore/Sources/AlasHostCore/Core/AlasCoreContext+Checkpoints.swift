@@ -23,8 +23,8 @@ extension AlasCoreContext {
     /// without a target or on any failure, which never holds the prompt back.
     /// The store keeps at most 50 automatic checkpoints, oldest pruned, as the app's.
     func captureAutomaticCheckpoint(_ worktree: Worktree, prompt: String, hasAttachments: Bool) async -> CheckpointID? {
-        guard let target = checkpointTarget(for: worktree) else { return nil }
         do {
+            guard let target = try await refreshedCheckpointTarget(for: worktree) else { return nil }
             let label = AutomaticCheckpointLabel.make(prompt: prompt, hasAttachments: hasAttachments)
             return try await checkpoints.createAutomatic(target: target, label: label).id
         } catch {
@@ -200,14 +200,18 @@ extension AlasCoreContext {
     /// listed again. A Mac has no Refresh to ask for, so the host relists the
     /// project once here, as the app's Refresh does; an identity that still
     /// differs is refused by the service as before.
-    private func requireCheckpointTarget(for worktree: Worktree) async throws -> CheckpointWorktreeTarget {
+    private func refreshedCheckpointTarget(for worktree: Worktree) async throws -> CheckpointWorktreeTarget? {
         var worktree = worktree
         if let lineageID = worktree.lineageID, !worktree.path.isRemoteAlasPath,
            WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) != lineageID {
             if try await environment.refreshProjectWorktrees(worktree.projectId, in: self) { try saveProjects() }
             worktree = projects.worktrees(projectId: worktree.projectId).first { $0.id == worktree.id } ?? worktree
         }
-        guard let target = checkpointTarget(for: worktree) else {
+        return checkpointTarget(for: worktree)
+    }
+
+    private func requireCheckpointTarget(for worktree: Worktree) async throws -> CheckpointWorktreeTarget {
+        guard let target = try await refreshedCheckpointTarget(for: worktree) else {
             throw HostError.failed(message: "Checkpoints are not available for this worktree.")
         }
         return target
