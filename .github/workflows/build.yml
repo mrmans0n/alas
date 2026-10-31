@@ -282,7 +282,7 @@ jobs:
           restore-keys: |
             tools-${{ runner.os }}-arm64-
 
-      - name: Prebuild zmx + fff + tree-sitter pack + Alas Helper + Alas CLI
+      - name: Prebuild zmx + fff + tree-sitter pack + Alas Helper + Alas CLI + Linux guest helper
         # These normally run as pre-build script phases *inside* xcodebuild,
         # where a cold run buries ~11 min of zig/cargo work inside the build
         # step and a later failure throws it away. Run them as their own
