@@ -5107,7 +5107,13 @@ extension ACPSessionRunner {
         }
         // The turn's updates have drained: its echoes have all arrived.
         session.endPromptEchoTurn()
-        session.transcript.streamingState = .idle
+        if session.settlesAtResult {
+            // A child's permission or question parked during the turn
+            // outlives its result: the turn ending must not hide it.
+            session.settleWaitingState(foregroundTurnActive: false)
+        } else {
+            session.transcript.streamingState = .idle
+        }
         guard flushQueueWhenReady else {
             if let turn = boundary.successfulTurn { nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: queue flush deferred") }
             return

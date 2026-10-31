@@ -5653,11 +5653,12 @@ struct ACPSessionRunnerTests {
     }
 
     /// A turn that settled at its result leaves a child running; the child's
-    /// later permission (or out-of-turn plan review) parks and is answered
-    /// without inventing a turn, and the prompt queued meanwhile drains.
-    @Test("a background child's permission after the turn settles back to idle",
-          arguments: ["Bash", "ExitPlanMode"])
-    func outOfTurnPermissionRestoresIdle(tool: String) async throws {
+    /// permission (or out-of-turn plan review) parks and is answered without
+    /// inventing a turn, and the prompt queued meanwhile drains. A permission
+    /// parked before the parent's result outlives the turn ending.
+    @Test("a background child's permission settles back to idle once answered",
+          arguments: [("ExitPlanMode", false), ("Bash", true)])
+    func outOfTurnPermissionRestoresIdle(tool: String, parksBeforeResult: Bool) async throws {
         var completions: [ACPTurnCompletion] = []
         var blockers: [ACPChildBlocker] = []
         let (runner, mock) = try makeRunner(
@@ -5669,28 +5670,45 @@ struct ACPSessionRunnerTests {
         session.settlesAtResult = true
         runner.start()
         defer { runner.stop() }
-        mock.scriptAsync(method: "session/prompt") { _ in
-            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
-            return Data(#"{"stopReason":"end_turn"}"#.utf8)
-        }
-        _ = await withCheckedContinuation { continuation in
-            runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
-        }
-        await runner.waitForTurnPublicationForTesting(promptID: 0)
-        try await waitUntil { session.subagentRun("child-1") != nil }
-        #expect(session.transcript.streamingState == .idle)
-
         let options: [ACPPermissionOption] = tool == "ExitPlanMode"
             ? [.init(optionId: "default", name: "Yes", kind: "allow_once"),
                .init(optionId: "plan", name: "No, keep planning", kind: "reject_once")]
             : [.init(optionId: "allow", name: "Allow", kind: "allow_once"),
                .init(optionId: "reject", name: "Reject", kind: "reject_once")]
-        mock.emitPermission(id: .number(21), params: .init(
+        let permission = ACPPermissionRequestParams(
             sessionId: "child-1",
             toolCall: .init(toolCallId: "child-call", title: tool, kind: nil, status: nil,
                             content: nil, locations: nil, rawInput: nil, rawOutput: nil),
-            options: options))
-        try await waitUntil { session.transcript.pendingPermission != nil }
+            options: options)
+        let permissionParked = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+            if parksBeforeResult {
+                mock.emitPermission(id: .number(21), params: permission)
+                await permissionParked.wait()
+            }
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        let sent = Task { @MainActor in
+            await withCheckedContinuation { continuation in
+                runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
+            }
+        }
+        if parksBeforeResult {
+            try await waitUntil { session.transcript.pendingPermission != nil }
+            await permissionParked.open()
+        }
+        _ = await sent.value
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { session.subagentRun("child-1") != nil }
+
+        if parksBeforeResult {
+            #expect(completions.count == 1)
+        } else {
+            #expect(session.transcript.streamingState == .idle)
+            mock.emitPermission(id: .number(21), params: permission)
+            try await waitUntil { session.transcript.pendingPermission != nil }
+        }
         #expect(blockers.count == 1)
         #expect(session.transcript.streamingState == .awaitingPermission)
         runner.send(text: "next", attachments: [])
@@ -5739,6 +5757,7 @@ struct ACPSessionRunnerTests {
 
         await runner.userCancel()
 
+        #expect(mock.sent.contains { $0.method == "session/cancel" })
         try await waitUntil { mock.permissionResponses[.number(41)] != nil }
         #expect(mock.permissionResponses[.number(41)]?.outcome == .cancelled)
         #expect(session.transcript.streamingState == .idle)
