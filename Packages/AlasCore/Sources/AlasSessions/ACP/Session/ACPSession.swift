@@ -270,7 +270,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// result, the waits still pending here win: an older broker reports
     /// awaiting input for a child's request outside any turn and never clears
     /// it, and reports completion over requests still open. `promptInFlight`
-    /// says whether the broker still holds an unanswered `session/prompt`.
+    /// says whether the broker still holds an unanswered `session/prompt`;
+    /// with one, awaiting input is the turn's own wait and shows as such.
     /// Other adapters keep the broker's word: there, awaiting input with no
     /// prompt is a steering turn held for recovery.
     public func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, promptInFlight: Bool) {
@@ -282,11 +283,14 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .streaming:
             foreground = true
         case .awaitingInput:
-            guard settlesAtResult else {
-                transcript.streamingState = .awaitingInput
+            guard settlesAtResult, !promptInFlight else {
+                // A turn really waits on the user; a question asked during it
+                // must still raise "needs input". A parked permission wins.
+                transcript.streamingState = settlesAtResult && transcript.pendingPermission != nil
+                    ? .awaitingPermission : .awaitingInput
                 return
             }
-            foreground = promptInFlight
+            foreground = false
         case .idle, .completed, .ambiguous, .unknown:
             foreground = false
         }

@@ -41,19 +41,29 @@ struct ACPSessionTests {
     /// requests still open. Only a settling adapter derives past it; elsewhere
     /// awaiting input without a prompt is a steering turn held for recovery.
     @Test("a broker turn state keeps what still waits here", arguments: [
-        // broker state, prompt in flight, settles, permission parked, expected
-        (ACPBrokerTurnState.awaitingInput, false, true, true, ACPSession.StreamingState.awaitingPermission),
-        (.completed, false, true, true, .awaitingPermission),
-        (.awaitingInput, false, true, false, .idle),
-        (.awaitingInput, true, true, false, .streaming),
-        (.streaming, true, true, false, .streaming),
-        (.awaitingInput, false, false, false, .awaitingInput),
+        // broker state, prompt in flight, settles, pending here, expected
+        (ACPBrokerTurnState.awaitingInput, false, true, "permission", ACPSession.StreamingState.awaitingPermission),
+        (.completed, false, true, "permission", .awaitingPermission),
+        (.awaitingInput, true, true, "permission", .awaitingPermission),
+        (.awaitingInput, false, true, "", .idle),
+        (.awaitingInput, true, true, "question", .awaitingInput),
+        (.awaitingInput, true, true, "", .awaitingInput),
+        (.streaming, true, true, "", .streaming),
+        (.awaitingInput, false, false, "", .awaitingInput),
     ])
     func brokerTurnStateKeepsPendingWaits(turnState: ACPBrokerTurnState, promptInFlight: Bool, settles: Bool,
-                                          permissionParked: Bool, expected: ACPSession.StreamingState) {
+                                          pending: String, expected: ACPSession.StreamingState) {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.settlesAtResult = settles
-        if permissionParked {
+        if pending == "question" {
+            session.transcript.pendingUserInputs = [ACPUserInputRequest(
+                id: UUID(),
+                source: .cursor(id: .string("q1"),
+                                params: ACPQuestionRequestParams(toolCallId: "t1", title: "Pick", questions: [])),
+                title: "Pick", message: "Pick", fields: [], mode: .form)]
+            session.transcript.streamingState = .streaming
+        }
+        if pending == "permission" {
             session.transcript.pendingPermission = .init(id: .number(0), params: .init(
                 sessionId: "child-1",
                 toolCall: .init(toolCallId: "c", title: "Bash", kind: nil, status: nil,

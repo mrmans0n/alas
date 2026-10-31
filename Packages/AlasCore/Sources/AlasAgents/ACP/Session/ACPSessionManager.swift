@@ -4397,6 +4397,9 @@ public final class ACPSessionManager: ChangeTracking {
         let brokerId = brokerIdOverride ?? ACPBrokerID(
             rawValue: descriptor?.brokerId.rawValue ?? Self.defaultBrokerId(for: sessionId)
         )
+        // The callback reads the client it belongs to; the runner that will
+        // own it is not installed until after initialize.
+        let attachingClient = WeakBrokerClientBox()
         let client = ACPBrokerClient(
             service: service,
             brokerId: brokerId,
@@ -4428,8 +4431,8 @@ public final class ACPSessionManager: ChangeTracking {
                           self.brokerCallbackOwnerIDs[sessionId] == callbackOwnerID,
                           let session = self.sessions[sessionId]
                     else { return }
-                    let broker = self.runners[sessionId]?.connection.client as? ACPBrokerClient
-                    session.applyBrokerTurnState(turnState, promptInFlight: broker?.hasPromptInFlight ?? false)
+                    session.applyBrokerTurnState(
+                        turnState, promptInFlight: attachingClient.client?.hasPromptInFlight ?? false)
                     if Self.brokerTurnStateAllowsQueueFlush(turnState) {
                         self.runners[sessionId]?.flushQueueIfIdle()
                     }
@@ -4437,6 +4440,7 @@ public final class ACPSessionManager: ChangeTracking {
             },
             wireContext: descriptor?.wireContext ?? .legacyV1
         )
+        attachingClient.client = client
         let connection = ACPConnection(client: client, protocolSelection: makeProtocolSelection())
         guard !attempt.shutdownRequestedBrokerStartupIDs.contains(startupID),
               !Task.isCancelled,
@@ -10702,4 +10706,9 @@ extension ACPSessionManager {
         }
         if let closeError { throw closeError }
     }
+}
+
+/// Lets a broker client's callbacks reach the client itself without a cycle.
+private final class WeakBrokerClientBox: @unchecked Sendable {
+    weak var client: ACPBrokerClient?
 }
