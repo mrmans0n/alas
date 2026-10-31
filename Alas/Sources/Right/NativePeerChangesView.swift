@@ -357,7 +357,7 @@ struct NativePeerChangesView: View {
                             ForEach(loaded) { file in
                                 StashFileRow(
                                     file: file,
-                                    onSelect: { onOpen(.stashDiff(path: file.path, stash: HostStashRef(stash))) },
+                                    onSelect: { onOpen(.stashDiff(file: file, stash: HostStashRef(stash))) },
                                     dragPayload: { nil }
                                 )
                             }
