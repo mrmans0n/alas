@@ -117,45 +117,42 @@ public struct WorktreeStateSnapshotter: Sendable {
         let reusable = previous.map { (snapshot: $0, settledBefore: $0.startedAt.addingTimeInterval(-Self.racyWindow)) }
         guard !target.path.isRemoteAlasPath else { throw CheckpointSnapshotError.remoteTarget }
         try validateLineage(target)
-        let head = try await headOID(target)
-        let branchResult = try await git.runData(["symbolic-ref", "--short", "-q", "HEAD"], cwd: target.path, environment: [:])
-        guard branchResult.exitCode == 0 || branchResult.exitCode == 1 else {
-            throw ProcessError.nonZeroExit(branchResult.exitCode, branchResult.stderr)
-        }
-        let branch = branchResult.exitCode == 1 ? "(detached)" : try line(branchResult.stdout)
+        let (head, branch) = try await headAndBranch(target)
         let indexPath: URL
         if let gitPaths { indexPath = gitPaths.index }
         else { indexPath = try await CheckpointGitPaths.resolve(git: git, cwd: target.path).index }
         let indexChecksum = try checksum(indexPath)
-        let status = try await data(["status", "--porcelain=v2", "-z", "--untracked-files=all"], target)
         // `-v` prefixes each staged record with a tag. Lowercase tags identify
         // assume-unchanged entries, whose disk edits can be hidden from both
-        // status and diff. S marks skip-worktree.
-        let taggedIndex = try records(try await data(["ls-files", "-v", "--stage", "-z"], target))
-            .map { record -> (tag: Character, record: String) in
-                guard let tag = record.first, record.dropFirst().first == " " else { throw CheckpointSnapshotError.invalidGitOutput }
-                return (tag, String(record.dropFirst(2)))
-            }
-        let index = try entries(taggedIndex.map { $0.record }, tree: false)
-        let headEntries = try entries(try records(try await data(["ls-tree", "-r", "-z", head], target)), tree: true)
-        let hidden = try taggedIndex
+        // status and diff. S marks skip-worktree. `--debug` adds the entry
+        // flags, which mark intent-to-add.
+        let listing = try indexListing(try await data(["ls-files", "-v", "--stage", "--debug", "-z"], target))
+        let index = try entries(listing.tagged.map { $0.record }, tree: false)
+        let hidden = try listing.tagged
             .filter { $0.tag == "S" || $0.tag.isLowercase }
             .map { try entryPath(of: $0.record) }
-        let intentToAdd = try await intentToAddPaths(target)
-        let unsupported = Set(hidden + intentToAdd + index.unsupported + headEntries.unsupported)
+        // Git diff can refresh stat entries even with GIT_OPTIONAL_LOCKS=0.
+        // Snapshot reads must preserve the exact index bytes being verified.
+        // Submodules are never ignored, so every path whose HEAD entry differs
+        // from its index entry is listed with that HEAD entry.
+        let staged = try parseDiff(try await data(["-c", "diff.autoRefreshIndex=false", "diff", "--cached", "--raw", "--no-abbrev", "-z",
+                                                   "--find-renames", "--no-ext-diff", "--ignore-submodules=none", head, "--"], target))
+        // HEAD matches the index everywhere the staged diff is silent.
+        var headEntries = Entries(values: index.values)
+        for change in staged.changes {
+            headEntries.values[change.path] = change.head
+            if let destination = change.destination { headEntries.values[destination] = nil }
+            if let entry = change.head, !Self.supportedModes.contains(entry.mode) { headEntries.unsupported.append(change.path) }
+        }
+        let unsupported = Set(hidden + listing.intentToAdd + index.unsupported + headEntries.unsupported)
         guard unsupported.isEmpty else { throw CheckpointSnapshotError.unsupportedPaths(unsupported.sorted()) }
 
-        var candidates = try statusPaths(status)
+        var candidates = staged.paths
         candidates.formUnion(includingPaths)
-        var renames: [(String, String)] = []
-        for args in [["diff", "--cached", "--name-status", "-z", "--find-renames", "--no-ext-diff", head, "--"],
-                     ["diff", "--name-status", "-z", "--find-renames", "--no-ext-diff", "--"]] {
-            // Git diff can refresh stat entries even with GIT_OPTIONAL_LOCKS=0.
-            // Snapshot reads must preserve the exact index bytes being verified.
-            let changes = try parseDiff(try await data(["-c", "diff.autoRefreshIndex=false"] + args, target))
-            candidates.formUnion(changes.paths)
-            renames += changes.renames
-        }
+        let unstaged = try parseDiff(try await data(["-c", "diff.autoRefreshIndex=false", "diff", "--raw", "--no-abbrev", "-z",
+                                                     "--find-renames", "--no-ext-diff", "--"], target))
+        candidates.formUnion(unstaged.paths)
+        let renames = staged.renames + unstaged.renames
         let caseOnlyRenamePairs: [(String, String)] = renames.compactMap { source, destination in
             guard source != destination, source.caseInsensitiveCompare(destination) == .orderedSame else { return nil }
             return (destination, source)
@@ -256,6 +253,8 @@ public struct WorktreeStateSnapshotter: Sendable {
         }
     }
 
+    private static let supportedModes: Set<String> = ["100644", "100755", "120000"]
+
     private struct Entry { let mode: String
     let oid: String
 
@@ -279,7 +278,7 @@ public struct WorktreeStateSnapshotter: Sendable {
             guard fields.count == 3 else { throw CheckpointSnapshotError.invalidGitOutput }
             let path = try entryPath(of: record)
             let mode = String(fields[0])
-            if !["100644", "100755", "120000"].contains(mode) || (!tree && fields[2] != "0") {
+            if !Self.supportedModes.contains(mode) || (!tree && fields[2] != "0") {
                 result.unsupported.append(path)
             }
             result.values[path] = Entry(mode: mode, oid: String(fields[tree ? 2 : 1]))
@@ -292,52 +291,41 @@ public struct WorktreeStateSnapshotter: Sendable {
         return String(record[record.index(after: tab)...])
     }
 
-    private func statusPaths(_ bytes: Data) throws -> Set<String> {
-        let records = try records(bytes)
-        var paths = Set<String>()
-        var offset = 0
-        while offset < records.count {
-            let record = records[offset]
-            offset += 1
-            let count: Int
-            switch record.first {
-            case "1": count = 8
-            case "2": count = 9
-            case "u": throw CheckpointSnapshotError.unsupportedPaths([String(record.split(separator: " ", maxSplits: 10).last ?? "")])
-            case "?": continue // Untracked candidates come exclusively from ls-files.
-            default: throw CheckpointSnapshotError.invalidGitOutput
-            }
-            let fields = record.split(separator: " ", maxSplits: count, omittingEmptySubsequences: false)
-            guard fields.count == count + 1 else { throw CheckpointSnapshotError.invalidGitOutput }
-            paths.insert(String(fields[count]))
-            if record.first == "2" {
-                guard offset < records.count else { throw CheckpointSnapshotError.invalidGitOutput }
-                paths.insert(records[offset])
-                offset += 1
-            }
-        }
-        return paths
+    private struct DiffChange {
+        let path: String
+        /// The source side; nil when the path is absent there.
+        let head: Entry?
+        /// A rename or copy destination.
+        let destination: String?
     }
 
-    private func parseDiff(_ bytes: Data) throws -> (paths: Set<String>, renames: [(String, String)]) {
+    /// Parses `diff --raw -z` output.
+    private func parseDiff(_ bytes: Data) throws -> (paths: Set<String>, renames: [(String, String)], changes: [DiffChange]) {
         let parts = try records(bytes)
         var paths = Set<String>()
         var renames: [(String, String)] = []
+        var changes: [DiffChange] = []
         var offset = 0
         while offset < parts.count {
-            let status = parts[offset]
-            guard offset + 1 < parts.count else { throw CheckpointSnapshotError.invalidGitOutput }
+            let fields = parts[offset].split(separator: " ", omittingEmptySubsequences: false)
+            guard fields.count == 5, fields[0].first == ":", offset + 1 < parts.count else { throw CheckpointSnapshotError.invalidGitOutput }
+            let mode = String(fields[0].dropFirst())
+            let status = fields[4]
             let first = parts[offset + 1]
             paths.insert(first)
             offset += 2
+            var destination: String?
             if status.hasPrefix("R") || status.hasPrefix("C") {
                 guard offset < parts.count else { throw CheckpointSnapshotError.invalidGitOutput }
+                destination = parts[offset]
                 paths.insert(parts[offset])
                 if status.hasPrefix("R") { renames.append((first, parts[offset])) }
                 offset += 1
             }
+            changes.append(.init(path: first, head: mode == "000000" ? nil : Entry(mode: mode, oid: String(fields[2])),
+                                 destination: destination))
         }
-        return (paths, renames)
+        return (paths, renames, changes)
     }
 
     private func makeGroups(paths: Set<String>, renames: [(String, String)]) -> [CheckpointFileGroup] {
@@ -477,23 +465,55 @@ public struct WorktreeStateSnapshotter: Sendable {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private func intentToAddPaths(_ target: CheckpointWorktreeTarget) async throws -> [String] {
-        let output = try await data(["ls-files", "--debug"], target)
-        guard let text = String(data: output, encoding: .utf8) else { throw CheckpointSnapshotError.invalidGitOutput }
-        var result: [String] = []
-        var currentPath: String?
-        for line in text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init) {
-            if line.first?.isWhitespace != true {
-                currentPath = line
-                continue
-            }
-            guard let path = currentPath else { continue }
-            if line.trimmingCharacters(in: .whitespaces).contains("flags: 2000") {
-                result.append(path)
-                currentPath = nil
-            }
+    /// HEAD's object and branch from one `rev-parse`. `--abbrev-ref=loose`
+    /// shortens exactly as `symbolic-ref --short` does; a detached HEAD
+    /// prints `HEAD`. An unborn branch fails, and falls back to the separate
+    /// reads.
+    private func headAndBranch(_ target: CheckpointWorktreeTarget) async throws -> (head: String, branch: String) {
+        let result = try await git.runData(["rev-parse", "HEAD", "--abbrev-ref=loose", "HEAD"], cwd: target.path, environment: [:])
+        if result.exitCode == 0 {
+            let lines = try line(result.stdout).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+            guard lines.count == 2, !lines[0].isEmpty, !lines[1].isEmpty else { throw CheckpointSnapshotError.invalidGitOutput }
+            return (lines[0], lines[1] == "HEAD" ? "(detached)" : lines[1])
         }
-        return result
+        let head = try await headOID(target)
+        let branchResult = try await git.runData(["symbolic-ref", "--short", "-q", "HEAD"], cwd: target.path, environment: [:])
+        guard branchResult.exitCode == 0 || branchResult.exitCode == 1 else {
+            throw ProcessError.nonZeroExit(branchResult.exitCode, branchResult.stderr)
+        }
+        return (head, branchResult.exitCode == 1 ? "(detached)" : try line(branchResult.stdout))
+    }
+
+    /// Parses `ls-files -v --stage --debug -z`: each record ends in NUL and is
+    /// followed by indented, newline-terminated debug lines, the last holding
+    /// the entry flags. Intent-to-add entries carry flag 0x20000000.
+    private func indexListing(_ bytes: Data) throws -> (tagged: [(tag: Character, record: String)], intentToAdd: [String]) {
+        var tagged: [(tag: Character, record: String)] = []
+        var intentToAdd: [String] = []
+        let chunks = bytes.split(separator: 0, omittingEmptySubsequences: false)
+        for (number, chunk) in chunks.enumerated() {
+            var rest = chunk[...]
+            if number > 0 {
+                var sawDebug = false
+                while rest.first == UInt8(ascii: " ") {
+                    guard let newline = rest.firstIndex(of: UInt8(ascii: "\n")) else { throw CheckpointSnapshotError.invalidGitOutput }
+                    if String(decoding: rest[..<newline], as: UTF8.self).contains("flags: 2000"), let previous = tagged.last {
+                        intentToAdd.append(try entryPath(of: previous.record))
+                    }
+                    rest = rest[rest.index(after: newline)...]
+                    sawDebug = true
+                }
+                guard sawDebug else { throw CheckpointSnapshotError.invalidGitOutput }
+            }
+            if number == chunks.count - 1 {
+                guard rest.isEmpty else { throw CheckpointSnapshotError.invalidGitOutput }
+                break
+            }
+            guard let record = String(data: Data(rest), encoding: .utf8), let tag = record.first,
+                  record.dropFirst().first == " " else { throw CheckpointSnapshotError.invalidGitOutput }
+            tagged.append((tag, String(record.dropFirst(2))))
+        }
+        return (tagged, intentToAdd)
     }
 
     private func validateLineage(_ target: CheckpointWorktreeTarget) throws {

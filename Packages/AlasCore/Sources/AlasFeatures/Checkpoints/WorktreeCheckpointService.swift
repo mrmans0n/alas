@@ -330,11 +330,14 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     public func createManual(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
         let label = try normalizedLabel(label)
+        let gitPaths = await capturePaths(target)
         for number in 1...2 {
             do {
-                let attempt = try await CheckpointCaptureAttempt(snapshot: snapshotter.snapshot(target: target), capturedAt: .now)
+                let attempt = try await CheckpointCaptureAttempt(snapshot: snapshotter.snapshot(target: target, gitPaths: gitPaths),
+                                                                 capturedAt: .now)
                 try await hooks.afterPayloadStaging(number)
-                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false, verifying: attempt.snapshot)
+                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false, gitPaths: gitPaths,
+                                                                  verifying: attempt.snapshot)
                 guard attempt.snapshot.fingerprint == verification.fingerprint else { continue }
                 return try await publish(target: target, attempt: attempt, paths: Set(attempt.snapshot.paths.keys),
                                          kind: .manual, label: label)
@@ -347,11 +350,14 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     public func createAutomatic(target: CheckpointWorktreeTarget, label: String) async throws -> WorktreeCheckpointSummary {
         let label = try normalizedLabel(label)
+        let gitPaths = await capturePaths(target)
         for number in 1...2 {
             do {
-                let attempt = try await CheckpointCaptureAttempt(snapshot: snapshotter.snapshot(target: target), capturedAt: .now)
+                let attempt = try await CheckpointCaptureAttempt(snapshot: snapshotter.snapshot(target: target, gitPaths: gitPaths),
+                                                                 capturedAt: .now)
                 try await hooks.afterPayloadStaging(number)
-                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false, verifying: attempt.snapshot)
+                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false, gitPaths: gitPaths,
+                                                                  verifying: attempt.snapshot)
                 guard attempt.snapshot.fingerprint == verification.fingerprint else { continue }
                 let stateKey = try automaticStateKey(for: attempt.snapshot)
                 return try await publishAutomatic(target: target, attempt: attempt, stateKey: stateKey, label: label)
@@ -360,6 +366,12 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             }
         }
         throw CheckpointCaptureError.unstableWorktree
+    }
+
+    /// Git-dir paths shared by a capture's passes. When they can't be
+    /// resolved, each pass resolves its own and reports the failure as before.
+    private func capturePaths(_ target: CheckpointWorktreeTarget) async -> CheckpointGitPaths? {
+        try? await CheckpointGitPaths.resolve(git: snapshotter.git, cwd: target.path)
     }
 
     // Restore preflight supplies the selected current states, including clean
