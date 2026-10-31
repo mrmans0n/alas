@@ -538,8 +538,6 @@ final class WorktreeVMManagerTests {
         try manager.createVM(worktreeID: "/repo/a", guest: .linux)
         #expect(try stubPresent())
         #expect(manager.vmKinds(forWorktree: "/repo/a") == [.linux])
-        #expect(manager.hasVMRecord("/repo/a") == false)
-        #expect(manager.hasVMRecord("/repo/a", guest: .linux) == true)
 
         try manager.createVM(worktreeID: "/repo/a")
         #expect(try !stubPresent())
@@ -578,12 +576,12 @@ final class WorktreeVMManagerTests {
         let manager = makeManager()
         let file = root.appendingPathComponent("registry.json")
         try Data("not json {".utf8).write(to: file)
-        #expect(manager.hasVMRecord("/repo/a") == false)
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [])
 
         try Data("not json {".utf8).write(to: file)
         let bundle = WorktreeVMManager.bundleURL(forWorktree: "/repo/a", root: root)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
-        #expect(manager.hasVMRecord("/repo/a") == true)
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.macOS])
 
         // Still unreadable after quarantine: the bundle on disk answers alone.
         try FileManager.default.removeItem(at: file)

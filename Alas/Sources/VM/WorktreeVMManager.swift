@@ -217,23 +217,12 @@ final class WorktreeVMManager {
 
     // MARK: - Queries
 
-    /// Whether the worktree has a VM of `guest`, read without locking or writing the registry,
-    /// so it is cheap enough for every computer use call; nil when the registry can't be read.
-    /// The worktree's clone bundle on disk counts, so a VM worktree never passes for one
-    /// without a VM.
-    func hasVMRecord(_ worktreeID: String, guest: VMGuestOS = .macOS) -> Bool? {
-        guard vmsExist else { return false }
-        if FileManager.default.fileExists(atPath: Self.bundleURL(forWorktree: worktreeID, guest: guest, root: root).path) {
-            return true
-        }
-        return vmKinds(forWorktree: worktreeID).map { $0.contains(guest) }
-    }
-
-    /// The guests the worktree has a VM of, read like `hasVMRecord`; nil when the registry
-    /// can't be read. A record a newer build wrote under the plain worktree id counts as
-    /// macOS, and so does a clone bundle on disk. The alias stub kept for builds that predate
-    /// Linux guests does not count. An unreadable registry is quarantined once by a locked
-    /// snapshot and read again.
+    /// The guests the worktree has a VM of, read without locking or writing the registry, so it
+    /// is cheap enough for every computer use call; nil when the registry can't be read. A
+    /// record a newer build wrote under the plain worktree id counts as macOS, and so does a
+    /// clone bundle on disk, so a VM worktree never passes for one without a VM. The alias stub
+    /// kept for builds that predate Linux guests does not count. An unreadable registry is
+    /// quarantined once by a locked snapshot and read again.
     func vmKinds(forWorktree worktreeID: String) -> Set<VMGuestOS>? {
         guard vmsExist else { return [] }
         let ids = (try? registry.recordIDs(includingLinuxAliases: false)) ?? {
