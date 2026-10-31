@@ -253,7 +253,9 @@ public enum ACPMCPPromptPreamble: Sendable {
                 lines.append("In a worktree with a VM, computer tools drive the VM instead of the user's Mac. "
                     + "vm_status tells whether it runs and where to put builds (copy to transfer_host_path on the Mac, "
                     + "find them at transfer_guest_path in the VM); vm_run runs a shell command in the VM, "
-                    + "for example to open a built app.")
+                    + "for example to open a built app. "
+                    + "A worktree may have a macOS and a Linux VM: then pass vm: \"macos\" or \"linux\" to these tools; "
+                    + "computer tools work only in the macOS VM.")
             }
             if !isDelegated {
                 lines.append(visualPolicy)

@@ -71,16 +71,16 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
             .map_err(|_| "window-id must be a non-negative integer".to_string())
     };
     match args.first().copied() {
-        Some("apps") if args.len() == 1 => {
-            Ok(Command::Computer(alas_client::ComputerCommand::Apps {
-                call_id: None,
-            }))
-        }
+        Some("apps") if args.len() == 1 => Ok(Command::Computer(
+            alas_client::ComputerCommand::Apps { call_id: None },
+            None,
+        )),
         Some("screenshot") if args.len() == 2 => Ok(Command::Computer(
             alas_client::ComputerCommand::Screenshot {
                 window_id: window_id(args[1])?,
                 call_id: None,
             },
+            None,
         )),
         Some("inspect") if args.len() >= 2 => {
             let window_id = window_id(args[1])?;
@@ -124,13 +124,16 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
             }
             // A query searches as deep as a read may go, as on input actions.
             let max_depth = max_depth.unwrap_or(if query.is_some() { 32 } else { 12 });
-            Ok(Command::Computer(alas_client::ComputerCommand::Inspect {
-                window_id,
-                query,
-                limit,
-                max_depth,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Inspect {
+                    window_id,
+                    query,
+                    limit,
+                    max_depth,
+                    call_id: None,
+                },
+                None,
+            ))
         }
         Some(action @ ("click" | "type" | "key" | "scroll" | "drag" | "wait"))
             if args.len() >= 2 =>
@@ -157,11 +160,14 @@ fn parse_computer(args: &[&str]) -> Result<Command, String> {
             if name.is_some() == bundle_id.is_some() {
                 return Err(OPEN_APP_USAGE.into());
             }
-            Ok(Command::Computer(alas_client::ComputerCommand::OpenApp {
-                name,
-                bundle_id,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::OpenApp {
+                    name,
+                    bundle_id,
+                    call_id: None,
+                },
+                None,
+            ))
         }
         _ => Err(USAGE.into()),
     }
@@ -395,7 +401,7 @@ fn parse_computer_action(action: &str, window_id: u32, rest: &[&str]) -> Result<
             call_id: None,
         },
     };
-    Ok(Command::Computer(command))
+    Ok(Command::Computer(command, None))
 }
 
 /// An `eN` ref: `^e[1-9][0-9]{0,4}$`.
@@ -2299,24 +2305,30 @@ mod tests {
         let p = |args: &[&str]| parse(&s(args), Path::new("/b"));
         assert_eq!(
             p(&["computer", "apps"]).unwrap(),
-            Command::Computer(ComputerCommand::Apps { call_id: None })
+            Command::Computer(ComputerCommand::Apps { call_id: None }, None)
         );
         assert_eq!(
             p(&["computer", "screenshot", "7"]).unwrap(),
-            Command::Computer(ComputerCommand::Screenshot {
-                window_id: 7,
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Screenshot {
+                    window_id: 7,
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             p(&["computer", "inspect", "7"]).unwrap(),
-            Command::Computer(ComputerCommand::Inspect {
-                window_id: 7,
-                query: None,
-                limit: 300,
-                max_depth: 12,
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Inspect {
+                    window_id: 7,
+                    query: None,
+                    limit: 300,
+                    max_depth: 12,
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             p(&[
@@ -2331,23 +2343,29 @@ mod tests {
                 "20"
             ])
             .unwrap(),
-            Command::Computer(ComputerCommand::Inspect {
-                window_id: 7,
-                query: Some("Save".into()),
-                limit: 3000,
-                max_depth: 20,
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Inspect {
+                    window_id: 7,
+                    query: Some("Save".into()),
+                    limit: 3000,
+                    max_depth: 20,
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             p(&["computer", "inspect", "7", "--query", "Save"]).unwrap(),
-            Command::Computer(ComputerCommand::Inspect {
-                window_id: 7,
-                query: Some("Save".into()),
-                limit: 300,
-                max_depth: 32,
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Inspect {
+                    window_id: 7,
+                    query: Some("Save".into()),
+                    limit: 300,
+                    max_depth: 32,
+                    call_id: None
+                },
+                None
+            )
         );
         let post = || alas_client::ComputerPost::default();
         assert_eq!(
@@ -2368,52 +2386,64 @@ mod tests {
                 "--direct"
             ])
             .unwrap(),
-            Command::Computer(ComputerCommand::Click {
-                window_id: 7,
-                target: alas_client::ComputerTarget::Point { x: 10.5, y: 20.0 },
-                button: "right".into(),
-                count: 2,
-                direct: true,
-                post: alas_client::ComputerPost {
-                    max_depth: Some(32),
-                    ..post()
+            Command::Computer(
+                ComputerCommand::Click {
+                    window_id: 7,
+                    target: alas_client::ComputerTarget::Point { x: 10.5, y: 20.0 },
+                    button: "right".into(),
+                    count: 2,
+                    direct: true,
+                    post: alas_client::ComputerPost {
+                        max_depth: Some(32),
+                        ..post()
+                    },
+                    call_id: None
                 },
-                call_id: None
-            })
+                None
+            )
         );
         assert_eq!(
             p(&["computer", "type", "7", "hello", "--ref", "e3", "--replace"]).unwrap(),
-            Command::Computer(ComputerCommand::Type {
-                window_id: 7,
-                text: "hello".into(),
-                element: Some("e3".into()),
-                replace: true,
-                direct: false,
-                post: post(),
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Type {
+                    window_id: 7,
+                    text: "hello".into(),
+                    element: Some("e3".into()),
+                    replace: true,
+                    direct: false,
+                    post: post(),
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             p(&["computer", "key", "7", "cmd+s", "--direct"]).unwrap(),
-            Command::Computer(ComputerCommand::Key {
-                window_id: 7,
-                keys: "cmd+s".into(),
-                direct: true,
-                post: post(),
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Key {
+                    window_id: 7,
+                    keys: "cmd+s".into(),
+                    direct: true,
+                    post: post(),
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             p(&["computer", "scroll", "7", "--ref", "e1", "--dy", "-5"]).unwrap(),
-            Command::Computer(ComputerCommand::Scroll {
-                window_id: 7,
-                target: alas_client::ComputerTarget::Ref("e1".into()),
-                dx: 0,
-                dy: -5,
-                direct: false,
-                post: post(),
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Scroll {
+                    window_id: 7,
+                    target: alas_client::ComputerTarget::Ref("e1".into()),
+                    dx: 0,
+                    dy: -5,
+                    direct: false,
+                    post: post(),
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             p(&[
@@ -2433,24 +2463,30 @@ mod tests {
                 "--direct"
             ])
             .unwrap(),
-            Command::Computer(ComputerCommand::Drag {
-                window_id: 7,
-                from: alas_client::ComputerTarget::Ref("e1".into()),
-                to_window_id: Some(9),
-                to: alas_client::ComputerTarget::Point { x: 3.0, y: 4.0 },
-                modifiers: vec!["option".into(), "command".into()],
-                direct: true,
-                post: post(),
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Drag {
+                    window_id: 7,
+                    from: alas_client::ComputerTarget::Ref("e1".into()),
+                    to_window_id: Some(9),
+                    to: alas_client::ComputerTarget::Point { x: 3.0, y: 4.0 },
+                    modifiers: vec!["option".into(), "command".into()],
+                    direct: true,
+                    post: post(),
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             p(&["computer", "open-app", "--bundle-id", "com.apple.TextEdit"]).unwrap(),
-            Command::Computer(ComputerCommand::OpenApp {
-                name: None,
-                bundle_id: Some("com.apple.TextEdit".into()),
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::OpenApp {
+                    name: None,
+                    bundle_id: Some("com.apple.TextEdit".into()),
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             p(&[
@@ -2463,14 +2499,17 @@ mod tests {
                 "100"
             ])
             .unwrap(),
-            Command::Computer(ComputerCommand::Wait {
-                window_id: 7,
-                query: "Done".into(),
-                disappear: true,
-                timeout_ms: 100,
-                limit: 100,
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Wait {
+                    window_id: 7,
+                    query: "Done".into(),
+                    disappear: true,
+                    timeout_ms: 100,
+                    limit: 100,
+                    call_id: None
+                },
+                None
+            )
         );
         for bad in [
             &["computer"][..],

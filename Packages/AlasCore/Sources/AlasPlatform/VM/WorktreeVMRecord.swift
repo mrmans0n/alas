@@ -4,6 +4,23 @@ import Foundation
 public enum VMGuestOS: String, Codable, Sendable {
     case macOS
     case linux
+
+    /// The name agents give the guest in a tool's `vm` argument. The raw value stays what
+    /// the registry persists.
+    public var wireName: String {
+        switch self {
+        case .macOS: "macos"
+        case .linux: "linux"
+        }
+    }
+
+    public init?(wireName: String) {
+        switch wireName {
+        case "macos": self = .macOS
+        case "linux": self = .linux
+        default: return nil
+        }
+    }
 }
 
 /// The process currently running a VM. Identified by pid plus process start

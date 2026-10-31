@@ -6,30 +6,58 @@ import Testing
 struct VMComputerUseRouteTests {
     struct Case: CustomTestStringConvertible, Sendable {
         let name: String
-        let worktreeID: String?
-        let hasVM: Bool?
-        let runningHere: Bool
+        var worktreeID: String? = "w"
+        let kinds: Set<VMGuestOS>?
+        var requested: VMGuestOS?
+        var running: Set<VMGuestOS> = []
         let expected: VMComputerUseRoute
 
         var testDescription: String { name }
     }
 
     static let cases: [Case] = [
-        Case(name: "no worktree", worktreeID: nil, hasVM: true, runningHere: true, expected: .desktop),
-        Case(name: "worktree without a VM", worktreeID: "w", hasVM: false, runningHere: false, expected: .desktop),
-        Case(name: "no VM record ignores a running flag", worktreeID: "w", hasVM: false, runningHere: true,
-             expected: .desktop),
-        Case(name: "VM running here", worktreeID: "w", hasVM: true, runningHere: true,
-             expected: .guest(worktreeID: "w")),
-        Case(name: "VM not running here", worktreeID: "w", hasVM: true, runningHere: false,
-             expected: .vmNotRunning(worktreeID: "w")),
-        Case(name: "unreadable VM state never falls back to the desktop", worktreeID: "w", hasVM: nil,
-             runningHere: false, expected: .vmStateUnreadable(worktreeID: "w")),
+        Case(name: "no worktree", worktreeID: nil, kinds: [.macOS], running: [.macOS], expected: .desktop),
+        Case(name: "no worktree never takes a named VM to the desktop", worktreeID: nil, kinds: [], requested: .linux,
+             expected: .vmMissing(guest: .linux)),
+        // No VM.
+        Case(name: "worktree without a VM", kinds: [], expected: .desktop),
+        Case(name: "naming a macOS VM the worktree lacks", kinds: [], requested: .macOS, expected: .vmMissing(guest: .macOS)),
+        Case(name: "naming a Linux VM the worktree lacks", kinds: [], requested: .linux, expected: .vmMissing(guest: .linux)),
+        // One VM: used when omitted, refused when the other is named.
+        Case(name: "macOS VM running here", kinds: [.macOS], running: [.macOS], expected: .guest(worktreeID: "w", guest: .macOS)),
+        Case(name: "macOS VM not running here", kinds: [.macOS], expected: .vmNotRunning(worktreeID: "w", guest: .macOS)),
+        Case(name: "macOS VM named", kinds: [.macOS], requested: .macOS, running: [.macOS],
+             expected: .guest(worktreeID: "w", guest: .macOS)),
+        Case(name: "Linux named beside only a macOS VM", kinds: [.macOS], requested: .linux, running: [.macOS],
+             expected: .vmMissing(guest: .linux)),
+        Case(name: "Linux VM running here", kinds: [.linux], running: [.linux], expected: .guest(worktreeID: "w", guest: .linux)),
+        Case(name: "Linux VM not running here", kinds: [.linux], expected: .vmNotRunning(worktreeID: "w", guest: .linux)),
+        Case(name: "macOS named beside only a Linux VM", kinds: [.linux], requested: .macOS, running: [.linux],
+             expected: .vmMissing(guest: .macOS)),
+        Case(name: "a VM running here counts though the registry misses it", kinds: [], running: [.macOS],
+             expected: .guest(worktreeID: "w", guest: .macOS)),
+        // Both VMs: never picked silently.
+        Case(name: "both VMs, none named", kinds: [.macOS, .linux], expected: .ambiguous(worktreeID: "w")),
+        Case(name: "both VMs, one running, none named", kinds: [.macOS], running: [.linux], expected: .ambiguous(worktreeID: "w")),
+        Case(name: "both VMs running, none named", kinds: [.macOS, .linux], running: [.macOS, .linux],
+             expected: .ambiguous(worktreeID: "w")),
+        Case(name: "both VMs, Linux named and running", kinds: [.macOS, .linux], requested: .linux, running: [.linux],
+             expected: .guest(worktreeID: "w", guest: .linux)),
+        Case(name: "both VMs, macOS named while only Linux runs", kinds: [.macOS, .linux], requested: .macOS, running: [.linux],
+             expected: .vmNotRunning(worktreeID: "w", guest: .macOS)),
+        // Unreadable state never falls back to the desktop.
+        Case(name: "unreadable VM state", kinds: nil, expected: .vmStateUnreadable(worktreeID: "w")),
+        Case(name: "unreadable VM state with a VM named", kinds: nil, requested: .linux, expected: .vmStateUnreadable(worktreeID: "w")),
+        Case(name: "unreadable VM state, the named VM running here", kinds: nil, requested: .linux, running: [.linux],
+             expected: .guest(worktreeID: "w", guest: .linux)),
     ]
 
     @Test(arguments: cases)
     func resolvesRoute(_ c: Case) {
-        #expect(VMComputerUseRoute.resolve(worktreeID: c.worktreeID, hasVM: c.hasVM, runningHere: c.runningHere) == c.expected)
+        let route = VMComputerUseRoute.resolve(
+            worktreeID: c.worktreeID, kinds: c.kinds, requested: c.requested, runningHere: { c.running.contains($0) }
+        )
+        #expect(route == c.expected)
     }
 
     private static func object(_ line: String) throws -> NSDictionary {
@@ -46,17 +74,29 @@ struct VMComputerUseRouteTests {
         (VMComputerUseRoute.desktop, answered, noVM),
         (.vmStateUnreadable(worktreeID: "w"), answered,
          #"{"has_vm":null,"running":false,"helper":null,"helper_error":null,"transfer_host_path":null,"transfer_guest_path":null}"#),
-        (.vmNotRunning(worktreeID: "w"), answered,
+        (.vmNotRunning(worktreeID: "w", guest: .macOS), answered,
          #"{"has_vm":true,"running":false,"helper":null,"helper_error":null,"transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
-        (.guest(worktreeID: "w"), answered,
+        (.guest(worktreeID: "w", guest: .macOS), answered,
          #"{"has_vm":true,"running":true,"helper":{"version":"1.2","accessibility":true,"screen_recording":false},"helper_error":null,"transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
-        (.guest(worktreeID: "w"), .failure(.outdated),
+        (.guest(worktreeID: "w", guest: .macOS), .failure(.outdated),
          #"{"has_vm":true,"running":true,"helper":null,"helper_error":"\#(VMGuestClient.Failure.outdated.message)","transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
+        (.vmNotRunning(worktreeID: "w", guest: .linux), answered,
+         #"{"has_vm":true,"running":false,"helper":null,"helper_error":null,"transfer_host_path":"/host/t","transfer_guest_path":"/mnt/alas/transfer"}"#),
     ])
     func statusReply(
         route: VMComputerUseRoute, helper: Result<VMGuestHello, VMGuestClient.Failure>, expected: String
     ) throws {
         let reply = VMComputerUseRoute.statusReply(route: route, helper: helper, transferHostPath: "/host/t")
+        #expect(try Self.object(reply) == Self.object(expected))
+    }
+
+    /// With both VMs and none named, `vm_status` lists each, macOS first, naming its guest.
+    @Test func statusReplyListsBothVMs() throws {
+        let reply = VMComputerUseRoute.statusReply(vms: [
+            (.macOS, .guest(worktreeID: "w", guest: .macOS), Self.answered, "/host/t"),
+            (.linux, .vmNotRunning(worktreeID: "w", guest: .linux), nil, "/host/t-linux"),
+        ])
+        let expected = #"{"vms":[{"vm":"macos","has_vm":true,"running":true,"helper":{"version":"1.2","accessibility":true,"screen_recording":false},"helper_error":null,"transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"},{"vm":"linux","has_vm":true,"running":false,"helper":null,"helper_error":null,"transfer_host_path":"/host/t-linux","transfer_guest_path":"/mnt/alas/transfer"}]}"#
         #expect(try Self.object(reply) == Self.object(expected))
     }
 

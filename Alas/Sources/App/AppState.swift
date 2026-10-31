@@ -7369,15 +7369,17 @@ final class AppState {
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
                 return await self.performComputerUse(command, sessionID: sessionID, worktreeID: worktreeID)
             },
-            vmRun: { [weak self] command, timeoutSeconds, sessionID in
+            vmRun: { [weak self] command, timeoutSeconds, vm, sessionID in
                 guard let self else { return .error("Alas is not available.") }
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
-                return await self.performVMRun(command, timeoutSeconds: timeoutSeconds, sessionID: sessionID, worktreeID: worktreeID)
+                return await self.performVMRun(
+                    command, timeoutSeconds: timeoutSeconds, vm: vm, sessionID: sessionID, worktreeID: worktreeID
+                )
             },
-            vmStatus: { [weak self] sessionID in
+            vmStatus: { [weak self] vm, sessionID in
                 guard let self else { return .error("Alas is not available.") }
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
-                return await self.vmStatus(worktreeID: worktreeID)
+                return await self.vmStatus(worktreeID: worktreeID, vm: vm)
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)

@@ -40,9 +40,10 @@ public struct AlasCLIRequest: Equatable, Sendable {
         /// the stack shepherd to the calling session.
         case stackShip
         /// MCP-only: run a shell command in the calling session's worktree VM.
-        case vmRun(command: String, timeoutSeconds: Int)
+        /// `vm` names the guest when the worktree has more than one VM.
+        case vmRun(command: String, timeoutSeconds: Int, vm: VMGuestOS? = nil)
         /// MCP-only: the calling session's worktree VM, its guest helper, and transfer folder.
-        case vmStatus
+        case vmStatus(vm: VMGuestOS? = nil)
         case resolve
     }
 
@@ -404,6 +405,18 @@ public struct AlasCLIRequest: Equatable, Sendable {
     private struct VMRunParams: Decodable {
         var command: String?
         var timeout_seconds: Int?
+        var vm: String?
+    }
+
+    private struct VMStatusParams: Decodable {
+        var vm: String?
+    }
+
+    /// A tool's optional `vm` argument; a name that isn't a guest is malformed.
+    static func targetVM(_ wireName: String?) throws -> VMGuestOS? {
+        guard let wireName else { return nil }
+        guard let guest = VMGuestOS(wireName: wireName) else { throw AlasCLIRequestError.malformed }
+        return guest
     }
 
     private struct SessionInterruptParams: Decodable {
@@ -767,10 +780,12 @@ public struct AlasCLIRequest: Equatable, Sendable {
             }
             command = .vmRun(
                 command: shell,
-                timeoutSeconds: try bounded(params.timeout_seconds, Self.vmRunTimeoutRange, default: Self.vmRunDefaultTimeout)
+                timeoutSeconds: try bounded(params.timeout_seconds, Self.vmRunTimeoutRange, default: Self.vmRunDefaultTimeout),
+                vm: try Self.targetVM(params.vm)
             )
         case "vm_status":
-            command = .vmStatus
+            let params = try Self.decodeParamsIfPresent(VMStatusParams.self, from: data)
+            command = .vmStatus(vm: try Self.targetVM(params?.vm))
         case "resolve":
             command = .resolve
         default:
