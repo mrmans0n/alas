@@ -369,6 +369,18 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
         liveBlockedRequestKeys.contains(blocker.requestKey) ? .wake : .stillHandled
     }
 
+    /// A child whose turn settled at its result is still running while its
+    /// background work runs, so a wait does not return interim text. A
+    /// foreground blocker still reads as awaiting input: only the user can
+    /// clear it, and the parent should hear about it.
+    public static func runtimeState(activity: ACPSessionActivity) -> ACPOrchestrationRuntimeState {
+        switch activity.foreground {
+        case .idle: activity.backgroundWorking ? .running : .idle
+        case .sending, .streaming: .running
+        case .awaitingPermission, .awaitingInput: .awaitingInput
+        }
+    }
+
     public static func publicState(
         phase: ACPDelegationPhase,
         runtime: ACPOrchestrationRuntimeState?,

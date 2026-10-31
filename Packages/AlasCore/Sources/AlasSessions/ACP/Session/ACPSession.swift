@@ -310,6 +310,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// its live child transcript from here; `subagentOrder` keeps spawn
     /// order for the rare consumer that wants the list rather than a row.
     @Tracked public private(set) var subagents: [String: ACPSubagentRun] = [:]
+    /// Children still running or blocked on the user.
+    @Tracked public private(set) var liveSubagentCount = 0
     @Tracked public var backgroundTasks: [ACPBackgroundTask] = []
     @Tracked public var backgroundTaskStopSupported = false
     /// The user's explicit collapse choice for the background task tray; nil follows the default.
@@ -2390,6 +2392,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             startedAt: timestamp)
         subagents[id] = run
         subagentOrder.append(id)
+        refreshLiveSubagentCount()
         clearRestoredContextRecoveryStatus()
         // A subagent row closes the current output run the same way a tool
         // call does, so held replay candidates must land ahead of it —
@@ -2549,6 +2552,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         }
         subagents = rebuilt
         subagentOrder = order
+        refreshLiveSubagentCount()
+    }
+
+    private func refreshLiveSubagentCount() {
+        let count = subagents.values.filter { $0.state == .running || $0.state == .requiresAction }.count
+        if count != liveSubagentCount { liveSubagentCount = count }
     }
 
     /// Marks every still-running child as disconnected when the agent
@@ -2577,6 +2586,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {
+        refreshLiveSubagentCount()
         let toolCallId = ACPSubagentRowDescriptor.toolCallId(
             subagentSessionId: run.subagentSessionId)
         guard let index = transcript.toolCallIndex(toolCallId: toolCallId),

@@ -216,6 +216,45 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession["s1"]?.state == .failed)
     }
 
+    @Test("a turn that settles at its result finishes only when its background work ends", arguments: [true, false])
+    func backgroundWorkDefersFinish(settles: Bool) async {
+        let harness = makeHarness()
+        var transitions: [HarnessActivityTransition] = []
+        harness.onActivityTransition = { transitions.append($0) }
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.settlesAtResult = settles
+        bridge.observe(session: session)
+        let idleTransitions = { transitions.filter { $0.state == .idle }.count }
+
+        session.transcript.streamingState = .streaming
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        await Task.yield()
+        session.transcript.streamingState = .idle
+        await Task.yield()
+        if !settles {
+            #expect(harness.activityBySession["s1"] == nil)
+            #expect(idleTransitions() == 1)
+            return
+        }
+        #expect(harness.activityBySession["s1"]?.state == .busy)
+
+        // A child permission after the parent's result, answered.
+        session.transcript.streamingState = .awaitingPermission
+        await Task.yield()
+        #expect(harness.activityBySession["s1"]?.state == .permissionRequest)
+        session.transcript.streamingState = .idle
+        await Task.yield()
+        #expect(harness.activityBySession["s1"]?.state == .busy)
+        #expect(idleTransitions() == 0)
+
+        session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        await Task.yield()
+        #expect(harness.activityBySession["s1"] == nil)
+        #expect(idleTransitions() == 1)
+    }
+
     @Test("ACP idle preserves a Pi background workflow")
     func idlePreservesBackgroundWorkflow() async {
         let harness = makeHarness()

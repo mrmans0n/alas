@@ -67,6 +67,10 @@ public final class ACPSessionRunner {
     /// runs an outdated built-in MCP server. The next idle point calls it
     /// once, before the queue drains (see `flushQueueIfIdle`).
     public var restartAgentWhenIdle: (() -> Void)?
+    /// A pending idle restart held back because background children or an
+    /// autonomous cycle were still running; retried when that work ends.
+    private var restartAwaitsBackgroundWork = false
+    private var backgroundWorkObservations: [ChangeSubscription] = []
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
     /// Fires only when a message row was actually written (a normal
@@ -472,6 +476,22 @@ public final class ACPSessionRunner {
             }
         )
         closeStoredSequenceGaps()
+        backgroundWorkObservations = [
+            session.$liveSubagentCount.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
+            session.$backgroundTasks.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
+        ]
+    }
+
+    /// Tracked signals fire before the new value is stored, so the restart
+    /// check reads the session on the next main-actor turn.
+    private func backgroundWorkChanged() {
+        guard restartAwaitsBackgroundWork else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.restartAwaitsBackgroundWork,
+                  !self.session.activity.backgroundWorking else { return }
+            self.restartAwaitsBackgroundWork = false
+            self.flushQueueIfIdle()
+        }
     }
 
     /// Rows are written as `msg-<session>-<index>`, so the store must hold
@@ -1773,6 +1793,7 @@ public final class ACPSessionRunner {
         // `persistIndices` requires the writer lease, so an instance that
         // lost it in a takeover records nothing.
         persistIndices(session.markSubagentsDisconnected())
+        backgroundWorkObservations.removeAll()
         scheduledQueueWakeTask?.cancel()
         scheduledQueueWakeTask = nil
         incomingUpdateFlushTask?.cancel()
@@ -3252,9 +3273,15 @@ extension ACPSessionRunner {
            activePromptID == nil,
            session.transcript.streamingState == .idle,
            session.transcript.pendingUserInputs.isEmpty {
-            restartAgentWhenIdle = nil
-            restart()
-            return
+            // A turn that settled at its result can leave children or an
+            // autonomous cycle running; a restart would kill them.
+            if session.activity.backgroundWorking {
+                restartAwaitsBackgroundWork = true
+            } else {
+                restartAgentWhenIdle = nil
+                restart()
+                return
+            }
         }
         guard !backgroundCancellationInProgress,
               !nativeForkBarrierActive,

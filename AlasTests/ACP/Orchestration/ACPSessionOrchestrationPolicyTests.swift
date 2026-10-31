@@ -426,6 +426,23 @@ struct ACPSessionOrchestrationPolicyTests {
         ) == settled)
     }
 
+    @Test("background work keeps a wait open, but a foreground blocker still settles it", arguments: [
+        (ACPSession.StreamingState.idle, ACPOrchestrationRuntimeState.running, false),
+        (.awaitingPermission, .awaitingInput, true),
+        (.awaitingInput, .awaitingInput, true),
+    ])
+    func backgroundWorkKeepsWaitOpen(
+        foreground: ACPSession.StreamingState, runtime: ACPOrchestrationRuntimeState, settled: Bool
+    ) {
+        let state = ACPSessionOrchestrationPolicy.runtimeState(
+            activity: .init(foreground: foreground, backgroundWorking: true))
+        #expect(state == runtime)
+        #expect(ACPSessionOrchestrationPolicy.waitSettled(
+            phase: .ready, runtime: state, hasPendingPrompts: false) == settled)
+        #expect(ACPSessionOrchestrationPolicy.publicState(
+            phase: .ready, runtime: state, archived: false) == (settled ? .awaitingInput : .running))
+    }
+
     @Test("completed turn that reported to the parent only notices")
     func completedReportedNotices() {
         #expect(ACPSessionOrchestrationPolicy.outcomeDisposition(

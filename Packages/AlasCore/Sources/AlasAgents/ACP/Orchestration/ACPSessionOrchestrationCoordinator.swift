@@ -1507,11 +1507,7 @@ public final class ACPSessionOrchestrationCoordinator {
     }
 
     private static func runtimeState(_ session: ACPSession) -> ACPOrchestrationRuntimeState {
-        switch session.transcript.streamingState {
-        case .idle: .idle
-        case .sending, .streaming: .running
-        case .awaitingPermission, .awaitingInput: .awaitingInput
-        }
+        ACPSessionOrchestrationPolicy.runtimeState(activity: session.activity)
     }
 
     private func json<T: Encodable>(_ value: T) -> AlasCLIResponse {

@@ -226,6 +226,20 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" }, "the retry wake drains the queue")
     }
 
+    @Test("an idle restart waits until background children finish")
+    func idleRestartWaitsForBackgroundWork() async throws {
+        let (runner, _, session, _) = try mkRunner()
+        session.settlesAtResult = true
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        var restarts = 0
+        runner.restartAgentWhenIdle = { restarts += 1 }
+        runner.flushQueueIfIdle()
+        #expect(restarts == 0)
+
+        session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        try await waitUntil { restarts == 1 }
+    }
+
     @Test("a resume that succeeds clears the Limited state and the queue drains")
     func usageLimitResumeSucceeds() async throws {
         let (runner, mock, session, _) = try mkRunner()
