@@ -376,6 +376,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public private(set) var subagents: [String: ACPSubagentRun] = [:]
     /// Children still running or blocked on the user.
     @Tracked public private(set) var liveSubagentCount = 0
+    /// True only while `markSubagentsDisconnected` drops the live children,
+    /// so an observer of `liveSubagentCount` can tell a lost connection
+    /// from children finishing their work.
+    @Tracked public private(set) var disconnectingSubagents = false
     @Tracked public var backgroundTasks: [ACPBackgroundTask] = []
     @Tracked public var backgroundTaskStopSupported = false
     /// The user's explicit collapse choice for the background task tray; nil follows the default.
@@ -2631,7 +2635,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @discardableResult
     public func markSubagentsDisconnected(at timestamp: Date = Date()) -> Set<Int> {
         var dirty: Set<Int> = []
-        for run in orderedSubagents where run.isRunning {
+        let running = orderedSubagents.filter(\.isRunning)
+        guard !running.isEmpty else { return dirty }
+        disconnectingSubagents = true
+        defer { disconnectingSubagents = false }
+        for run in running {
             nextPromptActivity.send()
             run.apply(state: .disconnected, at: timestamp)
             dirty.formUnion(refreshSubagentRow(for: run, at: timestamp))

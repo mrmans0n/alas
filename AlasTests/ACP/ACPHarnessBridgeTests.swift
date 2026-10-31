@@ -255,6 +255,31 @@ struct ACPHarnessBridgeTests {
         #expect(idleTransitions() == 1)
     }
 
+    /// Background work cut off with the connection is no finish. A stopping
+    /// runner marks its children disconnected while the agent still reads
+    /// ready; otherwise the agent leaves ready with the work still live.
+    @Test("background work a disconnect cuts off clears the badge without finishing", arguments: [true, false])
+    func disconnectedBackgroundWorkDoesNotFinish(childrenMarkedFirst: Bool) {
+        let harness = makeHarness()
+        var transitions: [HarnessActivityTransition] = []
+        harness.onActivityTransition = { transitions.append($0) }
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.settlesAtResult = true
+        bridge.observe(session: session)
+        session.transcript.streamingState = .streaming
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        session.transcript.streamingState = .idle
+        #expect(harness.activityBySession["s1"]?.state == .busy)
+
+        if childrenMarkedFirst { _ = session.markSubagentsDisconnected() }
+        session.agentState = .idle
+
+        #expect(harness.activityBySession["s1"] == nil)
+        #expect(!transitions.contains { $0.state == .idle })
+    }
+
     @Test("ACP idle preserves a Pi background workflow")
     func idlePreservesBackgroundWorkflow() async {
         let harness = makeHarness()

@@ -43,13 +43,17 @@ final class ACPHarnessBridge {
         // do not settle at result, so they see no extra emissions.
         let background = session.$backgroundTasks
             .combineLatest(session.$liveSubagentCount, session.$agentState, session.$settlesAtResult)
-            .map { tasks, liveChildren, agentState, settles in
-                BackgroundWork(
+            .combineLatest(session.$disconnectingSubagents)
+            .map { work, disconnecting in
+                let (tasks, liveChildren, agentState, settles) = work
+                return BackgroundWork(
                     working: ACPSessionActivity.project(
                         foreground: .idle, settlesAtResult: settles, agentReady: agentState == .ready,
                         backgroundTasks: tasks, liveSubagentCount: liveChildren
                     ).backgroundWorking,
-                    agentLost: settles && agentState != .ready
+                    // A stopping runner drops its children before the agent
+                    // leaves ready: that is the connection going, not a finish.
+                    agentLost: settles && (agentState != .ready || disconnecting)
                 )
             }
             .removeDuplicates()
@@ -119,8 +123,9 @@ final class ACPHarnessBridge {
     /// Work a turn that settled at its result left running.
     private struct BackgroundWork: Equatable {
         let working: Bool
-        /// The agent is no longer ready; `session.agentState` may still read
-        /// the old value while this change is delivered.
+        /// The agent is no longer ready, or its children are being marked
+        /// disconnected; `session.agentState` may still read the old value
+        /// while this change is delivered.
         let agentLost: Bool
     }
 
