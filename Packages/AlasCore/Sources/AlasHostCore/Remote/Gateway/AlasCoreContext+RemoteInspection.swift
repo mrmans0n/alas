@@ -872,6 +872,38 @@ extension AlasCoreContext {
         }
     }
 
+    @_spi(Testing) public func remoteFileHistory(sessionId: String, path: String) async -> RemoteFileHistoryResult {
+        await remoteFileHistory(in: remoteWorktreeContext(sessionId: sessionId), path: path)
+    }
+
+    /// The commits that touched a file, newest first and following renames,
+    /// as local File History lists them, cut at `limit`. The path is read
+    /// from history, so it need not exist now.
+    func remoteFileHistory(
+        in context: RemoteWorktreeContextResult, path: String,
+        limit: Int = RemoteWorktreeFileAccess.maxHistoryEntries
+    ) async -> RemoteFileHistoryResult {
+        let worktree: Worktree
+        switch context {
+        case .sessionUnknown: return .failure(reason: .sessionUnknown, message: nil)
+        case .worktreeUnavailable: return .failure(reason: .worktreeUnavailable, message: nil)
+        case .found(let found): worktree = found
+        }
+        // A folder has no history.
+        guard !isFolderWorktree(worktree), let normalizedPath = RemoteWorktreeFileAccess.normalizedRelativePath(path) else {
+            return .failure(reason: .pathRejected, message: nil)
+        }
+        do {
+            let history = try await GitService().fileHistoryWithPaths(
+                worktreePath: worktree.path, relativePath: normalizedPath, limit: limit)
+            return .success(
+                entries: history.prefix(limit).map { HostFileHistoryEntry(commit: $0.commit, pathAtCommit: $0.path) },
+                truncated: history.count > limit)
+        } catch {
+            return .failure(reason: .gitFailed, message: error.localizedDescription)
+        }
+    }
+
     /// The working-tree file's bytes, through `remoteFileContents`'s path chain.
     private func remoteWorkingTreeBytes(
         _ worktree: Worktree, normalizedPath: String, url: URL, maxBytes: Int
@@ -948,6 +980,9 @@ extension AlasCoreContext {
         }
         func remoteFileBytes(sessionId _: String, path: String, revision: HostFileRevision?) async -> RemoteFileBytesResult {
             await core.remoteFileBytes(in: .found(worktree), path: path, revision: revision)
+        }
+        func remoteFileHistory(sessionId _: String, path: String) async -> RemoteFileHistoryResult {
+            await core.remoteFileHistory(in: .found(worktree), path: path)
         }
         func remoteRangeFiles(sessionId _: String, base: String, head: String, threeDot: Bool) async -> RemoteCommitFilesResult {
             await core.remoteRangeFiles(in: .found(worktree), base: base, head: head, threeDot: threeDot)

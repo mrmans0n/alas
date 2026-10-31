@@ -459,6 +459,15 @@ struct RootView: View {
             )
             // An edit moves it to the rewritten commit: a fresh editor reads it.
             .id("\(editor.serverId)/\(worktree.id)/\(editor.sha)")
+        } else if let preview = client.openedWebPreview {
+            WebPreviewTabView(
+                state: state,
+                tab: WebPreviewTabState(ownerKey: preview.browser.ownerKey, url: preview.url, remoteHost: preview.browser.remoteHost),
+                browser: preview.browser,
+                onClose: { client.closeWebPreview() }
+            )
+            // A new forward gets a new browser, which the view's state must take.
+            .id(ObjectIdentifier(preview.browser))
         } else if let file = client.openedHostFile {
             NativePeerHostFileView(file: file, client: client, state: state)
                 .id(file)

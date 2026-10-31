@@ -5,13 +5,37 @@ import Testing
 
 struct HostProtocolTests {
     /// A preview at the cap, all `/`-heavy base64 that JSON escapes,
-    /// still fits one WebSocket frame inside its host reply envelope.
+    /// still fits the send budget inside its host reply envelope.
     @Test func aFileBytesReplyAtTheCapFitsOneFrame() throws {
         let data = Data(repeating: 0xFF, count: RemoteWorktreeFileAccess.maxPreviewBytes)
         let reply = RemoteServerMessage.host(.response(id: Int.max, result: .worktreeRead(reply: .fileBytes(
             sessionId: UUID().uuidString, path: String(repeating: "a/", count: 100) + "icon.png",
             data: data, byteSize: data.count))))
-        #expect(try JSONEncoder().encode(reply).count < WebSocketFrame.maxPayloadLength)
+        #expect(try JSONEncoder().encode(reply).count <= RemoteServerMessage.sendBudget)
+    }
+
+    /// A reply over the send budget goes out as its request's failure, with
+    /// checkpoint copy for a checkpoint's; an event batch over it, a resync.
+    @Test func aMessageOverTheSendBudgetIsReplacedOrDropped() throws {
+        let manifest = try WorktreeCheckpointManifest(
+            kind: .manual, label: "Big", createdAt: Date(timeIntervalSince1970: 0), byteCount: 0, lineageID: "l", capturedPath: "/srv/feature", repositoryName: "r",
+            branch: "main", headOID: "h", capturePolicyVersion: 1, automaticStateKey: nil, exclusions: [], groups: [], paths: []
+        )
+        func sent(_ message: RemoteServerMessage, budget: Int) throws -> RemoteServerMessage? {
+            try message.encodedForSending(budget: budget).map { try JSONDecoder().decode(RemoteServerMessage.self, from: $0) }
+        }
+        let reply = RemoteServerMessage.host(.response(id: 7, result: .checkpointManifest(manifest: manifest)))
+
+        #expect(try sent(reply, budget: RemoteServerMessage.sendBudget) == reply)
+        #expect(try sent(reply, budget: 100) == .host(.response(id: 7, result: .failure(
+            error: .failed(message: "This checkpoint has too many files to show from a paired Mac. It may have been saved; check the list.")
+        ))))
+        #expect(try sent(.host(.response(id: 8, result: .stashes(stashes: []))), budget: 10) == .host(.response(id: 8, result: .failure(
+            error: .failed(message: "This reply is too large to send to a paired Mac.")
+        ))))
+        let cursor = HostCursor(generation: UUID(), sequence: 1)
+        #expect(try sent(.host(.events(events: [.resync, .resync], cursor: cursor)), budget: 10)
+            == .host(.events(events: [.resync], cursor: cursor)))
     }
 
     private static let worktreePath = URL(fileURLWithPath: "/srv/feature")

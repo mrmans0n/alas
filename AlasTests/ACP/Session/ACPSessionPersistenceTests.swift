@@ -28,6 +28,31 @@ private final class SQLiteWriteLock: Sendable {
 @MainActor
 @Suite("ACP session persistence")
 struct ACPSessionPersistenceTests {
+    @Test func concurrentSubmissionCopiesCommitOnePassiveOutcome() async throws {
+        let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await persistence.upsertSession(row(id: "submission"))
+        let lease = try await persistence.seizeLease(sessionId: "submission", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let owner = fence(for: lease)
+        let connection = UUID()
+        let registration = try await persistence.registerV2Submission(id: UUID(), sessionId: "submission", upstreamSessionId: "upstream",
+            localRowID: UUID(), binding: .stdio(connectionID: connection, requestID: .string("a:7")), fence: owner)
+        let delivery = ACPRawRPCDelivery(frame: Data(#"{"jsonrpc":"2.0","id":"a:7","result":{"messageId":"m"}}"#.utf8),
+            connectionID: connection, source: .stdio(requestID: .string("a:7"), method: "session/prompt"))
+        let receipts = try await withThrowingTaskGroup(of: ACPV2SubmissionReceipt.self) { group in
+            for _ in 0..<16 { group.addTask { try await persistence.retainV2SubmissionOutcome(delivery, for: registration, fence: owner) } }
+            var result: [ACPV2SubmissionReceipt] = []
+            for try await receipt in group { result.append(receipt) }
+            return result
+        }
+        #expect(receipts.filter(\.wasInserted).count == 1)
+        #expect(receipts.allSatisfy { $0.record.outcome?.receiptID == delivery.receiptID })
+        _ = try await persistence.seizeLease(sessionId: "submission", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        await #expect(throws: ACPV2SubmissionLedgerError.staleLease) {
+            try await persistence.retainV2SubmissionOutcome(delivery, for: registration, fence: owner)
+        }
+        #expect(try await persistence.loadV2Submission(id: registration.id) == receipts.first?.record)
+    }
+
     @Test func concurrentReceiptRetriesCommitOnceWithoutConsumingTheDelivery() async throws {
         let url = temporaryDatabaseURL()
         let persistence = ACPSessionPersistence(path: url.path)

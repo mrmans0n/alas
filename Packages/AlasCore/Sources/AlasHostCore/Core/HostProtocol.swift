@@ -217,6 +217,10 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
     /// Restore the groups `groupIDs` of a listed checkpoint, as previewed at
     /// `fingerprint`, after a recovery checkpoint (`host.worktrees.checkpoints.v1`).
     case restoreCheckpoint(id: CheckpointID, groupIDs: Set<UUID>, fingerprint: String)
+    /// Recover the worktree's interrupted checkpoint restores, back to the
+    /// state each saved first; the one change a pending recovery lets through
+    /// (`host.worktrees.checkpointRecovery.v1`).
+    case recoverCheckpointRestore
     /// Stage, unstage or discard the `index`th hunk of `path`'s `stage` diff
     /// as the Mac was shown it, with `header` and `RemoteDiffHunk.linesHash`
     /// `linesHash` (`host.worktrees.hunks.v1`). Unstage takes the staged diff,
@@ -234,6 +238,7 @@ public enum HostWorktreeChange: Codable, Equatable, Sendable {
         case .editCommit: HostProtocolCapability.worktreesCommitEditV1
         case .merge, .rebase: HostProtocolCapability.worktreesIntegrateV1
         case .createCheckpoint, .deleteCheckpoint, .restoreCheckpoint: HostProtocolCapability.worktreesCheckpointsV1
+        case .recoverCheckpointRestore: HostProtocolCapability.worktreesCheckpointRecoveryV1
         case .hunk: HostProtocolCapability.worktreesHunksV1
         }
     }
@@ -292,11 +297,26 @@ public enum HostWorktreeRead: Codable, Equatable, Sendable {
     /// A file's raw bytes, for a preview: the working tree's when `revision`
     /// is nil. Answered as `.fileBytes` or `.fileUnavailable`.
     case fileBytes(path: String, revision: HostFileRevision?)
+    /// The commits that touched a file, newest first and following renames,
+    /// up to `RemoteWorktreeFileAccess.maxHistoryEntries`. Answered as
+    /// `.fileHistory` or `.fileHistoryFailed`.
+    case fileHistory(path: String)
 
     /// How a range's replies name it: `base..head`, or `base...head` for
     /// a branch comparison from their merge base.
     public static func rangeSpec(base: String, head: String, threeDot: Bool) -> String {
         "\(base)\(threeDot ? "..." : "..")\(head)"
+    }
+}
+
+/// One commit of a file's history, with the file's path in it, which differs before a rename.
+public struct HostFileHistoryEntry: Codable, Equatable, Sendable {
+    public var commit: CommitInfo
+    public var pathAtCommit: String
+
+    public init(commit: CommitInfo, pathAtCommit: String) {
+        self.commit = commit
+        self.pathAtCommit = pathAtCommit
     }
 }
 
@@ -572,8 +592,9 @@ public enum HostResponse: Codable, Equatable, Sendable {
     case commitDetails(details: CommitDetails)
     /// The answer to an `editCommit` change.
     case commitEdited(result: CommitEditResult)
-    /// The answer to `listCheckpoints`.
-    case checkpoints(catalog: CheckpointCatalogSnapshot)
+    /// The answer to `listCheckpoints`. `interruptedRestore` is nil from a
+    /// host older than `host.worktrees.checkpointRecovery.v1`.
+    case checkpoints(catalog: CheckpointCatalogSnapshot, interruptedRestore: Bool? = nil)
     /// The answer to `checkpointManifest` and a `createCheckpoint` change.
     case checkpointManifest(manifest: WorktreeCheckpointManifest)
     /// The answer to `checkpointRestorePreview`.

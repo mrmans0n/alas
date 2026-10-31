@@ -921,3 +921,8 @@ public enum RemoteFileBytesResult: Equatable, Sendable {
     case success(data: Data)
     case failure(reason: RemoteFileAccessReason, byteSize: Int?, message: String?)
 }
+
+public enum RemoteFileHistoryResult: Equatable, Sendable {
+    case success(entries: [HostFileHistoryEntry], truncated: Bool)
+    case failure(reason: RemoteFileAccessReason, message: String?)
+}
