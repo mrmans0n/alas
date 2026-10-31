@@ -39,6 +39,8 @@ fingerprint="$({
             | LC_ALL=C sort -z \
             | xargs -0 shasum -a 256
     )
+    # The workspace manifest holds the release profile, edition and version.
+    shasum -a 256 < "${workspace_root}/Cargo.toml"
     shasum -a 256 < "${workspace_root}/Cargo.lock"
     shasum -a 256 < "${script_dir}/build-alas-vm-guest-linux.sh"
     printf 'rust_toolchain=%s\n' "${rust_toolchain}"

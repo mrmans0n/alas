@@ -155,7 +155,7 @@ jobs:
             git rev-parse HEAD:AlasHelper
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
-            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-treesitter-pack.sh
+            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-alas-vm-guest-linux.sh scripts/build-treesitter-pack.sh
             shasum -a 256 "$(brew --prefix zig@0.17)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
@@ -188,6 +188,8 @@ jobs:
             .build/alas-helper/fingerprint
             .build/alas-cli/*/release/alas
             .build/alas-cli/fingerprint
+            .build/alas-vm-guest-linux/*/release/alas-vm-guest-linux
+            .build/alas-vm-guest-linux/fingerprint
           key: tools-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('.tools-pin') }}
           restore-keys: |
             tools-${{ runner.os }}-${{ matrix.arch }}-
@@ -207,6 +209,7 @@ jobs:
           ./scripts/build-treesitter-pack.sh
           ./scripts/build-alas-helper.sh
           ./scripts/build-alas-cli.sh
+          ./scripts/build-alas-vm-guest-linux.sh
 
       - name: Resolve SwiftPM packages
         run: |
