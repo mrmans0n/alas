@@ -83,6 +83,8 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
         cont.finish()
     }
 
+    func send(stderr: Data) { cont.yield(.stderr(stderr)) }
+
     /// Inject an inbound JSON frame as if the agent sent it.
     func send(frame: Data) {
         cont.yield(.frame(frame))

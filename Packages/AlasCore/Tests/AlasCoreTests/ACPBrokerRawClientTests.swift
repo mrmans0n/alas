@@ -115,6 +115,10 @@ struct ACPBrokerRawClientTests {
         #expect(delivery.provenance.cursor.rawValue == 1)
         #expect(delivery.provenance.origin == .pendingSnapshot)
         #expect(delivery.pendingRequestID == "p")
+        #expect(delivery.inboundDelivery.source == .broker(provenance: delivery.provenance, pendingRequestID: "p"))
+        #expect(delivery.inboundDelivery.frame == delivery.frame)
+        #expect(try delivery.inboundDelivery.decodeHeader().method == "test/request")
+        delivery.inboundDelivery.acknowledgeDurableConsumption()
         delivery.acknowledgeDurableConsumption()
         try await client.replayRawBrokerEvents()
         #expect(await service.acks.isEmpty)
@@ -291,6 +295,9 @@ struct ACPBrokerRawClientTests {
             #expect(frame.pendingRequestID == "p")
             #expect(frame.provenance.cursor.rawValue == 1)
             #expect(frame.provenance.origin == .pendingSnapshot)
+            #expect(frame.inboundDelivery.source == .broker(provenance: frame.provenance, pendingRequestID: "p"))
+            #expect(frame.inboundDelivery.receiptID != request.inboundDelivery.receiptID)
+            frame.inboundDelivery.acknowledgeDurableConsumption()
             frame.acknowledgeDurableConsumption()
         }
         #expect(await service.acks == [1, 2])
@@ -476,6 +483,57 @@ struct ACPBrokerRawClientTests {
         #expect(await service.sentRequests.isEmpty)
     }
 
+    @Test func brokerFacadeAndCommonViewShareOneReceiptAcrossConcurrencyAndReentry() async throws {
+        let count = Mutex(0)
+        let retained = Mutex<ACPBrokerRawFrameDelivery?>(nil)
+        let provenance = ACPBrokerFrameProvenance(brokerID: .init(rawValue: "raw"), generation: .init(rawValue: 7), cursor: .init(rawValue: 3), origin: .journal)
+        let bytes = Data(#"{"jsonrpc":"2.0","id":-7,"method":"peer/request","params":{"n":1e999}}"#.utf8)
+        let facade = ACPBrokerRawFrameDelivery(frame: bytes, connectionID: UUID(), provenance: provenance, pendingRequestID: "opaque-helper-key",
+            acknowledgement: { count.withLock { $0 += 1 }
+            retained.withLock { $0 }?.acknowledgeDurableConsumption() })
+        let common = facade.inboundDelivery
+        retained.withLock { $0 = facade }
+        #expect(common.receiptID == facade.inboundDelivery.receiptID)
+        #expect(common.frame == facade.frame)
+        #expect(common.connectionID == facade.connectionID)
+        #expect(common.source == .broker(provenance: provenance, pendingRequestID: "opaque-helper-key"))
+        #expect(try common.decodeHeader().id == .number(-7))
+        #expect(facade.pendingRequestID == "opaque-helper-key")
+        #expect(count.withLock { $0 } == 0)
+        await withTaskGroup(of: Void.self) { group in
+            for _ in 0..<16 {
+                group.addTask { facade.acknowledgeDurableConsumption() }
+                group.addTask { common.acknowledgeDurableConsumption() }
+            }
+        }
+        #expect(count.withLock { $0 } == 1)
+        retained.withLock { $0 = nil }
+    }
+
+    @Test(arguments: [
+        #"{"jsonrpc":"2.0","id":-7,"method":"peer/request","params":{"n":1e999}}"#,
+        #"{"jsonrpc":"2.0","id":99,"result":{"n":1e999}}"#,
+    ])
+    func brokerRawEvidenceWithoutPendingMetadataCannotMintHelperIdentity(json: String) async throws {
+        let bytes = Data(json.utf8)
+        let service = RawBrokerFixture(rawBytes: bytes)
+        let client = makeClient(service)
+        _ = try await client.start()
+        await client.detach()
+        var frames: [ACPBrokerRawFrameDelivery] = []
+        for await frame in client.incomingRawFrames { frames.append(frame) }
+        #expect(frames.count == 2)
+        #expect(frames.map(\.frame) == [bytes, bytes])
+        #expect(frames.map(\.provenance.cursor.rawValue) == [1, 2])
+        let first = try #require(frames.first)
+        let last = try #require(frames.last)
+        #expect(first.inboundDelivery.receiptID != last.inboundDelivery.receiptID)
+        #expect(first.inboundDelivery.source == .broker(provenance: first.provenance, pendingRequestID: nil))
+        if json.contains("method") { #expect(try first.inboundDelivery.decodeHeader().id == .number(-7)) }
+        else { #expect(throws: (any Error).self) { try first.inboundDelivery.decodeHeader() } }
+        #expect(await service.sentResponses.isEmpty)
+    }
+
     private func makeClient(_ service: RawBrokerFixture, context: ACPBrokerWireContext = .rawV2) -> ACPBrokerClient {
         ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
             command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",
@@ -498,6 +556,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     let rawBytes: Data
     let cached: Bool
     let delayOpen: Bool
+    var sentResponses: [ACPBrokerRespondParams] = []
     var sentRequests: [ACPBrokerSendParams] = []
     private var lastOperationKey = ACPBrokerOperationKey(rawValue: "key")
     var openCount = 0
@@ -609,7 +668,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         return result
     }
     func notify(_ params: ACPBrokerNotifyParams) -> ACPBrokerSimpleOK { .init(ok: true) }
-    func respond(_ params: ACPBrokerRespondParams) -> ACPBrokerSimpleOK { .init(ok: true) }
+    func respond(_ params: ACPBrokerRespondParams) -> ACPBrokerSimpleOK { sentResponses.append(params)
+    return .init(ok: true) }
     func ack(_ params: ACPBrokerAckParams) -> ACPBrokerSimpleOK { acks.append(params.cursor.rawValue)
     return .init(ok: true) }
     func detach(_ params: ACPBrokerDetachParams) -> ACPBrokerSimpleOK { .init(ok: true) }

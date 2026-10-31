@@ -111,6 +111,123 @@ struct ACPStdioClientTests {
         #expect(transport.sentFrames.isEmpty)
     }
 
+    @Test(arguments: ["session/request_permission", "fs/read_text_file", "fs/write_text_file", "terminal/create", "cursor/ask_question", "cursor/approve_plan", "elicitation/create", "$/cancel_request", "_auth/status_update", "_session/list/changes", "cursor/update_todos", "peer/future"], [false, true])
+    func v2MethodsRemainExactUnconsumedEvidenceWithoutAutomaticHandling(method: String, request: Bool) async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let id = request ? #","id":"inbound""# : ""
+        let bytes = Data(" \n{\"jsonrpc\":\"2.0\",\"method\":\"\(method)\"\(id),\"params\":{\"sessionId\":\"s\",\"future\":1e999}}\n".utf8)
+        let count = Mutex(0)
+        transport.send(frame: bytes, onConsumed: { count.withLock { $0 += 1 } })
+        let observed = await boundedResult { var inbound = client.incomingV2Inbound.makeAsyncIterator()
+        return await inbound.next() }
+        #expect(count.withLock { $0 } == 0)
+        #expect(transport.sentFrames.isEmpty)
+        let captured = try #require(observed)
+        let delivery = try #require(captured)
+        #expect(delivery.frame == bytes)
+        #expect(delivery.connectionID == client.updateConnectionID)
+        #expect(delivery.source == .stdio)
+        let header = try delivery.decodeHeader()
+        #expect(header.id == (request ? .string("inbound") : nil))
+        #expect(header.method == method)
+        guard case .object(let params)? = header.params else { Issue.record("Missing params")
+        return }
+        #expect(params["future"] == .number("1e999"))
+        #expect(count.withLock { $0 } == 0)
+        #expect(transport.sentFrames.isEmpty)
+        delivery.acknowledgeDurableConsumption()
+        #expect(count.withLock { $0 } == 1)
+        #expect(transport.sentFrames.isEmpty)
+    }
+
+    @Test func v2LegacyMethodStreamsFinishWhileRawCaptureAndStderrRemainActive() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        #expect(await boundedResult { var events = client.permissionRequests.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.fileRequests.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.terminalRequests.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.questionRequests.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.planRequests.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.elicitationRequests.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.elicitationCompletions.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.cancelRequests.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.authStatusUpdates.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        #expect(await boundedResult { var events = client.sessionListChanges.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        transport.send(stderr: Data("stderr".utf8))
+        let stderr = try #require(await boundedResult { var events = client.incomingStderr.makeAsyncIterator()
+        return await events.next() })
+        #expect(stderr == Data("stderr".utf8))
+    }
+
+    @Test(arguments: ["shutdown", "exit", "eof"])
+    func v2InboundLifetimeEndsWithoutConsumingBufferedOrLateReceipts(ending: String) async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.emitExitOnTerminate = ending != "eof"
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let count = Mutex(0)
+        let bytes = Data(#"{"jsonrpc":"2.0","id":-7,"method":"fs/write_text_file","params":null}"#.utf8)
+        for _ in 0..<2 { transport.send(frame: bytes, onConsumed: { count.withLock { $0 += 1 } }) }
+        // A method-absent diagnostic proves both preceding frames were routed.
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":-999,"result":null}"#.utf8))
+        #expect(await boundedResult { var events = client.incomingRawRPCDiagnostics.makeAsyncIterator()
+        return await events.next() != nil } == true)
+        let firstResult = await boundedResult { var events = client.incomingV2Inbound.makeAsyncIterator()
+        return await events.next() }
+        let firstValue = try #require(firstResult)
+        let first = try #require(firstValue)
+        if ending == "shutdown" { await client.shutdown() }
+        else if ending == "exit" { transport.send(exitStatus: 0) }
+        else { transport.terminate() }
+        let secondResult = await boundedResult { var events = client.incomingV2Inbound.makeAsyncIterator()
+        return await events.next() }
+        let secondValue = try #require(secondResult)
+        let second = try #require(secondValue)
+        #expect(first.frame == second.frame)
+        #expect(first.receiptID != second.receiptID)
+        #expect(await boundedResult { var events = client.incomingV2Inbound.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        transport.send(frame: bytes, onConsumed: { count.withLock { $0 += 1 } })
+        first.acknowledgeDurableConsumption()
+        second.acknowledgeDurableConsumption()
+        #expect(count.withLock { $0 } == 0)
+        #expect(transport.sentFrames.isEmpty)
+    }
+
+    @Test func defaultV1KeepsTypedDispatchAndHasNoRawInboundOwner() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport)
+        try client.start()
+        defer { transport.terminate() }
+        #expect(await boundedResult { var events = client.incomingV2Inbound.makeAsyncIterator()
+        return await events.next() == nil } == true)
+        let consumed = Mutex(0)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":7,"method":"fs/read_text_file","params":{"sessionId":"s","path":"/tmp/a"}}"#.utf8), onConsumed: { consumed.withLock { $0 += 1 } })
+        let observed = await boundedResult { var events = client.fileRequests.makeAsyncIterator()
+        return await events.next() }
+        let captured = try #require(observed)
+        guard case .read(let id, _) = try #require(captured) else { Issue.record("Missing v1 read")
+        return }
+        #expect(id == .number(7))
+        #expect(consumed.withLock { $0 } == 0)
+    }
+
     /// The fake agent script reads one Content-Length framed request from stdin
     /// and writes back a canned response + one session/update notification.
     private func fakeAgentScript() throws -> URL {
@@ -414,11 +531,10 @@ struct ACPStdioClientTests {
         try client.start()
         let bytes = Data(frame.utf8)
         let consumed = Mutex(0)
-        let barrier = AsyncStream<Void>.makeStream()
         transport.send(frame: bytes) { consumed.withLock { $0 += 1 } }
-        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":-999,"result":null}"#.utf8))
         #expect(await boundedResult {
-            var iterator = barrier.stream.makeAsyncIterator()
+            var iterator = client.incomingRawRPCDiagnostics.makeAsyncIterator()
             return await iterator.next() != nil
         } == true)
         #expect(client.yieldedUpdateCount == 1)
@@ -432,12 +548,11 @@ struct ACPStdioClientTests {
         #expect(delivery.frame == bytes)
         #expect(throws: (any Error).self) { try delivery.decode() }
         transport.send(exitStatus: 0, finish: false)
-        transport.send(frame: bytes) { consumed.withLock { $0 += 1 } }
-        transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
         #expect(await boundedResult {
-            var iterator = barrier.stream.makeAsyncIterator()
-            return await iterator.next() != nil
+            var iterator = client.incomingV2Updates.makeAsyncIterator()
+            return await iterator.next() == nil
         } == true)
+        transport.send(frame: bytes) { consumed.withLock { $0 += 1 } }
         #expect(client.yieldedUpdateCount == 1)
         #expect(consumed.withLock { $0 } == 0)
         await client.shutdown()
@@ -531,23 +646,13 @@ struct ACPStdioClientTests {
         }
         let result = try #require(received)
         let delivery = try #require(result)
-        if exit {
-            let barrier = AsyncStream<Void>.makeStream()
-            transport.send(exitStatus: 0, finish: false)
-            transport.send(frame: frame) { late.withLock { $0 += 1 } }
-            transport.send(frame: Data(#"{"jsonrpc":"2.0","method":"_test/barrier"}"#.utf8)) { barrier.continuation.yield(()) }
-            #expect(await boundedResult {
-                var iterator = barrier.stream.makeAsyncIterator()
-                return await iterator.next() != nil
-            } == true)
-        } else {
-            await client.shutdown()
-            transport.send(frame: frame) { late.withLock { $0 += 1 } }
-        }
+        if exit { transport.send(exitStatus: 0, finish: false) }
+        else { await client.shutdown() }
         #expect(await boundedResult {
             var iterator = client.incomingV2Updates.makeAsyncIterator()
             return await iterator.next() == nil
         } == true)
+        transport.send(frame: frame) { late.withLock { $0 += 1 } }
         #expect(client.yieldedUpdateCount == 1)
         #expect(consumed.withLock { $0 } == 0)
         #expect(late.withLock { $0 } == 0)
@@ -696,10 +801,13 @@ struct ACPStdioClientTests {
         #expect(await boundedResult { while transport.sentFrames.isEmpty, !Task.isCancelled { await Task.yield() }
         return !transport.sentFrames.isEmpty } == true)
         transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"method":"fs/read_text_file","params":{"sessionId":"s","path":"/tmp/a"}}"#.utf8))
-        var files = client.fileRequests.makeAsyncIterator()
-        guard case .read(let id, _) = try #require(await files.next()) else { Issue.record("Expected inbound read")
-        return }
-        #expect(id == .number(1))
+        let captured = try #require(await boundedResult {
+            var inbound = client.incomingV2Inbound.makeAsyncIterator()
+            return await inbound.next()
+        })
+        let header = try #require(captured).decodeHeader()
+        #expect(header.id == .number(1))
+        #expect(header.method == "fs/read_text_file")
         #expect(!settled.withLock { $0 })
         transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":null}"#.utf8))
         #expect(await request.value?.rawDelivery?.source == .stdio(requestID: .number(1), method: "m"))

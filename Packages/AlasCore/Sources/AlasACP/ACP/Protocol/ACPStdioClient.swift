@@ -7,6 +7,7 @@ import AlasCode
 
 public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
+    private let v2InboundCont: AsyncStream<ACPV2InboundDelivery>.Continuation
     private let rawRPCDiagnosticsCont: AsyncStream<ACPRawRPCDelivery>.Continuation
     private let v2UpdatesCont: AsyncStream<ACPV2SessionUpdateDelivery>.Continuation
     private let updatesCont: AsyncStream<ACPSessionUpdateParams>.Continuation
@@ -24,6 +25,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
 
     public let sessionUpdateProtocolVersion: ACPProtocolVersion
     public let updateConnectionID = UUID()
+    public let incomingV2Inbound: AsyncStream<ACPV2InboundDelivery>
     public let incomingRawRPCDiagnostics: AsyncStream<ACPRawRPCDelivery>
     public let incomingV2Updates: AsyncStream<ACPV2SessionUpdateDelivery>
     public let incomingUpdates: AsyncStream<ACPSessionUpdateParams>
@@ -76,6 +78,11 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         self.incomingUpdates = AsyncStream { uC = $0 }
         self.updatesCont = uC
 
+        let inbound = AsyncStream<ACPV2InboundDelivery>.makeStream()
+        self.incomingV2Inbound = inbound.stream
+        self.v2InboundCont = inbound.continuation
+        if sessionUpdateProtocolVersion == .v1 { inbound.continuation.finish() }
+
         let diagnostics = AsyncStream<ACPRawRPCDelivery>.makeStream()
         self.incomingRawRPCDiagnostics = diagnostics.stream
         self.rawRPCDiagnosticsCont = diagnostics.continuation
@@ -130,6 +137,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         var slC: AsyncStream<ACPSessionListChanges>.Continuation!
         self.sessionListChanges = AsyncStream { slC = $0 }
         self.sessionListChangesCont = slC
+        if sessionUpdateProtocolVersion == .v2 { finishLegacyMethodStreams() }
     }
 
     /// Accepts a pre-built transport directly, skipping the local
@@ -142,6 +150,11 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         self.incomingUpdates = AsyncStream { uC = $0 }
         self.updatesCont = uC
 
+        let inbound = AsyncStream<ACPV2InboundDelivery>.makeStream()
+        self.incomingV2Inbound = inbound.stream
+        self.v2InboundCont = inbound.continuation
+        if sessionUpdateProtocolVersion == .v1 { inbound.continuation.finish() }
+
         let diagnostics = AsyncStream<ACPRawRPCDelivery>.makeStream()
         self.incomingRawRPCDiagnostics = diagnostics.stream
         self.rawRPCDiagnosticsCont = diagnostics.continuation
@@ -196,6 +209,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         var slC: AsyncStream<ACPSessionListChanges>.Continuation!
         self.sessionListChanges = AsyncStream { slC = $0 }
         self.sessionListChangesCont = slC
+        if sessionUpdateProtocolVersion == .v2 { finishLegacyMethodStreams() }
     }
 
     /// Convenience factory for tests — wraps `init(transport:)`.
@@ -497,8 +511,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         }
     }
 
-    /// Returns false only for a valid inbound method envelope, whose separate
-    /// ID namespace remains owned by the existing request/notification handlers.
+    /// Selected-v2 evidence never enters legacy typed method dispatch.
     private func handleV2Frame(_ data: Data, onConsumed: ACPDurableConsumptionAcknowledgement?) -> Bool {
         guard case .object(let fields) = try? LSPJSONValue.decode(from: data) else {
             // Existing raw session/update evidence remains exclusive, including
@@ -517,7 +530,10 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         }
         if let method = fields["method"] {
             let supportedID = fields["id"].map { ACPRawRPCDelivery.stdioID($0) != nil } ?? true
-            if case .string = method, fields["jsonrpc"] == .string("2.0"), supportedID { return false }
+            if case .string = method, fields["jsonrpc"] == .string("2.0"), supportedID {
+                publishV2Inbound(data, onConsumed: onConsumed)
+                return true
+            }
             publishRPCDiagnostic(data, onConsumed: onConsumed)
             return true
         }
@@ -560,20 +576,43 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         rawRPCDiagnosticsCont.yield(rpcDelivery(data, source: .diagnostic, onConsumed: onConsumed))
     }
 
+    private func finishLegacyMethodStreams() {
+        permsCont.finish()
+        cancelRequestsCont.finish()
+        questionsCont.finish()
+        plansCont.finish()
+        elicitationsCont.finish()
+        elicitationCompletionsCont.finish()
+        filesCont.finish()
+        terminalsCont.finish()
+        authStatusCont.finish()
+        sessionListChangesCont.finish()
+    }
+
+    private func publishV2Inbound(_ data: Data, onConsumed: ACPDurableConsumptionAcknowledgement?) {
+        let acknowledgement = connectionAcknowledgement(onConsumed)
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        guard !didDrainPending else { return }
+        v2InboundCont.yield(.init(frame: data, connectionID: updateConnectionID, source: .stdio,
+            durableConsumptionAcknowledgement: acknowledgement))
+    }
+
     private func rpcDelivery(_ data: Data, source: ACPRawRPCDelivery.Source,
         onConsumed: ACPDurableConsumptionAcknowledgement?) -> ACPRawRPCDelivery {
-        let acknowledgement: ACPDurableConsumptionAcknowledgement?
-        if let onConsumed {
-            acknowledgement = { [weak self] in
-                guard let self else { return }
-                self.stateLock.lock()
-                let active = !self.didDrainPending
-                self.stateLock.unlock()
-                if active { onConsumed() }
-            }
-        } else { acknowledgement = nil }
-        return .init(frame: data, connectionID: updateConnectionID, source: source,
-            durableConsumptionAcknowledgement: acknowledgement)
+        .init(frame: data, connectionID: updateConnectionID, source: source,
+            durableConsumptionAcknowledgement: connectionAcknowledgement(onConsumed))
+    }
+
+    private func connectionAcknowledgement(_ onConsumed: ACPDurableConsumptionAcknowledgement?) -> ACPDurableConsumptionAcknowledgement? {
+        guard let onConsumed else { return nil }
+        return { [weak self] in
+            guard let self else { return }
+            self.stateLock.lock()
+            let active = !self.didDrainPending
+            self.stateLock.unlock()
+            if active { onConsumed() }
+        }
     }
 
     /// Extracts the raw JSON bytes of the `result` field from a full envelope.
@@ -863,6 +902,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         didDrainPending = true
         v2UpdatesCont.finish()
         rawRPCDiagnosticsCont.finish()
+        v2InboundCont.finish()
         let snapshot = pending
         pending.removeAll()
         stateLock.unlock()
