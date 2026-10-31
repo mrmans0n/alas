@@ -43,7 +43,13 @@ struct LinuxCloudInitTests {
         #expect(user.contains("/home/alas/.config/systemd/user/default.target.wants/alas-vm-guest.service"))
         #expect(user.contains("loginctl enable-linger alas"))
         #expect(user.contains("touch /etc/cloud/cloud-init.disabled"))
+        #expect(user.contains("systemctl set-default graphical.target"))
         #expect(user.contains("power_state:\n  mode: poweroff"))
+        // Power off only once setup really happened; otherwise the host's deadline fails the build.
+        #expect(!user.contains("condition: true"))
+        #expect(user.contains(
+            #"condition: "test -x /usr/local/bin/alas-vm-guest && test -L /home/alas/.config/systemd/user/default.target.wants/alas-vm-guest.service && dpkg -s xubuntu-core lightdm >/dev/null 2>&1""#
+        ))
         // The mount must be in place before the helper is copied from it.
         let mount = try #require(user.range(of: "mount /mnt/alas"))
         let install = try #require(user.range(of: "/mnt/alas/helper/alas-vm-guest-linux"))

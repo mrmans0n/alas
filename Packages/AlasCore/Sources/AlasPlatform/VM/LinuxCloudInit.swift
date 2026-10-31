@@ -62,6 +62,14 @@ public enum LinuxCloudInit {
         let home = "/home/\(name)"
         let userUnits = "\(home)/.config/systemd/user"
         let stagedUnit = "/usr/local/lib/alas/alas-vm-guest.service"
+        let wantsLink = "\(userUnits)/default.target.wants/alas-vm-guest.service"
+        // Power off only when setup really happened. Otherwise the guest stays
+        // up and the host's first-boot deadline fails the build.
+        let setupDone = [
+            "test -x \(helperPath)",
+            "test -L \(wantsLink)",
+            "dpkg -s xubuntu-core lightdm >/dev/null 2>&1",
+        ].joined(separator: " && ")
         // The share's fstab line is written directly rather than through
         // `mounts:`, so it doesn't depend on cc_mounts' device-name sanitizing
         // (which has changed across cloud-init releases) and is mounted before
@@ -75,9 +83,10 @@ public enum LinuxCloudInit {
             "install -d -o \(name) -g \(name) -m 0755 \(home)/.config \(home)/.config/systemd \(userUnits) \(userUnits)/default.target.wants",
             "install -o \(name) -g \(name) -m 0644 \(stagedUnit) \(userUnits)/alas-vm-guest.service",
             // What `systemctl --user enable` does, without needing the user's manager running yet.
-            "ln -sfn ../alas-vm-guest.service \(userUnits)/default.target.wants/alas-vm-guest.service",
-            "chown -h \(name):\(name) \(userUnits)/default.target.wants/alas-vm-guest.service",
+            "ln -sfn ../alas-vm-guest.service \(wantsLink)",
+            "chown -h \(name):\(name) \(wantsLink)",
             "loginctl enable-linger \(name)",
+            "systemctl set-default graphical.target",
             "touch /etc/cloud/cloud-init.disabled",
         ]
         // write_files runs before users exist, so files land root-owned and
@@ -124,7 +133,7 @@ public enum LinuxCloudInit {
           mode: poweroff
           message: "Alas golden image setup finished"
           timeout: 30
-          condition: true
+          condition: \(quoted(setupDone))
 
         """
     }
