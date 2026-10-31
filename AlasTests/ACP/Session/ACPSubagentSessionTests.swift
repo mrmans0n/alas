@@ -1469,4 +1469,66 @@ struct ACPSubagentRowPolicyTests {
         #expect(ACPSubagentRowPolicy.stateLabel(for: .other("awaiting_permission"))
             == "Awaiting Permission")
     }
+
+    struct ObservationCase: Sendable, CustomTestStringConvertible {
+        let label: String
+        let config: ACPSubagentConfigSummary?
+        let cwd: String?
+        let directoriesConfirmed: Bool
+        let expected: String?
+        var testDescription: String { label }
+    }
+
+    static let observationCases: [ObservationCase] = {
+        let live = ACPSubagentConfigSummary(model: "GPT-5", effort: "High", parameters: [], isConfirmed: true)
+        let lastSeen = ACPSubagentConfigSummary(model: "GPT-5", effort: "High", parameters: [], isConfirmed: false)
+        return [
+            .init(label: "live config, inherited cwd", config: live, cwd: nil, directoriesConfirmed: true,
+                  expected: "GPT-5 · High"),
+            .init(label: "historical config", config: lastSeen, cwd: nil, directoriesConfirmed: true,
+                  expected: "GPT-5 · High (last seen)"),
+            .init(label: "cwd inside the worktree", config: live, cwd: "/repo/pkg", directoriesConfirmed: true,
+                  expected: "GPT-5 · High · in pkg"),
+            .init(label: "cwd outside the worktree", config: nil, cwd: "/repo2/tools", directoriesConfirmed: true,
+                  expected: "in tools"),
+            .init(label: "historical cwd", config: live, cwd: "/repo/a/b", directoriesConfirmed: false,
+                  expected: "GPT-5 · High · in a/b (last seen)"),
+            .init(label: "nothing observed", config: nil, cwd: nil, directoriesConfirmed: true, expected: nil),
+        ]
+    }()
+
+    @Test("the header caption shows what the child reported, marking history", arguments: observationCases)
+    func observationCaptions(_ c: ObservationCase) {
+        #expect(ACPSubagentRowPolicy.observationCaption(
+            config: c.config, cwd: c.cwd, worktreeRoot: "/repo",
+            directoriesConfirmed: c.directoriesConfirmed) == c.expected)
+    }
+
+    @Test("a delegated row names the other side", arguments: [
+        // root -> child, seen from the child
+        (ACPDelegationLink(messageId: "m", senderSessionId: "root", recipientSessionId: "c1"), "c1", "From parent"),
+        // child -> root handback, seen from the child
+        (ACPDelegationLink(messageId: "m", senderSessionId: "c1", recipientSessionId: "root"), "c1", "Sent to parent"),
+        // sibling, seen from each side
+        (ACPDelegationLink(messageId: "m", senderSessionId: "c2", recipientSessionId: "c1"), "c1", "From Reviewer"),
+        (ACPDelegationLink(messageId: "m", senderSessionId: "c1", recipientSessionId: "c2"), "c1", "Sent to Reviewer"),
+    ])
+    func delegationCaptions(link: ACPDelegationLink, viewing: String, expected: String) {
+        #expect(ACPSubagentRowPolicy.delegationCaption(
+            link: link, viewingSessionId: viewing, rootSessionId: "root",
+            childNames: ["c1": "Explore", "c2": "Reviewer"]) == expected)
+    }
+
+    @Test("a delegated row inside a child never navigates to that child's own row")
+    func delegationTargetSkipsContainingRow() {
+        let fromRoot = ACPDelegationLink(
+            messageId: "toolu_1", senderSessionId: "root", recipientSessionId: "c1")
+        func target(rendered: Set<String>) -> ACPDelegationNavigationTarget? {
+            ACPSubagentRowPolicy.delegationTarget(
+                link: fromRoot, viewingSessionId: "c1", rootSessionId: "root",
+                parentToolCallIds: rendered, knownChildIds: ["c1"])
+        }
+        #expect(target(rendered: ["toolu_1"]) == .parentToolCall(toolCallId: "toolu_1"))
+        #expect(target(rendered: []) == nil)
+    }
 }

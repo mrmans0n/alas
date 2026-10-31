@@ -371,7 +371,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 nativeRowsEnabled: nativeRowsEnabled,
                 showsActionsPermanently: currentShowsActionsPermanently(),
                 // A native agent row whose growing text it can no longer draw.
-                requestRespec: { [weak self] in self?.scheduleDeferredUpdate() }
+                requestRespec: { [weak self] in self?.scheduleDeferredUpdate() },
+                revealDelegation: { [weak self] in self?.revealDelegation($0) }
             )
             hasNonSyntheticRow = specs.contains {
                 !$0.id.hasPrefix(ACPTranscriptScrollerReconciler.syntheticIdPrefix)
@@ -547,7 +548,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             renderRows: [ACPTranscriptRenderRow]? = nil,
             nativeRowsEnabled: Bool = ACPTranscriptNativeRows.isEnabled,
             showsActionsPermanently: Bool = Coordinator.systemShowsActionsPermanently(),
-            requestRespec: @escaping @MainActor () -> Void = {}
+            requestRespec: @escaping @MainActor () -> Void = {},
+            revealDelegation: ((ACPDelegationNavigationTarget) -> Void)? = nil
         ) -> [ACPTranscriptRowSpec] {
             let transcript = host.transcript
             var specs: [ACPTranscriptRowSpec] = []
@@ -610,6 +612,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     guard let spec = Self.messageRowSpec(
                         host: host, snapshot: snapshot, row: row, inToolCallGroup: false,
                         rowExpansionStore: rowExpansionStore,
+                        revealDelegation: revealDelegation,
                         mayBeNative: mayBeNative,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
@@ -620,6 +623,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     guard let spec = Self.messageRowSpec(
                         host: host, snapshot: snapshot, row: row, inToolCallGroup: true,
                         rowExpansionStore: rowExpansionStore,
+                        revealDelegation: revealDelegation,
                         mayBeNative: mayBeNative,
                         availableRowContentWidth: availableRowContentWidth,
                         availableTrailingGutterWidth: availableTrailingGutterWidth
@@ -725,6 +729,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             row: ACPTranscriptVisibleRow,
             inToolCallGroup: Bool,
             rowExpansionStore: ACPTranscriptRowExpansionStore,
+            revealDelegation: ((ACPDelegationNavigationTarget) -> Void)?,
             mayBeNative: Bool,
             availableRowContentWidth: CGFloat,
             availableTrailingGutterWidth: CGFloat
@@ -767,7 +772,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             availableRowContentWidth: availableRowContentWidth,
                             availableTrailingGutterWidth: availableTrailingGutterWidth,
                             isExpanded: expansion?.isExpanded ?? false,
-                            onExpandedChange: expansion?.setExpanded
+                            onExpandedChange: expansion?.setExpanded,
+                            onRevealDelegation: revealDelegation
                         )
                         if inToolCallGroup {
                             ACPToolCallGroupMemberRow { card }
@@ -1127,7 +1133,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             availableRowContentWidth: CGFloat? = nil,
             availableTrailingGutterWidth: CGFloat? = nil,
             isExpanded: Bool = false,
-            onExpandedChange: ((Bool) -> Void)? = nil
+            onExpandedChange: ((Bool) -> Void)? = nil,
+            onRevealDelegation: ((ACPDelegationNavigationTarget) -> Void)? = nil
         ) -> some View {
             ACPTranscriptRowContent(
                 stableId: row.stableId,
@@ -1153,6 +1160,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 messageMenuItems: host.messageMenuItems,
                 onCancelSubagent: host.onCancelSubagent,
                 onOpenSubagentLink: host.onOpenSubagentLink,
+                onRevealDelegation: onRevealDelegation,
                 delegatedLabel: delegatedLabel(host: host, message: message),
                 visualAidActions: host.visualAidActions,
                 isExpanded: isExpanded,
@@ -1777,6 +1785,33 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 else { return }
                 self.update(host: host)
             }
+        }
+
+        /// Scrolls to the other side of a delegation message. A row inside a
+        /// child transcript is reached through that child's row, which is
+        /// expanded first; its top does not move when it grows, so it can be
+        /// revealed right away. Rows outside the hydrated window are left alone.
+        func revealDelegation(_ target: ACPDelegationNavigationTarget) {
+            guard let host, let reconciler else { return }
+            let toolCallId: String
+            switch target {
+            case .parentToolCall(let id):
+                toolCallId = id
+            case .subagentRow(let childId):
+                toolCallId = ACPSubagentRowDescriptor.toolCallId(subagentSessionId: childId)
+            case .childMessage(let childId, _):
+                toolCallId = ACPSubagentRowDescriptor.toolCallId(subagentSessionId: childId)
+            }
+            let stableId = ACPMessage.stableId(for: .toolCall(toolCallId))
+            let rowId = currentRowLookup(host: host).rowId(forStableId: stableId) ?? stableId
+            guard tiling.row(withId: rowId) != nil else { return }
+            if case .childMessage = target {
+                rowExpansionStore.setExpanded(true, stableID: stableId)
+            }
+            // The tail-follow pass would otherwise snap straight back down.
+            pauseTailFollow()
+            reconciler.revealRow(stableId: rowId)
+            rememberCurrentAnchor()
         }
 
         private func alignPendingLogicalTargetIfPossible() {

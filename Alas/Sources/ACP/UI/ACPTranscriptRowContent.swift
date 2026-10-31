@@ -71,6 +71,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     var onCancelSubagent: ((String) -> Void)?
     /// Opens a link clicked in a subagent's transcript, with the child id.
     var onOpenSubagentLink: ((URL, String) -> Bool)?
+    /// Scrolls to the other side of a delegation message. Nil hides the
+    /// subagent rows' navigation buttons.
+    var onRevealDelegation: ((ACPDelegationNavigationTarget) -> Void)?
     /// Resolved caption for a delegated prompt's bubble. Compared, because
     /// it folds in the sender's agent display name, which lives outside
     /// `message`.
@@ -81,13 +84,14 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     var visualAidActions: ACPVisualAidActions = .readOnly
     /// Seeds a tool card's or thought's disclosure, which then keeps its own
     /// state; `onExpandedChange` reports toggles back to the scroller's
-    /// `ACPTranscriptRowExpansionStore`. Not compared: the scroller's row
-    /// token carries the flag.
+    /// `ACPTranscriptRowExpansionStore`. Compared: a subagent row reads the
+    /// flag on every render rather than seeding from it, so a mounted row
+    /// must see the store's change.
     var isExpanded: Bool = false
     var onExpandedChange: ((Bool) -> Void)?
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        guard lhs.messagePhase == rhs.messagePhase else { return false }
+        guard lhs.messagePhase == rhs.messagePhase, lhs.isExpanded == rhs.isExpanded else { return false }
         return equalityKey(
             stableId: lhs.stableId, message: lhs.message,
             messageCreatedAt: lhs.messageCreatedAt,
@@ -206,6 +210,22 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         return trustedImageRoot
     }
 
+    private var subagentDelegationContext: ACPSubagentDelegationContext {
+        let session = session
+        let transcript = transcript
+        return ACPSubagentDelegationContext(
+            rootSessionId: session.remoteSessionId ?? session.id,
+            rootAgentId: session.agentId,
+            knownChildIds: { Set(session.subagents.keys) },
+            childNames: { session.subagents.mapValues(\.displayName) },
+            renderedParentToolCallIds: { link in
+                Set([link.senderMessageId, link.messageId].compactMap { $0 }.filter {
+                    transcript.toolCallIndex(toolCallId: $0) != nil
+                })
+            },
+            onReveal: onRevealDelegation)
+    }
+
     var body: some View {
         switch message {
         case .user(_, _, let text, let attachments, let delegatedSource, let pastedSpans):
@@ -309,7 +329,11 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     },
                     onOpenLink: onOpenSubagentLink.map { open in
                         { open($0, descriptor.subagentSessionId) }
-                    })
+                    },
+                    worktreeRoot: trustedImageRoot?.path,
+                    delegation: subagentDelegationContext,
+                    isExpanded: isExpanded,
+                    onExpandedChange: onExpandedChange)
                     // A child's terminal-backed tool calls are served by the
                     // same host as the parent's — terminals belong to the
                     // connection, not to the session that asked for one — so
