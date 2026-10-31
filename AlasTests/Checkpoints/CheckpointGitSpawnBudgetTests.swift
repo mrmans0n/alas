@@ -21,7 +21,7 @@ struct CheckpointGitSpawnBudgetTests {
         defer { fixture.remove() }
 
         let checkpoint = try await fixture.service.createManual(target: fixture.repo.target, label: "Saved")
-        #expect(fixture.git.drain().count == 25)
+        #expect(fixture.git.drain().count == 24)
 
         for path in Fixture.paths { try fixture.repo.write("later \(path)\n", to: path) }
         let preview = try await fixture.service.restorePreview(target: fixture.repo.target, id: checkpoint.id, coordination: .clear)

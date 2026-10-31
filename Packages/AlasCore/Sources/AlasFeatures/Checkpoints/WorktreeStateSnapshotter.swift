@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import AlasFoundation
 import AlasModel
@@ -45,6 +44,12 @@ public struct WorktreeStateSnapshot: Equatable, Sendable {
     public let exclusions: [CheckpointExclusion]
     public let payloads: [String: Data]
     public let fingerprint: String
+    /// When this snapshot started reading the worktree.
+    public let startedAt: Date
+    /// The stat identity of each regular worktree file, taken before reading it.
+    public let diskIdentities: [String: CheckpointStatIdentity]
+    /// The reference of each HEAD and index object read, by object id.
+    public let gitBlobReferences: [String: CheckpointBlobReference]
 
     public func payload(_ state: CheckpointFileState) throws -> Data? {
         guard let blob = state.blob else { return nil }
@@ -52,7 +57,9 @@ public struct WorktreeStateSnapshot: Equatable, Sendable {
         return bytes
     }
 
-    public init(lineageID: String, headOID: String, branch: String, indexChecksum: String, paths: [String: CheckpointPathState], groups: [CheckpointFileGroup], exclusions: [CheckpointExclusion], payloads: [String: Data], fingerprint: String) {
+    public init(lineageID: String, headOID: String, branch: String, indexChecksum: String, paths: [String: CheckpointPathState], groups: [CheckpointFileGroup], exclusions: [CheckpointExclusion], payloads: [String: Data], fingerprint: String,
+                startedAt: Date = .distantPast, diskIdentities: [String: CheckpointStatIdentity] = [:],
+                gitBlobReferences: [String: CheckpointBlobReference] = [:]) {
         self.lineageID = lineageID
         self.headOID = headOID
         self.branch = branch
@@ -62,6 +69,9 @@ public struct WorktreeStateSnapshot: Equatable, Sendable {
         self.exclusions = exclusions
         self.payloads = payloads
         self.fingerprint = fingerprint
+        self.startedAt = startedAt
+        self.diskIdentities = diskIdentities
+        self.gitBlobReferences = gitBlobReferences
     }
 }
 
@@ -78,6 +88,12 @@ public struct CheckpointCaptureAttempt: Equatable, Sendable {
 public struct WorktreeStateSnapshotter: Sendable {
     public static let live = Self()
     public static let defaultRetainedPayloadByteLimit: Int64 = 100 * 1024 * 1024
+    /// A leaf changed this close before a snapshot started may have changed
+    /// again within the timestamp granularity, so a verifying pass re-reads it.
+    /// Same limits as git's racy check: writers through mmap whose timestamps
+    /// lag the write, and network file systems with coarse timestamps or a
+    /// server clock more than this behind can still hide a change.
+    public static let racyWindow: TimeInterval = 2
     public let git: any CheckpointGitRunning
     public let fileSystem: any CheckpointFileSystem
     public let retainedPayloadByteLimit: Int64
@@ -92,7 +108,13 @@ public struct WorktreeStateSnapshotter: Sendable {
 
     public func snapshot(target: CheckpointWorktreeTarget, includingPaths: Set<String> = [],
                   ignoringRestoreOperation: UUID? = nil, onlyIncludedPaths: Bool = false,
-                  retainingPayloads: Bool = true, gitPaths: CheckpointGitPaths? = nil) async throws -> WorktreeStateSnapshot {
+                  retainingPayloads: Bool = true, gitPaths: CheckpointGitPaths? = nil,
+                  verifying previous: WorktreeStateSnapshot? = nil) async throws -> WorktreeStateSnapshot {
+        let startedAt = Date()
+        // A pass that verifies `previous` trusts its object references, which
+        // are immutable by id, and its worktree reads of files whose stat
+        // identity is unchanged and settled before `previous` started.
+        let reusable = previous.map { (snapshot: $0, settledBefore: $0.startedAt.addingTimeInterval(-Self.racyWindow)) }
         guard !target.path.isRemoteAlasPath else { throw CheckpointSnapshotError.remoteTarget }
         try validateLineage(target)
         let head = try await headOID(target)
@@ -161,7 +183,9 @@ public struct WorktreeStateSnapshotter: Sendable {
             return entries.compactMap { $0 }
         }
         var payloads: [String: Data] = [:]
-        let blobs = try await gitBlobs(gitEntries, target, payloads: &payloads, retainingPayloads: retainingPayloads)
+        let blobs = try await gitBlobs(gitEntries, target, payloads: &payloads, retainingPayloads: retainingPayloads,
+                                       known: retainingPayloads ? [:] : previous?.gitBlobReferences ?? [:])
+        var diskIdentities: [String: CheckpointStatIdentity] = [:]
         var states: [String: CheckpointPathState] = [:]
         var exclusions: [CheckpointExclusion] = []
         for path in visited {
@@ -188,7 +212,12 @@ public struct WorktreeStateSnapshotter: Sendable {
                     directoryAsAbsent: headState.kind != .absent || indexState.kind != .absent || includingPaths.contains(path),
                     relativePath: path,
                     payloads: &payloads,
-                    retainingPayloads: retainingPayloads
+                    retainingPayloads: retainingPayloads,
+                    identities: &diskIdentities,
+                    reusable: retainingPayloads ? nil : reusable.flatMap { reusable in
+                        reusable.snapshot.paths[path].map { (state: $0.worktree, identity: reusable.snapshot.diskIdentities[path],
+                                                             settledBefore: reusable.settledBefore) }
+                    }
                 )
             } catch CheckpointFileSystemError.unsafePath where headState.kind == .absent && indexState.kind == .absent && includingPaths.contains(path) {
                 diskState = .absent
@@ -205,7 +234,8 @@ public struct WorktreeStateSnapshotter: Sendable {
                                             exclusions: exclusions)
         let fingerprint = CheckpointBlobReference.make(for: try JSONEncoder.checkpoints.encode(fingerprintRecord)).sha256
         return .init(lineageID: target.lineageID, headOID: head, branch: branch, indexChecksum: indexChecksum,
-                     paths: states, groups: groups, exclusions: exclusions, payloads: payloads, fingerprint: fingerprint)
+                     paths: states, groups: groups, exclusions: exclusions, payloads: payloads, fingerprint: fingerprint,
+                     startedAt: startedAt, diskIdentities: diskIdentities, gitBlobReferences: blobs)
     }
 
     private struct Fingerprint: Encodable {
@@ -358,11 +388,16 @@ public struct WorktreeStateSnapshotter: Sendable {
     /// observes the same content; the HEAD and index re-read at the end of the
     /// snapshot still guards the whole capture.
     private func gitBlobs(_ entries: [(path: String, entry: Entry)], _ target: CheckpointWorktreeTarget,
-                          payloads: inout [String: Data], retainingPayloads: Bool) async throws -> [String: CheckpointBlobReference] {
+                          payloads: inout [String: Data], retainingPayloads: Bool,
+                          known: [String: CheckpointBlobReference]) async throws -> [String: CheckpointBlobReference] {
         var seen = Set<String>()
         let oids = entries.map(\.entry.oid).filter { seen.insert($0).inserted }
         guard !oids.isEmpty else { return [:] }
-        guard retainingPayloads else { return try await git.blobReferences(oids: oids, cwd: target.path) }
+        guard retainingPayloads else {
+            let missing = oids.filter { known[$0] == nil }
+            let read = missing.isEmpty ? [:] : try await git.blobReferences(oids: missing, cwd: target.path)
+            return Dictionary(uniqueKeysWithValues: oids.compactMap { oid in (known[oid] ?? read[oid]).map { (oid, $0) } })
+        }
         let sizes = try await git.blobSizes(oids: oids, cwd: target.path)
         for (path, entry) in entries {
             guard let byteCount = sizes[entry.oid] else { throw CheckpointSnapshotError.invalidGitOutput }
@@ -380,12 +415,19 @@ public struct WorktreeStateSnapshotter: Sendable {
     }
 
     private func diskState(path: String, root: URL, directoryAsAbsent: Bool, relativePath: String, payloads: inout [String: Data],
-                           retainingPayloads: Bool) throws -> CheckpointFileState {
+                           retainingPayloads: Bool, identities: inout [String: CheckpointStatIdentity],
+                           reusable: (state: CheckpointFileState, identity: CheckpointStatIdentity?, settledBefore: Date)?) throws -> CheckpointFileState {
         do {
             guard let metadata = try fileSystem.metadata(root: root, relativePath: path) else { return .absent }
+            if metadata.kind == .regular, let identity = metadata.identity {
+                identities[path] = identity
+                if let reusable, reusable.identity == identity, identity.changedBefore(reusable.settledBefore),
+                   reusable.state.kind == .regular, let blob = reusable.state.blob {
+                    return .regular(blob: blob, executable: metadata.executable)
+                }
+            }
             if !retainingPayloads, metadata.kind == .regular {
-                let url = try fileSystem.validateRelativePath(path, under: root)
-                return .regular(blob: try streamFileReference(at: url), executable: metadata.executable)
+                return .regular(blob: try fileSystem.regularFileReference(root: root, relativePath: path), executable: metadata.executable)
             }
             if retainingPayloads, metadata.kind == .regular, metadata.byteCount > retainedPayloadByteLimit {
                 throw CheckpointSnapshotError.payloadTooLarge(
@@ -408,21 +450,6 @@ public struct WorktreeStateSnapshotter: Sendable {
             }
             throw CheckpointFileSystemError.unsupportedLeaf
         }
-    }
-
-    private func streamFileReference(at url: URL) throws -> CheckpointBlobReference {
-        let handle = try FileHandle(forReadingFrom: url)
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        var byteCount: Int64 = 0
-        while true {
-            let chunk = try handle.read(upToCount: 1024 * 1024) ?? Data()
-            if chunk.isEmpty { break }
-            byteCount += Int64(chunk.count)
-            hasher.update(data: chunk)
-        }
-        let hash = hasher.finalize().map { String(format: "%02x", $0) }.joined()
-        return CheckpointBlobReference(sha256: hash, byteCount: byteCount)
     }
 
     private func add(_ data: Data, to payloads: inout [String: Data], retainingPayload: Bool = true) -> CheckpointBlobReference {

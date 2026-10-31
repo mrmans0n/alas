@@ -1,3 +1,4 @@
+import CryptoKit
 import Darwin
 import Foundation
 import AlasFoundation
@@ -21,11 +22,41 @@ public struct CheckpointLeafMetadata: Equatable, Sendable {
     public let kind: CheckpointLeafKind
     public let executable: Bool
     public let byteCount: Int64
+    /// Nil when the file system can't tell; such a leaf is always re-read.
+    public let identity: CheckpointStatIdentity?
 
-    public init(kind: CheckpointLeafKind, executable: Bool, byteCount: Int64) {
+    public init(kind: CheckpointLeafKind, executable: Bool, byteCount: Int64, identity: CheckpointStatIdentity? = nil) {
         self.kind = kind
         self.executable = executable
         self.byteCount = byteCount
+        self.identity = identity
+    }
+}
+
+/// What `lstat` says about a leaf. Any write changes the ctime, which can't be
+/// set back, so an equal identity means unchanged bytes unless the change fell
+/// within the timestamp granularity: callers re-read recently changed leaves.
+public struct CheckpointStatIdentity: Equatable, Sendable {
+    public let device: UInt64
+    public let inode: UInt64
+    public let byteCount: Int64
+    /// Nanoseconds since 1970.
+    public let modified: Int64
+    /// Nanoseconds since 1970.
+    public let changed: Int64
+
+    public init(device: UInt64, inode: UInt64, byteCount: Int64, modified: Int64, changed: Int64) {
+        self.device = device
+        self.inode = inode
+        self.byteCount = byteCount
+        self.modified = modified
+        self.changed = changed
+    }
+
+    /// Whether the leaf last changed before `date`.
+    public func changedBefore(_ date: Date) -> Bool {
+        let limit = Int64((date.timeIntervalSince1970 * 1_000_000_000).rounded(.down))
+        return max(modified, changed) < limit
     }
 }
 
@@ -41,6 +72,8 @@ public enum CheckpointWriteDurability: Sendable {
 
 public protocol CheckpointFileSystem: Sendable {
     func readLeaf(root: URL, relativePath: String) throws -> CheckpointLeafRead
+    /// The reference of a regular file's bytes, without keeping them.
+    func regularFileReference(root: URL, relativePath: String) throws -> CheckpointBlobReference
     func metadata(root: URL, relativePath: String) throws -> CheckpointLeafMetadata?
     func validateRelativePath(_ relativePath: String, under root: URL) throws -> URL
     func createDirectoryExclusively(_ url: URL, mode: mode_t) throws
@@ -59,6 +92,13 @@ public protocol CheckpointFileSystem: Sendable {
 
 /// Test doubles that only implement the durable operations stay durable.
 extension CheckpointFileSystem {
+    public func regularFileReference(root: URL, relativePath: String) throws -> CheckpointBlobReference {
+        guard case .regular(let data, _) = try readLeaf(root: root, relativePath: relativePath) else {
+            throw CheckpointFileSystemError.unsupportedLeaf
+        }
+        return CheckpointBlobReference.make(for: data)
+    }
+
     public func write(_ data: Data, to url: URL, mode: mode_t, durability: CheckpointWriteDurability) throws {
         try writeDurable(data, to: url, mode: mode)
     }
@@ -93,12 +133,44 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
             throw posixError("lstat")
         }
         if isRegular(attributes) {
-            return .init(kind: .regular, executable: attributes.st_mode & 0o111 != 0, byteCount: attributes.st_size)
+            return .init(kind: .regular, executable: attributes.st_mode & 0o111 != 0, byteCount: attributes.st_size,
+                         identity: .init(device: UInt64(attributes.st_dev), inode: UInt64(attributes.st_ino),
+                                         byteCount: attributes.st_size,
+                                         modified: nanoseconds(attributes.st_mtimespec), changed: nanoseconds(attributes.st_ctimespec)))
         }
         if isSymlink(attributes) {
             return .init(kind: .symlink, executable: false, byteCount: attributes.st_size)
         }
         throw CheckpointFileSystemError.unsupportedLeaf
+    }
+
+    public func regularFileReference(root: URL, relativePath: String) throws -> CheckpointBlobReference {
+        let leaf = try validateRelativePath(relativePath, under: root)
+        let descriptor = Darwin.open(leaf.path, O_RDONLY | O_NOFOLLOW)
+        guard descriptor >= 0 else {
+            // Swapped for a symlink since the caller's lstat: retry the capture.
+            if errno == ELOOP { throw CheckpointSnapshotError.stateChanged }
+            throw posixError("open")
+        }
+        defer { _ = Darwin.close(descriptor) }
+        var attributes = stat()
+        guard Darwin.fstat(descriptor, &attributes) == 0 else { throw posixError("fstat") }
+        guard isRegular(attributes) else { throw CheckpointFileSystemError.unsupportedLeaf }
+
+        var hasher = SHA256()
+        var byteCount: Int64 = 0
+        var buffer = [UInt8](repeating: 0, count: Int(min(1024 * 1024, max(attributes.st_size, 1))))
+        while true {
+            let count = Darwin.read(descriptor, &buffer, buffer.count)
+            if count == 0 { break }
+            if count < 0 {
+                if errno == EINTR { continue }
+                throw posixError("read")
+            }
+            byteCount += Int64(count)
+            buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0[0 ..< count])) }
+        }
+        return CheckpointBlobReference(sha256: hasher.finalize().map { String(format: "%02x", $0) }.joined(), byteCount: byteCount)
     }
 
     public func validateRelativePath(_ relativePath: String, under root: URL) throws -> URL {
@@ -321,6 +393,7 @@ public struct LiveCheckpointFileSystem: CheckpointFileSystem, Sendable {
         return attributes
     }
 
+    private func nanoseconds(_ time: timespec) -> Int64 { Int64(time.tv_sec) * 1_000_000_000 + Int64(time.tv_nsec) }
     private func isDirectory(_ attributes: stat) -> Bool { attributes.st_mode & S_IFMT == S_IFDIR }
     private func isRegular(_ attributes: stat) -> Bool { attributes.st_mode & S_IFMT == S_IFREG }
     private func isSymlink(_ attributes: stat) -> Bool { attributes.st_mode & S_IFMT == S_IFLNK }

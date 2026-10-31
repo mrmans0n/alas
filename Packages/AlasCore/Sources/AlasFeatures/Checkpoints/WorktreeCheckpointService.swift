@@ -46,7 +46,6 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     private let snapshotter: WorktreeStateSnapshotter
     private let hooks: CheckpointCaptureHooks
     private let restoreFaultInjector: CheckpointRestoreFaultInjector
-    private var cachedCatalogs: [String: CheckpointCatalogSnapshot] = [:]
 
     public init(store: WorktreeCheckpointStore = .init(),
                 snapshotter: WorktreeStateSnapshotter = .live,
@@ -60,9 +59,7 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
     public func summaries(target: CheckpointWorktreeTarget) async throws -> CheckpointCatalogSnapshot {
         try validateLineage(target)
         _ = try await store.recoverableJournals(lineageID: target.lineageID)
-        let catalog = try await store.catalog(lineageID: target.lineageID)
-        cachedCatalogs[target.lineageID] = catalog
-        return catalog
+        return try await store.catalog(lineageID: target.lineageID)
     }
 
     public func nonterminalJournals(target: CheckpointWorktreeTarget) async throws -> [CheckpointRestoreJournal] {
@@ -81,9 +78,7 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
 
     public func delete(target: CheckpointWorktreeTarget, id: CheckpointID) async throws -> CheckpointCatalogSnapshot {
         try validateLineage(target)
-        let catalog = try await store.delete(id: id, lineageID: target.lineageID)
-        cachedCatalogs[target.lineageID] = catalog
-        return catalog
+        return try await store.delete(id: id, lineageID: target.lineageID)
     }
 
     public func restorePreview(target: CheckpointWorktreeTarget, id: CheckpointID,
@@ -339,7 +334,7 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             do {
                 let attempt = try await CheckpointCaptureAttempt(snapshot: snapshotter.snapshot(target: target), capturedAt: .now)
                 try await hooks.afterPayloadStaging(number)
-                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false)
+                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false, verifying: attempt.snapshot)
                 guard attempt.snapshot.fingerprint == verification.fingerprint else { continue }
                 return try await publish(target: target, attempt: attempt, paths: Set(attempt.snapshot.paths.keys),
                                          kind: .manual, label: label)
@@ -356,7 +351,7 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             do {
                 let attempt = try await CheckpointCaptureAttempt(snapshot: snapshotter.snapshot(target: target), capturedAt: .now)
                 try await hooks.afterPayloadStaging(number)
-                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false)
+                let verification = try await snapshotter.snapshot(target: target, retainingPayloads: false, verifying: attempt.snapshot)
                 guard attempt.snapshot.fingerprint == verification.fingerprint else { continue }
                 let stateKey = try automaticStateKey(for: attempt.snapshot)
                 return try await publishAutomatic(target: target, attempt: attempt, stateKey: stateKey, label: label)
@@ -571,7 +566,6 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                          protecting: Set<CheckpointID> = []) async throws -> WorktreeCheckpointSummary {
         let publication = try makePublication(target: target, attempt: attempt, paths: selectedPaths, kind: kind, label: label, automaticStateKey: automaticStateKey)
         let catalog = try await store.publish(publication, protecting: protecting)
-        cachedCatalogs[target.lineageID] = catalog
         guard let summary = catalog.summaries.first(where: { $0.id == publication.manifest.id }) else {
             throw CheckpointStoreError.checkpointNotFound
         }
@@ -582,11 +576,7 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                                   stateKey: String, label: String) async throws -> WorktreeCheckpointSummary {
         let publication = try makePublication(target: target, attempt: attempt, paths: Set(attempt.snapshot.paths.keys),
                                               kind: .automatic, label: label, automaticStateKey: stateKey)
-        let summary = try await store.publishAutomaticIfAbsent(publication, stateKey: stateKey)
-        if let catalog = try? await store.catalog(lineageID: target.lineageID) {
-            cachedCatalogs[target.lineageID] = catalog
-        }
-        return summary
+        return try await store.publishAutomaticIfAbsent(publication, stateKey: stateKey)
     }
 
     private func makePublication(target: CheckpointWorktreeTarget, attempt: CheckpointCaptureAttempt,
@@ -599,9 +589,8 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         }
         var blobs: [CheckpointBlobReference: Data] = [:]
         for state in paths.flatMap({ [$0.head, $0.index, $0.worktree] }) {
-            if let bytes = try snapshot.payload(state) {
-                blobs[CheckpointBlobReference.make(for: bytes)] = bytes
-            }
+            // The snapshot keyed each payload by the reference of its bytes.
+            if let blob = state.blob { blobs[blob] = try snapshot.payload(state) }
         }
         let groups = snapshot.groups.compactMap { group -> CheckpointFileGroup? in
             let members = group.memberPaths.filter { selectedPaths.contains($0) }
