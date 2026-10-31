@@ -1530,6 +1530,9 @@ struct ACPSubagentRowPolicyTests {
             .init(label: "historical cwd", config: live, cwd: "/repo/a/b", directoriesConfirmed: false,
                   expected: "GPT-5 · High · in a/b (last seen)"),
             .init(label: "nothing observed", config: nil, cwd: nil, directoriesConfirmed: true, expected: nil),
+            // A remote child reports its host path; the worktree root is virtual.
+            .init(label: "remote cwd inside the worktree", config: nil, cwd: "/repo/a/b", directoriesConfirmed: true,
+                  worktreeRoot: "/.alas-remote/mini/repo", expected: "in a/b"),
         ]
     }()
 

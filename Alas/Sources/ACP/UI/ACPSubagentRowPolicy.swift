@@ -64,7 +64,9 @@ enum ACPSubagentRowPolicy {
             let labels = [config.model, config.effort].compactMap { $0 } + config.parameters
             if !labels.isEmpty { parts.append((labels.joined(separator: " · "), !config.isConfirmed)) }
         }
-        if let cwd, let place = directoryLabel(cwd, worktreeRoot: worktreeRoot) {
+        // A remote child reports its host path; the worktree root is virtual.
+        if let cwd, let place = directoryLabel(
+            worktreeRoot.map { RemotePath.virtualizing(cwd, like: $0) } ?? cwd, worktreeRoot: worktreeRoot) {
             parts.append(("in \(place)", !directoriesConfirmed))
         }
         guard !parts.isEmpty else { return nil }
