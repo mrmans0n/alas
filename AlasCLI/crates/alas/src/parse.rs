@@ -22,7 +22,7 @@ usage: alas workspace show <checkout-uuid>
 usage: alas workspace switch <checkout-uuid>
 usage: alas workspace focus <checkout-uuid> --member <member-uuid>
 usage: alas preview <list|open|navigate|reload|back|forward|inspect|capture|console|click|type|scroll|wait|cancel> ...
-usage: alas computer <apps|screenshot|inspect|click|type|key|scroll|drag|open-app|wait> ...
+usage: alas computer <apps|screenshot|inspect|click|type|key|scroll|drag|open-app|wait> ... [--vm macos|linux]
 usage: alas agent list [--worktree <name-or-branch>]
 usage: alas session list
 usage: alas session new --prompt <text> [--agent <id>] [--model <id>] [--reasoning <value>] [--role <name>] [--worktree <name-or-branch> | --new-worktree <branch> [--base <ref>]]
@@ -63,8 +63,34 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
     }
 }
 
+/// `alas computer … [--vm macos|linux]`: `--vm` names the VM in a worktree
+/// with a macOS and a Linux VM, and goes anywhere after the action.
 fn parse_computer(args: &[&str]) -> Result<Command, String> {
-    const USAGE: &str = "usage: alas computer apps | screenshot <window-id> | inspect <window-id> [--query <text>] [--limit <1...3000>] [--max-depth <1...32>]";
+    const VM_USAGE: &str = "--vm must be macos or linux, given once";
+    let mut vm = None;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut i = 0;
+    while i < args.len() {
+        if i > 0 && args[i] == "--vm" {
+            let name = args.get(i + 1).copied().ok_or(VM_USAGE)?;
+            if vm.is_some() {
+                return Err(VM_USAGE.into());
+            }
+            vm = Some(alas_client::VmGuest::from_name(name).ok_or(VM_USAGE)?);
+            i += 2;
+        } else {
+            rest.push(args[i]);
+            i += 1;
+        }
+    }
+    match parse_computer_command(&rest)? {
+        Command::Computer(command, None) => Ok(Command::Computer(command, vm)),
+        other => Ok(other),
+    }
+}
+
+fn parse_computer_command(args: &[&str]) -> Result<Command, String> {
+    const USAGE: &str = "usage: alas computer apps | screenshot <window-id> | inspect <window-id> [--query <text>] [--limit <1...3000>] [--max-depth <1...32>] [--vm macos|linux]";
     let window_id = |value: &str| {
         value
             .parse::<u32>()
@@ -2511,8 +2537,28 @@ mod tests {
                 None
             )
         );
+        assert_eq!(
+            p(&["computer", "screenshot", "--vm", "linux", "7"]).unwrap(),
+            Command::Computer(
+                ComputerCommand::Screenshot {
+                    window_id: 7,
+                    call_id: None
+                },
+                Some(alas_client::VmGuest::Linux)
+            )
+        );
+        assert_eq!(
+            p(&["computer", "apps", "--vm", "macos"]).unwrap(),
+            Command::Computer(
+                ComputerCommand::Apps { call_id: None },
+                Some(alas_client::VmGuest::Macos)
+            )
+        );
         for bad in [
             &["computer"][..],
+            &["computer", "apps", "--vm"],
+            &["computer", "apps", "--vm", "macOS"],
+            &["computer", "apps", "--vm", "linux", "--vm", "linux"],
             &["computer", "apps", "7"],
             &["computer", "screenshot"],
             &["computer", "screenshot", "x"],

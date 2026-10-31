@@ -18,6 +18,8 @@ enum VMComputerUseRoute: Equatable {
     case ambiguous(worktreeID: String)
 
     static let vmNotRunningMessage = "computer_vm_stopped: This worktree's VM isn't running. Start it from its VM tab."
+    static let linuxVMNotRunningMessage =
+        "computer_vm_stopped: This worktree's Linux VM isn't running. Start it from its Linux VM tab."
     static let vmStateUnreadableMessage = "computer_vm_stopped: Couldn't read this worktree's VM state. Try again."
 
     static let vmMissingMessage = "computer_vm_missing: This worktree has no VM. Create one from its VM tab."

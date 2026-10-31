@@ -188,8 +188,8 @@ extension AppState {
             return .error(VMComputerUseRoute.vmMissingMessage(for: guest))
         case .ambiguous:
             return .error(VMComputerUseRoute.vmAmbiguousMessage)
-        case .vmNotRunning:
-            return .error(VMComputerUseRoute.vmNotRunningMessage)
+        case .vmNotRunning(_, let guest):
+            return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
         case .vmStateUnreadable:
             return .error(VMComputerUseRoute.vmStateUnreadableMessage)
         case .guest(let worktreeID, let guest):
@@ -197,7 +197,7 @@ extension AppState {
                 return .error(ComputerUseCoordinator.stoppedMessage)
             }
             guard let client = vmManager.guestClient(for: worktreeID, guest: guest) else {
-                return .error(VMComputerUseRoute.vmNotRunningMessage)
+                return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
             }
             // Awaited in the request's own task, so a client disconnect cancels the guest call.
             do {

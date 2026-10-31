@@ -48,6 +48,8 @@ struct VMComputerUseRouteTests {
         // Unreadable state never falls back to the desktop.
         Case(name: "unreadable VM state", kinds: nil, expected: .vmStateUnreadable(worktreeID: "w")),
         Case(name: "unreadable VM state with a VM named", kinds: nil, requested: .linux, expected: .vmStateUnreadable(worktreeID: "w")),
+        Case(name: "unreadable VM state, the only VM running here", kinds: nil, running: [.macOS],
+             expected: .guest(worktreeID: "w", guest: .macOS)),
         Case(name: "unreadable VM state, the named VM running here", kinds: nil, requested: .linux, running: [.linux],
              expected: .guest(worktreeID: "w", guest: .linux)),
     ]
