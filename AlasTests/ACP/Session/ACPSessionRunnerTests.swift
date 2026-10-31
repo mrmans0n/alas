@@ -5707,6 +5707,57 @@ struct ACPSessionRunnerTests {
         try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
     }
 
+    /// One child's question parks first, another child's permission parks on
+    /// top of it; answering both must not strand the session as streaming.
+    @Test("a child permission answered over a parked child question settles back to idle")
+    func outOfTurnPermissionOverChildQuestionRestoresIdle() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.turnPublicationTasksForTesting = [:]
+        let session = runner.session
+        session.agentState = .ready
+        session.settlesAtResult = true
+        session.remoteSessionId = "remote-parent"
+        let coordinator = ACPElicitationCoordinator(
+            session: session, client: mock, onInputResolved: { runner.flushQueueIfIdle() })
+        coordinator.start()
+        runner.start()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-2"))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { session.subagentRun("child-2") != nil }
+
+        mock.emitElicitation(id: .number(31), params: try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(#"{"sessionId":"child-1","mode":"form","message":"Pick","requestedSchema":{"type":"object","properties":{"choice":{"type":"string"}}}}"#.utf8)))
+        try await waitUntil { session.transcript.streamingState == .awaitingInput }
+        mock.emitPermission(id: .number(32), params: .init(
+            sessionId: "child-2",
+            toolCall: .init(toolCallId: "child-call", title: "Bash", kind: nil, status: nil,
+                            content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+            options: [.init(optionId: "allow", name: "Allow", kind: "allow_once")]))
+        try await waitUntil { session.transcript.pendingPermission != nil }
+        runner.send(text: "next", attachments: [])
+        try await waitUntil { session.queue.count == 1 }
+
+        await runner.policy.userDecided(scopeKey: "tool:Bash", optionId: "allow", decision: .allow, persistScope: nil)
+        #expect(session.transcript.streamingState == .awaitingInput)
+        let question = try #require(session.transcript.pendingUserInputs.first)
+        coordinator.respond(to: question.id, action: .submit(["choice": .string("a")]))
+
+        #expect(session.transcript.streamingState == .idle)
+        try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
+    }
+
     @Test("persistSessionRow skipped when lease is held by another instance")
     func persistSessionRowSkippedWhenLeaseHeldByOther() throws {
         let url = FileManager.default.temporaryDirectory

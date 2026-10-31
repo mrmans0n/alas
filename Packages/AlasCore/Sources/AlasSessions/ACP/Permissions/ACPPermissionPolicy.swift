@@ -185,7 +185,13 @@ public final class ACPPermissionPolicy {
         pendingContinuation = nil
         session.transcript.pendingPermission = nil
         if session.transcript.streamingState == .awaitingPermission {
-            session.transcript.streamingState = stateBeforePark == .idle ? .idle : .streaming
+            // A question parked underneath restores its own prior state once
+            // it resolves, so it must get `.awaitingInput` back.
+            switch stateBeforePark {
+            case .idle: session.transcript.streamingState = .idle
+            case .awaitingInput: session.transcript.streamingState = .awaitingInput
+            default: session.transcript.streamingState = .streaming
+            }
         }
         stateBeforePark = nil
         if let stillAuthorized, await !stillAuthorized() {

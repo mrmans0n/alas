@@ -246,7 +246,7 @@ struct ACPPermissionPolicyTests {
     /// A permission that parks out of turn (a background child asking after
     /// the parent's prompt returned) must not leave the session streaming.
     @Test("a decision restores the state the permission parked from",
-          arguments: [ACPSession.StreamingState.idle, .streaming])
+          arguments: [ACPSession.StreamingState.idle, .awaitingInput, .streaming])
     func decisionRestoresParkedState(prior: ACPSession.StreamingState) async throws {
         let store = try makeStore()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
