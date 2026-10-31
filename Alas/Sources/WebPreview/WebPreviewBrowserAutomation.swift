@@ -185,6 +185,7 @@ extension WebPreviewBrowser {
         if command.action == .cancel {
             automationState.cancelActiveOperation()
             webView.stopLoading()
+            cancelPendingLoad()
             markAutomationCancelled()
             return ["preview_id": automationID, "cancelled": true]
         }

@@ -45,6 +45,54 @@ struct WebPreviewBrowserTests {
         #expect(resolved == allowed)
     }
 
+    /// URLs are in the canonical form WebKit matches rules against.
+    @Test(arguments: [
+        ("http://127.0.0.1:3000/", nil, true),
+        ("ws://127.0.0.2:3000/socket", nil, true),
+        ("https://user:pw@127.0.0.1/", nil, true),
+        ("http://localhost:3000/api", nil, true),
+        ("http://localhost./", nil, true),
+        ("http://app.localhost:3000/", nil, true),
+        ("http://0.0.0.0:3000/", nil, true),
+        ("http://[::1]:3000/", nil, true),
+        ("http://[::]/", nil, true),
+        ("http://[::ffff:7f00:1]:3000/", nil, true),
+        ("https://example.com/", nil, false),
+        ("https://localhost.example.com/", nil, false),
+        ("https://127.0.0.1.example.com/", nil, false),
+        ("https://example.com/?next=http://127.0.0.1:3000/", nil, false),
+        ("http://192.0.2.1:3000/", nil, false),
+        ("http://127.0.0.1:51234/app.js", "http://127.0.0.1:51234", false),
+        ("ws://127.0.0.1:51234/hmr", "http://127.0.0.1:51234", false),
+        ("http://127.0.0.1:5123/", "http://127.0.0.1:51234", true),
+        ("http://127.0.0.1:51234/", "http://localhost:51234", true),
+        ("http://evil.localhost:51234/", "http://localhost:51234", true),
+        ("http://[::1]:51234/", "http://[::1]:51234", false),
+        ("http://[::1]/", "http://[::1]:80", false),
+        ("https://[::1]/", "http://[::1]:80", true),
+    ] as [(String, String?, Bool)])
+    func loopbackRulesBlockEveryLoopbackRequestButThePin(url: String, forward: String?, blocked: Bool) throws {
+        let pin = forward.flatMap { WebPreviewLoopbackPin(URL(string: $0)!) }
+        let rules = try #require(try JSONSerialization.jsonObject(
+            with: Data(WebPreviewLoopbackRules.json(allowing: pin).utf8)) as? [[String: [String: String]]])
+        func matches(_ action: String) throws -> Bool {
+            try rules.filter { $0["action"]?["type"] == action }.contains { rule in
+                let filter = try NSRegularExpression(pattern: #require(rule["trigger"]?["url-filter"]), options: .caseInsensitive)
+                return filter.firstMatch(in: url, range: NSRange(url.startIndex..., in: url)) != nil
+            }
+        }
+        // `ignore-previous-rules` entries follow every block rule.
+        let exempt = try matches("ignore-previous-rules")
+        let blocks = try matches("block")
+        #expect((blocks && !exempt) == blocked)
+    }
+
+    @Test(arguments: [nil, "http://[::1]:443"] as [String?])
+    func loopbackRulesCompileInWebKit(forward: String?) async {
+        let pin = forward.flatMap { WebPreviewLoopbackPin(URL(string: $0)!) }
+        #expect(await WebPreviewLoopbackRules.ruleList(allowing: pin) != nil)
+    }
+
     @Test func browserStorageIsPrivateAndNotShared() {
         let first = WebPreviewBrowser(ownerKey: "first", remoteHost: nil)
         let second = WebPreviewBrowser(ownerKey: "second", remoteHost: nil)
