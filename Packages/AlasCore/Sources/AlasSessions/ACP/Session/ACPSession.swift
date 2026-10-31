@@ -241,6 +241,29 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// The adapter settles foreground turns at their result while background
     /// children continue. Runtime only; relearned on attach.
     @Tracked public var settlesAtResult = false
+    /// Whether a foreground turn is running. Installed by the session's
+    /// runner; a turn that settled at its result no longer counts, even while
+    /// its children still run.
+    public var foregroundTurnActive: @MainActor () -> Bool = { false }
+
+    /// Recomputes the streaming state from what still waits on the user, once
+    /// a permission, question or plan resolves. Children can ask after their
+    /// parent's turn settled, so the state is derived rather than restored.
+    /// Questions asked during a turn leave it streaming; only plans and
+    /// permissions take it over.
+    public func settleWaitingState() {
+        guard transcript.streamingState != .sending else { return }
+        let foreground = foregroundTurnActive()
+        let settled: StreamingState
+        if transcript.pendingPermission != nil {
+            settled = .awaitingPermission
+        } else if transcript.pendingPlan != nil || (!foreground && !transcript.pendingUserInputs.isEmpty) {
+            settled = .awaitingInput
+        } else {
+            settled = foreground ? .streaming : .idle
+        }
+        if transcript.streamingState != settled { transcript.streamingState = settled }
+    }
 
     public var canSteerRunningTurn: Bool {
         agentState == .ready && supportsSteering

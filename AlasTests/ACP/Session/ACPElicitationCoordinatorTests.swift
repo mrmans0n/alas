@@ -123,6 +123,7 @@ struct ACPElicitationCoordinatorTests {
     func cursorAdapter() async throws {
         let (coordinator, session, client) = makeCoordinator()
         coordinator.start()
+        session.foregroundTurnActive = { true }
         session.transcript.streamingState = .streaming
         let params = ACPQuestionRequestParams(
             toolCallId: "call",
@@ -412,6 +413,7 @@ struct ACPElicitationCoordinatorTests {
     @Test("Cursor plan preserves the active turn state after response")
     func planResponseRestoresActiveTurnState() async throws {
         let (coordinator, session, client) = makeCoordinator()
+        session.foregroundTurnActive = { true }
         session.transcript.streamingState = .streaming
         coordinator.start()
 
@@ -431,6 +433,7 @@ struct ACPElicitationCoordinatorTests {
     @Test("broker-delivered Cursor plan preserves active state from awaiting input snapshot")
     func brokerPlanResponseRestoresActiveTurnState() async throws {
         let (coordinator, session, client) = makeCoordinator()
+        session.foregroundTurnActive = { true }
         session.transcript.streamingState = .awaitingInput
         coordinator.start()
 

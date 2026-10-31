@@ -476,10 +476,26 @@ public final class ACPSessionRunner {
             }
         )
         closeStoredSequenceGaps()
+        session.foregroundTurnActive = { [weak self] in self?.foregroundTurnActive ?? false }
         backgroundWorkObservations = [
             session.$liveSubagentCount.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
             session.$backgroundTasks.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
         ]
+    }
+
+    /// A foreground turn this runner sent, a detached steering turn, or a
+    /// turn a reattached broker still reports in flight. A turn that settled
+    /// at its result is over even while its children run.
+    private var foregroundTurnActive: Bool {
+        guard !stopped, isConnectionCurrent() else { return false }
+        if activePromptID != nil || detachedSteeringTurn { return true }
+        guard let broker = connection.client as? ACPBrokerClient else { return false }
+        switch broker.currentTurnState {
+        case .sending, .streaming, .awaitingInput, .cancelling:
+            return true
+        case .idle, .completed, .ambiguous, .unknown:
+            return false
+        }
     }
 
     /// Tracked signals fire before the new value is stored, so the restart

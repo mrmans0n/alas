@@ -5707,10 +5707,12 @@ struct ACPSessionRunnerTests {
         try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
     }
 
-    /// One child's question parks first, another child's permission parks on
-    /// top of it; answering both must not strand the session as streaming.
-    @Test("a child permission answered over a parked child question settles back to idle")
-    func outOfTurnPermissionOverChildQuestionRestoresIdle() async throws {
+    /// One child's question and another child's permission overlap after the
+    /// turn settled. Whatever order they park and are answered in, the state
+    /// shows what is still waiting, ends idle, and the queued prompt drains.
+    @Test("an out-of-turn child question and permission settle back to idle in any order",
+          arguments: [(true, true), (true, false), (false, true), (false, false)])
+    func outOfTurnPermissionOverChildQuestionRestoresIdle(questionParksFirst: Bool, questionAnsweredFirst: Bool) async throws {
         let (runner, mock) = try makeRunner()
         runner.turnPublicationTasksForTesting = [:]
         let session = runner.session
@@ -5736,23 +5738,48 @@ struct ACPSessionRunnerTests {
         await runner.waitForTurnPublicationForTesting(promptID: 0)
         try await waitUntil { session.subagentRun("child-2") != nil }
 
-        mock.emitElicitation(id: .number(31), params: try JSONDecoder().decode(
-            ACPElicitationRequestParams.self,
-            from: Data(#"{"sessionId":"child-1","mode":"form","message":"Pick","requestedSchema":{"type":"object","properties":{"choice":{"type":"string"}}}}"#.utf8)))
-        try await waitUntil { session.transcript.streamingState == .awaitingInput }
-        mock.emitPermission(id: .number(32), params: .init(
-            sessionId: "child-2",
-            toolCall: .init(toolCallId: "child-call", title: "Bash", kind: nil, status: nil,
-                            content: nil, locations: nil, rawInput: nil, rawOutput: nil),
-            options: [.init(optionId: "allow", name: "Allow", kind: "allow_once")]))
-        try await waitUntil { session.transcript.pendingPermission != nil }
+        func parkQuestion() async throws {
+            mock.emitElicitation(id: .number(31), params: try JSONDecoder().decode(
+                ACPElicitationRequestParams.self,
+                from: Data(#"{"sessionId":"child-1","mode":"form","message":"Pick","requestedSchema":{"type":"object","properties":{"choice":{"type":"string"}}}}"#.utf8)))
+            try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        }
+        func parkPermission() async throws {
+            mock.emitPermission(id: .number(32), params: .init(
+                sessionId: "child-2",
+                toolCall: .init(toolCallId: "child-call", title: "Bash", kind: nil, status: nil,
+                                content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+                options: [.init(optionId: "allow", name: "Allow", kind: "allow_once")]))
+            try await waitUntil { session.transcript.pendingPermission != nil }
+        }
+        func answerQuestion() throws {
+            let question = try #require(session.transcript.pendingUserInputs.first)
+            coordinator.respond(to: question.id, action: .submit(["choice": .string("a")]))
+        }
+        func answerPermission() async {
+            await runner.policy.userDecided(scopeKey: "tool:Bash", optionId: "allow", decision: .allow, persistScope: nil)
+        }
+
+        if questionParksFirst {
+            try await parkQuestion()
+            try await parkPermission()
+        } else {
+            try await parkPermission()
+            try await parkQuestion()
+        }
+        #expect(session.transcript.streamingState == .awaitingPermission)
         runner.send(text: "next", attachments: [])
         try await waitUntil { session.queue.count == 1 }
 
-        await runner.policy.userDecided(scopeKey: "tool:Bash", optionId: "allow", decision: .allow, persistScope: nil)
-        #expect(session.transcript.streamingState == .awaitingInput)
-        let question = try #require(session.transcript.pendingUserInputs.first)
-        coordinator.respond(to: question.id, action: .submit(["choice": .string("a")]))
+        if questionAnsweredFirst {
+            try answerQuestion()
+            #expect(session.transcript.streamingState == .awaitingPermission)
+            await answerPermission()
+        } else {
+            await answerPermission()
+            #expect(session.transcript.streamingState == .awaitingInput)
+            try answerQuestion()
+        }
 
         #expect(session.transcript.streamingState == .idle)
         try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }

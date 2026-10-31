@@ -105,10 +105,6 @@ public final class ACPPermissionPolicy {
     /// Remembered answers this policy delivered, so the agent's next request
     /// gets them at once rather than only after their record lands.
     private var deliveredDecisions: [String: ACPPermissionDecision] = [:]
-    /// The streaming state the session was in when a permission parked. A
-    /// background child can ask after its parent's turn settled, so the
-    /// answer must not claim a turn that is no longer running.
-    private var stateBeforePark: ACPSession.StreamingState?
 
     /// The real JSON-RPC id of the permission currently parked for a human,
     /// or nil when nothing is parked. `session.transcript.pendingPermission`
@@ -124,9 +120,6 @@ public final class ACPPermissionPolicy {
     }
 
     private func awaitUserDecision(scopeKey: String, params: ACPPermissionRequestParams) async -> ACPPermissionResponse {
-        if stateBeforePark == nil {
-            stateBeforePark = session.transcript.streamingState
-        }
         session.transcript.streamingState = .awaitingPermission
         session.transcript.pendingPermission = .init(id: .number(0), params: params)
         if let requestID = pendingRequestID {
@@ -184,16 +177,9 @@ public final class ACPPermissionPolicy {
         let cont = pendingContinuation
         pendingContinuation = nil
         session.transcript.pendingPermission = nil
-        if session.transcript.streamingState == .awaitingPermission {
-            // A question parked underneath restores its own prior state once
-            // it resolves, so it must get `.awaitingInput` back.
-            switch stateBeforePark {
-            case .idle: session.transcript.streamingState = .idle
-            case .awaitingInput: session.transcript.streamingState = .awaitingInput
-            default: session.transcript.streamingState = .streaming
-            }
-        }
-        stateBeforePark = nil
+        // A background child can ask after its parent's turn settled, so the
+        // answer must not claim a turn that is no longer running.
+        if wasPending { session.settleWaitingState() }
         if let stillAuthorized, await !stillAuthorized() {
             cont?.resume(returning: .init(outcome: .cancelled))
             return false
@@ -223,8 +209,7 @@ public final class ACPPermissionPolicy {
 
     public func userCancelled() {
         session.transcript.pendingPermission = nil
-        session.transcript.streamingState = .idle
-        stateBeforePark = nil
+        session.settleWaitingState()
         let cont = pendingContinuation
         pendingContinuation = nil
         cont?.resume(returning: .init(outcome: .cancelled))

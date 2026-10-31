@@ -21,9 +21,7 @@ public final class ACPElicitationCoordinator {
     private var elicitationsTask: Task<Void, Never>?
     private var completionsTask: Task<Void, Never>?
     private var pendingByToken: [UUID: ACPUserInputRequest] = [:]
-    private var pendingInputPreviousStreamingState: ACPSession.StreamingState?
     private var pendingPlans: [ACPCursorPlanRequest] = []
-    private var pendingPlanPreviousStreamingState: ACPSession.StreamingState?
     private var notifiedRequestIds: Set<JSONRPCID> = []
     private var didStop = false
 
@@ -156,7 +154,7 @@ public final class ACPElicitationCoordinator {
         }
         presentNextPlan()
         notifiedRequestIds.remove(id)
-        restoreStreamingStateIfResolved()
+        session.settleWaitingState()
     }
 
     @discardableResult
@@ -245,7 +243,6 @@ public final class ACPElicitationCoordinator {
             onInputAwaiting(session, request)
         }
         if wasEmpty, session.transcript.streamingState == .idle {
-            pendingInputPreviousStreamingState = .idle
             session.transcript.streamingState = .awaitingInput
         }
         if case .cursor(let id, let params) = request.source,
@@ -266,7 +263,7 @@ public final class ACPElicitationCoordinator {
                 return nil
             }.first
         }
-        restoreStreamingStateIfResolved()
+        session.settleWaitingState()
         presentNextPlan()
         return request
     }
@@ -290,19 +287,14 @@ public final class ACPElicitationCoordinator {
         else { return }
 
         session.transcript.pendingPlan = .init(id: request.id, params: request.params)
-        if session.transcript.streamingState == .awaitingInput {
-            pendingPlanPreviousStreamingState = pendingPlanPreviousStreamingState ?? .streaming
-        } else {
-            pendingPlanPreviousStreamingState = session.transcript.streamingState
-            session.transcript.streamingState = .awaitingInput
-        }
+        session.settleWaitingState()
     }
 
     private func cancelPlans() {
         let pending = pendingPlans
         pendingPlans.removeAll()
         session.transcript.pendingPlan = nil
-        restoreStreamingStateIfResolved()
+        session.settleWaitingState()
         for request in pending {
             notifiedRequestIds.remove(request.id)
             client.respondToPlan(id: request.id, response: .init(outcome: .cancelled))
@@ -315,7 +307,7 @@ public final class ACPElicitationCoordinator {
         session.transcript.pendingUserInputs.removeAll()
         session.transcript.pendingQuestion = nil
         notifiedRequestIds.removeAll()
-        restoreStreamingStateIfResolved()
+        session.settleWaitingState()
         for request in pending { cancel(request) }
     }
 
@@ -326,17 +318,6 @@ public final class ACPElicitationCoordinator {
             return
         }
         notifiedRequestIds.remove(id)
-    }
-
-    private func restoreStreamingStateIfResolved() {
-        guard pendingByToken.isEmpty, pendingPlans.isEmpty else { return }
-        if session.transcript.streamingState == .awaitingInput {
-            session.transcript.streamingState = pendingInputPreviousStreamingState
-                ?? pendingPlanPreviousStreamingState
-                ?? .idle
-        }
-        pendingInputPreviousStreamingState = nil
-        pendingPlanPreviousStreamingState = nil
     }
 
     private func cancel(_ request: ACPUserInputRequest) {

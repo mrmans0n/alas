@@ -243,14 +243,28 @@ struct ACPPermissionPolicyTests {
         #expect(await decision.outcome == .cancelled)
     }
 
-    /// A permission that parks out of turn (a background child asking after
-    /// the parent's prompt returned) must not leave the session streaming.
-    @Test("a decision restores the state the permission parked from",
-          arguments: [ACPSession.StreamingState.idle, .awaitingInput, .streaming])
-    func decisionRestoresParkedState(prior: ACPSession.StreamingState) async throws {
+    /// A background child can ask after its parent's turn settled, so the
+    /// answer derives the state from what still waits instead of assuming
+    /// a turn is streaming.
+    @Test("a decision settles the state from the turn and what still waits",
+          arguments: [
+            (true, false, ACPSession.StreamingState.streaming),
+            (false, false, .idle),
+            (false, true, .awaitingInput),
+          ])
+    func decisionDerivesWaitingState(foreground: Bool, questionPending: Bool,
+                                     expected: ACPSession.StreamingState) async throws {
         let store = try makeStore()
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
-        session.transcript.streamingState = prior
+        session.foregroundTurnActive = { foreground }
+        session.transcript.streamingState = foreground ? .streaming : .idle
+        if questionPending {
+            session.transcript.pendingUserInputs = [ACPUserInputRequest(
+                id: UUID(),
+                source: .cursor(id: .string("q1"),
+                                params: ACPQuestionRequestParams(toolCallId: "t1", title: "Pick", questions: [])),
+                title: "Pick", message: "Pick", fields: [], mode: .form)]
+        }
         let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
         let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
         async let decision = policy.evaluate(
@@ -264,7 +278,7 @@ struct ACPPermissionPolicyTests {
         await policy.userDecided(scopeKey: "tool:bash", optionId: "allow", decision: .allow, persistScope: nil)
 
         #expect(await decision.outcome == .selected(optionId: "allow"))
-        #expect(session.transcript.streamingState == prior)
+        #expect(session.transcript.streamingState == expected)
     }
 
     @Test("persisted user decisions commit before userDecided returns")
