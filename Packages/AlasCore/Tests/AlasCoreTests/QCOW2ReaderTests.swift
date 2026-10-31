@@ -14,7 +14,7 @@ struct QCOW2ReaderTests {
     }
 
     @Test(arguments: [
-        (UInt32(2), 9, UInt64?.none), (3, 9, nil), (3, 9, 8 << 20), (3, 10, nil),
+        (UInt32(2), 9, UInt64?.none), (3, 9, nil), (3, 9, 1 << 30), (3, 10, nil),
     ] as [(UInt32, UInt64, UInt64?)])
     func convertsTheFixtureToItsRawBytes(version: UInt32, clusterBits: UInt64, growTo: UInt64?) throws {
         let dir = try Self.scratchDirectory()
@@ -28,16 +28,20 @@ struct QCOW2ReaderTests {
         #expect(reader.virtualSize == fixture.virtualSize)
         try reader.convertToRaw(at: raw, growTo: growTo)
 
-        let bytes = try Data(contentsOf: raw)
-        let size = growTo ?? fixture.virtualSize
-        #expect(UInt64(bytes.count) == size)
-        #expect(bytes.prefix(Int(fixture.virtualSize)) == fixture.expectedRaw)
-        #expect(bytes.dropFirst(Int(fixture.virtualSize)).allSatisfy { $0 == 0 })
-        // Unallocated and zero clusters are holes, not written zeros: writing
-        // them would allocate the whole virtual size (or 8 MiB when grown).
         var info = stat()
         #expect(stat(raw.path, &info) == 0)
-        #expect(Int64(info.st_blocks) * 512 <= 64 * 1024)
+        #expect(UInt64(info.st_size) == growTo ?? fixture.virtualSize)
+        let handle = try FileHandle(forReadingFrom: raw)
+        defer { try? handle.close() }
+        #expect(try handle.read(upToCount: Int(fixture.virtualSize)) == fixture.expectedRaw)
+        let tail = try handle.read(upToCount: 64 * 1024) ?? Data()
+        #expect(tail.allSatisfy { $0 == 0 })
+        // Unallocated clusters and the grown tail are holes, not written zeros.
+        // Only checked on the grown disk: APFS allocates small files (a few
+        // MiB) in full once written to, however sparse they were made.
+        if growTo != nil {
+            #expect(Int64(info.st_blocks) * 512 <= 1 << 20)
+        }
     }
 
     @Test(arguments: Defect.allCases)
