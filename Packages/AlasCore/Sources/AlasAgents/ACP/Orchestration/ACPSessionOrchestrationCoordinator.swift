@@ -900,7 +900,8 @@ public final class ACPSessionOrchestrationCoordinator {
     ///
     /// A child turn that settled at its result while the child's own
     /// background work still runs waits here (`defersOutcome`) and reports
-    /// once that work ends, with the text the child ended on. A later turn of
+    /// once that work ends, with the text the child ended on, or as cancelled
+    /// when the user stopped that work. A later turn of
     /// the same child replaces it. Held in memory only: a restart in between
     /// loses it, and the child's turn then reports nothing, as a turn cut off
     /// by a restart does.
@@ -924,12 +925,15 @@ public final class ACPSessionOrchestrationCoordinator {
     private final class DeferredOutcome {
         let completion: ACPTurnCompletion
         let promptIDAtResult: Int
+        /// Children still live at the result.
+        let liveChildIds: Set<String>
         var subscriptions: [ChangeSubscription] = []
         var checkScheduled = false
 
-        init(completion: ACPTurnCompletion, promptIDAtResult: Int) {
+        init(completion: ACPTurnCompletion, promptIDAtResult: Int, liveChildIds: Set<String>) {
             self.completion = completion
             self.promptIDAtResult = promptIDAtResult
+            self.liveChildIds = liveChildIds
         }
     }
 
@@ -937,7 +941,9 @@ public final class ACPSessionOrchestrationCoordinator {
 
     private func deferOutcome(_ completion: ACPTurnCompletion, session: ACPSession) {
         let childId = completion.sessionId
-        let deferred = DeferredOutcome(completion: completion, promptIDAtResult: session.nextPromptID)
+        let deferred = DeferredOutcome(
+            completion: completion, promptIDAtResult: session.nextPromptID,
+            liveChildIds: Set(session.subagents.values.filter(\.isRunning).map(\.subagentSessionId)))
         // Change signals fire before the new value is stored: look on the
         // next main-actor turn, once per burst of changes.
         let changed: () -> Void = { [weak self, weak deferred, weak session] in
@@ -969,8 +975,16 @@ public final class ACPSessionOrchestrationCoordinator {
             deferredOutcomes[childId] = nil
             let original = deferred.completion
             let finalText = session.flatMap { ACPSessionTranscriptReader.lastAgentText($0.transcript.messages) }
+            let root = session.map { $0.remoteSessionId ?? $0.id }
+            let latestCycle = session?.backgroundTasks.last {
+                $0.taskType == "turn" && $0.ownerSessionId == root
+                    && Int64($0.startedAt.timeIntervalSince1970 * 1000) >= original.startedAt
+            }
+            let childCancelled = deferred.liveChildIds.contains { session?.subagents[$0]?.state == .cancelled }
             let completion = ACPTurnCompletion(
-                sessionId: original.sessionId, startedAt: original.startedAt, result: original.result,
+                sessionId: original.sessionId, startedAt: original.startedAt,
+                result: ACPSessionOrchestrationPolicy.deferredOutcomeResult(
+                    original.result, latestCycleState: latestCycle?.state, childCancelled: childCancelled),
                 delegatedSource: original.delegatedSource, lastAgentText: finalText ?? original.lastAgentText)
             guard let record = try? await environment.persistence.delegation(childSessionId: childId),
                   record.phase != .failed, record.phase != .closed

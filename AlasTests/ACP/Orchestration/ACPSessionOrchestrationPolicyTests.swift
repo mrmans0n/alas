@@ -488,13 +488,15 @@ struct ACPSessionOrchestrationPolicyTests {
             result: result, activity: .init(foreground: .idle, backgroundWorking: background)) == defers)
     }
 
-    @Test("a deferred outcome reports once all work ends, unless superseded or the agent stopped", arguments: [
+    @Test("a deferred outcome reports once all work ends with the agent ready, unless superseded", arguments: [
         // foreground, background working, agent ready, prompt sent since, live session, step
         (ACPSession.StreamingState.idle, true, true, false, true, ACPDeferredChildOutcomeStep.wait),
         (.awaitingPermission, false, true, false, true, .wait),
         (.idle, false, true, false, true, .deliver),
         (.idle, false, true, true, true, .discard),
-        (.idle, false, false, false, true, .discard),
+        // A reconnect the adapter and its children survive.
+        (.idle, false, false, false, true, .wait),
+        (.idle, true, false, false, true, .wait),
         (.idle, false, true, false, false, .discard),
     ])
     func deferredOutcomeStep(
@@ -504,6 +506,21 @@ struct ACPSessionOrchestrationPolicyTests {
         let activity = live ? ACPSessionActivity(foreground: foreground, backgroundWorking: background) : nil
         #expect(ACPSessionOrchestrationPolicy.deferredOutcomeStep(
             activity: activity, agentReady: agentReady, promptSentSince: promptSent) == expected)
+    }
+
+    @Test("a deferred outcome reports as cancelled only when the user stopped the work", arguments: [
+        // latest cycle since the turn, a child live at the result ended cancelled, cancelled
+        (String?.some("stopped"), false, true),
+        ("completed", false, false),
+        // A model cancelling its own subagent does so from a cycle that completes.
+        ("completed", true, false),
+        (nil, true, true),
+        (nil, false, false),
+    ])
+    func deferredOutcomeResult(latestCycleState: String?, childCancelled: Bool, cancelled: Bool) {
+        let result = ACPSessionOrchestrationPolicy.deferredOutcomeResult(
+            .completed, latestCycleState: latestCycleState, childCancelled: childCancelled)
+        #expect(result == (cancelled ? .cancelled : .completed))
     }
 
     private static func head(

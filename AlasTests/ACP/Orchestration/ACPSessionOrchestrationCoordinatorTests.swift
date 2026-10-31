@@ -1239,9 +1239,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
 
     /// A child whose turn settled at its result while its own subagent still
     /// runs reports to the parent only once that work ends, with the answer
-    /// its follow-up ended on rather than the interim text.
-    @Test("a settling child reports its follow-up's answer once its background work ends")
-    func settlingChildReportsAfterBackgroundWork() async throws {
+    /// its follow-up ended on rather than the interim text, even across a
+    /// reconnect its adapter survives. A follow-up the user stopped reports
+    /// as a cancelled turn.
+    @Test("a settling child reports once its background work ends", arguments: ["finishes", "reconnects", "stopped"])
+    func settlingChildReportsAfterBackgroundWork(ending: String) async throws {
         let fixture = try makeOutcomeFixture()
         try await insertReadyChild(fixture.persistence)
         let child = fixture.manager.createSession(id: "child", agentId: "claude", autoRunDefault: false)
@@ -1252,8 +1254,21 @@ struct ACPSessionOrchestrationCoordinatorTests {
         await fixture.coordinator.childTurnCompleted(completion(lastAgentText: "Started a background agent."))
         #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
 
+        var cycle = ACPBackgroundTask(ownerSessionId: "child", asyncTaskId: "cycle", name: "Claude is working")
+        cycle.taskType = "turn"
+        if ending == "stopped" { child.saveBackgroundTask(cycle) }
+        if ending == "reconnects" {
+            child.agentState = .disconnected
+            // The coordinator's check was queued first on the main actor.
+            await Task { @MainActor in }.value
+            child.agentState = .ready
+        }
         child.apply(.agentMessageChunk(.init(messageId: "final", content: .text("Parser fixed for real."))))
         child.applySubagentState(.init(subagentSessionId: "sub", state: .completed))
+        if ending == "stopped" {
+            cycle.state = "stopped"
+            child.saveBackgroundTask(cycle)
+        }
 
         let deadline = ContinuousClock.now.advanced(by: .seconds(5))
         var pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
@@ -1263,6 +1278,11 @@ struct ACPSessionOrchestrationCoordinatorTests {
             pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
         }
         #expect(pending.map(\.id) == ["outcome-child-500"])
+        if ending == "stopped" {
+            #expect(pending.first?.kind == .notice)
+            #expect(pending.first?.prompt == "Delegated session child (codex, worktree feature-x) had its turn cancelled.")
+            return
+        }
         #expect(pending.first?.prompt.contains("Parser fixed for real.") == true)
         #expect(pending.first?.prompt.contains("Started a background agent.") == false)
     }

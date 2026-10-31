@@ -347,17 +347,35 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
     }
 
     /// What a deferred outcome does as the child's state changes. It is
-    /// delivered once all work has finished. A prompt sent to the child since
-    /// supersedes it: that turn reports on its own. A child whose agent
-    /// stopped (closed, detached or restarting) or whose session left this
-    /// instance drops it, as a runner stopped mid-turn reports no turn.
+    /// delivered once all work has finished with the agent ready. A prompt
+    /// sent to the child since supersedes it: that turn reports on its own.
+    /// A child whose session left this instance drops it. An agent that is
+    /// not ready is reconnecting: an adapter that survives keeps its work,
+    /// and one that does not has its children and cycle marked gone, so the
+    /// outcome delivers once the agent is ready again.
     public static func deferredOutcomeStep(
         activity: ACPSessionActivity?,
         agentReady: Bool,
         promptSentSince: Bool
     ) -> ACPDeferredChildOutcomeStep {
-        guard !promptSentSince, agentReady, let activity else { return .discard }
+        guard !promptSentSince, let activity else { return .discard }
+        guard agentReady else { return .wait }
         return activity.allWorkFinished ? .deliver : .wait
+    }
+
+    /// The result a deferred outcome reports. The user stopping a settled
+    /// child's background work reports as a cancelled turn, as stopping its
+    /// held prompt did: the latest autonomous cycle since the turn ended
+    /// "stopped", or, with no cycle since, a child live at the result ended
+    /// cancelled. A model can only cancel its own subagent from a cycle,
+    /// and that cycle ends "completed", so it still reports as completed.
+    public static func deferredOutcomeResult(
+        _ result: ACPTurnCompletion.Result,
+        latestCycleState: String?,
+        childCancelled: Bool
+    ) -> ACPTurnCompletion.Result {
+        if let latestCycleState { return latestCycleState == "stopped" ? .cancelled : result }
+        return childCancelled ? .cancelled : result
     }
 
     /// Whether startup must re-attach a ready delegated child, judged from
