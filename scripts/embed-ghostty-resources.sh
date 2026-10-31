@@ -85,6 +85,19 @@ for mapping in "${helper_targets[@]}"; do
 done
 rsync -a "${SRCROOT}/AlasHelper/manifest.json" "${helper_destination_root}/manifest.json"
 
+# The Linux worktree VM helper. A Linux VM's helper share points at this
+# directory, and the guest installs the binary from it.
+linux_guest_destination_root="${destination_root}/alas-vm-guest-linux"
+linux_guest_source="${SRCROOT}/.build/alas-vm-guest-linux/aarch64-unknown-linux-musl/release/alas-vm-guest-linux"
+rm -rf "${linux_guest_destination_root}"
+if [ ! -x "${linux_guest_source}" ]; then
+    echo "embed-ghostty-resources.sh: error: Linux VM guest helper binary not found at ${linux_guest_source}" >&2
+    exit 1
+fi
+mkdir -p "${linux_guest_destination_root}"
+rsync -a "${linux_guest_source}" "${linux_guest_destination_root}/alas-vm-guest-linux"
+chmod +x "${linux_guest_destination_root}/alas-vm-guest-linux"
+
 # Alas CLI. macOS-only; the running Mac's slice is selected by
 # TerminalCLIInjection at install time.
 cli_destination_root="${destination_root}/alas-cli"

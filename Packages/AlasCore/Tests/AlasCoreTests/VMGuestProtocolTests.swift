@@ -39,16 +39,17 @@ struct VMGuestProtocolTests {
         #expect(message == .helloReply(guestVersion: "1.0", protocolRevision: 0, accessibility: true, screenRecording: true))
     }
 
-    @Test func helloReplyCarriesGuestKindAdditively() throws {
-        let macOS = VMGuestMessage.helloReply(
-            guestVersion: "1.0", protocolRevision: 1, accessibility: true, screenRecording: true)
-        let encoded = try #require(String(data: JSONEncoder().encode(macOS), encoding: .utf8))
-        #expect(!encoded.contains("guestKind"))
-        #expect(!encoded.contains("capabilities"))
-
-        let linux = VMGuestMessage.helloReply(
-            guestVersion: "0.1", protocolRevision: 1, accessibility: false, screenRecording: false,
-            guestKind: "linux", capabilities: ["run"])
-        #expect(try JSONDecoder().decode(VMGuestMessage.self, from: JSONEncoder().encode(linux)) == linux)
+    /// The Rust Linux guest helper round-trips the same file, so both sides agree on the wire.
+    @Test func sharedFixtureRoundTripsEveryMessage() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/vm-guest-protocol.json")
+        let samples = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [[String: Any]])
+        #expect(!samples.isEmpty)
+        for sample in samples {
+            let message = try JSONDecoder().decode(
+                VMGuestMessage.self, from: JSONSerialization.data(withJSONObject: sample))
+            let reencoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(message))
+            #expect(reencoded as? NSDictionary == sample as NSDictionary, "\(sample)")
+        }
     }
 }
