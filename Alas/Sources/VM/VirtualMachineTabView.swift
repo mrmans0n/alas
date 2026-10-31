@@ -20,6 +20,8 @@ struct VirtualMachineTabView: View {
     @State private var errorMessage: String?
     @State private var finishingSetup = false
     @State private var confirmingCustomize = false
+    /// A Stop of the VM running here is in progress.
+    @State private var stopping = false
     /// The VM whose Update helper awaits confirmation.
     @State private var confirmingHelperUpdate: String?
 
@@ -101,18 +103,9 @@ struct VirtualMachineTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if screen != .loading { statusBar }
             if let bannerMessage {
-                HStack(alignment: .top) {
-                    Image(systemName: "exclamationmark.triangle")
-                    Text(bannerMessage).textSelection(.enabled)
-                    Spacer(minLength: 0)
-                    Button("Dismiss", systemImage: "xmark") { dismissBanner() }
-                        .labelStyle(.iconOnly)
-                        .buttonStyle(.borderless)
-                }
-                .font(.system(size: 12)).padding(10)
-                .background(Color.yellow.opacity(0.12))
-                Divider()
+                VMCallout(message: bannerMessage, onDismiss: dismissBanner)
             }
             VStack(spacing: 0) { content }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -159,71 +152,159 @@ struct VirtualMachineTabView: View {
         }
     }
 
+    // MARK: - Status bar
+
+    @ViewBuilder
+    private var statusBar: some View {
+        switch screen {
+        case .running(let canUpdateHelper):
+            VMStatusBar(
+                tone: stopping ? .busy : .running,
+                title: stopping ? "Stopping" : "Running",
+                details: canUpdateHelper ? ["helper needs an update"] : []
+            ) {
+                ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(worktreeID) }
+                    .vmDisabled(stopping)
+                overflowMenu(updateHelper: canUpdateHelper ? worktreeID : nil)
+            }
+        case .starting:
+            VMStatusBar(tone: .busy, title: "Starting")
+        case .slotChoice:
+            VMStatusBar(tone: .attention, title: "No VM slot free")
+        case .runningElsewhere(let label):
+            VMStatusBar(tone: .running, title: "Running in \(label)")
+        case .goldenSetup(let build, let canUpdateHelper):
+            goldenStatusBar(build: build, canUpdateHelper: canUpdateHelper)
+        case .updatingHelper:
+            VMStatusBar(tone: .busy, title: "Updating the helper")
+        case .loading:
+            EmptyView()
+        case .setup:
+            setupStatusBar
+        case .createVM:
+            VMStatusBar(tone: .off, title: "No VM")
+        case .stopped:
+            VMStatusBar(tone: .off, title: "Stopped") {
+                overflowMenu(customize: canCustomize)
+            }
+        case .stoppedWhileCustomizing:
+            VMStatusBar(tone: .off, title: "Stopped", details: ["base image being customized"])
+        }
+    }
+
+    @ViewBuilder
+    private var setupStatusBar: some View {
+        switch installer.phase {
+        case .downloading(let fraction):
+            VMStatusBar(tone: .busy, title: "Preparing macOS", details: ["downloading \(percent(fraction))"])
+        case .installing(let fraction):
+            VMStatusBar(tone: .busy, title: "Preparing macOS", details: ["installing \(percent(fraction))"])
+        case .provisioning:
+            VMStatusBar(tone: .busy, title: "Preparing macOS")
+        case .failed:
+            VMStatusBar(tone: .attention, title: "Needs attention")
+        case .idle, .sealed, .awaitingSetup:
+            VMStatusBar(tone: .off, title: "No base image")
+        }
+    }
+
+    private func goldenStatusBar(build: String, canUpdateHelper: Bool) -> some View {
+        let customized = vms.isGoldenCustomized(build: build)
+        let running = vms.runningGolden() != nil
+        let tone: VMStatusTone = installer.failureNote != nil ? .attention : running ? .running : .off
+        let title = customized ? "Customizing the base image"
+            : installer.failureNote != nil ? "Needs attention" : "Setting up macOS"
+        return VMStatusBar(tone: tone, title: title, details: ["macOS \(build)", running ? "running" : "off"]) {
+            overflowMenu(updateHelper: canUpdateHelper ? StartTarget.golden(build: build).id : nil)
+                .vmDisabled(finishingSetup)
+        }
+    }
+
+    private func percent(_ fraction: Double) -> String {
+        "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
+    }
+
+    /// The ⋯ menu of rare actions; nothing when none applies.
+    @ViewBuilder
+    private func overflowMenu(updateHelper id: String? = nil, customize: Bool = false) -> some View {
+        if id != nil || customize {
+            ToolbarMenuButton(
+                iconName: "ellipsis", metrics: .vmStatusBar, restingColorToken: "fg-muted", help: "More VM actions"
+            ) {
+                if let id {
+                    Button("Update helper…") { confirmingHelperUpdate = id }
+                }
+                if customize {
+                    Button("Customize base image…") { confirmingCustomize = true }
+                }
+            }
+        }
+    }
+
+    // MARK: - Screens
+
     @ViewBuilder
     private var content: some View {
         switch screen {
-        case .running(let canUpdateHelper):
-            header("Running") {
-                if canUpdateHelper {
-                    Button("Update helper") { confirmingHelperUpdate = worktreeID }
-                }
-                Button("Stop") { stop(worktreeID) }
-            }
+        case .running:
             VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: vms.running(worktreeID)?.vm)
         case .starting:
-            ContentUnavailableView {
-                Label("Starting VM", systemImage: "desktopcomputer")
-            } description: {
-                ProgressView().controlSize(.small)
+            VMEmptyStateCard(icon: "desktopcomputer", title: "Starting the VM", subtitle: "macOS is booting.", busy: true) {
+                EmptyView()
             } actions: {
-                Button("Stop") { stop(worktreeID) }
+                AlasButton(title: "Stop") { stop(worktreeID) }
             }
         case .slotChoice:
             if let choice { choiceView(choice) }
         case .runningElsewhere(let label):
-            ContentUnavailableView {
-                Label("Running in another Alas (\(label))", systemImage: "desktopcomputer")
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "Running in another Alas",
+                subtitle: "\(label) is running this VM. Stop it there to use it here."
+            ) {
+                EmptyView()
             } actions: {
-                Button("Start") { start(elsewhere?.target ?? .worktree(worktreeID)) }
+                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) {
+                    start(elsewhere?.target ?? .worktree(worktreeID))
+                }
             }
-        case .goldenSetup(let build, let canUpdateHelper):
-            goldenSetupView(build: build, canUpdateHelper: canUpdateHelper)
+        case .goldenSetup(let build, _):
+            goldenSetupView(build: build)
         case .updatingHelper:
-            ContentUnavailableView {
-                Label("Updating the helper…", systemImage: "desktopcomputer")
-            } description: {
-                ProgressView().controlSize(.small)
-            }
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "Updating the helper",
+                subtitle: "The VM restarts with the new helper.", busy: true)
         case .loading:
-            ProgressView().controlSize(.small)
+            Spinner().frame(width: 16, height: 16)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .setup:
             setupView
         case .createVM:
-            ContentUnavailableView {
-                Label("No VM for this worktree", systemImage: "desktopcomputer")
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "No VM for this worktree",
+                subtitle: "Create one from the base image. Agents can drive it with computer use while your desktop stays untouched."
+            ) {
+                EmptyView()
             } actions: {
-                Button("Create VM", action: createVM)
-                    .buttonStyle(.borderedProminent)
+                AlasButton(title: "Create VM", icon: "plus", style: .primary, action: createVM)
             }
         case .stopped:
-            ContentUnavailableView {
-                Label("Stopped", systemImage: "desktopcomputer")
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "This worktree's VM is off",
+                subtitle: "Agents can drive it with computer use once it's running. Your desktop stays untouched."
+            ) {
+                EmptyView()
             } actions: {
-                Button("Start") { start(.worktree(worktreeID)) }
-                    .buttonStyle(.borderedProminent)
-                if canCustomize {
-                    Button("Customize base image") { confirmingCustomize = true }
-                }
+                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.worktree(worktreeID)) }
             }
         case .stoppedWhileCustomizing:
-            ContentUnavailableView {
-                Label("Stopped", systemImage: "desktopcomputer")
-            } description: {
-                Text("The base image is being customized.")
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "This worktree's VM is off",
+                subtitle: "The base image is being customized. Finish customizing it here, or start this VM."
+            ) {
+                EmptyView()
             } actions: {
-                Button("Start") { start(.worktree(worktreeID)) }
-                    .buttonStyle(.borderedProminent)
-                Button("Finish customizing") { vms.finishCustomizing(from: worktreeID) }
+                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.worktree(worktreeID)) }
+                AlasButton(title: "Finish customizing") { vms.finishCustomizing(from: worktreeID) }
             }
         }
     }
@@ -237,124 +318,107 @@ struct VirtualMachineTabView: View {
         }
     }
 
-    private var installerIsBusy: Bool {
-        switch installer.phase {
-        case .downloading, .installing, .provisioning: true
-        default: false
-        }
-    }
-
-    // MARK: - Screens
-
+    @ViewBuilder
     private var setupView: some View {
-        ContentUnavailableView {
-            Label("Set up a macOS VM", systemImage: "desktopcomputer")
-        } description: {
-            switch installer.phase {
-            case .downloading(let fraction):
-                progress("Downloading macOS", fraction: fraction)
-            case .installing(let fraction):
-                progress("Installing macOS", fraction: fraction)
-            case .provisioning(let step):
-                VStack(spacing: 6) {
-                    Text(step.title)
-                    ProgressView().controlSize(.small)
-                }
-            case .failed(let message):
-                Text(message)
-            default:
-                EmptyView()
+        if let position = VMSetupSteps.position(of: installer.phase) {
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "Setting up the base image",
+                subtitle: "This happens once. Every worktree VM starts from it."
+            ) {
+                VMSetupSteps(current: position.current, fraction: position.fraction)
             }
-        } actions: {
-            if !installerIsBusy {
-                Button("Set up") {
+        } else {
+            if case .failed(let message) = installer.phase {
+                VMCallout(title: "macOS setup couldn't finish", message: message)
+            }
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "Set up a macOS VM",
+                subtitle: "Alas downloads macOS once and prepares a base image. Every worktree VM starts from it."
+            ) {
+                EmptyView()
+            } actions: {
+                AlasButton(title: "Set up", style: .primary) {
                     Task { await installer.start() }
                 }
-                .buttonStyle(.borderedProminent)
             }
-        }
-    }
-
-    private func progress(_ title: String, fraction: Double) -> some View {
-        VStack(spacing: 6) {
-            Text(title)
-            ProgressView(value: fraction).frame(width: 240)
         }
     }
 
     @ViewBuilder
-    private func goldenSetupView(build: String, canUpdateHelper: Bool) -> some View {
+    private func goldenSetupView(build: String) -> some View {
+        let customized = vms.isGoldenCustomized(build: build)
         if let note = installer.failureNote {
-            HStack {
-                Image(systemName: "exclamationmark.triangle")
-                Text(note)
-                Spacer(minLength: 0)
-            }
-            .font(.system(size: 12)).padding(.horizontal, 8).padding(.top, 8)
+            VMCallout(title: "Automatic setup stopped", message: note)
         }
-        header("Create a user that logs in automatically. Install the helper: open My Shared Files › helper › Install Alas VM Guest, then allow it in Accessibility and Screen Recording. Shut down macOS, then click Done.") {
+        VMCallout(tone: .info, title: customized ? "Customize the base image" : "Finish the setup by hand") {
+            VMNumberedSteps(steps: customized ? Self.customizeSteps : Self.manualSetupSteps)
+                .padding(.top, 2)
+        } actions: {
             // Not for a golden the user runs, which it would force off, nor
             // one reopened by Customize, which is for the user's own changes.
-            if !vms.isGoldenCustomized(build: build) {
-                Button("Set up automatically") {
+            if !customized {
+                AlasButton(title: "Set up automatically", compact: true) {
                     Task { await installer.start() }
                 }
-                .disabled(finishingSetup || vms.isGoldenRunning(build: build))
+                .vmDisabled(finishingSetup || vms.isGoldenRunning(build: build))
             }
-            if canUpdateHelper {
-                Button("Update helper") { confirmingHelperUpdate = StartTarget.golden(build: build).id }
-                    .disabled(finishingSetup)
-            }
-            Button("Done") { finishGoldenSetup(build: build) }
-                .disabled(finishingSetup)
+            AlasButton(title: "Done", style: .primary, compact: true) { finishGoldenSetup(build: build) }
+                .vmDisabled(finishingSetup)
         }
         if let golden = vms.runningGolden() {
             VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: golden.vm)
         } else if vms.isStarting(StartTarget.golden(build: build).id) || finishingSetup {
-            ProgressView().controlSize(.small)
+            Spinner().frame(width: 16, height: 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            ContentUnavailableView {
-                Label("Stopped", systemImage: "desktopcomputer")
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "The setup VM is off",
+                subtitle: customized ? "Start it to make your changes." : "Start it to finish setting up macOS."
+            ) {
+                EmptyView()
             } actions: {
-                Button("Start") { start(.golden(build: build)) }
-                    .buttonStyle(.borderedProminent)
+                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.golden(build: build)) }
             }
         }
     }
+
+    private static let manualSetupSteps = [
+        "Create a user that logs in automatically.",
+        "Install the helper: open My Shared Files › helper › Install Alas VM Guest.",
+        "Allow it in Accessibility and Screen Recording.",
+        "Shut down macOS from the Apple menu, then click Done.",
+    ]
+
+    private static let customizeSteps = [
+        "Make your changes in the VM.",
+        "Shut down macOS from the Apple menu, then click Done. New VMs start from your changes.",
+    ]
 
     @ViewBuilder
     private func choiceView(_ choice: SlotChoice) -> some View {
         if choice.candidates.isEmpty {
-            ContentUnavailableView {
-                Label("Both VM slots are in use by another Alas.", systemImage: "desktopcomputer")
+            VMEmptyStateCard(
+                icon: "rectangle.on.rectangle", title: "Both VM slots are in use by another Alas",
+                subtitle: "Stop a VM there, then start this one again."
+            ) {
+                EmptyView()
             } actions: {
-                Button("Cancel") { self.choice = nil }
+                AlasButton(title: "Cancel") { self.choice = nil }
             }
         } else {
-            ContentUnavailableView {
-                Label("Both VM slots are busy", systemImage: "desktopcomputer")
+            VMEmptyStateCard(
+                icon: "rectangle.on.rectangle", title: "Both VM slots are busy",
+                subtitle: "macOS runs two VMs at a time. Pause one to start this VM."
+            ) {
+                EmptyView()
             } actions: {
                 ForEach(choice.candidates, id: \.self) { candidate in
-                    Button("Pause \(displayName(forCandidate: candidate))") {
+                    AlasButton(title: "Pause \(displayName(forCandidate: candidate))") {
                         start(choice.target, pausing: candidate)
                     }
                 }
-                Button("Cancel") { self.choice = nil }
+                AlasButton(title: "Cancel", style: .subtle) { self.choice = nil }
             }
-        }
-    }
-
-    private func header(_ title: String, @ViewBuilder trailing: () -> some View) -> some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                Text(title)
-                    .font(.system(size: 12, weight: .medium))
-                Spacer(minLength: 0)
-                trailing()
-            }
-            .padding(8)
-            Divider()
         }
     }
 
@@ -482,7 +546,13 @@ struct VirtualMachineTabView: View {
     }
 
     private func stop(_ id: String) {
-        Task { await vms.stopVM(worktreeID: id) }
+        let ownVM = id == worktreeID && vms.running(id) != nil
+        if ownVM { stopping = true }
+        Task {
+            await vms.stopVM(worktreeID: id)
+            if ownVM { stopping = false }
+            refresh()
+        }
     }
 
     /// Seals the golden image only after macOS shut itself down; a VM that
