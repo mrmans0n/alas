@@ -5,6 +5,112 @@ import Testing
 
 @Suite("ACPStdioClient")
 struct ACPStdioClientTests {
+    @Test(arguments: [false, true])
+    func preparedV2PromptReservesItsActualIDBeforeAnyTransportWrite(prefixed: Bool) async throws {
+        let wireID = prefixed ? #""prefix:1""# : "1"
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in
+            .frame(Data("{\"jsonrpc\":\"2.0\",\"id\":\(wireID),\"result\":{\"messageId\":\"m\"}}".utf8))
+        })
+        transport.requestIDPrefix = prefixed ? "prefix" : nil
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let prepared = AsyncStream<ACPV2PreparedPrompt>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let gate = ACPV2PromptHandoffGate()
+        let sending = Task {
+            try await client.sendV2Prompt(.init(sessionId: "s", prompt: [.text("x")]), operationKey: nil, gate: gate) { value in
+                prepared.continuation.yield(value)
+                for await _ in release.stream { break }
+            }
+        }
+        defer { release.continuation.finish()
+        sending.cancel() }
+        let observed = await boundedResult { () async -> ACPV2PreparedPrompt? in for await value in prepared.stream { return value }
+        return nil }
+        let capturedValue = try #require(observed)
+        let value = try #require(capturedValue)
+        let expected = prefixed ? JSONRPCID.string("prefix:1") : .number(1)
+        #expect(value.endpoint == .stdio(connectionID: client.updateConnectionID))
+        #expect(value.binding == .stdio(requestID: expected))
+        #expect(transport.sentFrames.isEmpty)
+        release.continuation.yield(())
+        let response = try await sending.value
+        #expect(response.rawDelivery?.source == .stdio(requestID: expected, method: "session/prompt"))
+        #expect(transport.sentFrames.count == 1)
+    }
+
+    @Test(arguments: ["cancel", "shutdown", "invalidate", "reject", "claimed"])
+    func invalidatedPreparationCannotDispatchAV2Prompt(action: String) async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let entered = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let gate = ACPV2PromptHandoffGate()
+        let sending = Task {
+            try await client.sendV2Prompt(.init(sessionId: "s", prompt: []), operationKey: nil, gate: gate) { _ in
+                entered.continuation.yield(())
+                for await _ in release.stream { break }
+                if action == "reject" { throw ACPClientError.notRunning }
+            }
+        }
+        defer { release.continuation.finish()
+        sending.cancel() }
+        _ = try #require(await boundedResult { for await _ in entered.stream { return true }
+        return false })
+        if action == "cancel" { sending.cancel() }
+        if action == "shutdown" { await client.shutdown() }
+        if action == "invalidate" { gate.invalidate() }
+        if action == "claimed" { try gate.claim() }
+        release.continuation.yield(())
+        let result = try #require(await boundedResult { await sending.result })
+        if case .success = result { Issue.record("Invalidated prompt returned success") }
+        #expect(transport.sentFrames.isEmpty)
+    }
+
+    @Test func cancellingADispatchedPreparedPromptLeavesLateResponseUnconsumed() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let sending = Task { try await client.sendV2Prompt(.init(sessionId: "s", prompt: []), operationKey: nil, gate: .init(), prepare: { _ in }) }
+        defer { sending.cancel() }
+        _ = try #require(await boundedResult { while transport.sentFrames.isEmpty, !Task.isCancelled { await Task.yield() }
+        return !transport.sentFrames.isEmpty })
+        sending.cancel()
+        let result = try #require(await boundedResult { await sending.result })
+        if case .success = result { Issue.record("Cancelled pending request succeeded") }
+        let consumed = Mutex(0)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":{"messageId":"late"}}"#.utf8), onConsumed: { consumed.withLock { $0 += 1 } })
+        let captured = await boundedResult { var events = client.incomingRawRPCDiagnostics.makeAsyncIterator()
+        return await events.next() }
+        let capturedValue = try #require(captured)
+        let late = try #require(capturedValue)
+        #expect(late.source == .diagnostic)
+        #expect(consumed.withLock { $0 } == 0)
+        let next = Task { try await client.sendV2Prompt(.init(sessionId: "s", prompt: []), operationKey: nil, gate: .init(), prepare: { _ in }) }
+        defer { next.cancel() }
+        _ = try #require(await boundedResult { while transport.sentFrames.count < 2, !Task.isCancelled { await Task.yield() }
+        return transport.sentFrames.count == 2 })
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":2,"result":{"messageId":"new"}}"#.utf8))
+        #expect(try await next.value.rawDelivery?.source == .stdio(requestID: .number(2), method: "session/prompt"))
+    }
+
+    @Test func v1ClientCannotEnterThePreparedV2PromptPath() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport)
+        try client.start()
+        defer { transport.terminate() }
+        let prepared = Mutex(false)
+        await #expect(throws: ACPV2PromptDispatchError.unsupported) {
+            try await client.sendV2Prompt(.init(sessionId: "s", prompt: []), operationKey: nil, gate: .init()) { _ in prepared.withLock { $0 = true } }
+        }
+        #expect(!prepared.withLock { $0 })
+        #expect(transport.sentFrames.isEmpty)
+    }
+
     /// The fake agent script reads one Content-Length framed request from stdin
     /// and writes back a canned response + one session/update notification.
     private func fakeAgentScript() throws -> URL {

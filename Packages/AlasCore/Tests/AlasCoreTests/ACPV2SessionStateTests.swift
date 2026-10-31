@@ -3,6 +3,22 @@ import Testing
 import AlasCore
 
 struct ACPV2SessionStateTests {
+    @Test func uncertaintyIsSubmissionScopedAndCannotDowngradeAcceptedFacts() throws {
+        let context = ACPV2SessionState.Context(sessionID: "s", connectionID: UUID())
+        var state = ACPV2SessionState(context: context)
+        for id in 1...3 { _ = state.register(requestID: id, localRowID: UUID(), context: context) }
+        _ = state.accept(requestID: 2, response: try .decode(from: Data(#"{"messageId":"accepted"}"#.utf8)), context: context)
+        _ = state.reject(requestID: 3, context: context)
+        _ = try state.apply(event(#"{"sessionUpdate":"state_update","state":"running"}"#), source: .live, context: context)
+        #expect(state.markSubmissionUncertain(requestID: 1, context: context).effects == [.lifecycle(.uncertain(requestID: 1))])
+        for id in 1...3 { #expect(state.markSubmissionUncertain(requestID: id, context: context).effects.isEmpty) }
+        #expect(state.lifecycle.submission(1) == .uncertain)
+        #expect(state.lifecycle.submission(2) == .accepted(messageID: "accepted"))
+        #expect(state.lifecycle.submission(3) == .rejected)
+        #expect(state.lifecycle.foreground == .running)
+        #expect(state.lifecycle.lastForegroundCompletion == nil)
+    }
+
     @Test func interleavedEntitiesKeepOneFirstObservationOrder() throws {
         let context = ACPV2MessageTranscript.Context(sessionID: "s", connectionID: UUID())
         var state = ACPV2SessionState(context: context)

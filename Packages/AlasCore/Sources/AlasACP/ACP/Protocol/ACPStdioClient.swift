@@ -5,7 +5,7 @@ import AlasPlatform
 import AlasFeatures
 import AlasCode
 
-public final class ACPStdioClient: ACPClient, @unchecked Sendable {
+public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
     private let rawRPCDiagnosticsCont: AsyncStream<ACPRawRPCDelivery>.Continuation
     private let v2UpdatesCont: AsyncStream<ACPV2SessionUpdateDelivery>.Continuation
@@ -621,6 +621,47 @@ public final class ACPStdioClient: ACPClient, @unchecked Sendable {
                 onRequestHandoff()
             }
         }
+    }
+
+    public var v2PromptEndpoint: ACPV2PromptEndpoint? {
+        sessionUpdateProtocolVersion == .v2 ? .stdio(connectionID: updateConnectionID) : nil
+    }
+
+    public func sendV2Prompt(_ params: ACPSessionPromptParams, operationKey: ACPBrokerOperationKey?,
+        gate: ACPV2PromptHandoffGate,
+        prepare: @escaping @Sendable (ACPV2PreparedPrompt) async throws -> Void) async throws -> ACPResponse {
+        guard let endpoint = v2PromptEndpoint else { throw ACPV2PromptDispatchError.unsupported }
+        let id = nextRequestID()
+        let body = try Self.encode(envelopeFor: ACPRequest(method: "session/prompt", params: params), id: id)
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            try await prepare(.init(endpoint: endpoint, binding: .stdio(requestID: id)))
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                stateLock.lock()
+                do {
+                    guard !didDrainPending else { throw ACPClientError.notRunning }
+                    try Task.checkCancellation()
+                    try gate.claim()
+                    pending[id] = Pending(method: "session/prompt", continuation: continuation)
+                    stateLock.unlock()
+                } catch {
+                    stateLock.unlock()
+                    continuation.resume(throwing: error)
+                    return
+                }
+                do { try transport.send(body) }
+                catch { cancelPreparedPrompt(id: id, error: error) }
+            }
+        } onCancel: {
+            gate.invalidate()
+            self.cancelPreparedPrompt(id: id, error: CancellationError())
+        }
+    }
+
+    private func cancelPreparedPrompt(id: JSONRPCID, error: any Error) {
+        let continuation = stateLock.withLock { pending.removeValue(forKey: id)?.continuation }
+        continuation?.resume(throwing: error)
     }
 
     private func nextRequestID() -> JSONRPCID {

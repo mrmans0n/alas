@@ -30,7 +30,7 @@ public struct ACPV2SessionState: Sendable {
 
     public struct SubmissionReduction: Equatable, Sendable {
         public enum Disposition: Equatable, Sendable {
-            case registered, accepted, rejected, unchanged, unmatched, conflict, staleContext
+            case registered, accepted, rejected, uncertain, unchanged, unmatched, conflict, staleContext
         }
         public let response: ACPV2PromptAccepted?
         public let disposition: Disposition
@@ -147,6 +147,14 @@ public struct ACPV2SessionState: Sendable {
         lifecycle = nextLifecycle
         effects += accepted.map(Effect.lifecycle)
         return SubmissionReduction(response: response, disposition: .accepted, effects: effects)
+    }
+
+    @discardableResult
+    public mutating func markSubmissionUncertain(requestID: Int, context: Context) -> SubmissionReduction {
+        guard context == self.context else { return .init(response: nil, disposition: .staleContext, effects: []) }
+        guard lifecycle.submission(requestID) != nil else { return .init(response: nil, disposition: .unmatched, effects: []) }
+        let effects = lifecycle.markSubmissionUncertain(requestID).map(Effect.lifecycle)
+        return .init(response: nil, disposition: effects.isEmpty ? .unchanged : .uncertain, effects: effects)
     }
 
     @discardableResult

@@ -334,6 +334,24 @@ actor ACPRawBrokerTransport {
         }
     }
 
+    func sendPreparedPrompt(_ params: ACPSessionPromptParams, operationKey: ACPBrokerOperationKey,
+        gate: ACPV2PromptHandoffGate,
+        prepare: @escaping @Sendable (ACPV2PreparedPrompt) async throws -> Void) async throws -> ACPResponse {
+        guard !terminated, let generation else { throw ACPClientError.notRunning }
+        let prepared = ACPV2PreparedPrompt(endpoint: .broker(connectionID: connectionID, id: openParams.brokerId, generation: generation),
+            binding: .broker(operationKey: operationKey))
+        let encoded = try ACPBrokerJSONValue(encodable: params)
+        return try await send(method: "session/prompt", params: encoded, operationKey: operationKey.rawValue, before: { actual in
+            guard actual == generation else { throw ACPV2PromptDispatchError.invalidated }
+            try Task.checkCancellation()
+            try await prepare(prepared)
+            try Task.checkCancellation()
+        }, handoff: {
+            try Task.checkCancellation()
+            try gate.claim()
+        })
+    }
+
     func send(method: String, params: ACPBrokerJSONValue, operationKey: String?,
               before: @Sendable (ACPBrokerGeneration?) async throws -> Void,
               handoff: @Sendable () throws -> Void) async throws -> ACPResponse {
