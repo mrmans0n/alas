@@ -49,8 +49,11 @@ public struct ACPTurnCompletion: Equatable, Sendable {
     public var model: String? = nil
     /// A context-recovery prompt Alas sent, reported only as usage.
     public var recovery = false
+    /// An autonomous cycle the adapter ran after a turn settled at its result, reported only as usage: its cost is
+    /// kept apart from the prompt turns around it.
+    public var background = false
 
-    public init(sessionId: String, startedAt: Int64, result: Result, delegatedSource: ACPDelegatedPromptSource?, lastAgentText: String?, quota: ACPPromptQuota? = nil, cost: ACPTurnCost? = nil, sentAt: Int64? = nil, endedAt: Int64? = nil, model: String? = nil, recovery: Bool = false) {
+    public init(sessionId: String, startedAt: Int64, result: Result, delegatedSource: ACPDelegatedPromptSource?, lastAgentText: String?, quota: ACPPromptQuota? = nil, cost: ACPTurnCost? = nil, sentAt: Int64? = nil, endedAt: Int64? = nil, model: String? = nil, recovery: Bool = false, background: Bool = false) {
         self.sessionId = sessionId
         self.startedAt = startedAt
         self.result = result
@@ -62,6 +65,7 @@ public struct ACPTurnCompletion: Equatable, Sendable {
         self.endedAt = endedAt
         self.model = model
         self.recovery = recovery
+        self.background = background
     }
 }
 

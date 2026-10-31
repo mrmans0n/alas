@@ -112,6 +112,9 @@ public final class ACPSessionRunner {
     /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
     /// between its prompt and its result.
     private var costLog: [(index: Int, cost: ACPUsageInfo.Cost)] = []
+    /// An autonomous cycle that finished outside any prompt, whose cost the adapter sends after finishing its task:
+    /// reported as background usage once that cost is applied, or before the next prompt goes out with what arrived.
+    private var pendingAutonomousUsage: (startedAt: Int64, streamStart: Int)?
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
@@ -1285,9 +1288,13 @@ public final class ACPSessionRunner {
         if case .asyncTask(let update) = params.update {
             let root = session.remoteSessionId ?? sessionId
             if params.sessionId == root || session.subagentRun(params.sessionId) != nil {
-                var dirty = session.applyBackgroundTask(update, ownerSessionId: params.sessionId)
                 let identity = ACPBackgroundTask(ownerSessionId: params.sessionId,
                     asyncTaskId: update.asyncTaskId, name: update.asyncTaskId).id
+                let wasActive = session.backgroundTasks.first(where: { $0.id == identity })?.isActive == true
+                var dirty = session.applyBackgroundTask(update, ownerSessionId: params.sessionId)
+                if params.sessionId == root {
+                    noteAutonomousCycle(update, identity: identity, wasActive: wasActive)
+                }
                 // An identical replay can match a mutation whose earlier write
                 // failed. Save its current row before consuming the broker event.
                 if let index = session.transcript.toolCallIndex(toolCallId: identity) { dirty.insert(index) }
@@ -1312,6 +1319,10 @@ public final class ACPSessionRunner {
             }
             applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenBoundaryReady)
             return
+        }
+        if pendingAutonomousUsage != nil, activePromptID == nil, !suppressingLoadReplay, !isSubagentUpdate(params),
+           case .usageUpdate(let info) = params.update, let cost = info.cost {
+            reportAutonomousUsage(cost: ACPTurnCost(known: cost))
         }
         if isSubagentUpdate(params) {
             applySubagentUpdate(
@@ -1783,6 +1794,33 @@ public final class ACPSessionRunner {
         if observedUpdateCount >= target {
             finishLoadReplaySuppression()
         }
+    }
+
+    /// An adapter that settles a turn at its result announces each autonomous follow-up cycle as a root-owned `turn`
+    /// task. A live one starting is new output, so its text may cross the streaming boundary; one finishing outside
+    /// any prompt leaves its cost to report on its own. A prompt sent meanwhile took the cycle over and owns its cost.
+    private func noteAutonomousCycle(_ update: ACPAsyncTaskUpdate, identity: String, wasActive: Bool) {
+        guard session.settlesAtResult, !suppressingLoadReplay,
+              let task = session.backgroundTasks.first(where: { $0.id == identity }), task.taskType == "turn"
+        else { return }
+        if update.sessionUpdate == "async_task_spawned" {
+            session.allowsStreamingBoundaryCrossing = true
+        }
+        guard wasActive, ["completed", "failed"].contains(task.state), activePromptID == nil else { return }
+        // A cycle whose cost never came is reported with what did before the next one replaces it.
+        reportAutonomousUsage(cost: nil)
+        pendingAutonomousUsage = (Int64(task.startedAt.timeIntervalSince1970 * 1000), dequeuedUpdateCount)
+    }
+
+    /// Reports the pending autonomous cycle as background usage, with `cost`, or when nil whatever cost-bearing
+    /// update arrived on the stream since the cycle finished.
+    private func reportAutonomousUsage(cost: ACPTurnCost?) {
+        guard let pending = pendingAutonomousUsage else { return }
+        pendingAutonomousUsage = nil
+        onTurnUsage?(ACPTurnCompletion(
+            sessionId: sessionId, startedAt: pending.startedAt, result: .completed, delegatedSource: nil,
+            lastAgentText: nil, cost: cost ?? turnCost(streamStart: pending.streamStart),
+            sentAt: pending.startedAt, endedAt: Self.now(), model: session.currentModel, background: true))
     }
 
     private func finishLoadReplaySuppression() {
@@ -4573,6 +4611,8 @@ extension ACPSessionRunner {
                         return false
                     }
                     // Usage starts when the prompt goes out, after checkpoints, attachments and context providers.
+                    // An autonomous cycle's cost not reported yet is what arrived before it.
+                    self.reportAutonomousUsage(cost: nil)
                     let sentAt = self.nextSentAt()
                     // Updates sent during that work belong to what came before.
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
@@ -4867,6 +4907,7 @@ extension ACPSessionRunner {
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
                 // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
+                self.reportAutonomousUsage(cost: nil)
                 let sentAt = self.nextSentAt()
                 self.unreportedPrompts[promptID] = (
                     sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)

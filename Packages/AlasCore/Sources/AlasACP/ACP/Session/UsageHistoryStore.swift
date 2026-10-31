@@ -336,13 +336,15 @@ extension UsageTurnInput {
         completion: ACPTurnCompletion, agent: String, model: String?, cumulativeCost: ACPUsageInfo.Cost?, project: String?,
         worktree: String?, endedAt: Int64
     ) {
-        let result = switch completion.result {
+        var result = switch completion.result {
         case .completed: "completed"
         case .failed: "failed"
         case .cancelled: "cancelled"
         case .limited: "limited"
         case .stopped(let reason): reason.usageResult
         }
+        // An autonomous cycle's usage, apart from the prompt turns.
+        if completion.background { result = "background" }
         let models = completion.quota?.modelUsage ?? []
         let started = completion.sentAt ?? completion.startedAt
         // Some adapters send only per-model counts; their sum is the turn's.
