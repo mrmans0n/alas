@@ -1112,16 +1112,23 @@ struct ACPSubagentSessionTests {
         #expect(subagentRowDescriptor(in: session, at: 0)?.links == [expected])
     }
 
-    @Test("a child's handback becomes an agent row in the child; a reply without link ids links nothing")
-    func childHandbackBecomesChildRow() throws {
+    @Test("a child's handback, continuation chunks included, becomes one agent row in the child; a reply without link ids links nothing",
+          arguments: [false, true])
+    func childHandbackBecomesChildRow(replaying: Bool) throws {
         let session = makeSession()
         session.remoteSessionId = "root"
         session.apply(.subagentSpawned(.init(subagentSessionId: "c1", name: "Explore")))
+        let applyToChild = { (update: ACPSessionUpdate) in
+            _ = replaying
+                ? session.applySubagentReplayedUpdate(update, subagentSessionId: "c1")
+                : session.applySubagentUpdate(update, subagentSessionId: "c1")
+        }
         let handback = ACPDirectedMessage(senderSessionId: "c1", recipientSessionId: "root", replacesContent: true,
                                           recipientMessageId: "toolu_h", isOutgoing: true)
-        session.applySubagentUpdate(
-            .userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"), directed: handback)),
-            subagentSessionId: "c1")
+        applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"), directed: handback)))
+        // A `session_message_chunk` names neither side, so it reads as incoming.
+        applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text(" and tests pass"), directed: .init(
+            senderSessionId: nil, recipientSessionId: nil, replacesContent: false))))
         let dirty = session.apply(.userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"),
             directed: .init(senderSessionId: "c1", recipientSessionId: "root", replacesContent: true,
                             senderMessageId: "toolu_h"))))
@@ -1133,7 +1140,7 @@ struct ACPSubagentSessionTests {
             return
         }
         #expect(messageId == "toolu_h")
-        #expect(buffer.value == "Build fixed")
+        #expect(buffer.value == "Build fixed and tests pass")
         #expect(dirty == [0])
         #expect(session.transcript.messages.count == 1)
         #expect(session.delegationLink(messageId: "toolu_h")?.senderMessageId == "toolu_h")

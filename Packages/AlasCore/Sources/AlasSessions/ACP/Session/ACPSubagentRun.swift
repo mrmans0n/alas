@@ -914,6 +914,12 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
             if case .user(_, let id, _, _, _, _) = message { return id == messageId }
             return false
         }
+        // A `session_message_chunk` names neither side, so a continuation of
+        // a message this child SENT arrives looking incoming: it extends the
+        // agent row its `session_message` made, not a new prompt.
+        if existing == nil, trailingIndex(of: .agent, messageId: messageId) != nil {
+            return applyOutgoingMessage(chunk, messageId: messageId, directed: directed, replaying: replaying, at: timestamp)
+        }
         guard let index = existing,
               case .user(let id, _, let existingText, let existingAttachments, let source, _) = messages[index]
         else {
