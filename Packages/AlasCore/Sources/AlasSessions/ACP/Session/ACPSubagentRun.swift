@@ -69,6 +69,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     public private(set) var startedAt: Date
     public private(set) var finishedAt: Date?
 
+    /// Ids of messages this child sent, so continuation chunks (which name
+    /// neither side) extend them even before their first text made a row.
+    private var outgoingMessageIds: Set<String> = []
     private var createdAts: [Int] = []
     /// The SQL `seq` for the message at the SAME array position. See
     /// `restore` for why this can't just be the array index.
@@ -903,6 +906,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     ) -> Set<Int> {
         if replaying { closeLegacyRuns() }
         if directed.isOutgoing {
+            outgoingMessageIds.insert(messageId)
             return applyOutgoingMessage(chunk, messageId: messageId, directed: directed, replaying: replaying, at: timestamp)
         }
         let text = Self.text(of: chunk.content)
@@ -914,7 +918,10 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         // A `session_message_chunk` names neither side, so a continuation of
         // a message this child SENT arrives looking incoming: it extends the
         // agent row its `session_message` made, not a new prompt.
-        if existing == nil, trailingIndex(of: .agent, messageId: messageId) != nil {
+        // A message announced empty has no row yet, so its id is
+        // remembered from the announcement.
+        if existing == nil,
+           outgoingMessageIds.contains(messageId) || trailingIndex(of: .agent, messageId: messageId) != nil {
             return applyOutgoingMessage(chunk, messageId: messageId, directed: directed, replaying: replaying, at: timestamp)
         }
         guard let index = existing,

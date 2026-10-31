@@ -1157,8 +1157,8 @@ struct ACPSubagentSessionTests {
     }
 
     @Test("a child's handback, continuation chunks included, becomes one agent row in the child; a reply without link ids links nothing",
-          arguments: [false, true])
-    func childHandbackBecomesChildRow(replaying: Bool) throws {
+          arguments: [(false, false), (true, false), (false, true)])
+    func childHandbackBecomesChildRow(replaying: Bool, announcedEmpty: Bool) throws {
         let session = makeSession()
         session.remoteSessionId = "root"
         session.apply(.subagentSpawned(.init(subagentSessionId: "c1", name: "Explore")))
@@ -1170,7 +1170,14 @@ struct ACPSubagentSessionTests {
         }
         let handback = ACPDirectedMessage(senderSessionId: "c1", recipientSessionId: "root", replacesContent: true,
                                           recipientMessageId: "toolu_h", isOutgoing: true)
-        applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"), directed: handback)))
+        if announcedEmpty {
+            // Announced with no text yet, it streams in through chunks.
+            applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text(""), directed: handback)))
+            applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"), directed: .init(
+                senderSessionId: nil, recipientSessionId: nil, replacesContent: false))))
+        } else {
+            applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"), directed: handback)))
+        }
         // A `session_message_chunk` names neither side, so it reads as incoming.
         applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text(" and tests pass"), directed: .init(
             senderSessionId: nil, recipientSessionId: nil, replacesContent: false))))

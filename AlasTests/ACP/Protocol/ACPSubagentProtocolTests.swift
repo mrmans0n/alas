@@ -212,11 +212,12 @@ struct ACPSubagentProtocolTests {
         #expect(spawn.replacesAdditionalDirectories == replacesDirs)
     }
 
-    @Test("the sender's view of a linked session_message is kept as an outgoing chunk, not a prompt")
-    func revisedMessageOutgoingView() throws {
-        let updates = try Self.frame(#"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_h","senderSessionId":"agent_n","recipientSessionId":"root","recipientMessageId":"toolu_h","content":[{"type":"text","text":"done"}]}}"#)
-        #expect(updates == [.init(sessionId: "agent_n", update: .userMessageChunk(.init(messageId: "toolu_h", content: .text("done"),
-            directed: .init(senderSessionId: "agent_n", recipientSessionId: "root", replacesContent: true,
+    @Test("the sender's view of a linked session_message is kept as an outgoing chunk, not a prompt; without content it only carries the link",
+          arguments: [(#","content":[{"type":"text","text":"done"}]"#, "done", true), ("", "", false)])
+    func revisedMessageOutgoingView(content: String, text: String, replaces: Bool) throws {
+        let updates = try Self.frame(#"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_h","senderSessionId":"agent_n","recipientSessionId":"root","recipientMessageId":"toolu_h"\#(content)}}"#)
+        #expect(updates == [.init(sessionId: "agent_n", update: .userMessageChunk(.init(messageId: "toolu_h", content: .text(text),
+            directed: .init(senderSessionId: "agent_n", recipientSessionId: "root", replacesContent: replaces,
                             recipientMessageId: "toolu_h", isOutgoing: true))))])
     }
 

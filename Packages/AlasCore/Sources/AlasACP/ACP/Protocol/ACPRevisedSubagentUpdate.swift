@@ -235,10 +235,20 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
             // this session when this session sent it.
             let addressedHere = message.recipientSessionId.map { $0 == sessionId }
                 ?? (message.senderSessionId != sessionId)
-            guard let content = message.content else { return [] }
             // An upsert replaces the message's content: the first block
             // carries that, the rest append to it. A clear has no block.
-            let blocks = content.isEmpty && message.replacesContent ? [ACPContentBlock.text("")] : content
+            // An update without content leaves the content alone; when it
+            // names a linked message it still reaches consumers as an empty
+            // appending chunk, which changes no row but carries the link.
+            let blocks: [ACPContentBlock]
+            if let content = message.content {
+                blocks = content.isEmpty && message.replacesContent ? [.text("")] : content
+            } else if message.senderMessageId != nil || message.recipientMessageId != nil {
+                blocks = [.text("")]
+            } else {
+                return []
+            }
+            let replacesContent = message.replacesContent && message.content != nil
             return blocks.enumerated().map { offset, block in
                 .init(sessionId: sessionId, update: .userMessageChunk(.init(
                     messageId: message.messageId,
@@ -246,7 +256,7 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                     directed: .init(
                         senderSessionId: message.senderSessionId,
                         recipientSessionId: message.recipientSessionId,
-                        replacesContent: message.replacesContent && offset == 0,
+                        replacesContent: replacesContent && offset == 0,
                         senderMessageId: message.senderMessageId,
                         recipientMessageId: message.recipientMessageId,
                         isOutgoing: !addressedHere))))
