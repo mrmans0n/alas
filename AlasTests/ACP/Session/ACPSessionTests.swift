@@ -41,8 +41,9 @@ struct ACPSessionTests {
     /// requests still open. Only a settling adapter derives past it; elsewhere
     /// awaiting input without a prompt is a steering turn held for recovery.
     @Test("a broker turn state keeps what still waits here", arguments: [
-        // broker state, prompt in flight, settles, pending here, expected
+        // broker state, prompt in flight, settles, pending here (or a turn the runner still runs), expected
         (ACPBrokerTurnState.awaitingInput, false, true, "permission", ACPSession.StreamingState.awaitingPermission),
+        (.awaitingInput, false, true, "turn", .awaitingInput),
         (.completed, false, true, "permission", .awaitingPermission),
         (.awaitingInput, true, true, "permission", .awaitingPermission),
         (.awaitingInput, false, true, "", .idle),
@@ -55,6 +56,7 @@ struct ACPSessionTests {
                                           pending: String, expected: ACPSession.StreamingState) {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         session.settlesAtResult = settles
+        if pending == "turn" { session.foregroundTurnActive = { true } }
         if pending == "question" {
             session.transcript.pendingUserInputs = [ACPUserInputRequest(
                 id: UUID(),
