@@ -129,6 +129,7 @@ struct GoldenImageInstallerTests {
 
         await installer.start()
 
+        #expect(!installer.cancelling)
         if let reason = c.fallbackReason {
             #expect(installer.phase == .awaitingSetup(build: "25A1"))
             #expect(installer.failureNote == (c.cancelAtBoot == nil

@@ -16,6 +16,8 @@ struct VirtualMachineTabView: View {
     @State private var loaded = false
     /// The VM disk's allocated size, formatted; read off the main actor on refresh.
     @State private var diskSize: String?
+    /// The latest disk size read; a newer refresh cancels it.
+    @State private var diskSizeLoad: Task<Void, Never>?
 
     /// Outcome of the last start request, until the user acts on it.
     @State private var elsewhere: RunningElsewhere?
@@ -241,9 +243,11 @@ struct VirtualMachineTabView: View {
     private func goldenStatusBar(build: String, canUpdateHelper: Bool) -> some View {
         let customized = vms.isGoldenCustomized(build: build)
         let running = vms.runningGolden() != nil
-        let tone: VMStatusTone = installer.failureNote != nil ? .attention : running ? .running : .off
+        // Running it is how the user finishes by hand; the note stays in its callout.
+        let needsAttention = installer.failureNote != nil && !running
+        let tone: VMStatusTone = needsAttention ? .attention : running ? .running : .off
         let title = customized ? "Customizing the base image"
-            : installer.failureNote != nil ? "Needs attention" : "Setting up macOS"
+            : needsAttention ? "Needs attention" : "Setting up macOS"
         return VMStatusBar(tone: tone, title: title, details: ["macOS \(build)", running ? "running" : "off"]) {
             overflowMenu(
                 updateHelper: canUpdateHelper && !finishingSetup ? StartTarget.golden(build: build).id : nil,
@@ -483,13 +487,17 @@ struct VirtualMachineTabView: View {
     /// Reads the allocated (not logical) size of the VM's sparse disk image
     /// off the main actor.
     private func loadDiskSize() {
+        diskSizeLoad?.cancel()
+        diskSizeLoad = nil
         guard let path = record.bundlePath else {
             diskSize = nil
             return
         }
         let disk = VMBundle(url: URL(fileURLWithPath: path, isDirectory: true)).diskImage
-        Task {
+        diskSizeLoad = Task {
             let bytes = await Task.detached { Self.allocatedBytes(of: disk) }.value
+            // A read that finishes after a newer refresh (a delete, say) is stale.
+            guard !Task.isCancelled, record.bundlePath == path else { return }
             diskSize = bytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         }
     }
@@ -504,7 +512,8 @@ struct VirtualMachineTabView: View {
         errorMessage = nil
         Task {
             if let reason = await vms.deleteVM(worktreeID: worktreeID) {
-                errorMessage = "Couldn't delete the VM: \(reason)."
+                let phrase = reason.hasSuffix(".") ? String(reason.dropLast()) : reason
+                errorMessage = "Couldn't delete the VM: \(phrase)."
             }
             refresh()
         }
