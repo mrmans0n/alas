@@ -251,9 +251,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// parent's turn settled, so the state is derived rather than restored.
     /// Questions asked during a turn leave it streaming; only plans and
     /// permissions take it over.
-    public func settleWaitingState() {
+    public func settleWaitingState(foregroundTurnActive foreground: Bool? = nil) {
         guard transcript.streamingState != .sending else { return }
-        let foreground = foregroundTurnActive()
+        let foreground = foreground ?? foregroundTurnActive()
         let settled: StreamingState
         if transcript.pendingPermission != nil {
             settled = .awaitingPermission
@@ -263,6 +263,41 @@ public final class ACPSession: ChangeTracking, Identifiable {
             settled = foreground ? .streaming : .idle
         }
         if transcript.streamingState != settled { transcript.streamingState = settled }
+    }
+
+    /// Applies the turn state a broker reports. A prompt being sent or
+    /// cancelled owns the state. For an adapter that settles turns at their
+    /// result, the waits still pending here win: an older broker reports
+    /// awaiting input for a child's request outside any turn and never clears
+    /// it, and reports completion over requests still open. `promptInFlight`
+    /// says whether the broker still holds an unanswered `session/prompt`.
+    /// Other adapters keep the broker's word: there, awaiting input with no
+    /// prompt is a steering turn held for recovery.
+    public func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, promptInFlight: Bool) {
+        let foreground: Bool
+        switch turnState {
+        case .sending, .cancelling:
+            transcript.streamingState = .sending
+            return
+        case .streaming:
+            foreground = true
+        case .awaitingInput:
+            guard settlesAtResult else {
+                transcript.streamingState = .awaitingInput
+                return
+            }
+            foreground = promptInFlight
+        case .idle, .completed, .ambiguous, .unknown:
+            foreground = false
+        }
+        guard settlesAtResult else {
+            transcript.streamingState = foreground ? .streaming : .idle
+            return
+        }
+        if transcript.streamingState == .sending {
+            transcript.streamingState = foreground ? .streaming : .idle
+        }
+        settleWaitingState(foregroundTurnActive: foreground)
     }
 
     public var canSteerRunningTurn: Bool {

@@ -484,17 +484,22 @@ public final class ACPSessionRunner {
     }
 
     /// A foreground turn this runner sent, a detached steering turn, or a
-    /// turn a reattached broker still reports in flight. A turn that settled
-    /// at its result is over even while its children run.
+    /// turn a reattached broker still runs. A turn that settled at its result
+    /// is over even while its children run. Broker awaiting input alone is
+    /// not a turn: older brokers report it for a child's request after the
+    /// parent settled, so only an unanswered prompt counts there.
     private var foregroundTurnActive: Bool {
         guard !stopped, isConnectionCurrent() else { return false }
         if activePromptID != nil || detachedSteeringTurn { return true }
         guard let broker = connection.client as? ACPBrokerClient else { return false }
         switch broker.currentTurnState {
-        case .sending, .streaming, .awaitingInput, .cancelling:
+        case .sending, .streaming, .cancelling:
             return true
+        case .awaitingInput:
+            // Elsewhere it is a steering turn held for recovery.
+            return broker.hasPromptInFlight || !session.settlesAtResult
         case .idle, .completed, .ambiguous, .unknown:
-            return false
+            return broker.hasPromptInFlight
         }
     }
 

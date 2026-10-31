@@ -36,6 +36,37 @@ struct ACPSessionTests {
         #expect(session.activity.allWorkFinished == !expected)
     }
 
+    /// An older broker reports awaiting input for a child's request after the
+    /// parent settled and never clears it, and reports completion over
+    /// requests still open. Only a settling adapter derives past it; elsewhere
+    /// awaiting input without a prompt is a steering turn held for recovery.
+    @Test("a broker turn state keeps what still waits here", arguments: [
+        // broker state, prompt in flight, settles, permission parked, expected
+        (ACPBrokerTurnState.awaitingInput, false, true, true, ACPSession.StreamingState.awaitingPermission),
+        (.completed, false, true, true, .awaitingPermission),
+        (.awaitingInput, false, true, false, .idle),
+        (.awaitingInput, true, true, false, .streaming),
+        (.streaming, true, true, false, .streaming),
+        (.awaitingInput, false, false, false, .awaitingInput),
+    ])
+    func brokerTurnStateKeepsPendingWaits(turnState: ACPBrokerTurnState, promptInFlight: Bool, settles: Bool,
+                                          permissionParked: Bool, expected: ACPSession.StreamingState) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.settlesAtResult = settles
+        if permissionParked {
+            session.transcript.pendingPermission = .init(id: .number(0), params: .init(
+                sessionId: "child-1",
+                toolCall: .init(toolCallId: "c", title: "Bash", kind: nil, status: nil,
+                                content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+                options: [.init(optionId: "allow", name: "Allow", kind: "allow_once")]))
+            session.transcript.streamingState = .awaitingPermission
+        }
+
+        session.applyBrokerTurnState(turnState, promptInFlight: promptInFlight)
+
+        #expect(session.transcript.streamingState == expected)
+    }
+
     @Test("a session link in a user chunk from the agent is not recorded, so it grants nothing")
     func agentSentSessionLinkIsDropped() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

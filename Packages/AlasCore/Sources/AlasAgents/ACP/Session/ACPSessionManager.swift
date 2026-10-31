@@ -4428,7 +4428,8 @@ public final class ACPSessionManager: ChangeTracking {
                           self.brokerCallbackOwnerIDs[sessionId] == callbackOwnerID,
                           let session = self.sessions[sessionId]
                     else { return }
-                    Self.applyBrokerTurnState(turnState, to: session)
+                    let broker = self.runners[sessionId]?.connection.client as? ACPBrokerClient
+                    session.applyBrokerTurnState(turnState, promptInFlight: broker?.hasPromptInFlight ?? false)
                     if Self.brokerTurnStateAllowsQueueFlush(turnState) {
                         self.runners[sessionId]?.flushQueueIfIdle()
                     }
@@ -4537,7 +4538,7 @@ public final class ACPSessionManager: ChangeTracking {
             }
             throw CancellationError()
         }
-        Self.applyBrokerTurnState(client.currentTurnState, to: session)
+        session.applyBrokerTurnState(client.currentTurnState, promptInFlight: client.hasPromptInFlight)
         return connection
     }
 
@@ -5055,24 +5056,14 @@ public final class ACPSessionManager: ChangeTracking {
         return (result, true)
     }
 
-    private static func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, to session: ACPSession) {
-        switch turnState {
-        case .sending, .cancelling:
-            session.transcript.streamingState = .sending
-        case .streaming:
-            session.transcript.streamingState = .streaming
-        case .awaitingInput:
-            session.transcript.streamingState = .awaitingInput
-        case .idle, .completed, .ambiguous, .unknown:
-            session.transcript.streamingState = .idle
-        }
-    }
-
     private static func brokerTurnStateAllowsQueueFlush(_ turnState: ACPBrokerTurnState) -> Bool {
         switch turnState {
-        case .idle, .completed, .ambiguous, .unknown:
+        // Older brokers report awaiting input for a child's request outside
+        // any turn; the runner's own state checks still hold the queue while
+        // a turn really waits.
+        case .idle, .completed, .ambiguous, .unknown, .awaitingInput:
             return true
-        case .sending, .streaming, .awaitingInput, .cancelling:
+        case .sending, .streaming, .cancelling:
             return false
         }
     }
@@ -7045,6 +7036,11 @@ extension ACPSessionManager {
             session.supportsSteering = initialized.supportsSteering
             session.supportsContextBreakdown = initialized.supportsContextBreakdown
             session.settlesAtResult = initialized.settlesAtResult
+            if initialized.settlesAtResult, let broker = connection.client as? ACPBrokerClient {
+                // Applied at connect before the adapter's capabilities were
+                // known; an older broker's stale awaiting input must not hold.
+                session.applyBrokerTurnState(broker.currentTurnState, promptInFlight: broker.hasPromptInFlight)
+            }
             session.supportsCodexSteeringCompletion = (ACPManagedAdapterDescriptor.codex.verifiedPackageNames + ["codex-acp"]).contains(initialized.agentInfo?.name ?? "")
             connection.mcpStartupAwaitTimeoutMs = ACPMCPStartupWaitPolicy.timeoutMilliseconds(for: initialized.agentInfo)
             connection.sessionInstructions = ACPSessionInstructionsPolicy.append(

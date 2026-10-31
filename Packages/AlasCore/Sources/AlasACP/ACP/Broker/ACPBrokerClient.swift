@@ -178,6 +178,10 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     private var deferredOrderedAckCursors: Set<ACPBrokerEventCursor> = []
     private var dispatchedEventCursors: Set<ACPBrokerEventCursor> = []
     private var turnState: ACPBrokerTurnState = .idle
+    /// `session/prompt` operations the broker reported without a terminal
+    /// outcome. Unlike `turnState`, which older brokers also set to awaiting
+    /// input for a request outside any turn, this only names a running turn.
+    private var inFlightPromptOperationKeys: Set<ACPBrokerOperationKey> = []
     private var isTerminated = false
     private var _adoptedRunningAgent = false
     private var terminationRequest: TerminationRequest?
@@ -221,6 +225,15 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         stateLock.lock()
         defer { stateLock.unlock() }
         return turnState
+    }
+
+    /// Whether the broker holds a `session/prompt` it has not answered,
+    /// including one a previous app instance sent before this reattach.
+    public var hasPromptInFlight: Bool {
+        if rawTransport != nil { return false }
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return !inFlightPromptOperationKeys.isEmpty
     }
 
     /// True when `start()` adopted a broker whose agent process was already
@@ -946,6 +959,7 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
                 unacknowledgedDurableEventCursors.insert(event.cursor)
             }
         case .operationCompleted(let operationKey, let outcome):
+            inFlightPromptOperationKeys.remove(operationKey)
             operationCompletionCursors[operationKey] = max(operationCompletionCursors[operationKey] ?? event.cursor, event.cursor)
             if let error = outcome.error, ACPCodexHookReviewError.classify(error) != nil {
                 if preRegisteredOperationKeyRefCounts[operationKey] != nil {
@@ -1440,6 +1454,9 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         if let snapshotTodos = snapshot.cursorTodosByToolCallId {
             cursorTodosByToolCallId = snapshotTodos
         }
+        inFlightPromptOperationKeys = Set(snapshot.operations.lazy
+            .filter { $0.method == "session/prompt" && $0.terminalOutcome == nil }
+            .map(\.operationKey))
         for operation in snapshot.operations {
             let id = operation.adapterRequestId.jsonRPCID
             if let terminalOutcome = operation.terminalOutcome {

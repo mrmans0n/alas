@@ -5785,6 +5785,43 @@ struct ACPSessionRunnerTests {
         try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
     }
 
+    /// Older brokers report awaiting input for a background child's request
+    /// after the parent settled; only an unanswered prompt makes that a turn,
+    /// unless the adapter does not settle at result (a steering turn held for
+    /// recovery).
+    @Test("a broker turn counts as foreground only while it really runs", arguments: [
+        // broker state, prompt in flight, settles, foreground
+        (ACPBrokerTurnState.awaitingInput, false, true, false),
+        (.awaitingInput, true, true, true),
+        (.awaitingInput, false, false, true),
+        (.streaming, false, true, true),
+        (.completed, false, true, false),
+    ])
+    func brokerForegroundTurn(turnState: ACPBrokerTurnState, promptInFlight: Bool, settles: Bool,
+                              expected: Bool) async throws {
+        let prompt = ACPBrokerOperationSnapshot(
+            operationKey: .init(rawValue: "prompt"), adapterRequestId: .init(rawValue: 1),
+            method: "session/prompt", terminalOutcome: nil)
+        let broker = ACPBrokerClient(
+            service: ForkSourceBrokerService(
+                remoteSessionID: "remote", turnState: turnState, operations: promptInFlight ? [prompt] : []),
+            brokerId: ACPBrokerID(rawValue: "broker-1"), sessionId: "s", command: "mock", args: [],
+            cwd: "/tmp/wt", env: [:], operationKeyPrefix: "op")
+        _ = try await broker.start()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.settlesAtResult = settles
+        let store = try ACPSessionStore(
+            path: FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite").path)
+        let runner = ACPSessionRunner(
+            session: session, connection: ACPConnection(client: broker), store: store,
+            sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
+
+        withExtendedLifetime(runner) {
+            #expect(session.foregroundTurnActive() == expected)
+        }
+        await broker.shutdown()
+    }
+
     @Test("persistSessionRow skipped when lease is held by another instance")
     func persistSessionRowSkippedWhenLeaseHeldByOther() throws {
         let url = FileManager.default.temporaryDirectory
