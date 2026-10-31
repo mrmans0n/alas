@@ -5707,6 +5707,44 @@ struct ACPSessionRunnerTests {
         try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
     }
 
+    /// Stop while a child's permission is parked after the turn settled: no
+    /// prompt exists, so the root cancel path answers the permission without
+    /// completing a turn.
+    @Test("Stop with a background child's permission parked cancels it and ends idle")
+    func stopWithParkedChildPermission() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        let session = runner.session
+        session.agentState = .ready
+        session.settlesAtResult = true
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { session.subagentRun("child-1") != nil }
+        mock.emitPermission(id: .number(41), params: .init(
+            sessionId: "child-1",
+            toolCall: .init(toolCallId: "child-call", title: "Bash", kind: nil, status: nil,
+                            content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+            options: [.init(optionId: "allow", name: "Allow", kind: "allow_once")]))
+        try await waitUntil { session.transcript.pendingPermission != nil }
+        let before = completions.count
+
+        await runner.userCancel()
+
+        try await waitUntil { mock.permissionResponses[.number(41)] != nil }
+        #expect(mock.permissionResponses[.number(41)]?.outcome == .cancelled)
+        #expect(session.transcript.streamingState == .idle)
+        #expect(completions.count == before)
+    }
+
     /// One child's question and another child's permission overlap after the
     /// turn settled. Whatever order they park and are answered in, the state
     /// shows what is still waiting, ends idle, and the queued prompt drains.

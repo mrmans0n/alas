@@ -2634,6 +2634,13 @@ public final class ACPSessionRunner {
     /// to `.idle`. Persists all mutations so they survive a reload.
     /// Returns whether the cancel reached the agent: false when the runner
     /// lost its connection or writer lease before sending it.
+    ///
+    /// With no foreground prompt, only idle background work is stopped, and
+    /// only when nothing waits on the user. A parked out-of-turn permission or
+    /// question leaves the state non-idle, so Stop takes the root
+    /// `session/cancel` path below: no prompt exists and the queue is blocked,
+    /// so nothing later could cancel it. That path answers the pending request
+    /// as cancelled, never reports a turn completion, and settles to idle.
     @discardableResult
     public func userCancel(confirmingLease: Bool = true) async -> Bool {
         guard isConnectionCurrent() else { return false }

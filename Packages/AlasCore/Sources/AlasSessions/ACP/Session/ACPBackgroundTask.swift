@@ -82,6 +82,9 @@ public struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
         finishedAt = Date()
         canStop = false
         summary = "The adapter was replaced; this task's process and completion can no longer be observed."
+        // An autonomous cycle is not work the agent can resume: waking it would
+        // invent a turn for a cycle that no longer exists.
+        guard taskType != "turn" else { return }
         wakeId = UUID()
         wakeDelivered = false
     }

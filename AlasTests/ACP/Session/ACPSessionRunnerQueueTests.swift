@@ -1593,6 +1593,51 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
+    @Test("idle Stop on a root-owned autonomous cycle stops it and its child without cancelling the root, and later prompts run")
+    func idleStopOfAutonomousCycle() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.remoteSessionId = "remote-root"
+        session.settlesAtResult = true
+        session.backgroundTaskStopSupported = true
+        var cycle = ACPAsyncTaskUpdate(sessionUpdate: "async_task_spawned", asyncTaskId: "cycle",
+            name: "Autonomous turn", canStop: true)
+        cycle.taskType = "turn"
+        session.applyBackgroundTask(cycle, ownerSessionId: "remote-root")
+        session.registerSubagent(.init(subagentSessionId: "child", capabilities: .cancellable))
+        mock.script(method: "_session/async_task/stop") { _ in Data(#"{"stopped":true}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        defer { runner.stop() }
+        #expect(await runner.userCancel())
+        await runner.flushPersistence()
+        #expect(mock.sent.map(\.method) == ["_session/async_task/stop", "session/cancel"])
+        let cancelled = try #require(mock.sent.last?.params as? ACPSessionCancelParams)
+        #expect(cancelled.sessionId == "child")
+        #expect(session.transcript.streamingState == .idle)
+        var finished: Bool?
+        runner.send(blocks: [.text("next")], intent: .auto) { finished = $0 }
+        try await waitUntil { finished != nil }
+        #expect(finished == true)
+        #expect(mock.sent.filter { $0.method == "session/cancel" }.count == 1)
+    }
+
+    @Test("a lost autonomous cycle does not wake the agent, other lost tasks do", arguments: [("turn", false), (nil, true)])
+    func lostAutonomousTurnDoesNotWake(taskType: String?, wakes: Bool) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.settlesAtResult = true
+        session.transcript.streamingState = .awaitingInput
+        var job = ACPAsyncTaskUpdate(sessionUpdate: "async_task_spawned", asyncTaskId: "job", name: "Job")
+        job.taskType = taskType
+        session.applyBackgroundTask(job, ownerSessionId: "s")
+        runner.start()
+        defer { runner.stop() }
+        await runner.reconcileBackgroundTasks(adapterSurvived: false, previousTaskIds: Set(session.backgroundTasks.map(\.id)))
+        await runner.flushPersistence()
+        #expect(session.backgroundTasks[0].state == "lost")
+        #expect(session.queue.count == (wakes ? 1 : 0))
+        #expect(!session.activity.backgroundWorking)
+        #expect(mock.sent.isEmpty)
+    }
+
     @Test(
         "background completion batches precede future schedules without overtaking ordinary prompts",
         arguments: [false, true])
