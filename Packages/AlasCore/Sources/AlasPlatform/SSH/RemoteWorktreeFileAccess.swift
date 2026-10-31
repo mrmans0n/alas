@@ -126,12 +126,13 @@ public enum RemoteWorktreeFileAccess: Sendable {
     /// path is empty, absolute, traverses upward, names `.git`, or resolves
     /// outside the worktree through a symlink.
     public static func resolve(path: String, in worktreeRoot: URL) -> URL? {
-        guard let normalized = normalizedRelativePath(path) else { return nil }
+        // No file is named with a NUL, and Foundation's file checks throw on one.
+        guard !path.contains("\0"), let normalized = normalizedRelativePath(path) else { return nil }
         let components = normalized.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
 
         let candidate = components.reduce(worktreeRoot) { $0.appendingPathComponent($1) }
-        let resolvedRoot = worktreeRoot.resolvingSymlinksInPath().standardizedFileURL
-        let resolved = candidate.resolvingSymlinksInPath().standardizedFileURL
+        let resolvedRoot = canonical(worktreeRoot)
+        let resolved = canonical(candidate)
 
         let rootPath = resolvedRoot.path.hasSuffix("/") ? resolvedRoot.path : resolvedRoot.path + "/"
         guard resolved.path.hasPrefix(rootPath) else { return nil }
@@ -145,6 +146,19 @@ public enum RemoteWorktreeFileAccess: Sendable {
         guard !resolvedComponents.contains(where: { $0.lowercased() == ".git" }) else { return nil }
 
         return candidate
+    }
+
+    /// `url` with symlinks resolved. Foundation only resolves what exists, and
+    /// keeps `/private/tmp` for an existing path but `/tmp` for a missing one,
+    /// so a missing path resolves through its deepest existing ancestor.
+    private static func canonical(_ url: URL) -> URL {
+        var existing = url.standardizedFileURL
+        var missing: [String] = []
+        while !FileManager.default.fileExists(atPath: existing.path), existing.pathComponents.count > 1 {
+            missing.insert(existing.lastPathComponent, at: 0)
+            existing.deleteLastPathComponent()
+        }
+        return missing.reduce(existing.resolvingSymlinksInPath().standardizedFileURL) { $0.appendingPathComponent($1) }
     }
 
     /// Truncates a single line's `text` to `maxDiffLineBytes` UTF-8 bytes,
