@@ -555,9 +555,6 @@ public final class ACPSessionRunner {
 
     public func start() {
         session.clearRetryStatus()
-        // The session outlives runners: a window marked by an attempt that
-        // never started must not leak into this one.
-        session.isApplyingUnsuppressedLoadReplay = unsuppressedLoadReplayTarget != nil
         updatesTask = Task { [weak self] in
             guard let self else { return }
             for await u in self.connection.client.incomingUpdates {
@@ -1243,7 +1240,16 @@ public final class ACPSessionRunner {
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
-        defer { endUnsuppressedLoadReplayIfReached() }
+        // Raised only while one update of the window is being applied, so
+        // the flag on the (longer-lived) session can never outlast it.
+        let appliesLoadHistory = unsuppressedLoadReplayTarget.map { observedUpdateCount <= $0 } ?? false
+        if appliesLoadHistory { session.isApplyingUnsuppressedLoadReplay = true }
+        defer {
+            if appliesLoadHistory { session.isApplyingUnsuppressedLoadReplay = false }
+            if let target = unsuppressedLoadReplayTarget, observedUpdateCount >= target {
+                unsuppressedLoadReplayTarget = nil
+            }
+        }
         if case .asyncTask(let update) = params.update {
             let root = session.remoteSessionId ?? sessionId
             if params.sessionId == root || session.subagentRun(params.sessionId) != nil {
@@ -1764,13 +1770,6 @@ public final class ACPSessionRunner {
     public func treatLoadReplayAsHistory(throughYieldedUpdateCount target: Int) {
         guard target > observedUpdateCount else { return }
         unsuppressedLoadReplayTarget = max(unsuppressedLoadReplayTarget ?? 0, target)
-        session.isApplyingUnsuppressedLoadReplay = true
-    }
-
-    private func endUnsuppressedLoadReplayIfReached() {
-        guard let target = unsuppressedLoadReplayTarget, observedUpdateCount >= target else { return }
-        unsuppressedLoadReplayTarget = nil
-        session.isApplyingUnsuppressedLoadReplay = false
     }
 
     public func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
@@ -1795,7 +1794,6 @@ public final class ACPSessionRunner {
     public func stop() {
         stopped = true
         unsuppressedLoadReplayTarget = nil
-        session.isApplyingUnsuppressedLoadReplay = false
         session.pendingQueuePersistenceCount -= deferredQueueAcknowledgements.count
         deferredQueueAcknowledgements.removeAll()
         invalidateNativeSteering()

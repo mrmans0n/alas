@@ -321,8 +321,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// True while a `session/load` replay that is NOT suppressed (nothing
     /// was hydrated to reconcile against) flows through the live apply
     /// paths. What it resends is still history, so the child observations
-    /// it carries must not be confirmed. Set by the runner.
-    public internal(set) var isApplyingUnsuppressedLoadReplay = false
+    /// it carries must not be confirmed. Raised by the runner around each
+    /// such update.
+    var isApplyingUnsuppressedLoadReplay = false
 
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?

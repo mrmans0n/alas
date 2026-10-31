@@ -609,7 +609,7 @@ struct ACPSubagentRoutingTests {
 
     @Test("a replayed nested lifecycle update is reconciled, its content is not")
     func replayReconcilesNestedLifecycleOnly() async throws {
-        let (runner, store, _) = try makeRunner()
+        let (runner, _, _) = try makeRunner()
         runner.applyIncomingUpdateForTesting(.init(
             sessionId: "remote-parent",
             update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
@@ -635,34 +635,46 @@ struct ACPSubagentRoutingTests {
 
         #expect(runner.session.subagentRun("grandchild")?.messages.count == 1)
         #expect(runner.session.subagentRun("grandchild")?.state == .completed)
+    }
 
-        // A replayed config snapshot is history, and the parent-row write
-        // that carries it gates the acknowledgement.
+    @Test("a child update's parent-row write gates its acknowledgement; a replayed config stays history")
+    func childFactsGateTheAcknowledgement() async throws {
+        let (runner, store, _) = try makeRunner()
+        feed(runner, Self.revisedAnnounce)
+        await runner.flushPersistence()
+
+        // The launch dirties both the child's prompt row and, through its
+        // delegation link, the parent row. Only the parent write fails.
         try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
         let failed = Acknowledged()
-        runner.applyIncomingUpdateForTesting(.init(
-            sessionId: "grandchild",
-            update: .sessionConfigOptionsUpdate([Self.effortOption("low")]),
-            durableConsumptionAcknowledgement: { failed.value = true }))
+        let launch = try JSONDecoder().decode(
+            ACPSessionUpdateFrame.self, from: Data(Self.launch(messageId: "toolu_launch", text: "Fix the build").utf8))
+        for update in launch.updates {
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: update.sessionId, update: update.update,
+                durableConsumptionAcknowledgement: { failed.value = true }))
+        }
         await runner.flushPersistence()
         try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+        #expect(try store.loadSubagentMessages(sessionId: "s").count == 1)
         #expect(failed.value == false)
 
+        runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
         let acknowledged = Acknowledged()
         runner.applyIncomingUpdateForTesting(.init(
-            sessionId: "grandchild",
+            sessionId: "agent_n",
             update: .sessionConfigOptionsUpdate([Self.effortOption("high")]),
             durableConsumptionAcknowledgement: { acknowledged.value = true }))
         await runner.flushPersistence()
         #expect(acknowledged.value)
-        let run = try #require(runner.session.subagentRun("grandchild"))
+        let run = try #require(runner.session.subagentRun("agent_n"))
         #expect(run.configOptions.map(\.currentStringValue) == ["high"])
         #expect(run.isConfigConfirmed == false)
         let stored = try store.loadMessages(sessionId: "s").compactMap {
             (try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: $0.payload))
                 .flatMap(ACPSubagentRowDescriptor.init(toolCall:))
         }
-        #expect(stored.first { $0.subagentSessionId == "grandchild" }?
+        #expect(stored.first { $0.subagentSessionId == "agent_n" }?
             .configOptions.map(\.currentStringValue) == ["high"])
     }
 
