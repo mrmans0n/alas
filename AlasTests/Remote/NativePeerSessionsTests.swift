@@ -737,7 +737,7 @@ struct NativePeerSessionsTests {
         let idleSelection: NativePeerWorktreeSelection
         let otherSelection: NativePeerWorktreeSelection
 
-        func answer(_ id: Int, _ reply: RemoteServerMessage) {
+        @MainActor func answer(_ id: Int, _ reply: RemoteServerMessage) {
             hosts.receive(serverId: "B", .response(id: id, result: .worktreeRead(reply: reply)))
         }
 
