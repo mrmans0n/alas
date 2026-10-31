@@ -3200,8 +3200,10 @@ private struct PausingCheckpointGit: CheckpointGitRunning {
         return try await git.runData(args, cwd: cwd, environment: environment)
     }
 
-    func blobSizes(oids: [String], cwd: URL) async throws -> [String: Int64] { try await git.blobSizes(oids: oids, cwd: cwd) }
-    func blobContents(oids: [String], cwd: URL) async throws -> [String: Data] { try await git.blobContents(oids: oids, cwd: cwd) }
+    func blobContents(oids: [String], cwd: URL,
+                      checkingSizes: @escaping @Sendable ([String: Int64]) throws -> Void) async throws -> [String: Data] {
+        try await git.blobContents(oids: oids, cwd: cwd, checkingSizes: checkingSizes)
+    }
     func blobReferences(oids: [String], cwd: URL) async throws -> [String: CheckpointBlobReference] {
         try await git.blobReferences(oids: oids, cwd: cwd)
     }

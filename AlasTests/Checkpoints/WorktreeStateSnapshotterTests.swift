@@ -260,6 +260,8 @@ struct WorktreeStateSnapshotterTests {
                                         "large": Data((0..<(3 * 1024 * 1024)).map { UInt8(truncatingIfNeeded: $0 &* 31) })]
         for number in 0..<2_000 { expected["small/\(number)"] = Data("object \(number)\n".utf8) }
         for (path, bytes) in expected { try repo.write(bytes, to: path) }
+        try repo.symlink("framing", at: "link")
+        expected["link"] = Data("framing".utf8)
         try await repo.git(["add", "-A"])
         let records = String(decoding: try await repo.git(["ls-files", "--stage", "-z"]), as: UTF8.self)
         var oids: [String: String] = [:]
@@ -273,7 +275,13 @@ struct WorktreeStateSnapshotterTests {
         let sizes = try await git.blobSizes(oids: requested, cwd: repo.root)
         let contents = try await git.blobContents(oids: requested, cwd: repo.root)
         let references = try await git.blobReferences(oids: requested, cwd: repo.root)
+        let checked = CheckedSizes()
+        // One `--batch-command` process, which must read what the two
+        // `--batch-check` and `--batch` processes it replaces read.
+        let combined = try await git.blobContents(oids: requested, cwd: repo.root) { checked.sizes = $0 }
 
+        #expect(combined == contents)
+        #expect(checked.sizes == sizes)
         for (path, bytes) in expected {
             let oid = try #require(oids[path])
             #expect(sizes[oid] == Int64(bytes.count))
@@ -290,7 +298,7 @@ struct WorktreeStateSnapshotterTests {
         let oid = String(decoding: try await repo.git(["rev-parse", ":file.swift"]), as: UTF8.self).trimmingCharacters(in: .newlines)
         let read = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await LiveCheckpointGitRunner().blobSizes(oids: [oid], cwd: repo.root)
+            return try await LiveCheckpointGitRunner().blobContents(oids: [oid], cwd: repo.root) { _ in }
         }
 
         await #expect(throws: CancellationError.self) { try await read.value }
@@ -439,5 +447,14 @@ struct WorktreeStateSnapshotterTests {
         await #expect(throws: CheckpointSnapshotError.lineageChanged) {
             try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
         }
+    }
+}
+
+private final class CheckedSizes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String: Int64] = [:]
+    var sizes: [String: Int64] {
+        get { lock.withLock { recorded } }
+        set { lock.withLock { recorded = newValue } }
     }
 }

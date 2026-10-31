@@ -371,7 +371,7 @@ public struct WorktreeStateSnapshotter: Sendable {
         return nil
     }
 
-    /// Reads every distinct object once, through one batch process per pass.
+    /// Reads every distinct object once, through one batch process.
     /// Objects are immutable by OID, so reading them ahead of the disk reads
     /// observes the same content; the HEAD and index re-read at the end of the
     /// snapshot still guards the whole capture.
@@ -386,14 +386,15 @@ public struct WorktreeStateSnapshotter: Sendable {
             let read = missing.isEmpty ? [:] : try await git.blobReferences(oids: missing, cwd: target.path)
             return Dictionary(uniqueKeysWithValues: oids.compactMap { oid in (known[oid] ?? read[oid]).map { (oid, $0) } })
         }
-        let sizes = try await git.blobSizes(oids: oids, cwd: target.path)
-        for (path, entry) in entries {
-            guard let byteCount = sizes[entry.oid] else { throw CheckpointSnapshotError.invalidGitOutput }
-            guard byteCount <= retainedPayloadByteLimit else {
-                throw CheckpointSnapshotError.payloadTooLarge(path: path, byteCount: byteCount, limit: retainedPayloadByteLimit)
+        let limit = retainedPayloadByteLimit
+        return try await git.blobContents(oids: oids, cwd: target.path) { sizes in
+            for (path, entry) in entries {
+                guard let byteCount = sizes[entry.oid] else { throw CheckpointSnapshotError.invalidGitOutput }
+                guard byteCount <= limit else {
+                    throw CheckpointSnapshotError.payloadTooLarge(path: path, byteCount: byteCount, limit: limit)
+                }
             }
-        }
-        return try await git.blobContents(oids: oids, cwd: target.path).mapValues { add($0, to: &payloads) }
+        }.mapValues { add($0, to: &payloads) }
     }
 
     private func gitState(_ entry: Entry?, blobs: [String: CheckpointBlobReference]) throws -> CheckpointFileState {
