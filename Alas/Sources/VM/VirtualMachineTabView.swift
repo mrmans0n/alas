@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import Virtualization
 
@@ -13,6 +14,8 @@ struct VirtualMachineTabView: View {
     @State private var record = WorktreeVMManager.RecordStatus()
     @State private var goldenAvailable = false
     @State private var loaded = false
+    /// The VM disk's allocated size, formatted; read off the main actor on refresh.
+    @State private var diskSize: String?
 
     /// Outcome of the last start request, until the user acts on it.
     @State private var elsewhere: RunningElsewhere?
@@ -22,6 +25,7 @@ struct VirtualMachineTabView: View {
     @State private var confirmingCustomize = false
     /// A Stop of the VM running here is in progress.
     @State private var stopping = false
+    @State private var confirmingDelete = false
     /// The VM whose Update helper awaits confirmation.
     @State private var confirmingHelperUpdate: String?
 
@@ -117,6 +121,8 @@ struct VirtualMachineTabView: View {
         // Progress ticks change the phase constantly; only a change of kind
         // can change what the registry or disk say.
         .onChange(of: phaseKind) { _, _ in refresh() }
+        // Starting or stopping changes the disk's size and the registry.
+        .onChange(of: vms.running(worktreeID) != nil) { _, _ in refresh() }
         .task(id: helperCheckTarget) { await checkHelper(helperCheckTarget) }
         .alert("Customize the base image?", isPresented: $confirmingCustomize) {
             Button("Customize", action: customizeBaseImage)
@@ -132,6 +138,12 @@ struct VirtualMachineTabView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("This restarts the VM; unsaved work inside it is lost.")
+        }
+        .alert("Delete this worktree's VM?", isPresented: $confirmingDelete) {
+            Button("Delete", role: .destructive, action: deleteVM)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Its disk and everything inside it are removed.")
         }
     }
 
@@ -161,11 +173,11 @@ struct VirtualMachineTabView: View {
             VMStatusBar(
                 tone: stopping ? .busy : .running,
                 title: stopping ? "Stopping" : "Running",
-                details: canUpdateHelper ? ["helper needs an update"] : []
+                details: (canUpdateHelper ? ["helper needs an update"] : []) + diskDetails
             ) {
                 ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(worktreeID) }
                     .vmDisabled(stopping)
-                overflowMenu(updateHelper: canUpdateHelper ? worktreeID : nil)
+                overflowMenu(updateHelper: canUpdateHelper ? worktreeID : nil, reveal: ownBundleURL, deletable: true)
             }
         case .starting:
             VMStatusBar(tone: .busy, title: "Starting")
@@ -184,11 +196,13 @@ struct VirtualMachineTabView: View {
         case .createVM:
             VMStatusBar(tone: .off, title: "No VM")
         case .stopped:
-            VMStatusBar(tone: .off, title: "Stopped") {
-                overflowMenu(customize: canCustomize)
+            VMStatusBar(tone: .off, title: "Stopped", details: diskDetails) {
+                overflowMenu(customize: canCustomize, reveal: ownBundleURL, deletable: true)
             }
         case .stoppedWhileCustomizing:
-            VMStatusBar(tone: .off, title: "Stopped", details: ["base image being customized"])
+            VMStatusBar(tone: .off, title: "Stopped", details: ["base image being customized"] + diskDetails) {
+                overflowMenu(reveal: ownBundleURL, deletable: true)
+            }
         }
     }
 
@@ -196,17 +210,33 @@ struct VirtualMachineTabView: View {
     private var setupStatusBar: some View {
         switch installer.phase {
         case .downloading(let fraction):
-            VMStatusBar(tone: .busy, title: "Preparing macOS", details: ["downloading \(percent(fraction))"])
+            preparingStatusBar("downloading \(percent(fraction))")
         case .installing(let fraction):
-            VMStatusBar(tone: .busy, title: "Preparing macOS", details: ["installing \(percent(fraction))"])
+            preparingStatusBar("installing \(percent(fraction))")
         case .provisioning:
-            VMStatusBar(tone: .busy, title: "Preparing macOS")
+            preparingStatusBar(nil)
         case .failed:
             VMStatusBar(tone: .attention, title: "Needs attention")
         case .idle, .sealed, .awaitingSetup:
             VMStatusBar(tone: .off, title: "No base image")
         }
     }
+
+    private func preparingStatusBar(_ progress: String?) -> some View {
+        VMStatusBar(
+            tone: .busy, title: "Preparing macOS",
+            details: [installer.setupBuild.map { "macOS \($0)" }, progress].compactMap { $0 }
+        ) {
+            AlasButton(title: installer.cancelling ? "Cancelling…" : "Cancel", style: .subtle, compact: true) {
+                installer.cancelSetup()
+            }
+            .vmDisabled(installer.cancelling)
+        }
+    }
+
+    private var diskDetails: [String] { diskSize.map { [$0] } ?? [] }
+
+    private var ownBundleURL: URL? { record.bundlePath.map { URL(fileURLWithPath: $0, isDirectory: true) } }
 
     private func goldenStatusBar(build: String, canUpdateHelper: Bool) -> some View {
         let customized = vms.isGoldenCustomized(build: build)
@@ -215,8 +245,9 @@ struct VirtualMachineTabView: View {
         let title = customized ? "Customizing the base image"
             : installer.failureNote != nil ? "Needs attention" : "Setting up macOS"
         return VMStatusBar(tone: tone, title: title, details: ["macOS \(build)", running ? "running" : "off"]) {
-            overflowMenu(updateHelper: canUpdateHelper ? StartTarget.golden(build: build).id : nil)
-                .vmDisabled(finishingSetup)
+            overflowMenu(
+                updateHelper: canUpdateHelper && !finishingSetup ? StartTarget.golden(build: build).id : nil,
+                reveal: vms.goldenBundleURL(build: build))
         }
     }
 
@@ -224,10 +255,13 @@ struct VirtualMachineTabView: View {
         "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
     }
 
-    /// The ⋯ menu of rare actions; nothing when none applies.
+    /// The ⋯ menu of rare actions; nothing when none applies. `deletable`
+    /// offers deleting this worktree's own VM.
     @ViewBuilder
-    private func overflowMenu(updateHelper id: String? = nil, customize: Bool = false) -> some View {
-        if id != nil || customize {
+    private func overflowMenu(
+        updateHelper id: String? = nil, customize: Bool = false, reveal bundle: URL? = nil, deletable: Bool = false
+    ) -> some View {
+        if id != nil || customize || bundle != nil || deletable {
             ToolbarMenuButton(
                 iconName: "ellipsis", metrics: .vmStatusBar, restingColorToken: "fg-muted", help: "More VM actions"
             ) {
@@ -236,6 +270,13 @@ struct VirtualMachineTabView: View {
                 }
                 if customize {
                     Button("Customize base image…") { confirmingCustomize = true }
+                }
+                if let bundle {
+                    Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([bundle]) }
+                }
+                if deletable {
+                    Divider()
+                    Button("Delete VM…", role: .destructive) { confirmingDelete = true }
                 }
             }
         }
@@ -436,6 +477,37 @@ struct VirtualMachineTabView: View {
         goldenAvailable = vms.availableGolden() != nil
         record = vms.recordStatus(worktreeID)
         loaded = true
+        loadDiskSize()
+    }
+
+    /// Reads the allocated (not logical) size of the VM's sparse disk image
+    /// off the main actor.
+    private func loadDiskSize() {
+        guard let path = record.bundlePath else {
+            diskSize = nil
+            return
+        }
+        let disk = VMBundle(url: URL(fileURLWithPath: path, isDirectory: true)).diskImage
+        Task {
+            let bytes = await Task.detached { Self.allocatedBytes(of: disk) }.value
+            diskSize = bytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
+        }
+    }
+
+    private nonisolated static func allocatedBytes(of file: URL) -> Int64? {
+        var info = stat()
+        guard stat(file.path, &info) == 0 else { return nil }
+        return Int64(info.st_blocks) * 512
+    }
+
+    private func deleteVM() {
+        errorMessage = nil
+        Task {
+            if let reason = await vms.deleteVM(worktreeID: worktreeID) {
+                errorMessage = "Couldn't delete the VM: \(reason)."
+            }
+            refresh()
+        }
     }
 
     /// Boots the golden VM by itself once per setup; afterwards the Start
@@ -551,7 +623,6 @@ struct VirtualMachineTabView: View {
         Task {
             await vms.stopVM(worktreeID: id)
             if ownVM { stopping = false }
-            refresh()
         }
     }
 

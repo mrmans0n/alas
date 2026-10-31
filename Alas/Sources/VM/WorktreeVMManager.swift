@@ -37,6 +37,8 @@ final class WorktreeVMManager {
         var hasVM = false
         /// Label of the other Alas process running it, if any.
         var runningElsewhere: String?
+        /// Where its bundle is, when it has one.
+        var bundlePath: String?
     }
 
     typealias StartVM = (_ worktreeID: String, _ bundle: VMBundle, _ shares: [VMShare]) async throws -> RunningVM
@@ -247,7 +249,7 @@ final class WorktreeVMManager {
         let elsewhere = record.runOwner.flatMap { owner in
             me.map(owner.isSameProcess(as:)) == true ? nil : owner.label
         }
-        return RecordStatus(hasVM: true, runningElsewhere: elsewhere)
+        return RecordStatus(hasVM: true, runningElsewhere: elsewhere, bundlePath: record.bundlePath)
     }
 
     /// True the first time it is asked for `build`, so the golden VM boots by
@@ -389,27 +391,30 @@ final class WorktreeVMManager {
 
     /// Forces the VM off if it runs here (its disk is discarded anyway), then
     /// removes its bundle and record. A VM another process is running is left
-    /// alone; one still booting is deleted once its boot returns.
-    func deleteVM(worktreeID: String) async {
+    /// alone; one still booting is deleted once its boot returns. Returns why
+    /// the VM was left in place, as a phrase, if it was.
+    @discardableResult
+    func deleteVM(worktreeID: String) async -> String? {
         guard !diskClaims.contains(worktreeID) else {
             logger.error("Not deleting VM \(worktreeID, privacy: .public): its disk is attached for an update")
-            return
+            return "its disk is attached for an update; try again once that finishes"
         }
         if starting.contains(worktreeID) {
             pendingAfterBoot[worktreeID] = .delete
-            return
+            return nil
         }
         do {
             try await stop(worktreeID, force: true)
         } catch {
             logger.error("Deleting VM \(worktreeID, privacy: .public) failed, it is still running: \(String(describing: error), privacy: .public)")
-            return
+            return "it couldn't be stopped (\(error.localizedDescription))"
         }
-        removeRecordAndBundle(worktreeID)
+        return removeRecordAndBundle(worktreeID)
     }
 
-    private func removeRecordAndBundle(_ worktreeID: String) {
-        guard vmsExist else { return }
+    @discardableResult
+    private func removeRecordAndBundle(_ worktreeID: String) -> String? {
+        guard vmsExist else { return nil }
         let me = VMRunOwner.current(label: ownerLabel)
         do {
             // The bundle goes under the registry lock too, so a concurrent
@@ -432,7 +437,9 @@ final class WorktreeVMManager {
             }
         } catch {
             logger.error("Deleting VM \(worktreeID, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            return error.localizedDescription
         }
+        return nil
     }
 
     /// Stops every VM this process runs. Called on quit so registry owners clear.
@@ -768,7 +775,7 @@ final class WorktreeVMManager {
             atPath: Self.customizingMarker(of: VMBundle(url: goldenBundleURL(build: build))).path)
     }
 
-    private func goldenBundleURL(build: String) -> URL {
+    func goldenBundleURL(build: String) -> URL {
         root.appendingPathComponent("golden", isDirectory: true).appendingPathComponent(build, isDirectory: true)
     }
 
