@@ -6709,6 +6709,7 @@ extension ACPSessionManager {
         session.supportsSteering = false
         session.supportsCodexSteeringCompletion = false
         session.supportsContextBreakdown = false
+        session.settlesAtResult = false
         session.availableProviders = []
         session.agentState = .spawning
 
@@ -7043,6 +7044,7 @@ extension ACPSessionManager {
             session.promptCapabilities = initialized.promptCapabilities
             session.supportsSteering = initialized.supportsSteering
             session.supportsContextBreakdown = initialized.supportsContextBreakdown
+            session.settlesAtResult = initialized.settlesAtResult
             session.supportsCodexSteeringCompletion = (ACPManagedAdapterDescriptor.codex.verifiedPackageNames + ["codex-acp"]).contains(initialized.agentInfo?.name ?? "")
             connection.mcpStartupAwaitTimeoutMs = ACPMCPStartupWaitPolicy.timeoutMilliseconds(for: initialized.agentInfo)
             connection.sessionInstructions = ACPSessionInstructionsPolicy.append(

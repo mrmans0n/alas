@@ -32,9 +32,10 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "sessionIndex"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
+            #expect(meta["settleAtResult"] as? Bool == true)
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
             #expect(meta["terminal-auth"] as? Bool == true)
@@ -46,6 +47,21 @@ struct ACPConnectionTests {
             return Data(#"{"protocolVersion":1}"#.utf8)
         }
         _ = try await ACPConnection(client: mock).initialize()
+    }
+
+    @Test("settleAtResult is honored only when advertised", arguments: [
+        (#"{"supported":true}"#, true),
+        (#"{"supported":false}"#, false),
+        ("true", false),
+        ("null", false),
+    ])
+    func settleAtResultNegotiation(advertisement: String, supported: Bool) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data(#"{"protocolVersion":1,"_meta":{"settleAtResult":\#(advertisement)}}"#.utf8)
+        }
+        let outcome = try await ACPConnection(client: mock).initialize()
+        #expect(outcome.settlesAtResult == supported)
     }
 
     @Test("hook review requires managed launch, verified release and neutral capability", arguments: [

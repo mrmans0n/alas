@@ -238,6 +238,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public var supportsCodexSteeringCompletion = false
     /// Relearned on attach: the adapter serves `_alas/context_usage`.
     @Tracked public var supportsContextBreakdown = false
+    /// The adapter settles foreground turns at their result while background
+    /// children continue. Runtime only; relearned on attach.
+    @Tracked public var settlesAtResult = false
 
     public var canSteerRunningTurn: Bool {
         agentState == .ready && supportsSteering
