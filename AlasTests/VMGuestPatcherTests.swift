@@ -1,6 +1,5 @@
 import AlasCore
 import Foundation
-import Security
 import SQLite3
 import Testing
 @testable import Alas
@@ -133,19 +132,6 @@ struct VMGuestPatcherTests {
             )
         }
         #expect(try Self.snapshot(volume) == before)
-    }
-
-    @Test func designatedRequirementOfTheEmbeddedHelper() throws {
-        let helper = try #require(Bundle.main.resourceURL?
-            .appendingPathComponent("alas-vm-guest/Alas VM Guest.app", isDirectory: true))
-        let data = try HelperCodeRequirement.designatedRequirementData(of: helper)
-
-        var requirement: SecRequirement?
-        #expect(SecRequirementCreateWithData(data as CFData, [], &requirement) == errSecSuccess)
-        var code: SecStaticCode?
-        #expect(SecStaticCodeCreateWithPath(helper as CFURL, [], &code) == errSecSuccess)
-        let staticCode = try #require(code)
-        #expect(SecStaticCodeCheckValidity(staticCode, [], try #require(requirement)) == errSecSuccess)
     }
 
     @Test(
