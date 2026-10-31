@@ -226,18 +226,27 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" }, "the retry wake drains the queue")
     }
 
-    @Test("an idle restart waits until background children finish")
+    @Test("an idle restart waits until background children finish, holding the queue for it")
     func idleRestartWaitsForBackgroundWork() async throws {
-        let (runner, _, session, _) = try mkRunner()
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
         session.settlesAtResult = true
         session.registerSubagent(.init(subagentSessionId: "child"))
+        session.enqueue(blocks: [.text("queued")])
+        runner.persistQueue()
+        await runner.flushPersistence()
         var restarts = 0
         runner.restartAgentWhenIdle = { restarts += 1 }
         runner.flushQueueIfIdle()
+        await runner.flushPersistence()
         #expect(restarts == 0)
+        #expect(Self.sentPromptTexts(mock).isEmpty)
+        #expect(session.queue.first?.status == .pending)
 
         session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
         try await waitUntil { restarts == 1 }
+        await runner.flushPersistence()
+        #expect(Self.sentPromptTexts(mock).isEmpty, "nothing reaches the outdated agent")
     }
 
     @Test("a resume that succeeds clears the Limited state and the queue drains")
@@ -2221,7 +2230,9 @@ struct ACPSessionRunnerQueueTests {
     @Test("recovery preserves surviving or reannounced tasks and reports loss only after replacement", arguments: [(true, false), (false, false), (false, true)])
     func backgroundRecovery(adapterSurvived: Bool, reannounced: Bool) async throws {
         let (runner, mock, session, store) = try mkRunner()
+        session.settlesAtResult = true
         session.transcript.streamingState = .awaitingInput
+        session.registerSubagent(.init(subagentSessionId: "child"))
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "watch", name: "Watch"), ownerSessionId: "s")
         if reannounced {
             mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
@@ -2233,6 +2244,9 @@ struct ACPSessionRunnerQueueTests {
         await runner.flushPersistence()
         let shouldReportLoss = !adapterSurvived && !reannounced
         #expect(session.backgroundTasks[0].state == (shouldReportLoss ? "lost" : "running"))
+        // A replaced adapter's children died with it, even if replay resurrected them.
+        #expect(session.subagentRun("child")?.state == (adapterSurvived ? .running : .disconnected))
+        #expect(session.activity.backgroundWorking == adapterSurvived)
         #expect(session.queue.count == (shouldReportLoss ? 1 : 0))
         #expect(mock.sent.isEmpty)
         if shouldReportLoss {

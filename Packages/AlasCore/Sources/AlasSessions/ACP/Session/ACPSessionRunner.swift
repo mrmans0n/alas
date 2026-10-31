@@ -3274,14 +3274,16 @@ extension ACPSessionRunner {
            session.transcript.streamingState == .idle,
            session.transcript.pendingUserInputs.isEmpty {
             // A turn that settled at its result can leave children or an
-            // autonomous cycle running; a restart would kill them.
+            // autonomous cycle running; a restart would kill them. The queue
+            // waits for the restart too: a drained turn would reach the
+            // outdated agent and could start more children.
             if session.activity.backgroundWorking {
                 restartAwaitsBackgroundWork = true
-            } else {
-                restartAgentWhenIdle = nil
-                restart()
                 return
             }
+            restartAgentWhenIdle = nil
+            restart()
+            return
         }
         guard !backgroundCancellationInProgress,
               !nativeForkBarrierActive,
@@ -5705,6 +5707,10 @@ extension ACPSessionRunner {
                 task.loseObservation()
                 dirty.formUnion(session.saveBackgroundTask(task))
             }
+            // Children of the replaced adapter died with it. One persisted as
+            // running, or resurrected by replay, would otherwise keep the
+            // session's background work open forever.
+            dirty.formUnion(session.markSubagentsDisconnected())
         }
         // Recover both pending completions and obsolete loss wakes after a
         // crash between the task snapshot write and its queue update.
