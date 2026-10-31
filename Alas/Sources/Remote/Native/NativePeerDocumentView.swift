@@ -13,7 +13,8 @@ struct NativePeerDocumentView: View {
     /// Stages, unstages or discards hunk `index` of the diff on the host,
     /// answering its refusal, nil once done. Nil where the host has none.
     var applyHunk: (@MainActor (HostHunkAction, Int, ParsedDiff.Hunk) async -> String?)?
-    let onClose: () -> Void
+    /// Nil hides the close button, as beside a file history, whose own button closes both.
+    let onClose: (() -> Void)?
 
     @Environment(\.theme) private var theme
     @State private var displayModel: DiffDisplayModel?
@@ -131,7 +132,9 @@ struct NativePeerDocumentView: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
             Spacer()
-            ToolbarBtn(icon: "x", tooltip: "Back to session", action: onClose)
+            if let onClose {
+                ToolbarBtn(icon: "x", tooltip: "Back to session", action: onClose)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -293,6 +296,114 @@ struct NativePeerDocumentView: View {
         }.value
         guard !Task.isCancelled else { return }
         displayModel = model
+    }
+}
+
+/// A host file's history over the peer center pane: its commits beside the selected one's diff of the file,
+/// which is the workspace's open document.
+struct NativePeerFileHistoryView: View {
+    let history: NativePeerFileHistory
+    let document: NativePeerWorkspace.Document?
+    let content: NativePeerWorkspace.Load<NativePeerWorkspace.DocumentContent>
+    var codeFontFamily: String = ""
+    var codeFontSize: CGFloat = 13
+    let onSelect: (HostFileHistoryEntry) -> Void
+    let onRetry: () -> Void
+    let onClose: () -> Void
+
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(spacing: 0) {
+            FileHistoryHeader(relativePath: history.path, onClose: onClose)
+            HStack(spacing: 0) {
+                commitList
+                    .frame(width: 320)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                Divider()
+                selectedDiff
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(theme.color("bg-1"))
+    }
+
+    @ViewBuilder
+    private var commitList: some View {
+        switch history.listing {
+        case .idle, .loading:
+            Spinner()
+                .frame(width: 20, height: 20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .failed(let message):
+            VStack(spacing: 8) {
+                Text("Could not load file history")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(theme.color("del"))
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(theme.color("fg-dim"))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(4)
+                AlasButton(title: "Retry", style: .subtle, action: onRetry)
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        case .loaded(let listing) where listing.entries.isEmpty:
+            Text("No history for \(history.path)")
+                .font(.system(size: 13))
+                .foregroundColor(theme.color("fg-dim"))
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        case .loaded(let listing):
+            commitRows(listing)
+        }
+    }
+
+    private func commitRows(_ listing: NativePeerFileHistory.Listing) -> some View {
+        ScrollView {
+            LazyVStack(spacing: 0) {
+                ForEach(Array(listing.entries.enumerated()), id: \.element.commit.sha) { index, entry in
+                    CommitRow(
+                        commit: entry.commit,
+                        isLast: index == listing.entries.count - 1,
+                        onSelect: { onSelect(entry) },
+                        onCopySHA: { Clipboard.copy(entry.commit.sha) }
+                    )
+                    .background(rowBackground(entry))
+                    .accessibilityAddTraits(entry.commit.sha == history.selectedSha ? .isSelected : [])
+                }
+                if listing.truncated {
+                    Text("Showing the latest \(RemoteWorktreeFileAccess.maxHistoryEntries)")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-dim"))
+                        .padding(12)
+                }
+            }
+            .padding(.top, 10)
+        }
+    }
+
+    private func rowBackground(_ entry: HostFileHistoryEntry) -> Color {
+        entry.commit.sha == history.selectedSha ? theme.color("accent").opacity(0.12) : Color.clear
+    }
+
+    /// The selected row's diff, once it is the open document.
+    @ViewBuilder
+    private var selectedDiff: some View {
+        if let selected = history.selectedDocument, selected == document {
+            NativePeerDocumentView(
+                document: selected,
+                content: content,
+                codeFontFamily: codeFontFamily,
+                codeFontSize: codeFontSize,
+                onClose: nil
+            )
+            .id(selected)
+        } else {
+            Color.clear
+        }
     }
 }
 

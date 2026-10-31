@@ -42,6 +42,8 @@ struct NativePeerChangesView: View {
     let commitFiles: [String: NativePeerWorkspace.Load<NativePeerWorkspace.CommitFiles>]
     let onLoadCommitFiles: (String) -> Void
     let onOpen: (NativePeerWorkspace.Document) -> Void
+    /// Nil leaves File History out of, or disabled in, a file row's menu.
+    var onFileHistory: ((ChangedFile) -> Void)? = nil
     var git: Git? = nil
 
     @Environment(\.theme) private var theme
@@ -223,6 +225,7 @@ struct NativePeerChangesView: View {
                                 Clipboard.copyPath(worktreePath.appendingPathComponent($0.path).path)
                             },
                             onSelectStage: onSelectStage,
+                            onFileHistory: onFileHistory,
                             onDiscardFile: git.map { git in { (file: ChangedFile) in
                                 git.onDiscard(PendingDiscard(target: .file(path: file.path), paths: [file.path]))
                             } }

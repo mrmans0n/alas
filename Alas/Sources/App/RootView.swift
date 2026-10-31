@@ -459,6 +459,17 @@ struct RootView: View {
             )
             // An edit moves it to the rewritten commit: a fresh editor reads it.
             .id("\(editor.serverId)/\(worktree.id)/\(editor.sha)")
+        } else if let history = client.openedFileHistory {
+            NativePeerFileHistoryView(
+                history: history,
+                document: client.workspace.document,
+                content: client.workspace.documentContent,
+                codeFontFamily: state.config.code.fontFamily,
+                codeFontSize: CGFloat(state.config.code.fontSize),
+                onSelect: { client.selectFileHistoryEntry($0) },
+                onRetry: { client.loadFileHistory() },
+                onClose: { client.closeFileHistory() }
+            )
         } else if let preview = client.openedWebPreview {
             WebPreviewTabView(
                 state: state,

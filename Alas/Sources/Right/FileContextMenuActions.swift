@@ -59,7 +59,8 @@ struct FileContextMenuConfiguration: Equatable {
     /// New File and New Folder, still with no local actions.
     static func readOnlyFile(kind: FileTreeNode.Kind, createsItems: Bool = false) -> Self {
         var actions: [FileContextMenuAction] = []
-        if kind == .file { actions.append(.openInAlas) }
+        // File History reads the host, so it is disabled where the host doesn't serve it.
+        if kind == .file { actions += [.openInAlas, .fileHistory] }
         if kind == .dir, createsItems { actions += [.newFile, .newFolder] }
         actions += [.copyRelativePath, .copyFullPath]
         return Self(target: FileContextMenuTarget(kind: kind, localURL: nil), actions: actions)

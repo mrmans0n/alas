@@ -717,6 +717,150 @@ struct NativePeerSessionsTests {
         #expect(client.workspace.changes == .loading)
     }
 
+    private final class SentHostMessages {
+        var all: [HostClientMessage] = []
+
+        var historyReads: [(id: Int, path: String)] {
+            all.compactMap { message in
+                guard case .readWorktree(_, .fileHistory(let path)) = message.request else { return nil }
+                return (message.id, path)
+            }
+        }
+    }
+
+    private struct HistoryHost {
+        let links: FakeLinks
+        let hosts: NativePeerHosts
+        let client: NativePeerSessions
+        let sent: SentHostMessages
+        let idle: Worktree
+        let idleSelection: NativePeerWorktreeSelection
+        let otherSelection: NativePeerWorktreeSelection
+
+        @MainActor func answer(_ id: Int, _ reply: RemoteServerMessage) {
+            hosts.receive(serverId: "B", .response(id: id, result: .worktreeRead(reply: reply)))
+        }
+
+        func history(_ path: String, _ entries: [HostFileHistoryEntry]) -> RemoteServerMessage {
+            .fileHistory(sessionId: idle.id, path: path, entries: entries, truncated: false)
+        }
+    }
+
+    /// A started client on a host serving every read, with two idle worktrees and `idle` selected.
+    private func historyHost() async throws -> HistoryHost {
+        let links = FakeLinks()
+        links.online("B", name: "Mac B")
+        let sent = SentHostMessages()
+        let hosts = NativePeerHosts(send: { sent.all.append($1) }, supports: { _, _ in true })
+        let client = NativePeerSessions(
+            federation: FederatedSessionsProvider(links: links),
+            peers: { [.init(serverId: "B", name: "Mac B", state: "online")] },
+            hosts: hosts
+        )
+        client.start()
+        try await eventually("snapshot request") { sent.all.count == 1 }
+        let worktrees = ["idle", "other"].map { name in
+            let path = URL(fileURLWithPath: "/srv/\(name)")
+            return Worktree(id: Worktree.makeId(path: path), projectId: "p", name: name, branch: name,
+                            path: path, status: .clean, lastActivity: .distantPast)
+        }
+        hosts.receive(serverId: "B", .response(id: sent.all[0].id, result: .snapshot(snapshot: HostSnapshot(
+            cursor: HostCursor(generation: UUID(), sequence: 0),
+            projects: [ProjectSnapshot(ProjectConfig(id: "p", name: "repo", path: "/srv/repo", color: "blue", addedAt: .distantPast))],
+            worktrees: worktrees.map { WorktreeSnapshot(worktree: $0, operation: nil, isArchived: false) },
+            workspaceCheckouts: [], runs: [], sessions: []
+        ))))
+        try await eventually("subscribe request") { sent.all.count == 2 }
+        hosts.receive(serverId: "B", .response(id: sent.all[1].id, result: .subscribed))
+        let rows = try #require(client.snapshot.groups.first?.repos(ordering: .manual).first?.worktrees)
+        func selection(_ worktree: Worktree) throws -> NativePeerWorktreeSelection {
+            let row = try #require(rows.first { $0.host?.snapshot.worktree.id == worktree.id })
+            return NativePeerWorktreeSelection(serverId: "B", worktreeId: row.id)
+        }
+        let host = try HistoryHost(
+            links: links, hosts: hosts, client: client, sent: sent, idle: worktrees[0],
+            idleSelection: selection(worktrees[0]), otherSelection: selection(worktrees[1])
+        )
+        client.selectWorktree(host.idleSelection)
+        return host
+    }
+
+    private func historyEntry(_ sha: String, at path: String) -> HostFileHistoryEntry {
+        HostFileHistoryEntry(
+            commit: CommitInfo(
+                sha: sha, shortSha: String(sha.prefix(7)), author: "A", authorInitials: "A", date: .distantPast,
+                subject: sha, conventionalTag: nil, filesChanged: 1, insertions: 1, deletions: 0
+            ),
+            pathAtCommit: path
+        )
+    }
+
+    /// A host file's history shows its first row's diff, keeps showing as rows are picked (each under the
+    /// path the file had then), drops a replaced history's late answer, and closes back to the document
+    /// open before the first history: none, or one whose read is still in flight.
+    @Test(arguments: [nil, NativePeerWorkspace.Document.file(path: "notes.txt")])
+    func aHostFileHistoryFollowsItsRowsAndClosesBackToThePreviousDocument(
+        previous: NativePeerWorkspace.Document?
+    ) async throws {
+        let host = try await historyHost()
+        let client = host.client
+        defer { client.stop() }
+        if let previous { client.open(previous) }
+
+        client.openFileHistory(path: "b.txt")
+        try await eventually("history read") { host.sent.historyReads.count == 1 }
+        host.answer(host.sent.historyReads[0].id, host.history("b.txt", [historyEntry("b1", at: "b.txt")]))
+        try await eventually("first row's diff") { client.workspace.document == .commitDiff(path: "b.txt", sha: "b1") }
+        client.loadFileHistory()
+        try await eventually("retried read") { host.sent.historyReads.count == 2 }
+
+        client.openFileHistory(path: "c.txt")
+        try await eventually("second history read") { host.sent.historyReads.count == 3 }
+        let entries = [historyEntry("c1", at: "c.txt"), historyEntry("c2", at: "old/c.txt")]
+        host.answer(host.sent.historyReads[1].id, host.history("b.txt", [historyEntry("b1", at: "b.txt")]))
+        host.answer(host.sent.historyReads[2].id, host.history("c.txt", entries))
+        try await eventually("second history") {
+            client.openedFileHistory?.listing == .loaded(.init(entries: entries, truncated: false))
+        }
+        #expect(client.openedFileHistory?.path == "c.txt")
+        #expect(client.workspace.document == .commitDiff(path: "c.txt", sha: "c1"))
+
+        client.selectFileHistoryEntry(entries[1])
+        #expect(client.openedFileHistory?.selectedSha == "c2")
+        #expect(client.workspace.document == .commitDiff(path: "old/c.txt", sha: "c2"))
+
+        client.closeFileHistory()
+        #expect(client.openedFileHistory == nil)
+        #expect(client.workspace.document == previous)
+    }
+
+    /// Opening another document closes the history, and so does moving to another worktree: a history
+    /// opened again after that ignores the answer to the one before.
+    @Test func navigatingAwayClosesAHostFileHistoryAndDropsItsLateAnswer() async throws {
+        let host = try await historyHost()
+        let client = host.client
+        defer { client.stop() }
+        client.openFileHistory(path: "b.txt")
+        #expect(client.openedFileHistory != nil)
+        client.open(.diff(path: "b.txt", stage: .unstaged))
+        #expect(client.openedFileHistory == nil)
+
+        client.openFileHistory(path: "b.txt")
+        try await eventually("history reads") { host.sent.historyReads.count == 2 }
+        client.selectWorktree(host.otherSelection)
+        #expect(client.openedFileHistory == nil)
+        client.selectWorktree(host.idleSelection)
+        client.openFileHistory(path: "b.txt")
+        try await eventually("history read after returning") { host.sent.historyReads.count == 3 }
+        let current = [historyEntry("b2", at: "b.txt")]
+        host.answer(host.sent.historyReads[1].id, host.history("b.txt", [historyEntry("b1", at: "b.txt")]))
+        host.answer(host.sent.historyReads[2].id, host.history("b.txt", current))
+        try await eventually("current history") {
+            client.openedFileHistory?.listing == .loaded(.init(entries: current, truncated: false))
+        }
+        #expect(client.workspace.document == .commitDiff(path: "b.txt", sha: "b2"))
+    }
+
     /// A host file is followed once for all its followers, again on each new subscription (which
     /// released the old one's follows) with a nudge to look again, and unfollowed with its last follower.
     @Test func aHostFileIsFollowedAgainOnEachSubscriptionUntilItsLastFollowerStops() async throws {

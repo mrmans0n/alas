@@ -115,7 +115,7 @@ struct FileContextMenuActionsTests {
         let configuration = FileContextMenuConfiguration.readOnlyFile(kind: kind, createsItems: createsItems)
         #expect(configuration.target.localURL == nil)
         let expected: [FileContextMenuAction] = switch kind {
-        case .file: [.openInAlas, .copyRelativePath, .copyFullPath]
+        case .file: [.openInAlas, .fileHistory, .copyRelativePath, .copyFullPath]
         case .dir: createsItems
             ? [.newFile, .newFolder, .copyRelativePath, .copyFullPath]
             : [.copyRelativePath, .copyFullPath]

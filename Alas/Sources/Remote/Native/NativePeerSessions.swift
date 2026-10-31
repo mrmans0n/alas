@@ -166,6 +166,8 @@ final class NativePeerSessions {
     private(set) var openedReview: NativePeerReviewSelection?
     /// A host commit opened in the commit editor over the center pane.
     private(set) var openedCommitEditor: NativePeerCommitEditorSelection?
+    /// A host file's history opened over the center pane, its selected row's diff the open document.
+    private(set) var openedFileHistory: NativePeerFileHistory?
     /// A host run's forwarded endpoint opened in the web preview over the
     /// center pane. Its browser closes when it stops showing.
     private(set) var openedWebPreview: NativePeerWebPreview? {
@@ -294,6 +296,7 @@ final class NativePeerSessions {
         guard let worktree = worktree(selection) else { return }
         openedReview = nil
         openedCommitEditor = nil
+        openedFileHistory = nil
         openedWebPreview = nil
         let tabs = worktree.tabs
         if let tab = lastTabs[selection].flatMap({ tabs.contains($0) ? $0 : nil }) ?? tabs.first {
@@ -406,7 +409,7 @@ final class NativePeerSessions {
 
     /// The open `.file` document on `hostFileTarget`, while documents show and no review or commit covers them.
     private var hostFileDocument: NativePeerHostFile? {
-        guard canReadWorkspace, openedReview == nil, openedCommitEditor == nil, openedWebPreview == nil,
+        guard canReadWorkspace, openedReview == nil, openedCommitEditor == nil, openedFileHistory == nil, openedWebPreview == nil,
               let target = hostFileTarget,
               case .file(let path)? = workspace.document
         else { return nil }
@@ -509,6 +512,15 @@ final class NativePeerSessions {
         return (selectedWorktree.serverId, host)
     }
 
+    /// The selected git worktree on a host that serves file history, whether or not a tab is open: only the
+    /// host channel carries it.
+    var hostHistoryTarget: (serverId: String, worktree: PeerHostWorktree)? {
+        guard let selectedWorktree, let group = selectedWorktreeGroup, !group.isFolder, let host = group.host,
+              hosts?.servesFileHistory(serverId: selectedWorktree.serverId) == true
+        else { return nil }
+        return (selectedWorktree.serverId, host)
+    }
+
     /// The selected tab-less worktree, read over its host's channel.
     private var hostReadTarget: (serverId: String, worktree: PeerHostWorktree)? {
         guard selectedTab == nil, let selectedWorktree, let host = selectedWorktreeGroup?.host,
@@ -601,6 +613,7 @@ final class NativePeerSessions {
         selectedWorktreeTabs = []
         openedReview = nil
         openedCommitEditor = nil
+        openedFileHistory = nil
         openedWebPreview = nil
         selectedSessionId = nil
         transcript = nil
@@ -712,6 +725,7 @@ final class NativePeerSessions {
             workspace.closeDocument()
             openedReview = nil
             openedCommitEditor = nil
+            openedFileHistory = nil
             openedWebPreview = nil
             refresh()
             return
@@ -751,6 +765,7 @@ final class NativePeerSessions {
         selectedWorktree = nil
         openedReview = nil
         openedCommitEditor = nil
+        openedFileHistory = nil
         openedWebPreview = nil
         pendingCheckpointRestore = nil
         selectedWorktreeTabs = []
@@ -1268,6 +1283,10 @@ final class NativePeerSessions {
         openedReview = nil
         openedCommitEditor = nil
         openedWebPreview = nil
+        // A refresh, or the history's own row, keeps the history open; any other document replaces it.
+        if let history = openedFileHistory, document != workspace.document, document != history.selectedDocument {
+            openedFileHistory = nil
+        }
         if document != workspace.document {
             documentRequestOutdated = false
             hostFileRefusals = [:]
@@ -1388,6 +1407,7 @@ final class NativePeerSessions {
     func openReview(_ sessionID: String, serverId: String, worktree: PeerHostWorktree) {
         workspace.closeDocument()
         openedCommitEditor = nil
+        openedFileHistory = nil
         openedWebPreview = nil
         openedReview = NativePeerReviewSelection(serverId: serverId, worktree: worktree, sessionID: sessionID)
     }
@@ -1407,12 +1427,65 @@ final class NativePeerSessions {
     func openCommitEditor(_ selection: NativePeerCommitEditorSelection) {
         workspace.closeDocument()
         openedReview = nil
+        openedFileHistory = nil
         openedWebPreview = nil
         openedCommitEditor = selection
     }
 
     func closeCommitEditor() {
         openedCommitEditor = nil
+    }
+
+    /// Opens `path`'s history over the center pane, read over the selected worktree's host channel.
+    func openFileHistory(path: String) {
+        guard let target = hostHistoryTarget else { return }
+        openedReview = nil
+        openedCommitEditor = nil
+        openedWebPreview = nil
+        openedFileHistory = NativePeerFileHistory(
+            worktreeId: target.worktree.snapshot.worktree.id, path: path,
+            // Opened again from within a history: closing still returns to what was open before the first.
+            previousDocument: openedFileHistory.map(\.previousDocument) ?? workspace.document
+        )
+        workspace.closeDocument()
+        loadFileHistory()
+    }
+
+    /// Reads the open history again, as Retry does.
+    func loadFileHistory() {
+        guard let history = openedFileHistory, let target = hostHistoryTarget,
+              target.worktree.snapshot.worktree.id == history.worktreeId else { return }
+        openedFileHistory?.listing = .loading
+        // A replaced or reloaded history of the same file must not take this read's answer.
+        let load = UUID()
+        openedFileHistory?.load = load
+        let stillWanted: @MainActor () -> Bool = { [weak self] in self?.openedFileHistory?.load == load }
+        if !routeHostRead(.fileHistory(path: history.path), to: target, stillWanted: stillWanted) {
+            openedFileHistory?.listing = .failed(NativePeerWorkspace.offlineMessage)
+        }
+    }
+
+    /// Selects a history row, opening its commit's diff of the file beside the list.
+    func selectFileHistoryEntry(_ entry: HostFileHistoryEntry) {
+        guard openedFileHistory != nil else { return }
+        openedFileHistory?.selectedSha = entry.commit.sha
+        // An image diff plans its sides from the commit's file row (added, renamed, deleted): load it, and
+        // its landing re-plans the open diff.
+        if ImageFileType.isSupported(relativePath: entry.pathAtCommit) { loadCommitFiles(sha: entry.commit.sha) }
+        open(.commitDiff(path: entry.pathAtCommit, sha: entry.commit.sha))
+    }
+
+    /// Closes the history, returning to the document open before it.
+    func closeFileHistory() {
+        guard let history = openedFileHistory else { return }
+        openedFileHistory = nil
+        // `open` also declines a document whose read is still in flight, which it keeps showing; only a
+        // workspace that can't be read leaves the history's diff behind as the plain document.
+        if let previous = history.previousDocument, canReadWorkspace {
+            open(previous)
+        } else {
+            closeDocument()
+        }
     }
 
     /// Opens `url`, `runID`'s forwarded endpoint on this Mac, over the center
@@ -1426,6 +1499,7 @@ final class NativePeerSessions {
         workspace.closeDocument()
         openedReview = nil
         openedCommitEditor = nil
+        openedFileHistory = nil
         let pin = WebPreviewLoopbackPin(url)
         if let reused = openedWebPreview.flatMap({
             $0.serverId == serverId && $0.runID == runID && $0.browser.allowedLoopback == pin ? $0.browser : nil
@@ -1569,7 +1643,11 @@ final class NativePeerSessions {
     }
 
     /// Sends `read` over `target`'s host channel and applies the answer, as a workspace reply.
-    private func routeHostRead(_ read: HostWorktreeRead, to target: (serverId: String, worktree: PeerHostWorktree)) -> Bool {
+    /// `stillWanted` drops an answer its caller has since superseded, beyond a selection change.
+    private func routeHostRead(
+        _ read: HostWorktreeRead, to target: (serverId: String, worktree: PeerHostWorktree),
+        stillWanted: @escaping @MainActor () -> Bool = { true }
+    ) -> Bool {
         guard let hosts else { return false }
         let epoch = workspaceEpoch
         let worktreeId = target.worktree.snapshot.worktree.id
@@ -1578,7 +1656,7 @@ final class NativePeerSessions {
             // The selection moved since: the answer is no longer wanted. A
             // lost host channel is not a selection change, so its failure
             // still clears this read's in-flight marker below.
-            guard let self, workspaceEpoch == epoch else { return }
+            guard let self, workspaceEpoch == epoch, stillWanted() else { return }
             // Unanswered, refused, or cut off by a disconnect: fail just this
             // read, as a failure reply would.
             let answer = reply.flatMap { $0.sessionId == worktreeId ? $0 : nil } ?? Self.unserved(read, worktreeId: worktreeId)
@@ -1806,6 +1884,7 @@ final class NativePeerSessions {
     /// in-flight marker and sending a retry queued while it was out. False
     /// for every other message.
     private func applyWorkspaceReply(_ message: RemoteServerMessage) -> Bool {
+        if applyFileHistoryReply(message) { return true }
         let isChangesReply: Bool = switch message {
         case .changeList, .changeListFailed: true
         default: false
@@ -1850,6 +1929,26 @@ final class NativePeerSessions {
             open(document)
         }
         return handled
+    }
+
+    /// Lands a history reply in the open history of its path, selecting the first row unless the
+    /// selected one is still listed. False for every other message.
+    private func applyFileHistoryReply(_ message: RemoteServerMessage) -> Bool {
+        switch message {
+        case .fileHistory(let worktreeId, let path, let entries, let truncated):
+            guard openedFileHistory?.worktreeId == worktreeId, openedFileHistory?.path == path else { return true }
+            openedFileHistory?.listing = .loaded(.init(entries: entries, truncated: truncated))
+            let selectedSha = openedFileHistory?.selectedSha
+            if let entry = entries.first(where: { $0.commit.sha == selectedSha }) ?? entries.first {
+                selectFileHistoryEntry(entry)
+            }
+        case .fileHistoryFailed(let worktreeId, let path, let reason, let message):
+            guard openedFileHistory?.worktreeId == worktreeId, openedFileHistory?.path == path else { return true }
+            openedFileHistory?.listing = .failed(NativePeerWorkspace.describe(reason, message: message))
+        default:
+            return false
+        }
+        return true
     }
 
     /// Reads the open image diff again when the lists just landed move its sides: a reload plans it from the
