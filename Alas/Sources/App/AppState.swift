@@ -12538,7 +12538,10 @@ final class AppState {
                             hasAttachments: hasAttachments
                         )
                     )
-                    await self.rightPaneStore.activeState(worktreeId: worktree.id)?.refreshCheckpoints()
+                    // The prompt waits for the checkpoint, not the list refresh.
+                    Task { @MainActor [weak self] in
+                        await self?.rightPaneStore.activeState(worktreeId: worktree.id)?.refreshCheckpoints()
+                    }
                     return checkpoint.id
                 } catch {
                     return nil
