@@ -187,6 +187,13 @@ impl ReplyAttempts {
             .insert(p.operation_key.clone(), (p.clone(), ReplyStatus::InFlight));
         Ok(())
     }
+    pub fn is_in_flight_origin(&self, request_id: &str, cursor: EventCursor) -> bool {
+        self.origins
+            .get(&(request_id.to_owned(), cursor.0))
+            .and_then(|key| self.attempts.get(key))
+            .is_some_and(|(_, status)| *status == ReplyStatus::InFlight)
+    }
+
     pub fn finish(&mut self, key: &OperationKey, status: ReplyStatus) {
         if let Some((_, current)) = self.attempts.get_mut(key) {
             if *current == ReplyStatus::InFlight {

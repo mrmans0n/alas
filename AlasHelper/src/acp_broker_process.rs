@@ -406,9 +406,9 @@ pub fn handle_control_request(
     method: &str,
     params: Option<Value>,
 ) -> Result<Value, AcpBrokerProcessError> {
-    // The exact reply path owns generation/origin/attempt and writer locking.
-    // It must not hold the general broker lock across a blocked pipe write.
-    if method == "acp/raw/respondExact" {
+    // Exact replies own origin/attempt fences; raw close owns generation and
+    // cross-process open locking. Neither may wait behind a blocked pipe write.
+    if matches!(method, "acp/raw/respondExact" | "acp/raw/close") {
         return dispatch_control_request(method, params);
     }
     // The id is copied out before locking so `params` can be *moved* into the
@@ -1668,10 +1668,11 @@ fn handle_connection(
         read_ipc_message(&mut reader, IPC_REQUEST_HEAD_BUDGET, framed_body_budget)?
     };
     if serde_json::from_str::<BrokerIpcRequest>(&line)
-        .is_ok_and(|request| request.method == "raw/respondExact")
+        .is_ok_and(|request| matches!(request.method.as_str(), "raw/respondExact" | "raw/close"))
     {
-        // Release this reservation before I/O. Ordinary prompt/cancel ordering
-        // stays intact, while close can invalidate a blocked reply writer.
+        // Raw close must also bypass a send/notify waiting for the writer.
+        // Ordinary prompt/cancel ordering stays intact; close is terminal and
+        // fenced by generation rather than its position in the write queue.
         drop(reservation);
         return handle_ipc_line(runtime, stream, line);
     }
@@ -2184,7 +2185,7 @@ fn perform_exact_reply(
     if let Some(status) = preflight_exact_reply(runtime, params)? {
         return Ok(params.result(status));
     }
-    {
+    let original = {
         let mut state = lock_runtime(runtime);
         // Repeat lookup inside the claim lock in case another writer won.
         if let Some(status) = state.reply_attempts.lookup(params).map_err(reply_error)? {
@@ -2207,7 +2208,8 @@ fn perform_exact_reply(
             .claim(params, &pending)
             .map_err(reply_error)?;
         runtime.state.1.notify_all();
-    }
+        pending
+    };
     let result = writer
         .write_all(params.frame.bytes())
         .and_then(|_| writer.write_all(b"\n"))
@@ -2220,24 +2222,14 @@ fn perform_exact_reply(
     };
     state.reply_attempts.finish(&params.operation_key, status);
     if status == ReplyStatus::Written {
-        // No unfenced raw responder can remove/replace this claimed origin.
-        if state
-            .broker
-            .pending_request(&params.pending_request_id)
-            .is_some_and(|pending| pending.origin_cursor == Some(params.origin_cursor))
-        {
-            state
-                .broker
-                .respond_to_pending_request(
-                    &params.pending_request_id,
-                    AdapterRPCOutcome {
-                        raw_frame: Some(params.frame.clone()),
-                        result: None,
-                        error: None,
-                    },
-                )
-                .map_err(domain_error)?;
-        }
+        state.broker.complete_raw_reply(
+            &original,
+            AdapterRPCOutcome {
+                raw_frame: Some(params.frame.clone()),
+                result: None,
+                error: None,
+            },
+        );
     } else {
         state.writer_poisoned = true;
         state
@@ -2566,11 +2558,28 @@ fn route_raw_adapter_frame(state: &mut RuntimeState, bytes: Vec<u8>) {
                     .or_else(|| serde_json::from_str::<i64>(id.get()).ok().map(Value::from));
                 if let Some(id) = id {
                     let key = request_id_key(&id);
-                    if state
+                    let retiring_origin = state
                         .broker
-                        .add_raw_pending_request(key, id, pending_kind(&method), frame.clone())
-                        .is_ok()
-                    {
+                        .pending_request(&key)
+                        .and_then(|pending| pending.origin_cursor)
+                        .filter(|cursor| state.reply_attempts.is_in_flight_origin(&key, *cursor));
+                    let captured = if let Some(origin) = retiring_origin {
+                        state.broker.add_raw_pending_successor(
+                            key,
+                            origin,
+                            id,
+                            pending_kind(&method),
+                            frame.clone(),
+                        )
+                    } else {
+                        state.broker.add_raw_pending_request(
+                            key,
+                            id,
+                            pending_kind(&method),
+                            frame.clone(),
+                        )
+                    };
+                    if captured.is_ok() {
                         return;
                     }
                 }
@@ -3645,6 +3654,86 @@ mod tests {
         let journal = state.broker.replay_after_ack();
         assert!(journal.iter().any(|event| matches!(&event.kind,crate::acp_broker::BrokerEventKind::PendingRequestResolved{response,..}
             if response.raw_frame.as_ref()==Some(&params.frame))));
+    }
+
+    #[test]
+    fn successor_request_arriving_during_flush_keeps_its_own_reply_origin() {
+        for flush_failure in [false, true] {
+            let (runtime, mut child, _) = adapter_test_runtime("exit 0", true);
+            child.wait().unwrap();
+            let original = reply_fixture(&runtime);
+            struct SuccessorWriter<'a> {
+                runtime: &'a Runtime,
+                fail: bool,
+            }
+            impl Write for SuccessorWriter<'_> {
+                fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                    Ok(bytes.len())
+                }
+                fn flush(&mut self) -> io::Result<()> {
+                    // The adapter can read the complete response before flush
+                    // returns and publish a sequential request using the same ID.
+                    route_raw_adapter_frame(
+                        &mut lock_runtime(self.runtime),
+                        br#"{"jsonrpc":"2.0","id":7,"method":"peer/successor"}"#.to_vec(),
+                    );
+                    if self.fail {
+                        Err(io::Error::other("flush failed after adapter read"))
+                    } else {
+                        Ok(())
+                    }
+                }
+            }
+            let outcome = perform_exact_reply(
+                &runtime,
+                &original,
+                &mut SuccessorWriter {
+                    runtime: &runtime,
+                    fail: flush_failure,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                outcome.status,
+                if flush_failure {
+                    ReplyStatus::WriteUncertain
+                } else {
+                    ReplyStatus::Written
+                }
+            );
+            let successor = lock_runtime(&runtime)
+                .broker
+                .snapshot()
+                .pending_requests
+                .remove(0);
+            assert_ne!(successor.origin_cursor, Some(original.origin_cursor));
+            assert!(
+                String::from_utf8_lossy(successor.raw_frame.as_ref().unwrap().bytes())
+                    .contains("peer/successor")
+            );
+            assert_eq!(
+                preflight_exact_reply(&runtime, &original).unwrap(),
+                Some(outcome.status)
+            );
+            if !flush_failure {
+                let mut next = original.clone();
+                next.origin_cursor = successor.origin_cursor.unwrap();
+                next.operation_key = OperationKey::new("successor-answer");
+                assert_eq!(
+                    perform_exact_reply(&runtime, &next, &mut Vec::new())
+                        .unwrap()
+                        .status,
+                    ReplyStatus::Written
+                );
+                assert!(
+                    lock_runtime(&runtime)
+                        .broker
+                        .snapshot()
+                        .pending_requests
+                        .is_empty()
+                );
+            }
+        }
     }
 
     #[test]

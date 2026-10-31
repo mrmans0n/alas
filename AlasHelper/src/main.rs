@@ -650,9 +650,9 @@ fn dispatch_acp_job(
         }
     }
 
-    // Exact replies have their own origin/attempt and writer fences. Keeping a
-    // blocked pipe write on the session queue would also block retries/close.
-    if job.method == "acp/raw/respondExact" {
+    // Exact replies and terminal raw close have their own fences. Close must
+    // remain reachable even when an ordinary write waits behind a blocked reply.
+    if matches!(job.method.as_str(), "acp/raw/respondExact" | "acp/raw/close") {
         answer_off_thread(job, responses);
         return;
     }
