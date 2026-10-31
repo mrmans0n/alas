@@ -1237,6 +1237,36 @@ struct ACPSessionOrchestrationCoordinatorTests {
         #expect(pending.first?.prompt.contains("worktree feature-x") == true)
     }
 
+    /// A child whose turn settled at its result while its own subagent still
+    /// runs reports to the parent only once that work ends, with the answer
+    /// its follow-up ended on rather than the interim text.
+    @Test("a settling child reports its follow-up's answer once its background work ends")
+    func settlingChildReportsAfterBackgroundWork() async throws {
+        let fixture = try makeOutcomeFixture()
+        try await insertReadyChild(fixture.persistence)
+        let child = fixture.manager.createSession(id: "child", agentId: "claude", autoRunDefault: false)
+        child.agentState = .ready
+        child.settlesAtResult = true
+        child.registerSubagent(.init(subagentSessionId: "sub"))
+
+        await fixture.coordinator.childTurnCompleted(completion(lastAgentText: "Started a background agent."))
+        #expect(try await fixture.persistence.pendingMessages(targetSessionId: "parent").isEmpty)
+
+        child.apply(.agentMessageChunk(.init(messageId: "final", content: .text("Parser fixed for real."))))
+        child.applySubagentState(.init(subagentSessionId: "sub", state: .completed))
+
+        let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+        var pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        while pending.isEmpty {
+            try #require(ContinuousClock.now < deadline)
+            await Task.yield()
+            pending = try await fixture.persistence.pendingMessages(targetSessionId: "parent")
+        }
+        #expect(pending.map(\.id) == ["outcome-child-500"])
+        #expect(pending.first?.prompt.contains("Parser fixed for real.") == true)
+        #expect(pending.first?.prompt.contains("Started a background agent.") == false)
+    }
+
     @Test(arguments: [ACPStopReason(), ACPStopReason(rawValue: .string("refusal"))])
     func stoppedChildWakesParentWithAnExplicitOutcome(reason: ACPStopReason) async throws {
         let fixture = try makeOutcomeFixture()

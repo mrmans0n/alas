@@ -6,6 +6,13 @@ import AlasFeatures
 import AlasCode
 import AlasACP
 
+/// See `ACPSessionOrchestrationPolicy.deferredOutcomeStep`.
+public enum ACPDeferredChildOutcomeStep: Equatable, Sendable {
+    case wait
+    case deliver
+    case discard
+}
+
 public enum ACPSessionOrchestrationPolicy: Sendable {
     public enum Error: Swift.Error, Equatable, Sendable {
         case delegatedSessionCannotCreateChild
@@ -327,6 +334,30 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
             }
             return .wake
         }
+    }
+
+    /// Whether a child's finished turn waits before its parent hears of it.
+    /// A turn that settled at its result while the child's own children or
+    /// autonomous follow-up still run would report interim text ("started a
+    /// background agent…"); the answer comes once that work ends. Failed,
+    /// stopped, cancelled and limited turns report at once.
+    public static func defersOutcome(result: ACPTurnCompletion.Result, activity: ACPSessionActivity?) -> Bool {
+        guard case .completed = result else { return false }
+        return activity?.backgroundWorking == true
+    }
+
+    /// What a deferred outcome does as the child's state changes. It is
+    /// delivered once all work has finished. A prompt sent to the child since
+    /// supersedes it: that turn reports on its own. A child whose agent
+    /// stopped (closed, detached or restarting) or whose session left this
+    /// instance drops it, as a runner stopped mid-turn reports no turn.
+    public static func deferredOutcomeStep(
+        activity: ACPSessionActivity?,
+        agentReady: Bool,
+        promptSentSince: Bool
+    ) -> ACPDeferredChildOutcomeStep {
+        guard !promptSentSince, agentReady, let activity else { return .discard }
+        return activity.allWorkFinished ? .deliver : .wait
     }
 
     /// Whether startup must re-attach a ready delegated child, judged from

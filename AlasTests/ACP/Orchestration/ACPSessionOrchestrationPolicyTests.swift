@@ -474,6 +474,38 @@ struct ACPSessionOrchestrationPolicyTests {
             result: .limited, lastParentReportAt: nil, turnStartedAt: 0) == .notice)
     }
 
+    @Test("only a completed turn with background work still running waits to report", arguments: [
+        // result, background working, defers
+        (ACPTurnCompletion.Result.completed, true, true),
+        (.completed, false, false),
+        (.failed("boom"), true, false),
+        (.cancelled, true, false),
+        (.limited, true, false),
+        (.stopped(ACPStopReason()), true, false),
+    ])
+    func defersOutcomeUntilBackgroundWorkEnds(result: ACPTurnCompletion.Result, background: Bool, defers: Bool) {
+        #expect(ACPSessionOrchestrationPolicy.defersOutcome(
+            result: result, activity: .init(foreground: .idle, backgroundWorking: background)) == defers)
+    }
+
+    @Test("a deferred outcome reports once all work ends, unless superseded or the agent stopped", arguments: [
+        // foreground, background working, agent ready, prompt sent since, live session, step
+        (ACPSession.StreamingState.idle, true, true, false, true, ACPDeferredChildOutcomeStep.wait),
+        (.awaitingPermission, false, true, false, true, .wait),
+        (.idle, false, true, false, true, .deliver),
+        (.idle, false, true, true, true, .discard),
+        (.idle, false, false, false, true, .discard),
+        (.idle, false, true, false, false, .discard),
+    ])
+    func deferredOutcomeStep(
+        foreground: ACPSession.StreamingState, background: Bool, agentReady: Bool, promptSent: Bool, live: Bool,
+        expected: ACPDeferredChildOutcomeStep
+    ) {
+        let activity = live ? ACPSessionActivity(foreground: foreground, backgroundWorking: background) : nil
+        #expect(ACPSessionOrchestrationPolicy.deferredOutcomeStep(
+            activity: activity, agentReady: agentReady, promptSentSince: promptSent) == expected)
+    }
+
     private static func head(
         status: QueuedPrompt.Status = .pending,
         dispatched: Bool = false,
