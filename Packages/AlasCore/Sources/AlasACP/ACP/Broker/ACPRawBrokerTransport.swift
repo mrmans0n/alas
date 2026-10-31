@@ -25,7 +25,7 @@ public struct ACPBrokerRawFrameDelivery: Sendable {
     public let connectionID: UUID
     public let provenance: ACPBrokerFrameProvenance
     public let pendingRequestID: String?
-    private let consumption: ACPV2SessionUpdateDelivery
+    public let inboundDelivery: ACPV2InboundDelivery
 
     init(frame: Data, connectionID: UUID, provenance: ACPBrokerFrameProvenance,
          pendingRequestID: String? = nil, acknowledgement: ACPDurableConsumptionAcknowledgement?) {
@@ -33,9 +33,11 @@ public struct ACPBrokerRawFrameDelivery: Sendable {
         self.connectionID = connectionID
         self.provenance = provenance
         self.pendingRequestID = pendingRequestID
-        consumption = .init(frame: frame, connectionID: connectionID, durableConsumptionAcknowledgement: acknowledgement)
+        inboundDelivery = .init(frame: frame, connectionID: connectionID,
+            source: .broker(provenance: provenance, pendingRequestID: pendingRequestID),
+            durableConsumptionAcknowledgement: acknowledgement)
     }
-    public func acknowledgeDurableConsumption() { consumption.acknowledgeDurableConsumption() }
+    public func acknowledgeDurableConsumption() { inboundDelivery.acknowledgeDurableConsumption() }
 }
 
 /// Owns only the raw transport journal, never ACP session semantics.
