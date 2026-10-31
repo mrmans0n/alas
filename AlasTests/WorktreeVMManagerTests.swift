@@ -571,6 +571,23 @@ final class WorktreeVMManagerTests {
         }
     }
 
+    @Test("stopping a worktree's VMs, as archiving does, stops both guests and keeps their bundles")
+    func stoppingTheWorktreeStopsBothVMs() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try manager.createVM(worktreeID: "/repo/a", guest: .linux)
+        try manager.createVM(worktreeID: "/repo/a")
+        for guest in [VMGuestOS.macOS, .linux] {
+            _ = try await manager.startVM(worktreeID: "/repo/a", guest: guest)
+        }
+
+        await manager.stopVMs(forWorktree: "/repo/a")
+
+        #expect(manager.running("/repo/a") == nil)
+        #expect(manager.running("/repo/a", guest: .linux) == nil)
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.macOS, .linux])
+    }
+
     @Test("a corrupt registry is quarantined and read again, and a VM bundle on disk still counts as a VM")
     func corruptRegistryNeitherHidesAVMNorBlocksTheAnswer() throws {
         let manager = makeManager()

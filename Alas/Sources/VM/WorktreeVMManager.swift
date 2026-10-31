@@ -439,6 +439,15 @@ final class WorktreeVMManager {
         await stopRecorded(VMIdentity.recordID(worktree: worktreeID, guest: guest))
     }
 
+    /// Shuts down every VM of a worktree, both guests at once, so the wait is one guest's.
+    func stopVMs(forWorktree worktreeID: String) async {
+        await withTaskGroup(of: Void.self) { group in
+            for guest in [VMGuestOS.macOS, .linux] {
+                group.addTask { await self.stopVM(worktreeID: worktreeID, guest: guest) }
+            }
+        }
+    }
+
     private func stopRecorded(_ id: String) async {
         do {
             try await stop(id, force: false)

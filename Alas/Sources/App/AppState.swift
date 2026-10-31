@@ -6666,8 +6666,9 @@ final class AppState {
         guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
             return
         }
-        // Only stopped: an archived worktree can come back with its VM.
-        Task { [vmManager] in await vmManager.stopVM(worktreeID: worktree.id) }
+        // Only stopped: an archived worktree can come back with its VMs. Its VM
+        // tabs closed with the rest when the archive quiesced it.
+        Task { [vmManager] in await vmManager.stopVMs(forWorktree: worktree.id) }
         refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
