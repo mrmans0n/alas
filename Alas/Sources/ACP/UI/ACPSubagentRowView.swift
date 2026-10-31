@@ -49,6 +49,8 @@ struct ACPSubagentRowView: View {
     /// Where symbol previews read files; nil where symbol paths are not relative to it.
     let symbolPreviewRoot: URL?
     var onCancel: (() -> Void)?
+    /// Opens a link from the child transcript against the child's directory.
+    var onOpenLink: ((URL) -> Bool)?
 
     @State private var expanded = false
     @Environment(\.theme) private var theme
@@ -131,8 +133,15 @@ struct ACPSubagentRowView: View {
         }
     }
 
-    @ViewBuilder
     private var childTranscript: some View {
+        childTranscriptContent
+            .environment(\.openURL, OpenURLAction { url in
+                onOpenLink?(url) == true ? .handled : .systemAction
+            })
+    }
+
+    @ViewBuilder
+    private var childTranscriptContent: some View {
         if run.messages.isEmpty {
             Text(state.isTerminal ? "No output." : "Waiting for output…")
                 .font(.system(size: 11))

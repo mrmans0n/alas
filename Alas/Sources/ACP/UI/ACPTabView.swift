@@ -735,6 +735,31 @@ private struct ACPSessionView: View {
         }
     }
 
+    /// Routes a clicked transcript link. A child's relative links resolve
+    /// against the child's own directory when it reported one.
+    private func openTranscriptLink(_ url: URL, baseDirectory: String?) -> Bool {
+        switch state.transcriptLinkRoute(url, in: worktree, baseDirectory: baseDirectory) {
+        case .opened, .ignored:
+            return true
+        case .systemOpen(let fileURL):
+            // Claimed either way: the destination this came from is
+            // a schemeless path (`/Users/me/notes.md` parses as a
+            // relative URL), and handing that to the default action
+            // only ever yields paramErr -50. The resolved `file:`
+            // URL is the sole form the system can act on.
+            _ = NSWorkspace.shared.open(fileURL)
+            return true
+        case .missing(let path):
+            state.showFileActionError(
+                title: "File Not Found",
+                message: "Nothing exists at \(path). The agent may have linked a file that was moved, deleted, or never created."
+            )
+            return true
+        case .unhandled:
+            return false
+        }
+    }
+
     private func messageList(contentMaxWidth: CGFloat, showMinimap: Bool) -> ACPMessageList {
         ACPMessageList(
             session: session,
@@ -758,26 +783,7 @@ private struct ACPSessionView: View {
                     )
                     return true
                 }
-                switch state.transcriptLinkRoute(url, in: worktree) {
-                case .opened, .ignored:
-                    return true
-                case .systemOpen(let fileURL):
-                    // Claimed either way: the destination this came from is
-                    // a schemeless path (`/Users/me/notes.md` parses as a
-                    // relative URL), and handing that to the default action
-                    // only ever yields paramErr -50. The resolved `file:`
-                    // URL is the sole form the system can act on.
-                    _ = NSWorkspace.shared.open(fileURL)
-                    return true
-                case .missing(let path):
-                    state.showFileActionError(
-                        title: "File Not Found",
-                        message: "Nothing exists at \(path). The agent may have linked a file that was moved, deleted, or never created."
-                    )
-                    return true
-                case .unhandled:
-                    return false
-                }
+                return openTranscriptLink(url, baseDirectory: nil)
             },
             // Use the runner's policy (where the agent's continuation
             // lives) so the user's click can resolve the pending permission
@@ -931,6 +937,9 @@ private struct ACPSessionView: View {
             onCancelSubagent: isMirror ? nil : { subagentSessionId in
                 guard !isMirror else { return }
                 Task { await manager.cancelSubagent(for: sessionId, subagentSessionId: subagentSessionId) }
+            },
+            onOpenSubagentLink: { url, subagentSessionId in
+                openTranscriptLink(url, baseDirectory: session.subagentRun(subagentSessionId)?.cwd)
             },
             onOpenForkSource: { sourceSessionID in
                 Task {

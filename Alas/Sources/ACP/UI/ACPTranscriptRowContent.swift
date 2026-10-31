@@ -69,6 +69,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// Cancels one native subagent by child session id. Nil when the host
     /// can't cancel (read-only mirror), which also hides the action.
     var onCancelSubagent: ((String) -> Void)?
+    /// Opens a link clicked in a subagent's transcript, with the child id.
+    var onOpenSubagentLink: ((URL, String) -> Bool)?
     /// Resolved caption for a delegated prompt's bubble. Compared, because
     /// it folds in the sender's agent display name, which lives outside
     /// `message`.
@@ -304,6 +306,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
                     symbolPreviewRoot: symbolPreviewRoot,
                     onCancel: onCancelSubagent.map { cancel in
                         { cancel(descriptor.subagentSessionId) }
+                    },
+                    onOpenLink: onOpenSubagentLink.map { open in
+                        { open($0, descriptor.subagentSessionId) }
                     })
                     // A child's terminal-backed tool calls are served by the
                     // same host as the parent's — terminals belong to the

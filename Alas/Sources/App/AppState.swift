@@ -10317,11 +10317,17 @@ final class AppState {
         _ rawPath: String,
         isLocalPathForm: Bool,
         schemeHasSystemHandler: Bool,
-        worktreeRoot: String
+        worktreeRoot: String,
+        baseDirectory: String? = nil
     ) -> AbsoluteLinkRoute {
         let isRelativePath = !rawPath.hasPrefix("/") && (isLocalPathForm
             || (!schemeHasSystemHandler && parseLocalPathPosition(rawPath) != nil))
-        return absoluteLinkRoute(isRelativePath ? worktreeRoot + "/" + rawPath : rawPath, worktreeRoot: worktreeRoot)
+        // A child's cwd is an absolute path as the adapter reported it, so it
+        // is virtualized like any absolute link. Containment still checks the
+        // worktree root, never the base.
+        let base = baseDirectory.flatMap { $0.hasPrefix("/") ? RemotePath.virtualizing($0, like: worktreeRoot) : nil }
+            ?? worktreeRoot
+        return absoluteLinkRoute(isRelativePath ? base + "/" + rawPath : rawPath, worktreeRoot: worktreeRoot)
     }
 
     /// Opens or claims a remote link; nil lets local routing run.
@@ -10353,7 +10359,7 @@ final class AppState {
     /// `session` is the tab's worktree. A Workspace checkout's tab gets a
     /// synthetic root worktree no project lists: its links still resolve
     /// against that root and open in the member worktree that contains them.
-    func transcriptLinkRoute(_ url: URL, in session: Worktree) -> TranscriptLinkRoute {
+    func transcriptLinkRoute(_ url: URL, in session: Worktree, baseDirectory: String? = nil) -> TranscriptLinkRoute {
         let registered = worktree(withId: session.id)
 
         let rawPath: String
@@ -10382,7 +10388,8 @@ final class AppState {
             rawPath,
             isLocalPathForm: isLocalPathForm,
             schemeHasSystemHandler: !isLocalPathForm && NSWorkspace.shared.urlForApplication(toOpen: url) != nil,
-            worktreeRoot: session.path.path
+            worktreeRoot: session.path.path,
+            baseDirectory: baseDirectory
         )
         if let registered {
             if let remote = routeRemoteLink(remoteRoute, worktree: registered) { return remote }
@@ -10400,7 +10407,12 @@ final class AppState {
         }
 
         for candidate in candidates {
-            switch transcriptRoute(forLocalPath: candidate, session: session, opensInSession: registered != nil) {
+            switch transcriptRoute(
+                forLocalPath: candidate,
+                session: session,
+                opensInSession: registered != nil,
+                baseDirectory: baseDirectory
+            ) {
             case .opened:
                 NSApp.activate(ignoringOtherApps: true)
                 return .opened
@@ -10414,11 +10426,16 @@ final class AppState {
         return isLocalPathForm ? .missing(path: rawPath) : .unhandled
     }
 
-    private func transcriptRoute(forLocalPath candidatePath: String, session: Worktree, opensInSession: Bool) -> TranscriptLinkRoute {
+    private func transcriptRoute(
+        forLocalPath candidatePath: String,
+        session: Worktree,
+        opensInSession: Bool,
+        baseDirectory: String?
+    ) -> TranscriptLinkRoute {
         guard let target = localFileOpenTarget(
             candidatePath,
             worktree: session,
-            baseDirectory: session.path
+            baseDirectory: baseDirectory.map { URL(fileURLWithPath: $0) } ?? session.path
         ) else { return .unhandled }
         guard !target.isDirectory else { return .systemOpen(target.url) }
 

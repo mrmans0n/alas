@@ -20,6 +20,8 @@ struct ACPTranscriptScroller: NSViewRepresentable {
     var messageMenuItems: () -> [ACPMessageMenuItem] = { [] }
     /// Cancels a native subagent by child session id.
     var onCancelSubagent: ((String) -> Void)?
+    /// Opens a link clicked in a subagent's transcript.
+    var onOpenSubagentLink: ((URL, String) -> Bool)?
     let rememberedScrollAnchor: () -> String?
     let onRememberScrollAnchor: (String?, Int?, Bool) -> Void
     // Remaining ACPMessageList host inputs (ACPMessageList.swift:5-36),
@@ -1150,6 +1152,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onRestoreCheckpoint: host.onRestoreCheckpoint,
                 messageMenuItems: host.messageMenuItems,
                 onCancelSubagent: host.onCancelSubagent,
+                onOpenSubagentLink: host.onOpenSubagentLink,
                 delegatedLabel: delegatedLabel(host: host, message: message),
                 visualAidActions: host.visualAidActions,
                 isExpanded: isExpanded,
