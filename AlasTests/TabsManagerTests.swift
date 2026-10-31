@@ -770,6 +770,19 @@ struct TabsManagerTests {
         #expect(tab.id == "vm:wt")
     }
 
+    /// Builds that predate Linux guests require `ownerKey`; a Linux tab must
+    /// fail to decode there instead of restoring as a macOS VM tab.
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func virtualMachineTabRoundTripsAndHidesLinuxFromOlderBuilds(_ guest: VMGuestOS) throws {
+        let state = VirtualMachineTabState(ownerKey: "wt", guest: guest)
+
+        let data = try JSONEncoder().encode(state)
+        let object = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(try JSONDecoder().decode(VirtualMachineTabState.self, from: data) == state)
+        #expect((object["ownerKey"] != nil) == (guest == .macOS))
+    }
+
     @Test func webPreviewURLUpdatePreservesRemoteHostAndActiveSelection() {
         let manager = TabsManager(store: TestPersistenceStore())
         let ownerKey = "owner-a"

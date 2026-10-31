@@ -258,15 +258,34 @@ struct VirtualMachineTabState: Codable, Equatable, Identifiable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, ownerKey, guest
+        case id, ownerKey, linuxOwnerKey, guest
     }
 
     /// Tabs saved before Linux guests have no `guest`: they are macOS.
     init(from decoder: any Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        self.init(
-            ownerKey: try container.decode(String.self, forKey: .ownerKey),
-            guest: try container.decodeIfPresent(VMGuestOS.self, forKey: .guest) ?? .macOS)
+        if let owner = try container.decodeIfPresent(String.self, forKey: .linuxOwnerKey) {
+            self.init(ownerKey: owner, guest: .linux)
+        } else {
+            self.init(
+                ownerKey: try container.decode(String.self, forKey: .ownerKey),
+                guest: try container.decodeIfPresent(VMGuestOS.self, forKey: .guest) ?? .macOS)
+        }
+    }
+
+    /// A Linux tab leaves out `ownerKey`, which builds that predate Linux
+    /// guests require, so they drop the tab rather than restore it as a
+    /// second macOS VM tab sharing the macOS tab's screen.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        switch guest {
+        case .macOS:
+            try container.encode(ownerKey, forKey: .ownerKey)
+            try container.encode(guest, forKey: .guest)
+        case .linux:
+            try container.encode(ownerKey, forKey: .linuxOwnerKey)
+        }
     }
 }
 
