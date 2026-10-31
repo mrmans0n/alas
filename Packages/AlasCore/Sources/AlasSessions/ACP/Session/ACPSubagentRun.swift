@@ -815,6 +815,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         replaying: Bool,
         at timestamp: Date
     ) -> Set<Int> {
+        // The sender's own view of a linked message is not a prompt into this
+        // child.
+        guard !directed.isOutgoing else { return [] }
         let text = Self.text(of: chunk.content)
         let attachments = Self.attachments(of: chunk.content)
         if replaying { closeLegacyRuns() }

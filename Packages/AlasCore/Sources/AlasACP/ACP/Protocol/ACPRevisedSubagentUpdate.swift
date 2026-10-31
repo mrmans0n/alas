@@ -36,6 +36,11 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
         public let capabilities: Patch<ACPSubagentCapabilities>
         /// `null` clears the snapshot: no activity is asserted any more.
         public let state: Patch<WorkState>
+        /// The child's working directory. `null` returns it to inheriting its
+        /// parent's.
+        public let cwd: Patch<String>
+        /// Present — `null` and `[]` included — it replaces the whole set.
+        public let additionalDirectories: Patch<[String]>
     }
 
     /// A nullable patch member: omitted keeps the previous value, `null`
@@ -89,6 +94,11 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
         public let messageId: String
         public let senderSessionId: String?
         public let recipientSessionId: String?
+        /// The tool use id of the message in the sender's / recipient's own
+        /// session. A linked message is emitted once per side, each carrying
+        /// the id the OTHER side knows it by.
+        public let senderMessageId: String?
+        public let recipientMessageId: String?
         /// Nil when a `session_message` omits it (content unchanged).
         public let content: [ACPContentBlock]?
         /// A `session_message`: its content replaces whatever the message
@@ -97,8 +107,8 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
     }
 
     private enum Keys: String, CodingKey {
-        case sessionUpdate, sessionId, title, description, capabilities, state
-        case messageId, senderSessionId, recipientSessionId, content
+        case sessionUpdate, sessionId, title, description, capabilities, state, cwd, additionalDirectories
+        case messageId, senderSessionId, recipientSessionId, content, senderMessageId, recipientMessageId
     }
 
     private enum StateKeys: String, CodingKey {
@@ -124,7 +134,11 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                 title: Self.patch(c, .title) { try $0.decode(String.self, forKey: .title) },
                 description: Self.patch(c, .description) { try $0.decode(String.self, forKey: .description) },
                 capabilities: capabilities,
-                state: Self.patch(c, .state) { try Self.workState($0) }))
+                state: Self.patch(c, .state) { try Self.workState($0) },
+                cwd: Self.patch(c, .cwd) { try $0.decode(String.self, forKey: .cwd) },
+                additionalDirectories: Self.patch(c, .additionalDirectories) {
+                    try $0.decode([String].self, forKey: .additionalDirectories)
+                }))
         case "session_message", "session_message_chunk":
             let isChunk = kind == "session_message_chunk"
             let content: [ACPContentBlock]?
@@ -142,6 +156,8 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                 messageId: try c.decode(String.self, forKey: .messageId),
                 senderSessionId: (try? c.decodeIfPresent(String.self, forKey: .senderSessionId)) ?? nil,
                 recipientSessionId: (try? c.decodeIfPresent(String.self, forKey: .recipientSessionId)) ?? nil,
+                senderMessageId: (try? c.decodeIfPresent(String.self, forKey: .senderMessageId)) ?? nil,
+                recipientMessageId: (try? c.decodeIfPresent(String.self, forKey: .recipientMessageId)) ?? nil,
                 content: content,
                 replacesContent: !isChunk))
         default:
@@ -192,7 +208,11 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                     replacesCapabilities: update.capabilities != .absent,
                     clearsName: update.title == .cleared,
                     clearsTask: update.description == .cleared,
-                    initialState: update.state.value?.normalized ?? .unconfirmed)))]
+                    initialState: update.state.value?.normalized ?? .unconfirmed,
+                    cwd: update.cwd.value,
+                    clearsCwd: update.cwd == .cleared,
+                    additionalDirectories: update.additionalDirectories.value ?? [],
+                    replacesAdditionalDirectories: update.additionalDirectories != .absent)))]
             if update.state != .absent {
                 result.append(.init(
                     sessionId: sessionId,
@@ -208,13 +228,14 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
             // transcript ignores them, and a child shows a message INTO it
             // (its launch prompt, each SendMessage resume) as the task it
             // was handed — the same row the earlier draft's prompt makes.
-            // Claude sends nothing else; the other view of a message (one
-            // this session sent elsewhere) is not this transcript's to show.
+            // Claude emits each linked message twice; the other view (one
+            // this session SENT elsewhere) is kept too, marked `isOutgoing`,
+            // so a consumer can tell it is not a prompt into this session.
             // With no recipient, a message is still known not to be INTO
             // this session when this session sent it.
             let addressedHere = message.recipientSessionId.map { $0 == sessionId }
                 ?? (message.senderSessionId != sessionId)
-            guard addressedHere, let content = message.content else { return [] }
+            guard let content = message.content else { return [] }
             // An upsert replaces the message's content: the first block
             // carries that, the rest append to it. A clear has no block.
             let blocks = content.isEmpty && message.replacesContent ? [ACPContentBlock.text("")] : content
@@ -225,7 +246,10 @@ public enum ACPRevisedSubagentUpdate: Decodable, Equatable, Sendable {
                     directed: .init(
                         senderSessionId: message.senderSessionId,
                         recipientSessionId: message.recipientSessionId,
-                        replacesContent: message.replacesContent && offset == 0))))
+                        replacesContent: message.replacesContent && offset == 0,
+                        senderMessageId: message.senderMessageId,
+                        recipientMessageId: message.recipientMessageId,
+                        isOutgoing: !addressedHere))))
             }
         }
     }
@@ -239,10 +263,21 @@ public struct ACPDirectedMessage: Equatable, Sendable {
     /// what the message's row held instead of extending it.
     public let replacesContent: Bool
 
-    public init(senderSessionId: String?, recipientSessionId: String?, replacesContent: Bool) {
+    public let senderMessageId: String?
+    public let recipientMessageId: String?
+    /// This session SENT the message; it is not a prompt into it.
+    public let isOutgoing: Bool
+
+    public init(
+        senderSessionId: String?, recipientSessionId: String?, replacesContent: Bool,
+        senderMessageId: String? = nil, recipientMessageId: String? = nil, isOutgoing: Bool = false
+    ) {
         self.senderSessionId = senderSessionId
         self.recipientSessionId = recipientSessionId
         self.replacesContent = replacesContent
+        self.senderMessageId = senderMessageId
+        self.recipientMessageId = recipientMessageId
+        self.isOutgoing = isOutgoing
     }
 }
 

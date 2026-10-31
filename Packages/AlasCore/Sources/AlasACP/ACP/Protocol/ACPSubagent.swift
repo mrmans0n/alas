@@ -34,6 +34,12 @@ public struct ACPSubagentSpawn: Codable, Equatable, Sendable {
     /// draft implies `running`; a revised announcement without a state
     /// asserts no activity.
     public var initialState: ACPSubagentState = .running
+    /// `cwd` is the child's own working directory; `clearsCwd` (`null`)
+    /// returns it to inheriting its parent's.
+    public var cwd: String? = nil
+    public var clearsCwd = false
+    public var additionalDirectories: [String] = []
+    public var replacesAdditionalDirectories = false
 
     public init(
         subagentSessionId: String,
@@ -43,7 +49,11 @@ public struct ACPSubagentSpawn: Codable, Equatable, Sendable {
         replacesCapabilities: Bool = false,
         clearsName: Bool = false,
         clearsTask: Bool = false,
-        initialState: ACPSubagentState = .running
+        initialState: ACPSubagentState = .running,
+        cwd: String? = nil,
+        clearsCwd: Bool = false,
+        additionalDirectories: [String] = [],
+        replacesAdditionalDirectories: Bool = false
     ) {
         self.subagentSessionId = subagentSessionId
         self.name = name
@@ -53,10 +63,14 @@ public struct ACPSubagentSpawn: Codable, Equatable, Sendable {
         self.clearsName = clearsName
         self.clearsTask = clearsTask
         self.initialState = initialState
+        self.cwd = cwd
+        self.clearsCwd = clearsCwd
+        self.additionalDirectories = additionalDirectories
+        self.replacesAdditionalDirectories = replacesAdditionalDirectories
     }
 
     private enum CodingKeys: String, CodingKey {
-        case subagentSessionId, name, task, capabilities
+        case subagentSessionId, name, task, capabilities, cwd, additionalDirectories
     }
 
     public init(from decoder: Decoder) throws {
@@ -66,6 +80,13 @@ public struct ACPSubagentSpawn: Codable, Equatable, Sendable {
         task = try? c.decodeIfPresent(String.self, forKey: .task)
         capabilities = (try? c.decodeIfPresent(ACPSubagentCapabilities.self, forKey: .capabilities))
             ?? .init()
+        if let cwd = (try? c.decodeIfPresent(String.self, forKey: .cwd)) ?? nil {
+            self.cwd = cwd
+        }
+        if let dirs = (try? c.decodeIfPresent([String].self, forKey: .additionalDirectories)) ?? nil {
+            additionalDirectories = dirs
+            replacesAdditionalDirectories = true
+        }
     }
 }
 

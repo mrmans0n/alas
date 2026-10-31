@@ -177,7 +177,7 @@ struct ACPSubagentProtocolTests {
         let updates = try Self.frame("""
         {"sessionId":"agent_n","update":{"content":[{"text":"Make the build pass","type":"text"},\
         {"type":"text"}],"messageId":"toolu_native","recipientSessionId":"agent_n",\
-        "senderSessionId":"root","sessionUpdate":"session_message"}}
+        "senderMessageId":"toolu_native","senderSessionId":"root","sessionUpdate":"session_message"}}
         """)
         let chunk = try Self.frame("""
         {"sessionId":"agent_n","update":{"content":{"text":"and run tests","type":"text"},\
@@ -189,24 +189,34 @@ struct ACPSubagentProtocolTests {
         #expect(updates + chunk == [
             .init(sessionId: "agent_n", update: .userMessageChunk(.init(
                 messageId: "toolu_native", content: .text("Make the build pass"),
-                directed: .init(senderSessionId: "root", recipientSessionId: "agent_n", replacesContent: true)))),
+                directed: .init(senderSessionId: "root", recipientSessionId: "agent_n", replacesContent: true,
+                                senderMessageId: "toolu_native", isOutgoing: false)))),
             .init(sessionId: "agent_n", update: .userMessageChunk(.init(
                 messageId: "toolu_native", content: .text("and run tests"),
                 directed: .init(senderSessionId: nil, recipientSessionId: nil, replacesContent: false))))
         ])
     }
 
-    @Test("a revised session_message not addressed to this session is not its turn", arguments: [
-        #""senderSessionId":"agent_n","recipientSessionId":"root""#,
-        // Only the sender is known yet, and it is this session.
-        #""senderSessionId":"agent_n""#
+    @Test("subagent_update directory members are patches: absent keeps, null inherits, a value replaces", arguments: [
+        (#""cwd":"/w/pkg","additionalDirectories":["/w/a"]"#, "/w/pkg" as String?, false, ["/w/a"], true),
+        (#""cwd":null,"additionalDirectories":null"#, nil, true, [], true),
+        (#""title":"t""#, nil, false, [], false),
     ])
-    func revisedMessageForAnotherSession(participants: String) throws {
-        let updates = try Self.frame("""
-        {"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"m1",\
-        \(participants),"content":[{"type":"text","text":"done"}]}}
-        """)
-        #expect(updates.isEmpty)
+    func revisedDirectoryPatches(members: String, cwd: String?, clearsCwd: Bool, dirs: [String], replacesDirs: Bool) throws {
+        let updates = try Self.frame(#"{"sessionId":"root","update":{"sessionUpdate":"subagent_update","sessionId":"agent_n",\#(members)}}"#)
+        guard case .subagentSpawned(let spawn) = updates.first?.update else { Issue.record("expected a spawn"); return }
+        #expect(spawn.cwd == cwd)
+        #expect(spawn.clearsCwd == clearsCwd)
+        #expect(spawn.additionalDirectories == dirs)
+        #expect(spawn.replacesAdditionalDirectories == replacesDirs)
+    }
+
+    @Test("the sender's view of a linked session_message is kept as an outgoing chunk, not a prompt")
+    func revisedMessageOutgoingView() throws {
+        let updates = try Self.frame(#"{"sessionId":"agent_n","update":{"sessionUpdate":"session_message","messageId":"toolu_h","senderSessionId":"agent_n","recipientSessionId":"root","recipientMessageId":"toolu_h","content":[{"type":"text","text":"done"}]}}"#)
+        #expect(updates == [.init(sessionId: "agent_n", update: .userMessageChunk(.init(messageId: "toolu_h", content: .text("done"),
+            directed: .init(senderSessionId: "agent_n", recipientSessionId: "root", replacesContent: true,
+                            recipientMessageId: "toolu_h", isOutgoing: true))))])
     }
 
     @Test("revised work states map onto the subagent lifecycle", arguments: [
