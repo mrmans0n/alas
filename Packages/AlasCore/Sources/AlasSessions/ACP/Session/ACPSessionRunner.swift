@@ -299,6 +299,9 @@ public final class ACPSessionRunner {
     private let usageWaitSleep: @Sendable (Duration) async -> Void
     private var suppressingLoadReplay: Bool
     private var loadReplaySuppressionTarget: Int?
+    /// The last yielded update of a `session/load` replay that is applied
+    /// live rather than suppressed. See `treatLoadReplayAsHistory`.
+    private var unsuppressedLoadReplayTarget: Int?
     private var observedUpdateCount = 0
     /// Set while `steer` is between `userCancel` and the redirect's
     /// `sendNow`. `flushQueueIfIdle` no-ops while this is true so a queue
@@ -1237,6 +1240,16 @@ public final class ACPSessionRunner {
         let durableConsumptionAcknowledgement = params.durableConsumptionAcknowledgement
         observedUpdateCount += 1
         appliedUpdateCount += 1
+        // Raised only while one update of the window is being applied, so
+        // the flag on the (longer-lived) session can never outlast it.
+        let appliesLoadHistory = unsuppressedLoadReplayTarget.map { observedUpdateCount <= $0 } ?? false
+        if appliesLoadHistory { session.isApplyingUnsuppressedLoadReplay = true }
+        defer {
+            if appliesLoadHistory { session.isApplyingUnsuppressedLoadReplay = false }
+            if let target = unsuppressedLoadReplayTarget, observedUpdateCount >= target {
+                unsuppressedLoadReplayTarget = nil
+            }
+        }
         if case .asyncTask(let update) = params.update {
             let root = session.remoteSessionId ?? sessionId
             if params.sessionId == root || session.subagentRun(params.sessionId) != nil {
@@ -1538,18 +1551,38 @@ public final class ACPSessionRunner {
             // its first replayed touch and rebuilds it from what replay
             // actually sends, so an already-complete row is unaffected and
             // a partially- or fully-lost one is recovered.
+            //
+            // Facts about the child itself (its config, delegation links)
+            // live on its PARENT row. Any `session/load` replay resends
+            // them as history, suppressed or not.
+            let parentDirty = session.applySubagentSessionFacts(
+                params.update,
+                subagentSessionId: params.sessionId,
+                live: !suppressingLoadReplay && !session.isApplyingUnsuppressedLoadReplay)
             let dirty = suppressingLoadReplay
                 ? session.applySubagentReplayedUpdate(
                     params.update, subagentSessionId: params.sessionId)
                 : session.applySubagentUpdate(
                     params.update, subagentSessionId: params.sessionId)
-            if dirty.isEmpty {
-                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
-            } else {
+            let acknowledgement = persistenceCompletion(acknowledging: durableConsumptionAcknowledgement)
+            if !parentDirty.isEmpty {
+                // Never `persistSessionRow`: the root's own
+                // `config_option_values` must not pick up a child's config.
+                // In the same lifecycle batch as the child write below, so a
+                // failed parent write withholds the shared acknowledgement.
+                flushStreamingPersist()
+                persistIndices(
+                    parentDirty,
+                    participatesInLifecycleBatch: true,
+                    completion: dirty.isEmpty ? acknowledgement : nil)
+            }
+            if !dirty.isEmpty {
                 persistSubagentIndices(
                     dirty,
                     subagentSessionId: params.sessionId,
-                    completion: persistenceCompletion(acknowledging: durableConsumptionAcknowledgement))
+                    completion: acknowledgement)
+            } else if parentDirty.isEmpty {
+                acknowledgeAfterQueuedPersistence(durableConsumptionAcknowledgement)
             }
         }
     }
@@ -1621,13 +1654,11 @@ public final class ACPSessionRunner {
         completion: ((Bool) -> Void)? = nil
     ) -> Bool {
         guard holdsLeaseForWrite() else { return false }
-        guard let run = session.subagentRun(subagentSessionId), !indices.isEmpty else {
-            completion?(true)
-            return true
-        }
-        let messages = run.messages
+        let run = session.subagentRun(subagentSessionId)
+        let messages = run?.messages ?? []
         var rows: [ACPStoredSubagentMessage] = []
         for index in indices.sorted() {
+            guard let run else { break }
             guard index >= 0, index < messages.count else { continue }
             let message = messages[index]
             guard let payload = try? ACPMessageCodec.encode(message) else { continue }
@@ -1649,7 +1680,12 @@ public final class ACPSessionRunner {
                 payload: payload,
                 createdAt: Int64(run.createdAt(at: index).timeIntervalSince1970)))
         }
-        guard !rows.isEmpty else {
+        // Nothing to write still has to answer for the batch when it carries
+        // the acknowledgement: a parent-row write queued just before it (a
+        // child's observed facts) may yet fail, and acknowledging right away
+        // would skip that outcome. The empty write below orders behind it and
+        // folds it in, like `acknowledgeAfterQueuedPersistence`.
+        if rows.isEmpty, completion == nil || !participatesInLifecycleBatch {
             completion?(true)
             return true
         }
@@ -1676,7 +1712,7 @@ public final class ACPSessionRunner {
             // bump it in SQLite, so the two would disagree. The spawn and
             // the terminal state both write parent rows, so a subagent run
             // still registers as activity at both ends.
-            if persisted == true {
+            if persisted == true, !subagentRows.isEmpty {
                 self.onPersist?()
             }
             guard participatesInLifecycleBatch else {
@@ -1731,6 +1767,14 @@ public final class ACPSessionRunner {
         loadReplaySuppressionTarget = max(loadReplaySuppressionTarget ?? 0, target)
     }
 
+    /// Marks the updates yielded so far as a `session/load` replay that is
+    /// applied live — there was no hydrated transcript to suppress it
+    /// against — so the child observations it resends stay historical.
+    public func treatLoadReplayAsHistory(throughYieldedUpdateCount target: Int) {
+        guard target > observedUpdateCount else { return }
+        unsuppressedLoadReplayTarget = max(unsuppressedLoadReplayTarget ?? 0, target)
+    }
+
     public func finishSuppressingLoadReplay(throughYieldedUpdateCount target: Int) {
         guard suppressingLoadReplay else { return }
         loadReplaySuppressionTarget = target
@@ -1752,6 +1796,7 @@ public final class ACPSessionRunner {
 
     public func stop() {
         stopped = true
+        unsuppressedLoadReplayTarget = nil
         session.pendingQueuePersistenceCount -= deferredQueueAcknowledgements.count
         deferredQueueAcknowledgements.removeAll()
         invalidateNativeSteering()

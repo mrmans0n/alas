@@ -624,6 +624,15 @@ final class ACPTranscriptScrollerReconciler {
         }
     }
 
+    /// Scrolls the row with `stableId` to the top of the viewport. A no-op,
+    /// returning false, for a row outside the hydrated window.
+    @discardableResult
+    func revealRow(stableId: String) -> Bool {
+        guard let row = tiling.row(withId: stableId) else { return false }
+        scroller.setScrollY(row.minY)
+        return true
+    }
+
     /// Resolves `id` via `resolveStaleRowId` and, on success, applies the
     /// same head-growth-aware restoration `restoreScrollAnchor` uses for a
     /// `.reset`'s direct row lookup miss. Shared with `trackAnchorAcrossUpdate`

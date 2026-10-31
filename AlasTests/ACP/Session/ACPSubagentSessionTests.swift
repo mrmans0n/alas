@@ -1007,17 +1007,193 @@ struct ACPSubagentSessionTests {
     }
 
     @Test("a child's session-level updates never touch the parent's chrome")
-    func childStateUpdatesAreIgnored() {
+    func childStateUpdatesAreIgnored() throws {
         let session = makeSession()
         session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
         session.applySubagentUpdate(.currentModelUpdate(modelId: "child-model"), subagentSessionId: "child-1")
         session.applySubagentUpdate(
             .usageUpdate(.init(used: 10, size: 100, cost: nil)),
             subagentSessionId: "child-1")
+        session.applySubagentSessionFacts(
+            .sessionConfigOptionsUpdate([modelOption("child")]), subagentSessionId: "child-1", live: true)
 
         #expect(session.currentModel == nil)
+        #expect(session.availableConfigOptions.isEmpty)
         #expect(session.contextUsage == nil)
-        #expect(session.subagentRun("child-1")?.messages.isEmpty == true)
+
+        session.apply(.sessionConfigOptionsUpdate([modelOption("parent")]))
+
+        let run = try #require(session.subagentRun("child-1"))
+        #expect(session.availableConfigOptions.map(\.currentStringValue) == ["parent"])
+        #expect(run.configOptions.map(\.currentStringValue) == ["child"])
+        #expect(run.messages.isEmpty)
+    }
+
+    @Test("directory patches replace, keep, then clear the child's directories")
+    func directoryPatchesApplyToRun() throws {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(
+            subagentSessionId: "child-1", cwd: "/w/pkg",
+            additionalDirectories: ["/w/shared"], replacesAdditionalDirectories: true)))
+        let run = try #require(session.subagentRun("child-1"))
+        #expect(run.cwd == "/w/pkg")
+        #expect(run.additionalDirectories == ["/w/shared"])
+
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+        #expect(run.cwd == "/w/pkg")
+        #expect(run.additionalDirectories == ["/w/shared"])
+
+        session.apply(.subagentSpawned(.init(
+            subagentSessionId: "child-1", clearsCwd: true, replacesAdditionalDirectories: true)))
+        #expect(run.cwd == nil)
+        #expect(run.additionalDirectories.isEmpty)
+    }
+
+    enum ObservedFact: CaseIterable, Sendable {
+        case config, directories
+    }
+
+    @Test("only a live observation confirms a child's facts; replay and disconnect leave them historical",
+          arguments: ObservedFact.allCases)
+    func observationConfirmationLifecycle(fact: ObservedFact) throws {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1")))
+        let run = try #require(session.subagentRun("child-1"))
+        func observe(_ value: String, live: Bool) {
+            switch (fact, live) {
+            case (.config, _):
+                session.applySubagentSessionFacts(
+                    .sessionConfigOptionsUpdate([modelOption(value)]), subagentSessionId: "child-1", live: live)
+            case (.directories, true):
+                session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", cwd: value)))
+            case (.directories, false):
+                _ = session.applySuppressedReplaySideEffects(.subagentSpawned(.init(subagentSessionId: "child-1", cwd: value)))
+            }
+        }
+        func observed() -> (value: String?, confirmed: Bool) {
+            switch fact {
+            case .config: (run.configOptions.first?.currentStringValue, run.isConfigConfirmed)
+            case .directories: (run.cwd, run.areDirectoriesConfirmed)
+            }
+        }
+
+        observe("live", live: true)
+        #expect(observed() == ("live", true))
+
+        // A replayed snapshot is older than what this connection reported.
+        observe("older", live: false)
+        #expect(observed() == ("live", true))
+
+        session.markSubagentsDisconnected()
+        #expect(observed() == ("live", false))
+
+        session.beginSuppressedReplaySideEffects()
+        observe("replayed", live: false)
+        #expect(observed() == ("replayed", false))
+
+        observe("replayed", live: true)
+        #expect(observed() == ("replayed", true))
+    }
+
+    enum LinkedViewOrder: CaseIterable, Sendable {
+        case outgoingFirst, incomingFirst, outgoingBeforeAnnounce
+    }
+
+    @Test("both views of a delegation merge into one link in any order, even before the child is announced",
+          arguments: LinkedViewOrder.allCases)
+    func linkedViewsMergeInAnyOrder(order: LinkedViewOrder) throws {
+        let session = makeSession()
+        session.remoteSessionId = "root"
+        let announce = { session.apply(.subagentSpawned(.init(subagentSessionId: "c1", name: "Explore"))) }
+        let outgoing = {
+            session.apply(.userMessageChunk(.init(messageId: "toolu_1", content: .text("Fix the build"), directed: .init(
+                senderSessionId: "root", recipientSessionId: "c1", replacesContent: true,
+                recipientMessageId: "toolu_1", isOutgoing: true))))
+        }
+        let incoming = {
+            session.applySubagentSessionFacts(.userMessageChunk(.init(messageId: "toolu_1", content: .text("Fix the build"),
+                directed: .init(senderSessionId: "root", recipientSessionId: "c1", replacesContent: true,
+                                senderMessageId: "toolu_1"))), subagentSessionId: "c1", live: true)
+        }
+        switch order {
+        case .outgoingFirst: _ = announce()
+        _ = outgoing()
+        _ = incoming()
+        case .incomingFirst: _ = announce()
+        _ = incoming()
+        _ = outgoing()
+        case .outgoingBeforeAnnounce: _ = outgoing()
+        _ = announce()
+        _ = incoming()
+        }
+
+        let expected = ACPDelegationLink(messageId: "toolu_1", senderSessionId: "root", recipientSessionId: "c1",
+                                         senderMessageId: "toolu_1", recipientMessageId: "toolu_1")
+        #expect(session.delegationLink(messageId: "toolu_1") == expected)
+        let run = try #require(session.subagentRun("c1"))
+        #expect(run.delegationLinks == [expected])
+        #expect(session.transcript.messages.count == 1)
+        #expect(subagentRowDescriptor(in: session, at: 0)?.links == [expected])
+    }
+
+    @Test("a link waits only for a child not announced yet, never for a root id lost to context recovery")
+    func linksWaitOnlyForUnannouncedChildren() throws {
+        let session = makeSession()
+        session.remoteSessionId = "root-new"
+        session.apply(.subagentSpawned(.init(subagentSessionId: "c1")))
+        let fromOldRoot = ACPDelegationLink(messageId: "toolu_old", senderSessionId: "root-old", recipientSessionId: "c1")
+        let toLaterSibling = ACPDelegationLink(messageId: "toolu_late", senderSessionId: "c1", recipientSessionId: "c2")
+        let toUnannounced = ACPDelegationLink(messageId: "toolu_c3", senderSessionId: "root-new", recipientSessionId: "c3")
+        for link in [fromOldRoot, toLaterSibling, toUnannounced] { session.recordDelegationLink(link) }
+
+        session.apply(.subagentSpawned(.init(subagentSessionId: "c2")))
+        #expect(try #require(session.subagentRun("c2")).delegationLinks == [toLaterSibling])
+
+        // Persisted rows are authoritative for links a child carries; only
+        // a link still waiting for its child is held in memory.
+        session.restoreSubagents(rows: [], messages: [:])
+        #expect(session.delegationLink(messageId: "toolu_old") == nil)
+        #expect(session.delegationLink(messageId: "toolu_c3") == toUnannounced)
+    }
+
+    @Test("a child's handback, continuation chunks included, becomes one agent row in the child; a reply without link ids links nothing",
+          arguments: [false, true])
+    func childHandbackBecomesChildRow(replaying: Bool) throws {
+        let session = makeSession()
+        session.remoteSessionId = "root"
+        session.apply(.subagentSpawned(.init(subagentSessionId: "c1", name: "Explore")))
+        let applyToChild = { (update: ACPSessionUpdate) in
+            session.applySubagentSessionFacts(update, subagentSessionId: "c1", live: !replaying)
+            _ = replaying
+                ? session.applySubagentReplayedUpdate(update, subagentSessionId: "c1")
+                : session.applySubagentUpdate(update, subagentSessionId: "c1")
+        }
+        let handback = ACPDirectedMessage(senderSessionId: "c1", recipientSessionId: "root", replacesContent: true,
+                                          recipientMessageId: "toolu_h", isOutgoing: true)
+        applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"), directed: handback)))
+        // A `session_message_chunk` names neither side, so it reads as incoming.
+        applyToChild(.userMessageChunk(.init(messageId: "toolu_h", content: .text(" and tests pass"), directed: .init(
+            senderSessionId: nil, recipientSessionId: nil, replacesContent: false))))
+        let dirty = session.apply(.userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"),
+            directed: .init(senderSessionId: "c1", recipientSessionId: "root", replacesContent: true,
+                            senderMessageId: "toolu_h"))))
+
+        let run = try #require(session.subagentRun("c1"))
+        #expect(run.messages.count == 1)
+        guard case .agent(_, let messageId, let buffer) = run.messages.first else {
+            Issue.record("expected the handback as an agent row")
+            return
+        }
+        #expect(messageId == "toolu_h")
+        #expect(buffer.value == "Build fixed and tests pass")
+        #expect(dirty == [0])
+        #expect(session.transcript.messages.count == 1)
+        #expect(session.delegationLink(messageId: "toolu_h")?.senderMessageId == "toolu_h")
+
+        session.apply(.userMessageChunk(.init(messageId: "toolu_1:reply", content: .text("ok"), directed: .init(
+            senderSessionId: "c1", recipientSessionId: "root", replacesContent: true))))
+        #expect(session.delegationLink(messageId: "toolu_1:reply") == nil)
+        #expect(session.transcript.messages.count == 1)
     }
 
     @Test("a replayed terminal state reconciles a child left running by a crash")
@@ -1164,14 +1340,21 @@ struct ACPSubagentSessionTests {
             toolCallId: "t1", title: "Read", status: "completed"))))
     }
 
-    @Test("the row descriptor survives an encode/decode round trip")
-    func descriptorRoundTrips() throws {
+    @Test("the row descriptor survives an encode/decode round trip", arguments: [false, true])
+    func descriptorRoundTrips(withObservations: Bool) throws {
         let descriptor = ACPSubagentRowDescriptor(
             subagentSessionId: "child-1",
             name: "Explore",
             task: "Find the router",
             state: .cancelled,
-            capabilities: .cancellable)
+            capabilities: .cancellable,
+            configOptions: withObservations ? [modelOption("gpt-5")] : [],
+            cwd: withObservations ? "/w/pkg" : nil,
+            additionalDirectories: withObservations ? ["/w/shared"] : [],
+            links: withObservations
+                ? [.init(messageId: "toolu_1", senderSessionId: "root", recipientSessionId: "child-1",
+                         senderMessageId: "toolu_1")]
+                : [])
         let toolCall = descriptor.toolCall(executionStartedAt: nil, executionFinishedAt: nil)
         let encoded = try JSONEncoder().encode(toolCall)
         let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: encoded)
@@ -1278,6 +1461,12 @@ struct ACPSubagentSessionTests {
         ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
     }
 
+    private func modelOption(_ current: String) -> ACPConfigOption {
+        ACPConfigOption(
+            id: "model", name: "Model", category: "model", currentValue: .string(current),
+            options: [.init(id: current, name: current)])
+    }
+
     private func subagentRowDescriptor(in session: ACPSession, at index: Int) -> ACPSubagentRowDescriptor? {
         guard case .toolCall(let toolCall) = session.transcript.messages[index] else { return nil }
         return ACPSubagentRowDescriptor(toolCall: toolCall)
@@ -1320,5 +1509,84 @@ struct ACPSubagentRowPolicyTests {
         #expect(ACPSubagentRowPolicy.stateLabel(for: .disconnected) == "Disconnected")
         #expect(ACPSubagentRowPolicy.stateLabel(for: .other("awaiting_permission"))
             == "Awaiting Permission")
+    }
+
+    struct ObservationCase: Sendable, CustomTestStringConvertible {
+        let label: String
+        let config: ACPSubagentConfigSummary?
+        let cwd: String?
+        let directoriesConfirmed: Bool
+        var worktreeRoot = "/repo"
+        let expected: String?
+        var testDescription: String { label }
+    }
+
+    static let observationCases: [ObservationCase] = {
+        let live = ACPSubagentConfigSummary(model: "GPT-5", effort: "High", parameters: [], isConfirmed: true)
+        let lastSeen = ACPSubagentConfigSummary(model: "GPT-5", effort: "High", parameters: [], isConfirmed: false)
+        return [
+            .init(label: "live config, inherited cwd", config: live, cwd: nil, directoriesConfirmed: true,
+                  expected: "GPT-5 · High"),
+            .init(label: "historical config", config: lastSeen, cwd: nil, directoriesConfirmed: true,
+                  expected: "GPT-5 · High (last seen)"),
+            .init(label: "cwd inside the worktree", config: live, cwd: "/repo/pkg", directoriesConfirmed: true,
+                  expected: "GPT-5 · High · in pkg"),
+            .init(label: "cwd outside the worktree", config: nil, cwd: "/repo2/tools", directoriesConfirmed: true,
+                  expected: "in tools"),
+            .init(label: "historical cwd", config: live, cwd: "/repo/a/b", directoriesConfirmed: false,
+                  expected: "GPT-5 · High · in a/b (last seen)"),
+            .init(label: "nothing observed", config: nil, cwd: nil, directoriesConfirmed: true, expected: nil),
+            // A remote child reports its host path; the worktree root is virtual.
+            .init(label: "remote cwd inside the worktree", config: nil, cwd: "/repo/a/b", directoriesConfirmed: true,
+                  worktreeRoot: "/.alas-remote/mini/repo", expected: "in a/b"),
+        ]
+    }()
+
+    @Test("the header caption shows what the child reported, marking history", arguments: observationCases)
+    func observationCaptions(_ c: ObservationCase) {
+        #expect(ACPSubagentRowPolicy.observationCaption(
+            config: c.config, cwd: c.cwd, worktreeRoot: c.worktreeRoot,
+            directoriesConfirmed: c.directoriesConfirmed) == c.expected)
+    }
+
+    struct DelegationCase: Sendable, CustomTestStringConvertible {
+        let label: String
+        let link: ACPDelegationLink
+        var viewing = "c1"
+        var renderedToolCalls: Set<String> = []
+        let caption: String
+        let action: String?
+        var testDescription: String { label }
+    }
+
+    static let delegationCases: [DelegationCase] = {
+        let launch = ACPDelegationLink(messageId: "m", senderSessionId: "root", recipientSessionId: "c1")
+        return [
+            .init(label: "launch, tool call rendered", link: launch, renderedToolCalls: ["m"],
+                  caption: "From parent", action: "Show request"),
+            // The child's own row is the one the user is inside.
+            .init(label: "launch, tool call hidden", link: launch, caption: "From parent", action: nil),
+            .init(label: "launch naming a recovered root",
+                  link: .init(messageId: "m", senderSessionId: "root-old", recipientSessionId: "c1"),
+                  caption: "From parent", action: nil),
+            .init(label: "handback", link: .init(messageId: "m", senderSessionId: "c1", recipientSessionId: "root"),
+                  caption: "Sent to parent", action: nil),
+            .init(label: "from a sibling", link: .init(messageId: "m", senderSessionId: "c2", recipientSessionId: "c1"),
+                  caption: "From Reviewer", action: "Show in Reviewer"),
+            .init(label: "to a sibling", link: .init(messageId: "m", senderSessionId: "c1", recipientSessionId: "c2"),
+                  caption: "Sent to Reviewer", action: "Show in Reviewer"),
+            .init(label: "the root's own tool call", link: launch, viewing: "root",
+                  caption: "Sent to Explore", action: "Show in Explore"),
+        ]
+    }()
+
+    @Test("a delegated row names the other side and where its button leads", arguments: delegationCases)
+    func delegationCaptions(_ c: DelegationCase) {
+        let names = ["c1": "Explore", "c2": "Reviewer"]
+        #expect(ACPSubagentRowPolicy.delegationCaption(
+            link: c.link, viewingSessionId: c.viewing, childNames: names) == c.caption)
+        #expect(ACPSubagentRowPolicy.delegationAction(
+            link: c.link, viewingSessionId: c.viewing, parentToolCallIds: c.renderedToolCalls,
+            childNames: names)?.label == c.action)
     }
 }

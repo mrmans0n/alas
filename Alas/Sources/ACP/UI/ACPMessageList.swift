@@ -41,6 +41,9 @@ struct ACPMessageList: View {
     /// Cancels one native subagent by child session id. Nil hides the row's
     /// Cancel action (read-only hosts).
     var onCancelSubagent: ((String) -> Void)?
+    /// Opens a link clicked in a subagent's transcript; the id selects the
+    /// child whose directory relative paths resolve against.
+    var onOpenSubagentLink: ((URL, String) -> Bool)?
     let onOpenForkSource: (String) -> Void
     let agentDisplayName: (String) -> String
     var showMinimap: Bool = false
@@ -76,6 +79,7 @@ struct ACPMessageList: View {
                 onRestoreCheckpoint: onRestoreCheckpoint,
                 messageMenuItems: messageMenuItems,
                 onCancelSubagent: onCancelSubagent,
+                onOpenSubagentLink: onOpenSubagentLink,
                 rememberedScrollAnchor: rememberedScrollAnchor,
                 onRememberScrollAnchor: onRememberScrollAnchor,
                 onOpenTranscriptLink: onOpenTranscriptLink,

@@ -39,6 +39,21 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// updates that don't themselves carry a new error, so the reason a
     /// row failed survives whatever housekeeping update lands after it.
     @Tracked public private(set) var lastError: String?
+    /// The child's own latest config snapshot, replaced whole. Never the
+    /// parent's: a child's options must not leak into the parent session's
+    /// chips or persisted values, nor be inferred from them.
+    @Tracked public private(set) var configOptions: [ACPConfigOption] = []
+    /// The child's own working directory; nil means it inherits the parent's.
+    @Tracked public private(set) var cwd: String? = nil
+    @Tracked public private(set) var additionalDirectories: [String] = []
+    /// Whether `configOptions` / the directories were observed live on the
+    /// current connection. Restored, replayed and pre-disconnect values are
+    /// historical. Never persisted.
+    @Tracked public private(set) var isConfigConfirmed = false
+    @Tracked public private(set) var areDirectoriesConfirmed = false
+    /// Delegation messages this child sent or received, each joined from
+    /// both of its views as they arrive. See `ACPSession.recordDelegationLink`.
+    @Tracked public private(set) var delegationLinks: [ACPDelegationLink] = []
     /// The child's own transcript, in arrival order.
     @Tracked public private(set) var messages: [ACPMessage] = []
 
@@ -143,7 +158,12 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// explicit spawn message, so Alas synthesizes one for every child
     /// notification — this must therefore be idempotent, and must never
     /// resurrect a child that already reported a terminal state.
-    public func merge(spawn: ACPSubagentSpawn) {
+    ///
+    /// Directory patches follow the same observation rule as
+    /// `observe(config:live:)`: a replayed (`live: false`) patch never
+    /// overrides directories this connection already reported.
+    public func merge(spawn: ACPSubagentSpawn, live: Bool = true) {
+        mergeDirectories(from: spawn, live: live)
         if let incoming = spawn.name, !incoming.isEmpty, incoming != name {
             name = incoming
         } else if spawn.clearsName, name != nil {
@@ -159,6 +179,55 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         }
     }
 
+    /// Absent members keep the current value, `null` (`clearsCwd`, or an
+    /// empty replacing list) returns to inheriting the parent's, and a value
+    /// replaces.
+    private func mergeDirectories(from spawn: ACPSubagentSpawn, live: Bool) {
+        let patchesCwd = spawn.cwd != nil || spawn.clearsCwd
+        let patchesDirectories = spawn.replacesAdditionalDirectories || !spawn.additionalDirectories.isEmpty
+        guard patchesCwd || patchesDirectories else { return }
+        if !live && areDirectoriesConfirmed { return }
+        if patchesCwd {
+            let incoming = spawn.clearsCwd ? nil : spawn.cwd
+            if incoming != cwd { cwd = incoming }
+        }
+        if patchesDirectories, spawn.additionalDirectories != additionalDirectories {
+            additionalDirectories = spawn.additionalDirectories
+        }
+        if areDirectoriesConfirmed != live { areDirectoriesConfirmed = live }
+    }
+
+    /// Records the child's own config snapshot. A replayed snapshot is older
+    /// than anything this connection reported, so it never replaces a
+    /// confirmed one.
+    public func observe(config options: [ACPConfigOption], live: Bool) {
+        if !live && isConfigConfirmed { return }
+        if options != configOptions { configOptions = options }
+        if isConfigConfirmed != live { isConfigConfirmed = live }
+    }
+
+    /// Records one view of a delegation message, merging it into what the
+    /// other view already told. Returns whether anything changed.
+    @discardableResult
+    public func record(_ link: ACPDelegationLink) -> Bool {
+        guard let index = delegationLinks.firstIndex(where: { $0.messageId == link.messageId }) else {
+            delegationLinks.append(link)
+            return true
+        }
+        var merged = delegationLinks[index]
+        merged.merge(link)
+        guard merged != delegationLinks[index] else { return false }
+        delegationLinks[index] = merged
+        return true
+    }
+
+    /// Demotes every observation to history: the connection that reported
+    /// it is gone, or a `session/load` replay is about to resend it.
+    public func markObservationsHistorical() {
+        if isConfigConfirmed { isConfigConfirmed = false }
+        if areDirectoriesConfirmed { areDirectoriesConfirmed = false }
+    }
+
     /// Adopts the facts persisted on the parent row. Used when a session is
     /// re-hydrated (open, or a read-only mirror's refresh) so an existing
     /// run keeps its identity — and therefore the row's expanded state —
@@ -169,6 +238,14 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         if state != descriptor.state { state = descriptor.state }
         if capabilities != descriptor.capabilities { capabilities = descriptor.capabilities }
         if lastError != descriptor.lastError { lastError = descriptor.lastError }
+        if configOptions != descriptor.configOptions { configOptions = descriptor.configOptions }
+        if cwd != descriptor.cwd { cwd = descriptor.cwd }
+        if additionalDirectories != descriptor.additionalDirectories {
+            additionalDirectories = descriptor.additionalDirectories
+        }
+        if delegationLinks != descriptor.links { delegationLinks = descriptor.links }
+        // Persisted facts are history, whichever connection reported them.
+        markObservationsHistorical()
         if let startedAt { self.startedAt = startedAt }
         // Mirrors `apply(state:)`: only a terminal child has a finish time.
         if !descriptor.state.isTerminal {
@@ -340,8 +417,12 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 return [index]
             }
             return [append(.plan(id: UUID(), items), at: timestamp)]
+        case .sessionConfigOptionsUpdate:
+            // An observation, not a row: `ACPSession.applySubagentSessionFacts`
+            // records it, knowing whether it is live or replayed.
+            return []
         case .availableModelsUpdate, .currentModeUpdate, .currentModelUpdate,
-             .sessionConfigOptionsUpdate, .availableCommandsUpdate, .usageUpdate,
+             .availableCommandsUpdate, .usageUpdate,
              .sessionInfoUpdate, .compactionUpdate, .compactionSummaryChunk,
              .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
             // Session-level state of a child session has no UI of its own:
@@ -803,11 +884,16 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         return [index]
     }
 
-    /// A revised-form `session_message` into this child. Its id is unique
-    /// (the tool use that sent it), so it addresses its row wherever that
-    /// sits, and a whole-content upsert REPLACES the row: the adapter can
-    /// resend a prompt (after a restart, or in `session/load` replay) and
+    /// A revised-form `session_message` into or out of this child. Its id is
+    /// unique (the tool use that sent it), so it addresses its row wherever
+    /// that sits, and a whole-content upsert REPLACES the row: the adapter can
+    /// resend a message (after a restart, or in `session/load` replay) and
     /// the RFD lets `session_message` rewrite or clear what chunks built.
+    ///
+    /// A message INTO the child is the task it was handed, a prompt row. One
+    /// the child SENT (its handback to the parent, a SendMessage to a
+    /// sibling) is the child speaking, an agent row: the root never shows it,
+    /// so this row is the only place its text lives.
     private func applyDirectedMessage(
         _ chunk: ACPTextChunk,
         messageId: String,
@@ -815,12 +901,21 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         replaying: Bool,
         at timestamp: Date
     ) -> Set<Int> {
+        if replaying { closeLegacyRuns() }
+        if directed.isOutgoing {
+            return applyOutgoingMessage(chunk, messageId: messageId, directed: directed, replaying: replaying, at: timestamp)
+        }
         let text = Self.text(of: chunk.content)
         let attachments = Self.attachments(of: chunk.content)
-        if replaying { closeLegacyRuns() }
         let existing = messages.lastIndex { message in
             if case .user(_, let id, _, _, _, _) = message { return id == messageId }
             return false
+        }
+        // A `session_message_chunk` names neither side, so a continuation of
+        // a message this child SENT arrives looking incoming: it extends the
+        // agent row its `session_message` made, not a new prompt.
+        if existing == nil, trailingIndex(of: .agent, messageId: messageId) != nil {
+            return applyOutgoingMessage(chunk, messageId: messageId, directed: directed, replaying: replaying, at: timestamp)
         }
         guard let index = existing,
               case .user(let id, _, let existingText, let existingAttachments, let source, _) = messages[index]
@@ -838,6 +933,33 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
             guard !text.isEmpty || !attachments.isEmpty else { return [] }
             appendToUserRow(at: index, messageId: messageId, text: text, attachments: attachments)
         }
+        return [index]
+    }
+
+    private func applyOutgoingMessage(
+        _ chunk: ACPTextChunk,
+        messageId: String,
+        directed: ACPDirectedMessage,
+        replaying: Bool,
+        at timestamp: Date
+    ) -> Set<Int> {
+        let text = Self.text(of: chunk.content)
+        guard let index = trailingIndex(of: .agent, messageId: messageId),
+              case .agent(_, _, let buffer) = messages[index]
+        else {
+            guard !text.isEmpty else { return [] }
+            let row = Self.makeTextMessage(
+                kind: .agent, messageId: messageId, text: text, phase: chunk.phase, metadata: chunk.metadata)
+            return [replaying ? insertRecovered(row, at: timestamp) : append(row, at: timestamp)]
+        }
+        if replaying { replayCursor = max(replayCursor, index + 1) }
+        if directed.replacesContent {
+            guard text != buffer.value else { return [] }
+            resetTextRow(at: index, kind: .agent, messageId: messageId)
+        } else {
+            guard !text.isEmpty else { return [] }
+        }
+        appendToTextRow(at: index, kind: .agent, text: text, phase: chunk.phase, metadata: chunk.metadata)
         return [index]
     }
 
