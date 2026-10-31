@@ -18,6 +18,8 @@ public enum CheckpointStoreError: Error, Equatable, Sendable {
 
 public struct CheckpointPublication: Sendable {
     public let manifest: WorktreeCheckpointManifest
+    /// Each payload keyed by the reference of its bytes, as a snapshot made it.
+    /// Publish trusts the hash and checks only the length.
     public let blobs: [CheckpointBlobReference: Data]
 
     public init(manifest: WorktreeCheckpointManifest, blobs: [CheckpointBlobReference: Data]) {
@@ -164,7 +166,7 @@ public actor WorktreeCheckpointStore {
         let manifestReferences = references(in: manifest)
         guard manifestReferences == Set(publication.blobs.keys) else { throw CheckpointStoreError.blobDoesNotMatchReference }
         for (reference, data) in publication.blobs {
-            guard CheckpointBlobReference.make(for: data) == reference else { throw CheckpointStoreError.blobDoesNotMatchReference }
+            guard Int64(data.count) == reference.byteCount else { throw CheckpointStoreError.blobDoesNotMatchReference }
         }
 
         let currentCatalogIDs = Set(currentCatalog.summaries.map(\.id))
@@ -192,7 +194,7 @@ public actor WorktreeCheckpointStore {
         for (reference, data) in publication.blobs {
             let blob = blobURL(reference, layout: layout)
             if exists(blob) {
-                if try blobMatchesReference(reference, layout: layout) {
+                if try blobIsValid(reference, layout: layout, lineageID: manifest.lineageID) {
                     continue
                 }
                 try fileSystem.removeIfPresent(blob)
@@ -203,6 +205,8 @@ public actor WorktreeCheckpointStore {
             try fileSystem.write(data, to: temporaryBlob, mode: 0o600, durability: .file)
             do {
                 try fileSystem.moveExclusively(temporaryBlob, to: blob, synchronizingParent: false)
+                // Written from bytes the snapshot hashed: known good.
+                verifiedBlobReferences[manifest.lineageID, default: [:]][reference] = try blobIdentity(reference, layout: layout)
             } catch CheckpointFileSystemError.posix(operation: "link", code: EEXIST) {
                 try fileSystem.removeIfPresent(temporaryBlob)
             }
@@ -815,7 +819,7 @@ public actor WorktreeCheckpointStore {
             guard let id = UUID(uuidString: url.lastPathComponent), !protectedIDs.contains(id) else { continue }
             try removeEntry(id, layout: layout)
         }
-        let protectedBlobs = Set(protectedManifests.flatMap { references(in: $0) })
+        let protectedBlobs = Set(protectedManifests.flatMap { references(in: $0).map(\.sha256) })
         for url in try fileSystem.list(layout.blobs) where shouldRemoveBlob(url, protected: protectedBlobs) { try fileSystem.removeIfPresent(url) }
     }
 
@@ -825,8 +829,8 @@ public actor WorktreeCheckpointStore {
         }
     }
 
-    private func shouldRemoveBlob(_ url: URL, protected: Set<CheckpointBlobReference>) -> Bool {
-        isBlobTemporary(url.lastPathComponent) || (isBlobName(url.lastPathComponent) && !protected.contains { $0.sha256 == url.lastPathComponent })
+    private func shouldRemoveBlob(_ url: URL, protected: Set<String>) -> Bool {
+        isBlobTemporary(url.lastPathComponent) || (isBlobName(url.lastPathComponent) && !protected.contains(url.lastPathComponent))
     }
 
     private func isBlobName(_ name: String) -> Bool {
