@@ -1865,6 +1865,25 @@ struct HostProtocolServerTests {
             == .failure(error: .invalidRequest(reason: "The path ../x is outside the worktree.")))
     }
 
+    /// A repository re-created at a listed path takes checkpoints without a
+    /// host restart: the host relists the project's worktrees for its new identity.
+    @Test func aRepositoryRecreatedAtTheListedPathTakesCheckpoints() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        try "one\n".write(to: repo.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        _ = try await fixture.checkpoint("Old", in: ref)
+
+        try FileManager.default.removeItem(at: repo)
+        try await GitTemplate.repository(at: repo)
+        guard case .checkpoints(let catalog, _) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
+            Issue.record("expected checkpoints")
+            return
+        }
+        #expect(catalog.summaries.isEmpty)
+        #expect(try await fixture.checkpoint("New", in: ref).label == "New")
+    }
+
     @Test func aMacRewordsAHostCommit() async throws {
         let fixture = try await RepoFixture(aheadOfOrigin: true)
         defer { fixture.tearDown() }

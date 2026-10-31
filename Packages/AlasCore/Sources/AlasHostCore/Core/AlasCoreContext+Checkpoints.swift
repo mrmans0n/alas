@@ -109,7 +109,7 @@ extension AlasCoreContext {
     /// The answer to `listCheckpoints`, with whether a restore awaits recovery:
     /// not while one runs, whose journal is open too.
     func checkpointCatalog(in worktree: Worktree) async throws -> HostResponse {
-        let target = try requireCheckpointTarget(for: worktree)
+        let target = try await requireCheckpointTarget(for: worktree)
         let catalog = try await checkpoints.summaries(target: target)
         let journals = try await checkpoints.nonterminalJournals(target: target)
         return .checkpoints(
@@ -118,13 +118,13 @@ extension AlasCoreContext {
     }
 
     func checkpointManifest(_ id: CheckpointID, in worktree: Worktree) async throws -> WorktreeCheckpointManifest {
-        let target = try requireCheckpointTarget(for: worktree)
+        let target = try await requireCheckpointTarget(for: worktree)
         return try await checkpoints.manifest(target: target, id: listedCheckpoint(id, in: target))
     }
 
     /// The service bounds what it reads; an image it decoded is answered as a note, its pixels never sent.
     func checkpointDiff(_ id: CheckpointID, path: String, in worktree: Worktree) async throws -> HostDiff {
-        let target = try requireCheckpointTarget(for: worktree)
+        let target = try await requireCheckpointTarget(for: worktree)
         try await Self.refuseOutside([path], of: worktree.path)
         let listed = try await listedCheckpoint(id, in: target)
         switch await checkpoints.diffContent(target: target, id: listed, path: path) {
@@ -136,7 +136,7 @@ extension AlasCoreContext {
     }
 
     func checkpointRestorePreview(_ id: CheckpointID, groupIDs: Set<UUID>?, in worktree: Worktree) async throws -> CheckpointRestorePreview {
-        let target = try requireCheckpointTarget(for: worktree)
+        let target = try await requireCheckpointTarget(for: worktree)
         return try await checkpoints.restorePreview(
             target: target, id: listedCheckpoint(id, in: target), coordination: await checkpointCoordination(for: worktree),
             selectedGroupIDs: groupIDs
@@ -146,7 +146,7 @@ extension AlasCoreContext {
     /// A checkpoint change, under the project's gate: refused, as locally, for
     /// every restore blocker the host sees, and for a preview gone stale.
     func applyCheckpointChange(_ change: HostWorktreeChange, to worktree: Worktree) async throws -> HostResponse {
-        let target = try requireCheckpointTarget(for: worktree)
+        let target = try await requireCheckpointTarget(for: worktree)
         switch change {
         case .createCheckpoint(let label):
             guard !label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -195,7 +195,18 @@ extension AlasCoreContext {
         return .done
     }
 
-    private func requireCheckpointTarget(for worktree: Worktree) throws -> CheckpointWorktreeTarget {
+    /// A repository re-created at the listed path has another identity, or
+    /// none yet, which the checkpoint service refuses until the worktrees are
+    /// listed again. A Mac has no Refresh to ask for, so the host relists the
+    /// project once here, as the app's Refresh does; an identity that still
+    /// differs is refused by the service as before.
+    private func requireCheckpointTarget(for worktree: Worktree) async throws -> CheckpointWorktreeTarget {
+        var worktree = worktree
+        if let lineageID = worktree.lineageID, !worktree.path.isRemoteAlasPath,
+           WorktreeService.existingLocalLineageID(forWorktreeAt: worktree.path) != lineageID {
+            if try await environment.refreshProjectWorktrees(worktree.projectId, in: self) { try saveProjects() }
+            worktree = projects.worktrees(projectId: worktree.projectId).first { $0.id == worktree.id } ?? worktree
+        }
         guard let target = checkpointTarget(for: worktree) else {
             throw HostError.failed(message: "Checkpoints are not available for this worktree.")
         }
