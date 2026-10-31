@@ -534,6 +534,118 @@ struct ACPBrokerRawClientTests {
         #expect(await service.sentResponses.isEmpty)
     }
 
+    @MainActor
+    @Test func inboundReceiptOwnerUsesTheFacadeStreamAndRestoresWithoutReplyAuthority() async throws {
+        let service = RawBrokerFixture(pending: true)
+        let client = makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("alas-broker-inbound-owner-\(UUID()).sqlite").path)
+        try await persistence.upsertSession(.init(id: "s", agentId: "fixture", title: "Inbound", autoRun: false,
+            acpBrokerId: "raw", acpBrokerGeneration: 7, acpBrokerWireContextJSON: try ACPBrokerWireContext.rawV2.persistedJSON(),
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let fence = ACPSessionLeaseFence(sessionId: "s", ownerInstance: "A", token: "owner")
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let owner = ACPV2InboundReceiptOwner(sessionId: "s", upstreamSessionId: "upstream", attachment: try .init(brokerClient: client, opened: opened),
+            fence: fence, journal: persistence, isCurrent: { true })
+        defer { owner.stop() }
+        #expect(owner.start(client.incomingRawFrames))
+        try await eventually { await MainActor.run { owner.lastRetainedOrdinal == 1 } }
+        let stream = try #require(owner.stream)
+        let original = try #require(try await persistence.loadV2InboundLedgerPage(stream: stream).records.first)
+        #expect(owner.latestReceipt?.record == original)
+        #expect(owner.latestReceipt?.origin == .inserted)
+        try await client.replayRawBrokerEvents()
+        try await eventually { await service.acks.last == 1 }
+        owner.stop()
+        await client.detach()
+        await owner.waitUntilFinished()
+        #expect(await service.closeCount == 0)
+        #expect(await service.sentResponses.isEmpty)
+
+        let restored = ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s", command: "fixture", args: [], cwd: "/tmp", env: [:],
+            operationKeyPrefix: "restored", initialBrokerGeneration: .init(rawValue: 7), initialAcknowledgedCursor: .init(rawValue: 1), wireContext: .rawV2)
+        let reopened = try await restored.start()
+        defer { Task { await restored.detach() } }
+        let successor = ACPV2InboundReceiptOwner(sessionId: "s", upstreamSessionId: "upstream", attachment: try .init(brokerClient: restored, opened: reopened),
+            fence: fence, journal: persistence, isCurrent: { true })
+        defer { successor.stop() }
+        #expect(successor.start(restored.incomingRawFrames))
+        try await eventually { await MainActor.run { successor.latestReceipt?.origin == .duplicate } }
+        #expect(successor.lastRetainedOrdinal == 1)
+        #expect(successor.latestReceipt?.record == original)
+        #expect(original.connectionID != restored.updateConnectionID)
+        try await restored.replayRawBrokerEvents()
+        #expect(await service.acks == [1])
+        #expect(await service.sentResponses.isEmpty)
+        successor.stop()
+        await restored.detach()
+        await successor.waitUntilFinished()
+        #expect(await service.closeCount == 0)
+    }
+
+    @MainActor
+    @Test(arguments: ["context", "broker", "generation", "tail", "ack", "local", "v1"])
+    func inboundOwnerRejectsMismatchedBrokerAttachmentMetadata(reason: String) async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service)
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        var metadata = ACPBrokerMetadata(brokerId: .init(rawValue: reason == "broker" ? "other" : "raw"), generation: .init(rawValue: reason == "generation" ? 8 : 7),
+            alasSessionId: reason == "local" ? "other" : "s", adapterProgram: "fixture", adapterArgs: [], cwd: "/tmp", envKeys: [], createdAtMillis: 0)
+        metadata.wireContext = reason == "context" ? .legacyV1 : .rawV2
+        let opened = ACPBrokerOpenResult(snapshot: .init(metadata: metadata, initializeResult: nil, remoteSessionResult: nil,
+            turnState: .unknown("unknown"), acknowledgedCursor: .init(rawValue: reason == "ack" ? 3 : 0),
+            journalTail: .init(rawValue: reason == "tail" ? .max : 2), pendingRequests: [], operations: []), adopted: true)
+        if reason == "local" {
+            let owner = ACPV2InboundReceiptOwner(sessionId: "s", upstreamSessionId: "upstream", attachment: try .init(brokerClient: client, opened: opened),
+                fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"),
+                journal: ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("alas-invalid-owner-\(UUID()).sqlite").path), isCurrent: { true })
+            let input = AsyncStream<ACPBrokerRawFrameDelivery>.makeStream()
+            input.continuation.finish()
+            _ = owner.start(input.stream)
+            await owner.waitUntilFinished()
+            #expect(owner.status == .blocked(.invalidAttachment))
+            #expect(owner.stream == nil)
+        } else {
+            let selected = reason == "v1" ? makeClient(service, context: .legacyV1) : client
+            #expect(throws: ACPV2InboundReceiptOwner.Failure.invalidAttachment) {
+                try ACPV2InboundReceiptOwner.Attachment(brokerClient: selected, opened: opened)
+            }
+        }
+        #expect(await service.acks.isEmpty)
+        #expect(await service.sentResponses.isEmpty)
+        await client.detach()
+    }
+
+    @MainActor
+    @Test func inboundOwnerRejectsCanonicalEquivalentPendingMetadataInCommittedProof() async throws {
+        let service = RawBrokerFixture()
+        let client = makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("alas-inbound-proof-\(UUID()).sqlite").path)
+        try await persistence.upsertSession(.init(id: "s", agentId: "fixture", title: "Proof", autoRun: false,
+            acpBrokerId: "raw", acpBrokerGeneration: 7, acpBrokerWireContextJSON: try ACPBrokerWireContext.rawV2.persistedJSON(),
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        let fence = ACPSessionLeaseFence(sessionId: "s", ownerInstance: "A", token: "owner")
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let owner = ACPV2InboundReceiptOwner(sessionId: "s", upstreamSessionId: "upstream", attachment: try .init(brokerClient: client, opened: opened),
+            fence: fence, journal: InboundJournalGate(base: persistence, fault: .pending), isCurrent: { true })
+        let consumed = Mutex(0)
+        let input = AsyncStream<ACPBrokerRawFrameDelivery>.makeStream()
+        input.continuation.yield(.init(frame: Data(), connectionID: try #require(client.updateConnectionID),
+            provenance: .init(brokerID: .init(rawValue: "raw"), generation: .init(rawValue: 7), cursor: .init(rawValue: 3), origin: .journal),
+            pendingRequestID: "\u{e9}", acknowledgement: { consumed.withLock { $0 += 1 } }))
+        input.continuation.finish()
+        _ = owner.start(input.stream)
+        await owner.waitUntilFinished()
+        #expect(owner.status == .blocked(.invalidProof))
+        #expect(owner.lastRetainedOrdinal == 0)
+        #expect(consumed.withLock { $0 } == 0)
+        await client.detach()
+    }
+
     private func makeClient(_ service: RawBrokerFixture, context: ACPBrokerWireContext = .rawV2) -> ACPBrokerClient {
         ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
             command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",
