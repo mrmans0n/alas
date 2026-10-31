@@ -4608,6 +4608,7 @@ struct ACPSessionRunnerTests {
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
         onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
+        onPermissionBlocked: ((ACPChildBlocker) -> Void)? = nil,
         pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
         incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
         usageWaitSleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
@@ -4631,6 +4632,7 @@ struct ACPSessionRunnerTests {
             onSuccessfulTurn: onSuccessfulTurn,
             onTurnCompleted: onTurnCompleted,
             onTurnUsage: onTurnUsage,
+            onPermissionBlocked: onPermissionBlocked,
             onCheckpointCapture: onCheckpointCapture,
             pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent,
@@ -5648,6 +5650,61 @@ struct ACPSessionRunnerTests {
         await cancelTask.value
 
         #expect(!mock.sent.contains { $0.method == "session/cancel" })
+    }
+
+    /// A turn that settled at its result leaves a child running; the child's
+    /// later permission (or out-of-turn plan review) parks and is answered
+    /// without inventing a turn, and the prompt queued meanwhile drains.
+    @Test("a background child's permission after the turn settles back to idle",
+          arguments: ["Bash", "ExitPlanMode"])
+    func outOfTurnPermissionRestoresIdle(tool: String) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var blockers: [ACPChildBlocker] = []
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) },
+            onPermissionBlocked: { blockers.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        let session = runner.session
+        session.agentState = .ready
+        session.settlesAtResult = true
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { session.subagentRun("child-1") != nil }
+        #expect(session.transcript.streamingState == .idle)
+
+        let options: [ACPPermissionOption] = tool == "ExitPlanMode"
+            ? [.init(optionId: "default", name: "Yes", kind: "allow_once"),
+               .init(optionId: "plan", name: "No, keep planning", kind: "reject_once")]
+            : [.init(optionId: "allow", name: "Allow", kind: "allow_once"),
+               .init(optionId: "reject", name: "Reject", kind: "reject_once")]
+        mock.emitPermission(id: .number(21), params: .init(
+            sessionId: "child-1",
+            toolCall: .init(toolCallId: "child-call", title: tool, kind: nil, status: nil,
+                            content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+            options: options))
+        try await waitUntil { session.transcript.pendingPermission != nil }
+        #expect(blockers.count == 1)
+        #expect(session.transcript.streamingState == .awaitingPermission)
+        runner.send(text: "next", attachments: [])
+        try await waitUntil { session.queue.count == 1 }
+
+        await runner.policy.userDecided(
+            scopeKey: "tool:\(tool)", optionId: options[0].optionId, decision: .allow, persistScope: nil)
+
+        #expect(session.transcript.streamingState == .idle)
+        #expect(runner.activePromptIDForTesting == nil)
+        #expect(completions.count == 1)
+        try await waitUntil { mock.permissionResponses[.number(21)] != nil }
+        #expect(mock.permissionResponses[.number(21)]?.outcome == .selected(optionId: options[0].optionId))
+        try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
     }
 
     @Test("persistSessionRow skipped when lease is held by another instance")

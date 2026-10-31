@@ -243,6 +243,30 @@ struct ACPPermissionPolicyTests {
         #expect(await decision.outcome == .cancelled)
     }
 
+    /// A permission that parks out of turn (a background child asking after
+    /// the parent's prompt returned) must not leave the session streaming.
+    @Test("a decision restores the state the permission parked from",
+          arguments: [ACPSession.StreamingState.idle, .streaming])
+    func decisionRestoresParkedState(prior: ACPSession.StreamingState) async throws {
+        let store = try makeStore()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.transcript.streamingState = prior
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: store))
+        let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
+        async let decision = policy.evaluate(
+            scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
+        let deadline = ContinuousClock.now + .seconds(5)
+        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+        #expect(session.transcript.streamingState == .awaitingPermission)
+
+        await policy.userDecided(scopeKey: "tool:bash", optionId: "allow", decision: .allow, persistScope: nil)
+
+        #expect(await decision.outcome == .selected(optionId: "allow"))
+        #expect(session.transcript.streamingState == prior)
+    }
+
     @Test("persisted user decisions commit before userDecided returns")
     func persistedUserDecisionIsAwaited() async throws {
         let store = try makeStore()

@@ -228,7 +228,9 @@ public final class ACPElicitationCoordinator {
             // reached the client in the RPC result.
             return true
         }
+        // A background child (Claude) asks under its own session id.
         return requestedSessionId == remoteSessionId
+            || session.subagentRun(requestedSessionId) != nil
     }
 
     private func enqueue(_ request: ACPUserInputRequest) {

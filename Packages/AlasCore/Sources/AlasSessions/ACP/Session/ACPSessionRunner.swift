@@ -634,6 +634,10 @@ public final class ACPSessionRunner {
                 guard self.isConnectionCurrent() else { continue }
                 self.connection.client.respondToPermission(id: id, response: response)
                 await self.persistPermissionDecision(params: params, response: response)
+                // A permission answered after the turn settled (a background
+                // child) leaves the session idle; nothing else drains the
+                // prompt queued while it was parked.
+                self.flushQueueIfIdle()
             }
         }
 
