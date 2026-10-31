@@ -465,11 +465,20 @@ final class WorktreeVMManager {
         }
         guard let vm = runningVMs[id] else { return }
         do {
-            if force { try await vm.forceStop() } else { try await vm.stop() }
+            if force { try await vm.forceStop() } else { try await vm.stop(requestingShutdown: guestPoweroff(id)) }
         } catch {
             guard vm.state == .stopped || vm.state == .error else { throw error }
         }
         didStop(id)
+    }
+
+    /// How a Linux VM whose helper is connected is asked to shut down: Xfce
+    /// may swallow the power button, which would leave the stop to force its
+    /// ext4 disk off. Nil for macOS VMs and when no helper is connected, which
+    /// press the power button.
+    private func guestPoweroff(_ id: String) -> (@MainActor () async -> Bool)? {
+        guard VMIdentity.parse(recordID: id).guest == .linux, let client = existingGuestClient(for: id) else { return nil }
+        return { await client.requestPoweroff() }
     }
 
     /// Forces the VM off if it runs here (its disk is discarded anyway), then

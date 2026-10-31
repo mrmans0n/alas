@@ -90,20 +90,27 @@ final class RunningVM {
 
     /// Requests a guest shutdown and forces the VM off when the guest has not
     /// stopped within `gracefulStopTimeout` (or refuses the request).
-    func stop() async throws {
-        guard await !stopGracefully() else { return }
+    /// `requestingShutdown`, when given, asks the guest some other way first
+    /// and returns whether it could; the power button is pressed only when
+    /// it couldn't.
+    func stop(requestingShutdown: (@MainActor () async -> Bool)? = nil) async throws {
+        guard await !stopGracefully(requestingShutdown: requestingShutdown) else { return }
         try await forceStop()
     }
 
     /// Requests a guest shutdown and waits up to `gracefulStopTimeout`. True
     /// when the VM is stopped afterwards; false leaves it running.
-    func stopGracefully() async -> Bool {
+    func stopGracefully(requestingShutdown: (@MainActor () async -> Bool)? = nil) async -> Bool {
         guard machine.state != .stopped, machine.state != .error else { return true }
-        do {
-            try machine.requestStop()
-        } catch {
-            // The guest cannot take a stop request right now.
-            return false
+        if let requestingShutdown, await requestingShutdown() {
+            // Asked; the wait below bounds it like a power button press.
+        } else {
+            do {
+                try machine.requestStop()
+            } catch {
+                // The guest cannot take a stop request right now.
+                return false
+            }
         }
         await waitForGuestStop(timeout: Self.gracefulStopTimeout)
         return machine.state == .stopped || machine.state == .error

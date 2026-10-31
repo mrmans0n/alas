@@ -183,6 +183,17 @@ actor VMGuestClient {
         return VMGuestRunResult(exitCode: exitCode, stdout: stdout, stderr: stderr, truncated: truncated, timedOut: timedOut)
     }
 
+    /// Asks a Linux guest to power off over a live connection, and returns at once whether it
+    /// was asked: the connection drops as the guest goes down, so the reply may never come, and
+    /// the caller bounds the shutdown itself.
+    func requestPoweroff() -> Bool {
+        guard !closed, let connection, !connection.lost, connection.hello != nil else { return false }
+        Task { _ = try? await self.run(Self.poweroffCommand, timeoutSeconds: 60) }
+        return true
+    }
+
+    static let poweroffCommand = "sudo systemctl poweroff"
+
     /// Tells the guest about a session's lifecycle. Sent only over a live connection: when the
     /// connection dropped, the guest already ended its sessions. Returns whether it was sent.
     @discardableResult

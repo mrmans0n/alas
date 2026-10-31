@@ -19,6 +19,7 @@ final class WorktreeVMManagerTests {
         var state: VZVirtualMachine.State = .stopped
         var virtualMachine: VZVirtualMachine? { nil }
         var onGuestStop: ((Error?) -> Void)?
+        private(set) var stopRequests = 0
         init(hypervisor: FakeHypervisor, stopFails: Bool, guestStopError: Error?) {
             self.hypervisor = hypervisor
             self.stopFails = stopFails
@@ -26,6 +27,7 @@ final class WorktreeVMManagerTests {
         }
         func start() async throws { state = .running }
         func requestStop() throws {
+            stopRequests += 1
             if stopFails { throw StopRefused() }
             state = guestStopError == nil ? .stopped : .error
             onGuestStop?(guestStopError)
@@ -236,6 +238,26 @@ final class WorktreeVMManagerTests {
         #expect(manager.running("/repo/a") != nil)
         #expect(manager.running("/repo/b") == nil)
         #expect(try registry.snapshot().first { $0.id == "/repo/a" }?.runOwner != nil)
+    }
+
+    /// A Linux guest's helper powers it off; the power button is the fallback when it can't.
+    @Test("a guest that takes the shutdown request stops without a power button press or a forced stop",
+          arguments: [true, false])
+    func stopAsksTheGuestFirst(guestTakesIt: Bool) async throws {
+        let machine = FakeMachine(hypervisor: hypervisor, stopFails: false, guestStopError: nil)
+        let vm = RunningVM(worktreeID: "/repo/a#linux", machine: machine)
+        try await vm.start()
+
+        try await vm.stop(requestingShutdown: {
+            guard guestTakesIt else { return false }
+            machine.state = .stopped
+            machine.onGuestStop?(nil)
+            return true
+        })
+
+        #expect(machine.state == .stopped)
+        #expect(machine.stopRequests == (guestTakesIt ? 0 : 1))
+        #expect(!vm.wasForcedOff)
     }
 
     @Test("a sealed golden image is never booted again")
