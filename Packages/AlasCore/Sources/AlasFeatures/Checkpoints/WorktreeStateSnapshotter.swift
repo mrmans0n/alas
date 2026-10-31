@@ -468,12 +468,13 @@ public struct WorktreeStateSnapshotter: Sendable {
     /// HEAD's object and branch from one `rev-parse`. `--abbrev-ref=loose`
     /// shortens exactly as `symbolic-ref --short` does; a detached HEAD
     /// prints `HEAD`. An unborn branch fails, and falls back to the separate
-    /// reads.
+    /// reads, as does any other output.
     private func headAndBranch(_ target: CheckpointWorktreeTarget) async throws -> (head: String, branch: String) {
         let result = try await git.runData(["rev-parse", "HEAD", "--abbrev-ref=loose", "HEAD"], cwd: target.path, environment: [:])
-        if result.exitCode == 0 {
-            let lines = try line(result.stdout).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-            guard lines.count == 2, !lines[0].isEmpty, !lines[1].isEmpty else { throw CheckpointSnapshotError.invalidGitOutput }
+        // A ref named like HEAD makes `--abbrev-ref` print nothing, with exit 0.
+        if result.exitCode == 0,
+           let lines = try? line(result.stdout).split(separator: "\n", omittingEmptySubsequences: false).map(String.init),
+           lines.count == 2, !lines[0].isEmpty, !lines[1].isEmpty {
             return (lines[0], lines[1] == "HEAD" ? "(detached)" : lines[1])
         }
         let head = try await headOID(target)
@@ -497,7 +498,8 @@ public struct WorktreeStateSnapshotter: Sendable {
                 var sawDebug = false
                 while rest.first == UInt8(ascii: " ") {
                     guard let newline = rest.firstIndex(of: UInt8(ascii: "\n")) else { throw CheckpointSnapshotError.invalidGitOutput }
-                    if String(decoding: rest[..<newline], as: UTF8.self).contains("flags: 2000"), let previous = tagged.last {
+                    if let flags = String(decoding: rest[..<newline], as: UTF8.self).components(separatedBy: "flags: ").dropFirst().first
+                        .flatMap({ UInt32($0, radix: 16) }), flags & 0x2000_0000 != 0, let previous = tagged.last {
                         intentToAdd.append(try entryPath(of: previous.record))
                     }
                     rest = rest[rest.index(after: newline)...]

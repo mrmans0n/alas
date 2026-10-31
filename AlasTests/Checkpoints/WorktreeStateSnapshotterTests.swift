@@ -102,20 +102,6 @@ struct WorktreeStateSnapshotterTests {
         await #expect(throws: (any Error).self) { try await WorktreeStateSnapshotter.live.snapshot(target: repo.target) }
     }
 
-    @Test func intentToAddEntryFailsCaptureWithoutChangingIndexIntent() async throws {
-        let repo = try await CheckpointTestRepository.makeFromTemplate()
-        defer { repo.remove() }
-        try repo.write("not staged", to: "planned.swift")
-        try await repo.git(["add", "-N", "planned.swift"])
-
-        await #expect(throws: CheckpointSnapshotError.unsupportedPaths(["planned.swift"])) {
-            try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
-        }
-
-        let debug = String(decoding: try await repo.git(["ls-files", "--debug", "--", "planned.swift"]), as: UTF8.self)
-        #expect(debug.contains("flags: 2000"))
-    }
-
     @Test func unbornRepositoryCapturesInitialWorkAgainstEmptyTree() async throws {
         let root = URL(fileURLWithPath: "/private/tmp").appendingPathComponent("checkpoint-unborn-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

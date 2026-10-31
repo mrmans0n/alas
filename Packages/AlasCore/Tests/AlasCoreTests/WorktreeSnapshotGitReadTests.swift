@@ -5,7 +5,7 @@ import Testing
 /// Pins the git state a snapshot derives instead of asking git for it
 /// directly: HEAD entries come from the index and the staged diff, not
 /// `ls-tree`, and the branch from `rev-parse`, not `symbolic-ref`.
-struct WorktreeStateSnapshotterTests {
+struct WorktreeSnapshotGitReadTests {
     @Test func headEntriesAndBranchMatchGitsOwnReads() async throws {
         let repo = try await Repository.make("""
         printf 'one\\ntwo\\nthree\\nfour\\n' > renamed.txt; printf 'one\\ntwo\\nthree\\nfour\\n' > edited.txt
@@ -39,7 +39,8 @@ struct WorktreeStateSnapshotterTests {
         }
     }
 
-    @Test(arguments: [("detached", "commit; git checkout -q --detach", "(detached)"), ("unborn", "git add -A", "main")])
+    @Test(arguments: [("detached", "commit; git checkout -q --detach", "(detached)"), ("unborn", "git add -A", "main"),
+                      ("ref named HEAD", "commit; git update-ref refs/heads/HEAD main", "main")])
     func branchOfHeadWithoutBranchTip(name: String, script: String, branch: String) async throws {
         let repo = try await Repository.make("echo x > a.txt; " + script, unborn: true)
         defer { repo.remove() }
@@ -48,7 +49,7 @@ struct WorktreeStateSnapshotterTests {
     }
 
     /// Intent-to-add paths are named as stored, never quoted, including ones
-    /// starting with a space.
+    /// starting with a space, and capture leaves their intent in the index.
     @Test func intentToAddPathsFailCaptureByTheirOwnNames() async throws {
         let repo = try await Repository.make("echo x > ' lead.txt'; echo x > 'é.txt'; git add -N ' lead.txt' 'é.txt'")
         defer { repo.remove() }
@@ -56,6 +57,8 @@ struct WorktreeStateSnapshotterTests {
         await #expect(throws: CheckpointSnapshotError.unsupportedPaths([" lead.txt", "é.txt"])) {
             try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
         }
+
+        #expect(try await repo.git(["ls-files", "--debug", "--", " lead.txt"]).contains("flags: 2000"))
     }
 
     private struct Repository {
