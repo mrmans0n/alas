@@ -301,6 +301,14 @@ public enum CheckpointDiffContent: @unchecked Sendable {
     case unavailable(String)
 }
 
+/// A file's bytes at a checkpoint, as `WorktreeCheckpointService.baselineBytes` reads them.
+public enum CheckpointBaselineBytes: Equatable, Sendable {
+    case data(Data)
+    case absent
+    case tooLarge(byteCount: Int64)
+    case unavailable(String)
+}
+
 public enum CheckpointKind: String, Codable, Equatable, Sendable {
     case manual
     case automatic

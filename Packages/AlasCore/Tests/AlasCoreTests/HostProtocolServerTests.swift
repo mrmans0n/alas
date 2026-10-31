@@ -587,6 +587,66 @@ struct HostProtocolServerTests {
         }
     }
 
+    /// Stash, checkpoint and range sides read as their diffs compare them,
+    /// with only stashes and checkpoints the host lists and verified range ends.
+    @Test func aMacReadsStashCheckpointAndRangeSidesBytes() async throws {
+        let fixture = try await RepoFixture()
+        defer { fixture.tearDown() }
+        let (repo, ref) = try await fixture.mainWorktree()
+        let id = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first).id
+        func git(_ arguments: String...) async throws -> String {
+            let result = try await Process.git(arguments, cwd: repo)
+            #expect(result.exitCode == 0, "\(arguments): \(result.stderr)")
+            return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        func read(_ path: String, at revision: HostFileRevision) async throws -> RemoteServerMessage? {
+            guard case .worktreeRead(let reply) = try await fixture.request(
+                .readWorktree(worktree: ref, read: .fileBytes(path: path, revision: revision)))
+            else { return nil }
+            return reply
+        }
+        func bytes(_ data: Data, _ path: String = "icon.png") -> RemoteServerMessage {
+            .fileBytes(sessionId: id, path: path, data: data, byteSize: data.count)
+        }
+        func refused(_ path: String, _ reason: RemoteFileAccessReason, _ message: String? = nil) -> RemoteServerMessage {
+            .fileUnavailable(sessionId: id, path: path, reason: reason, byteSize: nil, message: message)
+        }
+        let icon = repo.appendingPathComponent("icon.png")
+        let added = Data([0x89, 0x50, 0x01]), changed = Data([0x89, 0x50, 0x02])
+        let checkpointed = Data([0x89, 0x50, 0x03]), stashed = Data([0x89, 0x50, 0x04]), untracked = Data([0x89, 0x50, 0x05])
+        try added.write(to: icon)
+        _ = try await git("add", "icon.png")
+        _ = try await git("commit", "-q", "-m", "Add icon")
+        let first = try await git("rev-parse", "HEAD")
+        try changed.write(to: icon)
+        _ = try await git("commit", "-q", "-am", "Change icon")
+        let second = try await git("rev-parse", "HEAD")
+
+        #expect(try await read("icon.png", at: .rangeBase(base: first, head: second, threeDot: false)) == bytes(added))
+        #expect(try await read("icon.png", at: .rangeBase(base: second, head: first, threeDot: true)) == bytes(added))
+        #expect(try await read("icon.png", at: .rangeBase(base: "HEAD~1", head: second, threeDot: false))
+            == refused("icon.png", .pathRejected))
+
+        try checkpointed.write(to: icon)
+        let checkpoint = try await fixture.checkpoint("Before", in: ref).id
+        try untracked.write(to: repo.appendingPathComponent("new.png"))
+        #expect(try await read("icon.png", at: .checkpoint(id: checkpoint)) == bytes(checkpointed))
+        #expect(try await read("new.png", at: .checkpoint(id: checkpoint)) == refused("new.png", .notFound))
+
+        try stashed.write(to: icon)
+        _ = try await git("stash", "push", "-q", "--include-untracked")
+        guard case .stashes(let stashes) = try await fixture.request(.listStashes(worktree: ref)) else {
+            Issue.record("expected stashes")
+            return
+        }
+        let stash = HostStashRef(try #require(stashes.first))
+        #expect(try await read("icon.png", at: .stashBase(stash)) == bytes(changed))
+        #expect(try await read("icon.png", at: .stash(stash, untracked: false)) == bytes(stashed))
+        #expect(try await read("new.png", at: .stash(stash, untracked: true)) == bytes(untracked, "new.png"))
+        #expect(try await read("icon.png", at: .stash(HostStashRef(ref: stash.ref, sha: second), untracked: false))
+            == refused("icon.png", .gitFailed, "This stash changed since it was listed. Refresh and try again."))
+    }
+
     /// A file's history follows its renames, naming the file as each commit
     /// had it, and is cut at the cap with `truncated` set.
     @Test func aMacReadsAFilesHistory() async throws {

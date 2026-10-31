@@ -131,32 +131,15 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             }
             let saved = try await store.load(id: id, lineageID: target.lineageID)
             _ = try snapshotter.fileSystem.validateRelativePath(path, under: target.path)
-            let beforeState: CheckpointFileState
-            let beforeStoredInCheckpoint: Bool
-            if let state = saved.paths.first(where: { $0.relativePath == path })?.worktree {
-                beforeState = state
-                beforeStoredInCheckpoint = true
-            } else {
-                let current = try await snapshotter.snapshot(target: target, includingPaths: [path],
-                                                             onlyIncludedPaths: true, retainingPayloads: false)
-                guard current.headOID == saved.headOID, let state = current.paths[path] else {
-                    return .unavailable("The checkpoint baseline is unavailable for this path.")
-                }
-                beforeState = state.head
-                beforeStoredInCheckpoint = false
+            guard let baseline = try await baseline(of: path, in: saved, target: target) else {
+                return .unavailable("The checkpoint baseline is unavailable for this path.")
             }
+            let beforeState = baseline.state
             let afterMetadata = try currentCheckpointDiffMetadata(target: target, path: path)
             if let oversized = try oversizedCheckpointDiffPreview(before: beforeState, after: afterMetadata, target: target, path: path) {
                 return oversized
             }
-            let beforeData: Data?
-            if beforeStoredInCheckpoint {
-                beforeData = try await checkpointDiffPayload(beforeState, lineageID: target.lineageID)
-            } else {
-                let current = try await snapshotter.snapshot(target: target, includingPaths: [path],
-                                                             onlyIncludedPaths: true)
-                beforeData = try current.payload(beforeState)
-            }
+            let beforeData = try await payload(of: baseline, path: path, target: target)
             let before = CheckpointDiffSide(state: beforeState, data: beforeData)
             let after = try currentCheckpointDiffSide(target: target, path: path)
             if ImageFileType.isSupported(relativePath: path),
@@ -208,6 +191,52 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         } catch {
             return .unavailable("The checkpoint diff could not be loaded.")
         }
+    }
+
+    /// The bytes `path` had at checkpoint `id`, the old side of its diff:
+    /// nil when it was absent, or is not a regular file. Refused over
+    /// `maxBytes` before it is read.
+    public func baselineBytes(
+        target: CheckpointWorktreeTarget, id: CheckpointID, path: String, maxBytes: Int
+    ) async -> CheckpointBaselineBytes {
+        do {
+            guard !target.path.isRemoteAlasPath else { return .unavailable(CheckpointRestoreBlocker.remoteTarget.description) }
+            guard WorktreeService.existingLocalLineageID(forWorktreeAt: target.path) == target.lineageID else {
+                return .unavailable(CheckpointRestoreBlocker.lineageMismatch.description)
+            }
+            let saved = try await store.load(id: id, lineageID: target.lineageID)
+            _ = try snapshotter.fileSystem.validateRelativePath(path, under: target.path)
+            guard let baseline = try await baseline(of: path, in: saved, target: target) else {
+                return .unavailable("The checkpoint baseline is unavailable for this path.")
+            }
+            guard baseline.state.kind == .regular, let blob = baseline.state.blob else { return .absent }
+            guard blob.byteCount <= Int64(maxBytes) else { return .tooLarge(byteCount: blob.byteCount) }
+            return try await payload(of: baseline, path: path, target: target).map { .data($0) } ?? .absent
+        } catch {
+            return .unavailable("The checkpoint file could not be read.")
+        }
+    }
+
+    /// What `path` was at checkpoint `saved`: as the checkpoint stored it, else
+    /// as HEAD has it while HEAD has not moved since. Nil once that is gone.
+    private func baseline(
+        of path: String, in saved: WorktreeCheckpointManifest, target: CheckpointWorktreeTarget
+    ) async throws -> (state: CheckpointFileState, stored: Bool)? {
+        if let state = saved.paths.first(where: { $0.relativePath == path })?.worktree {
+            return (state, true)
+        }
+        let current = try await snapshotter.snapshot(target: target, includingPaths: [path],
+                                                     onlyIncludedPaths: true, retainingPayloads: false)
+        guard current.headOID == saved.headOID, let state = current.paths[path] else { return nil }
+        return (state.head, false)
+    }
+
+    private func payload(
+        of baseline: (state: CheckpointFileState, stored: Bool), path: String, target: CheckpointWorktreeTarget
+    ) async throws -> Data? {
+        if baseline.stored { return try await checkpointDiffPayload(baseline.state, lineageID: target.lineageID) }
+        let current = try await snapshotter.snapshot(target: target, includingPaths: [path], onlyIncludedPaths: true)
+        return try current.payload(baseline.state)
     }
 
     @MainActor

@@ -807,6 +807,20 @@ extension AlasCoreContext {
         guard let revision else {
             return await remoteWorkingTreeBytes(worktree, normalizedPath: normalizedPath, url: url, maxBytes: maxBytes)
         }
+        switch revision {
+        case .stashBase, .stash, .checkpoint, .rangeBase:
+            // A headless host's, as are the stash, checkpoint and review reads they serve.
+            guard environment.servesWorktreeGit else { return .failure(reason: .pathRejected, byteSize: nil, message: nil) }
+        case .index, .head, .base, .commit, .parent:
+            break
+        }
+        if case .checkpoint(let id) = revision {
+            do {
+                return try await checkpointBytes(id, path: normalizedPath, in: worktree, maxBytes: maxBytes)
+            } catch {
+                return Self.bytesRefusal(error)
+            }
+        }
         // A folder has no history; and a control character could end the batch request below.
         guard !isFolderWorktree(worktree),
               !normalizedPath.unicodeScalars.contains(where: { $0.value < 0x20 || $0.value == 0x7F })
@@ -843,6 +857,23 @@ extension AlasCoreContext {
                     return .failure(reason: .pathRejected, byteSize: nil, message: nil)
                 }
                 rev = revision == .commit(sha: sha) ? commit : commit + "^"
+            case .stashBase(let stash), .stash(let stash, _):
+                // Only a listed stash's SHA, never the Mac's, reaches git.
+                let listed = try await Self.listedStash(stash, at: worktree.path)
+                rev = switch revision {
+                case .stash(_, untracked: false): listed.sha
+                case .stash(_, untracked: true): listed.sha + "^3"
+                default: listed.sha + "^1"
+                }
+            case .rangeBase(let base, let head, let threeDot):
+                guard Self.isRangeEnd(base, allowingRootParent: true), Self.isRangeEnd(head, allowingRootParent: false) else {
+                    return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+                }
+                let range = try await Self.verifiedRange(base: base, head: head, threeDot: threeDot, at: worktree.path, git: git)
+                rev = try await git.resolvedRangeTrees(
+                    worktreePath: worktree.path, base: range.base, head: range.head, threeDot: threeDot).before
+            case .checkpoint:
+                preconditionFailure("read above")
             }
             // As diffs do, a path ignored now is still read where it is tracked.
             if try await git.isPathIgnored(worktreePath: worktree.path, path: normalizedPath, comparisonRef: rev) {
@@ -868,7 +899,16 @@ extension AlasCoreContext {
             }
             return .success(data: blob.stdout)
         } catch {
-            return .failure(reason: .gitFailed, byteSize: nil, message: error.localizedDescription)
+            return Self.bytesRefusal(error)
+        }
+    }
+
+    /// A refused bytes read: the host's own refusal shows its message.
+    private static func bytesRefusal(_ error: Error) -> RemoteFileBytesResult {
+        switch error as? HostError {
+        case .failed(let message)?: .failure(reason: .gitFailed, byteSize: nil, message: message)
+        case _?: .failure(reason: .pathRejected, byteSize: nil, message: nil)
+        case nil: .failure(reason: .gitFailed, byteSize: nil, message: error.localizedDescription)
         }
     }
 
