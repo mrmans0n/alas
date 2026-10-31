@@ -53,7 +53,9 @@ public struct VMBundle: Sendable {
         return VMBundle(url: to)
     }
 
-    private static func cloneFile(_ src: URL, to dst: URL) throws {
+    /// Copies `src` to `dst` with `clonefile(2)`: copy-on-write on APFS, and
+    /// an error across volumes.
+    public static func cloneFile(_ src: URL, to dst: URL) throws {
         if clonefile(src.path, dst.path, 0) != 0 {
             let code = errno
             throw NSError(

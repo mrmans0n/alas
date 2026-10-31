@@ -101,8 +101,12 @@ public struct QCOW2Reader {
     /// Writes the guest-visible bytes to `destination` as a sparse file, then
     /// extends it to `growTo` when given. Unallocated and zero clusters are left
     /// as holes. On failure the destination is removed, so a partial disk never
-    /// passes for a converted one.
-    public func convertToRaw(at destination: URL, growTo size: UInt64?) throws {
+    /// passes for a converted one. `progress` gets the fraction of guest bytes
+    /// done after each cluster; throwing from it (a `CancellationError`, say)
+    /// stops the conversion like any other failure.
+    public func convertToRaw(
+        at destination: URL, growTo size: UInt64?, progress: ((Double) throws -> Void)? = nil
+    ) throws {
         let finalSize = size ?? virtualSize
         guard finalSize <= UInt64(Int64.max) else { throw QCOW2ReaderError.sizeTooLarge(finalSize) }
         guard finalSize >= virtualSize else {
@@ -116,7 +120,7 @@ public struct QCOW2Reader {
             guard ftruncate(output, off_t(finalSize)) == 0 else {
                 throw QCOW2ReaderError.io(operation: "ftruncate", errno: errno)
             }
-            try copyClusters(from: source, to: output)
+            try copyClusters(from: source, to: output, progress: progress)
             guard fsync(output) == 0 else { throw QCOW2ReaderError.io(operation: "fsync", errno: errno) }
         } catch {
             unlink(destination.path)
@@ -124,7 +128,7 @@ public struct QCOW2Reader {
         }
     }
 
-    private func copyClusters(from source: Int32, to output: Int32) throws {
+    private func copyClusters(from source: Int32, to output: Int32, progress: ((Double) throws -> Void)?) throws {
         let clusterSize = UInt64(1) << clusterBits
         let l2Entries = clusterSize / 8
         let l1 = try Self.read(source, count: l1Size * 8, at: l1TableOffset)
@@ -140,6 +144,7 @@ public struct QCOW2Reader {
                 let offset = guestOffset + UInt64(l2Index) * clusterSize
                 guard offset < virtualSize else { break }
                 let length = Int(min(clusterSize, virtualSize - offset))
+                try progress?(Double(offset) / Double(virtualSize))
                 let entry = l2.uint64(at: l2Index * 8)
                 let data: Data
                 if entry & Self.compressedFlag != 0 {

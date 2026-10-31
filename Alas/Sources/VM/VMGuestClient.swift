@@ -18,6 +18,10 @@ struct VMGuestHello: Equatable, Sendable {
     var screenRecording: Bool
     /// The helper's `VMGuestProtocol.revision`; another value than this build's means it is out of date.
     var protocolRevision: Int
+    /// `"linux"` for the Linux helper; nil from a macOS helper, which never sends it.
+    var guestKind: String? = nil
+    /// What the helper can do, such as `"run"`; nil from a macOS helper, which can do everything.
+    var capabilities: [String]? = nil
 }
 
 /// Talks to the Alas VM Guest helper over one connection at a time, multiplexing requests by id.
@@ -380,10 +384,10 @@ actor VMGuestClient {
 
     private func deliver(_ message: VMGuestMessage, on connection: Connection) {
         switch message {
-        case let .helloReply(guestVersion, protocolRevision, accessibility, screenRecording, _, _):
+        case let .helloReply(guestVersion, protocolRevision, accessibility, screenRecording, guestKind, capabilities):
             let hello = VMGuestHello(
                 guestVersion: guestVersion, accessibility: accessibility, screenRecording: screenRecording,
-                protocolRevision: protocolRevision)
+                protocolRevision: protocolRevision, guestKind: guestKind, capabilities: capabilities)
             connection.hello = hello
             connection.hellosAnswered += 1
             let number = connection.hellosAnswered
