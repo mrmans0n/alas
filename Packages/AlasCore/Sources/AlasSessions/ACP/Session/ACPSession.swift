@@ -312,6 +312,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// The user's explicit collapse choice for the background task tray; nil follows the default.
     @Tracked public var backgroundTrayExpanded: Bool?
     private var subagentOrder: [String] = []
+    /// Every delegation message seen so far, both views merged, keyed by
+    /// message id. The runs hold (and persist) the links naming them.
+    private var delegationLinks: [String: ACPDelegationLink] = [:]
+    /// Message ids, in arrival order, of links naming a child that has not
+    /// been announced yet. `registerSubagent` hands them to the new run.
+    private var pendingDelegationLinks: [String] = []
 
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
@@ -1031,7 +1037,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .userMessageChunk(let chunk):
             // A message between sessions is not a human turn; on the root it
             // must never claim prompt ownership (see `ACPDirectedMessage`).
-            guard chunk.directed == nil else { return [] }
+            // Only its link to the child's view is kept.
+            guard chunk.directed == nil else { return recordDelegationLink(from: chunk, at: timestamp) }
             guard !isEchoedSymbolExpansion(chunk.content) else { return [] }
             let txt = text(of: chunk.content)
             // Recorded as a notice, not a user row: an echo has nothing to merge into.
@@ -1641,7 +1648,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) }
                 ?? firstIdLessMatch(of: .thought, atOrAfter: suppressedReplayInsertionCursor)
         case .userMessageChunk(let chunk):
-            guard chunk.directed == nil else { return [] }
+            guard chunk.directed == nil else { return recordDelegationLink(from: chunk) }
             dirty = []
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
@@ -2396,6 +2403,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         run.merge(spawn: spawn, live: live)
         subagents[id] = run
         subagentOrder.append(id)
+        adoptPendingDelegationLinks(for: run)
         clearRestoredContextRecoveryStatus()
         // A subagent row closes the current output run the same way a tool
         // call does, so held replay candidates must land ahead of it —
@@ -2457,6 +2465,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
         subagentSessionId: String,
         at timestamp: Date = Date()
     ) -> Set<Int> {
+        // Task 4 persists the parent row this dirties.
+        recordDelegationLink(from: update, at: timestamp)
         guard let run = subagents[subagentSessionId] else { return [] }
         nextPromptActivity.send()
         let dirty = run.apply(update, at: timestamp)
@@ -2481,6 +2491,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         subagentSessionId: String,
         at timestamp: Date = Date()
     ) -> Set<Int> {
+        recordDelegationLink(from: update, at: timestamp)
         guard let run = subagents[subagentSessionId] else { return [] }
         nextPromptActivity.send()
         let dirty = run.applyReplayed(update, at: timestamp)
@@ -2512,6 +2523,78 @@ public final class ACPSession: ChangeTracking, Identifiable {
 
     public func subagentRun(_ subagentSessionId: String) -> ACPSubagentRun? {
         subagents[subagentSessionId]
+    }
+
+    // MARK: Delegation links
+
+    /// Both views of one delegation message, as far as they have arrived.
+    public func delegationLink(messageId: String) -> ACPDelegationLink? {
+        delegationLinks[messageId]
+    }
+
+    /// Merges one view of a delegation message into its link and stores the
+    /// result on every child it names, so the link travels in that child's
+    /// row. A child not announced yet gets it on registration. Returns the
+    /// parent rows that changed.
+    @discardableResult
+    public func recordDelegationLink(_ link: ACPDelegationLink, at timestamp: Date = Date()) -> Set<Int> {
+        var merged = delegationLinks[link.messageId] ?? link
+        merged.merge(link)
+        delegationLinks[link.messageId] = merged
+        var dirty: Set<Int> = []
+        var waitsForChild = false
+        for id in delegationChildIds(of: merged) {
+            guard let run = subagents[id] else {
+                waitsForChild = true
+                continue
+            }
+            if run.record(merged) { dirty.formUnion(refreshSubagentRow(for: run, at: timestamp)) }
+        }
+        let pending = pendingDelegationLinks.contains(merged.messageId)
+        if waitsForChild, !pending {
+            pendingDelegationLinks.append(merged.messageId)
+        } else if !waitsForChild, pending {
+            pendingDelegationLinks.removeAll { $0 == merged.messageId }
+        }
+        return dirty
+    }
+
+    @discardableResult
+    private func recordDelegationLink(from update: ACPSessionUpdate, at timestamp: Date = Date()) -> Set<Int> {
+        guard case .userMessageChunk(let chunk) = update else { return [] }
+        return recordDelegationLink(from: chunk, at: timestamp)
+    }
+
+    private func recordDelegationLink(from chunk: ACPTextChunk, at timestamp: Date = Date()) -> Set<Int> {
+        guard let directed = chunk.directed,
+              let link = ACPDelegationLink(messageId: chunk.messageId, directed: directed)
+        else { return [] }
+        return recordDelegationLink(link, at: timestamp)
+    }
+
+    /// The participants of `link` other than the root, each a child that
+    /// should carry it.
+    private func delegationChildIds(of link: ACPDelegationLink) -> [String] {
+        var ids: [String] = []
+        for id in [link.senderSessionId, link.recipientSessionId].compactMap({ $0 })
+        where id != remoteSessionId && !ids.contains(id) {
+            ids.append(id)
+        }
+        return ids
+    }
+
+    private func adoptPendingDelegationLinks(for run: ACPSubagentRun) {
+        guard !pendingDelegationLinks.isEmpty else { return }
+        for messageId in pendingDelegationLinks {
+            guard let link = delegationLinks[messageId],
+                  delegationChildIds(of: link).contains(run.subagentSessionId)
+            else { continue }
+            run.record(link)
+        }
+        pendingDelegationLinks.removeAll { messageId in
+            guard let link = delegationLinks[messageId] else { return true }
+            return delegationChildIds(of: link).allSatisfy { subagents[$0] != nil }
+        }
     }
 
     public var orderedSubagents: [ACPSubagentRun] {
@@ -2555,6 +2638,20 @@ public final class ACPSession: ChangeTracking, Identifiable {
         }
         subagents = rebuilt
         subagentOrder = order
+        // The persisted rows are authoritative; only links still waiting for
+        // a child exist nowhere else.
+        var links: [String: ACPDelegationLink] = [:]
+        for messageId in pendingDelegationLinks {
+            links[messageId] = delegationLinks[messageId]
+        }
+        for run in order.compactMap({ rebuilt[$0] }) {
+            for link in run.delegationLinks {
+                links[link.messageId, default: link].merge(link)
+            }
+        }
+        delegationLinks = links
+        // A link still waiting may name a child only the restored rows know.
+        for run in order.compactMap({ rebuilt[$0] }) { adoptPendingDelegationLinks(for: run) }
     }
 
     /// Marks every still-running child as disconnected when the agent
@@ -2585,7 +2682,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
             lastError: run.lastError,
             configOptions: run.configOptions,
             cwd: run.cwd,
-            additionalDirectories: run.additionalDirectories)
+            additionalDirectories: run.additionalDirectories,
+            links: run.delegationLinks)
     }
 
     private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {

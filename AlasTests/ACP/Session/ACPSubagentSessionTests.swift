@@ -1077,6 +1077,73 @@ struct ACPSubagentSessionTests {
         #expect(run.isConfigConfirmed)
     }
 
+    enum LinkedViewOrder: CaseIterable, Sendable {
+        case outgoingFirst, incomingFirst, outgoingBeforeAnnounce
+    }
+
+    @Test("both views of a delegation merge into one link in any order, even before the child is announced",
+          arguments: LinkedViewOrder.allCases)
+    func linkedViewsMergeInAnyOrder(order: LinkedViewOrder) throws {
+        let session = makeSession()
+        session.remoteSessionId = "root"
+        let announce = { session.apply(.subagentSpawned(.init(subagentSessionId: "c1", name: "Explore"))) }
+        let outgoing = {
+            session.apply(.userMessageChunk(.init(messageId: "toolu_1", content: .text("Fix the build"), directed: .init(
+                senderSessionId: "root", recipientSessionId: "c1", replacesContent: true,
+                recipientMessageId: "toolu_1", isOutgoing: true))))
+        }
+        let incoming = {
+            session.applySubagentUpdate(.userMessageChunk(.init(messageId: "toolu_1", content: .text("Fix the build"),
+                directed: .init(senderSessionId: "root", recipientSessionId: "c1", replacesContent: true,
+                                senderMessageId: "toolu_1"))), subagentSessionId: "c1")
+        }
+        switch order {
+        case .outgoingFirst: _ = announce(); _ = outgoing(); _ = incoming()
+        case .incomingFirst: _ = announce(); _ = incoming(); _ = outgoing()
+        case .outgoingBeforeAnnounce: _ = outgoing(); _ = announce(); _ = incoming()
+        }
+
+        let expected = ACPDelegationLink(messageId: "toolu_1", senderSessionId: "root", recipientSessionId: "c1",
+                                         senderMessageId: "toolu_1", recipientMessageId: "toolu_1")
+        #expect(session.delegationLink(messageId: "toolu_1") == expected)
+        let run = try #require(session.subagentRun("c1"))
+        #expect(run.delegationLinks == [expected])
+        #expect(session.transcript.messages.count == 1)
+        #expect(subagentRowDescriptor(in: session, at: 0)?.links == [expected])
+    }
+
+    @Test("a child's handback becomes an agent row in the child; a reply without link ids links nothing")
+    func childHandbackBecomesChildRow() throws {
+        let session = makeSession()
+        session.remoteSessionId = "root"
+        session.apply(.subagentSpawned(.init(subagentSessionId: "c1", name: "Explore")))
+        let handback = ACPDirectedMessage(senderSessionId: "c1", recipientSessionId: "root", replacesContent: true,
+                                          recipientMessageId: "toolu_h", isOutgoing: true)
+        session.applySubagentUpdate(
+            .userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"), directed: handback)),
+            subagentSessionId: "c1")
+        let dirty = session.apply(.userMessageChunk(.init(messageId: "toolu_h", content: .text("Build fixed"),
+            directed: .init(senderSessionId: "c1", recipientSessionId: "root", replacesContent: true,
+                            senderMessageId: "toolu_h"))))
+
+        let run = try #require(session.subagentRun("c1"))
+        #expect(run.messages.count == 1)
+        guard case .agent(_, let messageId, let buffer) = run.messages.first else {
+            Issue.record("expected the handback as an agent row")
+            return
+        }
+        #expect(messageId == "toolu_h")
+        #expect(buffer.value == "Build fixed")
+        #expect(dirty == [0])
+        #expect(session.transcript.messages.count == 1)
+        #expect(session.delegationLink(messageId: "toolu_h")?.senderMessageId == "toolu_h")
+
+        session.apply(.userMessageChunk(.init(messageId: "toolu_1:reply", content: .text("ok"), directed: .init(
+            senderSessionId: "c1", recipientSessionId: "root", replacesContent: true))))
+        #expect(session.delegationLink(messageId: "toolu_1:reply") == nil)
+        #expect(session.transcript.messages.count == 1)
+    }
+
     @Test("a replayed terminal state reconciles a child left running by a crash")
     func replayReconcilesTerminalState() {
         let session = makeSession()
@@ -1231,7 +1298,11 @@ struct ACPSubagentSessionTests {
             capabilities: .cancellable,
             configOptions: withObservations ? [modelOption("gpt-5")] : [],
             cwd: withObservations ? "/w/pkg" : nil,
-            additionalDirectories: withObservations ? ["/w/shared"] : [])
+            additionalDirectories: withObservations ? ["/w/shared"] : [],
+            links: withObservations
+                ? [.init(messageId: "toolu_1", senderSessionId: "root", recipientSessionId: "child-1",
+                         senderMessageId: "toolu_1")]
+                : [])
         let toolCall = descriptor.toolCall(executionStartedAt: nil, executionFinishedAt: nil)
         let encoded = try JSONEncoder().encode(toolCall)
         let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: encoded)

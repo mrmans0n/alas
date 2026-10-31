@@ -51,6 +51,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     /// historical. Never persisted.
     @Tracked public private(set) var isConfigConfirmed = false
     @Tracked public private(set) var areDirectoriesConfirmed = false
+    /// Delegation messages this child sent or received, each joined from
+    /// both of its views as they arrive. See `ACPSession.recordDelegationLink`.
+    @Tracked public private(set) var delegationLinks: [ACPDelegationLink] = []
     /// The child's own transcript, in arrival order.
     @Tracked public private(set) var messages: [ACPMessage] = []
 
@@ -203,6 +206,21 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         if isConfigConfirmed != live { isConfigConfirmed = live }
     }
 
+    /// Records one view of a delegation message, merging it into what the
+    /// other view already told. Returns whether anything changed.
+    @discardableResult
+    public func record(_ link: ACPDelegationLink) -> Bool {
+        guard let index = delegationLinks.firstIndex(where: { $0.messageId == link.messageId }) else {
+            delegationLinks.append(link)
+            return true
+        }
+        var merged = delegationLinks[index]
+        merged.merge(link)
+        guard merged != delegationLinks[index] else { return false }
+        delegationLinks[index] = merged
+        return true
+    }
+
     /// Demotes every observation to history: the connection that reported
     /// it is gone, or a `session/load` replay is about to resend it.
     public func markObservationsHistorical() {
@@ -225,6 +243,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         if additionalDirectories != descriptor.additionalDirectories {
             additionalDirectories = descriptor.additionalDirectories
         }
+        if delegationLinks != descriptor.links { delegationLinks = descriptor.links }
         // Persisted facts are history, whichever connection reported them.
         markObservationsHistorical()
         if let startedAt { self.startedAt = startedAt }
@@ -868,11 +887,16 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         return [index]
     }
 
-    /// A revised-form `session_message` into this child. Its id is unique
-    /// (the tool use that sent it), so it addresses its row wherever that
-    /// sits, and a whole-content upsert REPLACES the row: the adapter can
-    /// resend a prompt (after a restart, or in `session/load` replay) and
+    /// A revised-form `session_message` into or out of this child. Its id is
+    /// unique (the tool use that sent it), so it addresses its row wherever
+    /// that sits, and a whole-content upsert REPLACES the row: the adapter can
+    /// resend a message (after a restart, or in `session/load` replay) and
     /// the RFD lets `session_message` rewrite or clear what chunks built.
+    ///
+    /// A message INTO the child is the task it was handed, a prompt row. One
+    /// the child SENT (its handback to the parent, a SendMessage to a
+    /// sibling) is the child speaking, an agent row: the root never shows it,
+    /// so this row is the only place its text lives.
     private func applyDirectedMessage(
         _ chunk: ACPTextChunk,
         messageId: String,
@@ -880,12 +904,12 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         replaying: Bool,
         at timestamp: Date
     ) -> Set<Int> {
-        // The sender's own view of a linked message is not a prompt into this
-        // child.
-        guard !directed.isOutgoing else { return [] }
+        if replaying { closeLegacyRuns() }
+        if directed.isOutgoing {
+            return applyOutgoingMessage(chunk, messageId: messageId, directed: directed, replaying: replaying, at: timestamp)
+        }
         let text = Self.text(of: chunk.content)
         let attachments = Self.attachments(of: chunk.content)
-        if replaying { closeLegacyRuns() }
         let existing = messages.lastIndex { message in
             if case .user(_, let id, _, _, _, _) = message { return id == messageId }
             return false
@@ -906,6 +930,33 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
             guard !text.isEmpty || !attachments.isEmpty else { return [] }
             appendToUserRow(at: index, messageId: messageId, text: text, attachments: attachments)
         }
+        return [index]
+    }
+
+    private func applyOutgoingMessage(
+        _ chunk: ACPTextChunk,
+        messageId: String,
+        directed: ACPDirectedMessage,
+        replaying: Bool,
+        at timestamp: Date
+    ) -> Set<Int> {
+        let text = Self.text(of: chunk.content)
+        guard let index = trailingIndex(of: .agent, messageId: messageId),
+              case .agent(_, _, let buffer) = messages[index]
+        else {
+            guard !text.isEmpty else { return [] }
+            let row = Self.makeTextMessage(
+                kind: .agent, messageId: messageId, text: text, phase: chunk.phase, metadata: chunk.metadata)
+            return [replaying ? insertRecovered(row, at: timestamp) : append(row, at: timestamp)]
+        }
+        if replaying { replayCursor = max(replayCursor, index + 1) }
+        if directed.replacesContent {
+            guard text != buffer.value else { return [] }
+            resetTextRow(at: index, kind: .agent, messageId: messageId)
+        } else {
+            guard !text.isEmpty else { return [] }
+        }
+        appendToTextRow(at: index, kind: .agent, text: text, phase: chunk.phase, metadata: chunk.metadata)
         return [index]
     }
 
