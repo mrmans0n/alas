@@ -738,6 +738,19 @@ private struct ACPSessionView: View {
     /// Routes a clicked transcript link. A child's relative links resolve
     /// against the child's own directory when it reported one.
     private func openTranscriptLink(_ url: URL, baseDirectory: String?) -> Bool {
+        if let target = ACPSymbolReference.target(fromURI: url.absoluteString) {
+            // Symbol mentions are off in workspace checkouts: a link's
+            // path is relative to the checkout root, not the focused member.
+            guard !isWorkspaceCheckoutOwner else { return true }
+            state.openFile(
+                relativePath: target.path,
+                worktreeId: worktree.id,
+                revealLine: target.lineRange.lowerBound,
+                revealEndLine: target.lineRange.upperBound,
+                revealCharacter: 0
+            )
+            return true
+        }
         switch state.transcriptLinkRoute(url, in: worktree, baseDirectory: baseDirectory) {
         case .opened, .ignored:
             return true
@@ -770,20 +783,7 @@ private struct ACPSessionView: View {
                 state.openDiffTab(forFileInWorktree: worktree, relativePath: relativePath)
             },
             onOpenTranscriptLink: { url in
-                if let target = ACPSymbolReference.target(fromURI: url.absoluteString) {
-                    // Symbol mentions are off in workspace checkouts: a link's
-                    // path is relative to the checkout root, not the focused member.
-                    guard !isWorkspaceCheckoutOwner else { return true }
-                    state.openFile(
-                        relativePath: target.path,
-                        worktreeId: worktree.id,
-                        revealLine: target.lineRange.lowerBound,
-                        revealEndLine: target.lineRange.upperBound,
-                        revealCharacter: 0
-                    )
-                    return true
-                }
-                return openTranscriptLink(url, baseDirectory: nil)
+                openTranscriptLink(url, baseDirectory: nil)
             },
             // Use the runner's policy (where the agent's continuation
             // lives) so the user's click can resolve the pending permission
