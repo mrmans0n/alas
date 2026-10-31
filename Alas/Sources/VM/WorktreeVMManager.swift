@@ -66,6 +66,9 @@ final class WorktreeVMManager {
     /// The guest helper and its installer, shared read-only with every VM.
     @ObservationIgnored private let helperDirectory: URL?
     @ObservationIgnored private let logger = Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
+    /// Turns sshd off on a stopped VM's disk, attached on the host. Called
+    /// under a disk claim by `turnOffLeftoverSSH`.
+    @ObservationIgnored var disableSSHOffline: @MainActor (VMBundle) async throws -> Void
 
     private(set) var runningVMs: [String: RunningVM] = [:]
     /// The worktree whose tab asked to customize the base image, or
@@ -89,6 +92,20 @@ final class WorktreeVMManager {
     /// voids the evidence that its disk is consistent.
     @ObservationIgnored private var cleanlyShutDown: [String: Int] = [:]
 
+    /// Goldens whose disk this process has attached on the host for the
+    /// unattended setup. Their registry record names this process as owner,
+    /// so other processes see them as running; this set keeps this process
+    /// from taking that for a leftover and booting them.
+    @ObservationIgnored private var diskClaims: Set<String> = []
+
+    /// Running VMs whose guest helper was found missing or out of date, by
+    /// a VM tab's check or `vm_status`. Cleared when the VM stops.
+    private(set) var helpersNeedingUpdate: Set<String> = []
+    /// VMs whose helper `updateHelper` is reinstalling.
+    private(set) var updatingHelpers: Set<String> = []
+    /// Why the last helper update of a VM failed, until the next one or dismissal.
+    private(set) var helperUpdateFailures: [String: String] = [:]
+
     private enum PendingAction { case stop, delete }
 
     init(
@@ -103,6 +120,17 @@ final class WorktreeVMManager {
         self.ownerLabel = ownerLabel
         self.helperDirectory = helperDirectory
         self.start = start
+        disableSSHOffline = { bundle in try await Self.disableSSHOnDisk(bundle, root: root) }
+    }
+
+    private static func disableSSHOnDisk(_ bundle: VMBundle, root: URL) async throws {
+        let image = bundle.diskImage
+        try await Task.detached {
+            let session = try VMDiskSession.open(diskImage: image, root: root)
+            let result = Result { try VMGuestPatcher.disableSSH(dataVolume: session.dataVolume) }
+            guard session.close() else { throw VMDiskSession.DetachFailed() }
+            try result.get()
+        }.value
     }
 
     static var defaultOwnerLabel: String {
@@ -304,8 +332,18 @@ final class WorktreeVMManager {
         }
     }
 
-    func startVM(worktreeID: String) async throws -> VMStartOutcome {
-        try await startRecorded(id: worktreeID, ensureRecord: nil)
+    /// `keepingSSH` is only for `VMHelperUpdater`, whose boot needs the sshd
+    /// it just turned on; every other start first turns off sshd an
+    /// interrupted setup or update left on.
+    func startVM(worktreeID: String, keepingSSH: Bool = false) async throws -> VMStartOutcome {
+        if !keepingSSH { try await turnOffLeftoverSSHBeforeBoot(id: worktreeID) }
+        return try await startRecorded(id: worktreeID, ensureRecord: nil)
+    }
+
+    /// A VM already running or booting here keeps its disk to itself.
+    private func turnOffLeftoverSSHBeforeBoot(id: String) async throws {
+        guard runningVMs[id] == nil, !starting.contains(id) else { return }
+        try await turnOffLeftoverSSH(id: id)
     }
 
     /// Stops `other` (which must run in this process) and starts `worktreeID`.
@@ -353,6 +391,10 @@ final class WorktreeVMManager {
     /// removes its bundle and record. A VM another process is running is left
     /// alone; one still booting is deleted once its boot returns.
     func deleteVM(worktreeID: String) async {
+        guard !diskClaims.contains(worktreeID) else {
+            logger.error("Not deleting VM \(worktreeID, privacy: .public): its disk is attached for an update")
+            return
+        }
         if starting.contains(worktreeID) {
             pendingAfterBoot[worktreeID] = .delete
             return
@@ -402,18 +444,110 @@ final class WorktreeVMManager {
         }
     }
 
+    // MARK: - Guest helper
+
+    /// Records what the guest helper of a VM running here answered: missing
+    /// or unresponsive, or of another protocol revision, offers an update.
+    func noteHelperCheck(_ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>) {
+        guard runningVMs[id] != nil else { return }
+        if Self.helperNeedsUpdate(result) {
+            helpersNeedingUpdate.insert(id)
+        } else {
+            helpersNeedingUpdate.remove(id)
+        }
+    }
+
+    /// Whether a helper check result calls for Update helper. A stopped VM
+    /// or a cancelled check says nothing about the helper.
+    nonisolated static func helperNeedsUpdate(_ result: Result<VMGuestHello, VMGuestClient.Failure>) -> Bool {
+        switch result {
+        case .success(let hello): hello.protocolRevision != VMGuestProtocol.revision
+        case .failure(.helperMissing), .failure(.helperUnresponsive), .failure(.outdated): true
+        case .failure: false
+        }
+    }
+
+    func dismissHelperUpdateFailure(_ id: String) {
+        helperUpdateFailures.removeValue(forKey: id)
+    }
+
+    /// Reinstalls the helper in VM `id` (a worktree's, or a golden's awaiting
+    /// setup) through `VMHelperUpdater`: restarts the VM, which ends up
+    /// running with the new helper, or stopped with `helperUpdateFailures` set.
+    func updateHelper(_ id: String) async {
+        if id.hasPrefix(Self.goldenIDPrefix),
+           !isGoldenCustomized(build: String(id.dropFirst(Self.goldenIDPrefix.count))) {
+            // A golden awaiting its first setup has no helper to update yet.
+            helperUpdateFailures[id] = "Couldn't update the helper: set up this macOS image first."
+            return
+        }
+        guard updatingHelpers.insert(id).inserted else { return }
+        defer { updatingHelpers.remove(id) }
+        helperUpdateFailures.removeValue(forKey: id)
+        switch await VMHelperUpdater.live(manager: self, id: id).run(id: id, bundle: bundle(forID: id)) {
+        case .updated:
+            helpersNeedingUpdate.remove(id)
+        case .failed(let reason):
+            helperUpdateFailures[id] = "Couldn't update the helper (\(reason)). Start the VM and try again, or install it from My Shared Files › helper › Install Alas VM Guest."
+        }
+    }
+
+    /// The bundle of VM `id`, a worktree's or a golden's.
+    private func bundle(forID id: String) -> VMBundle {
+        if id.hasPrefix(Self.goldenIDPrefix) {
+            return VMBundle(url: goldenBundleURL(build: String(id.dropFirst(Self.goldenIDPrefix.count))))
+        }
+        let recorded = (try? registry.snapshot())?.first { $0.id == id }?.bundlePath
+        return VMBundle(url: recorded.map { URL(fileURLWithPath: $0) } ?? Self.bundleURL(forWorktree: id, root: root))
+    }
+
+    // MARK: - Leftover sshd
+
+    /// Written into a bundle before a patch turns the guest's sshd on, and
+    /// removed once the in-guest finishing step or an offline edit turned it
+    /// off again. Left behind, the guest may run sshd with a known password.
+    nonisolated static func sshdEnabledMarker(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent(".sshd-enabled")
+    }
+
+    /// Turns sshd off on stopped VM `id`'s disk when a setup or helper
+    /// update that turned it on was interrupted (Alas quit, or the offline
+    /// fix failed). The disk is claimed meanwhile, so no Alas process boots it.
+    func turnOffLeftoverSSH(id: String) async throws {
+        let bundle = bundle(forID: id)
+        let marker = Self.sshdEnabledMarker(of: bundle)
+        guard FileManager.default.fileExists(atPath: marker.path) else { return }
+        try claimDisk(id: id)
+        do {
+            try await disableSSHOffline(bundle)
+        } catch is VMDiskSession.DetachFailed {
+            // Still attached on the host: the claim stays so nothing boots it.
+            logger.error("VM \(id, privacy: .public)'s disk stayed attached after turning sshd off; keeping its claim")
+            throw VMError(message: "The VM's disk couldn't be detached from this Mac. Restart Alas, then try again.")
+        } catch {
+            releaseDisk(id: id)
+            logger.error("Turning leftover sshd off in VM \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            throw VMError(message: "SSH is still on in this VM and couldn't be turned off (\(error.localizedDescription)). Try again.")
+        }
+        releaseDisk(id: id)
+        try? FileManager.default.removeItem(at: marker)
+        logger.notice("Turned leftover sshd off in VM \(id, privacy: .public)")
+    }
+
     // MARK: - Golden VM
 
     /// Boots the golden VM so the user can finish Setup Assistant. It takes a
     /// slot like any worktree VM.
     /// Refuses a sealed image: worktree VMs clone its disk, so it must not
-    /// change after sealing.
-    func startGolden(build: String) async throws -> VMStartOutcome {
+    /// change after sealing. `keepingSSH` is only for the unattended setup's
+    /// and `VMHelperUpdater`'s own boots, which log in over SSH.
+    func startGolden(build: String, keepingSSH: Bool = false) async throws -> VMStartOutcome {
         let id = Self.goldenIDPrefix + build
         let bundleURL = goldenBundleURL(build: build)
         guard !VMBundle(url: bundleURL).isSealed else {
             throw VMError(message: "This macOS image is already set up")
         }
+        if !keepingSSH { try await turnOffLeftoverSSHBeforeBoot(id: id) }
         let bundlePath = bundleURL.path
         return try await startRecorded(id: id) { records in
             // Checked again under the registry lock: sealing happens under
@@ -425,6 +559,85 @@ final class WorktreeVMManager {
             let now = Date()
             records.append(WorktreeVMRecord(
                 id: id, goldenBuild: build, bundlePath: bundlePath, createdAt: now, lastUsedAt: now))
+        }
+    }
+
+    /// Powers a VM off at once, running or still booting. Only for a boot
+    /// whose disk need not be consistent: a worktree clone, or a golden that
+    /// will not be sealed from this run.
+    func forceStop(id: String) async {
+        do {
+            try await stop(id, force: true)
+        } catch {
+            logger.error("Forcing VM \(id, privacy: .public) off failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// Powers the golden VM off at once, running or still booting. Only for
+    /// boots whose disk will not be sealed from this run: the unattended
+    /// setup's first boot, or giving up on it.
+    func forceStopGolden(build: String) async {
+        await forceStop(id: Self.goldenIDPrefix + build)
+    }
+
+    /// Reserves a stopped VM's record for this process while its disk is
+    /// attached on the host: under the registry lock boot admission and
+    /// sealing take, the record gets this process as owner, so no Alas
+    /// process boots (or seals) it until `releaseDisk`.
+    func claimDisk(id: String) throws {
+        guard let me = VMRunOwner.current(label: ownerLabel) else {
+            throw VMError(message: "Could not identify this Alas process, so the VM cannot be tracked")
+        }
+        guard !diskClaims.contains(id) else { throw VMError(message: "The VM's disk is already open") }
+        guard runningVMs[id] == nil, !starting.contains(id) else { throw VMError(message: "The VM is running") }
+        let isGolden = id.hasPrefix(Self.goldenIDPrefix)
+        try registry.update { records in
+            if isGolden, goldenRunsAnywhere(records) {
+                throw VMError(message: "The golden VM is running")
+            }
+            guard let index = records.firstIndex(where: { $0.id == id }) else {
+                throw VMError(message: "The VM has no record")
+            }
+            if let owner = records[index].runOwner {
+                throw VMError(message: "The VM is running in \(owner.label)")
+            }
+            records[index].runOwner = me
+        }
+        diskClaims.insert(id)
+    }
+
+    func releaseDisk(id: String) {
+        guard diskClaims.remove(id) != nil else { return }
+        clearOwner(id)
+    }
+
+    /// Whether this process runs or boots the golden VM.
+    func isGoldenRunning(build: String) -> Bool {
+        let id = Self.goldenIDPrefix + build
+        return runningVMs[id] != nil || starting.contains(id)
+    }
+
+    /// The guest helper's current version and grants in a VM this process runs.
+    func helperStatus(id: String) async throws -> VMGuestHello {
+        guard let client = guestClient(for: id) else {
+            throw VMError(message: "The VM is not running")
+        }
+        return try await client.status()
+    }
+
+    /// Runs `command` in a guest this process runs, through its helper, without waiting
+    /// for the result: a command that shuts the guest down drops the
+    /// connection before it can answer. The guest stopping by itself is
+    /// recorded as a clean shutdown, as for one from the Apple menu.
+    func requestGuestCommand(id: String, _ command: String) {
+        guard let client = guestClient(for: id) else { return }
+        let logger = logger
+        Task {
+            do {
+                _ = try await client.run(command, timeoutSeconds: 60)
+            } catch {
+                logger.notice("Guest command ended without a reply: \(String(describing: error), privacy: .public)")
+            }
         }
     }
 
@@ -472,7 +685,12 @@ final class WorktreeVMManager {
             else {
                 throw VMError(message: "macOS was powered off without shutting down. Start it, shut down macOS from the Apple menu, then click Done.")
             }
+            // Every clone would run sshd with the known password.
+            guard !FileManager.default.fileExists(atPath: Self.sshdEnabledMarker(of: bundle).path) else {
+                throw VMError(message: "SSH is still enabled on this image; click Set up automatically or try again")
+            }
             try GoldenImageInstaller.writeSealedMarker(bundle)
+            try? FileManager.default.removeItem(at: Self.customizingMarker(of: bundle))
             records.removeAll { $0.id == id }
             // Spent: should the image be customized again, from this process
             // or another, sealing it needs a new clean shutdown.
@@ -508,6 +726,9 @@ final class WorktreeVMManager {
             }
             let build = golden.url.lastPathComponent
             let id = Self.goldenIDPrefix + build
+            // Before unsealing: an unsealed golden without it may be set up
+            // unattended, which would overwrite the user's changes.
+            try Data().write(to: Self.customizingMarker(of: golden))
             try FileManager.default.removeItem(at: golden.sealedMarker)
             // Sealing dropped the record. A recreated one starts above any
             // generation an earlier record reached, so no process's old
@@ -533,6 +754,18 @@ final class WorktreeVMManager {
         #else
         throw VMError(message: unsupportedMessage)
         #endif
+    }
+
+    /// Marks a golden unsealed by Customize: only the manual flow finishes it.
+    nonisolated static func customizingMarker(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent(".customizing")
+    }
+
+    /// Whether the unsealed golden `build` was reopened by Customize rather
+    /// than freshly installed, after a relaunch too.
+    func isGoldenCustomized(build: String) -> Bool {
+        FileManager.default.fileExists(
+            atPath: Self.customizingMarker(of: VMBundle(url: goldenBundleURL(build: build))).path)
     }
 
     private func goldenBundleURL(build: String) -> URL {
@@ -571,6 +804,9 @@ final class WorktreeVMManager {
         if let vm = runningVMs[id] { return .running(vm) }
         guard !starting.contains(id) else {
             throw VMError(message: "This VM is already starting")
+        }
+        guard !diskClaims.contains(id) else {
+            throw VMError(message: "This VM's disk is being updated. Wait for it to finish.")
         }
         guard let me = VMRunOwner.current(label: ownerLabel) else {
             throw VMError(message: "Could not identify this Alas process, so the VM cannot be tracked")
@@ -697,6 +933,7 @@ final class WorktreeVMManager {
     }
 
     private func didStop(_ id: String) {
+        helpersNeedingUpdate.remove(id)
         if let client = guestClients.removeValue(forKey: id) {
             Task { await client.close() }
         }

@@ -249,6 +249,9 @@ final class WorktreeVMManagerTests {
         /// Clean shutdown here, then another process booted the golden and
         /// was reaped (crashed) without a clean shutdown of its own.
         case bootedElsewhereAfterCleanShutdown
+        /// Clean shutdown, but a setup or helper update that turned sshd on
+        /// never turned it off.
+        case guestShutdownWithSSHDLeftOn
     }
 
     @Test(
@@ -260,6 +263,9 @@ final class WorktreeVMManagerTests {
         switch lastStop {
         case .guestShutdown:
             _ = try await manager.startGolden(build: "25A1")
+        case .guestShutdownWithSSHDLeftOn:
+            _ = try await manager.startGolden(build: "25A1")
+            try Data().write(to: WorktreeVMManager.sshdEnabledMarker(of: makeGoldenBundle()))
         case .forcedOff:
             _ = try await manager.startGolden(build: "25A1")
             try await #require(manager.running(id)).forceStop()
@@ -281,11 +287,103 @@ final class WorktreeVMManagerTests {
         let golden = try makeGoldenBundle()
         let sealed = (try? manager.sealGolden(golden)) != nil
 
-        let sawCleanShutdown = [.guestShutdown, .bootedElsewhereAfterCleanShutdown].contains(lastStop)
+        let sawCleanShutdown = [.guestShutdown, .bootedElsewhereAfterCleanShutdown, .guestShutdownWithSSHDLeftOn]
+            .contains(lastStop)
         #expect(shutdown == (sawCleanShutdown ? .clean : .forcedOff))
         #expect(manager.running(id) == nil)
         #expect(sealed == (lastStop == .guestShutdown))
         #expect(golden.isSealed == (lastStop == .guestShutdown))
+    }
+
+    enum LeftoverSSHDStart: CaseIterable {
+        case worktree, golden
+        /// The unattended setup's or helper update's own boot, which needs sshd.
+        case goldenKeepingSSH
+    }
+
+    @Test(
+        "a VM an interrupted setup left with sshd on gets it turned off offline before it boots, unless the boot needs it",
+        arguments: LeftoverSSHDStart.allCases)
+    func leftoverSSHDIsTurnedOffBeforeBoot(_ start: LeftoverSSHDStart) async throws {
+        let bundle: VMBundle
+        switch start {
+        case .worktree:
+            bundle = try VMBundle(url: addRecord("/repo/a"))
+        case .golden, .goldenKeepingSSH:
+            bundle = try makeGoldenBundle()
+            try addRecord(WorktreeVMManager.goldenIDPrefix + "25A1")
+        }
+        let marker = WorktreeVMManager.sshdEnabledMarker(of: bundle)
+        try Data().write(to: marker)
+        let manager = makeManager()
+        let disabled = DisabledDisks()
+        manager.disableSSHOffline = { [hypervisor] bundle in disabled.record(bundle.url, bootsSoFar: hypervisor.boots) }
+
+        let outcome = switch start {
+        case .worktree: try await manager.startVM(worktreeID: "/repo/a")
+        case .golden: try await manager.startGolden(build: "25A1")
+        case .goldenKeepingSSH: try await manager.startGolden(build: "25A1", keepingSSH: true)
+        }
+
+        guard case .running = outcome else {
+            Issue.record("the VM did not start")
+            return
+        }
+        let turnedOff = start != .goldenKeepingSSH
+        #expect(disabled.bundles == (turnedOff ? [bundle.url] : []))
+        #expect(disabled.bootsBefore == (turnedOff ? [0] : []))
+        #expect(FileManager.default.fileExists(atPath: marker.path) == !turnedOff)
+    }
+
+    enum DiskStep: CaseIterable { case close, failedOpen }
+
+    @Test(
+        "a VM whose disk stays attached on the host stays claimed",
+        arguments: DiskStep.allCases, [true, false])
+    func failedDetachKeepsTheClaim(_ step: DiskStep, _ detached: Bool) async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+
+        switch step {
+        case .close:
+            try manager.claimDisk(id: "/repo/a")
+            await GuestSetupSteps.closeClaimed(
+                ClaimedDisk(disk: FakeDisk(detaches: detached), id: "/repo/a"), manager: manager)
+        case .failedOpen:
+            // Attached, then the mount failed, and its cleanup detached or not.
+            let failure: any Error = detached
+                ? VMDiskSession.Failure(message: "mount failed") : VMDiskSession.DetachFailed(underlying: "mount failed")
+            await #expect(throws: (any Error).self) {
+                _ = try await GuestSetupSteps.openClaimed(id: "/repo/a", manager: manager) { throw failure }
+            }
+        }
+
+        #expect(try (registry.snapshot().first?.runOwner == nil) == detached)
+        if detached {
+            _ = try await manager.startVM(worktreeID: "/repo/a")
+            #expect(manager.running("/repo/a") != nil)
+        } else {
+            await #expect(throws: WorktreeVMManager.VMError.self) {
+                _ = try await manager.startVM(worktreeID: "/repo/a")
+            }
+        }
+    }
+
+    private struct FakeDisk: GoldenProvisioningDisk {
+        let detaches: Bool
+        var dataVolume: URL { URL(fileURLWithPath: "/nonexistent") }
+        func systemVersion() throws -> (product: String, build: String) { ("27.2", "25A1") }
+        func close() -> Bool { detaches }
+    }
+
+    @MainActor
+    private final class DisabledDisks {
+        private(set) var bundles: [URL] = []
+        private(set) var bootsBefore: [Int] = []
+        func record(_ bundle: URL, bootsSoFar: Int) {
+            bundles.append(bundle)
+            bootsBefore.append(bootsSoFar)
+        }
     }
 
     @Test("a golden VM another process booted after a clean shutdown here is not sealed")

@@ -20,6 +20,8 @@ struct VirtualMachineTabView: View {
     @State private var errorMessage: String?
     @State private var finishingSetup = false
     @State private var confirmingCustomize = false
+    /// The VM whose Update helper awaits confirmation.
+    @State private var confirmingHelperUpdate: String?
 
     private struct RunningElsewhere {
         let target: StartTarget
@@ -62,18 +64,49 @@ struct VirtualMachineTabView: View {
             hasVM: record.hasVM,
             customizingHere: vms.customizingFrom == worktreeID,
             goldenAvailable: goldenAvailable,
-            installerPhase: installer.phase
+            installerPhase: installer.phase,
+            helper: helperUpdate(worktreeID),
+            goldenHelper: customizedGoldenID.map(helperUpdate) ?? .none
         )
+    }
+
+    private func helperUpdate(_ id: String) -> VMTabScreen.HelperUpdate {
+        if vms.updatingHelpers.contains(id) { return .updating }
+        return vms.helpersNeedingUpdate.contains(id) ? .available : .none
+    }
+
+    /// The golden awaiting setup when Customize reopened it. A golden
+    /// awaiting its first setup has no `alas` account or helper to update.
+    private var customizedGoldenID: String? {
+        guard let build = awaitingSetupBuild, vms.isGoldenCustomized(build: build) else { return nil }
+        return StartTarget.golden(build: build).id
+    }
+
+    /// The VM running here whose helper this tab checks: its own, or the
+    /// customized golden it shows setup for.
+    private var helperCheckTarget: String? {
+        switch screen {
+        case .running: worktreeID
+        case .goldenSetup:
+            customizedGoldenID.flatMap { vms.running($0) != nil ? $0 : nil }
+        default: nil
+        }
+    }
+
+    /// The error to show: this tab's own, else a failed helper update of a VM it shows.
+    private var bannerMessage: String? {
+        errorMessage ?? vms.helperUpdateFailures[worktreeID]
+            ?? awaitingSetupBuild.flatMap { vms.helperUpdateFailures[StartTarget.golden(build: $0).id] }
     }
 
     var body: some View {
         VStack(spacing: 0) {
-            if let errorMessage {
+            if let bannerMessage {
                 HStack(alignment: .top) {
                     Image(systemName: "exclamationmark.triangle")
-                    Text(errorMessage).textSelection(.enabled)
+                    Text(bannerMessage).textSelection(.enabled)
                     Spacer(minLength: 0)
-                    Button("Dismiss", systemImage: "xmark") { self.errorMessage = nil }
+                    Button("Dismiss", systemImage: "xmark") { dismissBanner() }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                 }
@@ -91,11 +124,21 @@ struct VirtualMachineTabView: View {
         // Progress ticks change the phase constantly; only a change of kind
         // can change what the registry or disk say.
         .onChange(of: phaseKind) { _, _ in refresh() }
+        .task(id: helperCheckTarget) { await checkHelper(helperCheckTarget) }
         .alert("Customize the base image?", isPresented: $confirmingCustomize) {
             Button("Customize", action: customizeBaseImage)
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("New VMs will use your changes. Existing VMs are not affected.")
+        }
+        .alert("Update the helper?", isPresented: Binding(
+            get: { confirmingHelperUpdate != nil },
+            set: { if !$0 { confirmingHelperUpdate = nil } }
+        ), presenting: confirmingHelperUpdate) { id in
+            Button("Update") { updateHelper(id) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("This restarts the VM; unsaved work inside it is lost.")
         }
     }
 
@@ -109,6 +152,7 @@ struct VirtualMachineTabView: View {
         case .idle: "idle"
         case .downloading: "downloading"
         case .installing: "installing"
+        case .provisioning(let step): "provisioning:\(step)"
         case .awaitingSetup(let build): "awaiting:\(build)"
         case .sealed(let build): "sealed:\(build)"
         case .failed: "failed"
@@ -118,8 +162,11 @@ struct VirtualMachineTabView: View {
     @ViewBuilder
     private var content: some View {
         switch screen {
-        case .running:
+        case .running(let canUpdateHelper):
             header("Running") {
+                if canUpdateHelper {
+                    Button("Update helper") { confirmingHelperUpdate = worktreeID }
+                }
                 Button("Stop") { stop(worktreeID) }
             }
             VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: vms.running(worktreeID)?.vm)
@@ -139,8 +186,14 @@ struct VirtualMachineTabView: View {
             } actions: {
                 Button("Start") { start(elsewhere?.target ?? .worktree(worktreeID)) }
             }
-        case .goldenSetup(let build):
-            goldenSetupView(build: build)
+        case .goldenSetup(let build, let canUpdateHelper):
+            goldenSetupView(build: build, canUpdateHelper: canUpdateHelper)
+        case .updatingHelper:
+            ContentUnavailableView {
+                Label("Updating the helper…", systemImage: "desktopcomputer")
+            } description: {
+                ProgressView().controlSize(.small)
+            }
         case .loading:
             ProgressView().controlSize(.small)
         case .setup:
@@ -180,13 +233,13 @@ struct VirtualMachineTabView: View {
     private var canCustomize: Bool {
         switch installer.phase {
         case .idle, .sealed: goldenAvailable
-        case .downloading, .installing, .awaitingSetup, .failed: false
+        case .downloading, .installing, .provisioning, .awaitingSetup, .failed: false
         }
     }
 
     private var installerIsBusy: Bool {
         switch installer.phase {
-        case .downloading, .installing: true
+        case .downloading, .installing, .provisioning: true
         default: false
         }
     }
@@ -202,6 +255,11 @@ struct VirtualMachineTabView: View {
                 progress("Downloading macOS", fraction: fraction)
             case .installing(let fraction):
                 progress("Installing macOS", fraction: fraction)
+            case .provisioning(let step):
+                VStack(spacing: 6) {
+                    Text(step.title)
+                    ProgressView().controlSize(.small)
+                }
             case .failed(let message):
                 Text(message)
             default:
@@ -225,8 +283,28 @@ struct VirtualMachineTabView: View {
     }
 
     @ViewBuilder
-    private func goldenSetupView(build: String) -> some View {
+    private func goldenSetupView(build: String, canUpdateHelper: Bool) -> some View {
+        if let note = installer.failureNote {
+            HStack {
+                Image(systemName: "exclamationmark.triangle")
+                Text(note)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 12)).padding(.horizontal, 8).padding(.top, 8)
+        }
         header("Create a user that logs in automatically. Install the helper: open My Shared Files › helper › Install Alas VM Guest, then allow it in Accessibility and Screen Recording. Shut down macOS, then click Done.") {
+            // Not for a golden the user runs, which it would force off, nor
+            // one reopened by Customize, which is for the user's own changes.
+            if !vms.isGoldenCustomized(build: build) {
+                Button("Set up automatically") {
+                    Task { await installer.start() }
+                }
+                .disabled(finishingSetup || vms.isGoldenRunning(build: build))
+            }
+            if canUpdateHelper {
+                Button("Update helper") { confirmingHelperUpdate = StartTarget.golden(build: build).id }
+                    .disabled(finishingSetup)
+            }
             Button("Done") { finishGoldenSetup(build: build) }
                 .disabled(finishingSetup)
         }
@@ -299,7 +377,10 @@ struct VirtualMachineTabView: View {
     /// Boots the golden VM by itself once per setup; afterwards the Start
     /// button does.
     private func autoStartGoldenOnce() {
-        guard case .goldenSetup(let build) = screen,
+        // Only for Customize: a golden awaiting setup otherwise stays off so
+        // "Set up automatically" can run; the manual flow starts it by hand.
+        guard case .goldenSetup(let build, _) = screen,
+              vms.isGoldenCustomized(build: build),
               vms.runningGolden() == nil,
               !vms.isStarting(StartTarget.golden(build: build).id),
               vms.claimGoldenAutoStart(build: build)
@@ -360,6 +441,46 @@ struct VirtualMachineTabView: View {
         }
     }
 
+    private func dismissBanner() {
+        errorMessage = nil
+        vms.dismissHelperUpdateFailure(worktreeID)
+        if let build = awaitingSetupBuild { vms.dismissHelperUpdateFailure(StartTarget.golden(build: build).id) }
+    }
+
+    /// Asks the helper of a VM running here whether it is installed and
+    /// current. A freshly booted guest starts it only after logging in, so
+    /// a missing helper is asked again for a while before Update helper shows.
+    private func checkHelper(_ id: String?) async {
+        guard let id else { return }
+        let deadline = ContinuousClock.now + .seconds(120)
+        while !Task.isCancelled, let client = vms.guestClient(for: id) {
+            let result: Result<VMGuestHello, VMGuestClient.Failure>
+            do {
+                result = .success(try await client.status())
+            } catch {
+                result = .failure(error as? VMGuestClient.Failure ?? .stopped)
+            }
+            guard !Task.isCancelled else { return }
+            let notUpYet = switch result {
+            case .failure(.helperMissing), .failure(.helperUnresponsive): true
+            default: false
+            }
+            guard notUpYet, ContinuousClock.now < deadline else {
+                vms.noteHelperCheck(id, result)
+                return
+            }
+            try? await Task.sleep(for: .seconds(10))
+        }
+    }
+
+    private func updateHelper(_ id: String) {
+        errorMessage = nil
+        Task {
+            await vms.updateHelper(id)
+            refresh()
+        }
+    }
+
     private func stop(_ id: String) {
         Task { await vms.stopVM(worktreeID: id) }
     }
@@ -373,6 +494,8 @@ struct VirtualMachineTabView: View {
             switch await vms.shutDownGoldenForSealing(build: build) {
             case .clean:
                 do {
+                    // An interrupted helper update may have left sshd on.
+                    try await vms.turnOffLeftoverSSH(id: StartTarget.golden(build: build).id)
                     try installer.markSetupDone()
                 } catch {
                     errorMessage = error.localizedDescription

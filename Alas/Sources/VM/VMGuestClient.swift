@@ -35,13 +35,13 @@ actor VMGuestClient {
         var message: String {
             switch self {
             case .helperMissing:
-                "computer_vm_helper_missing: The Alas VM Guest helper isn't running in this VM. If the VM just started, wait for it to log in and try again. Otherwise, in the VM open My Shared Files › helper › Install Alas VM Guest. Customize base image puts it in new VMs."
+                "computer_vm_helper_missing: The Alas VM Guest helper isn't running in this VM. If the VM just started, wait for it to log in and try again. Otherwise, in the VM open My Shared Files › helper › Install Alas VM Guest. Customize base image puts it in new VMs. Or click Update helper in the VM tab."
             case .helperUnresponsive:
-                "computer_vm_helper_missing: The Alas VM Guest helper isn't responding in this VM. Restart the VM, or reinstall it from My Shared Files › helper › Install Alas VM Guest in the VM."
+                "computer_vm_helper_missing: The Alas VM Guest helper isn't responding in this VM. Restart the VM, or reinstall it from My Shared Files › helper › Install Alas VM Guest in the VM. Or click Update helper in the VM tab."
             case .stopped:
                 "computer_vm_stopped: The VM stopped or its helper disconnected."
             case .outdated:
-                "computer_vm_helper_outdated: The Alas VM Guest helper in this VM doesn't match this version of Alas. In the VM, open My Shared Files › helper › Install Alas VM Guest to update it."
+                "computer_vm_helper_outdated: The Alas VM Guest helper in this VM doesn't match this version of Alas. In the VM, open My Shared Files › helper › Install Alas VM Guest to update it. Or click Update helper in the VM tab."
             case .cancelled:
                 "computer_cancelled: The call was cancelled."
             case .malformed:
