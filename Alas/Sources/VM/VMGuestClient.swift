@@ -36,8 +36,13 @@ actor VMGuestClient {
         case cancelled
         case malformed
 
-        var message: String {
-            switch self {
+        var message: String { message(for: .macOS) }
+
+        /// The text for a call to the helper of a `guest` VM. Codes are the same for both guests;
+        /// only the remedies differ.
+        func message(for guest: VMGuestOS) -> String {
+            if guest == .linux, let linux = linuxMessage { return linux }
+            return switch self {
             case .helperMissing:
                 "computer_vm_helper_missing: The Alas VM Guest helper isn't running in this VM. If the VM just started, wait for it to log in and try again. Otherwise, in the VM open My Shared Files › helper › Install Alas VM Guest. Customize base image puts it in new VMs. Or click Update helper in the VM tab."
             case .helperUnresponsive:
@@ -50,6 +55,21 @@ actor VMGuestClient {
                 "computer_cancelled: The call was cancelled."
             case .malformed:
                 "computer_vm_malformed: The Alas VM Guest helper sent a reply Alas couldn't read."
+            }
+        }
+
+        /// Remedies a Linux guest can take: its helper is installed at first boot and has no
+        /// Install or Update helper flow.
+        private var linuxMessage: String? {
+            switch self {
+            case .helperMissing:
+                "computer_vm_helper_missing: The Alas VM Guest helper isn't running in this Linux VM. If the VM just started, wait for Ubuntu to finish starting and try again. Otherwise, restart the VM."
+            case .helperUnresponsive:
+                "computer_vm_helper_missing: The Linux VM's helper isn't answering yet. Wait for Ubuntu to finish starting, or restart the VM."
+            case .outdated:
+                "computer_vm_helper_outdated: The Alas VM Guest helper in this Linux VM doesn't match this version of Alas. In the VM, run `sudo install -m 0755 /mnt/alas/helper/alas-vm-guest-linux /usr/local/bin/alas-vm-guest`, then `systemctl --user restart alas-vm-guest`."
+            case .stopped, .cancelled, .malformed:
+                nil
             }
         }
 

@@ -203,7 +203,7 @@ extension AppState {
             do {
                 return .text([VMComputerUseRoute.runReply(try await client.run(command, timeoutSeconds: timeoutSeconds))])
             } catch {
-                return .error((error as? VMGuestClient.Failure ?? .stopped).message)
+                return .error((error as? VMGuestClient.Failure ?? .stopped).message(for: guest))
             }
         }
     }

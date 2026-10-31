@@ -69,6 +69,9 @@ struct VMComputerUseRouteTests {
     private static let noVM = #"{"has_vm":false,"running":false,"helper":null,"helper_error":null,"transfer_host_path":null,"transfer_guest_path":null}"#
     private static let hello = VMGuestHello(guestVersion: "1.2", accessibility: true, screenRecording: false, protocolRevision: 1)
     private static let answered = Result<VMGuestHello, VMGuestClient.Failure>.success(hello)
+    private static let linuxAnswered = Result<VMGuestHello, VMGuestClient.Failure>.success(VMGuestHello(
+        guestVersion: "0.1", accessibility: false, screenRecording: false, protocolRevision: 1,
+        guestKind: "linux", capabilities: ["run"]))
 
     /// What `vm_status` reports per route: the helper only for a VM running here, and the
     /// transfer paths only where a VM is known to exist.
@@ -84,6 +87,11 @@ struct VMComputerUseRouteTests {
          #"{"has_vm":true,"running":true,"helper":null,"helper_error":"\#(VMGuestClient.Failure.outdated.message)","transfer_host_path":"/host/t","transfer_guest_path":"/Volumes/My Shared Files/transfer"}"#),
         (.vmNotRunning(worktreeID: "w", guest: .linux), answered,
          #"{"has_vm":true,"running":false,"helper":null,"helper_error":null,"transfer_host_path":"/host/t","transfer_guest_path":"/mnt/alas/transfer"}"#),
+        // A Linux helper has no TCC grants to report, only what it can do.
+        (.guest(worktreeID: "w", guest: .linux), linuxAnswered,
+         #"{"has_vm":true,"running":true,"helper":{"version":"0.1","capabilities":["run"]},"helper_error":null,"transfer_host_path":"/host/t","transfer_guest_path":"/mnt/alas/transfer"}"#),
+        (.guest(worktreeID: "w", guest: .linux), .failure(.helperUnresponsive),
+         #"{"has_vm":true,"running":true,"helper":null,"helper_error":"\#(VMGuestClient.Failure.helperUnresponsive.message(for: .linux))","transfer_host_path":"/host/t","transfer_guest_path":"/mnt/alas/transfer"}"#),
     ])
     func statusReply(
         route: VMComputerUseRoute, helper: Result<VMGuestHello, VMGuestClient.Failure>, expected: String

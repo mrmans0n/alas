@@ -104,23 +104,26 @@ enum VMComputerUseRoute: Equatable {
         case .vmNotRunning, .ambiguous: (hasVM, running) = (true, false)
         case .guest: (hasVM, running) = (true, true)
         }
+        // Transfer paths only for a VM known to exist and to be one guest.
+        let transferGuest: VMGuestOS? = switch route {
+        case .guest(_, let guest), .vmNotRunning(_, let guest): guest
+        default: nil
+        }
         var helperObject: Any = null
         var helperError: Any = null
         switch running ? helper : nil {
+        case .success(let hello) where transferGuest == .linux:
+            // No TCC grants in a Linux guest; reporting them false would read as missing permissions.
+            helperObject = ["version": hello.guestVersion, "capabilities": hello.capabilities ?? ["run"]] as [String: Any]
         case .success(let hello):
             helperObject = [
                 "version": hello.guestVersion, "accessibility": hello.accessibility,
                 "screen_recording": hello.screenRecording,
             ] as [String: Any]
         case .failure(let failure):
-            helperError = failure.message
+            helperError = failure.message(for: transferGuest ?? .macOS)
         case nil:
             break
-        }
-        // Transfer paths only for a VM known to exist and to be one guest.
-        let transferGuest: VMGuestOS? = switch route {
-        case .guest(_, let guest), .vmNotRunning(_, let guest): guest
-        default: nil
         }
         return [
             "has_vm": hasVM,
