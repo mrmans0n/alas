@@ -238,6 +238,52 @@ impl RuntimeState {
         }
     }
 
+    /// A prompt or steering turn the adapter is still working on. Requests
+    /// that arrive outside one (a background child asking after its parent's
+    /// turn settled) must not claim a turn.
+    fn foreground_turn_in_flight(&self) -> bool {
+        self.steering_turn.is_some()
+            || self
+                .pending_methods
+                .values()
+                .any(|pending| pending.method == "session/prompt")
+    }
+
+    fn user_request_parked(&mut self, kind: PendingClientRequestKind) {
+        if pending_kind_awaits_user(kind) && self.foreground_turn_in_flight() {
+            let _ = self.broker.set_turn_state(BrokerTurnState::AwaitingInput);
+        }
+    }
+
+    /// Once nothing waits on the user, a turn still in flight is streaming
+    /// again rather than staying parked until its prompt answers.
+    fn user_request_answered(&mut self) {
+        let snapshot = self.broker.snapshot();
+        if snapshot.turn_state != BrokerTurnState::AwaitingInput
+            || snapshot
+                .pending_requests
+                .iter()
+                .any(|request| pending_kind_awaits_user(request.kind))
+        {
+            return;
+        }
+        let resumed = if self
+            .pending_methods
+            .values()
+            .any(|pending| pending.method == "session/prompt")
+        {
+            Some(BrokerTurnState::Streaming)
+        } else {
+            self.steering_turn
+                .as_ref()
+                .map(SteeringTurn::turn_state)
+                .filter(|state| *state != BrokerTurnState::Completed)
+        };
+        if let Some(resumed) = resumed.filter(|state| *state != snapshot.turn_state) {
+            let _ = self.broker.set_turn_state(resumed);
+        }
+    }
+
     fn register_steering(&mut self, session_id: &str) {
         if let Some(turn) = self.steering_turn.as_mut() {
             turn.begin_followup();
@@ -2068,6 +2114,7 @@ fn broker_respond(
             .broker
             .respond_to_pending_request(&request_key, outcome.clone())
             .map_err(domain_error)?;
+        state.user_request_answered();
     }
     write_adapter_response(runtime, params.request_id, outcome)?;
     Ok(json!({ "ok": true }))
@@ -2536,9 +2583,7 @@ fn handle_adapter_client_request(runtime: &Runtime, value: Value) {
         kind,
         json!({ "method": method, "params": params }),
     );
-    if pending_kind_awaits_user(kind) {
-        let _ = state.broker.set_turn_state(BrokerTurnState::AwaitingInput);
-    }
+    state.user_request_parked(kind);
     condvar.notify_all();
 }
 
@@ -3707,6 +3752,50 @@ mod tests {
         assert!(!pending_kind_awaits_user(
             PendingClientRequestKind::Terminal
         ));
+    }
+
+    #[test]
+    fn user_requests_wait_only_inside_a_turn_in_flight() {
+        let park = |state: &mut RuntimeState, id: &str| {
+            state
+                .broker
+                .add_pending_request(id, json!(id), PendingClientRequestKind::Permission, json!({}))
+                .unwrap();
+            state.user_request_parked(PendingClientRequestKind::Permission);
+        };
+        let answer = |state: &mut RuntimeState, id: &str| {
+            state
+                .broker
+                .respond_to_pending_request(id, AdapterRPCOutcome {
+                    raw_frame: None,
+                    result: Some(json!({})),
+                    error: None,
+                })
+                .unwrap();
+            state.user_request_answered();
+        };
+
+        // A background child asking after its parent's turn settled.
+        let mut state = steering_runtime_state();
+        state.broker.set_turn_state(BrokerTurnState::Completed).unwrap();
+        park(&mut state, "child");
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Completed);
+        answer(&mut state, "child");
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Completed);
+
+        // Inside a prompt: waits until the last request is answered.
+        state.pending_methods.insert(7, PendingOperation {
+            operation_key: OperationKey::new("prompt"),
+            method: "session/prompt".to_string(),
+        });
+        state.broker.set_turn_state(BrokerTurnState::Streaming).unwrap();
+        park(&mut state, "first");
+        park(&mut state, "second");
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::AwaitingInput);
+        answer(&mut state, "first");
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::AwaitingInput);
+        answer(&mut state, "second");
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Streaming);
     }
 
     #[test]
