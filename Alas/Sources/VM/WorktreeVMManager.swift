@@ -240,12 +240,13 @@ final class WorktreeVMManager {
             _ = try? registry.snapshot()
             return try? registry.recordIDs(includingLinuxAliases: false)
         }()
-        guard let ids else { return nil }
-        return Set([VMGuestOS.macOS, .linux].filter { guest in
-            ids.contains(VMIdentity.recordID(worktree: worktreeID, guest: guest))
-                || FileManager.default.fileExists(
-                    atPath: Self.bundleURL(forWorktree: worktreeID, guest: guest, root: root).path)
+        let guests: [VMGuestOS] = [.macOS, .linux]
+        let onDisk = Set(guests.filter { guest in
+            FileManager.default.fileExists(atPath: Self.bundleURL(forWorktree: worktreeID, guest: guest, root: root).path)
         })
+        // Unreadable even after quarantine: the bundles on disk are all that is known.
+        guard let ids else { return onDisk.isEmpty ? nil : onDisk }
+        return onDisk.union(guests.filter { ids.contains(VMIdentity.recordID(worktree: worktreeID, guest: $0)) })
     }
 
     /// False until the first VM is installed, so queries and worktree

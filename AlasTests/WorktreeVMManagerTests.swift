@@ -584,6 +584,12 @@ final class WorktreeVMManagerTests {
         let bundle = WorktreeVMManager.bundleURL(forWorktree: "/repo/a", root: root)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
         #expect(manager.hasVMRecord("/repo/a") == true)
+
+        // Still unreadable after quarantine: the bundle on disk answers alone.
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.macOS])
+        #expect(manager.vmKinds(forWorktree: "/repo/b") == nil)
     }
 
     /// A sealed macOS and Linux golden image, enough for `createVM` to clone.
