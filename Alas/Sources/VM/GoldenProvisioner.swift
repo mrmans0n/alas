@@ -29,6 +29,8 @@ struct GoldenProvisioner {
         /// The golden is left installed, unsealed and stopped; `reason` is a
         /// short phrase for "Automatic setup couldn't finish (<reason>)".
         case fallback(reason: String)
+        /// The run's task was cancelled; the golden is left as for a fallback.
+        case cancelled
     }
 
     /// A failure whose reason the user should see instead of the step's.
@@ -102,6 +104,8 @@ struct GoldenProvisioner {
             guestIP: guestIP, ssh: ssh, helperHello: helperHello, sleep: sleep, now: now)
     }
 
+    /// Cancelling the calling task stops the run at its next step, with the
+    /// same cleanup as a fallback.
     func run(bundle: VMBundle, onStep: @MainActor (Step) -> Void) async -> Outcome {
         let build = bundle.url.lastPathComponent
         let steps = steps
@@ -110,14 +114,15 @@ struct GoldenProvisioner {
             try await materialiseAndPatch(bundle, build: build, steps: steps, onStep: onStep)
             patched = true
 
-            onStep(.finishing)
+            try Self.enter(.finishing, onStep)
             try await steps.bootOrFail(build, reason: Reason.vmStart)
+            try Task.checkCancellation()
             try await steps.finishOverSSH(bundle)
 
-            onStep(.verifying)
+            try Self.enter(.verifying, onStep)
             try await steps.waitForHelperGrants(build)
 
-            onStep(.shuttingDown)
+            try Self.enter(.shuttingDown, onStep)
             await guestShutdown(build)
             guard await steps.waitUntil(timeout: Self.shutdownTimeout, interval: Self.shutdownInterval, { !isRunning(build) })
             else { throw Failure(reason: Reason.shutdown) }
@@ -130,13 +135,21 @@ struct GoldenProvisioner {
             Self.logger.info("Golden \(build, privacy: .public) set up unattended")
             return .sealed
         } catch {
-            let reason = (error as? Failure)?.reason ?? Reason.vmStart
+            // A step cut short by cancellation fails in its own way, if at all.
+            let cancelled = Task.isCancelled
+            let reason = cancelled ? "cancelled" : (error as? Failure)?.reason ?? Reason.vmStart
             Self.logger.error("Unattended setup of golden \(build, privacy: .public) stopped: \(reason, privacy: .public)")
             await stop(build)
             // A patch that failed part-way may already have turned sshd on.
             if patched || steps.sshdMayBeOn(bundle) { await steps.turnSSHDOffOffline(bundle) }
-            return .fallback(reason: reason)
+            return cancelled ? .cancelled : .fallback(reason: reason)
         }
+    }
+
+    /// Reports `step` unless the run was cancelled.
+    private static func enter(_ step: Step, _ onStep: @MainActor (Step) -> Void) throws {
+        try Task.checkCancellation()
+        onStep(step)
     }
 
     /// First boot until the Data volume has a TCC database, then the offline
@@ -145,12 +158,13 @@ struct GoldenProvisioner {
         _ bundle: VMBundle, build: String, steps: GuestSetupSteps, onStep: @MainActor (Step) -> Void
     ) async throws {
         for wait in [Self.firstBootWait, Self.retryBootWait] {
-            onStep(.firstBoot)
+            try Self.enter(.firstBoot, onStep)
             try await steps.bootOrFail(build, reason: Reason.firstStart)
+            // A cancelled sleep returns at once, before the Data volume exists.
             await sleep(wait)
             await stop(build)
 
-            onStep(.patching)
+            try Self.enter(.patching, onStep)
             let result: Result<Void, Error>
             do {
                 try await steps.withDisk(bundle) { disk in
@@ -371,7 +385,7 @@ struct GuestSetupSteps {
                 return
             } catch let failure as Failure {
                 throw failure
-            } catch where GoldenProvisioner.isVirtualizationFailure(error) && now() < deadline {
+            } catch where GoldenProvisioner.isVirtualizationFailure(error) && now() < deadline && !Task.isCancelled {
                 Self.logger.notice("VM \(key, privacy: .public) failed to start (VZError \((error as NSError).code, privacy: .public)), its storage may still be locked; retrying the boot")
                 await sleep(GoldenProvisioner.storageLockInterval)
             } catch {
@@ -484,6 +498,8 @@ struct GuestSetupSteps {
     ) async -> Bool {
         let deadline = now() + timeout
         while true {
+            // A cancelled sleep returns at once: without this it would spin.
+            guard !Task.isCancelled else { return false }
             if await condition() { return true }
             let remaining = deadline - now()
             guard remaining > .zero else { return false }

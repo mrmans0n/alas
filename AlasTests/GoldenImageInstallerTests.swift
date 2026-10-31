@@ -70,6 +70,8 @@ struct GoldenImageInstallerTests {
         var shutsDownCleanly = true
         /// Boots that fail first because the last VM still holds the storage lock.
         var lockedBoots = 0
+        /// The boot during which the user cancels the setup.
+        var cancelAtBoot: Int?
         /// Nil: sealed. Otherwise the reason in the failure note.
         let fallbackReason: String?
         /// A fallback after the patch turned sshd on must turn it off offline.
@@ -108,6 +110,9 @@ struct GoldenImageInstallerTests {
                      fallbackReason: "the helper didn't start", sshdTurnedOffOffline: true),
         PipelineCase(name: "guest shutdown not clean", shutsDownCleanly: false,
                      fallbackReason: "macOS didn't shut down cleanly", sshdTurnedOffOffline: true),
+        PipelineCase(name: "cancelled during the first boot", cancelAtBoot: 1, fallbackReason: "cancelled"),
+        PipelineCase(name: "cancelled after the patch turned sshd on", cancelAtBoot: 2, fallbackReason: "cancelled",
+                     sshdTurnedOffOffline: true),
     ]
 
     @Test("an installed golden resumes the unattended setup", arguments: pipelineCases)
@@ -119,13 +124,15 @@ struct GoldenImageInstallerTests {
             at: root.appendingPathComponent("golden/25A1", isDirectory: true), withIntermediateDirectories: true)
         let guest = FakeGuest(c)
         let installer = GoldenImageInstaller(root: root, provisioner: guest.provisioner())
+        guest.cancel = { [weak installer] in installer?.cancelSetup() }
         #expect(installer.phase == .awaitingSetup(build: "25A1"))
 
         await installer.start()
 
         if let reason = c.fallbackReason {
             #expect(installer.phase == .awaitingSetup(build: "25A1"))
-            #expect(installer.failureNote == "Automatic setup couldn't finish (\(reason)). Finish it by hand:")
+            #expect(installer.failureNote == (c.cancelAtBoot == nil
+                    ? "Automatic setup couldn't finish (\(reason))." : GoldenImageInstaller.cancelledNote))
             #expect(!guest.sealed)
         } else {
             #expect(installer.phase == .sealed(build: "25A1"))
@@ -286,6 +293,8 @@ private final class FakeGuest {
     private func stepDone() { waitStart = nil }
 
     private(set) var grantsPatched = false
+    /// What Cancel does, called during boot `cancelAtBoot`.
+    var cancel: (() -> Void)?
     /// Whether the guest's port 22 answers.
     private(set) var sshListening = false
 
@@ -324,6 +333,7 @@ private final class FakeGuest {
                 stepDone()
                 boots += 1
                 running = true
+                if boots == c.cancelAtBoot { cancel?() }
             },
             stop: { [self] _ in
                 stepDone()
