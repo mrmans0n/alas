@@ -193,9 +193,9 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
         }
     }
 
-    /// The bytes `path` had at checkpoint `id`, the old side of its diff:
-    /// nil when it was absent, or is not a regular file. Refused over
-    /// `maxBytes` before it is read.
+    /// The bytes `path` had at checkpoint `id`, the old side of its diff.
+    /// Refused over `maxBytes` before it is read, and when it was not a
+    /// regular file.
     public func baselineBytes(
         target: CheckpointWorktreeTarget, id: CheckpointID, path: String, maxBytes: Int
     ) async -> CheckpointBaselineBytes {
@@ -209,9 +209,18 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
             guard let baseline = try await baseline(of: path, in: saved, target: target) else {
                 return .unavailable("The checkpoint baseline is unavailable for this path.")
             }
-            guard baseline.state.kind == .regular, let blob = baseline.state.blob else { return .absent }
+            if baseline.state.kind == .absent { return .absent }
+            guard baseline.state.kind == .regular, let blob = baseline.state.blob else { return .unavailable("Not a regular file.") }
             guard blob.byteCount <= Int64(maxBytes) else { return .tooLarge(byteCount: blob.byteCount) }
-            return try await payload(of: baseline, path: path, target: target).map { .data($0) } ?? .absent
+            if baseline.stored {
+                return try await checkpointDiffPayload(baseline.state, lineageID: target.lineageID).map { .data($0) } ?? .absent
+            }
+            // HEAD's blob, by the checkpoint's HEAD, which `baseline` matched: the working file is never read.
+            let read = try await Process.gitData(["cat-file", "blob", "\(saved.headOID):./\(path)"], cwd: target.path)
+            guard read.exitCode == 0, read.stdout.count <= maxBytes else {
+                return .unavailable("The checkpoint file could not be read.")
+            }
+            return .data(read.stdout)
         } catch {
             return .unavailable("The checkpoint file could not be read.")
         }

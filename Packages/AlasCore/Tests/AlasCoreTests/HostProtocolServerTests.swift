@@ -627,7 +627,10 @@ struct HostProtocolServerTests {
         #expect(try await read("icon.png", at: .rangeBase(base: "HEAD~1", head: second, threeDot: false))
             == refused("icon.png", .pathRejected))
 
+        // Unchanged since HEAD when the checkpoint was taken: HEAD's bytes, not the working file's.
+        let unchanged = try await fixture.checkpoint("Unchanged", in: ref).id
         try checkpointed.write(to: icon)
+        #expect(try await read("icon.png", at: .checkpoint(id: unchanged)) == bytes(changed))
         let checkpoint = try await fixture.checkpoint("Before", in: ref).id
         try untracked.write(to: repo.appendingPathComponent("new.png"))
         #expect(try await read("icon.png", at: .checkpoint(id: checkpoint)) == bytes(checkpointed))
