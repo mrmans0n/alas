@@ -97,9 +97,13 @@ enum WebPreviewLoopbackRules {
 
     private static var compiled: [String: Task<WKContentRuleList?, Never>] = [:]
     // Each forward pins a new port, so keep the compiled files out of the
-    // app's persistent WebKit store.
-    private static let store = WKContentRuleListStore(
-        url: FileManager.default.temporaryDirectory.appendingPathComponent("AlasWebPreviewRules", isDirectory: true))
+    // app's persistent WebKit store and drop the last launch's on first use.
+    private static let store: WKContentRuleListStore? = {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "AlasWebPreviewRules-\(Bundle.main.bundleIdentifier ?? "alas")", isDirectory: true)
+        try? FileManager.default.removeItem(at: folder)
+        return WKContentRuleListStore(url: folder)
+    }()
 
     /// Compiled once per pin and reused; nil if WebKit refused the rules.
     static func ruleList(allowing pin: WebPreviewLoopbackPin?) async -> WKContentRuleList? {
@@ -281,6 +285,13 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    /// Drops a load still waiting for the loopback rules, as Stop expects.
+    func cancelPendingLoad() {
+        guard loadAwaitingRules != nil else { return }
+        loadAwaitingRules = nil
+        loading = false
+    }
+
     func close() {
         guard !isClosed else { return }
         isClosed = true
@@ -320,7 +331,11 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             loading = true
             return nil
         case .failed:
-            error = Self.loopbackRulesFailure
+            // Retry, so a transient compile failure doesn't strand the tab.
+            loopbackRules = .pending
+            loadAwaitingRules = url
+            loading = true
+            installLoopbackRules()
             return nil
         }
         return webView.load(URLRequest(url: url))

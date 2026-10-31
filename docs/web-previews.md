@@ -49,18 +49,19 @@ address, including hosts-file aliases. Enter a reachable remote URL instead.
 This feature does not create tunnels or infer local port forwarding.
 
 A remote preview also installs a WebKit content rule list before its first
-load. It blocks every request a page makes to this Mac's loopback, not only
-navigations: fetch, XHR, images, scripts, frames, and WebSockets to
-`localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`, `[::1]`, `[::]`, and
-IPv4-mapped loopback. A paired host's forwarded preview keeps exactly its
-forward's address and port reachable; every other loopback address and port
-stays blocked. If WebKit cannot compile the rules, the preview loads nothing.
+load. It blocks requests a page makes to this Mac's loopback by IP or a
+`localhost` name, not only navigations: fetch, XHR, images, scripts, frames,
+and WebSockets to `localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`,
+`[::1]`, `[::]`, and IPv4-mapped loopback. A paired host's forwarded preview
+keeps exactly its forward's address and port reachable; every other loopback
+address and port stays blocked. If WebKit cannot compile the rules, the preview
+loads nothing and retries on the next navigation.
 
 These checks prevent accidental local endpoint routing; they are not a network
-sandbox. Content rules match the URL text, so a page can still reach this Mac
-through a DNS name that resolves to loopback; only navigations get the DNS
-check. WebKit uses this Mac's network and its own connections, so preflight
-DNS checks cannot pin a later connection or prevent DNS rebinding.
+sandbox. Content rules match the URL text, so they do not cover a DNS name that
+resolves to loopback (only navigations get the DNS check), DNS rebinding, or
+this Mac's own LAN address. WebKit uses this Mac's network and its own
+connections, so preflight DNS checks cannot pin a later connection.
 
 ## MCP and CLI automation
 

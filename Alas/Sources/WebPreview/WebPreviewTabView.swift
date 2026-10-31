@@ -51,6 +51,7 @@ struct WebPreviewTabView: View {
                 tool("Forward", icon: "chevron.right", disabled: !browser.canGoForward) { browser.webView.goForward() }
                 tool(browser.loading ? "Stop" : "Reload", icon: browser.loading ? "xmark" : "arrow.clockwise") {
                     if browser.loading { browser.webView.stopLoading()
+                    browser.cancelPendingLoad()
                     browser.loading = false }
                     else if browser.error == nil && browser.webView.url != nil { browser.webView.reload() }
                     else { openAddress() }
