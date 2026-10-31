@@ -114,10 +114,9 @@ import Testing
         // A stale stub from an earlier sync must go when the set no longer calls for it.
         try registry.update { $0 = [Self.record("/w/a#linux", guest: .linux)] }
         try registry.syncLinuxAlias(worktree: "/w/a")
-        try registry.update { records in
+        try registry.update(syncingLinuxAliasFor: "/w/a") { records in
             records = guests.map { Self.record(VMIdentity.recordID(worktree: "/w/a", guest: $0), guest: $0) }
         }
-        try registry.syncLinuxAlias(worktree: "/w/a")
         try registry.syncLinuxAlias(worktree: "/w/a")
 
         let elements = try #require(
@@ -131,6 +130,7 @@ import Testing
         #expect(try registry.snapshot().map(\.guestOS).sorted { $0.rawValue < $1.rawValue }
             == guests.sorted { $0.rawValue < $1.rawValue })
         #expect(try registry.recordIDs().contains("/w/a") == !guests.isEmpty)
+        #expect(try registry.recordIDs(includingLinuxAliases: false).contains("/w/a") == guests.contains(.macOS))
     }
 
     @Test func concurrentUpdatesDoNotLoseWrites() async throws {

@@ -65,8 +65,10 @@ final class WorktreeVMManager {
     /// The checkout directory of a worktree, shared read-only with its VM.
     /// Installed by the app; nil leaves the worktree share out.
     @ObservationIgnored var worktreePath: (String) -> URL? = { _ in nil }
-    /// The guest helper and its installer, shared read-only with every VM.
+    /// The guest helper and its installer, shared read-only with every macOS VM.
     @ObservationIgnored private let helperDirectory: URL?
+    /// The Linux guest helper, shared read-only with every Linux VM.
+    @ObservationIgnored private let linuxHelperDirectory: URL?
     @ObservationIgnored private let logger = Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
     /// Turns sshd off on a stopped VM's disk, attached on the host. Called
     /// under a disk claim by `turnOffLeftoverSSH`.
@@ -115,12 +117,15 @@ final class WorktreeVMManager {
         root: URL = Paths.vmsRoot,
         ownerLabel: String = WorktreeVMManager.defaultOwnerLabel,
         helperDirectory: URL? = Bundle.main.resourceURL?.appendingPathComponent("alas-vm-guest", isDirectory: true),
+        linuxHelperDirectory: URL? = Bundle.main.resourceURL?
+            .appendingPathComponent("alas-vm-guest-linux", isDirectory: true),
         start: @escaping StartVM = WorktreeVMManager.bootVirtualMachine
     ) {
         self.registry = registry
         self.root = root
         self.ownerLabel = ownerLabel
         self.helperDirectory = helperDirectory
+        self.linuxHelperDirectory = linuxHelperDirectory
         self.start = start
         disableSSHOffline = { bundle in try await Self.disableSSHOnDisk(bundle, root: root) }
     }
@@ -141,13 +146,21 @@ final class WorktreeVMManager {
             ?? "Alas"
     }
 
+    /// Boots VM `worktreeID` (a registry record id), configured for the guest its id names.
     static func bootVirtualMachine(worktreeID: String, bundle: VMBundle, shares: [VMShare]) async throws -> RunningVM {
         let resources = VMConfigurationFactory.defaultResources(
             hostCPUs: ProcessInfo.processInfo.processorCount,
             hostMemory: ProcessInfo.processInfo.physicalMemory)
-        let configuration = try VMConfigurationFactory.macOS(
-            bundle: bundle, cpuCount: resources.cpus, memoryBytes: resources.memory, display: .default,
-            shares: shares)
+        let configuration = switch VMIdentity.parse(recordID: worktreeID).guest {
+        case .macOS:
+            try VMConfigurationFactory.macOS(
+                bundle: bundle, cpuCount: resources.cpus, memoryBytes: resources.memory, display: .default,
+                shares: shares)
+        case .linux:
+            try VMConfigurationFactory.linux(
+                bundle: LinuxVMBundle(url: bundle.url), cpuCount: resources.cpus, memoryBytes: resources.memory,
+                display: .default, shares: shares, seedISO: nil)
+        }
         // Diagnostic for suspend and resume, which a later plan builds on:
         // whether this configuration, shares included, supports save/restore.
         #if arch(arm64)
@@ -167,19 +180,24 @@ final class WorktreeVMManager {
 
     // MARK: - Shared folders
 
-    /// `<root>/transfer/<name>-<hash>/`, named like the worktree's VM bundle:
-    /// the one folder the guest can write back to the host.
-    func transferDirectory(forWorktree worktreeID: String) -> URL {
+    /// `<root>/transfer/<name>-<hash>[-linux]/`, named like the worktree's VM
+    /// bundle: the one folder the guest can write back to the host.
+    func transferDirectory(forWorktree worktreeID: String, guest: VMGuestOS = .macOS) -> URL {
         root.appendingPathComponent("transfer", isDirectory: true)
-            .appendingPathComponent(Self.directoryName(forWorktree: worktreeID), isDirectory: true)
+            .appendingPathComponent(Self.directoryName(forWorktree: worktreeID, guest: guest), isDirectory: true)
     }
 
-    /// The folders a VM sees under `/Volumes/My Shared Files`: the guest
-    /// helper (read-only) for every VM, plus the worktree checkout
-    /// (read-only) and a writable transfer folder, created here, for
-    /// worktree VMs. A helper or worktree directory that does not exist is
-    /// left out, since the VM would refuse to boot with it.
-    func shares(forWorktree id: String) throws -> [VMShare] {
+    /// The folders a VM sees under `/Volumes/My Shared Files` (macOS) or
+    /// `/mnt/alas` (Linux): its guest's helper (read-only) for every VM, plus
+    /// the worktree checkout (read-only) and a writable transfer folder,
+    /// created here, for worktree VMs. A helper or worktree directory that
+    /// does not exist is left out, since the VM would refuse to boot with it.
+    func shares(forWorktree worktreeID: String, guest: VMGuestOS = .macOS) throws -> [VMShare] {
+        try shares(forRecord: VMIdentity.recordID(worktree: worktreeID, guest: guest))
+    }
+
+    private func shares(forRecord recordID: String) throws -> [VMShare] {
+        let (id, guest) = VMIdentity.parse(recordID: recordID)
         var shares: [VMShare] = []
         func addIfPresent(_ name: String, _ url: URL?) {
             guard let url, FileManager.default.fileExists(atPath: url.path) else {
@@ -188,10 +206,10 @@ final class WorktreeVMManager {
             }
             shares.append(VMShare(name: name, hostURL: url, readOnly: true))
         }
-        addIfPresent("helper", helperDirectory)
+        addIfPresent("helper", guest == .linux ? linuxHelperDirectory : helperDirectory)
         guard !id.hasPrefix(Self.goldenIDPrefix) else { return shares }
         addIfPresent("worktree", worktreePath(id))
-        let transfer = transferDirectory(forWorktree: id)
+        let transfer = transferDirectory(forWorktree: id, guest: guest)
         try FileManager.default.createDirectory(at: transfer, withIntermediateDirectories: true)
         shares.append(VMShare(name: "transfer", hostURL: transfer, readOnly: false))
         return shares
@@ -199,27 +217,43 @@ final class WorktreeVMManager {
 
     // MARK: - Queries
 
-    /// Whether the worktree has a VM, read without locking or writing the registry, so it is
-    /// cheap enough for every computer use call; nil when the registry can't be read.
-    /// A record a newer build wrote counts, and so does the worktree's clone bundle on disk,
-    /// so a VM worktree never passes for one without a VM. An unreadable registry is
-    /// quarantined once by a locked snapshot and read again.
-    func hasVMRecord(_ worktreeID: String) -> Bool? {
+    /// Whether the worktree has a VM of `guest`, read without locking or writing the registry,
+    /// so it is cheap enough for every computer use call; nil when the registry can't be read.
+    /// The worktree's clone bundle on disk counts, so a VM worktree never passes for one
+    /// without a VM.
+    func hasVMRecord(_ worktreeID: String, guest: VMGuestOS = .macOS) -> Bool? {
         guard vmsExist else { return false }
-        if FileManager.default.fileExists(atPath: Self.bundleURL(forWorktree: worktreeID, root: root).path) {
+        if FileManager.default.fileExists(atPath: Self.bundleURL(forWorktree: worktreeID, guest: guest, root: root).path) {
             return true
         }
-        if let ids = try? registry.recordIDs() { return ids.contains(worktreeID) }
-        _ = try? registry.snapshot()
-        return (try? registry.recordIDs()).map { $0.contains(worktreeID) }
+        return vmKinds(forWorktree: worktreeID).map { $0.contains(guest) }
+    }
+
+    /// The guests the worktree has a VM of, read like `hasVMRecord`; nil when the registry
+    /// can't be read. A record a newer build wrote under the plain worktree id counts as
+    /// macOS, and so does a clone bundle on disk. The alias stub kept for builds that predate
+    /// Linux guests does not count. An unreadable registry is quarantined once by a locked
+    /// snapshot and read again.
+    func vmKinds(forWorktree worktreeID: String) -> Set<VMGuestOS>? {
+        guard vmsExist else { return [] }
+        let ids = (try? registry.recordIDs(includingLinuxAliases: false)) ?? {
+            _ = try? registry.snapshot()
+            return try? registry.recordIDs(includingLinuxAliases: false)
+        }()
+        guard let ids else { return nil }
+        return Set([VMGuestOS.macOS, .linux].filter { guest in
+            ids.contains(VMIdentity.recordID(worktree: worktreeID, guest: guest))
+                || FileManager.default.fileExists(
+                    atPath: Self.bundleURL(forWorktree: worktreeID, guest: guest, root: root).path)
+        })
     }
 
     /// False until the first VM is installed, so queries and worktree
     /// deletion do not create the VM directory for users who never use VMs.
     private var vmsExist: Bool { FileManager.default.fileExists(atPath: root.path) }
 
-    func running(_ worktreeID: String) -> RunningVM? {
-        runningVMs[worktreeID]
+    func running(_ worktreeID: String, guest: VMGuestOS = .macOS) -> RunningVM? {
+        runningVMs[VMIdentity.recordID(worktree: worktreeID, guest: guest)]
     }
 
     /// The guest client already made for a VM this process runs, without creating one.
@@ -228,7 +262,8 @@ final class WorktreeVMManager {
     }
 
     /// The client for the guest helper of a VM this process runs; nil when it does not run here.
-    func guestClient(for worktreeID: String) -> VMGuestClient? {
+    func guestClient(for worktreeID: String, guest: VMGuestOS = .macOS) -> VMGuestClient? {
+        let worktreeID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
         guard let vm = runningVMs[worktreeID] else { return nil }
         if let client = guestClients[worktreeID] { return client }
         let client = VMGuestClient(connect: { @MainActor [weak vm] in
@@ -241,8 +276,9 @@ final class WorktreeVMManager {
 
     /// One registry read for a VM tab: whether the worktree has a VM and
     /// which other process, if any, runs it.
-    func recordStatus(_ worktreeID: String) -> RecordStatus {
-        guard vmsExist, let record = (try? registry.snapshot())?.first(where: { $0.id == worktreeID }) else {
+    func recordStatus(_ worktreeID: String, guest: VMGuestOS = .macOS) -> RecordStatus {
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        guard vmsExist, let record = (try? registry.snapshot())?.first(where: { $0.id == id }) else {
             return RecordStatus()
         }
         let me = VMRunOwner.current(label: ownerLabel)
@@ -282,12 +318,14 @@ final class WorktreeVMManager {
 
     // MARK: - Lifecycle
 
-    /// Clones the newest sealed golden image for `worktreeID` and records it.
-    /// Does not boot the VM. A no-op when the worktree already has one.
-    func createVM(worktreeID: String) throws {
+    /// Clones the newest sealed golden image of `guest` for `worktreeID` and
+    /// records it. Does not boot the VM. A no-op when the worktree already has
+    /// one of that guest.
+    func createVM(worktreeID: String, guest: VMGuestOS = .macOS) throws {
         guard !isRemoteWorktree(worktreeID) else {
             throw VMError(message: "VMs are only available for worktrees on this Mac, not on a remote host")
         }
+        if guest == .linux { return try createLinuxVM(worktreeID: worktreeID) }
         let root = root
         guard let golden = availableGolden() else {
             // A worktree that already has a VM needs no golden image.
@@ -302,7 +340,8 @@ final class WorktreeVMManager {
         // If saving the record fails, the clone stays behind as a stale
         // bundle; removing it outside the lock could delete another
         // process's fresh clone, and the next create replaces it anyway.
-        try registry.update { records in
+        // The alias stub for older builds follows in the same write.
+        try registry.update(syncingLinuxAliasFor: worktreeID) { records in
             guard !records.contains(where: { $0.id == worktreeID }) else { return }
             // Re-checked under the lock unsealing takes: another process may
             // have reopened the golden, and booted it, since the read above.
@@ -334,12 +373,53 @@ final class WorktreeVMManager {
         }
     }
 
+    /// Clones the newest sealed Linux golden for `worktreeID`, like `createVM`
+    /// does for macOS. A sealed Linux golden never changes or goes away (it
+    /// has no customize flow, and setup only removes unsealed bundles), so
+    /// unlike the macOS golden it needs no registry record to protect a clone
+    /// in flight; it is re-checked under the lock all the same.
+    private func createLinuxVM(worktreeID: String) throws {
+        #if arch(arm64)
+        let root = root
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: .linux)
+        guard let golden = LinuxGoldenInstaller.availableGolden(root: root) else {
+            guard try !(vmsExist && registry.snapshot().contains { $0.id == id }) else { return }
+            throw VMError(message: "Set up the Ubuntu image first")
+        }
+        let destination = Self.bundleURL(forWorktree: worktreeID, guest: .linux, root: root)
+        try registry.update(syncingLinuxAliasFor: worktreeID) { records in
+            guard !records.contains(where: { $0.id == id }) else { return }
+            guard golden.isSealed, LinuxGoldenInstaller.availableGolden(root: root)?.url == golden.url else {
+                throw VMError(message: "The Ubuntu image changed. Try again.")
+            }
+            if FileManager.default.fileExists(atPath: destination.path) {
+                try FileManager.default.removeItem(at: destination)
+            }
+            let bundle: LinuxVMBundle
+            do {
+                bundle = try LinuxVMBundle.cloneForWorktree(golden: golden, to: destination)
+            } catch let error as NSError
+                where error.domain == NSPOSIXErrorDomain && [Int(EXDEV), Int(ENOTSUP)].contains(error.code)
+            {
+                throw VMError(message: "The Ubuntu image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
+            }
+            let now = Date()
+            records.append(WorktreeVMRecord(
+                id: id, guestOS: .linux, goldenBuild: VMIdentity.linuxGoldenPrefix + golden.url.lastPathComponent,
+                bundlePath: bundle.url.path, createdAt: now, lastUsedAt: now))
+        }
+        #else
+        throw VMError(message: Self.unsupportedMessage)
+        #endif
+    }
+
     /// `keepingSSH` is only for `VMHelperUpdater`, whose boot needs the sshd
     /// it just turned on; every other start first turns off sshd an
     /// interrupted setup or update left on.
-    func startVM(worktreeID: String, keepingSSH: Bool = false) async throws -> VMStartOutcome {
-        if !keepingSSH { try await turnOffLeftoverSSHBeforeBoot(id: worktreeID) }
-        return try await startRecorded(id: worktreeID, ensureRecord: nil)
+    func startVM(worktreeID: String, guest: VMGuestOS = .macOS, keepingSSH: Bool = false) async throws -> VMStartOutcome {
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        if !keepingSSH { try await turnOffLeftoverSSHBeforeBoot(id: id) }
+        return try await startRecorded(id: id, ensureRecord: nil)
     }
 
     /// A VM already running or booting here keeps its disk to itself.
@@ -365,11 +445,15 @@ final class WorktreeVMManager {
     }
 
     /// Shuts the VM down. A VM still booting is stopped once its boot returns.
-    func stopVM(worktreeID: String) async {
+    func stopVM(worktreeID: String, guest: VMGuestOS = .macOS) async {
+        await stopRecorded(VMIdentity.recordID(worktree: worktreeID, guest: guest))
+    }
+
+    private func stopRecorded(_ id: String) async {
         do {
-            try await stop(worktreeID, force: false)
+            try await stop(id, force: false)
         } catch {
-            logger.error("Stopping VM \(worktreeID, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            logger.error("Stopping VM \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -394,7 +478,8 @@ final class WorktreeVMManager {
     /// alone; one still booting is deleted once its boot returns. Returns why
     /// the VM was left in place, as a phrase, if it was.
     @discardableResult
-    func deleteVM(worktreeID: String) async -> String? {
+    func deleteVM(worktreeID: String, guest: VMGuestOS = .macOS) async -> String? {
+        let worktreeID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
         guard !diskClaims.contains(worktreeID) else {
             logger.error("Not deleting VM \(worktreeID, privacy: .public): its disk is attached for an update")
             return "its disk is attached for an update; try again once that finishes"
@@ -412,24 +497,38 @@ final class WorktreeVMManager {
         return removeRecordAndBundle(worktreeID)
     }
 
+    /// Deletes every VM of a worktree being deleted, as `deleteVM` does each.
+    /// Returns why one was left in place, if any was.
+    @discardableResult
+    func deleteVMs(forWorktree worktreeID: String) async -> String? {
+        var reasons: [String] = []
+        for guest in [VMGuestOS.macOS, .linux] {
+            if let reason = await deleteVM(worktreeID: worktreeID, guest: guest) { reasons.append(reason) }
+        }
+        return reasons.isEmpty ? nil : reasons.joined(separator: "; ")
+    }
+
+    /// `worktreeID` is a registry record id.
     @discardableResult
     private func removeRecordAndBundle(_ worktreeID: String) -> String? {
         guard vmsExist else { return nil }
         let me = VMRunOwner.current(label: ownerLabel)
+        let (worktree, guest) = VMIdentity.parse(recordID: worktreeID)
         do {
             // The bundle goes under the registry lock too, so a concurrent
             // create of the same worktree cannot clone into it in between.
-            try registry.update { records in
+            // The alias stub for older builds follows in the same write.
+            try registry.update(syncingLinuxAliasFor: worktree) { records in
                 let index = records.firstIndex { $0.id == worktreeID }
                 if let index, let owner = records[index].runOwner, !(me.map(owner.isSameProcess(as:)) ?? false) {
                     throw VMError(message: "it is running in \(owner.label)")
                 }
                 let bundle = index.map { URL(fileURLWithPath: records[$0].bundlePath) }
-                    ?? Self.bundleURL(forWorktree: worktreeID, root: root)
+                    ?? Self.bundleURL(forWorktree: worktree, guest: guest, root: root)
                 if FileManager.default.fileExists(atPath: bundle.path) {
                     try FileManager.default.removeItem(at: bundle)
                 }
-                let transfer = transferDirectory(forWorktree: worktreeID)
+                let transfer = transferDirectory(forWorktree: worktree, guest: guest)
                 if !worktreeID.hasPrefix(Self.goldenIDPrefix), FileManager.default.fileExists(atPath: transfer.path) {
                     try FileManager.default.removeItem(at: transfer)
                 }
@@ -446,7 +545,7 @@ final class WorktreeVMManager {
     func stopAll() async {
         await withTaskGroup(of: Void.self) { group in
             for id in runningVMs.keys {
-                group.addTask { await self.stopVM(worktreeID: id) }
+                group.addTask { await self.stopRecorded(id) }
             }
         }
     }
@@ -505,7 +604,9 @@ final class WorktreeVMManager {
             return VMBundle(url: goldenBundleURL(build: String(id.dropFirst(Self.goldenIDPrefix.count))))
         }
         let recorded = (try? registry.snapshot())?.first { $0.id == id }?.bundlePath
-        return VMBundle(url: recorded.map { URL(fileURLWithPath: $0) } ?? Self.bundleURL(forWorktree: id, root: root))
+        let (worktree, guest) = VMIdentity.parse(recordID: id)
+        return VMBundle(url: recorded.map { URL(fileURLWithPath: $0) }
+            ?? Self.bundleURL(forWorktree: worktree, guest: guest, root: root))
     }
 
     // MARK: - Leftover sshd
@@ -781,11 +882,19 @@ final class WorktreeVMManager {
 
     // MARK: - Internals
 
-    /// `<root>/worktrees/<name>-<hash>/`: a readable, filesystem-safe name from
-    /// the worktree's last path component plus a digest of the full id.
-    static func bundleURL(forWorktree worktreeID: String, root: URL) -> URL {
+    /// `<root>/worktrees/<name>-<hash>[-linux]/`: a readable, filesystem-safe
+    /// name from the worktree's last path component plus a digest of the full
+    /// id, and a suffix for a Linux VM.
+    static func bundleURL(forWorktree worktreeID: String, guest: VMGuestOS = .macOS, root: URL) -> URL {
         root.appendingPathComponent("worktrees", isDirectory: true)
-            .appendingPathComponent(directoryName(forWorktree: worktreeID), isDirectory: true)
+            .appendingPathComponent(directoryName(forWorktree: worktreeID, guest: guest), isDirectory: true)
+    }
+
+    private static func directoryName(forWorktree worktreeID: String, guest: VMGuestOS) -> String {
+        switch guest {
+        case .macOS: directoryName(forWorktree: worktreeID)
+        case .linux: directoryName(forWorktree: worktreeID) + "-linux"
+        }
     }
 
     private static func directoryName(forWorktree worktreeID: String) -> String {
@@ -861,7 +970,7 @@ final class WorktreeVMManager {
         cleanlyShutDown.removeValue(forKey: id)
         let booted: Result<RunningVM, Error>
         do {
-            booted = .success(try await start(id, bundle, try shares(forWorktree: id)))
+            booted = .success(try await start(id, bundle, try shares(forRecord: id)))
         } catch {
             booted = .failure(error)
         }

@@ -161,7 +161,9 @@ extension AppState {
     /// otherwise one lockless registry read.
     private func vmRoute(worktreeID: String?) -> VMComputerUseRoute {
         let runningHere = worktreeID.map { vmManager.running($0) != nil } ?? false
-        let hasVM: Bool? = runningHere ? true : worktreeID.map(vmManager.hasVMRecord) ?? false
+        // A VM of either guest keeps the call off the desktop.
+        let hasVM: Bool? = runningHere
+            ? true : worktreeID.map { id in vmManager.vmKinds(forWorktree: id).map { !$0.isEmpty } } ?? false
         return VMComputerUseRoute.resolve(worktreeID: worktreeID, hasVM: hasVM, runningHere: runningHere)
     }
 
