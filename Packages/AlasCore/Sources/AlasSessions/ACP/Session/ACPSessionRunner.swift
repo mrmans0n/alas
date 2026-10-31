@@ -115,6 +115,11 @@ public final class ACPSessionRunner {
     /// An autonomous cycle that finished outside any prompt, whose cost the adapter sends after finishing its task:
     /// reported as background usage once that cost is applied, or before the next prompt goes out with what arrived.
     private var pendingAutonomousUsage: (startedAt: Int64, streamStart: Int)?
+    /// Autonomous cycles a prompt took over: running when one was sent, or started during one. Their spend is that
+    /// prompt's, even once it is stopped and the cycle ends outside any prompt.
+    private var takenOverCycles: Set<String> = []
+    /// Where the update being applied came off the stream; nil outside a buffered apply.
+    private var applyingStreamIndex: Int?
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
@@ -291,10 +296,13 @@ public final class ACPSessionRunner {
     private struct PendingIncomingUpdate {
         let params: ACPSessionUpdateParams
         let receivedWhileHoldingLease: Bool
+        /// The runner's `dequeuedUpdateCount` when it came off the stream.
+        var streamIndex: Int?
 
-        public init(params: ACPSessionUpdateParams, receivedWhileHoldingLease: Bool) {
+        public init(params: ACPSessionUpdateParams, receivedWhileHoldingLease: Bool, streamIndex: Int? = nil) {
             self.params = params
             self.receivedWhileHoldingLease = receivedWhileHoldingLease
+            self.streamIndex = streamIndex
         }
     }
 
@@ -1189,7 +1197,8 @@ public final class ACPSessionRunner {
         }
         pendingIncomingUpdates.append(.init(
             params: update,
-            receivedWhileHoldingLease: receivedWhileHoldingLease
+            receivedWhileHoldingLease: receivedWhileHoldingLease,
+            streamIndex: dequeuedUpdateCount
         ))
         guard incomingUpdateFlushTask == nil else { return }
         incomingUpdateFlushTask = Task { @MainActor [weak self] in
@@ -1260,7 +1269,10 @@ public final class ACPSessionRunner {
         guard !steeringRowPersistencePending, !pendingIncomingUpdates.isEmpty else { return }
         let updates = pendingIncomingUpdates
         pendingIncomingUpdates.removeAll(keepingCapacity: true)
+        let outerStreamIndex = applyingStreamIndex
+        defer { applyingStreamIndex = outerStreamIndex }
         for update in updates {
+            applyingStreamIndex = update.streamIndex
             applyIncomingUpdate(
                 update.params,
                 bufferedUpdateReceivedWhileHoldingLease: update.receivedWhileHoldingLease,
@@ -1277,7 +1289,9 @@ public final class ACPSessionRunner {
         treatBufferedUpdatesAsPromptOwned: Bool = false
     ) {
         if steeringRowPersistencePending {
-            pendingIncomingUpdates.append(.init(params: params, receivedWhileHoldingLease: bufferedUpdateReceivedWhileHoldingLease))
+            pendingIncomingUpdates.append(.init(
+                params: params, receivedWhileHoldingLease: bufferedUpdateReceivedWhileHoldingLease,
+                streamIndex: applyingStreamIndex))
             return
         }
 
@@ -1290,10 +1304,11 @@ public final class ACPSessionRunner {
             if params.sessionId == root || session.subagentRun(params.sessionId) != nil {
                 let identity = ACPBackgroundTask(ownerSessionId: params.sessionId,
                     asyncTaskId: update.asyncTaskId, name: update.asyncTaskId).id
-                let wasActive = session.backgroundTasks.first(where: { $0.id == identity })?.isActive == true
+                let previous = session.backgroundTasks.first(where: { $0.id == identity })
                 var dirty = session.applyBackgroundTask(update, ownerSessionId: params.sessionId)
                 if params.sessionId == root {
-                    noteAutonomousCycle(update, identity: identity, wasActive: wasActive)
+                    noteAutonomousCycle(
+                        identity: identity, wasKnown: previous != nil, wasActive: previous?.isActive == true)
                 }
                 // An identical replay can match a mutation whose earlier write
                 // failed. Save its current row before consuming the broker event.
@@ -1799,17 +1814,31 @@ public final class ACPSessionRunner {
     /// An adapter that settles a turn at its result announces each autonomous follow-up cycle as a root-owned `turn`
     /// task. A live one starting is new output, so its text may cross the streaming boundary; one finishing outside
     /// any prompt leaves its cost to report on its own. A prompt sent meanwhile took the cycle over and owns its cost.
-    private func noteAutonomousCycle(_ update: ACPAsyncTaskUpdate, identity: String, wasActive: Bool) {
+    private func noteAutonomousCycle(identity: String, wasKnown: Bool, wasActive: Bool) {
         guard session.settlesAtResult, !suppressingLoadReplay,
               let task = session.backgroundTasks.first(where: { $0.id == identity }), task.taskType == "turn"
         else { return }
-        if update.sessionUpdate == "async_task_spawned" {
+        // Only a cycle first seen now: a late replayed start of a known one must not let replay through.
+        if !wasKnown, task.isActive {
             session.allowsStreamingBoundaryCrossing = true
+            if activePromptID != nil { takenOverCycles.insert(identity) }
         }
-        guard wasActive, ["completed", "failed"].contains(task.state), activePromptID == nil else { return }
+        guard wasActive, !task.isActive else { return }
+        guard takenOverCycles.remove(identity) == nil,
+              ["completed", "failed"].contains(task.state), activePromptID == nil else { return }
         // A cycle whose cost never came is reported with what did before the next one replaces it.
         reportAutonomousUsage(cost: nil)
-        pendingAutonomousUsage = (Int64(task.startedAt.timeIntervalSince1970 * 1000), dequeuedUpdateCount)
+        pendingAutonomousUsage = (
+            Int64(task.startedAt.timeIntervalSince1970 * 1000), applyingStreamIndex ?? dequeuedUpdateCount)
+    }
+
+    /// The prompt about to go out takes over any autonomous cycle still running.
+    private func takeOverRunningCycles() {
+        guard session.settlesAtResult else { return }
+        let root = session.remoteSessionId ?? sessionId
+        for task in session.backgroundTasks where task.isActive && task.taskType == "turn" && task.ownerSessionId == root {
+            takenOverCycles.insert(task.id)
+        }
     }
 
     /// Reports the pending autonomous cycle as background usage, with `cost`, or when nil whatever cost-bearing
@@ -4613,6 +4642,7 @@ extension ACPSessionRunner {
                     // Usage starts when the prompt goes out, after checkpoints, attachments and context providers.
                     // An autonomous cycle's cost not reported yet is what arrived before it.
                     self.reportAutonomousUsage(cost: nil)
+                    self.takeOverRunningCycles()
                     let sentAt = self.nextSentAt()
                     // Updates sent during that work belong to what came before.
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
@@ -4908,6 +4938,7 @@ extension ACPSessionRunner {
                 self.session.transcript.streamingState = .sending
                 // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
                 self.reportAutonomousUsage(cost: nil)
+                self.takeOverRunningCycles()
                 let sentAt = self.nextSentAt()
                 self.unreportedPrompts[promptID] = (
                     sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)

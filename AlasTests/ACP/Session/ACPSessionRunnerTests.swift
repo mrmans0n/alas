@@ -5838,9 +5838,11 @@ struct ACPSessionRunnerTests {
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
         onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
         second: AsyncGate = AsyncGate(),
+        usageWaitSleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         duringPrompt: @escaping @MainActor (_ call: Int, _ mock: ACPMockClient) -> Void = { _, _ in }
     ) throws -> (ACPSessionRunner, ACPMockClient, () -> Int) {
-        let (runner, mock) = try makeRunner(onTurnCompleted: onTurnCompleted, onTurnUsage: onTurnUsage)
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: onTurnCompleted, onTurnUsage: onTurnUsage, usageWaitSleep: usageWaitSleep)
         runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
         runner.session.settlesAtResult = true
@@ -5923,9 +5925,43 @@ struct ACPSessionRunnerTests {
         #expect(usage.map(\.background) == [false, false])
     }
 
+    /// A prompt that took a cycle over and is then stopped keeps the cycle's spend: the cycle ending after the stop
+    /// is no background usage, and the stopped prompt's row gets the cost once its result comes.
+    @Test func aStoppedTakeoverKeepsTheCyclesSpend() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let second = AsyncGate()
+        let never = AsyncGate()
+        let (runner, mock, prompts) = try makeSettlingRunner(
+            onTurnUsage: { usage.append($0) }, second: second, usageWaitSleep: { _ in await never.wait() })
+        let session = runner.session
+        runner.start()
+        defer { runner.stop() }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "first", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { usage.count == 1 }
+        mock.emit(followUpCycle("async_task_spawned", state: "running"))
+        try await waitUntil { session.activity.backgroundWorking }
+        session.enqueue(blocks: [.text("second")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { prompts() == 2 && session.transcript.streamingState == .streaming }
+
+        await runner.userCancel()
+        mock.emit(followUpCycle("async_task_state_update", state: "failed"))
+        mock.emit(usageUpdate(2.0))
+        try await waitUntil { !session.activity.backgroundWorking }
+        await second.open()
+        try await waitUntil { usage.count == 2 }
+        #expect(usage.map(\.background) == [false, false])
+        #expect(await usage.last?.cost?.resolve() == .init(amount: 2.0, currency: "USD"))
+    }
+
     /// The cost of an autonomous cycle, sent after its task finished, is reported as a background usage row of its
-    /// own, never charged to the prompt before or after it.
-    @Test func autonomousUsageIsReportedApart() async throws {
+    /// own, never charged to the prompt before or after it. An adapter that does not settle at its result has no
+    /// such cycles: its prompts keep every cost.
+    @Test(arguments: [true, false])
+    func autonomousUsageIsReportedApart(settles: Bool) async throws {
         var usage: [ACPTurnCompletion] = []
         var completions: [ACPTurnCompletion] = []
         let second = AsyncGate()
@@ -5933,6 +5969,7 @@ struct ACPSessionRunnerTests {
         let (runner, mock, _) = try makeSettlingRunner(
             onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) }, second: second,
             duringPrompt: { call, mock in mock.emit(self.usageUpdate(call == 1 ? 1.0 : 3.5)) })
+        runner.session.settlesAtResult = settles
         runner.start()
         defer { runner.stop() }
         _ = await withCheckedContinuation { continuation in
@@ -5944,40 +5981,54 @@ struct ACPSessionRunnerTests {
         mock.emit(followUpCycle("async_task_spawned", state: "running"))
         mock.emit(followUpCycle("async_task_state_update", state: "completed"))
         mock.emit(usageUpdate(3.0))
-        try await waitUntil { usage.count == 2 }
-        #expect(usage.map(\.background) == [false, true])
-        #expect(usage.last?.result == .completed)
-        #expect(await usage.last?.cost?.resolve() == .init(amount: 3.0, currency: "USD"))
+        if settles {
+            try await waitUntil { usage.count == 2 }
+            #expect(usage.last?.result == .completed)
+            #expect(await usage.last?.cost?.resolve() == .init(amount: 3.0, currency: "USD"))
+        } else {
+            try await waitUntil { runner.session.backgroundTasks.first?.state == "completed" }
+        }
         #expect(completions.count == 1)
 
         _ = await withCheckedContinuation { continuation in
             runner.send(text: "second", attachments: []) { continuation.resume(returning: $0) }
         }
-        try await waitUntil { usage.count == 3 }
-        #expect(usage.last?.background == false)
+        try await waitUntil { usage.count == (settles ? 3 : 2) }
+        #expect(usage.map(\.background) == (settles ? [false, true, false] : [false, false]))
         #expect(await usage.last?.cost?.resolve() == .init(amount: 3.5, currency: "USD"))
     }
 
     /// After a reattach's replay ends, an autonomous cycle's text is live output even when it repeats part of an
-    /// earlier message: a new agent row, not a held replay candidate.
-    @Test func autonomousTextShowsAfterReplay() async throws {
+    /// earlier message: a new agent row, not a held replay candidate. A late replayed start of a cycle already known,
+    /// or an adapter that does not settle at its result, keeps such text held.
+    @Test(arguments: [
+        // settles, cycle known before the replay, new row
+        (true, false, true),
+        (true, true, false),
+        (false, false, false),
+    ])
+    func autonomousTextShowsAfterReplay(settles: Bool, known: Bool, showsRow: Bool) async throws {
         let (runner, _) = try makeRunner()
         defer { runner.stop() }
         let session = runner.session
         session.agentState = .ready
-        session.settlesAtResult = true
+        session.settlesAtResult = settles
+        if known { runner.applyIncomingUpdateForTesting(followUpCycle("async_task_spawned", state: "running")) }
         func chunk(_ messageId: String, _ text: String) -> ACPSessionUpdateParams {
             .init(sessionId: "s", update: .agentMessageChunk(.init(messageId: messageId, content: .text(text))))
         }
         session.apply(chunk("earlier", "Checking the build again").update)
-        runner.suppressLoadReplay(throughYieldedUpdateCount: 1)
+        // The replay is the one update after any applied above.
+        let replayEnd = known ? 2 : 1
+        runner.suppressLoadReplay(throughYieldedUpdateCount: replayEnd)
         runner.applyIncomingUpdateForTesting(chunk("earlier", "Checking the build again"))
-        runner.finishSuppressingLoadReplay(throughYieldedUpdateCount: 1)
+        runner.finishSuppressingLoadReplay(throughYieldedUpdateCount: replayEnd)
 
         runner.applyIncomingUpdateForTesting(followUpCycle("async_task_spawned", state: "running"))
         runner.applyIncomingUpdateForTesting(chunk("cycle", "the build"))
 
-        #expect(session.transcript.messages.count == 3)
+        #expect(session.transcript.messages.count == (showsRow ? 3 : 2))
+        guard showsRow else { return }
         guard case .agent(_, _, let text) = session.transcript.messages.last else {
             Issue.record("The cycle's text did not get a row")
             return
