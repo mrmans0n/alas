@@ -2397,8 +2397,13 @@ public final class ACPSession: ChangeTracking, Identifiable {
             let before = descriptor(for: existing)
             existing.merge(spawn: spawn, live: live)
             let after = descriptor(for: existing)
-            guard before != after else { return [] }
-            return refreshSubagentRow(for: existing, at: timestamp)
+            // A directory patch is a fact about the child: its row is written
+            // again even when nothing changed, so a durable redelivery after a
+            // failed write cannot be acknowledged without persisting it.
+            let patchesDirectories = spawn.cwd != nil || spawn.clearsCwd
+                || spawn.replacesAdditionalDirectories
+            guard before != after || patchesDirectories else { return [] }
+            return persistableSubagentRow(for: existing, at: timestamp)
         }
         let run = ACPSubagentRun(
             subagentSessionId: id,

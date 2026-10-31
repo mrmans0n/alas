@@ -681,6 +681,30 @@ struct ACPSubagentRoutingTests {
         }.first { $0.subagentSessionId == "agent_n" }?.links.map(\.messageId)
         #expect(storedLinks == ["toolu_launch"])
 
+        // A directory patch whose row write failed is written again when it
+        // is redelivered, although it changes nothing in memory by then.
+        let cwdPatch = try JSONDecoder().decode(ACPSessionUpdateFrame.self, from: Data(
+            #"{"sessionId":"remote-parent","update":{"sessionId":"agent_n","sessionUpdate":"subagent_update","cwd":"/w/pkg"}}"#.utf8))
+        try store.db.exec("ALTER TABLE messages RENAME TO messages_broken")
+        for update in cwdPatch.updates {
+            runner.applyIncomingUpdateForTesting(.init(sessionId: update.sessionId, update: update.update))
+        }
+        await runner.flushPersistence()
+        try store.db.exec("ALTER TABLE messages_broken RENAME TO messages")
+        // The failed write still withholds this redelivery's acknowledgement,
+        // so the adapter delivers it again; the row is written either way.
+        for update in cwdPatch.updates {
+            runner.applyIncomingUpdateForTesting(.init(
+                sessionId: update.sessionId, update: update.update,
+                durableConsumptionAcknowledgement: {}))
+        }
+        await runner.flushPersistence()
+        let storedCwd = try store.loadMessages(sessionId: "s").compactMap {
+            (try? JSONDecoder().decode(ACPMessage.ToolCall.self, from: $0.payload))
+                .flatMap(ACPSubagentRowDescriptor.init(toolCall:))
+        }.first { $0.subagentSessionId == "agent_n" }?.cwd
+        #expect(storedCwd == "/w/pkg")
+
         runner.suppressLoadReplay(throughYieldedUpdateCount: 99)
         let acknowledged = Acknowledged()
         runner.applyIncomingUpdateForTesting(.init(
