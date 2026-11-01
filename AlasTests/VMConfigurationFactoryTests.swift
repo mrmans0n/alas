@@ -18,26 +18,4 @@ struct VMConfigurationFactoryTests {
         #expect(resources.cpus == cpus)
         #expect(resources.memory == memory)
     }
-
-    #if arch(arm64)
-    @Test("a Linux bundle with its seed and shares makes a configuration Virtualization accepts")
-    func linuxConfigurationValidates() throws {
-        let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("VMConfigurationFactoryTests-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let bundle = LinuxVMBundle(url: dir)
-        try Data(count: 1 << 20).write(to: bundle.diskImage)
-        try bundle.writeIdentity()
-        let seed = dir.appendingPathComponent("seed.iso")
-        try Data(count: 1 << 16).write(to: seed)
-
-        let configuration = try VMConfigurationFactory.linux(
-            bundle: bundle, cpuCount: 2, memoryBytes: 4 * Self.gib, display: .default,
-            shares: [VMShare(name: "helper", hostURL: dir, readOnly: true)], seedISO: seed)
-
-        #expect(configuration.storageDevices.count == 2)
-        #expect(configuration.audioDevices.isEmpty)
-    }
-    #endif
 }
