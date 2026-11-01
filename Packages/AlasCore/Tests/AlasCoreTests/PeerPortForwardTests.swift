@@ -304,7 +304,7 @@ private final class EventLog: Sendable {
 
 /// A loopback TCP echo server that reads only once its previous echo was
 /// written, so it stops reading when its peer stops reading.
-private final class EchoServer: Sendable {
+final class EchoServer: Sendable {
     private let listener: NWListener
     private let acceptedCount = Mutex(0)
     private let receivedCount = Mutex(0)
@@ -349,7 +349,7 @@ private final class EchoServer: Sendable {
 }
 
 /// A loopback TCP client.
-private final class TestClient: Sendable {
+final class TestClient: Sendable {
     private let connection: NWConnection
     private let state = Mutex((bytes: Data(), ended: false))
 

@@ -1,7 +1,7 @@
 # Keep remote previews off this Mac's own services
 
 Date: 2026-11-02
-Status: design, not implemented
+Status: implemented
 
 ## Intent
 

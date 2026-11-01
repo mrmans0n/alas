@@ -1,10 +1,12 @@
 import AppKit
-import Darwin
+import CryptoKit
+import Network
 import SwiftUI
+import Synchronization
 import WebKit
 
 enum WebPreviewNavigation {
-    typealias HostResolver = @MainActor (String) async -> [String]?
+    typealias HostResolver = @Sendable (String) async -> [String]?
 
     /// `allowedLoopback` pins the one Mac loopback address a remote owner may
     /// load (a paired host's forwarded endpoint). Nil keeps loopback refused.
@@ -14,17 +16,22 @@ enum WebPreviewNavigation {
         return allowedLoopback?.matches(url) == true
     }
 
+    /// A remote owner's navigation must not resolve to this Mac or a
+    /// link-local address. Only the pinned address itself may be loopback,
+    /// never another name for it.
     @MainActor
     static func allowsResolved(_ url: URL, remoteHost: String?, allowedLoopback: WebPreviewLoopbackPin? = nil,
+                               localAddresses: Set<Data> = WebPreviewLocalAddresses.shared.current,
                                resolveHost: HostResolver) async -> Bool {
         guard allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else { return false }
         guard remoteHost != nil else { return true }
+        if allowedLoopback?.matches(url) == true { return true }
         guard let host = url.host(percentEncoded: false),
-              let addresses = await resolveHost(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))),
-              !addresses.isEmpty else { return false }
-        // Only the pinned address itself may resolve to loopback, never another name for it.
-        let pinned = allowedLoopback?.matches(url) == true
-        return addresses.allSatisfy { pinned || !RunEndpointPolicy.isLoopbackHost($0) }
+              let answers = await resolveHost(host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))),
+              !answers.isEmpty else { return false }
+        let addresses = answers.compactMap(WebPreviewEgressPolicy.address)
+        return addresses.count == answers.count
+            && WebPreviewEgressPolicy.refusal(forAny: addresses, port: 0, pin: nil, localAddresses: localAddresses) == nil
     }
 
     static func captureRect(_ rect: CGRect, viewport: CGSize) -> CGRect? {
@@ -52,22 +59,29 @@ struct WebPreviewLoopbackPin: Equatable {
         return Self.normalized(host) == self.host && url.runEndpointPort == port
     }
 
+    /// The forward's addresses for the egress proxy; `localhost` listens on both.
+    var egressPin: WebPreviewEgressPolicy.Pin {
+        let hosts = host == "localhost" ? ["127.0.0.1", "::1"] : [host]
+        return WebPreviewEgressPolicy.Pin(addresses: Set(hosts.compactMap(WebPreviewEgressPolicy.address)), port: port)
+    }
+
     private static func normalized(_ host: String) -> String {
         host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
     }
 }
 
 /// A content rule list that stops a remote owner's page from reaching this
-/// Mac's loopback with any request, not only navigations: fetch, XHR, images,
-/// scripts, frames, and WebSockets. Rules match the canonical URL text, so a
-/// DNS name that resolves to loopback is not covered here; navigations to one
-/// are still refused by `WebPreviewNavigation.allowsResolved`.
+/// Mac by IP literal or `localhost` with any request, not only navigations:
+/// fetch, XHR, images, scripts, frames, and WebSockets. WebKit connects to
+/// these directly, around the preview's egress proxy, so the proxy cannot
+/// check them. Every name goes through the proxy.
 @MainActor
 enum WebPreviewLoopbackRules {
-    /// WebKit's matcher has no alternation, so each loopback spelling gets its
-    /// own rule. Hosts are matched after WebKit canonicalizes them (`0x7f.1`
-    /// becomes `127.0.0.1`, `[0::1]` becomes `[::1]`).
-    static func json(allowing pin: WebPreviewLoopbackPin?) -> String {
+    /// WebKit's matcher has no alternation, so each spelling gets its own
+    /// rule. Hosts are matched after WebKit canonicalizes them (`0x7f.1`
+    /// becomes `127.0.0.1`, `[0::1]` becomes `[::1]`). `selfAddresses` are
+    /// this Mac's interface addresses, canonical.
+    static func json(allowing pin: WebPreviewLoopbackPin?, selfAddresses: Set<Data> = []) -> String {
         let authority = #"^[^:/]+://([^/@]*@)?"#
         let blocked = [
             #"([^/:@]*\.)?localhost\.?[:/]"#,
@@ -76,7 +90,9 @@ enum WebPreviewLoopbackRules {
             #"\[::1?\][:/]"#,
             #"\[::ffff:7f[0-9a-f][0-9a-f]:[0-9a-f]+\][:/]"#,
             #"\[::ffff:0:0\][:/]"#,
-        ]
+            #"169\.254\.[0-9.]+[:/]"#,
+            #"\[::ffff:a9fe:[0-9a-f]+\][:/]"#,
+        ] + selfAddresses.sorted { $0.lexicographicallyPrecedes($1) }.flatMap(selfHostPatterns)
         var rules = blocked.map { rule(authority + $0, action: "block") }
         if let pin {
             let host = NSRegularExpression.escapedPattern(for: pin.host.contains(":") ? "[\(pin.host)]" : pin.host)
@@ -89,6 +105,46 @@ enum WebPreviewLoopbackRules {
         }
         let data = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys, .withoutEscapingSlashes])
         return data.map { String(decoding: $0, as: UTF8.self) } ?? "[]"
+    }
+
+    /// The URL host spellings of one of this Mac's addresses, as WebKit
+    /// canonicalizes them. Addresses the fixed rules or the proxy already
+    /// refuse need none.
+    private static func selfHostPatterns(_ address: Data) -> [String] {
+        guard WebPreviewEgressPolicy.refusal(for: address, localAddresses: []) == nil else { return [] }
+        let bytes = [UInt8](address)
+        let hosts = bytes.count == 4
+            ? [bytes.map(String.init).joined(separator: "."), "[\(ipv6URLText([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff] + bytes))]"]
+            : ["[\(ipv6URLText(bytes))]"]
+        return hosts.map { NSRegularExpression.escapedPattern(for: $0) + "[:/]" }
+    }
+
+    /// The WHATWG URL serialization of an IPv6 address: lowercase hex without
+    /// leading zeros, and the first longest run of two or more zero pieces
+    /// compressed to `::`.
+    static func ipv6URLText(_ bytes: [UInt8]) -> String {
+        let pieces = stride(from: 0, to: 16, by: 2).map { UInt16(bytes[$0]) << 8 | UInt16(bytes[$0 + 1]) }
+        var compress = (start: -1, length: 1)
+        var index = 0
+        while index < 8 {
+            var end = index
+            while end < 8, pieces[end] == 0 { end += 1 }
+            if end - index > compress.length { compress = (index, end - index) }
+            index = max(end, index + 1)
+        }
+        var text = ""
+        index = 0
+        while index < 8 {
+            if index == compress.start {
+                text += index == 0 ? "::" : ":"
+                index += compress.length
+                continue
+            }
+            text += String(pieces[index], radix: 16)
+            if index < 7 { text += ":" }
+            index += 1
+        }
+        return text
     }
 
     private static func rule(_ filter: String, action: String) -> [String: Any] {
@@ -105,11 +161,12 @@ enum WebPreviewLoopbackRules {
         return WKContentRuleListStore(url: folder)
     }()
 
-    /// Compiled once per pin and reused; nil if WebKit refused the rules.
-    static func ruleList(allowing pin: WebPreviewLoopbackPin?) async -> WKContentRuleList? {
-        let identifier = pin.map { "loopback-\($0.host)-\($0.port)" } ?? "loopback"
+    /// Compiled once per pin and address set and reused; nil if WebKit
+    /// refused the rules.
+    static func ruleList(allowing pin: WebPreviewLoopbackPin?, selfAddresses: Set<Data>) async -> WKContentRuleList? {
+        let json = json(allowing: pin, selfAddresses: selfAddresses)
+        let identifier = "loopback-" + SHA256.hash(data: Data(json.utf8)).prefix(16).map { String(format: "%02x", $0) }.joined()
         if let task = compiled[identifier] { return await task.value }
-        let json = json(allowing: pin)
         let task = Task { @MainActor () -> WKContentRuleList? in
             guard let store else { return nil }
             return try? await store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json)
@@ -121,82 +178,35 @@ enum WebPreviewLoopbackRules {
     }
 }
 
-enum WebPreviewHostLookup {
-    private static let queue: OperationQueue = {
-        let queue = OperationQueue()
-        queue.name = "Web preview DNS"
-        queue.maxConcurrentOperationCount = 2
-        queue.qualityOfService = .utility
-        return queue
-    }()
+/// This Mac's own interface addresses, canonical, which a remote preview
+/// must not reach. Refreshed when the network path changes; remote browsers
+/// recompile their rules on `didChange`.
+final class WebPreviewLocalAddresses: Sendable {
+    static let shared = WebPreviewLocalAddresses()
+    static let didChange = Notification.Name("WebPreviewLocalAddressesDidChange")
 
-    @MainActor
-    static func resolve(_ host: String) async -> [String]? {
-        let normalizedHost = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
-        if RunEndpointPolicy.isLoopbackHost(normalizedHost) || isNumericAddress(normalizedHost) {
-            return [normalizedHost]
-        }
+    private let snapshot = Mutex(WebPreviewLocalAddresses.read())
+    private let monitor = NWPathMonitor()
 
-        return await withCheckedContinuation { continuation in
-            let result = Resolution(continuation: continuation)
-            let operation = BlockOperation {
-                let addresses = lookupAddresses(normalizedHost)
-                Task { @MainActor in result.finish(addresses) }
-            }
-            queue.addOperation(operation)
-            Task { @MainActor in
-                try? await Task.sleep(for: .seconds(5))
-                operation.cancel()
-                result.finish(nil)
-            }
-        }
+    var current: Set<Data> { snapshot.withLock { $0 } }
+
+    private init() {
+        monitor.pathUpdateHandler = { [weak self] _ in self?.refresh() }
+        monitor.start(queue: DispatchQueue(label: "io.nlopez.alas.web-preview-local-addresses"))
     }
 
-    private static func isNumericAddress(_ host: String) -> Bool {
-        var ipv4 = in_addr()
-        if inet_pton(AF_INET, host, &ipv4) == 1 { return true }
-        var ipv6 = in6_addr()
-        return inet_pton(AF_INET6, host, &ipv6) == 1
+    private func refresh() {
+        let addresses = Self.read()
+        let changed = snapshot.withLock { current in
+            defer { current = addresses }
+            return current != addresses
+        }
+        guard changed else { return }
+        Task { @MainActor in NotificationCenter.default.post(name: Self.didChange, object: nil) }
     }
 
-    private static func lookupAddresses(_ host: String) -> [String]? {
-        var hints = addrinfo()
-        hints.ai_family = AF_UNSPEC
-        hints.ai_socktype = SOCK_STREAM
-        var result: UnsafeMutablePointer<addrinfo>?
-        guard getaddrinfo(host, nil, &hints, &result) == 0, let result else { return nil }
-        defer { freeaddrinfo(result) }
-
-        var addresses = Set<String>()
-        var entry: UnsafeMutablePointer<addrinfo>? = result
-        while let current = entry {
-            let info = current.pointee
-            var buffer = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            guard let address = info.ai_addr,
-                  getnameinfo(address, info.ai_addrlen, &buffer, socklen_t(buffer.count), nil, 0, NI_NUMERICHOST) == 0
-            else { return nil }
-            // `String(cString:)` is deprecated; getnameinfo NUL-terminates, so
-            // decode up to the terminator rather than the whole fixed buffer.
-            let hostBytes = buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
-            addresses.insert(String(decoding: hostBytes, as: UTF8.self))
-            entry = info.ai_next
-        }
-        return Array(addresses)
-    }
-
-    @MainActor
-    private final class Resolution {
-        var continuation: CheckedContinuation<[String]?, Never>?
-
-        init(continuation: CheckedContinuation<[String]?, Never>) {
-            self.continuation = continuation
-        }
-
-        func finish(_ addresses: [String]?) {
-            let pending = continuation
-            continuation = nil
-            pending?.resume(returning: addresses)
-        }
+    private static func read() -> Set<Data> {
+        Set(RemoteNetwork.interfaces().compactMap { WebPreviewEgressPolicy.address($0.host).map(WebPreviewEgressPolicy.canonical) })
     }
 }
 
@@ -223,10 +233,14 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var consoleHandler: PreviewConsoleHandler?
     private var urlObservation: NSKeyValueObservation?
     private let resolveHost: WebPreviewNavigation.HostResolver
-    /// Remote owners load nothing until the loopback rules are installed.
-    private var loopbackRules: LoopbackRules
-    private enum LoopbackRules { case installed, pending, failed }
+    /// Remote owners load nothing until the loopback rules are installed and
+    /// the egress proxy is listening.
+    private var protection: Protection
+    private enum Protection { case installed, pending, failed }
     private var loadAwaitingRules: URL?
+    private var rules: WKContentRuleList?
+    private var proxy: WebPreviewEgressProxy?
+    private var addressObserver: NSObjectProtocol?
     let automationState = WebPreviewBrowserAutomationState()
     var automationDocumentGeneration: Int { navigationGeneration }
 
@@ -236,7 +250,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         self.remoteHost = remoteHost
         self.allowedLoopback = allowedLoopback
         self.resolveHost = resolveHost
-        loopbackRules = remoteHost == nil ? .installed : .pending
+        protection = remoteHost == nil ? .installed : .pending
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -262,27 +276,87 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
                 self.onNavigate?(url)
             }
         }
-        if remoteHost != nil { installLoopbackRules() }
+        if remoteHost != nil {
+            installProtection()
+            addressObserver = NotificationCenter.default.addObserver(
+                forName: WebPreviewLocalAddresses.didChange, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    guard let self, !self.isClosed, self.protection == .installed else { return }
+                    Task { @MainActor in
+                        if !(await self.installRules()) { self.protectionFailed() }
+                    }
+                }
+            }
+        }
     }
 
-    private func installLoopbackRules() {
-        Task { @MainActor [weak self, allowedLoopback] in
-            let list = await WebPreviewLoopbackRules.ruleList(allowing: allowedLoopback)
-            guard let self, !isClosed else { return }
-            guard let list else {
-                loopbackRules = .failed
-                loadAwaitingRules = nil
-                loading = false
-                error = Self.loopbackRulesFailure
-                return
-            }
-            webView.configuration.userContentController.add(list)
-            loopbackRules = .installed
+    private func installProtection() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            async let rulesReady = installRules()
+            async let proxyReady = startProxy()
+            let ready = await (rulesReady, proxyReady)
+            guard !isClosed else { return }
+            guard ready.0, ready.1 else { return protectionFailed() }
+            protection = .installed
             if let url = loadAwaitingRules {
                 loadAwaitingRules = nil
                 webView.load(URLRequest(url: url))
             }
         }
+    }
+
+    private func protectionFailed() {
+        protection = .failed
+        loadAwaitingRules = nil
+        loading = false
+        error = Self.protectionFailure
+    }
+
+    /// Compiles the rules for this Mac's current addresses and swaps them in.
+    private func installRules() async -> Bool {
+        while true {
+            let addresses = WebPreviewLocalAddresses.shared.current
+            guard let list = await WebPreviewLoopbackRules.ruleList(allowing: allowedLoopback, selfAddresses: addresses),
+                  !isClosed else { return false }
+            // The addresses changed while compiling; compile for the new ones.
+            guard addresses == WebPreviewLocalAddresses.shared.current else { continue }
+            let controller = webView.configuration.userContentController
+            if let rules { controller.remove(rules) }
+            controller.add(list)
+            rules = list
+            return true
+        }
+    }
+
+    /// Starts the egress proxy, unless it is already listening, and points the
+    /// data store at it with failover off, so a dead proxy fails every load.
+    private func startProxy() async -> Bool {
+        if proxy?.isListening == true { return true }
+        proxy?.stop()
+        let proxy = WebPreviewEgressProxy(
+            pin: allowedLoopback?.egressPin, resolve: resolveHost,
+            localAddresses: { WebPreviewLocalAddresses.shared.current },
+            onBlocked: { [weak self] host, port, refusal in
+                let line = "Blocked request to \(host):\(port): \(refusal.description)"
+                Task { @MainActor in self?.recordBlocked(line) }
+            })
+        self.proxy = proxy
+        guard let port = try? await proxy.start(), let port = NWEndpoint.Port(rawValue: port),
+              !isClosed, self.proxy === proxy else {
+            proxy.stop()
+            return false
+        }
+        var configuration = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: .ipv4(.loopback), port: port))
+        configuration.allowFailover = false
+        webView.configuration.websiteDataStore.proxyConfigurations = [configuration]
+        return true
+    }
+
+    private func recordBlocked(_ line: String) {
+        // WebKit retries a refused connection, so report each destination once.
+        guard !isClosed, consoleErrors.count < 100, !consoleErrors.contains(line) else { return }
+        consoleErrors.append(line)
     }
 
     /// Drops a load still waiting for the loopback rules, as Stop expects.
@@ -296,6 +370,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard !isClosed else { return }
         isClosed = true
         navigationGeneration += 1
+        proxy?.stop()
+        proxy = nil
+        if let addressObserver { NotificationCenter.default.removeObserver(addressObserver) }
+        addressObserver = nil
         automationState.invalidate()
         webView.stopLoading()
         urlObservation?.invalidate()
@@ -324,18 +402,20 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         error = nil
         address = url.absoluteString
-        switch loopbackRules {
+        // A proxy that died fails every load; restart it.
+        if protection == .installed, remoteHost != nil, proxy?.isListening != true { protection = .failed }
+        switch protection {
         case .installed: break
         case .pending:
             loadAwaitingRules = url
             loading = true
             return nil
         case .failed:
-            // Retry, so a transient compile failure doesn't strand the tab.
-            loopbackRules = .pending
+            // Retry, so a transient failure doesn't strand the tab.
+            protection = .pending
             loadAwaitingRules = url
             loading = true
-            installLoopbackRules()
+            installProtection()
             return nil
         }
         return webView.load(URLRequest(url: url))
@@ -386,7 +466,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             return }
             if !allowed {
                 loading = false
-                error = "Navigation blocked. The remote endpoint resolves to loopback or its address could not be verified."
+                error = "Navigation blocked. The remote endpoint resolves to this Mac or a local address, or its address could not be verified."
             }
             completion(allowed)
         }
@@ -501,7 +581,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
-    private static let loopbackRulesFailure = "This preview could not block requests to this Mac's localhost, so it will not load pages."
+    private static let protectionFailure = "This preview could not block requests to this Mac, so it will not load pages."
 
     private static let consoleScript = #"""
     (() => {

@@ -44,7 +44,7 @@ struct WebPreviewAutomationService {
             guard isAuthorized() else { throw WebPreviewAutomationError.denied }
             if let url = target.url,
                !(await WebPreviewNavigation.allowsResolved(url, remoteHost: target.remoteHost, resolveHost: resolveHost)) {
-                throw WebPreviewAutomationError.endpoint("The URL is unsupported, resolves to loopback for a remote owner, or its address could not be verified.")
+                throw WebPreviewAutomationError.endpoint("The URL is unsupported, resolves to this Mac or a local address for a remote owner, or its address could not be verified.")
             }
             guard isAuthorized() else { throw WebPreviewAutomationError.denied }
             if let current = previews().first {

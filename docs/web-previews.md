@@ -44,24 +44,48 @@ context in feedback.
 
 A remote preview retains its execution host. Remote loopback URLs are blocked
 on launch and navigation, including redirects. Remote navigations also perform
-a bounded system DNS lookup and reject unresolved names or any returned loopback
-address, including hosts-file aliases. Enter a reachable remote URL instead.
-This feature does not create tunnels or infer local port forwarding.
+a bounded system DNS lookup and reject unresolved names or any address that is
+loopback, link-local (`169.254.0.0/16`, `fe80::/10`), or one of this Mac's own
+LAN or tailnet addresses, including hosts-file aliases. Enter a reachable
+remote URL instead. This feature does not create tunnels or infer local port
+forwarding.
 
-A remote preview also installs a WebKit content rule list before its first
-load. It blocks requests a page makes to this Mac's loopback by IP or a
-`localhost` name, not only navigations: fetch, XHR, images, scripts, frames,
-and WebSockets to `localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`,
-`[::1]`, `[::]`, and IPv4-mapped loopback. A paired host's forwarded preview
-keeps exactly its forward's address and port reachable; every other loopback
-address and port stays blocked. If WebKit cannot compile the rules, the preview
-loads nothing and retries on the next navigation.
+Every other request a remote page makes is checked too: fetch, XHR, images,
+scripts, styles, frames, WebSockets, workers, and redirects.
 
-These checks prevent accidental local endpoint routing; they are not a network
-sandbox. Content rules match the URL text, so they do not cover a DNS name that
-resolves to loopback (only navigations get the DNS check), DNS rebinding, or
-this Mac's own LAN address. WebKit uses this Mac's network and its own
-connections, so preflight DNS checks cannot pin a later connection.
+- **Names** go through a per-preview HTTP CONNECT proxy that Alas runs on
+  `127.0.0.1`. It resolves each name once, refuses the connection unless every
+  answer is allowed, and connects to the exact address it checked, so DNS
+  rebinding has nothing to act on. A refused request fails in the page and
+  adds a console line such as `Blocked request to app.test:5432: resolves to
+  this Mac`, which `preview_console` and captures include. The proxy is set
+  with failover off: if it stops, requests fail rather than going direct.
+- **IP literals** for loopback and this Mac's own addresses never reach a
+  proxy, because WebKit connects to them directly. A WebKit content rule list
+  blocks them by URL: `localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`,
+  `[::1]`, `[::]`, `169.254.0.0/16`, IPv4-mapped forms of these, and each of
+  this Mac's current interface addresses. The list is recompiled when the
+  Mac's addresses change.
+
+A paired host's forwarded preview keeps exactly its forward's address and port
+reachable; every other address on this Mac stays blocked. If the rules cannot
+be compiled or the proxy cannot start, the preview loads nothing and retries on
+the next navigation. Local previews use neither and may load `localhost`.
+
+These checks keep remote pages off this Mac; they are not a network sandbox.
+Other hosts on the LAN or tailnet stay reachable, since the remote host is
+usually one of them. Known gaps:
+
+- WebRTC and other UDP traffic do not use the proxy.
+- HTTP/3 (QUIC) cannot run through an HTTP CONNECT tunnel. In testing, a site
+  that advertises HTTP/3 loaded over HTTP/2 through the proxy and failed when
+  the proxy refused it, so no direct QUIC connection was seen. That is
+  WebKit's current behaviour, not a guarantee, and Alas has no public API to
+  turn HTTP/3 off.
+- After this Mac gets a new address, a literal URL for it is reachable until
+  the rules are recompiled, typically within tens of milliseconds. Names are
+  refused immediately.
+- WebKit may still look up names for DNS prefetch; that opens no connection.
 
 ## MCP and CLI automation
 
