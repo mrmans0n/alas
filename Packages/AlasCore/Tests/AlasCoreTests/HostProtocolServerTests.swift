@@ -627,6 +627,45 @@ struct HostProtocolServerTests {
         #expect(try await read("icon.png", at: .rangeBase(base: "HEAD~1", head: second, threeDot: false))
             == refused("icon.png", .pathRejected))
 
+        // A pull request's sides are the commits its provider names to the
+        // host for the diff it last served, at that diff's head, asked once
+        // per diff read however many reads share it, and only ones the host has.
+        let provider = FakeReviewProvider(kind: .github)
+        provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: first, afterSHA: second)
+        let pullRequest = try await fixture.openPullRequestReview(provider)
+        let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
+        func side(_ after: Bool, head: String = provider.headSHA, in other: Worktree? = nil) async -> RemoteFileBytesResult {
+            await fixture.core.remoteFileBytes(
+                in: .found(other ?? worktree), path: "icon.png",
+                revision: .providerReview(sessionID: pullRequest, after: after, head: head))
+        }
+        func diffRead() async throws {
+            _ = try await fixture.request(.readProviderReview(worktree: ref, sessionID: pullRequest, withDiff: true))
+        }
+        #expect(await side(false) == .failure(
+            reason: .gitFailed, byteSize: nil, message: "This review's diff isn't loaded on the host. Reload it and try again."))
+        try await diffRead()
+        provider.holdsRevisions = true
+        async let before = side(false)
+        async let after = side(true)
+        try await eventually { await MainActor.run { provider.releaseRevisions != nil } }
+        provider.releaseRevisions?.resume()
+        #expect(await [before, after] == [.success(data: added), .success(data: changed)])
+        #expect(provider.revisionCalls == 1)
+        #expect(await side(true, head: "stale") == .failure(
+            reason: .gitFailed, byteSize: nil, message: "This pull request changed since it was loaded. Reload it and try again."))
+        provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: second, afterSHA: String(repeating: "1", count: 40))
+        #expect(await side(false) == .success(data: added))
+        try await diffRead()
+        #expect(await side(false) == .success(data: changed))
+        #expect(await side(true) == .failure(reason: .notFound, byteSize: nil, message: nil))
+        #expect(provider.revisionCalls == 2)
+        // Another worktree can't read this one's review, cached or not.
+        let other = Worktree(
+            id: "other", projectId: worktree.projectId, name: "other", branch: "other",
+            path: worktree.path, status: .clean, lastActivity: .distantPast)
+        #expect(await side(false, in: other) == .failure(reason: .pathRejected, byteSize: nil, message: nil))
+
         // Unchanged since HEAD when the checkpoint was taken: HEAD's bytes, not the working file's.
         // Even with the working file unreadable now.
         let unchanged = try await fixture.checkpoint("Unchanged", in: ref).id
@@ -3155,6 +3194,21 @@ struct HostProtocolServerTests {
             )
         }
         func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+        var imageRevisions = CodeHostReviewImageRevisions(beforeSHA: "aaa", afterSHA: "bbb")
+        var revisionCalls = 0
+        /// The next `reviewImageRevisions` waits for `releaseRevisions` to be resumed.
+        var holdsRevisions = false
+        var releaseRevisions: CheckedContinuation<Void, Never>?
+        @MainActor func reviewImageRevisions(
+            remote: CodeHostRemote, request: ReviewRequest, cwd: URL
+        ) async throws -> CodeHostReviewImageRevisions {
+            revisionCalls += 1
+            if holdsRevisions {
+                holdsRevisions = false
+                await withCheckedContinuation { releaseRevisions = $0 }
+            }
+            return imageRevisions
+        }
         @MainActor func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
             threadMutations.append(mutation)
             return ProviderThreadMutationResult(refreshedRequest: mutation.reviewRequest, providerURL: nil)

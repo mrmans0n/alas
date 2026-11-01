@@ -18,6 +18,8 @@ extension ReviewsAPI {
             let diff = withDiff
                 ? HostProviderReview.capped(try await provider.reviewDiff(remote: remote, request: request, cwd: worktree.path))
                 : nil
+            // Its images are read at the head of the diff a Mac now shows.
+            if withDiff { core.providerReviewImages[record.target.draftSessionID] = ProviderReviewImages(request: request) }
             return HostProviderReview(
                 remote: remote,
                 request: request,
@@ -154,6 +156,43 @@ extension ReviewsAPI {
 }
 
 extension AlasCoreContext {
+    /// The commits pull or merge request review `session` of `worktree`
+    /// compares in an image diff, as its provider names them to this host
+    /// for the diff it last served, at `head`: asked once per diff read,
+    /// a failure included.
+    func providerReviewImageRevisions(
+        _ session: ReviewDraftSessionID, head: String, in worktree: Worktree
+    ) async throws -> CodeHostReviewImageRevisions {
+        guard session.isFor(worktreeID: worktree.id),
+              let record = try reviewSessions.list(worktreeID: worktree.id)
+              .first(where: { $0.target.draftSessionID == session }),
+              case .reviewRequest = record.target.payload,
+              let remote = record.target.providerRemote,
+              let provider = codeHostProviders.provider(for: remote.kind)
+        else { throw HostError.notFound(what: "review \(session.rawValue)") }
+        guard var images = providerReviewImages[session] else {
+            throw HostError.failed(message: "This review's diff isn't loaded on the host. Reload it and try again.")
+        }
+        // Compared, never passed to git: only the provider's commits are.
+        guard images.request.headSHA == head else {
+            throw HostError.failed(message: "This pull request changed since it was loaded. Reload it and try again.")
+        }
+        let revisions: Task<CodeHostReviewImageRevisions, any Error>
+        if let inFlight = images.revisions {
+            revisions = inFlight
+        } else {
+            let request = images.request, cwd = worktree.path
+            revisions = Task { try await provider.reviewImageRevisions(remote: remote, request: request, cwd: cwd) }
+            images.revisions = revisions
+            providerReviewImages[session] = images
+        }
+        do {
+            return try await revisions.value
+        } catch {
+            throw HostError.failed(message: error.localizedDescription)
+        }
+    }
+
     /// The path renamed file `path` had before in pull or merge request
     /// review `session`, from its provider diff (loaded once per review);
     /// nil on any failure, which files the comment without it.
@@ -179,4 +218,11 @@ extension AlasCoreContext {
             return nil
         }
     }
+}
+
+/// A pull or merge request review's request as the host served its diff,
+/// and the image diff commits its provider names for it once asked.
+struct ProviderReviewImages {
+    let request: ReviewRequest
+    var revisions: Task<CodeHostReviewImageRevisions, any Error>?
 }

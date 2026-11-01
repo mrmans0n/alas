@@ -808,7 +808,7 @@ extension AlasCoreContext {
             return await remoteWorkingTreeBytes(worktree, normalizedPath: normalizedPath, url: url, maxBytes: maxBytes)
         }
         switch revision {
-        case .stashBase, .stash, .checkpoint, .rangeBase:
+        case .stashBase, .stash, .checkpoint, .rangeBase, .providerReview:
             // A headless host's, as are the stash, checkpoint and review reads they serve.
             guard environment.servesWorktreeGit else { return .failure(reason: .pathRejected, byteSize: nil, message: nil) }
         case .index, .head, .base, .commit, .parent:
@@ -872,6 +872,23 @@ extension AlasCoreContext {
                 let range = try await Self.verifiedRange(base: base, head: head, threeDot: threeDot, at: worktree.path, git: git)
                 rev = try await git.resolvedRangeTrees(
                     worktreePath: worktree.path, base: range.base, head: range.head, threeDot: threeDot).before
+            case .providerReview(let sessionID, let after, let head):
+                guard let session = ReviewDraftSessionID(rawValue: sessionID) else {
+                    return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+                }
+                // Only the commits the provider named to this host reach git,
+                // and only ones it has: it fetches none for a Mac.
+                let revisions = try await providerReviewImageRevisions(session, head: head, in: worktree)
+                let sha = after ? revisions.afterSHA : revisions.beforeSHA
+                guard RemoteWorktreeFileAccess.isCommitSHA(sha) else {
+                    return .failure(reason: .notFound, byteSize: nil, message: nil)
+                }
+                do {
+                    rev = try await git.resolveRevision(at: worktree.path, ref: sha)
+                } catch let error as NSError where error.domain == "GitService.resolveRevision" {
+                    // git ran and has no such commit; anything else failed to run.
+                    return .failure(reason: .notFound, byteSize: nil, message: nil)
+                }
             case .checkpoint:
                 preconditionFailure("read above")
             }
