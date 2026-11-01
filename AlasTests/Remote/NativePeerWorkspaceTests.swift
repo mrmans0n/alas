@@ -304,11 +304,14 @@ struct NativePeerWorkspaceTests {
     /// An image side the host refused says why: its own message first, else the reason, with the
     /// size of one too large to preview.
     @Test(arguments: [
-        (RemoteFileAccessReason.tooLarge, 6_200_000 as Int?, nil as String?, "Too large to preview (6.2 MB)."),
+        (RemoteFileAccessReason.tooLarge, 6_200_000 as Int?, nil as String?,
+         "Too large to preview (\(NativePeerWorkspace.formattedByteSize(6_200_000)))."),
         (.tooLarge, nil, nil, "Too large to preview."),
         (.notFound, nil, nil, "The host doesn't have this revision of the file."),
         (.pathRejected, nil, "", "The host refused to read this file."),
-        (.gitFailed, nil, "This stash changed since it was listed.\n", "This stash changed since it was listed."),
+        (.notFound, nil, "This stash changed since it was listed.\n", "This stash changed since it was listed."),
+        (.gitFailed, nil, "\n  fatal: bad object\nhint: run fsck\n", "Git failed on the host: fatal: bad object"),
+        (.gitFailed, nil, String(repeating: "x", count: 250), "Git failed on the host: \(String(repeating: "x", count: 200))…"),
         (.unknown, nil, nil, "The host couldn't read this image."),
     ])
     func refusedImageSideSaysWhy(reason: RemoteFileAccessReason, byteSize: Int?, message: String?, expected: String) {

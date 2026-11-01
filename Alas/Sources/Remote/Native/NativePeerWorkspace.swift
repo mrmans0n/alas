@@ -279,13 +279,18 @@ struct NativePeerWorkspace: Equatable {
     }
 
     /// What an image side the host refused shows in its place: the host's own message when it
-    /// gave one, else why from `reason`, with the size of one too large to preview.
+    /// gave one (git's first line only), else why from `reason`, with the size of one too large to preview.
     static func imageFailure(_ reason: RemoteFileAccessReason, byteSize: Int?, message: String?) -> String {
-        if let message = message?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty { return message }
+        if let message = message?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
+            guard reason == .gitFailed else { return message }
+            let line: String = message.split(whereSeparator: \.isNewline)
+                .map { $0.trimmingCharacters(in: .whitespaces) }.first(where: { !$0.isEmpty }) ?? ""
+            return "Git failed on the host: " + (line.count > 200 ? String(line.prefix(200)) + "…" : line)
+        }
         switch reason {
         case .tooLarge:
             guard let byteSize else { return "Too large to preview." }
-            return "Too large to preview (\(ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file)))."
+            return "Too large to preview (\(formattedByteSize(byteSize)))."
         case .notFound: return "The host doesn't have this revision of the file."
         case .pathRejected: return "The host refused to read this file."
         case .gitFailed: return "Git failed on the host."
@@ -293,6 +298,10 @@ struct NativePeerWorkspace: Equatable {
         case .worktreeUnavailable: return "The worktree isn't available on the host."
         case .binary, .unknown: return "The host couldn't read this image."
         }
+    }
+
+    static func formattedByteSize(_ byteSize: Int) -> String {
+        ByteCountFormatter.string(fromByteCount: Int64(byteSize), countStyle: .file)
     }
 
     /// Lands a host-served image diff for `document` if it is still the open one.
