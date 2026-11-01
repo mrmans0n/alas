@@ -5,6 +5,9 @@
 // Off Linux only the pure protocol and runner code is built, for its tests.
 #![cfg_attr(not(target_os = "linux"), allow(dead_code))]
 
+// Not used on Linux until the computer-use commands are wired to it.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+mod cua;
 mod protocol;
 mod runner;
 
