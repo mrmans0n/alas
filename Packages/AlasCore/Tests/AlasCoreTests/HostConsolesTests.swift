@@ -879,8 +879,11 @@ struct HostConsolesTests {
         }
 
         func tearDown() {
-            try? FileManager.default.removeItem(at: root)
-            try? FileManager.default.removeItem(at: zmxDir)
+            // Off the main actor, as RepoFixture in HostProtocolServerTests does.
+            BlockingWork.detach { [root, zmxDir] in
+                try? FileManager.default.removeItem(at: root)
+                try? FileManager.default.removeItem(at: zmxDir)
+            }
         }
     }
 }

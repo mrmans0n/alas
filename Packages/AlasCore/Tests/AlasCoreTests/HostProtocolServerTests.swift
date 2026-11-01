@@ -3079,7 +3079,10 @@ struct HostProtocolServerTests {
         func tearDown() {
             connection.close()
             core.sessionManagers.values.forEach { $0.shutdownBackgroundTasks() }
-            try? FileManager.default.removeItem(at: root)
+            // Off the main actor: deleting a repository takes long enough
+            // that, across this suite, it starves other main-actor suites
+            // past their `eventually` deadlines.
+            BlockingWork.detach { [root] in try? FileManager.default.removeItem(at: root) }
         }
     }
 

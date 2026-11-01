@@ -160,7 +160,7 @@ public actor WorktreeCheckpointStore {
     }
 
     private func publishUnlocked(_ publication: CheckpointPublication, protecting additionalProtectedIDs: Set<CheckpointID>) throws -> CheckpointCatalogSnapshot {
-        let manifest = publication.manifest
+        var manifest = publication.manifest
         let layout = paths(manifest.lineageID)
         let currentCatalog = try catalogUnlocked(lineageID: manifest.lineageID)
         let manifestReferences = references(in: manifest)
@@ -172,6 +172,13 @@ public actor WorktreeCheckpointStore {
         let currentCatalogIDs = Set(currentCatalog.summaries.map(\.id))
         let existingManifests = try validManifests(lineageID: manifest.lineageID, previousSummaries: currentCatalog.summaries,
                                                    allowedIDs: currentCatalogIDs).valid
+        // Manifests persist whole-second times and the catalog orders by them,
+        // so two captures in one second would list in directory order. Keep
+        // each publish strictly newest under the lineage lock.
+        // ponytail: a burst of captures runs ahead of the wall clock by a second each.
+        if let latest = existingManifests.map(\.createdAt).max(), manifest.createdAt <= latest {
+            manifest.createdAt = latest.addingTimeInterval(1)
+        }
         var candidates = existingManifests + [manifest]
         let protected = try protectedIDsUnlocked(lineageID: manifest.lineageID).union(additionalProtectedIDs)
         var victims = retentionVictims(from: candidates, protected: protected, incomingID: manifest.id)
