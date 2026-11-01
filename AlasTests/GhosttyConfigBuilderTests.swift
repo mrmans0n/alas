@@ -99,6 +99,28 @@ struct GhosttyConfigBuilderTests {
         #expect(body.contains("background-opacity") == transparent)
     }
 
+    /// Ghostty rejects unknown keys and bad values only at load time, so a
+    /// renamed option on a Ghostty update would otherwise surface as a
+    /// terminal that fails to start.
+    @Test(arguments: [("off", "cool-slate", SidebarMaterialChoice.none),
+                      ("visual", "light", .appKitHudWindow),
+                      ("sound", "cool-slate", .none)])
+    @MainActor func ghosttyAcceptsTheGeneratedGlobalConfig(
+        bell: String, themeID: String, material: SidebarMaterialChoice
+    ) throws {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("ghostty-config-load-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        var cfg = AppConfig.defaults.terminal
+        cfg.bell = bell
+        cfg.backgroundMaterial = material
+        try GhosttyConfigBuilder.writeGlobalConfigFile(
+            cfg: cfg, theme: try Theme.loadBundled(id: themeID), to: url)
+
+        _ = try AlasGhostty.Config(filePath: url.path)
+    }
+
     @Test @MainActor func surfaceConfigurationEmitsEmptyZmxSessionOverride() {
         let project = ProjectConfig(id: "p", name: "x/y", path: "/r", color: "#0", addedAt: Date())
         let worktree = Worktree(

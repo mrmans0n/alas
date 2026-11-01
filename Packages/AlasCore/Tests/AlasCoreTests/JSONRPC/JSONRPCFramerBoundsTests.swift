@@ -47,7 +47,10 @@ struct JSONRPCFramerBoundsTests {
 }
 
 struct JSONRPCStdioFramingFailureTests {
-    @Test func contentLengthFailureEndsConsumersWhileChildIsStillWaiting() async throws {
+    // The child never exits, so a stream that waits for it never ends and
+    // the time limit fails the test.
+    @Test(.timeLimit(.minutes(1)))
+    func contentLengthFailureEndsConsumersWhileChildIsStillWaiting() async throws {
         let transport = JSONRPCStdioTransport(
             executable: URL(fileURLWithPath: "/bin/sh"),
             arguments: ["-c", "printf 'Content-Length: 16777217\\r\\n\\r\\n'; read value"],
@@ -55,19 +58,6 @@ struct JSONRPCStdioFramingFailureTests {
         )
         defer { transport.terminate() }
         try transport.start()
-        let ended = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                for await _ in transport.incoming {}
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(for: .seconds(2))
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
-        #expect(ended)
+        for await _ in transport.incoming {}
     }
 }

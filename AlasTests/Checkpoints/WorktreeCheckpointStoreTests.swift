@@ -41,7 +41,7 @@ struct WorktreeCheckpointStoreTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let bytes = Data("shared blob".utf8)
         let first = try publication(lineageID: lineageA, label: "First", bytes: bytes)
-        let second = try publication(lineageID: lineageA, label: "Second", bytes: bytes)
+        let second = try publication(lineageID: lineageA, label: "Second", bytes: bytes, createdAt: Date(timeIntervalSince1970: 1_700_000_001))
         let store = WorktreeCheckpointStore(root: root)
         _ = try await store.publish(first)
         _ = try await store.publish(second)
@@ -344,7 +344,7 @@ struct WorktreeCheckpointStoreTests {
         let store = WorktreeCheckpointStore(root: root, limits: .init(manualCount: 1, recoveryCount: 5, bytes: 100_000))
         let createdAt = Date(timeIntervalSince1970: 1_700_000_000)
         let existing = try publication(lineageID: lineageA, label: "Existing", bytes: Data([1]), createdAt: createdAt)
-        let incoming = try publication(lineageID: lineageA, label: "Incoming", bytes: Data([2]), createdAt: createdAt)
+        let incoming = try publication(lineageID: lineageA, label: "Incoming", bytes: Data([2]), createdAt: createdAt.addingTimeInterval(1))
         _ = try await store.publish(existing)
         try await store.writeJournal(.init(
             lineageID: lineageA,

@@ -233,20 +233,27 @@ actor VMGuestClient {
             throw Failure.stopped
         }
         return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                switch connection.pending[id] {
-                case let .answered(reply):
-                    connection.pending[id] = nil
-                    continuation.resume(returning: reply)
-                case .waiting:
-                    connection.pending[id] = .waiting(continuation)
-                case nil:
-                    // The connection dropped while the request was being sent.
-                    continuation.resume(throwing: Failure.stopped)
-                }
-            }
+            try await self.reply(to: id, on: connection)
         } onCancel: { [token = connection.token] in
             Task { await self.cancel(id, token: token) }
+        }
+    }
+
+    /// Waits for the reply to request `id`. An actor method rather than inline in `call`: before
+    /// Swift 6.4, a `withTaskCancellationHandler` operation that doesn't use `self` runs off the
+    /// actor, and `connection.pending` must only be touched on it.
+    private func reply(to id: UInt64, on connection: Connection) async throws -> VMGuestMessage {
+        try await withCheckedThrowingContinuation { continuation in
+            switch connection.pending[id] {
+            case let .answered(reply):
+                connection.pending[id] = nil
+                continuation.resume(returning: reply)
+            case .waiting:
+                connection.pending[id] = .waiting(continuation)
+            case nil:
+                // The connection dropped while the request was being sent.
+                continuation.resume(throwing: Failure.stopped)
+            }
         }
     }
 

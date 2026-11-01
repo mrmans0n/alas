@@ -22,13 +22,25 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private let busyTimeoutMilliseconds: Int32
-    private var store: ACPSessionStore?
+    /// Unsafe only so `deinit` can hand it to `queue`; otherwise touched on this actor alone.
+    private nonisolated(unsafe) var store: ACPSessionStore?
     private var hydrator: ACPSessionHydrator?
 
     public init(path: String, busyTimeoutMilliseconds: Int32 = 5_000) {
         self.path = path
         self.busyTimeoutMilliseconds = busyTimeoutMilliseconds
         queue = DispatchSerialQueue(label: "io.nlopez.alas.acp-session-persistence \(path)")
+    }
+
+    /// Closes the databases on this actor's queue, not on whichever thread
+    /// drops the last reference: closing checkpoints the WAL and fsyncs,
+    /// which on `MainActor` stalls it for every manager released there.
+    /// (`isolated deinit` would do this but needs macOS 15.4.)
+    deinit {
+        nonisolated(unsafe) let closing = (store, hydrator)
+        store = nil
+        hydrator = nil
+        queue.async { _ = closing }
     }
 
     private func openedStore() throws -> ACPSessionStore {

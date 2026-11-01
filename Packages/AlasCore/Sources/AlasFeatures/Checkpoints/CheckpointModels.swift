@@ -496,7 +496,7 @@ public struct WorktreeCheckpointManifest: Codable, Equatable, Sendable, Identifi
     public let id: CheckpointID
     public let kind: CheckpointKind
     public let label: String
-    public let createdAt: Date
+    public internal(set) var createdAt: Date
     public let byteCount: Int64
     public let lineageID: String
     public let capturedPath: String
