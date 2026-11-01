@@ -743,12 +743,14 @@ struct NativePeerProviderDiff: CodeHostProvider {
     func reviewDiff(remote _: CodeHostRemote, request _: ReviewRequest, cwd _: URL) async throws -> String { diff }
 
     /// Names for the host's sides, not commits: the host resolves the review's
-    /// own. The head keeps a new push's images apart in the image cache.
+    /// own. The base and head keep a new push's images apart in the image cache.
     func reviewImageRevisions(
         remote _: CodeHostRemote, request: ReviewRequest, cwd _: URL
     ) async throws -> CodeHostReviewImageRevisions {
         guard readImage != nil, let head = request.headSHA else { throw CodeHostProviderError.unsupportedProvider(kind) }
-        return CodeHostReviewImageRevisions(beforeSHA: "host-before:\(head)", afterSHA: Self.afterPrefix + head)
+        return CodeHostReviewImageRevisions(
+            beforeSHA: "host-before:\(request.baseSHA ?? "-"):\(head)", afterSHA: Self.afterPrefix + head
+        )
     }
 
     func reviewFileData(

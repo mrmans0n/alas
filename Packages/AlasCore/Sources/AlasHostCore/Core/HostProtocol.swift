@@ -340,8 +340,9 @@ public enum HostFileRevision: Codable, Equatable, Sendable {
     case rangeBase(base: String, head: String, threeDot: Bool)
     /// A side of pull or merge request review `sessionID`'s image diff: the
     /// commits its provider names to the host, never ones a Mac sends. The
-    /// head with `after`, else what the provider diffs it from.
-    case providerReview(sessionID: String, after: Bool)
+    /// head with `after`, else what the provider diffs it from. Refused
+    /// unless the host last served its diff at `head`.
+    case providerReview(sessionID: String, after: Bool, head: String)
 }
 
 /// A draft review as a worktree's Reviews list shows it.
