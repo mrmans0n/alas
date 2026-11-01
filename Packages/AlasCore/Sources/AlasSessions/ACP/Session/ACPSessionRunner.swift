@@ -347,6 +347,9 @@ public final class ACPSessionRunner {
     private var nativeSteeringInProgress = false
     private var nativeSteeringQueueItemID: UUID?
     private var steeringRowPersistencePending = false
+    /// Optional answers submitted while a steering row was persisting; they
+    /// are recorded once it settles, see `recordOptionalAnswer`.
+    private var deferredOptionalAnswers: [String] = []
     private var detachedSteeringTurn = false
     private var lastSteeringThreadStatus: String?
     private var steeringSawIdle = false
@@ -4100,15 +4103,13 @@ extension ACPSessionRunner {
                                 self.session.titleSource = titleSourceBefore
                             }
                         }
-                        self.steeringRowPersistencePending = false
-                        self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                        self.endSteeringRowPersistence()
                         recordedMessageID = nil
                         throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
                     }
                     recordedMessagePersisted = true
                     recoveryPersisted = true
-                    self.steeringRowPersistencePending = false
-                    self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                    self.endSteeringRowPersistence()
                     guard !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation
                     else { throw CancellationError() }
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
@@ -4130,8 +4131,7 @@ extension ACPSessionRunner {
                     if !persisted, self.isConnectionCurrent() {
                         rollBackBoundary()
                     }
-                    self.steeringRowPersistencePending = false
-                    self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                    self.endSteeringRowPersistence()
                     guard persisted else {
                         throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up boundary; it was not sent.", data: nil))
                     }
@@ -5273,13 +5273,35 @@ extension ACPSessionRunner {
     /// replays for it. The agent reads the answer mid-turn, like a native
     /// steer, so the row splits the running output the same way; it is not a
     /// prompt, so nothing else about the turn changes.
+    ///
+    /// While a steering row is still persisting, its rollback could remove
+    /// the row under the answer, so the answer waits until it settles. At
+    /// idle there is no running output to split: opening the boundary would
+    /// reopen the late-replay guard and tag the finished turn's rows.
     public func recordOptionalAnswer(_ text: String) {
+        guard !steeringRowPersistencePending else {
+            deferredOptionalAnswers.append(text)
+            return
+        }
         flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
         flushStreamingPersist()
         let before = session.transcript.messages.count
         let index = session.appendAnswerRow(text: text)
-        let (dirty, _) = beginOutputBoundary(beforeUserMessageAt: index)
+        var dirty: Set<Int> = []
+        if session.transcript.streamingState != .idle {
+            dirty = beginOutputBoundary(beforeUserMessageAt: index).dirty
+        }
         persistIndices(dirty.union(before...index))
+    }
+
+    /// Settle a steering row write: apply the updates it held back, then
+    /// record any optional answer submitted meanwhile.
+    private func endSteeringRowPersistence() {
+        steeringRowPersistencePending = false
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: stopped)
+        let answers = deferredOptionalAnswers
+        deferredOptionalAnswers.removeAll()
+        answers.forEach(recordOptionalAnswer)
     }
 
     /// Append a system notice and report whether it actually reached the

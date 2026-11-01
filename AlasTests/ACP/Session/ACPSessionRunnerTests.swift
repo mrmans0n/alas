@@ -5973,10 +5973,12 @@ struct ACPSessionRunnerTests {
     }
 
     /// An answered optional question is recorded the way the adapter replays
-    /// it: a user row that is not a new prompt, so the title stays, and that
-    /// splits the agent's running message like a native steer.
-    @Test("an optional answer row splits the running agent message")
-    func optionalAnswerRowSplitsStream() async throws {
+    /// it: a user row that is not a new prompt, so the title stays. During a
+    /// turn it splits the agent's running message like a native steer; at
+    /// idle there is nothing to split, so a restored session's late-replay
+    /// guard stays closed and the finished turn's rows stay untouched.
+    @Test("an optional answer row splits only a running agent message", arguments: [true, false])
+    func optionalAnswerRowSplitsStream(streaming: Bool) async throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
@@ -5991,6 +5993,7 @@ struct ACPSessionRunnerTests {
             worktreePath: FileManager.default.temporaryDirectory.path
         )
         _ = session.recordUserPrompt(text: "go", attachments: [])
+        runner.persistFromIndex(0)
         // A prompt would claim a placeholder title; the answer must not.
         session.titleSource = .placeholder
         let title = session.title
@@ -6001,8 +6004,13 @@ struct ACPSessionRunnerTests {
         }
 
         chunk("Before")
+        if !streaming {
+            // The turn ended, and a restored session's replay closed the guard.
+            session.transcript.streamingState = .idle
+            session.allowsStreamingBoundaryCrossing = false
+        }
         runner.recordOptionalAnswer("> Q\n\nA")
-        chunk(" after")
+        if streaming { chunk(" after") }
 
         func timeline(_ messages: [ACPMessage]) -> [String] {
             messages.compactMap {
@@ -6013,13 +6021,23 @@ struct ACPSessionRunnerTests {
                 }
             }
         }
-        #expect(timeline(session.transcript.messages) == ["user:go", "agent:Before", "user:> Q\n\nA", "agent: after"])
+        let expected = ["user:go", "agent:Before", "user:> Q\n\nA"] + (streaming ? ["agent: after"] : [])
+        #expect(timeline(session.transcript.messages) == expected)
         #expect(session.title == title)
+        #expect(session.allowsStreamingBoundaryCrossing == streaming)
         await runner.flushPersistence()
         let restored = try store.loadMessages(sessionId: "s").map {
             try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload)
         }
-        #expect(timeline(restored).contains("user:> Q\n\nA"))
+        #expect(timeline(restored) == expected)
+        if !streaming {
+            let finished = restored.compactMap { message -> StreamingText? in
+                if case .agent(_, _, let text) = message { return text }
+                return nil
+            }
+            #expect(finished.count == 1)
+            #expect(finished.allSatisfy { $0.metadata == nil })
+        }
     }
 
     /// A started runner with a started question coordinator wired the way
