@@ -23,7 +23,7 @@ public struct ReviewRequestDiffLoader: Sendable {
         let diff = try await provider.reviewDiff(remote: remote, request: request, cwd: cwd)
         try Task.checkCancellation()
 
-        let sections = splitFileSections(diff)
+        let sections = Self.splitFileSections(diff)
         let imageRevisionContext = await hostedImageRevisionContext(
             ifNeededFor: sections,
             remote: remote,
@@ -308,7 +308,14 @@ public struct ReviewRequestDiffLoader: Sendable {
         )
     }
 
-    private func splitFileSections(_ rawDiff: String) -> [ProviderDiffFileSection] {
+    /// The paths a provider diff's image sides are read at: each file's
+    /// path after, and its path before (its original one when renamed or copied).
+    public static func imagePaths(in rawDiff: String) -> (after: Set<String>, before: Set<String>) {
+        let sections = splitFileSections(rawDiff)
+        return (Set(sections.map(\.path)), Set(sections.map { $0.originalPath ?? $0.path }))
+    }
+
+    private static func splitFileSections(_ rawDiff: String) -> [ProviderDiffFileSection] {
         var sections: [ProviderDiffFileSection] = []
         var currentLines: [String] = []
 
