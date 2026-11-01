@@ -864,6 +864,58 @@ private actor RawBrokerFixture: ACPBrokerServicing {
 }
 
 struct ACPBrokerRawHelperTests {
+    @Test func helperObservationEndCannotLeaveAnRPCWaitingOrInventAnExitCode() async throws {
+        let transport = RawHelperTransport(supported: true, holdAck: true)
+        let client = RemoteHelperClient(host: "local", idleShutdownNanoseconds: 0, transportFactory: { transport })
+        _ = try await client.hello()
+        let settled = Mutex(false)
+        let sending = Task {
+            defer { settled.withLock { $0 = true } }
+            var params = ACPBrokerAckParams(brokerId: .init(rawValue: "b"), generation: .init(rawValue: 1), cursor: .init(rawValue: 1))
+            params.wireContext = .rawV2
+            do { _ = try await client.ackACPBroker(params)
+            return false } catch { return true }
+        }
+        defer { sending.cancel()
+        Task { await client.shutdown() } }
+        try await eventually { transport.methods.contains("acp/raw/ack") }
+        transport.terminate()
+        try await eventually { settled.withLock { $0 } }
+        #expect(await sending.value)
+        #expect(await client.lastObservedExitStatus() == nil)
+        await client.shutdown()
+    }
+
+    @Test func helperExitAfterObservationLossStillReportsConnectionFailure() async throws {
+        let host = "eof-exit-\(UUID())"
+        let transport = RawHelperTransport(supported: true, holdAck: true, deferExit: true)
+        let client = RemoteHelperClient(host: host, idleShutdownNanoseconds: 0, transportFactory: { transport })
+        _ = try await client.hello()
+        defer { Task {
+            await client.shutdown()
+            await MainActor.run { RemoteHostStatusStore.shared.reportSuccess(host: host) }
+        } }
+        let settled = Mutex(false)
+        let sending = Task {
+            defer { settled.withLock { $0 = true } }
+            var params = ACPBrokerAckParams(brokerId: .init(rawValue: "b"), generation: .init(rawValue: 1), cursor: .init(rawValue: 1))
+            params.wireContext = .rawV2
+            do { _ = try await client.ackACPBroker(params)
+            return false } catch { return true }
+        }
+        defer { sending.cancel() }
+        try await eventually { transport.methods.contains("acp/raw/ack") }
+        transport.loseObservation()
+        try await eventually { settled.withLock { $0 } }
+        #expect(await sending.value)
+        #expect(await client.lastObservedExitStatus() == nil)
+        // One prior failure makes this exit the threshold-crossing observation.
+        await MainActor.run { RemoteHostStatusStore.shared.reportConnectionFailure(host: host) }
+        transport.exit(status: 255)
+        try await eventually { await client.lastObservedExitStatus() == 255 }
+        try await eventually { await MainActor.run { RemoteHostStatusStore.shared.isOffline(host) } }
+    }
+
     @Test(arguments: ["cancel", "replacement"])
     func capabilityWaitCannotHandoffAReplyAfterInvalidation(action: String) async throws {
         let transport = RawHelperTransport(supported: true, replies: true, holdHello: true)
@@ -922,6 +974,8 @@ private final class RawHelperTransport: JSONRPCStdioTransporting, @unchecked Sen
     private var sent: [String] = []
     private let supported: Bool
     private let replies: Bool
+    private let holdAck: Bool
+    private let deferExit: Bool
     private let holdHello: Bool
     private let heldHello = Mutex<Data?>(nil)
     func releaseHello() { if let data = heldHello.withLock({ value in let data = value
@@ -930,7 +984,9 @@ private final class RawHelperTransport: JSONRPCStdioTransporting, @unchecked Sen
     var methods: [String] { lock.lock()
     defer { lock.unlock() }
     return sent }
-    init(supported: Bool, replies: Bool = false, holdHello: Bool = false) {
+    init(supported: Bool, replies: Bool = false, holdHello: Bool = false, holdAck: Bool = false, deferExit: Bool = false) {
+        self.deferExit = deferExit
+        self.holdAck = holdAck
         self.holdHello = holdHello
         self.replies = replies
         self.supported = supported
@@ -945,6 +1001,7 @@ private final class RawHelperTransport: JSONRPCStdioTransporting, @unchecked Sen
         lock.lock()
         sent.append(method)
         lock.unlock()
+        if holdAck, method == "acp/raw/ack" { return }
         let result: [String: Any]
         if method == "hello" {
             var capabilities: [String: Any] = ["watchKinds": [], "fs": ["read": true, "write": true, "stat": true], "ping": true]
@@ -959,7 +1016,10 @@ private final class RawHelperTransport: JSONRPCStdioTransporting, @unchecked Sen
         if method == "hello", holdHello { heldHello.withLock { $0 = response } }
         else { continuation.yield(.frame(response)) }
     }
-    func terminate() { continuation.finish() }
+    func loseObservation() { continuation.yield(.observationLost) }
+    func exit(status: Int32) { continuation.yield(.exited(status))
+    continuation.finish() }
+    func terminate() { if !deferExit { continuation.finish() } }
 }
 
 private final class NSLockState<Value: Sendable>: @unchecked Sendable {

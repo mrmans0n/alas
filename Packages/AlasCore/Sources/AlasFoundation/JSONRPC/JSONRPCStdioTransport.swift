@@ -29,10 +29,12 @@ extension JSONRPCStdioTransporting {
     }
 }
 
-public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting {
+public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTransporting, JSONRPCFrameWriting {
     public enum Incoming: Sendable {
         case frame(Data, onConsumed: (@Sendable () -> Void)? = nil)
         case stderr(Data)
+        /// Response observation ended; a later process exit still carries its actual status.
+        case observationLost
         case exited(Int32)
     }
 
@@ -71,7 +73,8 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     private let environment: [String: String]
     /// Set by `start()`.
     private var process: SpawnedProcess?
-    private let stdin = Pipe()
+    private let stdin: Pipe
+    private let frameWriter: JSONRPCFrameWriter
     private let stdout = Pipe()
     private let stderr = Pipe()
     private let framing: JSONRPCFraming
@@ -105,6 +108,12 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         replaceEnv: Bool = false,
         terminationScope: JSONRPCProcessTerminationScope = .processTree
     ) {
+        let input = Pipe()
+        self.stdin = input
+        self.frameWriter = JSONRPCFrameWriter { framed in try input.fileHandleForWriting.write(contentsOf: framed) }
+        // A closed adapter pipe is a factual write error, never a process-wide
+        // SIGPIPE that could kill the app before its attempt becomes uncertain.
+        _ = fcntl(input.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
         self.framing = framing
         self.terminationScope = terminationScope
         var cont: AsyncStream<Incoming>.Continuation!
@@ -125,7 +134,14 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     public func start() throws {
         stdout.fileHandleForReading.readabilityHandler = { [weak self] h in
             let d = h.availableData
-            guard let self, !d.isEmpty else { return }
+            guard let self else { return }
+            guard !d.isEmpty else {
+                h.readabilityHandler = nil
+                self.frameWriter.close()
+                self.continuation?.yield(.observationLost)
+                self.terminate()
+                return
+            }
             self.lock.lock()
             let frames: [Data]
             let framingFailed: Bool
@@ -141,7 +157,8 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
             }
             self.lock.unlock()
             if framingFailed {
-                self.continuation?.finish()
+                self.frameWriter.close()
+                self.continuation?.yield(.observationLost)
                 self.terminate()
                 return
             }
@@ -178,6 +195,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
                     _ = Darwin.kill(d.pid, SIGTERM)
                 }
             }
+            self.frameWriter.close()
             self.continuation?.yield(.exited(termination.status))
             self.continuation?.finish()
         }
@@ -191,16 +209,27 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
         startDescendantTracker()
     }
 
-    public func send(_ data: Data) throws {
-        let framed: Data
+    private func framed(_ data: Data) -> Data {
         switch framing {
-        case .contentLength: framed = JSONRPCFramer.encode(data)
-        case .newline:       framed = JSONRPCNewlineFramer.encode(data)
+        case .contentLength: JSONRPCFramer.encode(data)
+        case .newline: JSONRPCNewlineFramer.encode(data)
         }
-        try stdin.fileHandleForWriting.write(contentsOf: framed)
+    }
+
+    public func send(_ data: Data) throws {
+        do { try frameWriter.send(framed(data)) }
+        catch { terminate()
+        throw error }
+    }
+
+    public func writeFrame(_ data: Data, authorize: @escaping @Sendable () -> Bool) async -> JSONRPCFrameWriteResult {
+        let result = await frameWriter.writeFrame(framed(data), authorize: authorize)
+        if case .writeUncertain = result { terminate() }
+        return result
     }
 
     public func terminate() {
+        frameWriter.close()
         descendantTracker?.cancel()
         cancelDescendantForkObservers()
         guard let process, process.pid > 0 else { return }

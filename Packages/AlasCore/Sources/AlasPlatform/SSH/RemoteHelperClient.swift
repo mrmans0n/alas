@@ -920,6 +920,7 @@ public actor RemoteHelperClient {
             for await event in nextTransport.incoming {
                 await self?.handle(event, generation: transportGeneration)
             }
+            await self?.finishObservation(generation: transportGeneration)
         }
         return true
     }
@@ -1039,6 +1040,8 @@ public actor RemoteHelperClient {
             handleFrame(data)
         case .stderr:
             break
+        case .observationLost:
+            finishObservation(generation: eventGeneration)
         case .exited(let status):
             handleExit(status)
         }
@@ -1190,8 +1193,23 @@ public actor RemoteHelperClient {
         }
     }
 
-    private func handleExit(_ status: Int32) {
+    private func finishObservation(generation observedGeneration: Int) {
+        guard observedGeneration == generation, let lostTransport = transport else { return }
+        // EOF is observation loss, not evidence of a particular process exit.
+        handleExit(nil)
+        lostTransport.terminate()
+    }
+
+    private func handleExit(_ status: Int32?) {
         lastExitStatus = status
+        if let status, RemoteExec.isConnectionFailure(exitCode: status) {
+            Task { @MainActor [host] in
+                RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
+            }
+        }
+        // EOF already withdrew this attachment. Keep a late factual status,
+        // without publishing a second set of unavailable notifications.
+        guard transport != nil else { return }
         transport = nil
         dispatchTask = nil
         subscriptionsNeedReplay = !activeSubscriptions.isEmpty || !mcpRoutes.isEmpty
@@ -1223,11 +1241,6 @@ public actor RemoteHelperClient {
         pluginProcStreams.removeAll()
         earlyProcEvents.removeAll()
         detachedProcIds.removeAll()
-        if RemoteExec.isConnectionFailure(exitCode: status) {
-            Task { @MainActor [host] in
-                RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
-            }
-        }
     }
 
     private func rememberProcOffsetIfNeeded(_ event: RemoteHelperProcEvent, procId: String) {

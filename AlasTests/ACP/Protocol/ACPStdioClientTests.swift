@@ -228,6 +228,248 @@ struct ACPStdioClientTests {
         #expect(consumed.withLock { $0 } == 0)
     }
 
+    @Test(arguments: [false, true])
+    func exactV2RepliesUseCapturedOriginWithoutConsumingReceipts(consumeFirst: Bool) async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let consumed = Mutex(0)
+        transport.send(frame: Data(#"{"jsonrpc":"2.0","id":7,"method":"peer/request","params":null}"#.utf8), onConsumed: { consumed.withLock { $0 += 1 } })
+        let observed = try #require(await boundedResult { var iterator = client.incomingV2Inbound.makeAsyncIterator()
+        return await iterator.next() })
+        let delivery = try #require(observed)
+        let response = Data(#" {"jsonrpc":"2.0","id":7,"result":{"n":1e999}} "#.utf8)
+        if consumeFirst { delivery.acknowledgeDurableConsumption() }
+        let key = ACPV2ReplyOperationKey(rawValue: "answer")
+        let result = try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: key, frame: response)
+        #expect(result.status == .written)
+        #expect(result.receiptID == delivery.receiptID && result.connectionID == client.updateConnectionID)
+        #expect(transport.sentFrames == [response])
+        #expect(consumed.withLock { $0 } == (consumeFirst ? 1 : 0))
+        #expect(try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: key, frame: response) == result)
+        #expect(transport.exactWriteCount == 1)
+        await #expect(throws: ACPV2StdioReplyError.conflict) {
+            try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: key,
+                frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8))
+        }
+        delivery.acknowledgeDurableConsumption()
+        #expect(consumed.withLock { $0 } == 1)
+    }
+
+    @Test(arguments: ["invented", "foreign", "notification", "invalid", "v1"])
+    func replyEvidenceCannotManufactureAStdioOrigin(reason: String) async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: reason == "v1" ? .v1 : .v2)
+        try client.start()
+        defer { transport.terminate() }
+        var delivery = ACPV2InboundDelivery(frame: Data(), connectionID: client.updateConnectionID, source: .stdio)
+        if reason != "invented" && reason != "v1" {
+            transport.send(frame: Data((reason == "notification" ? #"{"jsonrpc":"2.0","method":"peer/notice"}"# : #"{"jsonrpc":"2.0","id":7,"method":"peer/request"}"#).utf8))
+            let captured = try #require(await boundedResult { var iterator = client.incomingV2Inbound.makeAsyncIterator()
+            return await iterator.next() })
+            delivery = try #require(captured)
+        }
+        let origin = delivery
+        let response = Data((reason == "invalid" ? "{}" : #"{"jsonrpc":"2.0","id":7,"result":null}"#).utf8)
+        await #expect(throws: (any Error).self) {
+            try await client.respondToV2Request(origin, expectedConnectionID: reason == "foreign" ? UUID() : client.updateConnectionID,
+                operationKey: .init(rawValue: "answer"), frame: response)
+        }
+        #expect(transport.sentFrames.isEmpty)
+    }
+
+    private func capturedV2Request(_ client: ACPStdioClient, _ transport: FakeJSONRPCTransport, id: String = "7") async throws -> ACPV2InboundDelivery {
+        transport.send(frame: Data("{\"jsonrpc\":\"2.0\",\"id\":\(id),\"method\":\"peer/request\"}".utf8))
+        let captured = try #require(await boundedResult { var input = client.incomingV2Inbound.makeAsyncIterator()
+        return await input.next() })
+        return try #require(captured)
+    }
+
+    @Test(arguments: [false, true], ["cancel", "shutdown", "exit"])
+    func invalidatedExactRepliesSettleBeforeTheGatedWriterReturns(claimed: Bool, action: String) async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.deferExactAuthorization = !claimed
+        transport.deferExactCompletion = claimed
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.releaseExactAuthorization()
+        transport.releaseExactCompletion()
+        transport.terminate() }
+        let delivery = try await capturedV2Request(client, transport)
+        let frame = Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)
+        let key = ACPV2ReplyOperationKey(rawValue: "answer")
+        let sending = Task { try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: key, frame: frame) }
+        defer { sending.cancel() }
+        _ = try #require(await boundedResult { while transport.exactWriteCount < 1 || (claimed && transport.sentFrames.isEmpty) { if Task.isCancelled { return false }
+        await Task.yield() }
+        return true })
+        #expect(try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: key, frame: frame).status == (claimed ? .inFlight : .queued))
+        if action == "cancel" { sending.cancel() }
+        if action == "shutdown" { await client.shutdown() }
+        if action == "exit" { transport.send(exitStatus: 0, finish: false) }
+        let settled = try #require(await boundedResult { await sending.result })
+        #expect(try settled.get().status == (claimed ? .writeUncertain : .notWritten))
+        #expect(transport.sentFrames.count == (claimed ? 1 : 0))
+        transport.releaseExactAuthorization()
+        transport.releaseExactCompletion()
+        #expect(await boundedResult {
+            while !Task.isCancelled {
+                let fact = try? await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: key, frame: frame)
+                if fact?.status == (claimed ? .written : .notWritten) { return true }
+                await Task.yield()
+            }
+            return false
+        } == true)
+        #expect(transport.exactWriteCount == 1)
+    }
+
+    @Test func cancelledQueuedAttemptCanOnlyBeReplacedByAnExplicitNewKey() async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.deferExactAuthorization = true
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.releaseExactAuthorization()
+        transport.terminate() }
+        let delivery = try await capturedV2Request(client, transport)
+        let frame = Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)
+        let sending = Task { try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: .init(rawValue: "old"), frame: frame) }
+        defer { sending.cancel() }
+        _ = try #require(await boundedResult { while transport.exactWriteCount < 1 { if Task.isCancelled { return false }
+        await Task.yield() }
+        return true })
+        sending.cancel()
+        let result = try #require(await boundedResult { await sending.result })
+        #expect(try result.get().status == .notWritten)
+        transport.releaseExactAuthorization()
+        transport.deferExactAuthorization = false
+        #expect(try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: .init(rawValue: "new"), frame: frame).status == .written)
+        #expect(try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: .init(rawValue: "old"), frame: frame).status == .notWritten)
+        #expect(transport.sentFrames == [frame])
+    }
+
+    @Test(arguments: [false, true])
+    func unansweredOrQueuedDuplicateIDsAreAmbiguous(queued: Bool) async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.deferExactAuthorization = true
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.releaseExactAuthorization()
+        transport.terminate() }
+        let first = try await capturedV2Request(client, transport)
+        let frame = Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)
+        let sending: Task<ACPV2StdioReplyResult, Error>? = queued ? Task { try await client.respondToV2Request(first, expectedConnectionID: client.updateConnectionID, operationKey: .init(rawValue: "queued"), frame: frame) } : nil
+        defer { sending?.cancel() }
+        if queued { _ = try #require(await boundedResult { while transport.exactWriteCount < 1 { if Task.isCancelled { return false }
+        await Task.yield() }
+        return true }) }
+        let second = try await capturedV2Request(client, transport)
+        if let sending {
+            let result = try #require(await boundedResult { await sending.result })
+            #expect(try result.get().status == .notWritten)
+        }
+        for origin in [first, second] {
+            await #expect(throws: ACPV2StdioReplyError.invalidOrigin) {
+                try await client.respondToV2Request(origin, expectedConnectionID: client.updateConnectionID, operationKey: .init(rawValue: UUID().uuidString), frame: frame)
+            }
+        }
+        transport.releaseExactAuthorization()
+        #expect(transport.sentFrames.isEmpty)
+    }
+
+    @Test func successorDuringWriteFinalizationRetainsItsIndependentOrigin() async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.deferExactCompletion = true
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.releaseExactCompletion()
+        transport.terminate() }
+        let first = try await capturedV2Request(client, transport)
+        let frame = Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)
+        let oldKey = ACPV2ReplyOperationKey(rawValue: "old")
+        let sending = Task { try await client.respondToV2Request(first, expectedConnectionID: client.updateConnectionID, operationKey: oldKey, frame: frame) }
+        defer { sending.cancel() }
+        _ = try #require(await boundedResult { while transport.sentFrames.isEmpty { if Task.isCancelled { return false }
+        await Task.yield() }
+        return true })
+        let successor = try await capturedV2Request(client, transport)
+        transport.deferExactCompletion = false
+        transport.releaseExactCompletion()
+        let result = try #require(await boundedResult { await sending.result })
+        #expect(try result.get().status == .written)
+        #expect(try await client.respondToV2Request(successor, expectedConnectionID: client.updateConnectionID, operationKey: .init(rawValue: "successor"), frame: frame).status == .written)
+        #expect(try await client.respondToV2Request(first, expectedConnectionID: client.updateConnectionID, operationKey: oldKey, frame: frame).status == .written)
+        let later = try await capturedV2Request(client, transport)
+        #expect(try await client.respondToV2Request(later, expectedConnectionID: client.updateConnectionID, operationKey: .init(rawValue: "later"), frame: frame).status == .written)
+        #expect(transport.sentFrames == [frame, frame, frame])
+    }
+
+    @Test func stringRequestAndAttemptIdentitiesUseExactUTF8() async throws {
+        let transport = FakeJSONRPCTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let first = try await capturedV2Request(client, transport, id: #""é""#)
+        let second = try await capturedV2Request(client, transport, id: #""e\u0301""#)
+        let firstKey = ACPV2ReplyOperationKey(rawValue: "é")
+        let secondKey = ACPV2ReplyOperationKey(rawValue: "e\u{301}")
+        #expect(firstKey != secondKey)
+        let firstFrame = Data(#"{"jsonrpc":"2.0","id":"é","result":null}"#.utf8)
+        let secondFrame = Data(#"{"jsonrpc":"2.0","id":"e\u0301","result":null}"#.utf8)
+        #expect(try await client.respondToV2Request(first, expectedConnectionID: client.updateConnectionID, operationKey: firstKey, frame: firstFrame).status == .written)
+        #expect(try await client.respondToV2Request(second, expectedConnectionID: client.updateConnectionID, operationKey: secondKey, frame: secondFrame).status == .written)
+        #expect(transport.sentFrames == [firstFrame, secondFrame])
+    }
+
+    @Test func uncertainStdioWriteCannotAuthorizeAnotherAttempt() async throws {
+        let transport = FakeJSONRPCTransport()
+        transport.exactOutcome = .writeUncertain("injected")
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let delivery = try await capturedV2Request(client, transport)
+        let frame = Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)
+        let key = ACPV2ReplyOperationKey(rawValue: "answer")
+        #expect(try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: key, frame: frame).status == .writeUncertain)
+        #expect(try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: key, frame: frame).status == .writeUncertain)
+        await #expect(throws: ACPV2StdioReplyError.invalidated) {
+            try await client.respondToV2Request(delivery, expectedConnectionID: client.updateConnectionID, operationKey: .init(rawValue: "fresh"), frame: frame)
+        }
+        #expect(transport.exactWriteCount == 1)
+    }
+
+    @Test func aCustomTransportWithoutFactualWritesCannotUseLegacySendAsFallback() async throws {
+        let underlying = FakeJSONRPCTransport()
+        let transport = SendOnlyReplyTransport(underlying)
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        defer { transport.terminate() }
+        let origin = try await capturedV2Request(client, underlying)
+        await #expect(throws: ACPV2StdioReplyError.unsupported) {
+            try await client.respondToV2Request(origin, expectedConnectionID: client.updateConnectionID,
+                operationKey: .init(rawValue: "answer"), frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8))
+        }
+        #expect(underlying.sentFrames.isEmpty)
+    }
+
+    @Test(arguments: [ACPProtocolVersion.v1, .v2], [false, true])
+    func observationEndWithoutExitCannotLeaveAnRPCWaiting(version: ACPProtocolVersion, explicitLoss: Bool) async throws {
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in explicitLoss ? .observationLost : nil })
+        transport.emitExitOnTerminate = false
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: version)
+        try client.start()
+        defer { transport.terminate() }
+        let sending = Task { try await client.send(.init(method: "peer/wait")) }
+        defer { sending.cancel() }
+        _ = try #require(await boundedResult { while transport.sentFrames.isEmpty { if Task.isCancelled { return false }
+        await Task.yield() }
+        return true })
+        if !explicitLoss { transport.terminate() }
+        let result = try #require(await boundedResult { await sending.result })
+        if case .success = result { Issue.record("Lost observation fabricated RPC success") }
+        #expect(!client.hasPendingOutboundRequest(id: .number(1)))
+    }
+
     /// The fake agent script reads one Content-Length framed request from stdin
     /// and writes back a canned response + one session/update notification.
     private func fakeAgentScript() throws -> URL {
@@ -808,6 +1050,9 @@ struct ACPStdioClientTests {
         let header = try #require(captured).decodeHeader()
         #expect(header.id == .number(1))
         #expect(header.method == "fs/read_text_file")
+        let capturedDelivery = try #require(captured)
+        #expect(try await client.respondToV2Request(capturedDelivery, expectedConnectionID: client.updateConnectionID,
+            operationKey: .init(rawValue: "inbound"), frame: Data(#"{"jsonrpc":"2.0","id":1,"result":null}"#.utf8)).status == .written)
         #expect(!settled.withLock { $0 })
         transport.send(frame: Data(#"{"jsonrpc":"2.0","id":1,"result":null}"#.utf8))
         #expect(await request.value?.rawDelivery?.source == .stdio(requestID: .number(1), method: "m"))
@@ -932,4 +1177,13 @@ struct ACPStdioClientTests {
         await connection.shutdown()
         #expect(await threw == true)
     }
+}
+
+private final class SendOnlyReplyTransport: JSONRPCStdioTransporting, Sendable {
+    let underlying: FakeJSONRPCTransport
+    init(_ underlying: FakeJSONRPCTransport) { self.underlying = underlying }
+    var incoming: AsyncStream<JSONRPCStdioTransport.Incoming> { underlying.incoming }
+    func start() throws { try underlying.start() }
+    func send(_ data: Data) throws { try underlying.send(data) }
+    func terminate() { underlying.terminate() }
 }
