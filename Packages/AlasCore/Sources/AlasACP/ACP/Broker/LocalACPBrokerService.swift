@@ -99,6 +99,10 @@ public actor LocalACPBrokerService {
         return try await client.notifyACPBroker(params)
     }
 
+    public func respondExact(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
+        try await client.respondExactACPBroker(params)
+    }
+
     public func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
         try await verifyACPIfNeeded()
         return try await client.respondACPBroker(params)

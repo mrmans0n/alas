@@ -1,13 +1,17 @@
+import AlasCore
 import AppKit
 import SwiftUI
 import Virtualization
 
-/// A worktree's VM tab: golden image setup, VM creation, start and stop, and
-/// the live screen. Closing the tab leaves the VM running.
+/// A worktree's VM tab for one guest: golden image setup, VM creation, start
+/// and stop, and the live screen. Closing the tab leaves the VM running. A
+/// Linux tab builds its image unattended and has no customizing or helper
+/// update.
 struct VirtualMachineTabView: View {
     let state: AppState
     let tab: VirtualMachineTabState
     @ObservedObject private var installer: GoldenImageInstaller
+    @ObservedObject private var linuxInstaller: LinuxGoldenInstaller
 
     /// Registry and disk facts, read on appear and after actions rather than
     /// on every render: reading the registry takes a file lock.
@@ -42,12 +46,13 @@ struct VirtualMachineTabView: View {
     }
 
     private enum StartTarget {
-        case worktree(String)
+        case worktree(String, VMGuestOS)
         case golden(build: String)
 
+        /// The registry id.
         var id: String {
             switch self {
-            case .worktree(let id): id
+            case .worktree(let id, let guest): VMIdentity.recordID(worktree: id, guest: guest)
             case .golden(let build): WorktreeVMManager.goldenIDPrefix + build
             }
         }
@@ -57,15 +62,22 @@ struct VirtualMachineTabView: View {
         self.state = state
         self.tab = tab
         _installer = ObservedObject(wrappedValue: state.goldenImageInstaller)
+        _linuxInstaller = ObservedObject(wrappedValue: state.linuxGoldenInstaller)
     }
 
     private var vms: WorktreeVMManager { state.vmManager }
     private var worktreeID: String { tab.ownerKey }
+    private var guest: VMGuestOS { tab.guest }
+    private var isLinux: Bool { guest == .linux }
+    /// The worktree VM's registry id, which helper state and slots use.
+    private var recordID: String { VMIdentity.recordID(worktree: worktreeID, guest: guest) }
+    private var guestName: String { isLinux ? "Ubuntu" : "macOS" }
 
     private var screen: VMTabScreen {
         VMTabScreen.resolve(
-            runningHere: vms.running(worktreeID) != nil,
-            startingHere: vms.isStarting(worktreeID),
+            guest: guest,
+            runningHere: vms.running(worktreeID, guest: guest) != nil,
+            startingHere: vms.isStarting(recordID),
             slotChoice: choice?.candidates,
             runningElsewhere: elsewhere?.label ?? record.runningElsewhere,
             loaded: loaded,
@@ -73,7 +85,8 @@ struct VirtualMachineTabView: View {
             customizingHere: vms.customizingFrom == worktreeID,
             goldenAvailable: goldenAvailable,
             installerPhase: installer.phase,
-            helper: helperUpdate(worktreeID),
+            linuxInstallerPhase: linuxInstaller.phase,
+            helper: helperUpdate(recordID),
             goldenHelper: customizedGoldenID.map(helperUpdate) ?? .none
         )
     }
@@ -94,7 +107,7 @@ struct VirtualMachineTabView: View {
     /// customized golden it shows setup for.
     private var helperCheckTarget: String? {
         switch screen {
-        case .running: worktreeID
+        case .running: isLinux ? nil : worktreeID
         case .goldenSetup:
             customizedGoldenID.flatMap { vms.running($0) != nil ? $0 : nil }
         default: nil
@@ -103,7 +116,7 @@ struct VirtualMachineTabView: View {
 
     /// The error to show: this tab's own, else a failed helper update of a VM it shows.
     private var bannerMessage: String? {
-        errorMessage ?? vms.helperUpdateFailures[worktreeID]
+        errorMessage ?? vms.helperUpdateFailures[recordID]
             ?? awaitingSetupBuild.flatMap { vms.helperUpdateFailures[StartTarget.golden(build: $0).id] }
     }
 
@@ -124,7 +137,7 @@ struct VirtualMachineTabView: View {
         // can change what the registry or disk say.
         .onChange(of: phaseKind) { _, _ in refresh() }
         // Starting or stopping changes the disk's size and the registry.
-        .onChange(of: vms.running(worktreeID) != nil) { _, _ in refresh() }
+        .onChange(of: vms.running(worktreeID, guest: guest) != nil) { _, _ in refresh() }
         .task(id: helperCheckTarget) { await checkHelper(helperCheckTarget) }
         .alert("Customize the base image?", isPresented: $confirmingCustomize) {
             Button("Customize", action: customizeBaseImage)
@@ -149,13 +162,26 @@ struct VirtualMachineTabView: View {
         }
     }
 
+    /// The macOS golden awaiting setup; never shown in a Linux tab.
     private var awaitingSetupBuild: String? {
-        if case .awaitingSetup(let build) = installer.phase { return build }
+        if !isLinux, case .awaitingSetup(let build) = installer.phase { return build }
         return nil
     }
 
     private var phaseKind: String {
-        switch installer.phase {
+        if isLinux {
+            return switch linuxInstaller.phase {
+            case .idle: "idle"
+            case .downloading: "downloading"
+            case .checking: "checking"
+            case .converting: "converting"
+            case .firstBoot: "firstBoot"
+            case .verifying: "verifying"
+            case .sealed(let serial): "sealed:\(serial)"
+            case .failed: "failed"
+            }
+        }
+        return switch installer.phase {
         case .idle: "idle"
         case .downloading: "downloading"
         case .installing: "installing"
@@ -177,9 +203,9 @@ struct VirtualMachineTabView: View {
                 title: stopping ? "Stopping" : "Running",
                 details: (canUpdateHelper ? ["helper needs an update"] : []) + diskDetails
             ) {
-                ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(worktreeID) }
+                ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(recordID) }
                     .vmDisabled(stopping)
-                overflowMenu(updateHelper: canUpdateHelper ? worktreeID : nil, reveal: ownBundleURL, deletable: true)
+                overflowMenu(updateHelper: canUpdateHelper ? recordID : nil, reveal: ownBundleURL, deletable: true)
             }
         case .starting:
             VMStatusBar(tone: .busy, title: "Starting")
@@ -210,6 +236,29 @@ struct VirtualMachineTabView: View {
 
     @ViewBuilder
     private var setupStatusBar: some View {
+        if isLinux { linuxSetupStatusBar } else { macOSSetupStatusBar }
+    }
+
+    @ViewBuilder
+    private var linuxSetupStatusBar: some View {
+        switch linuxInstaller.phase {
+        case .downloading(let fraction):
+            preparingStatusBar("downloading \(percent(fraction))")
+        case .checking:
+            preparingStatusBar("checking download")
+        case .converting(let fraction):
+            preparingStatusBar("converting \(percent(fraction))")
+        case .firstBoot, .verifying:
+            preparingStatusBar(nil)
+        case .failed:
+            VMStatusBar(tone: .attention, title: "Needs attention")
+        case .idle, .sealed:
+            VMStatusBar(tone: .off, title: "No base image")
+        }
+    }
+
+    @ViewBuilder
+    private var macOSSetupStatusBar: some View {
         switch installer.phase {
         case .downloading(let fraction):
             preparingStatusBar("downloading \(percent(fraction))")
@@ -225,14 +274,16 @@ struct VirtualMachineTabView: View {
     }
 
     private func preparingStatusBar(_ progress: String?) -> some View {
-        VMStatusBar(
-            tone: .busy, title: "Preparing macOS",
-            details: [installer.setupBuild.map { "macOS \($0)" }, progress].compactMap { $0 }
+        let version = isLinux ? "Ubuntu \(LinuxGoldenImage.release)" : installer.setupBuild.map { "macOS \($0)" }
+        let cancelling = isLinux ? linuxInstaller.cancelling : installer.cancelling
+        return VMStatusBar(
+            tone: .busy, title: "Preparing \(guestName)",
+            details: [version, progress].compactMap { $0 }
         ) {
-            AlasButton(title: installer.cancelling ? "Cancelling…" : "Cancel", style: .subtle, compact: true) {
-                installer.cancelSetup()
+            AlasButton(title: cancelling ? "Cancelling…" : "Cancel", style: .subtle, compact: true) {
+                if isLinux { linuxInstaller.cancel() } else { installer.cancelSetup() }
             }
-            .vmDisabled(installer.cancelling)
+            .vmDisabled(cancelling)
         }
     }
 
@@ -292,12 +343,15 @@ struct VirtualMachineTabView: View {
     private var content: some View {
         switch screen {
         case .running:
-            VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: vms.running(worktreeID)?.vm)
+            VMDisplaySurface(
+                view: state.tabs.vmView(tabID: tab.id), virtualMachine: vms.running(worktreeID, guest: guest)?.vm)
         case .starting:
-            VMEmptyStateCard(icon: "desktopcomputer", title: "Starting the VM", subtitle: "macOS is booting.", busy: true) {
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "Starting the VM", subtitle: "\(guestName) is booting.", busy: true
+            ) {
                 EmptyView()
             } actions: {
-                AlasButton(title: "Stop") { stop(worktreeID) }
+                AlasButton(title: "Stop") { stop(recordID) }
             }
         case .slotChoice:
             if let choice { choiceView(choice) }
@@ -309,7 +363,7 @@ struct VirtualMachineTabView: View {
                 EmptyView()
             } actions: {
                 AlasButton(title: "Start VM", icon: "play.fill", style: .primary) {
-                    start(elsewhere?.target ?? .worktree(worktreeID))
+                    start(elsewhere?.target ?? .worktree(worktreeID, guest))
                 }
             }
         case .goldenSetup(let build, _):
@@ -326,7 +380,9 @@ struct VirtualMachineTabView: View {
         case .createVM:
             VMEmptyStateCard(
                 icon: "desktopcomputer", title: "No VM for this worktree",
-                subtitle: "Create one from the base image. Agents can drive it with computer use while your desktop stays untouched."
+                subtitle: isLinux
+                    ? "Create one from the Ubuntu image. Agents can run commands in it while your desktop stays untouched."
+                    : "Create one from the base image. Agents can drive it with computer use while your desktop stays untouched."
             ) {
                 EmptyView()
             } actions: {
@@ -335,11 +391,13 @@ struct VirtualMachineTabView: View {
         case .stopped:
             VMEmptyStateCard(
                 icon: "desktopcomputer", title: "This worktree's VM is off",
-                subtitle: "Agents can drive it with computer use once it's running. Your desktop stays untouched."
+                subtitle: isLinux
+                    ? "Agents can run commands in it once it's running. Your desktop stays untouched."
+                    : "Agents can drive it with computer use once it's running. Your desktop stays untouched."
             ) {
                 EmptyView()
             } actions: {
-                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.worktree(worktreeID)) }
+                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.worktree(worktreeID, guest)) }
             }
         case .stoppedWhileCustomizing:
             VMEmptyStateCard(
@@ -348,7 +406,7 @@ struct VirtualMachineTabView: View {
             ) {
                 EmptyView()
             } actions: {
-                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.worktree(worktreeID)) }
+                AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.worktree(worktreeID, guest)) }
                 AlasButton(title: "Finish customizing") { vms.finishCustomizing(from: worktreeID) }
             }
         }
@@ -357,7 +415,8 @@ struct VirtualMachineTabView: View {
     /// Only with a sealed golden settled: unsealing it while another image
     /// installs or awaits setup would leave two images awaiting setup.
     private var canCustomize: Bool {
-        switch installer.phase {
+        if isLinux { return false }
+        return switch installer.phase {
         case .idle, .sealed: goldenAvailable
         case .downloading, .installing, .provisioning, .awaitingSetup, .failed: false
         }
@@ -365,6 +424,45 @@ struct VirtualMachineTabView: View {
 
     @ViewBuilder
     private var setupView: some View {
+        if isLinux { linuxSetupView } else { macOSSetupView }
+    }
+
+    @ViewBuilder
+    private var linuxSetupView: some View {
+        if let position = VMSetupSteps.position(of: linuxInstaller.phase) {
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "Setting up the Ubuntu image",
+                subtitle: "This happens once. Every Linux VM starts from it."
+            ) {
+                VMSetupSteps(titles: linuxSetupTitles, current: position.current, fraction: position.fraction)
+            }
+        } else {
+            if case .failed(let message) = linuxInstaller.phase {
+                VMCallout(title: "Ubuntu setup couldn't finish", message: message)
+            }
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "Set up a Linux VM",
+                subtitle: "Alas downloads Ubuntu once and prepares a base image. Every Linux VM starts from it."
+            ) {
+                EmptyView()
+            } actions: {
+                AlasButton(title: "Set up", style: .primary) {
+                    Task { await linuxInstaller.start() }
+                }
+            }
+        }
+    }
+
+    /// A cached or just downloaded image is checksummed before converting;
+    /// the first step says so rather than sitting at its download progress.
+    private var linuxSetupTitles: [String] {
+        var titles = VMSetupSteps.linuxTitles
+        if linuxInstaller.phase == .checking { titles[0] = "Checking download…" }
+        return titles
+    }
+
+    @ViewBuilder
+    private var macOSSetupView: some View {
         if let position = VMSetupSteps.position(of: installer.phase) {
             VMEmptyStateCard(
                 icon: "desktopcomputer", title: "Setting up the base image",
@@ -411,7 +509,7 @@ struct VirtualMachineTabView: View {
                 .vmDisabled(finishingSetup)
         }
         if let golden = vms.runningGolden() {
-            VMDisplaySurface(view: state.tabs.vmView(ownerKey: worktreeID), virtualMachine: golden.vm)
+            VMDisplaySurface(view: state.tabs.vmView(tabID: tab.id), virtualMachine: golden.vm)
         } else if vms.isStarting(StartTarget.golden(build: build).id) || finishingSetup {
             Spinner().frame(width: 16, height: 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -476,10 +574,14 @@ struct VirtualMachineTabView: View {
     // MARK: - Actions
 
     private func refresh() {
-        // Another Alas process may have sealed or replaced the golden image.
-        installer.reloadFromDisk()
-        goldenAvailable = vms.availableGolden() != nil
-        record = vms.recordStatus(worktreeID)
+        if isLinux {
+            goldenAvailable = LinuxGoldenInstaller.availableGolden(root: vms.root) != nil
+        } else {
+            // Another Alas process may have sealed or replaced the golden image.
+            installer.reloadFromDisk()
+            goldenAvailable = vms.availableGolden() != nil
+        }
+        record = vms.recordStatus(worktreeID, guest: guest)
         loaded = true
         loadDiskSize()
     }
@@ -511,7 +613,7 @@ struct VirtualMachineTabView: View {
     private func deleteVM() {
         errorMessage = nil
         Task {
-            if let reason = await vms.deleteVM(worktreeID: worktreeID) {
+            if let reason = await vms.deleteVM(worktreeID: worktreeID, guest: guest) {
                 let phrase = reason.hasSuffix(".") ? String(reason.dropLast()) : reason
                 errorMessage = "Couldn't delete the VM: \(phrase)."
             }
@@ -536,7 +638,7 @@ struct VirtualMachineTabView: View {
     private func createVM() {
         errorMessage = nil
         do {
-            try vms.createVM(worktreeID: worktreeID)
+            try vms.createVM(worktreeID: worktreeID, guest: guest)
         } catch {
             errorMessage = error.localizedDescription
         }
@@ -565,7 +667,7 @@ struct VirtualMachineTabView: View {
                     _ = try await vms.startVM(worktreeID: target.id, pausing: other)
                 } else {
                     let outcome = switch target {
-                    case .worktree(let id): try await vms.startVM(worktreeID: id)
+                    case .worktree(let id, let guest): try await vms.startVM(worktreeID: id, guest: guest)
                     case .golden(let build): try await vms.startGolden(build: build)
                     }
                     switch outcome {
@@ -588,7 +690,7 @@ struct VirtualMachineTabView: View {
 
     private func dismissBanner() {
         errorMessage = nil
-        vms.dismissHelperUpdateFailure(worktreeID)
+        vms.dismissHelperUpdateFailure(recordID)
         if let build = awaitingSetupBuild { vms.dismissHelperUpdateFailure(StartTarget.golden(build: build).id) }
     }
 
@@ -626,11 +728,13 @@ struct VirtualMachineTabView: View {
         }
     }
 
+    /// `id` is a registry id: this tab's VM or a golden.
     private func stop(_ id: String) {
-        let ownVM = id == worktreeID && vms.running(id) != nil
+        let (worktree, guest) = VMIdentity.parse(recordID: id)
+        let ownVM = id == recordID && vms.running(worktree, guest: guest) != nil
         if ownVM { stopping = true }
         Task {
-            await vms.stopVM(worktreeID: id)
+            await vms.stopVM(worktreeID: worktree, guest: guest)
             if ownVM { stopping = false }
         }
     }

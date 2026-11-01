@@ -18,7 +18,7 @@ public struct GitStash: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-public struct GitStashFile: Codable, Equatable, Identifiable, Sendable {
+public struct GitStashFile: Codable, Hashable, Identifiable, Sendable {
     public var id: String { "\(path)\u{0}\(isUntracked)" }
 
     public let path: String

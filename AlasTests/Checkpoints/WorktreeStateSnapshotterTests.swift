@@ -102,17 +102,19 @@ struct WorktreeStateSnapshotterTests {
         await #expect(throws: (any Error).self) { try await WorktreeStateSnapshotter.live.snapshot(target: repo.target) }
     }
 
+    /// Intent-to-add paths are named as stored, never quoted, including ones
+    /// starting with a space.
     @Test func intentToAddEntryFailsCaptureWithoutChangingIndexIntent() async throws {
         let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
-        try repo.write("not staged", to: "planned.swift")
-        try await repo.git(["add", "-N", "planned.swift"])
+        for path in [" lead.swift", "é.swift"] { try repo.write("not staged", to: path) }
+        try await repo.git(["add", "-N", " lead.swift", "é.swift"])
 
-        await #expect(throws: CheckpointSnapshotError.unsupportedPaths(["planned.swift"])) {
+        await #expect(throws: CheckpointSnapshotError.unsupportedPaths([" lead.swift", "é.swift"])) {
             try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
         }
 
-        let debug = String(decoding: try await repo.git(["ls-files", "--debug", "--", "planned.swift"]), as: UTF8.self)
+        let debug = String(decoding: try await repo.git(["ls-files", "--debug", "--", " lead.swift"]), as: UTF8.self)
         #expect(debug.contains("flags: 2000"))
     }
 
@@ -139,6 +141,7 @@ struct WorktreeStateSnapshotterTests {
         #expect(snapshot.headOID == emptyTree.stdout.trimmingCharacters(in: .whitespacesAndNewlines))
         #expect(snapshot.paths["initial.swift"]?.head == .absent)
         #expect(try snapshot.payload(#require(snapshot.paths["initial.swift"]).index) == Data("initial".utf8))
+        #expect(snapshot.branch == "main")
     }
 
     @Test func sha256UnbornRepositoryCapturesInitialWorkAgainstRepositoryEmptyTree() async throws {
@@ -257,6 +260,8 @@ struct WorktreeStateSnapshotterTests {
                                         "large": Data((0..<(3 * 1024 * 1024)).map { UInt8(truncatingIfNeeded: $0 &* 31) })]
         for number in 0..<2_000 { expected["small/\(number)"] = Data("object \(number)\n".utf8) }
         for (path, bytes) in expected { try repo.write(bytes, to: path) }
+        try repo.symlink("framing", at: "link")
+        expected["link"] = Data("framing".utf8)
         try await repo.git(["add", "-A"])
         let records = String(decoding: try await repo.git(["ls-files", "--stage", "-z"]), as: UTF8.self)
         var oids: [String: String] = [:]
@@ -270,7 +275,13 @@ struct WorktreeStateSnapshotterTests {
         let sizes = try await git.blobSizes(oids: requested, cwd: repo.root)
         let contents = try await git.blobContents(oids: requested, cwd: repo.root)
         let references = try await git.blobReferences(oids: requested, cwd: repo.root)
+        let checked = CheckedSizes()
+        // One `--batch-command` process, which must read what the two
+        // `--batch-check` and `--batch` processes it replaces read.
+        let combined = try await git.blobContents(oids: requested, cwd: repo.root) { checked.sizes = $0 }
 
+        #expect(combined == contents)
+        #expect(checked.sizes == sizes)
         for (path, bytes) in expected {
             let oid = try #require(oids[path])
             #expect(sizes[oid] == Int64(bytes.count))
@@ -287,7 +298,7 @@ struct WorktreeStateSnapshotterTests {
         let oid = String(decoding: try await repo.git(["rev-parse", ":file.swift"]), as: UTF8.self).trimmingCharacters(in: .newlines)
         let read = Task {
             withUnsafeCurrentTask { $0?.cancel() }
-            return try await LiveCheckpointGitRunner().blobSizes(oids: [oid], cwd: repo.root)
+            return try await LiveCheckpointGitRunner().blobContents(oids: [oid], cwd: repo.root) { _ in }
         }
 
         await #expect(throws: CancellationError.self) { try await read.value }
@@ -370,6 +381,65 @@ struct WorktreeStateSnapshotterTests {
         #expect(snapshot.paths["config/local.json"]?.worktree.kind == .regular)
     }
 
+    /// HEAD entries come from the index and the staged diff, and the branch
+    /// from `rev-parse`; both must match git's own reads.
+    @Test func headEntriesAndBranchMatchGitsOwnReads() async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repo.remove() }
+        for path in ["renamed.txt", "edited.txt"] { try repo.write("one\ntwo\nthree\nfour\n", to: path) }
+        for path in ["unstaged.txt", "tool.sh", "link", "dropped.txt", "dir", "shared.txt"] { try repo.write("x\n", to: path) }
+        try await repo.commitAll("base")
+        try await repo.git(["mv", "renamed.txt", "moved.txt"])
+        try await repo.git(["mv", "edited.txt", "edited-moved.txt"])
+        try repo.write("one\ntwo\nthree\nfour\nfive\n", to: "edited-moved.txt")
+        try await repo.stage("edited-moved.txt")
+        try repo.write("one\ntwo\nthree\nfour\nfive\nsix\n", to: "edited-moved.txt")
+        try repo.write("x\ny\n", to: "unstaged.txt")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: repo.root.appendingPathComponent("tool.sh").path)
+        try await repo.stage("tool.sh")
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("link"))
+        try repo.symlink("tool.sh", at: "link")
+        try await repo.stage("link")
+        try await repo.git(["rm", "-q", "--cached", "dropped.txt", "dir"])
+        try FileManager.default.removeItem(at: repo.root.appendingPathComponent("dir"))
+        try repo.write("z\n", to: "dir/inner.txt")
+        try await repo.stage("dir/inner.txt")
+        try repo.write("new\n", to: "staged-new.txt")
+        try await repo.stage("staged-new.txt")
+        try repo.write("u\n", to: "untracked.txt")
+        try await repo.git(["tag", "main"])
+
+        let snapshot = try await WorktreeStateSnapshotter.live.snapshot(target: repo.target, includingPaths: ["shared.txt"])
+
+        let branch = String(decoding: try await repo.git(["symbolic-ref", "--short", "HEAD"]), as: UTF8.self)
+        #expect(snapshot.branch == branch.trimmingCharacters(in: .newlines))
+        #expect(snapshot.branch == "heads/main")
+        #expect(Set(snapshot.paths.keys) == ["moved.txt", "renamed.txt", "edited-moved.txt", "edited.txt", "unstaged.txt", "tool.sh",
+                                             "link", "dropped.txt", "dir", "dir/inner.txt", "staged-new.txt", "untracked.txt", "shared.txt"])
+        for (path, state) in snapshot.paths {
+            let record = String(decoding: try await repo.git(["ls-tree", "-z", "HEAD", "--", path]), as: UTF8.self)
+            guard !record.isEmpty else {
+                #expect(state.head == .absent, "\(path)")
+                continue
+            }
+            let fields = record.split(separator: "\t")[0].split(separator: " ")
+            let blob = try #require(snapshot.gitBlobReferences[String(fields[2])], "\(path)")
+            let expected: CheckpointFileState = fields[0] == "120000" ? .symlink(blob: blob) : .regular(blob: blob, executable: fields[0] == "100755")
+            #expect(state.head == expected, "\(path)")
+        }
+    }
+
+    /// A ref named HEAD makes the combined `rev-parse` print no branch, so
+    /// the snapshot falls back to `symbolic-ref`.
+    @Test(arguments: [(["checkout", "-q", "--detach"], "(detached)"), (["update-ref", "refs/heads/HEAD", "main"], "main")])
+    func branchWithoutAShortBranchName(setup: [String], branch: String) async throws {
+        let repo = try await CheckpointTestRepository.makeFromTemplate()
+        defer { repo.remove() }
+        try await repo.git(setup)
+
+        #expect(try await WorktreeStateSnapshotter.live.snapshot(target: repo.target).branch == branch)
+    }
+
     @Test func lineageReplacementFailsCapture() async throws {
         let repo = try await CheckpointTestRepository.makeFromTemplate()
         defer { repo.remove() }
@@ -377,5 +447,14 @@ struct WorktreeStateSnapshotterTests {
         await #expect(throws: CheckpointSnapshotError.lineageChanged) {
             try await WorktreeStateSnapshotter.live.snapshot(target: repo.target)
         }
+    }
+}
+
+private final class CheckedSizes: @unchecked Sendable {
+    private let lock = NSLock()
+    private var recorded: [String: Int64] = [:]
+    var sizes: [String: Int64] {
+        get { lock.withLock { recorded } }
+        set { lock.withLock { recorded = newValue } }
     }
 }

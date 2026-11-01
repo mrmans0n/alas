@@ -578,6 +578,33 @@ public actor RemoteHelperClient {
         try await request(method: params.wireContext == .rawV2 ? "acp/raw/notify" : "acp/notify", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
     }
 
+    public func respondExactACPBroker(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
+        // Replies never start a replacement helper. A prior open owns this generation.
+        guard transport != nil, !Task.isCancelled else { throw ACPBrokerRawReplyError.rejected(.unavailable) }
+        let replyGeneration = generation
+        if helperCapabilities?.generation != replyGeneration {
+            do { _ = try await hello() }
+            catch { throw ACPBrokerRawReplyError.rejected(.unavailable) }
+        }
+        guard transport != nil, generation == replyGeneration, !Task.isCancelled,
+              helperCapabilities?.generation == replyGeneration,
+              helperCapabilities?.capabilities.acpRawFrames == 1,
+              helperCapabilities?.capabilities.acpRawReplies == 1 else { throw ACPBrokerRawReplyError.rejected(.unavailable) }
+        do {
+            let result: ACPBrokerRawReplyResult = try await request(method: "acp/raw/respondExact", params: params,
+                replaySubscriptionsOnStart: false, stripVirtualPaths: false, requiredGeneration: replyGeneration)
+            guard generation == replyGeneration, !Task.isCancelled, result.matches(params) else {
+                throw ACPBrokerRawReplyError.uncertain("Reply attachment or returned identity changed after handoff")
+            }
+            return result
+        } catch let error as ACPBrokerRawReplyError { throw error }
+        catch let RemoteHelperClientError.jsonrpc(error) {
+            if let reason = ACPBrokerRawReplyRejection(rawValue: error.code) { throw ACPBrokerRawReplyError.rejected(reason) }
+            if error.code == -32601 { throw ACPBrokerRawReplyError.rejected(.unavailable) }
+            throw ACPBrokerRawReplyError.uncertain(error.message)
+        } catch { throw ACPBrokerRawReplyError.uncertain(error.localizedDescription) }
+    }
+
     public func respondACPBroker(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK {
         try await request(method: params.wireContext == .rawV2 ? "acp/raw/respond" : "acp/respond", params: params, replaySubscriptionsOnStart: false, stripVirtualPaths: false)
     }
@@ -831,6 +858,11 @@ public actor RemoteHelperClient {
             if helperCapabilities?.generation != generation { _ = try await hello() }
             guard helperCapabilities?.generation == generation,
                   helperCapabilities?.capabilities.sessionCoordination == 1 else { throw RemoteSessionUnavailable.helperRequired }
+        }
+        if let requiredGeneration {
+            guard transport != nil, generation == requiredGeneration, !Task.isCancelled else {
+                throw RemoteHelperClientError.notRunning
+            }
         }
         idleShutdownTask?.cancel()
         idleShutdownTask = nil

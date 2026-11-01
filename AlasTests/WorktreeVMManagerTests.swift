@@ -19,6 +19,7 @@ final class WorktreeVMManagerTests {
         var state: VZVirtualMachine.State = .stopped
         var virtualMachine: VZVirtualMachine? { nil }
         var onGuestStop: ((Error?) -> Void)?
+        private(set) var stopRequests = 0
         init(hypervisor: FakeHypervisor, stopFails: Bool, guestStopError: Error?) {
             self.hypervisor = hypervisor
             self.stopFails = stopFails
@@ -26,6 +27,7 @@ final class WorktreeVMManagerTests {
         }
         func start() async throws { state = .running }
         func requestStop() throws {
+            stopRequests += 1
             if stopFails { throw StopRefused() }
             state = guestStopError == nil ? .stopped : .error
             onGuestStop?(guestStopError)
@@ -111,9 +113,14 @@ final class WorktreeVMManagerTests {
         try? FileManager.default.removeItem(at: root)
     }
 
+    private var linuxHelperDirectory: URL { root.appendingPathComponent("linux-helper", isDirectory: true) }
+
     private func makeManager() -> WorktreeVMManager {
         let hypervisor = hypervisor
-        return WorktreeVMManager(registry: registry, root: root, helperDirectory: helperDirectory) { worktreeID, _, _ in
+        return WorktreeVMManager(
+            registry: registry, root: root, helperDirectory: helperDirectory,
+            linuxHelperDirectory: linuxHelperDirectory
+        ) { worktreeID, _, _ in
             try await hypervisor.boot(worktreeID)
         }
     }
@@ -231,6 +238,26 @@ final class WorktreeVMManagerTests {
         #expect(manager.running("/repo/a") != nil)
         #expect(manager.running("/repo/b") == nil)
         #expect(try registry.snapshot().first { $0.id == "/repo/a" }?.runOwner != nil)
+    }
+
+    /// A Linux guest's helper powers it off; the power button is the fallback when it can't.
+    @Test("a guest that takes the shutdown request stops without a power button press or a forced stop",
+          arguments: [true, false])
+    func stopAsksTheGuestFirst(guestTakesIt: Bool) async throws {
+        let machine = FakeMachine(hypervisor: hypervisor, stopFails: false, guestStopError: nil)
+        let vm = RunningVM(worktreeID: "linux:/repo/a", machine: machine)
+        try await vm.start()
+
+        try await vm.stop(requestingShutdown: {
+            guard guestTakesIt else { return false }
+            machine.state = .stopped
+            machine.onGuestStop?(nil)
+            return true
+        })
+
+        #expect(machine.state == .stopped)
+        #expect(machine.stopRequests == (guestTakesIt ? 0 : 1))
+        #expect(!vm.wasForcedOff)
     }
 
     @Test("a sealed golden image is never booted again")
@@ -478,6 +505,109 @@ final class WorktreeVMManagerTests {
         #expect(try manager.shares(forWorktree: WorktreeVMManager.goldenIDPrefix + "25A1") == [
             VMShare(name: "helper", hostURL: helperDirectory, readOnly: true),
         ])
+
+        // A Linux VM gets the Linux helper and a transfer folder of its own.
+        try FileManager.default.createDirectory(at: linuxHelperDirectory, withIntermediateDirectories: true)
+        let linuxTransfer = manager.transferDirectory(forWorktree: "/repo/a", guest: .linux)
+        #expect(try manager.shares(forWorktree: "/repo/a", guest: .linux) == [
+            VMShare(name: "helper", hostURL: linuxHelperDirectory, readOnly: true),
+            VMShare(name: "worktree", hostURL: worktree, readOnly: true),
+            VMShare(name: "transfer", hostURL: linuxTransfer, readOnly: false),
+        ])
+        #expect(linuxTransfer.lastPathComponent == transfer.lastPathComponent + "-linux")
+        #expect(linuxTransfer.lastPathComponent
+            == WorktreeVMManager.bundleURL(forWorktree: "/repo/a", guest: .linux, root: root).lastPathComponent)
+    }
+
+    @Test("a worktree's Linux VM lives beside its macOS VM and starts outside the macOS slots")
+    func linuxAndMacOSVMsCoexist() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try manager.createVM(worktreeID: "/repo/a", guest: .linux)
+        try manager.createVM(worktreeID: "/repo/a")
+
+        let records = try registry.snapshot()
+        #expect(Set(records.map(\.id)) == ["/repo/a", "linux:/repo/a"])
+        #expect(records.first { $0.id == "linux:/repo/a" }?.guestOS == .linux)
+        let bundles = [VMGuestOS.macOS, .linux].map { WorktreeVMManager.bundleURL(forWorktree: "/repo/a", guest: $0, root: root) }
+        #expect(Set(bundles).count == 2)
+        #expect(bundles.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.macOS, .linux])
+
+        try addRecord("/repo/b", owner: elsewhere)
+        try addRecord("/repo/c", owner: elsewhere)
+        guard case .running = try await manager.startVM(worktreeID: "/repo/a", guest: .linux) else {
+            Issue.record("the Linux VM did not start")
+            return
+        }
+        #expect(manager.running("/repo/a", guest: .linux) != nil)
+        #expect(manager.running("/repo/a") == nil)
+        let transfers = [VMGuestOS.macOS, .linux].map { manager.transferDirectory(forWorktree: "/repo/a", guest: $0) }
+        #expect(Set(transfers).count == 2)
+        #expect(FileManager.default.fileExists(atPath: transfers[1].path))
+    }
+
+    @Test("the stub older builds read exists exactly while the worktree has a Linux VM and no macOS VM")
+    func aliasStubFollowsTheWorktreesVMs() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        func stubPresent() throws -> Bool {
+            let file = root.appendingPathComponent("registry.json")
+            let elements = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [[String: Any]] ?? []
+            return elements.contains { $0["id"] as? String == "/repo/a" && $0["guestOS"] as? String == VMIdentity.aliasGuestRaw }
+        }
+
+        try manager.createVM(worktreeID: "/repo/a", guest: .linux)
+        #expect(try stubPresent())
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.linux])
+
+        try manager.createVM(worktreeID: "/repo/a")
+        #expect(try !stubPresent())
+
+        #expect(await manager.deleteVM(worktreeID: "/repo/a") == nil)
+        #expect(try stubPresent())
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.linux])
+
+        #expect(await manager.deleteVM(worktreeID: "/repo/a", guest: .linux) == nil)
+        #expect(try !stubPresent())
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [])
+    }
+
+    @Test("deleting a worktree removes both of its VMs")
+    func deletingTheWorktreeRemovesBothVMs() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try manager.createVM(worktreeID: "/repo/a", guest: .linux)
+        try manager.createVM(worktreeID: "/repo/a")
+        _ = try await manager.startVM(worktreeID: "/repo/a", guest: .linux)
+
+        #expect(await manager.deleteVMs(forWorktree: "/repo/a") == nil)
+
+        #expect(try registry.recordIDs().isEmpty)
+        #expect(manager.running("/repo/a", guest: .linux) == nil)
+        for guest in [VMGuestOS.macOS, .linux] {
+            #expect(!FileManager.default.fileExists(
+                atPath: WorktreeVMManager.bundleURL(forWorktree: "/repo/a", guest: guest, root: root).path))
+            #expect(!FileManager.default.fileExists(
+                atPath: manager.transferDirectory(forWorktree: "/repo/a", guest: guest).path))
+        }
+    }
+
+    @Test("stopping a worktree's VMs, as archiving does, stops both guests and keeps their bundles")
+    func stoppingTheWorktreeStopsBothVMs() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try manager.createVM(worktreeID: "/repo/a", guest: .linux)
+        try manager.createVM(worktreeID: "/repo/a")
+        for guest in [VMGuestOS.macOS, .linux] {
+            _ = try await manager.startVM(worktreeID: "/repo/a", guest: guest)
+        }
+
+        await manager.stopVMs(forWorktree: "/repo/a")
+
+        #expect(manager.running("/repo/a") == nil)
+        #expect(manager.running("/repo/a", guest: .linux) == nil)
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.macOS, .linux])
     }
 
     @Test("a corrupt registry is quarantined and read again, and a VM bundle on disk still counts as a VM")
@@ -485,12 +615,32 @@ final class WorktreeVMManagerTests {
         let manager = makeManager()
         let file = root.appendingPathComponent("registry.json")
         try Data("not json {".utf8).write(to: file)
-        #expect(manager.hasVMRecord("/repo/a") == false)
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [])
 
         try Data("not json {".utf8).write(to: file)
         let bundle = WorktreeVMManager.bundleURL(forWorktree: "/repo/a", root: root)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
-        #expect(manager.hasVMRecord("/repo/a") == true)
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.macOS])
+
+        // Still unreadable after quarantine: the bundle on disk answers alone.
+        try FileManager.default.removeItem(at: file)
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+        #expect(manager.vmKinds(forWorktree: "/repo/a") == [.macOS])
+        #expect(manager.vmKinds(forWorktree: "/repo/b") == nil)
+    }
+
+    /// A sealed macOS and Linux golden image, enough for `createVM` to clone.
+    private func makeSealedGoldens() throws {
+        let macOS = try makeGoldenBundle()
+        for file in [macOS.diskImage, macOS.auxiliaryStorage, macOS.hardwareModel] {
+            try Data("x".utf8).write(to: file)
+        }
+        try GoldenImageInstaller.writeSealedMarker(macOS)
+        let linux = LinuxVMBundle(url: root.appendingPathComponent(
+            "golden-linux/\(LinuxGoldenImage.serial)", isDirectory: true))
+        try FileManager.default.createDirectory(at: linux.url, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: linux.diskImage)
+        try LinuxGoldenInstaller.writeSealedMarker(linux)
     }
 
     private func makeGoldenBundle() throws -> VMBundle {

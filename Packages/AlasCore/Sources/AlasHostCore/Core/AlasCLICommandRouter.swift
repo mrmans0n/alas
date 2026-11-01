@@ -36,12 +36,12 @@ public struct AlasCLICommandRouter {
     var computerCommand: (ComputerUseCommand, String) async -> AlasCLIResponse = { _, _ in
         .error("Computer use is not available.")
     }
-    /// `vm_run`: the command, its timeout in seconds, and the calling session.
-    var vmRun: (String, Int, String) async -> AlasCLIResponse = { _, _, _ in
+    /// `vm_run`: the command, its timeout in seconds, the VM it names, and the calling session.
+    var vmRun: (String, Int, VMGuestOS?, String) async -> AlasCLIResponse = { _, _, _, _ in
         .error("Worktree VMs are not available.")
     }
-    /// `vm_status` for the calling session.
-    var vmStatus: (String) async -> AlasCLIResponse = { _ in
+    /// `vm_status` for the VM it names and the calling session.
+    var vmStatus: (VMGuestOS?, String) async -> AlasCLIResponse = { _, _ in
         .error("Worktree VMs are not available.")
     }
     var activateApp: () -> Void
@@ -74,10 +74,10 @@ public struct AlasCLICommandRouter {
         computerCommand: @escaping (ComputerUseCommand, String) async -> AlasCLIResponse = { _, _ in
             .error("Computer use is not available.")
         },
-        vmRun: @escaping (String, Int, String) async -> AlasCLIResponse = { _, _, _ in
+        vmRun: @escaping (String, Int, VMGuestOS?, String) async -> AlasCLIResponse = { _, _, _, _ in
             .error("Worktree VMs are not available.")
         },
-        vmStatus: @escaping (String) async -> AlasCLIResponse = { _ in
+        vmStatus: @escaping (VMGuestOS?, String) async -> AlasCLIResponse = { _, _ in
             .error("Worktree VMs are not available.")
         },
         activateApp: @escaping () -> Void,
@@ -147,12 +147,12 @@ public struct AlasCLICommandRouter {
                 return .error("computer_unsupported_caller: Computer use is only available to ACP agent sessions.")
             }
             return await computerCommand(command, sessionID)
-        case .vmRun(let command, let timeoutSeconds):
+        case .vmRun(let command, let timeoutSeconds, let vm):
             guard let sessionID = computerUseCaller(request.sessionId) else { return Self.vmUnsupportedCaller }
-            return await vmRun(command, timeoutSeconds, sessionID)
-        case .vmStatus:
+            return await vmRun(command, timeoutSeconds, vm, sessionID)
+        case .vmStatus(let vm):
             guard let sessionID = computerUseCaller(request.sessionId) else { return Self.vmUnsupportedCaller }
-            return await vmStatus(sessionID)
+            return await vmStatus(vm, sessionID)
         case .workspace(let command):
             return await workspaceCommand(command, caller)
         case .visualShow(let title, let html, let question, let presentation):

@@ -586,6 +586,22 @@ struct AppStateCLIRoutingTests {
         })
     }
 
+    @Test func routeTranscriptOpenURLResolvesChildRelativeLinkAgainstChildCwd() async throws {
+        let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-child-cwd")
+        defer { try? FileManager.default.removeItem(at: worktree.path) }
+        let sub = worktree.path.appendingPathComponent("sub")
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try "x\n".write(to: sub.appendingPathComponent("a.swift"), atomically: true, encoding: .utf8)
+
+        let url = URL(string: "a.swift")!
+        #expect(state.transcriptLinkRoute(url, in: worktree) == .missing(path: "a.swift"))
+        #expect(state.transcriptLinkRoute(url, in: worktree, baseDirectory: sub.path) == .opened)
+        #expect(state.tabs.tabs(forWorktree: worktree.id).contains {
+            if case .editor(let s) = $0 { return s.relativePath == "sub/a.swift" }
+            return false
+        })
+    }
+
     @Test func routeTranscriptOpenURLAcceptsRootRelativePathWithLineParsedAsScheme() async throws {
         let (state, _, worktree) = try await makeStateWithWorktree(name: "transcript-root-position")
         defer { try? FileManager.default.removeItem(at: worktree.path) }
@@ -749,17 +765,20 @@ struct AppStateCLIRoutingTests {
     /// app handles (`tel:123`) or that aren't `path:line`, and every link in a
     /// local session, keep the local routing.
     @Test(arguments: [
-        ("Sources/a.swift:3", true, false, AppState.AbsoluteLinkRoute.remoteEditor(relativePath: "Sources/a.swift", line: 3, column: nil)),
-        ("Package.swift:2", false, false, .remoteEditor(relativePath: "Package.swift", line: 2, column: nil)),
-        ("tel:123", false, true, .local),
-        ("mailto:a@b.c", false, true, .local),
-        ("../escape.swift", true, false, .ignored),
-        ("/srv/repo/a.swift", true, false, .remoteEditor(relativePath: "a.swift", line: nil, column: nil)),
+        ("Sources/a.swift:3", true, false, nil, AppState.AbsoluteLinkRoute.remoteEditor(relativePath: "Sources/a.swift", line: 3, column: nil)),
+        ("Package.swift:2", false, false, nil, .remoteEditor(relativePath: "Package.swift", line: 2, column: nil)),
+        ("tel:123", false, true, nil, .local),
+        ("mailto:a@b.c", false, true, nil, .local),
+        ("../escape.swift", true, false, nil, .ignored),
+        ("/srv/repo/a.swift", true, false, nil, .remoteEditor(relativePath: "a.swift", line: nil, column: nil)),
+        ("a.swift", true, false, "/srv/repo/pkg", .remoteEditor(relativePath: "pkg/a.swift", line: nil, column: nil)),
+        ("../../x.swift", true, false, "/srv/repo/pkg", .ignored),
     ])
     func transcriptRemoteLinkRouteJoinsRelativePaths(
         raw: String,
         isLocalPathForm: Bool,
         schemeHasSystemHandler: Bool,
+        baseDirectory: String?,
         expected: AppState.AbsoluteLinkRoute
     ) {
         func route(root: String) -> AppState.AbsoluteLinkRoute {
@@ -767,7 +786,8 @@ struct AppStateCLIRoutingTests {
                 raw,
                 isLocalPathForm: isLocalPathForm,
                 schemeHasSystemHandler: schemeHasSystemHandler,
-                worktreeRoot: root
+                worktreeRoot: root,
+                baseDirectory: baseDirectory
             )
         }
         #expect(route(root: "/.alas-remote/mini/srv/repo") == expected)

@@ -1,0 +1,51 @@
+[
+  { "type": "hello", "hostVersion": "0.22.3" },
+  {
+    "type": "helloReply",
+    "guestVersion": "0.22.3",
+    "protocolRevision": 1,
+    "accessibility": true,
+    "screenRecording": false
+  },
+  {
+    "type": "helloReply",
+    "guestVersion": "0.1.0",
+    "protocolRevision": 1,
+    "accessibility": false,
+    "screenRecording": false,
+    "guestKind": "linux",
+    "capabilities": ["run"]
+  },
+  { "type": "run", "id": 7, "command": "uname -a | tr a-z A-Z", "timeoutSeconds": 0 },
+  {
+    "type": "runResult",
+    "id": 7,
+    "exitCode": 0,
+    "stdout": "LINUX ü \"quoted\"\n",
+    "stderr": "",
+    "truncated": false,
+    "timedOut": false
+  },
+  {
+    "type": "runResult",
+    "id": 8,
+    "stdout": "partial",
+    "stderr": "Terminated\n",
+    "truncated": true,
+    "timedOut": true
+  },
+  { "type": "cancel", "id": 8 },
+  { "type": "lifecycle", "sessionID": "session-1", "event": "turnEnded" },
+  { "type": "lifecycle", "sessionID": "session-1", "event": "sessionEnded" },
+  {
+    "type": "command",
+    "id": 9,
+    "sessionID": "session-1",
+    "request": "eyJjb21tYW5kIjoiY29tcHV0ZXJfYXBwcyJ9"
+  },
+  {
+    "type": "response",
+    "id": 9,
+    "body": "eyJvayI6ZmFsc2UsImVycm9yIjoiY29tcHV0ZXJfdm1fdW5zdXBwb3J0ZWQ6IENvbXB1dGVyIHVzZSBpc24ndCBhdmFpbGFibGUgaW4gTGludXggVk1zIHlldC4ifQ=="
+  }
+]

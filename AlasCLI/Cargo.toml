@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/alas-client", "crates/alas"]
+members = ["crates/alas-client", "crates/alas", "crates/alas-vm-guest-linux"]
 
 [workspace.package]
 edition = "2024"

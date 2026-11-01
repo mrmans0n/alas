@@ -20,6 +20,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "alas-vm-guest-linux"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"

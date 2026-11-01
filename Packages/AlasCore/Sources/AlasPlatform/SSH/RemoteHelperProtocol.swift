@@ -32,6 +32,7 @@ public struct RemoteHelperHelloResult: Codable, Equatable, Sendable {
 
 public struct RemoteHelperCapabilities: Codable, Equatable, Sendable {
     public var acpRawFrames: Int? = nil
+    public var acpRawReplies: Int? = nil
     public let watchKinds: [RemoteHelperWatchKind]
     public let fs: RemoteHelperFSCapabilities
     public let search: Bool?

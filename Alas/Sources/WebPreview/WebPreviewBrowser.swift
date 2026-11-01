@@ -57,6 +57,70 @@ struct WebPreviewLoopbackPin: Equatable {
     }
 }
 
+/// A content rule list that stops a remote owner's page from reaching this
+/// Mac's loopback with any request, not only navigations: fetch, XHR, images,
+/// scripts, frames, and WebSockets. Rules match the canonical URL text, so a
+/// DNS name that resolves to loopback is not covered here; navigations to one
+/// are still refused by `WebPreviewNavigation.allowsResolved`.
+@MainActor
+enum WebPreviewLoopbackRules {
+    /// WebKit's matcher has no alternation, so each loopback spelling gets its
+    /// own rule. Hosts are matched after WebKit canonicalizes them (`0x7f.1`
+    /// becomes `127.0.0.1`, `[0::1]` becomes `[::1]`).
+    static func json(allowing pin: WebPreviewLoopbackPin?) -> String {
+        let authority = #"^[^:/]+://([^/@]*@)?"#
+        let blocked = [
+            #"([^/:@]*\.)?localhost\.?[:/]"#,
+            #"127\.[0-9.]+[:/]"#,
+            #"0\.0\.0\.0[:/]"#,
+            #"\[::1?\][:/]"#,
+            #"\[::ffff:7f[0-9a-f][0-9a-f]:[0-9a-f]+\][:/]"#,
+            #"\[::ffff:0:0\][:/]"#,
+        ]
+        var rules = blocked.map { rule(authority + $0, action: "block") }
+        if let pin {
+            let host = NSRegularExpression.escapedPattern(for: pin.host.contains(":") ? "[\(pin.host)]" : pin.host)
+            rules.append(rule(authority + host + ":\(pin.port)/", action: "ignore-previous-rules"))
+            // WebKit drops a scheme's default port from the URL it matches.
+            let defaultSchemes = [80: ["http", "ws"], 443: ["https", "wss"]][pin.port] ?? []
+            for scheme in defaultSchemes {
+                rules.append(rule("^\(scheme)://([^/@]*@)?\(host)/", action: "ignore-previous-rules"))
+            }
+        }
+        let data = try? JSONSerialization.data(withJSONObject: rules, options: [.sortedKeys, .withoutEscapingSlashes])
+        return data.map { String(decoding: $0, as: UTF8.self) } ?? "[]"
+    }
+
+    private static func rule(_ filter: String, action: String) -> [String: Any] {
+        ["trigger": ["url-filter": filter], "action": ["type": action]]
+    }
+
+    private static var compiled: [String: Task<WKContentRuleList?, Never>] = [:]
+    // Each forward pins a new port, so keep the compiled files out of the
+    // app's persistent WebKit store and drop the last launch's on first use.
+    private static let store: WKContentRuleListStore? = {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "AlasWebPreviewRules-\(Bundle.main.bundleIdentifier ?? "alas")", isDirectory: true)
+        try? FileManager.default.removeItem(at: folder)
+        return WKContentRuleListStore(url: folder)
+    }()
+
+    /// Compiled once per pin and reused; nil if WebKit refused the rules.
+    static func ruleList(allowing pin: WebPreviewLoopbackPin?) async -> WKContentRuleList? {
+        let identifier = pin.map { "loopback-\($0.host)-\($0.port)" } ?? "loopback"
+        if let task = compiled[identifier] { return await task.value }
+        let json = json(allowing: pin)
+        let task = Task { @MainActor () -> WKContentRuleList? in
+            guard let store else { return nil }
+            return try? await store.compileContentRuleList(forIdentifier: identifier, encodedContentRuleList: json)
+        }
+        compiled[identifier] = task
+        let list = await task.value
+        if list == nil { compiled[identifier] = nil }
+        return list
+    }
+}
+
 enum WebPreviewHostLookup {
     private static let queue: OperationQueue = {
         let queue = OperationQueue()
@@ -159,6 +223,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var consoleHandler: PreviewConsoleHandler?
     private var urlObservation: NSKeyValueObservation?
     private let resolveHost: WebPreviewNavigation.HostResolver
+    /// Remote owners load nothing until the loopback rules are installed.
+    private var loopbackRules: LoopbackRules
+    private enum LoopbackRules { case installed, pending, failed }
+    private var loadAwaitingRules: URL?
     let automationState = WebPreviewBrowserAutomationState()
     var automationDocumentGeneration: Int { navigationGeneration }
 
@@ -168,6 +236,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         self.remoteHost = remoteHost
         self.allowedLoopback = allowedLoopback
         self.resolveHost = resolveHost
+        loopbackRules = remoteHost == nil ? .installed : .pending
         let configuration = WKWebViewConfiguration()
         configuration.websiteDataStore = .nonPersistent()
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -193,6 +262,34 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
                 self.onNavigate?(url)
             }
         }
+        if remoteHost != nil { installLoopbackRules() }
+    }
+
+    private func installLoopbackRules() {
+        Task { @MainActor [weak self, allowedLoopback] in
+            let list = await WebPreviewLoopbackRules.ruleList(allowing: allowedLoopback)
+            guard let self, !isClosed else { return }
+            guard let list else {
+                loopbackRules = .failed
+                loadAwaitingRules = nil
+                loading = false
+                error = Self.loopbackRulesFailure
+                return
+            }
+            webView.configuration.userContentController.add(list)
+            loopbackRules = .installed
+            if let url = loadAwaitingRules {
+                loadAwaitingRules = nil
+                webView.load(URLRequest(url: url))
+            }
+        }
+    }
+
+    /// Drops a load still waiting for the loopback rules, as Stop expects.
+    func cancelPendingLoad() {
+        guard loadAwaitingRules != nil else { return }
+        loadAwaitingRules = nil
+        loading = false
     }
 
     func close() {
@@ -227,6 +324,20 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         error = nil
         address = url.absoluteString
+        switch loopbackRules {
+        case .installed: break
+        case .pending:
+            loadAwaitingRules = url
+            loading = true
+            return nil
+        case .failed:
+            // Retry, so a transient compile failure doesn't strand the tab.
+            loopbackRules = .pending
+            loadAwaitingRules = url
+            loading = true
+            installLoopbackRules()
+            return nil
+        }
         return webView.load(URLRequest(url: url))
     }
 
@@ -389,6 +500,8 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             }
         }
     }
+
+    private static let loopbackRulesFailure = "This preview could not block requests to this Mac's localhost, so it will not load pages."
 
     private static let consoleScript = #"""
     (() => {

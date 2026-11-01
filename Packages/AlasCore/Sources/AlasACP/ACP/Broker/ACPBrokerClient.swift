@@ -11,10 +11,17 @@ public protocol ACPBrokerServicing: Sendable {
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult
     func send(_ params: ACPBrokerSendParams) async throws -> ACPBrokerSendResult
     func notify(_ params: ACPBrokerNotifyParams) async throws -> ACPBrokerSimpleOK
+    func respondExact(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult
     func respond(_ params: ACPBrokerRespondParams) async throws -> ACPBrokerSimpleOK
     func ack(_ params: ACPBrokerAckParams) async throws -> ACPBrokerSimpleOK
     func detach(_ params: ACPBrokerDetachParams) async throws -> ACPBrokerSimpleOK
     func close(_ params: ACPBrokerCloseParams) async throws -> ACPBrokerSimpleOK
+}
+
+extension ACPBrokerServicing {
+    public func respondExact(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
+        throw ACPBrokerRawReplyError.rejected(.unavailable)
+    }
 }
 
 extension LocalACPBrokerService: ACPBrokerServicing {}
@@ -100,8 +107,12 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     public func replayRawBrokerEvents() async throws { try await rawTransport?.replay() }
 
     public func respondToRawRequest(id: ACPBrokerJSONValue, result: ACPBrokerJSONValue? = nil, error: JSONRPCError? = nil) async throws {
-        guard let rawTransport else { throw ACPClientError.notRunning }
-        try await rawTransport.respond(id: id, result: result, error: error)
+        throw ACPBrokerRawReplyError.rejected(.unavailable)
+    }
+
+    public func respondToRawRequestExact(expectedConnectionID: UUID, params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
+        guard let rawTransport else { throw ACPBrokerRawReplyError.rejected(.unavailable) }
+        return try await rawTransport.respondExact(expectedConnectionID: expectedConnectionID, params: params)
     }
 
     private let service: ACPBrokerServicing

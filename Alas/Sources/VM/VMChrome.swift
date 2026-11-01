@@ -230,7 +230,7 @@ struct VMNumberedSteps: View {
 /// The base image setup's steps, with the current one spinning, and a thin
 /// bar for the whole setup.
 struct VMSetupSteps: View {
-    static let titles = [
+    static let macOSTitles = [
         "Download macOS",
         "Install",
         "First start",
@@ -238,6 +238,14 @@ struct VMSetupSteps: View {
         "Check permissions & seal",
     ]
 
+    static let linuxTitles = [
+        "Download Ubuntu",
+        "Convert",
+        "First start",
+        "Check helper & seal",
+    ]
+
+    var titles = Self.macOSTitles
     /// The step in progress, an index into `titles`.
     let current: Int
     /// How far the current step is, 0…1.
@@ -258,10 +266,22 @@ struct VMSetupSteps: View {
         }
     }
 
+    /// Where the Linux installer's `phase` is in `linuxTitles`; nil outside the setup.
+    static func position(of phase: LinuxGoldenInstaller.Phase) -> (current: Int, fraction: Double)? {
+        switch phase {
+        case .downloading(let fraction): (0, fraction)
+        case .checking: (0, 1)
+        case .converting(let fraction): (1, fraction)
+        case .firstBoot: (2, 0)
+        case .verifying: (3, 0)
+        case .idle, .sealed, .failed: nil
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 7) {
-                ForEach(Array(Self.titles.enumerated()), id: \.offset) { index, title in
+                ForEach(Array(titles.enumerated()), id: \.offset) { index, title in
                     HStack(spacing: 8) {
                         marker(index)
                         Text(title)
@@ -284,7 +304,7 @@ struct VMSetupSteps: View {
     }
 
     private var overall: Double {
-        min(max((Double(current) + min(max(fraction, 0), 1)) / Double(Self.titles.count), 0), 1)
+        min(max((Double(current) + min(max(fraction, 0), 1)) / Double(titles.count), 0), 1)
     }
 
     @ViewBuilder

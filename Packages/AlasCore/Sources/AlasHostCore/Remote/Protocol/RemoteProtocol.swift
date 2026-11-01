@@ -1548,6 +1548,9 @@ public enum HostProtocolCapability: Sendable {
     public static let worktreesReadV1 = "host.worktrees.read.v1"
     /// Hosts that serve the `fileBytes` read of `readWorktree`.
     public static let worktreesFileBytesV1 = "host.worktrees.fileBytes.v1"
+    /// Hosts whose `fileBytes` read also takes the stash, checkpoint and
+    /// range revisions. Only a headless host.
+    public static let worktreesFileBytesV2 = "host.worktrees.fileBytes.v2"
     /// Hosts that serve the `fileHistory` read of `readWorktree`.
     public static let worktreesFileHistoryV1 = "host.worktrees.fileHistory.v1"
     /// Hosts that serve `listRunScripts` and `restartRun`.
@@ -1601,7 +1604,7 @@ public enum HostProtocolCapability: Sendable {
     /// What only a headless host serves.
     public static let headlessOnly = [worktreesGitV1, reviewsV1, reviewsProviderV1, worktreesStashV1, worktreesOperationsV1,
                                        worktreesCommitEditV1, worktreesCheckpointsV1, worktreesFilesV1, worktreesIntegrateV1,
-                                       worktreesCheckpointRecoveryV1, worktreesHunksV1]
+                                       worktreesCheckpointRecoveryV1, worktreesHunksV1, worktreesFileBytesV2]
 }
 
 /// Opening and closing host tabs from a peer. Older hosts drop unknown client

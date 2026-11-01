@@ -111,6 +111,42 @@ impl Helper {
         self.stdin.flush().expect("flush helper request");
     }
 
+    fn response_before(&mut self, ids: &[u64], budget: Duration) -> Option<Value> {
+        use std::os::fd::AsRawFd;
+        let deadline = std::time::Instant::now() + budget;
+        loop {
+            if !self.stdout.buffer().contains(&b'\n') {
+                let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                if remaining.is_zero() {
+                    return None;
+                }
+                let mut fd = libc::pollfd {
+                    fd: self.stdout.get_ref().as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                if unsafe {
+                    libc::poll(
+                        &mut fd,
+                        1,
+                        remaining.as_millis().min(i32::MAX as u128) as i32,
+                    )
+                } <= 0
+                {
+                    return None;
+                }
+            }
+            let mut line = String::new();
+            if self.stdout.read_line(&mut line).ok()? == 0 {
+                return None;
+            }
+            let value: Value = serde_json::from_str(&line).ok()?;
+            if ids.iter().any(|id| value["id"] == json!(id)) {
+                return Some(value);
+            }
+        }
+    }
+
     fn kill(mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -1999,6 +2035,98 @@ done
         .status()
         .expect("chmod fake adapter");
     assert!(status.success());
+}
+
+#[test]
+fn blocked_exact_reply_keeps_retry_and_close_routable_through_real_helper() {
+    for waiting_method in [None, Some("send"), Some("notify")] {
+        use alas_helper::acp_broker_protocol::AcpRawJSONPayload;
+        use std::os::unix::fs::OpenOptionsExt;
+        let fixture = Fixture::new("blocked-reply-routing");
+        let gate = fixture.root.join("release.fifo");
+        let path = std::ffi::CString::new(gate.to_str().unwrap()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+        std::fs::write(
+            &fixture.adapter,
+            format!(
+                r#"#!/bin/sh
+printf '%s\n' '{{"jsonrpc":"2.0","id":7,"method":"peer/request"}}'
+IFS= read -r gate < '{}'
+cat >/dev/null
+"#,
+                gate.display()
+            ),
+        )
+        .unwrap();
+        let mut helper = Helper::start(&fixture.home);
+        let mut open = fixture.open_params("reply-routing", 0);
+        let context = json!({"acpVersion":2,"payloadFormat":"alas.acp.raw-json.v1"});
+        open["wireContext"] = context.clone();
+        let opened = helper.request("acp/raw/open", open);
+        let mut base = json!({"brokerId":"reply-routing","generation":opened["snapshot"]["metadata"]["generation"],"wireContext":context});
+        let mut attach = base.clone();
+        attach["acknowledgedCursor"] = json!(0);
+        let deadline = poll_deadline();
+        let pending = loop {
+            let snapshot = helper.request("acp/raw/attach", attach.clone())["snapshot"].clone();
+            if let Some(p) = snapshot["pendingRequests"]
+                .as_array()
+                .and_then(|p| p.first())
+            {
+                break p.clone();
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::yield_now();
+        };
+        base["pendingRequestId"] = pending["requestId"].clone();
+        base["originCursor"] = pending["originCursor"].clone();
+        base["operationKey"] = json!("reply");
+        base["frame"] = json!(AcpRawJSONPayload::new(
+            format!(
+                r#"{{"jsonrpc":"2.0","id":7,"result":"{}"}}"#,
+                "x".repeat(512 * 1024)
+            )
+            .into_bytes()
+        ));
+        let original_id = helper.next_id;
+        helper.write_request_without_reading("acp/raw/respondExact", base.clone());
+        let retry_id = helper.next_id;
+        helper.write_request_without_reading("acp/raw/respondExact", base.clone());
+        let retry = helper.response_before(&[original_id, retry_id], Duration::from_secs(5));
+        if let Some(method) = waiting_method {
+            let mut waiting = base.clone();
+            waiting["method"] = json!("session/prompt");
+            waiting["params"] = json!({});
+            waiting["operationKey"] = json!("waiting-write");
+            helper.write_request_without_reading(&format!("acp/raw/{method}"), waiting);
+            // The helper serve loop has enqueued the write before close is sent.
+            assert_eq!(helper.request("ping", json!({}))["ok"], true);
+        }
+        let close_id = helper.next_id;
+        helper.write_request_without_reading("acp/raw/close", base.clone());
+        let close = helper.response_before(&[close_id], Duration::from_secs(5));
+        // Release the adapter on either result, so a failing regression cleans up.
+        if let Ok(mut release) = std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&gate)
+        {
+            let _ = release.write_all(b"release\n");
+        }
+        if close.is_none() {
+            let _ = helper.response_before(&[close_id], Duration::from_secs(5));
+        }
+        assert_eq!(
+            retry.expect("retry must remain routable during pipe write")["result"]["status"],
+            "inFlight"
+        );
+        assert!(
+            close
+                .expect("close must remain routable during pipe write")
+                .get("result")
+                .is_some()
+        );
+    }
 }
 
 #[test]

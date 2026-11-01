@@ -44,7 +44,7 @@ extension GitService {
     /// which uses `--index` instead: that flag reverts both the index *and* the
     /// worktree, so changes disappear from disk as well as from the staged diff.
     public func unstageHunk(worktreePath: URL, path: String, hunk: ParsedDiff.Hunk) async throws {
-        let patch = HunkPatchBuilder.patch(file: path, hunk: hunk, tracked: true)
+        let patch = try await unstagePatch(worktreePath: worktreePath, path: path, hunk: hunk)
         // --cached touches the index only; --index (used by CommitEditing.dropHunk) also reverts the worktree.
         let result = try await Process.git(["apply", "--cached", "--reverse", "-"], cwd: worktreePath, stdin: patch)
         guard result.exitCode == 0 else {
@@ -56,6 +56,21 @@ extension GitService {
                     msg.isEmpty ? "git apply failed (exit \(result.exitCode))" : msg]
             )
         }
+    }
+
+    /// A new file's staged diff is its one hunk from /dev/null: reversed as
+    /// a tracked patch it would leave an empty file in the index, so it goes
+    /// as a new-file patch with the index entry's mode, which removes the entry.
+    private func unstagePatch(worktreePath: URL, path: String, hunk: ParsedDiff.Hunk) async throws -> String {
+        guard hunk.oldStart == 0 else { return HunkPatchBuilder.patch(file: path, hunk: hunk, tracked: true) }
+        let added = try await Process.git(
+            ["--literal-pathspecs", "diff", "--cached", "--name-only", "--diff-filter=A", "--", path], cwd: worktreePath
+        ).stdout
+        guard !added.isEmpty else { return HunkPatchBuilder.patch(file: path, hunk: hunk, tracked: true) }
+        // `<mode> <sha> <stage>\t<path>`
+        let listed = try await Process.git(["--literal-pathspecs", "ls-files", "-s", "--", path], cwd: worktreePath).stdout
+        let mode = listed.split(separator: " ", maxSplits: 1).first.map(String.init) ?? HunkPatchBuilder.defaultUntrackedMode
+        return HunkPatchBuilder.patch(file: path, hunk: hunk, tracked: false, untrackedMode: mode)
     }
 
     /// Create a new commit (or amend HEAD) with the given subject and optional

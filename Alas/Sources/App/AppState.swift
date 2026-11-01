@@ -346,6 +346,8 @@ final class AppState {
             try vmManager.sealGolden(bundle)
         },
         provisioner: GoldenProvisioner.live(manager: vmManager))
+    /// The one Ubuntu image installer, shared by every Linux VM tab.
+    @ObservationIgnored private(set) lazy var linuxGoldenInstaller = LinuxGoldenInstaller(root: vmManager.root)
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
@@ -6664,8 +6666,9 @@ final class AppState {
         guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
             return
         }
-        // Only stopped: an archived worktree can come back with its VM.
-        Task { [vmManager] in await vmManager.stopVM(worktreeID: worktree.id) }
+        // Only stopped: an archived worktree can come back with its VMs. Its VM
+        // tabs closed with the rest when the archive quiesced it.
+        Task { [vmManager] in await vmManager.stopVMs(forWorktree: worktree.id) }
         refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
@@ -7367,15 +7370,17 @@ final class AppState {
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
                 return await self.performComputerUse(command, sessionID: sessionID, worktreeID: worktreeID)
             },
-            vmRun: { [weak self] command, timeoutSeconds, sessionID in
+            vmRun: { [weak self] command, timeoutSeconds, vm, sessionID in
                 guard let self else { return .error("Alas is not available.") }
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
-                return await self.performVMRun(command, timeoutSeconds: timeoutSeconds, sessionID: sessionID, worktreeID: worktreeID)
+                return await self.performVMRun(
+                    command, timeoutSeconds: timeoutSeconds, vm: vm, sessionID: sessionID, worktreeID: worktreeID
+                )
             },
-            vmStatus: { [weak self] sessionID in
+            vmStatus: { [weak self] vm, sessionID in
                 guard let self else { return .error("Alas is not available.") }
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
-                return await self.vmStatus(worktreeID: worktreeID)
+                return await self.vmStatus(worktreeID: worktreeID, vm: vm)
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
@@ -10317,11 +10322,17 @@ final class AppState {
         _ rawPath: String,
         isLocalPathForm: Bool,
         schemeHasSystemHandler: Bool,
-        worktreeRoot: String
+        worktreeRoot: String,
+        baseDirectory: String? = nil
     ) -> AbsoluteLinkRoute {
         let isRelativePath = !rawPath.hasPrefix("/") && (isLocalPathForm
             || (!schemeHasSystemHandler && parseLocalPathPosition(rawPath) != nil))
-        return absoluteLinkRoute(isRelativePath ? worktreeRoot + "/" + rawPath : rawPath, worktreeRoot: worktreeRoot)
+        // A child's cwd is an absolute path as the adapter reported it, so it
+        // is virtualized like any absolute link. Containment still checks the
+        // worktree root, never the base.
+        let base = baseDirectory.flatMap { $0.hasPrefix("/") ? RemotePath.virtualizing($0, like: worktreeRoot) : nil }
+            ?? worktreeRoot
+        return absoluteLinkRoute(isRelativePath ? base + "/" + rawPath : rawPath, worktreeRoot: worktreeRoot)
     }
 
     /// Opens or claims a remote link; nil lets local routing run.
@@ -10353,7 +10364,7 @@ final class AppState {
     /// `session` is the tab's worktree. A Workspace checkout's tab gets a
     /// synthetic root worktree no project lists: its links still resolve
     /// against that root and open in the member worktree that contains them.
-    func transcriptLinkRoute(_ url: URL, in session: Worktree) -> TranscriptLinkRoute {
+    func transcriptLinkRoute(_ url: URL, in session: Worktree, baseDirectory: String? = nil) -> TranscriptLinkRoute {
         let registered = worktree(withId: session.id)
 
         let rawPath: String
@@ -10382,7 +10393,8 @@ final class AppState {
             rawPath,
             isLocalPathForm: isLocalPathForm,
             schemeHasSystemHandler: !isLocalPathForm && NSWorkspace.shared.urlForApplication(toOpen: url) != nil,
-            worktreeRoot: session.path.path
+            worktreeRoot: session.path.path,
+            baseDirectory: baseDirectory
         )
         if let registered {
             if let remote = routeRemoteLink(remoteRoute, worktree: registered) { return remote }
@@ -10400,7 +10412,12 @@ final class AppState {
         }
 
         for candidate in candidates {
-            switch transcriptRoute(forLocalPath: candidate, session: session, opensInSession: registered != nil) {
+            switch transcriptRoute(
+                forLocalPath: candidate,
+                session: session,
+                opensInSession: registered != nil,
+                baseDirectory: baseDirectory
+            ) {
             case .opened:
                 NSApp.activate(ignoringOtherApps: true)
                 return .opened
@@ -10414,11 +10431,16 @@ final class AppState {
         return isLocalPathForm ? .missing(path: rawPath) : .unhandled
     }
 
-    private func transcriptRoute(forLocalPath candidatePath: String, session: Worktree, opensInSession: Bool) -> TranscriptLinkRoute {
+    private func transcriptRoute(
+        forLocalPath candidatePath: String,
+        session: Worktree,
+        opensInSession: Bool,
+        baseDirectory: String?
+    ) -> TranscriptLinkRoute {
         guard let target = localFileOpenTarget(
             candidatePath,
             worktree: session,
-            baseDirectory: session.path
+            baseDirectory: baseDirectory.map { URL(fileURLWithPath: $0) } ?? session.path
         ) else { return .unhandled }
         guard !target.isDirectory else { return .systemOpen(target.url) }
 
@@ -11695,8 +11717,10 @@ final class AppState {
         switch outcome {
         case .deleted, .deletedButNotSaved:
             removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
-            Task { [vmManager] in await vmManager.deleteVM(worktreeID: worktree.id) }
-            tabs.close(worktreeId: worktree.id, tabId: VirtualMachineTabState(ownerKey: worktree.id).id)
+            Task { [vmManager] in await vmManager.deleteVMs(forWorktree: worktree.id) }
+            for guest in [VMGuestOS.macOS, .linux] {
+                tabs.close(worktreeId: worktree.id, tabId: VirtualMachineTabState(ownerKey: worktree.id, guest: guest).id)
+            }
             // Callers that skip the refresh (batches, which refresh once at the
             // end) reconcile the selection themselves afterwards.
             if refreshAfter, selectedWorktreeId == worktree.id {

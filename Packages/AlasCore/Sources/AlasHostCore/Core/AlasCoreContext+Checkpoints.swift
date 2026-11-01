@@ -135,6 +135,18 @@ extension AlasCoreContext {
         }
     }
 
+    /// `path`'s bytes at a listed checkpoint, the old side of its image diff, as `fileBytes` answers.
+    func checkpointBytes(_ id: CheckpointID, path: String, in worktree: Worktree, maxBytes: Int) async throws -> RemoteFileBytesResult {
+        let target = try await requireCheckpointTarget(for: worktree)
+        let listed = try await listedCheckpoint(id, in: target)
+        switch await checkpoints.baselineBytes(target: target, id: listed, path: path, maxBytes: maxBytes) {
+        case .data(let data): return .success(data: data)
+        case .absent: return .failure(reason: .notFound, byteSize: nil, message: nil)
+        case .tooLarge(let byteCount): return .failure(reason: .tooLarge, byteSize: Int(byteCount), message: nil)
+        case .unavailable(let message): return .failure(reason: .gitFailed, byteSize: nil, message: message)
+        }
+    }
+
     func checkpointRestorePreview(_ id: CheckpointID, groupIDs: Set<UUID>?, in worktree: Worktree) async throws -> CheckpointRestorePreview {
         let target = try await requireCheckpointTarget(for: worktree)
         return try await checkpoints.restorePreview(

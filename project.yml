@@ -189,6 +189,9 @@ targets:
       - name: Build Alas Helper
         script: '"${SRCROOT}/scripts/build-alas-helper.sh"'
         basedOnDependencyAnalysis: false
+      - name: Build Alas VM Guest (Linux)
+        script: '"${SRCROOT}/scripts/build-alas-vm-guest-linux.sh"'
+        basedOnDependencyAnalysis: false
       - name: Build Alas CLI
         script: '"${SRCROOT}/scripts/build-alas-cli.sh"'
         basedOnDependencyAnalysis: false

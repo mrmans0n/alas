@@ -1,9 +1,11 @@
+import AlasCore
 import Testing
 @testable import Alas
 
 struct VMTabScreenTests {
     struct Case: CustomTestStringConvertible, Sendable {
         let name: String
+        var guest: VMGuestOS = .macOS
         var runningHere = false
         var startingHere = false
         var slotChoice: [String]?
@@ -13,6 +15,7 @@ struct VMTabScreenTests {
         var customizingHere = false
         var goldenAvailable = false
         var phase: GoldenImageInstaller.Phase = .idle
+        var linuxPhase: LinuxGoldenInstaller.Phase = .idle
         var helper: VMTabScreen.HelperUpdate = .none
         var goldenHelper: VMTabScreen.HelperUpdate = .none
         let expected: VMTabScreen
@@ -55,11 +58,27 @@ struct VMTabScreenTests {
              expected: .updatingHelper),
         Case(name: "another tab's golden helper update leaves the own VM stopped", hasVM: true,
              phase: .awaitingSetup(build: "25A1"), goldenHelper: .updating, expected: .stoppedWhileCustomizing),
+        Case(name: "Linux, no image yet", guest: .linux, expected: .setup),
+        Case(name: "Linux, image downloading", guest: .linux, goldenAvailable: true,
+             linuxPhase: .downloading(0.3), expected: .setup),
+        Case(name: "Linux, download being checked", guest: .linux, linuxPhase: .checking, expected: .setup),
+        Case(name: "Linux, setup failed", guest: .linux, linuxPhase: .failed("offline"), expected: .setup),
+        Case(name: "Linux, sealed image", guest: .linux, goldenAvailable: true,
+             linuxPhase: .sealed(serial: "20260101"), expected: .createVM),
+        Case(name: "Linux ignores a macOS golden awaiting setup", guest: .linux,
+             phase: .awaitingSetup(build: "25A1"), goldenHelper: .available, expected: .setup),
+        Case(name: "Linux VM stopped", guest: .linux, hasVM: true, phase: .awaitingSetup(build: "25A1"),
+             linuxPhase: .converting(0.5), expected: .stopped),
+        Case(name: "Linux VM running", guest: .linux, runningHere: true, hasVM: true, helper: .available,
+             expected: .running(updateHelper: false)),
+        Case(name: "Linux VM running elsewhere", guest: .linux, runningElsewhere: "Alas Dev", hasVM: true,
+             expected: .runningElsewhere(label: "Alas Dev")),
     ]
 
     @Test(arguments: cases)
     func resolvesScreen(_ c: Case) {
         let screen = VMTabScreen.resolve(
+            guest: c.guest,
             runningHere: c.runningHere,
             startingHere: c.startingHere,
             slotChoice: c.slotChoice,
@@ -69,6 +88,7 @@ struct VMTabScreenTests {
             customizingHere: c.customizingHere,
             goldenAvailable: c.goldenAvailable,
             installerPhase: c.phase,
+            linuxInstallerPhase: c.linuxPhase,
             helper: c.helper,
             goldenHelper: c.goldenHelper
         )

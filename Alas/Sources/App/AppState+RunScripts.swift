@@ -166,18 +166,22 @@ extension AppState {
             && !RemotePath.isReserved(worktree.id) && webPreviewRemoteHost(for: worktree) == nil
     }
 
-    /// Opens the worktree's VM tab, creating the VM first when a golden image
-    /// is ready. Without one the tab offers to set it up.
-    func openVirtualMachine(in worktree: Worktree) {
+    /// Opens the worktree's VM tab for `guest`, creating the VM first when
+    /// that guest's golden image is ready. Without one the tab offers to set it up.
+    func openVirtualMachine(in worktree: Worktree, guest: VMGuestOS = .macOS) {
         guard canOpenVirtualMachine(in: worktree) else { return }
-        if vmManager.availableGolden() != nil {
+        let goldenReady = switch guest {
+        case .macOS: vmManager.availableGolden() != nil
+        case .linux: LinuxGoldenInstaller.availableGolden(root: vmManager.root) != nil
+        }
+        if goldenReady {
             do {
-                try vmManager.createVM(worktreeID: worktree.id)
+                try vmManager.createVM(worktreeID: worktree.id, guest: guest)
             } catch {
                 showFileActionError(title: "Can't Create VM", message: error.localizedDescription)
             }
         }
-        let tab = tabs.openVirtualMachine(worktreeId: worktree.id)
+        let tab = tabs.openVirtualMachine(worktreeId: worktree.id, guest: guest)
         activateWorktreeCenterTab(worktreeId: worktree.id, tabId: tab.id)
     }
 

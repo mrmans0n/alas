@@ -49,11 +49,72 @@ struct ACPSubagentRowView: View {
     /// Where symbol previews read files; nil where symbol paths are not relative to it.
     let symbolPreviewRoot: URL?
     var onCancel: (() -> Void)?
+    /// Opens a link from the child transcript against the child's directory.
+    var onOpenLink: ((URL) -> Bool)?
+    /// The worktree the child's directory is shown relative to.
+    var worktreeRoot: String?
+    /// Resolves delegation links and names the other side; nil hides both.
+    var delegation: ACPSubagentDelegationContext?
+    /// The scroller's expansion flag for this row, so navigation can open
+    /// it. Without `onExpandedChange` the row keeps its own state.
+    var isExpanded: Bool = false
+    var onExpandedChange: ((Bool) -> Void)?
 
-    @State private var expanded = false
+    @State private var localExpanded = false
     @Environment(\.theme) private var theme
 
     private var state: ACPSubagentState { run.state }
+
+    private var expanded: Bool { onExpandedChange == nil ? localExpanded : isExpanded }
+
+    private func toggleExpanded() {
+        if let onExpandedChange {
+            onExpandedChange(!isExpanded)
+        } else {
+            localExpanded.toggle()
+        }
+    }
+
+    private var observationCaption: String? {
+        ACPSubagentRowPolicy.observationCaption(
+            config: delegation.flatMap { context in
+                ACPSubagentConfigSummary.make(
+                    agentId: context.rootAgentId,
+                    configOptions: run.configOptions,
+                    isConfirmed: run.isConfigConfirmed)
+            },
+            cwd: run.cwd,
+            worktreeRoot: worktreeRoot,
+            directoriesConfirmed: run.areDirectoriesConfirmed)
+    }
+
+    /// Caption and navigation for a child row that carried a delegation
+    /// message. Read from the observed run, so a link joined later shows up.
+    private func delegationBadge(for message: ACPMessage) -> ACPSubagentDelegationBadge? {
+        guard let delegation else { return nil }
+        let messageId: String?
+        switch message {
+        case .user(_, let id, _, _, _, _), .agent(_, let id, _):
+            messageId = id
+        default:
+            return nil
+        }
+        guard let messageId, let link = run.delegationLinks.first(where: { $0.messageId == messageId }) else {
+            return nil
+        }
+        let viewing = descriptor.subagentSessionId
+        let childNames = delegation.childNames()
+        let caption = ACPSubagentRowPolicy.delegationCaption(
+            link: link, viewingSessionId: viewing, childNames: childNames)
+        let action = delegation.onReveal.flatMap { reveal in
+            ACPSubagentRowPolicy.delegationAction(
+                link: link, viewingSessionId: viewing,
+                parentToolCallIds: delegation.renderedParentToolCallIds(link),
+                childNames: childNames
+            ).map { action in (action.label, { reveal(action.target) }) }
+        }
+        return ACPSubagentDelegationBadge(caption: caption, action: action)
+    }
 
     var body: some View {
         ACPToolCallGroupLane {
@@ -79,9 +140,23 @@ struct ACPSubagentRowView: View {
     }
 
     private var header: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            headerLine
+            if let observationCaption {
+                Text(observationCaption)
+                    .font(.system(size: 10))
+                    .foregroundStyle(theme.color("fg-faint"))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .padding(.leading, 17)
+            }
+        }
+    }
+
+    private var headerLine: some View {
         HStack(spacing: 7) {
             Button {
-                expanded.toggle()
+                toggleExpanded()
             } label: {
                 HStack(spacing: 7) {
                     Image(systemName: "person.2")
@@ -131,8 +206,15 @@ struct ACPSubagentRowView: View {
         }
     }
 
-    @ViewBuilder
     private var childTranscript: some View {
+        childTranscriptContent
+            .environment(\.openURL, OpenURLAction { url in
+                onOpenLink?(url) == true ? .handled : .systemAction
+            })
+    }
+
+    @ViewBuilder
+    private var childTranscriptContent: some View {
         if run.messages.isEmpty {
             Text(state.isTerminal ? "No output." : "Waiting for output…")
                 .font(.system(size: 11))
@@ -172,7 +254,8 @@ struct ACPSubagentRowView: View {
                         trustedImageRoot: trustedImageRoot,
                         symbolPreviewRoot: symbolPreviewRoot,
                         isLiveNarration: index == liveIndex,
-                        isTurnActive: run.isRunning && index > currentTurnUserIndex)
+                        isTurnActive: run.isRunning && index > currentTurnUserIndex,
+                        delegation: delegationBadge(for: message))
                 }
             }
             .padding(.leading, 2)
@@ -192,9 +275,21 @@ private struct ACPSubagentMessageRow: View {
     let symbolPreviewRoot: URL?
     let isLiveNarration: Bool
     let isTurnActive: Bool
-    @Environment(\.theme) private var theme
+    var delegation: ACPSubagentDelegationBadge?
 
     var body: some View {
+        if let delegation {
+            VStack(alignment: .leading, spacing: 4) {
+                ACPSubagentDelegationBadgeView(badge: delegation)
+                content
+            }
+        } else {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
         switch message {
         case .agent(_, _, let buffer):
             ACPSubagentTextRow(buffer: buffer, typography: typography, isLive: isLiveNarration)
@@ -215,6 +310,51 @@ private struct ACPSubagentMessageRow: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+/// What a subagent row needs from the parent session to caption and
+/// navigate delegation links. Closures, so they read the session when the
+/// row renders rather than when the parent row was built.
+struct ACPSubagentDelegationContext {
+    /// Children run in the root's adapter, so its id decodes their config.
+    let rootAgentId: String
+    /// Every known child's display name, keyed by child session id. A link
+    /// participant not in it is the root.
+    let childNames: () -> [String: String]
+    /// The link's candidate sending tool calls present in the parent transcript.
+    let renderedParentToolCallIds: (ACPDelegationLink) -> Set<String>
+    /// Scrolls the parent transcript to a target; nil hides the button.
+    let onReveal: ((ACPDelegationNavigationTarget) -> Void)?
+}
+
+struct ACPSubagentDelegationBadge {
+    /// Nil shows the action alone.
+    var caption: String?
+    /// Nil when nothing outside this row answers to the message.
+    let action: (label: String, perform: () -> Void)?
+}
+
+struct ACPSubagentDelegationBadgeView: View {
+    let badge: ACPSubagentDelegationBadge
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.left.arrow.right")
+                .font(.system(size: 9))
+            if let caption = badge.caption {
+                Text(caption)
+                    .font(.system(size: 10, weight: .medium))
+            }
+            if let action = badge.action {
+                Button(action.label, action: action.perform)
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10))
+                    .underline()
+            }
+        }
+        .foregroundStyle(theme.color("fg-faint"))
     }
 }
 
