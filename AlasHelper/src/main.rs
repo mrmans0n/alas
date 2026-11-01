@@ -265,6 +265,7 @@ fn capabilities() -> Value {
         ,
         "acp": true,
         "acpRawFrames": 1,
+        "acpRawReplies": 1,
         "sessionCoordination": 1,
         "visualMCPRelay": 1,
         "remoteMCPTools": 1
@@ -649,6 +650,12 @@ fn dispatch_acp_job(
         }
     }
 
+    // Exact replies and terminal raw close have their own fences. Close must
+    // remain reachable even when an ordinary write waits behind a blocked reply.
+    if matches!(job.method.as_str(), "acp/raw/respondExact" | "acp/raw/close") {
+        answer_off_thread(job, responses);
+        return;
+    }
     let Some(broker_id) = job.broker_id() else {
         answer_off_thread(job, responses);
         return;

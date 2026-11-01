@@ -601,6 +601,51 @@ impl ACPBrokerState {
         Ok(self.push_event(BrokerEventKind::PendingRequest { request }))
     }
 
+    /// Reuse observed while the original reply is finalizing gets a fresh
+    /// origin immediately. Only the matching claimed original may be replaced.
+    pub fn add_raw_pending_successor(
+        &mut self,
+        request_id: String,
+        expected_origin: EventCursor,
+        adapter_request_id: Value,
+        kind: PendingClientRequestKind,
+        frame: AcpRawJSONPayload,
+    ) -> Result<EventCursor, BrokerError> {
+        if !self
+            .pending_requests
+            .get(&request_id)
+            .is_some_and(|pending| pending.origin_cursor == Some(expected_origin))
+        {
+            return Err(BrokerError::new(
+                BrokerErrorKind::PendingRequestNotFound,
+                "original raw request was not found",
+            ));
+        }
+        self.pending_requests.remove(&request_id);
+        self.add_raw_pending_request(request_id, adapter_request_id, kind, frame)
+    }
+
+    /// The writer carries the claimed request across I/O. Resolution evidence
+    /// belongs to it even if stdout already installed a successor under its key.
+    pub fn complete_raw_reply(
+        &mut self,
+        original: &PendingClientRequest,
+        response: AdapterRPCOutcome,
+    ) -> EventCursor {
+        if self
+            .pending_requests
+            .get(&original.request_id)
+            .is_some_and(|pending| pending.origin_cursor == original.origin_cursor)
+        {
+            self.pending_requests.remove(&original.request_id);
+            self.resolved_requests.insert(original.request_id.clone());
+        }
+        self.push_event(BrokerEventKind::PendingRequestResolved {
+            request_id: original.request_id.clone(),
+            response,
+        })
+    }
+
     pub fn add_adapter_notification(
         &mut self,
         method: impl Into<String>,
@@ -638,6 +683,10 @@ impl ACPBrokerState {
         };
         self.pending_requests.insert(request_id, request.clone());
         Ok(self.push_event(BrokerEventKind::PendingRequest { request }))
+    }
+
+    pub fn pending_request(&self, request_id: &str) -> Option<&PendingClientRequest> {
+        self.pending_requests.get(request_id)
     }
 
     pub fn respond_to_pending_request(

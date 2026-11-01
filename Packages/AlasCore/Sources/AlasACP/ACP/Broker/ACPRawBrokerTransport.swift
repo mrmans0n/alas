@@ -267,7 +267,7 @@ actor ACPRawBrokerTransport {
             // Factual helper status is not an adapter frame and grants no source authority.
             seen.insert(event.cursor)
             summary.withLock { $0.consumed.insert(event.cursor) }
-            if method == "adapter/stdoutClosed" { updatesCont.finish()
+            if method == "adapter/stdoutClosed" || method == "adapter/writeUncertain" { updatesCont.finish()
             framesCont.finish() }
         case .operationStarted, .pendingRequestResolved:
             seen.insert(event.cursor)
@@ -427,13 +427,23 @@ actor ACPRawBrokerTransport {
         _ = try await service.notify(request)
         try await replay()
     }
-    func respond(id: ACPBrokerJSONValue, result: ACPBrokerJSONValue?, error: JSONRPCError?) async throws {
-        guard !terminated, let generation else { throw ACPClientError.notRunning }
-        operationIndex += 1
-        var request = ACPBrokerRespondParams(brokerId: openParams.brokerId, generation: generation, requestId: id,
-            operationKey: .init(rawValue: "\(prefix):respond:\(operationIndex)"), result: result, error: error)
-        request.wireContext = .rawV2
-        _ = try await service.respond(request)
+    func respondExact(expectedConnectionID: UUID, params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
+        guard !terminated, !Task.isCancelled, let generation else { throw ACPBrokerRawReplyError.rejected(.unavailable) }
+        guard expectedConnectionID == connectionID, params.wireContext == .rawV2,
+              params.brokerId.rawValue.utf8.elementsEqual(openParams.brokerId.rawValue.utf8), params.generation == generation else {
+            throw ACPBrokerRawReplyError.rejected(.staleOrigin)
+        }
+        guard params.originCursor.rawValue > 0, Int64(exactly: params.originCursor.rawValue) != nil,
+              !params.operationKey.rawValue.isEmpty else { throw ACPBrokerRawReplyError.rejected(.invalid) }
+        _ = try ACPRawReply.validateFrame(params.frame.bytes)
+        do {
+            let result = try await service.respondExact(params)
+            guard !terminated, !Task.isCancelled, self.generation == generation, result.matches(params) else {
+                throw ACPBrokerRawReplyError.uncertain("Reply attachment or returned identity changed after handoff")
+            }
+            return result
+        } catch let error as ACPBrokerRawReplyError { throw error }
+        catch { throw ACPBrokerRawReplyError.uncertain(error.localizedDescription) }
     }
     func stop(close: Bool) async {
         guard !terminated else { return }
