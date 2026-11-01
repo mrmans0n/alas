@@ -215,7 +215,7 @@ struct ACPSideQuestionCard: View {
                 modelName: side.currentModelDisplayName,
                 enforcesReadOnly: enforcesReadOnly,
                 needsAttention: transcript.pendingPermission != nil || transcript.pendingPlan != nil
-                    || !transcript.pendingUserInputs.isEmpty || hooksReviewShowing,
+                    || transcript.hasBlockingUserInput || hooksReviewShowing,
                 hasPendingInput: hasPendingInput(hooksReviewShowing: hooksReviewShowing),
                 answer: latestAnswer.isEmpty ? nil : latestAnswer,
                 hasContent: !ownMessages.isEmpty || !side.readOnlyBlockedTools.isEmpty || !side.queue.isEmpty || hooksReviewShowing,
@@ -270,7 +270,7 @@ struct ACPSideQuestionCard: View {
                         // A queued plan must not inherit the last one's rejection reason.
                         .id(pendingPlan.id)
                     }
-                    if let request = transcript.pendingUserInputs.first {
+                    if let request = transcript.presentedUserInput {
                         ACPUserInputPrompt(
                             request: request,
                             onRespond: inputActions.onUserInput,

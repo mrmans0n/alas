@@ -84,6 +84,26 @@ struct ACPUserInputFormStateTests {
         #expect(state.submittedContent() == [:])
     }
 
+    @Test("an optional form has content to submit only once something is chosen or typed", arguments: [
+        (nil, nil, false),
+        ("Prod", nil, true),
+        (nil, "mine", true),
+    ] as [(String?, String?, Bool)])
+    func optionalFormContentToSubmit(choice: String?, note: String?, expected: Bool) throws {
+        let request = try formRequest(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#))
+        let state = ACPUserInputFormState(request: request)
+        if let choice {
+            state.toggle(choice, for: try #require(request.fields.first { $0.key == "question_0" }))
+        }
+        if let note {
+            state.textValues["question_0_note"] = note
+            state.markTouched("question_0_note")
+        }
+
+        #expect(state.hasContentToSubmit == expected)
+        #expect(!state.attemptedSubmit)
+    }
+
     @Test("unknown required fields cannot be submitted")
     func unknownRequiredField() throws {
         let request = try formRequest(#"""

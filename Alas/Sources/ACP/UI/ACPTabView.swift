@@ -385,7 +385,8 @@ private struct ACPSessionView: View {
         guard session.transcript.streamingState == .streaming || session.transcript.streamingState == .sending
               || session.transcript.streamingState == .awaitingPermission
               || session.transcript.streamingState == .awaitingInput
-              || !session.transcript.pendingUserInputs.isEmpty
+              // An optional question alone is not something to interrupt.
+              || session.transcript.hasBlockingUserInput
               || session.hasCancellableBackgroundWork
         else { return }
         Task {

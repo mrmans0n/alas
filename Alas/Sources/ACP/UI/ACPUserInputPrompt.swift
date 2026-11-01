@@ -25,7 +25,8 @@ struct ACPUserInputPrompt: View {
         self.onRespond = onRespond
         self.onOpenURL = onOpenURL
         self.showsDismissActions = showsDismissActions
-        self.headerLabel = "Awaiting input"
+        // An optional question blocks nothing; the agent keeps working.
+        self.headerLabel = request.isBlocking ? "Awaiting input" : "Optional"
         _formState = State(initialValue: ACPUserInputFormState(request: request))
     }
 
@@ -91,8 +92,13 @@ struct ACPUserInputPrompt: View {
             if shouldShowPromptText {
                 promptText
             }
-            ForEach(renderedFields) { field in
-                fieldView(field)
+            ForEach(renderedGroups) { group in
+                VStack(alignment: .leading, spacing: 8) {
+                    fieldView(group.field)
+                    if let note = group.note, Self.isRendered(note) {
+                        noteView(note)
+                    }
+                }
             }
         }
         .padding(12)
@@ -122,10 +128,6 @@ struct ACPUserInputPrompt: View {
         request.title != nil && request.title != request.message
     }
 
-    private var renderedFields: [ACPUserInputField] {
-        Self.renderedFields(for: request)
-    }
-
     static func shouldShowMessage(for request: ACPUserInputRequest) -> Bool {
         let renderedFields = renderedFields(for: request)
         // Only the first field sits directly under the message; a later
@@ -139,7 +141,36 @@ struct ACPUserInputPrompt: View {
     }
 
     static func renderedFields(for request: ACPUserInputRequest) -> [ACPUserInputField] {
-        request.fields.filter { $0.isSupported || $0.required }
+        request.fields.filter(isRendered)
+    }
+
+    private static func isRendered(_ field: ACPUserInputField) -> Bool {
+        field.isSupported || field.required
+    }
+
+    /// Each rendered question with its note field, so the note sits directly
+    /// under the question it belongs to.
+    private var renderedGroups: [ACPUserInputRequest.FieldGroup] {
+        request.fieldGroups.filter { Self.isRendered($0.field) }
+    }
+
+    /// A question's note field, under its question rather than as a field of
+    /// its own.
+    private func noteView(_ field: ACPUserInputField) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Add a note")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(theme.color("fg-muted"))
+            fieldControl(field)
+            if formState.shouldShowError(for: field),
+               let error = formState.validationError(for: field) {
+                Text(error)
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.red)
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Add a note")
     }
 
     @ViewBuilder
@@ -322,7 +353,10 @@ struct ACPUserInputPrompt: View {
         HStack(spacing: 8) {
             if showsDismissActions {
                 Button(secondaryActionTitle) { onRespond(request.id, .decline) }
-                Button("Cancel", role: .cancel) { onRespond(request.id, .cancel) }
+                // Skipping an optional question is all there is to dismiss.
+                if request.isBlocking {
+                    Button("Cancel", role: .cancel) { onRespond(request.id, .cancel) }
+                }
             }
             Spacer()
             Button(primaryActionTitle) {
@@ -331,6 +365,8 @@ struct ACPUserInputPrompt: View {
                 }
             }
             .buttonStyle(.borderedProminent)
+            // An empty optional answer would send nothing; Skip says that.
+            .disabled(!request.isBlocking && !formState.hasContentToSubmit)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
@@ -383,15 +419,17 @@ struct ACPUserInputPrompt: View {
         .background(theme.color("bg-0").opacity(0.45))
     }
 
+    /// An optional question must not take focus from the composer.
     private var initialFocusKey: String? {
-        request.fields.first {
+        guard request.isBlocking else { return nil }
+        return request.fields.first {
             $0.schema.type == "string" && $0.schema.options.isEmpty
         }?.key
     }
 
     private var headerTitle: String {
         if case .url = request.mode { return "Continue in browser" }
-        return "Input requested"
+        return request.isBlocking ? "Input requested" : "Codex asks"
     }
 
     private var iconName: String {
@@ -406,7 +444,7 @@ struct ACPUserInputPrompt: View {
 
     private var secondaryActionTitle: String {
         if case .cursor = request.source { return "Skip" }
-        return "Decline"
+        return request.isBlocking ? "Decline" : "Skip"
     }
 
     private func selectionIcon(selected: Bool, multiple: Bool) -> String {

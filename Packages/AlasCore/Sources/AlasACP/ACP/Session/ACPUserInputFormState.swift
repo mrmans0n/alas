@@ -157,6 +157,12 @@ public final class ACPUserInputFormState {
         return content
     }
 
+    /// Whether submitting would send any field. Unlike `submittedContent()`
+    /// it has no side effects, so a view can gate its Submit button on it.
+    public var hasContentToSubmit: Bool {
+        request.fields.contains(where: shouldInclude)
+    }
+
     public func shouldShowError(for field: ACPUserInputField) -> Bool {
         attemptedSubmit || touched.contains(field.key) || !field.isSupported
     }
