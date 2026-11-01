@@ -104,7 +104,13 @@ if [ -z "${cua_driver_version}" ] || [ ! -x "${cua_driver_source_dir}/cua-driver
     echo "embed-ghostty-resources.sh: error: Cua Driver or its licence not found in ${cua_driver_source_dir}" >&2
     exit 1
 fi
-rsync -a "${cua_driver_source_dir}/cua-driver" "${cua_driver_source_dir}/CUA-DRIVER-LICENSE.txt" "${linux_guest_destination_root}/"
+# The licences of the crates Cua Driver links; scripts/generate-cua-driver-notices.sh writes it.
+cua_driver_notices="${SRCROOT}/ThirdParty/cua-driver/THIRD-PARTY-NOTICES.txt"
+if [ ! -f "${cua_driver_notices}" ]; then
+    echo "embed-ghostty-resources.sh: error: Cua Driver third-party notices not found at ${cua_driver_notices}" >&2
+    exit 1
+fi
+rsync -a "${cua_driver_source_dir}/cua-driver" "${cua_driver_source_dir}/CUA-DRIVER-LICENSE.txt" "${cua_driver_notices}" "${linux_guest_destination_root}/"
 chmod +x "${linux_guest_destination_root}/cua-driver"
 
 # Alas CLI. macOS-only; the running Mac's slice is selected by
