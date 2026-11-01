@@ -19,18 +19,6 @@ public enum WebPreviewEgressPolicy {
         }
     }
 
-    /// The forward a host run's preview was opened for: its exact address
-    /// bytes, as resolved, and port.
-    public struct Pin: Equatable, Sendable {
-        public let addresses: Set<Data>
-        public let port: Int
-
-        public init(addresses: Set<Data>, port: Int) {
-            self.addresses = addresses
-            self.port = port
-        }
-    }
-
     /// The raw bytes of a numeric address, ignoring brackets and an IPv6 zone.
     public static func address(_ text: String) -> Data? {
         var host = text.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
@@ -53,12 +41,16 @@ public enum WebPreviewEgressPolicy {
         return mapped || compatible ? Data(bytes[12...]) : address
     }
 
+    /// Tailscale's MagicDNS and service addresses, which terminate on this
+    /// Mac whenever Tailscale runs, whatever its interface addresses are.
+    private static let tailscaleServices: Set<Data> = Set(["100.100.100.100", "fd7a:115c:a1e0::53"].compactMap(address))
+
     /// Why a remote page may not connect to `address`, or nil if it may.
     /// `localAddresses` are this Mac's interface addresses, canonical.
     public static func refusal(for address: Data, localAddresses: Set<Data>) -> Refusal? {
         let address = canonical(address)
         let bytes = [UInt8](address)
-        if localAddresses.contains(address) { return .thisMac }
+        if localAddresses.contains(address) || tailscaleServices.contains(address) { return .thisMac }
         switch bytes.count {
         case 4:
             if bytes[0] == 127 || bytes[0] == 0 { return .thisMac }
@@ -72,14 +64,10 @@ public enum WebPreviewEgressPolicy {
     }
 
     /// Why a remote page may not connect to a name with these addresses, or
-    /// nil if it may connect to the first. Every address must pass, so a
-    /// name cannot mix a public answer with one for this Mac. Only the pin's
-    /// exact address and port may be refused ones.
-    public static func refusal(forAny addresses: [Data], port: Int, pin: Pin?, localAddresses: Set<Data>) -> Refusal? {
-        for address in addresses where pin.map({ $0.port != port || !$0.addresses.contains(address) }) ?? true {
-            if let refusal = refusal(for: address, localAddresses: localAddresses) { return refusal }
-        }
-        return nil
+    /// nil if it may. Every address must pass, so a name cannot mix a public
+    /// answer with one for this Mac.
+    public static func refusal(forAny addresses: [Data], localAddresses: Set<Data>) -> Refusal? {
+        addresses.lazy.compactMap { refusal(for: $0, localAddresses: localAddresses) }.first
     }
 }
 
@@ -87,14 +75,16 @@ public enum WebPreviewHostLookup {
     private static let queue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "Web preview DNS"
-        queue.maxConcurrentOperationCount = 4
+        queue.maxConcurrentOperationCount = 16
         queue.qualityOfService = .utility
         return queue
     }()
 
     /// The numeric addresses `host` resolves to, or nil if the system
     /// resolver fails or takes longer than 5 seconds. A numeric host is
-    /// returned as is.
+    /// returned as is. At most 16 lookups run at once across the app; each
+    /// egress proxy uses at most `WebPreviewEgressProxy.maxResolutions` of
+    /// them, so one page cannot starve other previews.
     public static func resolve(_ host: String) async -> [String]? {
         let host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
         if WebPreviewEgressPolicy.address(host) != nil { return [host] }

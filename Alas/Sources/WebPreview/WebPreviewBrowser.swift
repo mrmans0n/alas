@@ -21,7 +21,7 @@ enum WebPreviewNavigation {
     /// never another name for it.
     @MainActor
     static func allowsResolved(_ url: URL, remoteHost: String?, allowedLoopback: WebPreviewLoopbackPin? = nil,
-                               localAddresses: Set<Data> = WebPreviewLocalAddresses.shared.current,
+                               localAddresses: Set<Data> = WebPreviewLocalAddresses.read(),
                                resolveHost: HostResolver) async -> Bool {
         guard allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else { return false }
         guard remoteHost != nil else { return true }
@@ -31,7 +31,7 @@ enum WebPreviewNavigation {
               !answers.isEmpty else { return false }
         let addresses = answers.compactMap(WebPreviewEgressPolicy.address)
         return addresses.count == answers.count
-            && WebPreviewEgressPolicy.refusal(forAny: addresses, port: 0, pin: nil, localAddresses: localAddresses) == nil
+            && WebPreviewEgressPolicy.refusal(forAny: addresses, localAddresses: localAddresses) == nil
     }
 
     static func captureRect(_ rect: CGRect, viewport: CGSize) -> CGRect? {
@@ -57,12 +57,6 @@ struct WebPreviewLoopbackPin: Equatable {
     func matches(_ url: URL) -> Bool {
         guard let host = url.host(percentEncoded: false) else { return false }
         return Self.normalized(host) == self.host && url.runEndpointPort == port
-    }
-
-    /// The forward's addresses for the egress proxy; `localhost` listens on both.
-    var egressPin: WebPreviewEgressPolicy.Pin {
-        let hosts = host == "localhost" ? ["127.0.0.1", "::1"] : [host]
-        return WebPreviewEgressPolicy.Pin(addresses: Set(hosts.compactMap(WebPreviewEgressPolicy.address)), port: port)
     }
 
     private static func normalized(_ host: String) -> String {
@@ -92,6 +86,10 @@ enum WebPreviewLoopbackRules {
             #"\[::ffff:0:0\][:/]"#,
             #"169\.254\.[0-9.]+[:/]"#,
             #"\[::ffff:a9fe:[0-9a-f]+\][:/]"#,
+            // Tailscale's MagicDNS and service addresses terminate on this Mac.
+            #"100\.100\.100\.100[:/]"#,
+            #"\[::ffff:6464:6464\][:/]"#,
+            #"\[fd7a:115c:a1e0::53\][:/]"#,
         ] + selfAddresses.sorted { $0.lexicographicallyPrecedes($1) }.flatMap(selfHostPatterns)
         var rules = blocked.map { rule(authority + $0, action: "block") }
         if let pin {
@@ -179,16 +177,16 @@ enum WebPreviewLoopbackRules {
 }
 
 /// This Mac's own interface addresses, canonical, which a remote preview
-/// must not reach. Refreshed when the network path changes; remote browsers
-/// recompile their rules on `didChange`.
+/// must not reach. `read()` is current; it is cheap enough to call per
+/// connection. A path monitor posts `didChange` so remote browsers recompile
+/// their rules, and each navigation also checks for a change the monitor
+/// missed, such as a rotated IPv6 temporary address.
 final class WebPreviewLocalAddresses: Sendable {
     static let shared = WebPreviewLocalAddresses()
     static let didChange = Notification.Name("WebPreviewLocalAddressesDidChange")
 
     private let snapshot = Mutex(WebPreviewLocalAddresses.read())
     private let monitor = NWPathMonitor()
-
-    var current: Set<Data> { snapshot.withLock { $0 } }
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] _ in self?.refresh() }
@@ -205,7 +203,7 @@ final class WebPreviewLocalAddresses: Sendable {
         Task { @MainActor in NotificationCenter.default.post(name: Self.didChange, object: nil) }
     }
 
-    private static func read() -> Set<Data> {
+    static func read() -> Set<Data> {
         Set(RemoteNetwork.interfaces().compactMap { WebPreviewEgressPolicy.address($0.host).map(WebPreviewEgressPolicy.canonical) })
     }
 }
@@ -239,6 +237,9 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     private enum Protection { case installed, pending, failed }
     private var loadAwaitingRules: URL?
     private var rules: WKContentRuleList?
+    private var rulesAddresses: Set<Data> = []
+    /// The about:blank load that clears a page whose protection failed.
+    private var blanking: WKNavigation?
     private var proxy: WebPreviewEgressProxy?
     private var addressObserver: NSObjectProtocol?
     let automationState = WebPreviewBrowserAutomationState()
@@ -306,9 +307,14 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
     }
 
+    /// Fails closed: a page already showing stops, since its rules may be stale.
     private func protectionFailed() {
         protection = .failed
         loadAwaitingRules = nil
+        if webView.url != nil {
+            webView.stopLoading()
+            blanking = webView.load(URLRequest(url: Self.blank))
+        }
         loading = false
         error = Self.protectionFailure
     }
@@ -316,15 +322,16 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     /// Compiles the rules for this Mac's current addresses and swaps them in.
     private func installRules() async -> Bool {
         while true {
-            let addresses = WebPreviewLocalAddresses.shared.current
+            let addresses = WebPreviewLocalAddresses.read()
             guard let list = await WebPreviewLoopbackRules.ruleList(allowing: allowedLoopback, selfAddresses: addresses),
                   !isClosed else { return false }
             // The addresses changed while compiling; compile for the new ones.
-            guard addresses == WebPreviewLocalAddresses.shared.current else { continue }
+            guard addresses == WebPreviewLocalAddresses.read() else { continue }
             let controller = webView.configuration.userContentController
             if let rules { controller.remove(rules) }
             controller.add(list)
             rules = list
+            rulesAddresses = addresses
             return true
         }
     }
@@ -335,8 +342,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         if proxy?.isListening == true { return true }
         proxy?.stop()
         let proxy = WebPreviewEgressProxy(
-            pin: allowedLoopback?.egressPin, resolve: resolveHost,
-            localAddresses: { WebPreviewLocalAddresses.shared.current },
+            resolve: resolveHost, localAddresses: { WebPreviewLocalAddresses.read() },
             onBlocked: { [weak self] host, port, refusal in
                 let line = "Blocked request to \(host):\(port): \(refusal.description)"
                 Task { @MainActor in self?.recordBlocked(line) }
@@ -402,8 +408,13 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         error = nil
         address = url.absoluteString
-        // A proxy that died fails every load; restart it.
-        if protection == .installed, remoteHost != nil, proxy?.isListening != true { protection = .failed }
+        blanking = nil
+        // A proxy that died fails every load, and rules for old addresses
+        // miss new ones; set both up again.
+        if protection == .installed, remoteHost != nil,
+           proxy?.isListening != true || rulesAddresses != WebPreviewLocalAddresses.read() {
+            protection = .failed
+        }
         switch protection {
         case .installed: break
         case .pending:
@@ -427,6 +438,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             decisionHandler(.cancel)
             return
         }
+        if blanking != nil, navigationAction.request.url == Self.blank {
+            decisionHandler(.allow)
+            return
+        }
         guard let url = navigationAction.request.url,
               WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else {
             error = "Navigation blocked. Previews accept HTTP(S) pages and cannot open remote localhost endpoints."
@@ -440,6 +455,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
                  decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
         guard !isClosed else {
             decisionHandler(.cancel)
+            return
+        }
+        if blanking != nil, navigationResponse.response.url == Self.blank {
+            decisionHandler(.allow)
             return
         }
         guard let url = navigationResponse.response.url,
@@ -483,6 +502,8 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         guard !isClosed else { return }
         navigationGeneration += 1
         automationDocumentWillChange(navigation)
+        // Clearing a failed page keeps its error and console.
+        guard navigation !== blanking else { return }
         loading = true
         error = nil
         consoleErrors = []
@@ -492,6 +513,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         guard !isClosed else { return }
         loading = false
+        if navigation === blanking {
+            blanking = nil
+            return
+        }
         canGoBack = webView.canGoBack
         canGoForward = webView.canGoForward
         guard let url = webView.url, WebPreviewNavigation.allows(url, remoteHost: remoteHost, allowedLoopback: allowedLoopback) else {
@@ -580,6 +605,8 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             }
         }
     }
+
+    private static let blank = URL(string: "about:blank")!
 
     private static let protectionFailure = "This preview could not block requests to this Mac, so it will not load pages."
 

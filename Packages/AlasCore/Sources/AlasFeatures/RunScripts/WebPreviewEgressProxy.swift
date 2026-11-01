@@ -5,12 +5,16 @@ import Synchronization
 /// The HTTP CONNECT proxy a remote-owned web preview's data store uses, so
 /// every connection its page opens by name is checked against the address it
 /// actually connects to. Each name is resolved once, every answer is vetted
-/// by `WebPreviewEgressPolicy`, and the proxy connects to the first answer as
-/// a numeric address, so DNS rebinding has nothing to act on.
+/// by `WebPreviewEgressPolicy`, and the proxy connects to the answers in
+/// order as numeric addresses, so DNS rebinding has nothing to act on.
 ///
 /// One proxy per browser, on `127.0.0.1` at an ephemeral port. WebKit sends
 /// IP literals for loopback and this Mac's own addresses around any proxy;
 /// the preview's content rules block those.
+///
+/// It holds at most `maxTunnels` connections, answering `503` beyond, and
+/// resolves at most `maxResolutions` names at once; further CONNECTs wait
+/// their turn, in order.
 ///
 /// `@unchecked Sendable` because all mutable state, and every `NWListener`
 /// and `NWConnection` callback, is confined to `queue`.
@@ -33,9 +37,10 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     }
 
     static let headLimit = 8 * 1024
+    public static let maxResolutions = 4
     private static let headTimeout: DispatchTimeInterval = .seconds(5)
 
-    private let pin: WebPreviewEgressPolicy.Pin?
+    private let maxTunnels: Int
     private let resolve: Resolve
     private let localAddresses: @Sendable () -> Set<Data>
     private let onBlocked: OnBlocked
@@ -43,15 +48,18 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     private var listener: NWListener?
     private var stopped = false
     private var tunnels: [ObjectIdentifier: Tunnel] = [:]
+    private var resolving = 0
+    /// CONNECTs waiting for a resolution slot, in arrival order.
+    private var awaitingResolution: [() -> Void] = []
     private let listening = Mutex(false)
 
     /// `localAddresses` is read for every CONNECT. `onBlocked` is called on
     /// an internal queue.
     public init(
-        pin: WebPreviewEgressPolicy.Pin?, resolve: @escaping Resolve,
-        localAddresses: @escaping @Sendable () -> Set<Data>, onBlocked: @escaping OnBlocked
+        resolve: @escaping Resolve, localAddresses: @escaping @Sendable () -> Set<Data>,
+        maxTunnels: Int = 128, onBlocked: @escaping OnBlocked
     ) {
-        self.pin = pin
+        self.maxTunnels = maxTunnels
         self.resolve = resolve
         self.localAddresses = localAddresses
         self.onBlocked = onBlocked
@@ -117,6 +125,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
 
     private func accept(_ connection: NWConnection) {
         guard !stopped else { return connection.cancel() }
+        let full = tunnels.count >= maxTunnels
         let tunnel = Tunnel(client: connection)
         let id = ObjectIdentifier(tunnel)
         tunnels[id] = tunnel
@@ -127,6 +136,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
             }
         }
         connection.start(queue: queue)
+        if full { return respond(id, "503 Service Unavailable") }
         let timeout = DispatchWorkItem { [weak self] in self?.close(id) }
         tunnel.timeout = timeout
         queue.asyncAfter(deadline: .now() + Self.headTimeout, execute: timeout)
@@ -155,10 +165,28 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         case .failure(let status): return respond(id, status.rawValue)
         case .success(let value): target = value
         }
+        awaitingResolution.append { [weak self] in self?.resolve(id, target: target, rest: rest) }
+        resolveNext()
+    }
+
+    private func resolveNext() {
+        guard resolving < Self.maxResolutions, !awaitingResolution.isEmpty else { return }
+        awaitingResolution.removeFirst()()
+    }
+
+    private func resolve(_ id: ObjectIdentifier, target: (host: String, port: Int), rest: Data) {
+        // A tunnel that closed while waiting needs no lookup.
+        guard tunnels[id] != nil else { return resolveNext() }
+        resolving += 1
         let resolve = resolve
         Task { [weak self] in
             let answers = await resolve(target.host)
-            self?.queue.async { [weak self] in self?.vet(id, target: target, answers: answers, rest: rest) }
+            self?.queue.async { [weak self] in
+                guard let self else { return }
+                resolving -= 1
+                resolveNext()
+                vet(id, target: target, answers: answers, rest: rest)
+            }
         }
     }
 
@@ -166,26 +194,28 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         guard tunnels[id] != nil else { return }
         let addresses = answers?.compactMap(WebPreviewEgressPolicy.address) ?? []
         guard !addresses.isEmpty, addresses.count == answers?.count else { return respond(id, "502 Bad Gateway") }
-        if let refusal = WebPreviewEgressPolicy.refusal(
-            forAny: addresses, port: target.port, pin: pin, localAddresses: localAddresses()) {
+        if let refusal = WebPreviewEgressPolicy.refusal(forAny: addresses, localAddresses: localAddresses()) {
             onBlocked(target.host, target.port, refusal)
             return respond(id, "403 Forbidden")
         }
-        connect(id, to: addresses[0], port: target.port, rest: rest)
+        connect(id, to: addresses[...], port: target.port, rest: rest)
     }
 
-    private func connect(_ id: ObjectIdentifier, to address: Data, port: Int, rest: Data) {
+    /// Connects to the first address, falling back to the next on failure.
+    private func connect(_ id: ObjectIdentifier, to addresses: ArraySlice<Data>, port: Int, rest: Data) {
+        guard let tunnel = tunnels[id] else { return }
+        guard let address = addresses.first else { return respond(id, "502 Bad Gateway") }
         let host: NWEndpoint.Host? = address.count == 4
             ? IPv4Address(address).map { .ipv4($0) } : IPv6Address(address).map { .ipv6($0) }
-        guard let tunnel = tunnels[id], let host, let port = NWEndpoint.Port(rawValue: UInt16(port)) else {
-            return respond(id, "502 Bad Gateway")
+        guard let host, let endpointPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
+            return connect(id, to: addresses.dropFirst(), port: port, rest: rest)
         }
         let options = NWProtocolTCP.Options()
         options.connectionTimeout = 30
         let parameters = NWParameters(tls: nil, tcp: options)
         // The vetted address is the destination; no system proxy may stand in.
         parameters.preferNoProxies = true
-        let upstream = NWConnection(host: host, port: port, using: parameters)
+        let upstream = NWConnection(host: host, port: endpointPort, using: parameters)
         tunnel.upstream = upstream
         upstream.stateUpdateHandler = { [weak self] state in
             guard let self, let tunnel = tunnels[id], tunnel.upstream === upstream else { return }
@@ -202,7 +232,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
                 upstream.stateUpdateHandler = nil
                 upstream.cancel()
                 tunnel.upstream = nil
-                respond(id, "502 Bad Gateway")
+                connect(id, to: addresses.dropFirst(), port: port, rest: rest)
             default:
                 break
             }

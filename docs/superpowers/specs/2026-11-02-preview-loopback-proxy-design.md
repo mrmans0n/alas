@@ -143,10 +143,14 @@ bytes.
     the embedded IPv4 address.
   - Any address in the injected `localAddresses` set. That set is compared as
     canonical bytes, so the IPv6 zone is dropped and mapped forms are unmapped.
-- The pin may match: the forward's host and port, where the host is loopback
-  by construction. WebKit sends loopback literals directly today, so the proxy
-  never sees the pin. Allowing it keeps the forward working if that bypass ever
-  changes.
+    The app reads it with `getifaddrs` for every CONNECT, so no change can be
+    missed between path updates.
+  - Tailscale's service addresses `100.100.100.100` and `fd7a:115c:a1e0::53`,
+    which terminate on this Mac.
+- The proxy has no pin. WebKit sends the forward's loopback literal, and
+  `localhost`, around the proxy, so the content rules' exemption and the
+  navigation check are what let the forward through. (Implementation review
+  dropped the pin the first version carried.)
 - Parameterized tests cover the table above.
 
 **`WebPreviewEgressProxy`** also lives in `AlasFeatures`. It uses Network.framework
@@ -224,12 +228,14 @@ The test policy applies, so these are few and sharp.
 - `AlasCoreTests`, extending an existing suite:
   - A parameterized `WebPreviewEgressPolicy` table covering IPv4, IPv6, mapped
     and compatible forms, the local set, and the pin.
-  - One real proxy test with loopback servers. An `NWConnection` client sends
-    `CONNECT` through the proxy to an injected resolver that maps
-    `allowed.invalid` to a loopback echo server, with the pin set to that
-    server's port, and `blocked.invalid` to `127.0.0.1` on another port. The
-    test asserts `200` plus echoed bytes for the first, and `403` with no
-    accept on the second server. Hermetic: no external DNS, no WebKit.
+  - One real proxy test. An `NWConnection` client sends `CONNECT` through the
+    proxy to an injected resolver that maps `allowed.invalid` to this Mac's LAN
+    address, where an echo server listens and which the injected
+    `localAddresses` leaves out so it stands in for a remote host, and
+    `blocked.invalid` to `127.0.0.1`. The test asserts `200` plus echoed bytes
+    for the first, and `403` with no accept for the second. No external DNS,
+    no WebKit. (With no proxy pin, a loopback destination can no longer play
+    the allowed one.)
 - `AlasTests`:
   - One WebKit integration test that pins the bypass assumption. A remote
     browser with an injected resolver loads a page from the proxy's pinned
@@ -261,8 +267,17 @@ The test policy applies, so these are few and sharp.
   block all own addresses regardless, so a change in either direction stays
   covered. The WebKit integration test catches the case where `proxyConfigurations`
   stops applying at all.
-- **Other processes on this Mac can use the proxy port.** They only reach
-  destinations they could already reach directly.
+- **Other processes on this Mac can use a running remote preview's proxy.**
+  Web pages cannot: browsers forbid `CONNECT` from `fetch` and XHR. A local
+  process can, and the proxy then reaches LAN hosts as Alas, under Alas's
+  Local Network permission rather than its own. It still cannot reach this
+  Mac's own services. This is an accepted risk: any local process running as
+  the user can already drive Alas in other ways.
+- **Limits.** A proxy holds at most 128 tunnels, answering `503` beyond, and
+  resolves at most 4 names at once, with further CONNECTs waiting in order.
+  Lookups share an app-wide pool of 16, so one page cannot starve other
+  previews or the navigation check. A connect that fails moves on to the
+  name's next vetted address.
 - **DNS prefetch.** WebKit may still query names; it opens no connections.
 
 ## Risks

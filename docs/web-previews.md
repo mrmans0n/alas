@@ -59,13 +59,16 @@ scripts, styles, frames, WebSockets, workers, and redirects.
   rebinding has nothing to act on. A refused request fails in the page and
   adds a console line such as `Blocked request to app.test:5432: resolves to
   this Mac`, which `preview_console` and captures include. The proxy is set
-  with failover off: if it stops, requests fail rather than going direct.
+  with failover off: if it stops, requests fail rather than going direct. Each
+  proxy keeps at most 128 connections open, answering `503` beyond, and looks
+  up at most 4 names at once; further requests wait their turn.
 - **IP literals** for loopback and this Mac's own addresses never reach a
   proxy, because WebKit connects to them directly. A WebKit content rule list
   blocks them by URL: `localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`,
   `[::1]`, `[::]`, `169.254.0.0/16`, IPv4-mapped forms of these, and each of
-  this Mac's current interface addresses. The list is recompiled when the
-  Mac's addresses change.
+  this Mac's current interface addresses, and Tailscale's service addresses
+  `100.100.100.100` and `fd7a:115c:a1e0::53`. The list is recompiled when the
+  Mac's addresses change, and checked again before each navigation.
 
 A paired host's forwarded preview keeps exactly its forward's address and port
 reachable; every other address on this Mac stays blocked. If the rules cannot
@@ -86,6 +89,10 @@ usually one of them. Known gaps:
   the rules are recompiled, typically within tens of milliseconds. Names are
   refused immediately.
 - WebKit may still look up names for DNS prefetch; that opens no connection.
+- Other processes on this Mac can send `CONNECT` to a running remote
+  preview's proxy and reach LAN hosts under Alas's Local Network permission.
+  Web pages cannot, since browsers forbid `CONNECT`, and nothing can reach this
+  Mac's own services through it. Alas accepts this risk.
 
 ## MCP and CLI automation
 
