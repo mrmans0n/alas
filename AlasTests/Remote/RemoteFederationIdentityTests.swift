@@ -57,7 +57,11 @@ struct RemoteFederationIdentityTests {
                 }
             }
             try server.start(port: 0)
-            for _ in 0..<100 where server.port == nil {
+            // The listener reports `.ready` asynchronously; a loaded CI runner
+            // can take well over two seconds, so wait on the same deadline
+            // the rest of this suite uses.
+            let deadline = Date().addingTimeInterval(20)
+            while server.port == nil, Date() < deadline {
                 try await Task.sleep(nanoseconds: 20_000_000)
             }
             port = try #require(server.port)
