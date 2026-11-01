@@ -5288,7 +5288,10 @@ extension ACPSessionRunner {
         let before = session.transcript.messages.count
         let index = session.appendAnswerRow(text: text)
         var dirty: Set<Int> = []
-        if session.transcript.streamingState != .idle {
+        // Only a live turn has a running message to split; a session parked
+        // on a permission or blocking question with no foreground turn has
+        // finished its output, like an idle one.
+        if session.foregroundTurnActive() || session.transcript.streamingState == .sending {
             dirty = beginOutputBoundary(beforeUserMessageAt: index).dirty
         }
         persistIndices(dirty.union(before...index))

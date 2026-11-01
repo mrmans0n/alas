@@ -5976,9 +5976,13 @@ struct ACPSessionRunnerTests {
     /// it: a user row that is not a new prompt, so the title stays. During a
     /// turn it splits the agent's running message like a native steer; at
     /// idle there is nothing to split, so a restored session's late-replay
-    /// guard stays closed and the finished turn's rows stay untouched.
-    @Test("an optional answer row splits only a running agent message", arguments: [true, false])
-    func optionalAnswerRowSplitsStream(streaming: Bool) async throws {
+    /// guard stays closed and the finished turn's rows stay untouched. A
+    /// session parked on a blocking wait with no foreground turn is not live.
+    @Test("an optional answer row splits only a running agent message", arguments: [
+        ACPSession.StreamingState.streaming, .idle, .awaitingInput,
+    ])
+    func optionalAnswerRowSplitsStream(state: ACPSession.StreamingState) async throws {
+        let streaming = state == .streaming
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
         let store = try ACPSessionStore(path: url.path)
         try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
@@ -6004,9 +6008,12 @@ struct ACPSessionRunnerTests {
         }
 
         chunk("Before")
-        if !streaming {
-            // The turn ended, and a restored session's replay closed the guard.
-            session.transcript.streamingState = .idle
+        if streaming {
+            session.foregroundTurnActive = { true }
+        } else {
+            // The turn ended (or parked with no foreground turn), and a
+            // restored session's replay closed the guard.
+            session.transcript.streamingState = state
             session.allowsStreamingBoundaryCrossing = false
         }
         runner.recordOptionalAnswer("> Q\n\nA")
