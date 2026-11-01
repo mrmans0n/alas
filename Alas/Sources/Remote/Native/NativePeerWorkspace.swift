@@ -285,7 +285,7 @@ struct NativePeerWorkspace: Equatable {
             guard reason == .gitFailed else { return message }
             let line: String = message.split(whereSeparator: \.isNewline)
                 .map { $0.trimmingCharacters(in: .whitespaces) }.first(where: { !$0.isEmpty }) ?? ""
-            return "Git failed on the host: " + (line.count > 200 ? String(line.prefix(200)) + "…" : line)
+            return line.count > 200 ? String(line.prefix(200)) + "…" : line
         }
         switch reason {
         case .tooLarge:

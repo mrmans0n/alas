@@ -310,8 +310,8 @@ struct NativePeerWorkspaceTests {
         (.notFound, nil, nil, "The host doesn't have this revision of the file."),
         (.pathRejected, nil, "", "The host refused to read this file."),
         (.notFound, nil, "This stash changed since it was listed.\n", "This stash changed since it was listed."),
-        (.gitFailed, nil, "\n  fatal: bad object\nhint: run fsck\n", "Git failed on the host: fatal: bad object"),
-        (.gitFailed, nil, String(repeating: "x", count: 250), "Git failed on the host: \(String(repeating: "x", count: 200))…"),
+        (.gitFailed, nil, "\n  fatal: bad object\nhint: run fsck\n", "fatal: bad object"),
+        (.gitFailed, nil, String(repeating: "x", count: 250), "\(String(repeating: "x", count: 200))…"),
         (.unknown, nil, nil, "The host couldn't read this image."),
     ])
     func refusedImageSideSaysWhy(reason: RemoteFileAccessReason, byteSize: Int?, message: String?, expected: String) {
