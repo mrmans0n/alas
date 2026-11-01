@@ -96,6 +96,16 @@ struct LinuxCloudInitTests {
         for file in LinuxGuestSetup.lockerOffFiles {
             #expect(commands.contains { $0.hasPrefix("cat > \(file.path) ") })
         }
+
+        // On an older guest a per-user screensaver channel overrides those defaults and a locker may
+        // run, so Update helper also drops both before the restart, which ends the update script.
+        // The pkill is anchored: an unanchored -f would match the script's own command line.
+        let update = LinuxGuestSetup.updateCommands(user: "alas")
+        #expect(update == commands.dropLast() + [
+            #"rm -f "$(getent passwd alas | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#,
+            "pkill -f '^(/usr/bin/)?xfce4-screensaver' || true",
+            commands.last!,
+        ])
     }
 
     @Test

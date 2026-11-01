@@ -110,6 +110,27 @@ struct VMComputerUseRouteTests {
         #expect(try Self.object(reply) == Self.object(expected))
     }
 
+    /// A Linux helper answers computer use only when its hello says so; an older one that only
+    /// runs commands is asked to be updated, and one with no capabilities at all is unsupported.
+    @Test(arguments: [
+        (nil, VMComputerUseRoute.LinuxComputerUseDecision.unsupported),
+        (["run"], .outdated),
+        (["run", "computer_use"], .forward),
+    ] as [([String]?, VMComputerUseRoute.LinuxComputerUseDecision)])
+    func linuxComputerUseDecision(capabilities: [String]?, expected: VMComputerUseRoute.LinuxComputerUseDecision) {
+        #expect(VMComputerUseRoute.linuxComputerUse(capabilities: capabilities) == expected)
+    }
+
+    /// The agent is told to update the helper: never that Linux can't do computer use.
+    @Test func linuxRouteWithoutComputerUseAsksForUpdate() {
+        let decision = VMComputerUseRoute.linuxComputerUse(capabilities: ["run"])
+        #expect(decision.refusal == "computer_vm_helper_outdated: This Linux VM's helper can't do computer use yet. Click Update helper in its VM tab.")
+        #expect(decision.refusal == VMComputerUseRoute.linuxHelperOutdatedMessage)
+        #expect(VMComputerUseRoute.linuxComputerUse(capabilities: nil).refusal
+            == "computer_vm_unsupported: Computer use isn't available in Linux VMs yet.")
+        #expect(VMComputerUseRoute.linuxComputerUse(capabilities: ["computer_use"]).refusal == nil)
+    }
+
     @Test func runReplyKeepsANullExitCodeForAKilledCommand() throws {
         let result = VMGuestRunResult(exitCode: nil, stdout: "a", stderr: "b", truncated: true, timedOut: true)
         let expected = #"{"exit_code":null,"stdout":"a","stderr":"b","truncated":true,"timed_out":true}"#

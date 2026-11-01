@@ -3,7 +3,8 @@ import Foundation
 /// The setup a Linux guest needs for the Alas helper and computer use, shared
 /// by the golden image's first boot (cloud-init) and a live guest's Update
 /// helper. Both run `commands(user:)` as root with the `alas` share mounted at
-/// `LinuxCloudInit.shareMountPoint`.
+/// `LinuxCloudInit.shareMountPoint`; Update helper runs it as
+/// `updateCommands(user:)`.
 public enum LinuxGuestSetup {
     public static let helperSource = "/mnt/alas/helper/alas-vm-guest-linux"
     public static let helperPath = "/usr/local/bin/alas-vm-guest"
@@ -74,5 +75,19 @@ public enum LinuxGuestSetup {
                 "dpkg -s mousepad >/dev/null 2>&1 || { apt-get -o DPkg::Lock::Timeout=300 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y mousepad; }",
                 "runuser -u \(user) -- env XDG_RUNTIME_DIR=/run/user/$(id -u \(user)) systemctl --user restart alas-vm-guest || true",
             ]
+    }
+
+    /// `commands(user:)` for a guest that has been running: before the
+    /// restart, which kills the script with the helper's service, it removes
+    /// `user`'s own screensaver channel (older guests wrote one, and it
+    /// overrides the `/etc/xdg` defaults) and ends a running locker. The
+    /// locker's name is longer than the 15 characters `pkill -x` sees, so it
+    /// matches the command line, anchored so it can't match this script's.
+    public static func updateCommands(user: String) -> [String] {
+        let setup = commands(user: user)
+        return setup.dropLast() + [
+            #"rm -f "$(getent passwd \#(user) | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#,
+            "pkill -f '^(/usr/bin/)?xfce4-screensaver' || true",
+        ] + setup.suffix(1)
     }
 }

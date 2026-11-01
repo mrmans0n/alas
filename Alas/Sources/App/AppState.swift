@@ -328,8 +328,9 @@ final class AppState {
     let acpModelCatalog: ACPAgentModelCatalog
     /// Worktree VMs (and the golden VM during its setup) this process runs.
     @ObservationIgnored let vmManager = WorktreeVMManager()
-    /// Sessions that made a computer use call in their worktree's VM, by worktree id, until the
-    /// session ends; turn and session ends are forwarded to the guest only for them.
+    /// Sessions that made a computer use call in their worktree's VM, by the VM's registry id
+    /// (`VMIdentity.recordID`), until the session ends; turn and session ends are forwarded to
+    /// the guest only for them.
     @ObservationIgnored var vmComputerUseSessions: [String: String] = [:]
     /// VM sessions that made a call this turn; the badge shows for them as for the host driver.
     var vmDrivingSessions: Set<String> = []

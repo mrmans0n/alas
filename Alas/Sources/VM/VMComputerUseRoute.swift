@@ -26,7 +26,33 @@ enum VMComputerUseRoute: Equatable {
     static let vmUnsupportedMessage = "computer_vm_unsupported: \(WorktreeVMManager.unsupportedMessage)."
     static let vmAmbiguousMessage =
         #"computer_vm_ambiguous: This worktree has a macOS and a Linux VM. Pass vm: "macos" or "linux"."#
+    /// Only for a Linux helper whose hello lists no capabilities at all.
     static let linuxComputerUseUnsupportedMessage = "computer_vm_unsupported: Computer use isn't available in Linux VMs yet."
+    static let linuxHelperOutdatedMessage =
+        "computer_vm_helper_outdated: This Linux VM's helper can't do computer use yet. Click Update helper in its VM tab."
+
+    /// Whether a Linux helper takes `computer_*` calls, from its hello's `capabilities`.
+    enum LinuxComputerUseDecision: Equatable {
+        case forward
+        /// It only runs commands: Update helper installs one that can.
+        case outdated
+        /// Its hello says nothing about what it can do.
+        case unsupported
+
+        /// The error the agent gets; nil when the call goes to the guest.
+        var refusal: String? {
+            switch self {
+            case .forward: nil
+            case .outdated: VMComputerUseRoute.linuxHelperOutdatedMessage
+            case .unsupported: VMComputerUseRoute.linuxComputerUseUnsupportedMessage
+            }
+        }
+    }
+
+    static func linuxComputerUse(capabilities: [String]?) -> LinuxComputerUseDecision {
+        guard let capabilities else { return .unsupported }
+        return capabilities.contains(VMGuestHello.computerUseCapability) ? .forward : .outdated
+    }
 
     /// The reply to a call naming a guest the worktree has no VM of.
     static func vmMissingMessage(for guest: VMGuestOS) -> String {

@@ -37,8 +37,8 @@ enum VMTabScreen: Equatable {
     /// the golden's awaiting setup.
     ///
     /// A Linux tab follows `linuxInstallerPhase` alone: its image has no
-    /// setup by hand, no customizing and no helper update, and it takes no
-    /// macOS VM slot.
+    /// setup by hand and no customizing, and it takes no macOS VM slot. Its
+    /// helper update keeps the VM running, so it shows only while it runs.
     static func resolve(
         guest: VMGuestOS = .macOS,
         runningHere: Bool,
@@ -57,7 +57,8 @@ enum VMTabScreen: Equatable {
         if guest == .linux {
             return resolveLinux(
                 runningHere: runningHere, startingHere: startingHere, runningElsewhere: runningElsewhere,
-                loaded: loaded, hasVM: hasVM, goldenAvailable: goldenAvailable, installerPhase: linuxInstallerPhase)
+                loaded: loaded, hasVM: hasVM, goldenAvailable: goldenAvailable, installerPhase: linuxInstallerPhase,
+                helper: helper)
         }
         if helper == .updating { return .updatingHelper }
         if runningHere { return .running(updateHelper: helper == .available) }
@@ -83,9 +84,10 @@ enum VMTabScreen: Equatable {
         loaded: Bool,
         hasVM: Bool,
         goldenAvailable: Bool,
-        installerPhase: LinuxGoldenInstaller.Phase
+        installerPhase: LinuxGoldenInstaller.Phase,
+        helper: HelperUpdate
     ) -> VMTabScreen {
-        if runningHere { return .running(updateHelper: false) }
+        if runningHere { return helper == .updating ? .updatingHelper : .running(updateHelper: helper == .available) }
         if startingHere { return .starting }
         if let runningElsewhere { return .runningElsewhere(label: runningElsewhere) }
         if !loaded { return .loading }

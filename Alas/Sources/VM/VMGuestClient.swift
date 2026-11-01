@@ -22,6 +22,9 @@ struct VMGuestHello: Equatable, Sendable {
     var guestKind: String? = nil
     /// What the helper can do, such as `"run"`; nil from a macOS helper, which can do everything.
     var capabilities: [String]? = nil
+
+    /// The capability a Linux helper lists once it answers `computer_*` calls.
+    static let computerUseCapability = "computer_use"
 }
 
 /// Talks to the Alas VM Guest helper over one connection at a time, multiplexing requests by id.
@@ -58,8 +61,8 @@ actor VMGuestClient {
             }
         }
 
-        /// Remedies a Linux guest can take: its helper is installed at first boot and has no
-        /// Install or Update helper flow.
+        /// Remedies a Linux guest can take: its helper is installed at first boot, and Update
+        /// helper reinstalls it only through a helper that still answers `run`.
         private var linuxMessage: String? {
             switch self {
             case .helperMissing:
@@ -158,7 +161,8 @@ actor VMGuestClient {
         try await sayHello(on: connected())
     }
 
-    func perform(_ command: ComputerUseCommand, sessionID: String) async -> AlasCLIResponse {
+    /// `guest` picks the remedies in a failure's text.
+    func perform(_ command: ComputerUseCommand, sessionID: String, guest: VMGuestOS = .macOS) async -> AlasCLIResponse {
         let request: Data
         do {
             request = try command.requestJSON()
@@ -172,7 +176,7 @@ actor VMGuestClient {
             }
             return response
         } catch {
-            return .error((error as? Failure ?? .stopped).message)
+            return .error((error as? Failure ?? .stopped).message(for: guest))
         }
     }
 

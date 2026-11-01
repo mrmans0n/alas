@@ -254,8 +254,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                     + "vm_status tells whether it runs and where to put builds (copy to transfer_host_path on the Mac, "
                     + "find them at transfer_guest_path in the VM); vm_run runs a shell command in the VM, "
                     + "for example to open a built app. "
-                    + "A worktree may have a macOS and a Linux VM: then pass vm: \"macos\" or \"linux\" to these tools; "
-                    + "computer tools work only in the macOS VM.")
+                    + "A worktree may have a macOS and a Linux VM: then pass vm: \"macos\" or \"linux\" to these tools. "
+                    + "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.")
             }
             if !isDelegated {
                 lines.append(visualPolicy)
