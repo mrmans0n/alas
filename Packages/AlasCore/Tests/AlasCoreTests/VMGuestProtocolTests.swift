@@ -38,4 +38,18 @@ struct VMGuestProtocolTests {
         let message = try JSONDecoder().decode(VMGuestMessage.self, from: json)
         #expect(message == .helloReply(guestVersion: "1.0", protocolRevision: 0, accessibility: true, screenRecording: true))
     }
+
+    /// The Rust Linux guest helper round-trips the same file, so both sides agree on the wire.
+    @Test func sharedFixtureRoundTripsEveryMessage() throws {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            .appendingPathComponent("Fixtures/vm-guest-protocol.json")
+        let samples = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [[String: Any]])
+        #expect(!samples.isEmpty)
+        for sample in samples {
+            let message = try JSONDecoder().decode(
+                VMGuestMessage.self, from: JSONSerialization.data(withJSONObject: sample))
+            let reencoded = try JSONSerialization.jsonObject(with: JSONEncoder().encode(message))
+            #expect(reencoded as? NSDictionary == sample as NSDictionary, "\(sample)")
+        }
+    }
 }

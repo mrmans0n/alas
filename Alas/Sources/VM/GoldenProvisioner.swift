@@ -496,6 +496,15 @@ struct GuestSetupSteps {
     func waitUntil(
         timeout: Duration, interval: Duration, _ condition: @MainActor () async -> Bool
     ) async -> Bool {
+        await Self.waitUntil(timeout: timeout, interval: interval, sleep: sleep, now: now, condition)
+    }
+
+    /// `waitUntil` on the given clock.
+    static func waitUntil(
+        timeout: Duration, interval: Duration,
+        sleep: @MainActor (Duration) async -> Void, now: @MainActor () -> ContinuousClock.Instant,
+        _ condition: @MainActor () async -> Bool
+    ) async -> Bool {
         let deadline = now() + timeout
         while true {
             // A cancelled sleep returns at once: without this it would spin.

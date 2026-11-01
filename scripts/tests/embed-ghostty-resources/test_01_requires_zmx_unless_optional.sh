@@ -37,6 +37,10 @@ for target in \
     chmod +x "${cli}"
 done
 cp "${repo_root}/AlasCLI/manifest.json" "${srcroot}/AlasCLI/manifest.json"
+linux_guest="${srcroot}/.build/alas-vm-guest-linux/aarch64-unknown-linux-musl/release/alas-vm-guest-linux"
+mkdir -p "$(dirname "${linux_guest}")"
+printf '#!/bin/sh\n' > "${linux_guest}"
+chmod +x "${linux_guest}"
 touch "${srcroot}/.build/fff/arm64/install/lib/libfff_c.dylib"
 for tool in install_name_tool codesign; do
     printf '#!/bin/sh\nexit 0\n' > "${tmp}/bin/${tool}"

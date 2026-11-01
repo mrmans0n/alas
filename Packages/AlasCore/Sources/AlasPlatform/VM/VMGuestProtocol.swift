@@ -25,7 +25,11 @@ public enum VMGuestMessage: Codable, Equatable, Sendable {
     case run(id: UInt64, command: String, timeoutSeconds: Int)
     // Guest to host.
     /// `protocolRevision` is `VMGuestProtocol.revision`; a helper from before it existed decodes as 0.
-    case helloReply(guestVersion: String, protocolRevision: Int, accessibility: Bool, screenRecording: Bool)
+    /// `guestKind` (for example `"linux"`) and `capabilities` are optional additions: a macOS helper
+    /// that omits them decodes as nil, and nil values are not encoded.
+    case helloReply(
+        guestVersion: String, protocolRevision: Int, accessibility: Bool, screenRecording: Bool,
+        guestKind: String? = nil, capabilities: [String]? = nil)
     /// `body` is an `AlasCLIResponse` encoding.
     case response(id: UInt64, body: Data)
     case runResult(id: UInt64, exitCode: Int32?, stdout: String, stderr: String, truncated: Bool, timedOut: Bool)
@@ -36,7 +40,7 @@ public enum VMGuestMessage: Codable, Equatable, Sendable {
 
     private enum Key: String, CodingKey {
         case type, hostVersion, guestVersion, protocolRevision, id, sessionID, request, event, command, timeoutSeconds
-        case accessibility, screenRecording, body, exitCode, stdout, stderr, truncated, timedOut
+        case accessibility, screenRecording, guestKind, capabilities, body, exitCode, stdout, stderr, truncated, timedOut
     }
 
     public init(from decoder: Decoder) throws {
@@ -66,7 +70,9 @@ public enum VMGuestMessage: Codable, Equatable, Sendable {
                 guestVersion: try c.decode(String.self, forKey: .guestVersion),
                 protocolRevision: try c.decodeIfPresent(Int.self, forKey: .protocolRevision) ?? 0,
                 accessibility: try c.decode(Bool.self, forKey: .accessibility),
-                screenRecording: try c.decode(Bool.self, forKey: .screenRecording)
+                screenRecording: try c.decode(Bool.self, forKey: .screenRecording),
+                guestKind: try c.decodeIfPresent(String.self, forKey: .guestKind),
+                capabilities: try c.decodeIfPresent([String].self, forKey: .capabilities)
             )
         case .response:
             self = .response(id: try c.decode(UInt64.self, forKey: .id), body: try c.decode(Data.self, forKey: .body))
@@ -102,12 +108,14 @@ public enum VMGuestMessage: Codable, Equatable, Sendable {
             try c.encode(id, forKey: .id)
             try c.encode(command, forKey: .command)
             try c.encode(timeoutSeconds, forKey: .timeoutSeconds)
-        case let .helloReply(guestVersion, protocolRevision, accessibility, screenRecording):
+        case let .helloReply(guestVersion, protocolRevision, accessibility, screenRecording, guestKind, capabilities):
             try c.encode(Kind.helloReply, forKey: .type)
             try c.encode(guestVersion, forKey: .guestVersion)
             try c.encode(protocolRevision, forKey: .protocolRevision)
             try c.encode(accessibility, forKey: .accessibility)
             try c.encode(screenRecording, forKey: .screenRecording)
+            try c.encodeIfPresent(guestKind, forKey: .guestKind)
+            try c.encodeIfPresent(capabilities, forKey: .capabilities)
         case let .response(id, body):
             try c.encode(Kind.response, forKey: .type)
             try c.encode(id, forKey: .id)

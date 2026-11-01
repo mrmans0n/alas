@@ -276,17 +276,56 @@ pub enum Command {
         member_id: String,
     },
     Preview(PreviewCommand),
-    Computer(ComputerCommand),
+    /// The VM is the one a worktree with a macOS and a Linux VM targets;
+    /// the app picks the only VM, or the desktop, when it is absent.
+    Computer(ComputerCommand, Option<VmGuest>),
     /// MCP-only: run a shell command in the calling session's worktree VM.
     /// The app applies the default timeout when absent.
     VmRun {
         command: String,
         timeout_seconds: Option<u32>,
+        vm: Option<VmGuest>,
     },
     /// MCP-only: whether the calling session's worktree has a running VM,
     /// its guest helper, and the shared transfer folder.
-    VmStatus,
+    VmStatus {
+        vm: Option<VmGuest>,
+    },
     Resolve,
+}
+
+/// Which of a worktree's VMs a `vm_*` or `computer_*` call targets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VmGuest {
+    Macos,
+    Linux,
+}
+
+impl VmGuest {
+    /// The `vm` argument's values, as the app reads them.
+    pub const NAMES: [&'static str; 2] = ["macos", "linux"];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            VmGuest::Macos => "macos",
+            VmGuest::Linux => "linux",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name {
+            "macos" => Some(VmGuest::Macos),
+            "linux" => Some(VmGuest::Linux),
+            _ => None,
+        }
+    }
+}
+
+/// Adds the `vm` argument a call names to its params.
+fn insert_vm(request: &mut Request, vm: Option<VmGuest>) {
+    if let (Some(vm), Some(serde_json::Value::Object(params))) = (vm, request.params.as_mut()) {
+        params.insert("vm".into(), serde_json::Value::String(vm.as_str().into()));
+    }
 }
 
 /// The keys a drag may hold, as the app names them (`ComputerUseKeyChord.Modifier`).
@@ -940,10 +979,15 @@ pub fn build_request(
             r
         }
         Command::Preview(preview) => preview_request(preview),
-        Command::Computer(computer) => computer_request(computer),
+        Command::Computer(computer, vm) => {
+            let mut r = computer_request(computer);
+            insert_vm(&mut r, *vm);
+            r
+        }
         Command::VmRun {
             command,
             timeout_seconds,
+            vm,
         } => {
             let mut r = Request::new("vm_run");
             let mut params = serde_json::Map::new();
@@ -952,11 +996,13 @@ pub fn build_request(
                 params.insert("timeout_seconds".into(), serde_json::Value::from(*timeout));
             }
             r.params = Some(serde_json::Value::Object(params));
+            insert_vm(&mut r, *vm);
             r
         }
-        Command::VmStatus => {
+        Command::VmStatus { vm } => {
             let mut r = Request::new("vm_status");
             r.params = Some(serde_json::json!({}));
+            insert_vm(&mut r, *vm);
             r
         }
         Command::Resolve => Request::new("resolve"),
@@ -1440,7 +1486,7 @@ const VM_RUN_REPLY_GRACE: Duration = Duration::from_secs(30);
 /// How long `dispatch` waits for the reply to `command`.
 pub fn read_timeout(command: &Command) -> Duration {
     match command {
-        Command::Computer(_) => COMPUTER_READ_TIMEOUT,
+        Command::Computer(..) => COMPUTER_READ_TIMEOUT,
         Command::VmRun {
             timeout_seconds, ..
         } => {
@@ -2353,7 +2399,7 @@ mod tests {
 
     #[test]
     fn computer_calls_outwait_the_approval_card() {
-        let apps = Command::Computer(ComputerCommand::Apps { call_id: None });
+        let apps = Command::Computer(ComputerCommand::Apps { call_id: None }, None);
         assert_eq!(read_timeout(&apps), COMPUTER_READ_TIMEOUT);
         assert_eq!(read_timeout(&Command::Resolve), READ_TIMEOUT);
     }
@@ -2363,10 +2409,11 @@ mod tests {
         let run = |timeout_seconds| Command::VmRun {
             command: "ls".into(),
             timeout_seconds,
+            vm: None,
         };
         assert_eq!(read_timeout(&run(None)), Duration::from_secs(150));
         assert_eq!(read_timeout(&run(Some(600))), Duration::from_secs(630));
-        assert_eq!(read_timeout(&Command::VmStatus), READ_TIMEOUT);
+        assert_eq!(read_timeout(&Command::VmStatus { vm: None }), READ_TIMEOUT);
     }
 
     #[test]
@@ -2375,6 +2422,7 @@ mod tests {
             &Command::VmRun {
                 command: "open x.app".into(),
                 timeout_seconds: None,
+                vm: None,
             },
             Some("acp-1".into()),
             Some("/wt".into()),
@@ -2388,26 +2436,52 @@ mod tests {
             &Command::VmRun {
                 command: "make".into(),
                 timeout_seconds: Some(5),
+                vm: Some(VmGuest::Linux),
             },
             None,
             Some("/wt".into()),
         );
         assert_eq!(
             bounded.params,
-            Some(serde_json::json!({ "command": "make", "timeout_seconds": 5 }))
+            Some(serde_json::json!({ "command": "make", "timeout_seconds": 5, "vm": "linux" }))
         );
-        let status = build_request(&Command::VmStatus, Some("acp-1".into()), None);
+        let status = build_request(&Command::VmStatus { vm: None }, Some("acp-1".into()), None);
         assert_eq!(status.command, "vm_status");
         assert_eq!(status.params, Some(serde_json::json!({})));
+        let named = build_request(
+            &Command::VmStatus {
+                vm: Some(VmGuest::Macos),
+            },
+            None,
+            None,
+        );
+        assert_eq!(named.params, Some(serde_json::json!({ "vm": "macos" })));
+        let computer = build_request(
+            &Command::Computer(
+                ComputerCommand::Cancel {
+                    call_id: "42-1".into(),
+                },
+                Some(VmGuest::Macos),
+            ),
+            None,
+            None,
+        );
+        assert_eq!(
+            computer.params,
+            Some(serde_json::json!({ "call_id": "42-1", "vm": "macos" }))
+        );
     }
 
     #[test]
     fn computer_commands_serialize_as_versioned_params_only_requests() {
         let shot = build_request(
-            &Command::Computer(ComputerCommand::Screenshot {
-                window_id: 7,
-                call_id: None,
-            }),
+            &Command::Computer(
+                ComputerCommand::Screenshot {
+                    window_id: 7,
+                    call_id: None,
+                },
+                None,
+            ),
             Some("s1".into()),
             None,
         );
@@ -2417,13 +2491,16 @@ mod tests {
         assert!(shot.target.is_none());
 
         let inspect = build_request(
-            &Command::Computer(ComputerCommand::Inspect {
-                window_id: 7,
-                query: Some("Save".into()),
-                limit: 300,
-                max_depth: 12,
-                call_id: Some("42-1".into()),
-            }),
+            &Command::Computer(
+                ComputerCommand::Inspect {
+                    window_id: 7,
+                    query: Some("Save".into()),
+                    limit: 300,
+                    max_depth: 12,
+                    call_id: Some("42-1".into()),
+                },
+                None,
+            ),
             None,
             None,
         );
@@ -2436,20 +2513,23 @@ mod tests {
         );
 
         let click = build_request(
-            &Command::Computer(ComputerCommand::Click {
-                window_id: 7,
-                target: ComputerTarget::Ref("e12".into()),
-                button: "right".into(),
-                count: 2,
-                direct: true,
-                post: ComputerPost {
-                    limit: 50,
-                    query: Some("Save".into()),
-                    max_depth: Some(20),
-                    include_screenshot: true,
+            &Command::Computer(
+                ComputerCommand::Click {
+                    window_id: 7,
+                    target: ComputerTarget::Ref("e12".into()),
+                    button: "right".into(),
+                    count: 2,
+                    direct: true,
+                    post: ComputerPost {
+                        limit: 50,
+                        query: Some("Save".into()),
+                        max_depth: Some(20),
+                        include_screenshot: true,
+                    },
+                    call_id: Some("42-2".into()),
                 },
-                call_id: Some("42-2".into()),
-            }),
+                None,
+            ),
             None,
             None,
         );
@@ -2464,16 +2544,19 @@ mod tests {
         );
 
         let drag = build_request(
-            &Command::Computer(ComputerCommand::Drag {
-                window_id: 7,
-                from: ComputerTarget::Point { x: 10.5, y: 20.0 },
-                to_window_id: Some(9),
-                to: ComputerTarget::Ref("e3".into()),
-                modifiers: vec!["option".into(), "command".into()],
-                direct: true,
-                post: ComputerPost::default(),
-                call_id: None,
-            }),
+            &Command::Computer(
+                ComputerCommand::Drag {
+                    window_id: 7,
+                    from: ComputerTarget::Point { x: 10.5, y: 20.0 },
+                    to_window_id: Some(9),
+                    to: ComputerTarget::Ref("e3".into()),
+                    modifiers: vec!["option".into(), "command".into()],
+                    direct: true,
+                    post: ComputerPost::default(),
+                    call_id: None,
+                },
+                None,
+            ),
             None,
             None,
         );
@@ -2486,14 +2569,17 @@ mod tests {
         );
 
         let wait = build_request(
-            &Command::Computer(ComputerCommand::Wait {
-                window_id: 7,
-                query: "Done".into(),
-                disappear: true,
-                timeout_ms: 5000,
-                limit: 100,
-                call_id: None,
-            }),
+            &Command::Computer(
+                ComputerCommand::Wait {
+                    window_id: 7,
+                    query: "Done".into(),
+                    disappear: true,
+                    timeout_ms: 5000,
+                    limit: 100,
+                    call_id: None,
+                },
+                None,
+            ),
             None,
             None,
         );
@@ -2504,11 +2590,14 @@ mod tests {
         );
 
         let open_app = build_request(
-            &Command::Computer(ComputerCommand::OpenApp {
-                name: None,
-                bundle_id: Some("com.apple.TextEdit".into()),
-                call_id: None,
-            }),
+            &Command::Computer(
+                ComputerCommand::OpenApp {
+                    name: None,
+                    bundle_id: Some("com.apple.TextEdit".into()),
+                    call_id: None,
+                },
+                None,
+            ),
             None,
             None,
         );
@@ -2519,9 +2608,12 @@ mod tests {
         );
 
         let cancel = build_request(
-            &Command::Computer(ComputerCommand::Cancel {
-                call_id: "42-1".into(),
-            }),
+            &Command::Computer(
+                ComputerCommand::Cancel {
+                    call_id: "42-1".into(),
+                },
+                None,
+            ),
             None,
             None,
         );

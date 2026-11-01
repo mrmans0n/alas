@@ -1,3 +1,4 @@
+import AlasCore
 import CryptoKit
 import Foundation
 
@@ -232,18 +233,59 @@ struct WebPreviewTabState: Codable, Equatable, Identifiable {
     }
 }
 
-/// A worktree's VM screen. Restores on relaunch; the VM itself does not
-/// boot until the user starts it.
+/// A worktree's VM screen, one per guest. Restores on relaunch; the VM
+/// itself does not boot until the user starts it.
 struct VirtualMachineTabState: Codable, Equatable, Identifiable {
     let id: TabID
     /// Worktree id.
     let ownerKey: String
+    let guest: VMGuestOS
 
-    var title: String { "VM" }
+    var title: String {
+        switch guest {
+        case .macOS: "VM · macOS"
+        case .linux: "VM · Linux"
+        }
+    }
 
-    init(ownerKey: String) {
+    init(ownerKey: String, guest: VMGuestOS = .macOS) {
         self.ownerKey = ownerKey
-        self.id = "vm:\(ownerKey)"
+        self.guest = guest
+        self.id = switch guest {
+        case .macOS: "vm:\(ownerKey)"
+        case .linux: "vm-linux:\(ownerKey)"
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, ownerKey, linuxOwnerKey, guest
+    }
+
+    /// Tabs saved before Linux guests have no `guest`: they are macOS.
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        if let owner = try container.decodeIfPresent(String.self, forKey: .linuxOwnerKey) {
+            self.init(ownerKey: owner, guest: .linux)
+        } else {
+            self.init(
+                ownerKey: try container.decode(String.self, forKey: .ownerKey),
+                guest: try container.decodeIfPresent(VMGuestOS.self, forKey: .guest) ?? .macOS)
+        }
+    }
+
+    /// A Linux tab leaves out `ownerKey`, which builds that predate Linux
+    /// guests require, so they drop the tab rather than restore it as a
+    /// second macOS VM tab sharing the macOS tab's screen.
+    func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        switch guest {
+        case .macOS:
+            try container.encode(ownerKey, forKey: .ownerKey)
+            try container.encode(guest, forKey: .guest)
+        case .linux:
+            try container.encode(ownerKey, forKey: .linuxOwnerKey)
+        }
     }
 }
 

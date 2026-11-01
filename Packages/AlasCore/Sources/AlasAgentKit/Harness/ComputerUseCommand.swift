@@ -75,6 +75,8 @@ public struct ComputerUseCommand: Equatable, Sendable {
     public var condition: WaitCondition
     public var timeoutMS: Int
     public var includeScreenshot: Bool
+    /// Which of the worktree's VMs the host routes to; never forwarded to the guest.
+    public var vm: VMGuestOS?
 
     public init(
         action: Action, windowID: UInt32? = nil, query: String? = nil, limit: Int? = nil, maxDepth: Int = 12,
@@ -83,7 +85,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         modifiers: [ComputerUseKeyChord.Modifier] = [], button: Button = .left, count: Int = 1, text: String? = nil, mode: TypeMode = .insert,
         keys: String? = nil, dx: Int = 0, dy: Int = 0, delivery: Delivery = .background,
         name: String? = nil, bundleID: String? = nil, condition: WaitCondition = .appear,
-        timeoutMS: Int = 5000, includeScreenshot: Bool = false
+        timeoutMS: Int = 5000, includeScreenshot: Bool = false, vm: VMGuestOS? = nil
     ) {
         self.action = action
         self.windowID = windowID
@@ -112,6 +114,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         self.condition = condition
         self.timeoutMS = timeoutMS
         self.includeScreenshot = includeScreenshot
+        self.vm = vm
     }
 
     private struct Params: Decodable {
@@ -141,6 +144,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
         var condition: WaitCondition?
         var timeout_ms: Int?
         var include_screenshot: Bool?
+        var vm: String?
 
         /// Wire keys present in the request, for rejecting params an action does not take.
         var present: Set<String> {
@@ -172,6 +176,7 @@ public struct ComputerUseCommand: Equatable, Sendable {
             note("condition", condition)
             note("timeout_ms", timeout_ms)
             note("include_screenshot", include_screenshot)
+            note("vm", vm)
             return keys
         }
     }
@@ -196,7 +201,8 @@ public struct ComputerUseCommand: Equatable, Sendable {
 
     public static func decode(action: Action, data: Data) throws -> Self {
         let params = try AlasCLIRequest.decodeParamsIfPresent(Params.self, from: data)
-        if let params, !params.present.isSubset(of: allowedParams(for: action)) {
+        // Every action may name the VM it targets.
+        if let params, !params.present.isSubset(of: allowedParams(for: action).union(["vm"])) {
             throw AlasCLIRequestError.malformed
         }
         let command = Self(
@@ -214,14 +220,16 @@ public struct ComputerUseCommand: Equatable, Sendable {
             dx: params?.dx ?? 0, dy: params?.dy ?? 0, delivery: params?.delivery ?? .background,
             name: params?.name, bundleID: params?.bundle_id,
             condition: params?.condition ?? .appear, timeoutMS: params?.timeout_ms ?? 5000,
-            includeScreenshot: params?.include_screenshot ?? false
+            includeScreenshot: params?.include_screenshot ?? false,
+            vm: try AlasCLIRequest.targetVM(params?.vm)
         )
         try command.validate()
         return command
     }
 
     /// The `{"command":"computer_<action>","params":{…}}` request `decode(action:data:)` turns back into
-    /// an equal command. Only values that differ from the decode defaults are written.
+    /// an equal command, apart from `vm`: the host has routed on it, and a guest helper that predates
+    /// it would refuse the key. Only values that differ from the decode defaults are written.
     public func requestJSON() throws -> Data {
         var params: [String: Any] = [:]
         func put(_ key: String, _ value: Any?) { if let value { params[key] = value } }

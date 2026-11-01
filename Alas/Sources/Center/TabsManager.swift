@@ -1,3 +1,4 @@
+import AlasCore
 import Foundation
 import Observation
 import Virtualization
@@ -79,9 +80,9 @@ final class TabsManager {
     /// tabs, but are deliberately not persisted as part of the tab identity.
     private var ggSplitCommitDrafts: [TabID: GGSplitCommitDraft] = [:]
     @ObservationIgnored private var webPreviewBrowsers: [String: WebPreviewBrowser] = [:]
-    /// One display view per worktree VM tab, kept across tab switches so the
+    /// One display view per VM tab, kept across tab switches so the
     /// screen does not flash. Dropped when the tab closes; the VM keeps running.
-    @ObservationIgnored private var vmViews: [String: VZVirtualMachineView] = [:]
+    @ObservationIgnored private var vmViews: [TabID: VZVirtualMachineView] = [:]
     private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
     @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
     @ObservationIgnored var onCreatedReview: ((String, ReviewPRTabState) -> Void)?
@@ -1195,19 +1196,20 @@ final class TabsManager {
         openWebPreview(worktreeId: owner.storageKey, url: url, remoteHost: remoteHost ?? Self.remoteHost(for: owner))
     }
 
-    func vmView(ownerKey: String) -> VZVirtualMachineView {
-        if let view = vmViews[ownerKey] { return view }
+    /// The VM screen of a VM tab, kept while the tab is open.
+    func vmView(tabID: TabID) -> VZVirtualMachineView {
+        if let view = vmViews[tabID] { return view }
         let view = VZVirtualMachineView()
         view.capturesSystemKeys = true
         view.automaticallyReconfiguresDisplay = true
-        vmViews[ownerKey] = view
+        vmViews[tabID] = view
         return view
     }
 
-    /// Opens or focuses the worktree's one VM tab.
+    /// Opens or focuses the worktree's one VM tab for `guest`.
     @discardableResult
-    func openVirtualMachine(worktreeId: String) -> Tab {
-        let tab = Tab.virtualMachine(VirtualMachineTabState(ownerKey: worktreeId))
+    func openVirtualMachine(worktreeId: String, guest: VMGuestOS = .macOS) -> Tab {
+        let tab = Tab.virtualMachine(VirtualMachineTabState(ownerKey: worktreeId, guest: guest))
         if var file = byWorktree[worktreeId], file.tabs.contains(where: { $0.id == tab.id }) {
             file.activeTabId = tab.id
             byWorktree[worktreeId] = file
@@ -2283,15 +2285,15 @@ final class TabsManager {
             case .webPreview(let state):
                 clearWebPreviewBrowser(ownerKey: state.ownerKey)
             case .virtualMachine(let state):
-                clearVMView(ownerKey: state.ownerKey)
+                clearVMView(tabID: state.id)
             default:
                 continue
             }
         }
     }
 
-    private func clearVMView(ownerKey: String) {
-        guard let view = vmViews.removeValue(forKey: ownerKey) else { return }
+    private func clearVMView(tabID: TabID) {
+        guard let view = vmViews.removeValue(forKey: tabID) else { return }
         view.virtualMachine = nil
         view.removeFromSuperview()
     }

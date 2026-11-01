@@ -19,7 +19,43 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         self.isAlive = isAlive
     }
 
-    public func update<T>(_ body: (inout [WorktreeVMRecord]) throws -> T) throws -> T {
+    /// Runs `body` on the records under the lock. With `syncingLinuxAliasFor`, the worktree's
+    /// alias stub (see `syncLinuxAlias`) is brought in line with the result in the same write, so
+    /// no crash or other process can see the records and the stub disagree.
+    public func update<T>(
+        syncingLinuxAliasFor worktree: String? = nil, _ body: (inout [WorktreeVMRecord]) throws -> T
+    ) throws -> T {
+        try withLock { records, foreign in
+            let result = try body(&records)
+            if let worktree { Self.syncLinuxAlias(worktree: worktree, records: records, foreign: &foreign) }
+            return result
+        }
+    }
+
+    /// Keeps a stub record with `worktree`'s plain id while it has a Linux VM and no macOS VM, so
+    /// builds that predate Linux guests (and see neither id they know) still count it as having a
+    /// VM. The stub's guest OS no build decodes, so every build preserves it verbatim.
+    public func syncLinuxAlias(worktree: String) throws {
+        try update(syncingLinuxAliasFor: worktree) { _ in }
+    }
+
+    private static func isLinuxAlias(_ element: Any) -> Bool {
+        (element as? [String: Any])?["guestOS"] as? String == VMIdentity.aliasGuestRaw
+    }
+
+    private static func syncLinuxAlias(worktree: String, records: [WorktreeVMRecord], foreign: inout [Any]) {
+        foreign.removeAll { isLinuxAlias($0) && ($0 as? [String: Any])?["id"] as? String == worktree }
+        let ids = Set(records.map(\.id))
+        guard ids.contains(VMIdentity.recordID(worktree: worktree, guest: .linux)),
+            !ids.contains(VMIdentity.recordID(worktree: worktree, guest: .macOS))
+        else { return }
+        foreign.append([
+            "id": worktree, "guestOS": VMIdentity.aliasGuestRaw, "goldenBuild": "", "bundlePath": "",
+            "createdAt": 0, "lastUsedAt": 0,
+        ] as [String: Any])
+    }
+
+    private func withLock<T>(_ body: (inout [WorktreeVMRecord], inout [Any]) throws -> T) throws -> T {
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         let fd = open(lockURL.path, O_RDWR | O_CREAT | O_CLOEXEC, 0o600)
@@ -32,12 +68,11 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         while flock(fd, LOCK_EX) != 0 {
             guard errno == EINTR else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
         }
-        let (known, foreign) = try load()
-        var records = known
+        var (records, foreign) = try load()
         for index in records.indices {
             if let owner = records[index].runOwner, !isAlive(owner) { records[index].runOwner = nil }
         }
-        let result = try body(&records)
+        let result = try body(&records, &foreign)
         try write(records, foreign: foreign)
         return result
     }
@@ -49,10 +84,13 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
     /// The id of every record, including ones this build cannot decode: a record from a newer
     /// build still means its worktree has a VM. Read without taking the lock or writing, since
     /// writes are atomic renames and a reader sees one whole file; an unparseable file throws
-    /// instead of being quarantined.
-    public func recordIDs() throws -> Set<String> {
+    /// instead of being quarantined. Without `includingLinuxAliases`, alias stubs are left out, so
+    /// a worktree's plain id then means a macOS VM (or a newer build's record) only.
+    public func recordIDs(includingLinuxAliases: Bool = true) throws -> Set<String> {
         let (known, foreign) = try load(quarantining: false)
-        let foreignIDs = foreign.compactMap { ($0 as? [String: Any])?["id"] as? String }
+        let foreignIDs = foreign
+            .filter { includingLinuxAliases || !Self.isLinuxAlias($0) }
+            .compactMap { ($0 as? [String: Any])?["id"] as? String }
         return Set(known.map(\.id) + foreignIDs)
     }
 

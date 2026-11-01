@@ -346,6 +346,8 @@ final class AppState {
             try vmManager.sealGolden(bundle)
         },
         provisioner: GoldenProvisioner.live(manager: vmManager))
+    /// The one Ubuntu image installer, shared by every Linux VM tab.
+    @ObservationIgnored private(set) lazy var linuxGoldenInstaller = LinuxGoldenInstaller(root: vmManager.root)
     /// Host-aware script discovery used by scheduled runs. Injectable so tests
     /// can stand in for SSH discovery on a remote project.
     @ObservationIgnored var runScheduleScriptDiscovery: @Sendable (URL, String?) async -> RunScriptStore.DiscoveryResult = {
@@ -6664,8 +6666,9 @@ final class AppState {
         guard projectsManager.isWorktreeHidden(projectId: worktree.projectId, path: worktree.path) else {
             return
         }
-        // Only stopped: an archived worktree can come back with its VM.
-        Task { [vmManager] in await vmManager.stopVM(worktreeID: worktree.id) }
+        // Only stopped: an archived worktree can come back with its VMs. Its VM
+        // tabs closed with the rest when the archive quiesced it.
+        Task { [vmManager] in await vmManager.stopVMs(forWorktree: worktree.id) }
         refreshGGSidebar()
         if selectedWorktreeId == worktree.id {
             selectWorktree(id: selectionAfterRemoval(
@@ -7367,15 +7370,17 @@ final class AppState {
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
                 return await self.performComputerUse(command, sessionID: sessionID, worktreeID: worktreeID)
             },
-            vmRun: { [weak self] command, timeoutSeconds, sessionID in
+            vmRun: { [weak self] command, timeoutSeconds, vm, sessionID in
                 guard let self else { return .error("Alas is not available.") }
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
-                return await self.performVMRun(command, timeoutSeconds: timeoutSeconds, sessionID: sessionID, worktreeID: worktreeID)
+                return await self.performVMRun(
+                    command, timeoutSeconds: timeoutSeconds, vm: vm, sessionID: sessionID, worktreeID: worktreeID
+                )
             },
-            vmStatus: { [weak self] sessionID in
+            vmStatus: { [weak self] vm, sessionID in
                 guard let self else { return .error("Alas is not available.") }
                 let worktreeID: String? = if case .worktree(let id)? = callers.owner(ofSession: sessionID) { id } else { nil }
-                return await self.vmStatus(worktreeID: worktreeID)
+                return await self.vmStatus(worktreeID: worktreeID, vm: vm)
             },
             activateApp: {
                 NSApp.activate(ignoringOtherApps: true)
@@ -11712,8 +11717,10 @@ final class AppState {
         switch outcome {
         case .deleted, .deletedButNotSaved:
             removePersistedGGWorktreeMode(projectId: worktree.projectId, worktreeId: worktree.id)
-            Task { [vmManager] in await vmManager.deleteVM(worktreeID: worktree.id) }
-            tabs.close(worktreeId: worktree.id, tabId: VirtualMachineTabState(ownerKey: worktree.id).id)
+            Task { [vmManager] in await vmManager.deleteVMs(forWorktree: worktree.id) }
+            for guest in [VMGuestOS.macOS, .linux] {
+                tabs.close(worktreeId: worktree.id, tabId: VirtualMachineTabState(ownerKey: worktree.id, guest: guest).id)
+            }
             // Callers that skip the refresh (batches, which refresh once at the
             // end) reconcile the selection themselves afterwards.
             if refreshAfter, selectedWorktreeId == worktree.id {

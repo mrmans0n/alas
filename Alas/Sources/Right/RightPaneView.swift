@@ -294,7 +294,7 @@ struct RightPaneView: View {
             onRunPluginCommand: { state.runPluginCommand($0, slot: .changesToolbar, worktreeID: worktree.id) },
             onOpenPreview: { state.openWebPreview(in: worktree) },
             onOpenVirtualMachine: state.canOpenVirtualMachine(in: worktree)
-                ? { state.openVirtualMachine(in: worktree) } : nil,
+                ? { state.openVirtualMachine(in: worktree, guest: $0) } : nil,
             onNewRunScript: { state.newRunScript(scope: $0, in: worktree) }
         )
     }

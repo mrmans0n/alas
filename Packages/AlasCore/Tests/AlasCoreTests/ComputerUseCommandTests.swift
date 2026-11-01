@@ -136,11 +136,36 @@ struct ComputerUseCommandTests {
         #expect(try decode("vm_run", #"{"command":"open x.app"}"#).command == .vmRun(command: "open x.app", timeoutSeconds: 120))
         #expect(try decode("vm_run", #"{"command":"make","timeout_seconds":1}"#).command == .vmRun(command: "make", timeoutSeconds: 1))
         #expect(try decode("vm_run", #"{"command":"make","timeout_seconds":600}"#).command == .vmRun(command: "make", timeoutSeconds: 600))
-        #expect(try decode("vm_status", "{}").command == .vmStatus)
-        #expect(try decode("vm_status", nil).command == .vmStatus)
+        #expect(try decode("vm_status", "{}").command == .vmStatus())
+        #expect(try decode("vm_status", nil).command == .vmStatus())
         for params in [nil, "{}", #"{"command":"  "}"#, #"{"command":"ls","timeout_seconds":0}"#, #"{"command":"ls","timeout_seconds":601}"#] {
             #expect(throws: AlasCLIRequestError.self) { try decode("vm_run", params) }
         }
+    }
+
+    /// `vm` names the guest by its wire name, never by `VMGuestOS`'s persisted raw value.
+    @Test func decodesTheTargetVM() throws {
+        #expect(try decode("vm_run", #"{"command":"uname -a","vm":"linux"}"#).command
+            == .vmRun(command: "uname -a", timeoutSeconds: 120, vm: .linux))
+        #expect(try decode("vm_status", #"{"vm":"macos"}"#).command == .vmStatus(vm: .macOS))
+        #expect(try decode("computer_screenshot", #"{"window_id":7,"vm":"linux"}"#).command
+            == .computer(.init(action: .screenshot, windowID: 7, vm: .linux)))
+        #expect(try decode("computer_cancel", #"{"call_id":"c","vm":"macos"}"#).command
+            == .computer(.init(action: .cancel, callID: "c", vm: .macOS)))
+        for (command, params) in [
+            ("vm_run", #"{"command":"ls","vm":"macOS"}"#), ("vm_status", #"{"vm":"windows"}"#),
+            ("vm_status", #"{"vm":1}"#), ("computer_apps", #"{"vm":"ubuntu"}"#),
+        ] {
+            #expect(throws: AlasCLIRequestError.self) { try decode(command, params) }
+        }
+    }
+
+    /// The host routes on `vm`; a guest helper predating it would refuse the key.
+    @Test func requestJSONLeavesTheTargetVMToTheHost() throws {
+        let command = ComputerUseCommand(action: .screenshot, windowID: 7, vm: .macOS)
+        var forwarded = command
+        forwarded.vm = nil
+        #expect(try ComputerUseCommand.decode(action: .screenshot, data: command.requestJSON()) == forwarded)
     }
 
     @Test(arguments: [

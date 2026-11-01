@@ -122,16 +122,23 @@ extension AppState {
     /// Routes one call: a session whose worktree has a VM talks to its guest and never reaches
     /// the host coordinator, so no host readiness, approvals, driver lock, or overlay apply.
     func performComputerUse(_ command: ComputerUseCommand, sessionID: String, worktreeID: String?) async -> AlasCLIResponse {
-        switch vmRoute(worktreeID: worktreeID) {
+        switch vmRoute(worktreeID: worktreeID, requested: command.vm) {
         case .desktop:
             return await computerUse.perform(command, sessionID: sessionID)
+        case .ambiguous:
+            return .error(VMComputerUseRoute.vmAmbiguousMessage)
+        case .vmMissing(let guest):
+            return .error(VMComputerUseRoute.vmMissingMessage(for: guest))
+        case .guest(_, .linux), .vmNotRunning(_, .linux):
+            // Answered here: starting the VM wouldn't help, and its helper only runs commands.
+            return .error(VMComputerUseRoute.linuxComputerUseUnsupportedMessage)
         case .vmNotRunning:
             // A VM record on Intel came with data migrated from Apple silicon; it can't run here.
             return .error(WorktreeVMManager.isSupported
                 ? VMComputerUseRoute.vmNotRunningMessage : VMComputerUseRoute.vmUnsupportedMessage)
         case .vmStateUnreadable:
             return .error(VMComputerUseRoute.vmStateUnreadableMessage)
-        case .guest(let worktreeID):
+        case .guest(let worktreeID, .macOS):
             if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
                 return .error(ComputerUseCoordinator.stoppedMessage)
             }
@@ -157,68 +164,102 @@ extension AppState {
         }
     }
 
-    /// The route a VM tool call takes: a running VM answers without touching the registry,
-    /// otherwise one lockless registry read.
-    private func vmRoute(worktreeID: String?) -> VMComputerUseRoute {
-        let runningHere = worktreeID.map { vmManager.running($0) != nil } ?? false
-        let hasVM: Bool? = runningHere ? true : worktreeID.map(vmManager.hasVMRecord) ?? false
-        return VMComputerUseRoute.resolve(worktreeID: worktreeID, hasVM: hasVM, runningHere: runningHere)
+    /// The route a VM tool call takes: a running VM of the named guest answers without touching
+    /// the registry, otherwise one lockless registry read.
+    private func vmRoute(worktreeID: String?, requested: VMGuestOS?) -> VMComputerUseRoute {
+        VMComputerUseRoute.resolve(
+            worktreeID: worktreeID,
+            kinds: worktreeID.flatMap { vmManager.vmKinds(forWorktree: $0) },
+            requested: requested,
+            runningHere: { [vmManager] guest in worktreeID.map { vmManager.running($0, guest: guest) != nil } ?? false }
+        )
     }
 
     /// `vm_run`: runs a shell command in the guest of the session's worktree VM. A session the
     /// user stopped can't use it until resumed, like the computer tools.
-    func performVMRun(_ command: String, timeoutSeconds: Int, sessionID: String, worktreeID: String?) async -> AlasCLIResponse {
+    func performVMRun(
+        _ command: String, timeoutSeconds: Int, vm: VMGuestOS?, sessionID: String, worktreeID: String?
+    ) async -> AlasCLIResponse {
         guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
-        switch vmRoute(worktreeID: worktreeID) {
+        switch vmRoute(worktreeID: worktreeID, requested: vm) {
         case .desktop:
             return .error(VMComputerUseRoute.vmMissingMessage)
-        case .vmNotRunning:
-            return .error(VMComputerUseRoute.vmNotRunningMessage)
+        case .vmMissing(let guest):
+            return .error(VMComputerUseRoute.vmMissingMessage(for: guest))
+        case .ambiguous:
+            return .error(VMComputerUseRoute.vmAmbiguousMessage)
+        case .vmNotRunning(_, let guest):
+            return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
         case .vmStateUnreadable:
             return .error(VMComputerUseRoute.vmStateUnreadableMessage)
-        case .guest(let worktreeID):
+        case .guest(let worktreeID, let guest):
             if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
                 return .error(ComputerUseCoordinator.stoppedMessage)
             }
-            guard let client = vmManager.guestClient(for: worktreeID) else {
-                return .error(VMComputerUseRoute.vmNotRunningMessage)
+            guard let client = vmManager.guestClient(for: worktreeID, guest: guest) else {
+                return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
             }
             // Awaited in the request's own task, so a client disconnect cancels the guest call.
             do {
                 return .text([VMComputerUseRoute.runReply(try await client.run(command, timeoutSeconds: timeoutSeconds))])
             } catch {
-                return .error((error as? VMGuestClient.Failure ?? .stopped).message)
+                return .error((error as? VMGuestClient.Failure ?? .stopped).message(for: guest))
             }
         }
     }
 
     /// `vm_status`: whether the session's worktree has a VM, whether it runs here, its guest
-    /// helper (or why it doesn't answer), and the transfer folder.
-    func vmStatus(worktreeID: String?) async -> AlasCLIResponse {
+    /// helper (or why it doesn't answer), and the transfer folder. With both VMs and no `vm`
+    /// named, one such status per VM under `vms`.
+    func vmStatus(worktreeID: String?, vm: VMGuestOS?) async -> AlasCLIResponse {
         guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
-        let route = vmRoute(worktreeID: worktreeID)
-        var helper: Result<VMGuestHello, VMGuestClient.Failure>?
-        if case .guest(let id) = route, let client = vmManager.guestClient(for: id) {
-            do {
-                helper = .success(try await client.status())
-            } catch {
-                helper = .failure(error as? VMGuestClient.Failure ?? .stopped)
+        switch vmRoute(worktreeID: worktreeID, requested: vm) {
+        case .vmMissing(let guest):
+            return .error(VMComputerUseRoute.vmMissingMessage(for: guest))
+        case .ambiguous:
+            var vms: [VMComputerUseRoute.VMStatusEntry] = []
+            for guest in [VMGuestOS.macOS, .linux] {
+                let route = vmRoute(worktreeID: worktreeID, requested: guest)
+                vms.append((guest, route, await vmHelperStatus(route), vmTransferHostPath(route)))
             }
-            // The VM tab offers Update helper for an outdated one. A missing
-            // one may still be starting: the tab's own check waits for it.
-            if case .success(let hello) = helper { vmManager.noteHelperCheck(id, .success(hello)) }
+            return .text([VMComputerUseRoute.statusReply(vms: vms)])
+        case let route:
+            return .text([VMComputerUseRoute.statusReply(
+                route: route, helper: await vmHelperStatus(route), transferHostPath: vmTransferHostPath(route)
+            )])
         }
-        var transfer = ""
+    }
+
+    /// The guest helper's hello for a VM running here, or why it doesn't answer.
+    private func vmHelperStatus(_ route: VMComputerUseRoute) async -> Result<VMGuestHello, VMGuestClient.Failure>? {
+        guard case .guest(let id, let guest) = route, let client = vmManager.guestClient(for: id, guest: guest) else {
+            return nil
+        }
+        let helper: Result<VMGuestHello, VMGuestClient.Failure>
+        do {
+            helper = .success(try await client.status())
+        } catch {
+            helper = .failure(error as? VMGuestClient.Failure ?? .stopped)
+        }
+        // The VM tab offers Update helper for an outdated one. A missing
+        // one may still be starting: the tab's own check waits for it.
+        if case .success(let hello) = helper {
+            vmManager.noteHelperCheck(VMIdentity.recordID(worktree: id, guest: guest), .success(hello))
+        }
+        return helper
+    }
+
+    /// The host side of the transfer folder of a VM known to exist; empty otherwise.
+    private func vmTransferHostPath(_ route: VMComputerUseRoute) -> String {
         switch route {
-        case .guest(let id), .vmNotRunning(let id):
+        case .guest(let id, let guest), .vmNotRunning(let id, let guest):
             // Made at VM start; made here too so a copy before the first start lands.
-            let directory = vmManager.transferDirectory(forWorktree: id)
+            let directory = vmManager.transferDirectory(forWorktree: id, guest: guest)
             try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            transfer = directory.path
-        case .desktop, .vmStateUnreadable:
-            break
+            return directory.path
+        case .desktop, .vmStateUnreadable, .vmMissing, .ambiguous:
+            return ""
         }
-        return .text([VMComputerUseRoute.statusReply(route: route, helper: helper, transferHostPath: transfer)])
     }
 
     /// Whether the badge shows a session as driving its VM.

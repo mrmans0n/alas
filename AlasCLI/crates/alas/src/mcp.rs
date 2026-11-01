@@ -663,6 +663,26 @@ fn workspace_tool_definitions() -> Vec<Value> {
 }
 
 fn computer_tool_definitions() -> Vec<Value> {
+    with_vm_argument(
+        "Which of this worktree's VMs to drive, needed when it has a macOS and a Linux VM. Computer use works only in the macOS VM.",
+        computer_tools_without_vm(),
+    )
+}
+
+/// Adds the optional `vm` argument to each tool's input schema.
+fn with_vm_argument(description: &str, mut tools: Vec<Value>) -> Vec<Value> {
+    for tool in &mut tools {
+        if let Some(properties) = tool["inputSchema"]["properties"].as_object_mut() {
+            properties.insert(
+                "vm".into(),
+                json!({ "type": "string", "enum": alas_client::VmGuest::NAMES, "description": description }),
+            );
+        }
+    }
+    tools
+}
+
+fn computer_tools_without_vm() -> Vec<Value> {
     vec![
         json!({
             "name": "computer_apps",
@@ -812,10 +832,17 @@ fn computer_tool_definitions() -> Vec<Value> {
 }
 
 fn vm_tool_definitions() -> Vec<Value> {
+    with_vm_argument(
+        "Which of this worktree's VMs to use. Default: its only VM. vm_run needs it when the worktree has a macOS and a Linux VM; vm_status then lists both.",
+        vm_tools_without_vm(),
+    )
+}
+
+fn vm_tools_without_vm() -> Vec<Value> {
     vec![
         json!({
             "name": "vm_run",
-            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only).",
+            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only); in a Linux VM, under /mnt/alas instead.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -828,7 +855,7 @@ fn vm_tool_definitions() -> Vec<Value> {
         }),
         json!({
             "name": "vm_status",
-            "description": "Report whether this worktree has a VM, whether it is running, its guest helper's version and permissions (or helper_error when it doesn't answer), and the transfer folder: copy a build to transfer_host_path on the Mac and it appears at transfer_guest_path in the VM.",
+            "description": "Report whether this worktree has a VM, whether it is running, its guest helper's version and permissions (capabilities in a Linux VM), or helper_error when it doesn't answer, and the transfer folder: copy a build to transfer_host_path on the Mac and it appears at transfer_guest_path in the VM. When the worktree has a macOS and a Linux VM and vm is omitted, returns {\"vms\": [...]} with one such status per VM, each naming its vm.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": { "type": "object", "properties": {} }
         }),
@@ -1359,32 +1386,42 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             member_id: required_uuid(args, "member_id")?,
         }),
         "computer_apps" => {
-            reject_arguments(args, name, &[])?;
-            Ok(Command::Computer(alas_client::ComputerCommand::Apps {
-                call_id: None,
-            }))
+            reject_arguments(args, name, &["vm"])?;
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Apps { call_id: None },
+                optional_vm(args)?,
+            ))
         }
         "computer_screenshot" => {
-            reject_arguments(args, name, &["window_id"])?;
+            reject_arguments(args, name, &["window_id", "vm"])?;
             Ok(Command::Computer(
                 alas_client::ComputerCommand::Screenshot {
                     window_id: required_window_id(args)?,
                     call_id: None,
                 },
+                optional_vm(args)?,
             ))
         }
         "computer_inspect" => {
-            reject_arguments(args, name, &["window_id", "query", "limit", "max_depth"])?;
+            reject_arguments(
+                args,
+                name,
+                &["window_id", "query", "limit", "max_depth", "vm"],
+            )?;
             let query = optional_limited_string(args, "query", 256)?;
             // A query searches as deep as a read may go, as on input actions.
             let default_depth = if query.is_some() { 32 } else { 12 };
-            Ok(Command::Computer(alas_client::ComputerCommand::Inspect {
-                window_id: required_window_id(args)?,
-                limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(300),
-                max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?.unwrap_or(default_depth),
-                query,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Inspect {
+                    window_id: required_window_id(args)?,
+                    limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(300),
+                    max_depth: optional_bounded_u64(args, "max_depth", 1, 32)?
+                        .unwrap_or(default_depth),
+                    query,
+                    call_id: None,
+                },
+                optional_vm(args)?,
+            ))
         }
         "computer_click" => {
             reject_arguments(
@@ -1402,18 +1439,22 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "limit",
                     "max_depth",
                     "include_screenshot",
+                    "vm",
                 ],
             )?;
             let button = optional_enum(args, "button", &["left", "right"])?.unwrap_or("left");
-            Ok(Command::Computer(alas_client::ComputerCommand::Click {
-                window_id: required_window_id(args)?,
-                target: computer_target(args, "ref", "x", "y")?,
-                button: button.into(),
-                count: optional_bounded_u64(args, "count", 1, 2)?.unwrap_or(1),
-                direct: computer_direct(args)?,
-                post: computer_post(args)?,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Click {
+                    window_id: required_window_id(args)?,
+                    target: computer_target(args, "ref", "x", "y")?,
+                    button: button.into(),
+                    count: optional_bounded_u64(args, "count", 1, 2)?.unwrap_or(1),
+                    direct: computer_direct(args)?,
+                    post: computer_post(args)?,
+                    call_id: None,
+                },
+                optional_vm(args)?,
+            ))
         }
         "computer_type" => {
             reject_arguments(
@@ -1429,6 +1470,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "limit",
                     "max_depth",
                     "include_screenshot",
+                    "vm",
                 ],
             )?;
             let element = optional_computer_ref(args, "ref")?;
@@ -1436,15 +1478,18 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             if replace && element.is_none() {
                 return Err("mode replace needs a ref".into());
             }
-            Ok(Command::Computer(alas_client::ComputerCommand::Type {
-                window_id: required_window_id(args)?,
-                text: required_computer_text(args)?,
-                element,
-                replace,
-                direct: computer_direct(args)?,
-                post: computer_post(args)?,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Type {
+                    window_id: required_window_id(args)?,
+                    text: required_computer_text(args)?,
+                    element,
+                    replace,
+                    direct: computer_direct(args)?,
+                    post: computer_post(args)?,
+                    call_id: None,
+                },
+                optional_vm(args)?,
+            ))
         }
         "computer_key" => {
             reject_arguments(
@@ -1458,6 +1503,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "limit",
                     "max_depth",
                     "include_screenshot",
+                    "vm",
                 ],
             )?;
             let keys = match args.get("keys") {
@@ -1466,13 +1512,16 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                 }
                 _ => return Err("keys must be a non-blank string of at most 64 bytes".into()),
             };
-            Ok(Command::Computer(alas_client::ComputerCommand::Key {
-                window_id: required_window_id(args)?,
-                keys,
-                direct: computer_direct(args)?,
-                post: computer_post(args)?,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Key {
+                    window_id: required_window_id(args)?,
+                    keys,
+                    direct: computer_direct(args)?,
+                    post: computer_post(args)?,
+                    call_id: None,
+                },
+                optional_vm(args)?,
+            ))
         }
         "computer_scroll" => {
             reject_arguments(
@@ -1490,6 +1539,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "limit",
                     "max_depth",
                     "include_screenshot",
+                    "vm",
                 ],
             )?;
             let dx = optional_bounded_i64(args, "dx", -100, 100)?.unwrap_or(0);
@@ -1497,15 +1547,18 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
             if dx == 0 && dy == 0 {
                 return Err("dx and dy must not both be 0".into());
             }
-            Ok(Command::Computer(alas_client::ComputerCommand::Scroll {
-                window_id: required_window_id(args)?,
-                target: computer_target(args, "ref", "x", "y")?,
-                dx,
-                dy,
-                direct: computer_direct(args)?,
-                post: computer_post(args)?,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Scroll {
+                    window_id: required_window_id(args)?,
+                    target: computer_target(args, "ref", "x", "y")?,
+                    dx,
+                    dy,
+                    direct: computer_direct(args)?,
+                    post: computer_post(args)?,
+                    call_id: None,
+                },
+                optional_vm(args)?,
+            ))
         }
         "computer_drag" => {
             reject_arguments(
@@ -1526,6 +1579,7 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     "limit",
                     "max_depth",
                     "include_screenshot",
+                    "vm",
                 ],
             )?;
             let modifiers = match args.get("modifiers") {
@@ -1548,62 +1602,82 @@ pub fn command_for_tool(name: &str, args: &Value, worktree_dir: &str) -> Result<
                     ));
                 }
             };
-            Ok(Command::Computer(alas_client::ComputerCommand::Drag {
-                window_id: required_window_id(args)?,
-                from: computer_target(args, "ref", "x", "y")?,
-                to_window_id: optional_bounded_u64(args, "to_window_id", 0, u32::MAX.into())?
-                    .map(|value| value as u32),
-                to: computer_target(args, "to_ref", "to_x", "to_y")?,
-                modifiers,
-                direct: computer_direct(args)?,
-                post: computer_post(args)?,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Drag {
+                    window_id: required_window_id(args)?,
+                    from: computer_target(args, "ref", "x", "y")?,
+                    to_window_id: optional_bounded_u64(args, "to_window_id", 0, u32::MAX.into())?
+                        .map(|value| value as u32),
+                    to: computer_target(args, "to_ref", "to_x", "to_y")?,
+                    modifiers,
+                    direct: computer_direct(args)?,
+                    post: computer_post(args)?,
+                    call_id: None,
+                },
+                optional_vm(args)?,
+            ))
         }
         "computer_open_app" => {
-            reject_arguments(args, name, &["name", "bundle_id"])?;
+            reject_arguments(args, name, &["name", "bundle_id", "vm"])?;
             let app_name = optional_limited_string_raw(args, "name", 256)?;
             let bundle_id = optional_limited_string_raw(args, "bundle_id", 256)?;
             if app_name.is_some() == bundle_id.is_some() {
                 return Err("computer_open_app needs exactly one of name or bundle_id".into());
             }
-            Ok(Command::Computer(alas_client::ComputerCommand::OpenApp {
-                name: app_name,
-                bundle_id,
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::OpenApp {
+                    name: app_name,
+                    bundle_id,
+                    call_id: None,
+                },
+                optional_vm(args)?,
+            ))
         }
         "computer_wait" => {
             reject_arguments(
                 args,
                 name,
-                &["window_id", "query", "condition", "timeout_ms", "limit"],
+                &[
+                    "window_id",
+                    "query",
+                    "condition",
+                    "timeout_ms",
+                    "limit",
+                    "vm",
+                ],
             )?;
             let query = optional_limited_string_raw(args, "query", 256)?
                 .ok_or_else(|| "query is required".to_string())?;
-            Ok(Command::Computer(alas_client::ComputerCommand::Wait {
-                window_id: required_window_id(args)?,
-                query,
-                disappear: optional_enum(args, "condition", &["appear", "disappear"])?
-                    == Some("disappear"),
-                timeout_ms: optional_bounded_u64(args, "timeout_ms", 100, 20000)?.unwrap_or(5000),
-                limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(100),
-                call_id: None,
-            }))
+            Ok(Command::Computer(
+                alas_client::ComputerCommand::Wait {
+                    window_id: required_window_id(args)?,
+                    query,
+                    disappear: optional_enum(args, "condition", &["appear", "disappear"])?
+                        == Some("disappear"),
+                    timeout_ms: optional_bounded_u64(args, "timeout_ms", 100, 20000)?
+                        .unwrap_or(5000),
+                    limit: optional_bounded_u64(args, "limit", 1, 3000)?.unwrap_or(100),
+                    call_id: None,
+                },
+                optional_vm(args)?,
+            ))
         }
         "vm_run" => {
-            reject_arguments(args, name, &["command", "timeout_seconds"])?;
+            reject_arguments(args, name, &["command", "timeout_seconds", "vm"])?;
             let command = optional_limited_string_raw(args, "command", VM_RUN_COMMAND_MAX_BYTES)?
                 .ok_or_else(|| "command is required".to_string())?;
             Ok(Command::VmRun {
                 command,
                 timeout_seconds: optional_bounded_u64(args, "timeout_seconds", 1, 600)?
                     .map(|seconds| seconds as u32),
+                vm: optional_vm(args)?,
             })
         }
         "vm_status" => {
-            reject_arguments(args, name, &[])?;
-            Ok(Command::VmStatus)
+            reject_arguments(args, name, &["vm"])?;
+            Ok(Command::VmStatus {
+                vm: optional_vm(args)?,
+            })
         }
         "preview_list" => Ok(Command::Preview(alas_client::PreviewCommand::List)),
         "preview_open" => {
@@ -1874,6 +1948,12 @@ fn optional_bool(args: &Value, key: &str) -> Result<Option<bool>, String> {
         Some(Value::Bool(value)) => Ok(Some(*value)),
         Some(_) => Err(format!("{key} must be a boolean")),
     }
+}
+
+/// The `vm` argument of the `vm_*` and `computer_*` tools.
+fn optional_vm(args: &Value) -> Result<Option<alas_client::VmGuest>, String> {
+    Ok(optional_enum(args, "vm", &alas_client::VmGuest::NAMES)?
+        .and_then(alas_client::VmGuest::from_name))
 }
 
 /// The computer_* tools accept exactly their documented arguments.
@@ -2253,7 +2333,7 @@ fn tool_result(command: &Command, resp: Response) -> Value {
     if matches!(
         command,
         Command::Preview(alas_client::PreviewCommand::Capture { .. })
-    ) || matches!(command, Command::Computer(computer) if computer.includes_screenshot())
+    ) || matches!(command, Command::Computer(computer, _) if computer.includes_screenshot())
     {
         if let Some(result) = capture_tool_result(resp.lines.as_ref()) {
             return result;
@@ -2301,8 +2381,8 @@ fn success_message(command: &Command) -> String {
         Command::WorkspaceSwitch { .. } => "Switched Alas to Workspace Checkout.".into(),
         Command::WorkspaceFocus { .. } => "Focused Workspace Checkout member.".into(),
         Command::Preview(_) => "Preview command completed.".into(),
-        Command::Computer(_) => "Computer command completed.".into(),
-        Command::VmRun { .. } | Command::VmStatus => "OK".into(),
+        Command::Computer(..) => "Computer command completed.".into(),
+        Command::VmRun { .. } | Command::VmStatus { .. } => "OK".into(),
         Command::WtList | Command::Resolve => "OK".into(),
     }
 }
@@ -2416,7 +2496,7 @@ fn runs_on_worker(command: &Command) -> bool {
     is_preview_command(command)
         || matches!(
             command,
-            Command::Computer(_) | Command::VmRun { .. } | Command::VmStatus
+            Command::Computer(..) | Command::VmRun { .. } | Command::VmStatus { .. }
         )
         || publishes(command)
         || matches!(command, Command::SessionWait { .. })
@@ -2502,7 +2582,7 @@ fn is_preview_cancel_command(command: &Command) -> bool {
 
 /// A computer call that may block in the app; its cancel is quick.
 fn is_computer_call(command: &Command) -> bool {
-    matches!(command, Command::Computer(computer) if !matches!(computer, alas_client::ComputerCommand::Cancel { .. }))
+    matches!(command, Command::Computer(computer, _) if !matches!(computer, alas_client::ComputerCommand::Cancel { .. }))
 }
 
 /// Process-unique ids for computer calls, so a cancellation can name one.
@@ -2523,7 +2603,7 @@ fn register_pending_call(
     command: &mut Command,
 ) -> Option<String> {
     if is_computer_call(command) {
-        if let Command::Computer(computer) = command {
+        if let Command::Computer(computer, _) = command {
             computer.set_call_id(next_computer_call_id());
         }
     } else if preview_id_for_cancel(command).is_none()
@@ -2591,12 +2671,14 @@ fn cancellation_command_for_message(
     }
     // Retired like a wait, so its worker answers nothing (stdio) or the
     // cancellation error (HTTP) instead of a late result.
-    if let Command::Computer(computer) = &command {
+    // The cancel targets the VM its call did.
+    if let Command::Computer(computer, vm) = &command {
         let call_id = computer.call_id()?.to_string();
         pending.remove(&key);
-        return Some(Command::Computer(alas_client::ComputerCommand::Cancel {
-            call_id,
-        }));
+        return Some(Command::Computer(
+            alas_client::ComputerCommand::Cancel { call_id },
+            *vm,
+        ));
     }
     let preview_id = preview_id_for_cancel(&command)?;
     Some(Command::Preview(alas_client::PreviewCommand::Cancel {
@@ -4116,22 +4198,29 @@ mod tests {
     fn cancellation_notification_maps_pending_computer_call_to_cancel_by_call_id() {
         use alas_client::ComputerCommand;
         let pending = std::sync::Mutex::new(std::collections::HashMap::new());
-        let mut first = Command::Computer(ComputerCommand::Screenshot {
-            window_id: 7,
-            call_id: None,
-        });
-        let mut second = Command::Computer(ComputerCommand::Wait {
-            window_id: 7,
-            query: "Done".into(),
-            disappear: false,
-            timeout_ms: 5000,
-            limit: 100,
-            call_id: None,
-        });
+        // Its cancel goes to the VM the call named.
+        let mut first = Command::Computer(
+            ComputerCommand::Screenshot {
+                window_id: 7,
+                call_id: None,
+            },
+            Some(alas_client::VmGuest::Macos),
+        );
+        let mut second = Command::Computer(
+            ComputerCommand::Wait {
+                window_id: 7,
+                query: "Done".into(),
+                disappear: false,
+                timeout_ms: 5000,
+                limit: 100,
+                call_id: None,
+            },
+            None,
+        );
         assert!(register_pending_call(&pending, &json!(7), &mut first).is_some());
         assert!(register_pending_call(&pending, &json!(8), &mut second).is_some());
         let call_id = |command: &Command| match command {
-            Command::Computer(computer) => computer.call_id().unwrap().to_string(),
+            Command::Computer(computer, _) => computer.call_id().unwrap().to_string(),
             _ => unreachable!(),
         };
         assert_ne!(call_id(&first), call_id(&second));
@@ -4141,9 +4230,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             cancellation_command_for_message(&msg, &pending),
-            Some(Command::Computer(ComputerCommand::Cancel {
-                call_id: call_id(&first)
-            }))
+            Some(Command::Computer(
+                ComputerCommand::Cancel {
+                    call_id: call_id(&first)
+                },
+                Some(alas_client::VmGuest::Macos)
+            ))
         );
         assert!(!pending.lock().unwrap().contains_key(&json!(7).to_string()));
     }
@@ -4159,6 +4251,7 @@ mod tests {
             Command::VmRun {
                 command: "make".into(),
                 timeout_seconds: None,
+                vm: None,
             },
         ];
         for mut command in commands {
@@ -4204,10 +4297,13 @@ mod tests {
                 selector: None,
                 timeout_ms: 20_000,
             }),
-            Command::Computer(alas_client::ComputerCommand::Screenshot {
-                window_id: 7,
-                call_id: Some("42-1".into()),
-            }),
+            Command::Computer(
+                alas_client::ComputerCommand::Screenshot {
+                    window_id: 7,
+                    call_id: Some("42-1".into()),
+                },
+                None,
+            ),
         ] {
             assert_http_cancellation_is_accepted(pending);
         }
@@ -4285,7 +4381,8 @@ mod tests {
             command_for_tool("vm_run", &json!({ "command": "open -a Safari" }), "/wt").unwrap(),
             Command::VmRun {
                 command: "open -a Safari".into(),
-                timeout_seconds: None
+                timeout_seconds: None,
+                vm: None
             }
         );
         let ranged = command_for_tool(
@@ -4298,17 +4395,37 @@ mod tests {
             ranged,
             Command::VmRun {
                 command: "make".into(),
-                timeout_seconds: Some(600)
+                timeout_seconds: Some(600),
+                vm: None
             }
         );
         // Up to ten minutes in the guest: never on the stdio loop.
         assert!(runs_on_worker(&ranged));
         assert_eq!(
             command_for_tool("vm_status", &json!({}), "/wt").unwrap(),
-            Command::VmStatus
+            Command::VmStatus { vm: None }
         );
         // Waits on the guest helper's hello for seconds.
-        assert!(runs_on_worker(&Command::VmStatus));
+        assert!(runs_on_worker(&Command::VmStatus { vm: None }));
+        assert_eq!(
+            command_for_tool(
+                "vm_run",
+                &json!({ "command": "uname -a", "vm": "linux" }),
+                "/wt"
+            )
+            .unwrap(),
+            Command::VmRun {
+                command: "uname -a".into(),
+                timeout_seconds: None,
+                vm: Some(alas_client::VmGuest::Linux)
+            }
+        );
+        assert_eq!(
+            command_for_tool("vm_status", &json!({ "vm": "macos" }), "/wt").unwrap(),
+            Command::VmStatus {
+                vm: Some(alas_client::VmGuest::Macos)
+            }
+        );
         for (name, args) in [
             ("vm_run", json!({})),
             ("vm_run", json!({ "command": "  " })),
@@ -4317,6 +4434,8 @@ mod tests {
             ("vm_run", json!({ "command": "ls", "timeout_seconds": 601 })),
             ("vm_run", json!({ "command": "ls", "cwd": "/tmp" })),
             ("vm_status", json!({ "verbose": true })),
+            ("vm_status", json!({ "vm": "macOS" })),
+            ("vm_run", json!({ "command": "ls", "vm": "windows" })),
         ] {
             assert!(
                 command_for_tool(name, &args, "/wt").is_err(),
@@ -4326,18 +4445,72 @@ mod tests {
     }
 
     #[test]
+    fn vm_and_computer_tools_take_an_optional_vm() {
+        let tools: Vec<Value> = super::computer_tool_definitions()
+            .into_iter()
+            .chain(super::vm_tool_definitions())
+            .collect();
+        assert_eq!(tools.len(), 12);
+        for tool in &tools {
+            let name = tool["name"].as_str().unwrap();
+            let schema = &tool["inputSchema"];
+            assert_eq!(
+                schema["properties"]["vm"]["enum"],
+                json!(["macos", "linux"]),
+                "{name}"
+            );
+            let required = schema["required"].as_array().cloned().unwrap_or_default();
+            assert!(!required.contains(&json!("vm")), "{name}");
+        }
+        // Every computer tool takes `vm`, with arguments it otherwise accepts.
+        for (tool, args) in [
+            ("computer_apps", json!({})),
+            ("computer_screenshot", json!({ "window_id": 7 })),
+            ("computer_inspect", json!({ "window_id": 7 })),
+            ("computer_click", json!({ "window_id": 7, "ref": "e1" })),
+            ("computer_type", json!({ "window_id": 7, "text": "a" })),
+            ("computer_key", json!({ "window_id": 7, "keys": "a" })),
+            (
+                "computer_scroll",
+                json!({ "window_id": 7, "ref": "e1", "dy": 1 }),
+            ),
+            (
+                "computer_drag",
+                json!({ "window_id": 7, "ref": "e1", "to_ref": "e2" }),
+            ),
+            ("computer_open_app", json!({ "name": "Notes" })),
+            ("computer_wait", json!({ "window_id": 7, "query": "x" })),
+        ] {
+            let mut named = args.clone();
+            named["vm"] = json!("linux");
+            let unnamed = command_for_tool(tool, &args, "/wt").unwrap();
+            let Command::Computer(computer, None) = unnamed else {
+                panic!("{tool}: {unnamed:?}");
+            };
+            assert_eq!(
+                command_for_tool(tool, &named, "/wt").unwrap(),
+                Command::Computer(computer, Some(alas_client::VmGuest::Linux)),
+                "{tool}"
+            );
+        }
+    }
+
+    #[test]
     fn computer_tools_validate_arguments_and_map_to_commands() {
         use alas_client::ComputerCommand;
         assert_eq!(
             command_for_tool("computer_apps", &json!({}), "/wt").unwrap(),
-            Command::Computer(ComputerCommand::Apps { call_id: None })
+            Command::Computer(ComputerCommand::Apps { call_id: None }, None)
         );
         assert_eq!(
             command_for_tool("computer_screenshot", &json!({ "window_id": 7 }), "/wt").unwrap(),
-            Command::Computer(ComputerCommand::Screenshot {
-                window_id: 7,
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Screenshot {
+                    window_id: 7,
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             command_for_tool(
@@ -4346,13 +4519,16 @@ mod tests {
                 "/wt"
             )
             .unwrap(),
-            Command::Computer(ComputerCommand::Inspect {
-                window_id: 7,
-                query: Some("Save".into()),
-                limit: 300,
-                max_depth: 32,
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Inspect {
+                    window_id: 7,
+                    query: Some("Save".into()),
+                    limit: 300,
+                    max_depth: 32,
+                    call_id: None
+                },
+                None
+            )
         );
         assert_eq!(
             command_for_tool(
@@ -4361,13 +4537,16 @@ mod tests {
                 "/wt"
             )
             .unwrap(),
-            Command::Computer(ComputerCommand::Inspect {
-                window_id: 7,
-                query: None,
-                limit: 300,
-                max_depth: 32,
-                call_id: None
-            })
+            Command::Computer(
+                ComputerCommand::Inspect {
+                    window_id: 7,
+                    query: None,
+                    limit: 300,
+                    max_depth: 32,
+                    call_id: None
+                },
+                None
+            )
         );
         let post = alas_client::ComputerPost::default();
         let at = |x, y| alas_client::ComputerTarget::Point { x, y };
@@ -4480,7 +4659,7 @@ mod tests {
         ] {
             assert_eq!(
                 command_for_tool(tool, &args, "/wt").unwrap(),
-                Command::Computer(expected),
+                Command::Computer(expected, None),
                 "{tool} {args}"
             );
         }
@@ -4674,6 +4853,8 @@ mod tests {
                 "computer_open_app",
                 json!({ "name": "Notes", "max_depth": 12 }),
             ),
+            ("computer_apps", json!({ "vm": "ubuntu" })),
+            ("computer_apps", json!({ "vm": "macOS" })),
         ] {
             assert!(
                 command_for_tool(tool, &args, "/wt").is_err(),
@@ -4696,7 +4877,7 @@ mod tests {
             |command| {
                 assert!(matches!(
                     command,
-                    Command::Computer(alas_client::ComputerCommand::Screenshot { .. })
+                    Command::Computer(alas_client::ComputerCommand::Screenshot { .. }, None)
                 ));
                 Ok(Response {
                     ok: true,

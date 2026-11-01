@@ -1,3 +1,4 @@
+import AlasCore
 import Foundation
 
 /// Which screen a worktree's VM tab shows.
@@ -34,7 +35,12 @@ enum VMTabScreen: Equatable {
     /// A helper update stops and restarts the VM, so it wins over the states
     /// that passes through. `helper` is the worktree VM's, `goldenHelper`
     /// the golden's awaiting setup.
+    ///
+    /// A Linux tab follows `linuxInstallerPhase` alone: its image has no
+    /// setup by hand, no customizing and no helper update, and it takes no
+    /// macOS VM slot.
     static func resolve(
+        guest: VMGuestOS = .macOS,
         runningHere: Bool,
         startingHere: Bool,
         slotChoice: [String]?,
@@ -44,9 +50,15 @@ enum VMTabScreen: Equatable {
         customizingHere: Bool,
         goldenAvailable: Bool,
         installerPhase: GoldenImageInstaller.Phase,
+        linuxInstallerPhase: LinuxGoldenInstaller.Phase = .idle,
         helper: HelperUpdate,
         goldenHelper: HelperUpdate
     ) -> VMTabScreen {
+        if guest == .linux {
+            return resolveLinux(
+                runningHere: runningHere, startingHere: startingHere, runningElsewhere: runningElsewhere,
+                loaded: loaded, hasVM: hasVM, goldenAvailable: goldenAvailable, installerPhase: linuxInstallerPhase)
+        }
         if helper == .updating { return .updatingHelper }
         if runningHere { return .running(updateHelper: helper == .available) }
         if startingHere { return .starting }
@@ -60,6 +72,26 @@ enum VMTabScreen: Equatable {
             return .goldenSetup(build: build, updateHelper: goldenHelper == .available)
         case _ where hasVM: return .stopped
         case .downloading, .installing, .provisioning, .failed: return .setup
+        case .idle, .sealed: return goldenAvailable ? .createVM : .setup
+        }
+    }
+
+    private static func resolveLinux(
+        runningHere: Bool,
+        startingHere: Bool,
+        runningElsewhere: String?,
+        loaded: Bool,
+        hasVM: Bool,
+        goldenAvailable: Bool,
+        installerPhase: LinuxGoldenInstaller.Phase
+    ) -> VMTabScreen {
+        if runningHere { return .running(updateHelper: false) }
+        if startingHere { return .starting }
+        if let runningElsewhere { return .runningElsewhere(label: runningElsewhere) }
+        if !loaded { return .loading }
+        if hasVM { return .stopped }
+        switch installerPhase {
+        case .downloading, .checking, .converting, .firstBoot, .verifying, .failed: return .setup
         case .idle, .sealed: return goldenAvailable ? .createVM : .setup
         }
     }
