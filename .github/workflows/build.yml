@@ -552,6 +552,19 @@ jobs:
         # runtime skip, which the coverage audit correctly rejects.
         run: brew install ripgrep
 
+      - name: Serve key-authenticated SSH on localhost
+        # SSHIntegrationTests drive real `ssh localhost`.
+        run: |
+          sudo launchctl enable system/com.openssh.sshd
+          sudo launchctl bootstrap system /System/Library/LaunchDaemons/ssh.plist || true
+          mkdir -p -m 700 ~/.ssh
+          ssh-keygen -q -t ed25519 -N "" -f ~/.ssh/id_ed25519
+          cat ~/.ssh/id_ed25519.pub >> ~/.ssh/authorized_keys
+          chmod 600 ~/.ssh/authorized_keys
+          for _ in $(seq 30); do ssh-keyscan -T 2 localhost >> ~/.ssh/known_hosts 2>/dev/null && break; sleep 1; done
+          ssh -o BatchMode=yes localhost true
+          echo "TEST_RUNNER_ALAS_SSH_INTEGRATION=1" >> "$GITHUB_ENV"
+
       - name: Download compiled Swift test products
         uses: actions/download-artifact@v8
         with:
