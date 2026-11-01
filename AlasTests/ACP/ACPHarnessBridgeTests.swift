@@ -216,6 +216,70 @@ struct ACPHarnessBridgeTests {
         #expect(harness.activityBySession["s1"]?.state == .failed)
     }
 
+    @Test("a turn that settles at its result finishes only when its background work ends", arguments: [true, false])
+    func backgroundWorkDefersFinish(settles: Bool) async {
+        let harness = makeHarness()
+        var transitions: [HarnessActivityTransition] = []
+        harness.onActivityTransition = { transitions.append($0) }
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.settlesAtResult = settles
+        bridge.observe(session: session)
+        let idleTransitions = { transitions.filter { $0.state == .idle }.count }
+
+        session.transcript.streamingState = .streaming
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        await Task.yield()
+        session.transcript.streamingState = .idle
+        await Task.yield()
+        if !settles {
+            #expect(harness.activityBySession["s1"] == nil)
+            #expect(idleTransitions() == 1)
+            return
+        }
+        #expect(harness.activityBySession["s1"]?.state == .busy)
+
+        // A child permission after the parent's result, answered.
+        session.transcript.streamingState = .awaitingPermission
+        await Task.yield()
+        #expect(harness.activityBySession["s1"]?.state == .permissionRequest)
+        session.transcript.streamingState = .idle
+        await Task.yield()
+        #expect(harness.activityBySession["s1"]?.state == .busy)
+        #expect(idleTransitions() == 0)
+
+        session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        await Task.yield()
+        #expect(harness.activityBySession["s1"] == nil)
+        #expect(idleTransitions() == 1)
+    }
+
+    /// Background work cut off with the connection is no finish. A stopping
+    /// runner marks its children disconnected while the agent still reads
+    /// ready; otherwise the agent leaves ready with the work still live.
+    @Test("background work a disconnect cuts off clears the badge without finishing", arguments: [true, false])
+    func disconnectedBackgroundWorkDoesNotFinish(childrenMarkedFirst: Bool) {
+        let harness = makeHarness()
+        var transitions: [HarnessActivityTransition] = []
+        harness.onActivityTransition = { transitions.append($0) }
+        let bridge = ACPHarnessBridge(harness: harness)
+        let session = ACPSession(id: "s1", agentId: "claude", worktreeId: "wt", title: "t")
+        session.agentState = .ready
+        session.settlesAtResult = true
+        bridge.observe(session: session)
+        session.transcript.streamingState = .streaming
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        session.transcript.streamingState = .idle
+        #expect(harness.activityBySession["s1"]?.state == .busy)
+
+        if childrenMarkedFirst { _ = session.markSubagentsDisconnected() }
+        session.agentState = .idle
+
+        #expect(harness.activityBySession["s1"] == nil)
+        #expect(!transitions.contains { $0.state == .idle })
+    }
+
     @Test("ACP idle preserves a Pi background workflow")
     func idlePreservesBackgroundWorkflow() async {
         let harness = makeHarness()

@@ -226,6 +226,29 @@ struct ACPSessionRunnerQueueTests {
         #expect(mock.sent.contains { $0.method == "session/prompt" }, "the retry wake drains the queue")
     }
 
+    @Test("an idle restart waits until background children finish, holding the queue for it")
+    func idleRestartWaitsForBackgroundWork() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        session.settlesAtResult = true
+        session.registerSubagent(.init(subagentSessionId: "child"))
+        session.enqueue(blocks: [.text("queued")])
+        runner.persistQueue()
+        await runner.flushPersistence()
+        var restarts = 0
+        runner.restartAgentWhenIdle = { restarts += 1 }
+        runner.flushQueueIfIdle()
+        await runner.flushPersistence()
+        #expect(restarts == 0)
+        #expect(Self.sentPromptTexts(mock).isEmpty)
+        #expect(session.queue.first?.status == .pending)
+
+        session.applySubagentState(.init(subagentSessionId: "child", state: .completed))
+        try await waitUntil { restarts == 1 }
+        await runner.flushPersistence()
+        #expect(Self.sentPromptTexts(mock).isEmpty, "nothing reaches the outdated agent")
+    }
+
     @Test("a resume that succeeds clears the Limited state and the queue drains")
     func usageLimitResumeSucceeds() async throws {
         let (runner, mock, session, _) = try mkRunner()
@@ -1570,6 +1593,51 @@ struct ACPSessionRunnerQueueTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
+    @Test("idle Stop on a root-owned autonomous cycle stops it and its child without cancelling the root, and later prompts run")
+    func idleStopOfAutonomousCycle() async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.remoteSessionId = "remote-root"
+        session.settlesAtResult = true
+        session.backgroundTaskStopSupported = true
+        var cycle = ACPAsyncTaskUpdate(sessionUpdate: "async_task_spawned", asyncTaskId: "cycle",
+            name: "Autonomous turn", canStop: true)
+        cycle.taskType = "turn"
+        session.applyBackgroundTask(cycle, ownerSessionId: "remote-root")
+        session.registerSubagent(.init(subagentSessionId: "child", capabilities: .cancellable))
+        mock.script(method: "_session/async_task/stop") { _ in Data(#"{"stopped":true}"#.utf8) }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        defer { runner.stop() }
+        #expect(await runner.userCancel())
+        await runner.flushPersistence()
+        #expect(mock.sent.map(\.method) == ["_session/async_task/stop", "session/cancel"])
+        let cancelled = try #require(mock.sent.last?.params as? ACPSessionCancelParams)
+        #expect(cancelled.sessionId == "child")
+        #expect(session.transcript.streamingState == .idle)
+        var finished: Bool?
+        runner.send(blocks: [.text("next")], intent: .auto) { finished = $0 }
+        try await waitUntil { finished != nil }
+        #expect(finished == true)
+        #expect(mock.sent.filter { $0.method == "session/cancel" }.count == 1)
+    }
+
+    @Test("a lost autonomous cycle does not wake the agent, other lost tasks do", arguments: [("turn", false), (nil, true)])
+    func lostAutonomousTurnDoesNotWake(taskType: String?, wakes: Bool) async throws {
+        let (runner, mock, session, _) = try mkRunner()
+        session.settlesAtResult = true
+        session.transcript.streamingState = .awaitingInput
+        var job = ACPAsyncTaskUpdate(sessionUpdate: "async_task_spawned", asyncTaskId: "job", name: "Job")
+        job.taskType = taskType
+        session.applyBackgroundTask(job, ownerSessionId: "s")
+        runner.start()
+        defer { runner.stop() }
+        await runner.reconcileBackgroundTasks(adapterSurvived: false, previousTaskIds: Set(session.backgroundTasks.map(\.id)))
+        await runner.flushPersistence()
+        #expect(session.backgroundTasks[0].state == "lost")
+        #expect(session.queue.count == (wakes ? 1 : 0))
+        #expect(!session.activity.backgroundWorking)
+        #expect(mock.sent.isEmpty)
+    }
+
     @Test(
         "background completion batches precede future schedules without overtaking ordinary prompts",
         arguments: [false, true])
@@ -2207,7 +2275,9 @@ struct ACPSessionRunnerQueueTests {
     @Test("recovery preserves surviving or reannounced tasks and reports loss only after replacement", arguments: [(true, false), (false, false), (false, true)])
     func backgroundRecovery(adapterSurvived: Bool, reannounced: Bool) async throws {
         let (runner, mock, session, store) = try mkRunner()
+        session.settlesAtResult = true
         session.transcript.streamingState = .awaitingInput
+        session.registerSubagent(.init(subagentSessionId: "child"))
         session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "watch", name: "Watch"), ownerSessionId: "s")
         if reannounced {
             mock.emit(.init(sessionId: "s", update: .asyncTask(.init(
@@ -2219,6 +2289,9 @@ struct ACPSessionRunnerQueueTests {
         await runner.flushPersistence()
         let shouldReportLoss = !adapterSurvived && !reannounced
         #expect(session.backgroundTasks[0].state == (shouldReportLoss ? "lost" : "running"))
+        // A replaced adapter's children died with it, even if replay resurrected them.
+        #expect(session.subagentRun("child")?.state == (adapterSurvived ? .running : .disconnected))
+        #expect(session.activity.backgroundWorking == adapterSurvived)
         #expect(session.queue.count == (shouldReportLoss ? 1 : 0))
         #expect(mock.sent.isEmpty)
         if shouldReportLoss {

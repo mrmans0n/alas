@@ -4608,6 +4608,7 @@ struct ACPSessionRunnerTests {
         onSuccessfulTurn: @escaping @MainActor (NextPromptCompletedTurn) -> Void = { _ in },
         onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
         onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
+        onPermissionBlocked: ((ACPChildBlocker) -> Void)? = nil,
         pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
         incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
         usageWaitSleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
@@ -4631,6 +4632,7 @@ struct ACPSessionRunnerTests {
             onSuccessfulTurn: onSuccessfulTurn,
             onTurnCompleted: onTurnCompleted,
             onTurnUsage: onTurnUsage,
+            onPermissionBlocked: onPermissionBlocked,
             onCheckpointCapture: onCheckpointCapture,
             pluginContext: pluginContext,
             isConnectionCurrent: isConnectionCurrent,
@@ -5648,6 +5650,491 @@ struct ACPSessionRunnerTests {
         await cancelTask.value
 
         #expect(!mock.sent.contains { $0.method == "session/cancel" })
+    }
+
+    /// A turn that settled at its result leaves a child running; the child's
+    /// permission (or out-of-turn plan review) parks and is answered without
+    /// inventing a turn, and the prompt queued meanwhile drains. A permission
+    /// parked before the parent's result outlives the turn ending.
+    @Test("a background child's permission settles back to idle once answered",
+          arguments: [("ExitPlanMode", false), ("Bash", true)])
+    func outOfTurnPermissionRestoresIdle(tool: String, parksBeforeResult: Bool) async throws {
+        var completions: [ACPTurnCompletion] = []
+        var blockers: [ACPChildBlocker] = []
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: { completions.append($0) },
+            onPermissionBlocked: { blockers.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        let session = runner.session
+        session.agentState = .ready
+        session.settlesAtResult = true
+        runner.start()
+        defer { runner.stop() }
+        let options: [ACPPermissionOption] = tool == "ExitPlanMode"
+            ? [.init(optionId: "default", name: "Yes", kind: "allow_once"),
+               .init(optionId: "plan", name: "No, keep planning", kind: "reject_once")]
+            : [.init(optionId: "allow", name: "Allow", kind: "allow_once"),
+               .init(optionId: "reject", name: "Reject", kind: "reject_once")]
+        let permission = ACPPermissionRequestParams(
+            sessionId: "child-1",
+            toolCall: .init(toolCallId: "child-call", title: tool, kind: nil, status: nil,
+                            content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+            options: options)
+        let permissionParked = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+            if parksBeforeResult {
+                mock.emitPermission(id: .number(21), params: permission)
+                await permissionParked.wait()
+            }
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        let sent = Task { @MainActor in
+            await withCheckedContinuation { continuation in
+                runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
+            }
+        }
+        if parksBeforeResult {
+            try await waitUntil { session.transcript.pendingPermission != nil }
+            await permissionParked.open()
+        }
+        _ = await sent.value
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { session.subagentRun("child-1") != nil }
+
+        if parksBeforeResult {
+            #expect(completions.count == 1)
+        } else {
+            #expect(session.transcript.streamingState == .idle)
+            mock.emitPermission(id: .number(21), params: permission)
+            try await waitUntil { session.transcript.pendingPermission != nil }
+        }
+        #expect(blockers.count == 1)
+        #expect(session.transcript.streamingState == .awaitingPermission)
+        runner.send(text: "next", attachments: [])
+        try await waitUntil { session.queue.count == 1 }
+
+        await runner.policy.userDecided(
+            scopeKey: "tool:\(tool)", optionId: options[0].optionId, decision: .allow, persistScope: nil)
+
+        #expect(session.transcript.streamingState == .idle)
+        #expect(runner.activePromptIDForTesting == nil)
+        #expect(completions.count == 1)
+        try await waitUntil { mock.permissionResponses[.number(21)] != nil }
+        #expect(mock.permissionResponses[.number(21)]?.outcome == .selected(optionId: options[0].optionId))
+        try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
+    }
+
+    /// Stop while a child's permission is parked after the turn settled: no
+    /// prompt exists, so the root cancel path answers the permission without
+    /// completing a turn.
+    @Test("Stop with a background child's permission parked cancels it and ends idle")
+    func stopWithParkedChildPermission() async throws {
+        var completions: [ACPTurnCompletion] = []
+        let (runner, mock) = try makeRunner(onTurnCompleted: { completions.append($0) })
+        runner.turnPublicationTasksForTesting = [:]
+        let session = runner.session
+        session.agentState = .ready
+        session.settlesAtResult = true
+        runner.start()
+        defer { runner.stop() }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { session.subagentRun("child-1") != nil }
+        mock.emitPermission(id: .number(41), params: .init(
+            sessionId: "child-1",
+            toolCall: .init(toolCallId: "child-call", title: "Bash", kind: nil, status: nil,
+                            content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+            options: [.init(optionId: "allow", name: "Allow", kind: "allow_once")]))
+        try await waitUntil { session.transcript.pendingPermission != nil }
+        let before = completions.count
+
+        await runner.userCancel()
+
+        #expect(mock.sent.contains { $0.method == "session/cancel" })
+        try await waitUntil { mock.permissionResponses[.number(41)] != nil }
+        #expect(mock.permissionResponses[.number(41)]?.outcome == .cancelled)
+        #expect(session.transcript.streamingState == .idle)
+        #expect(completions.count == before)
+    }
+
+    /// One child's question and another child's permission overlap after the
+    /// turn settled. Whatever order they park and are answered in, the state
+    /// shows what is still waiting, ends idle, and the queued prompt drains.
+    @Test("an out-of-turn child question and permission settle back to idle in any order",
+          arguments: [(true, true), (true, false), (false, true), (false, false)])
+    func outOfTurnPermissionOverChildQuestionRestoresIdle(questionParksFirst: Bool, questionAnsweredFirst: Bool) async throws {
+        let (runner, mock) = try makeRunner()
+        runner.turnPublicationTasksForTesting = [:]
+        let session = runner.session
+        session.agentState = .ready
+        session.settlesAtResult = true
+        session.remoteSessionId = "remote-parent"
+        let coordinator = ACPElicitationCoordinator(
+            session: session, client: mock, onInputResolved: { runner.flushQueueIfIdle() })
+        coordinator.start()
+        runner.start()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+            mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-2"))))
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { session.subagentRun("child-2") != nil }
+
+        func parkQuestion() async throws {
+            mock.emitElicitation(id: .number(31), params: try JSONDecoder().decode(
+                ACPElicitationRequestParams.self,
+                from: Data(#"{"sessionId":"child-1","mode":"form","message":"Pick","requestedSchema":{"type":"object","properties":{"choice":{"type":"string"}}}}"#.utf8)))
+            try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        }
+        func parkPermission() async throws {
+            mock.emitPermission(id: .number(32), params: .init(
+                sessionId: "child-2",
+                toolCall: .init(toolCallId: "child-call", title: "Bash", kind: nil, status: nil,
+                                content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+                options: [.init(optionId: "allow", name: "Allow", kind: "allow_once")]))
+            try await waitUntil { session.transcript.pendingPermission != nil }
+        }
+        func answerQuestion() throws {
+            let question = try #require(session.transcript.pendingUserInputs.first)
+            coordinator.respond(to: question.id, action: .submit(["choice": .string("a")]))
+        }
+        func answerPermission() async {
+            await runner.policy.userDecided(scopeKey: "tool:Bash", optionId: "allow", decision: .allow, persistScope: nil)
+        }
+
+        if questionParksFirst {
+            try await parkQuestion()
+            try await parkPermission()
+        } else {
+            try await parkPermission()
+            try await parkQuestion()
+        }
+        #expect(session.transcript.streamingState == .awaitingPermission)
+        runner.send(text: "next", attachments: [])
+        try await waitUntil { session.queue.count == 1 }
+
+        if questionAnsweredFirst {
+            try answerQuestion()
+            #expect(session.transcript.streamingState == .awaitingPermission)
+            await answerPermission()
+        } else {
+            await answerPermission()
+            #expect(session.transcript.streamingState == .awaitingInput)
+            try answerQuestion()
+        }
+
+        #expect(session.transcript.streamingState == .idle)
+        try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
+    }
+
+    /// Older brokers report awaiting input for a background child's request
+    /// after the parent settled; only an unanswered prompt makes that a turn,
+    /// unless the adapter does not settle at result (a steering turn held for
+    /// recovery).
+    @Test("a broker turn counts as foreground only while it really runs", arguments: [
+        // broker state, prompt in flight, settles, foreground
+        (ACPBrokerTurnState.awaitingInput, false, true, false),
+        (.awaitingInput, true, true, true),
+        (.awaitingInput, false, false, true),
+        (.streaming, false, true, true),
+        (.completed, false, true, false),
+    ])
+    func brokerForegroundTurn(turnState: ACPBrokerTurnState, promptInFlight: Bool, settles: Bool,
+                              expected: Bool) async throws {
+        let prompt = ACPBrokerOperationSnapshot(
+            operationKey: .init(rawValue: "prompt"), adapterRequestId: .init(rawValue: 1),
+            method: "session/prompt", terminalOutcome: nil)
+        let broker = ACPBrokerClient(
+            service: ForkSourceBrokerService(
+                remoteSessionID: "remote", turnState: turnState, operations: promptInFlight ? [prompt] : []),
+            brokerId: ACPBrokerID(rawValue: "broker-1"), sessionId: "s", command: "mock", args: [],
+            cwd: "/tmp/wt", env: [:], operationKeyPrefix: "op")
+        _ = try await broker.start()
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.settlesAtResult = settles
+        let store = try ACPSessionStore(
+            path: FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite").path)
+        let runner = ACPSessionRunner(
+            session: session, connection: ACPConnection(client: broker), store: store,
+            sessionId: "s", worktreePath: FileManager.default.temporaryDirectory.path)
+
+        withExtendedLifetime(runner) {
+            #expect(session.foregroundTurnActive() == expected)
+        }
+        await broker.shutdown()
+    }
+
+    /// The adapter's autonomous follow-up cycle, announced as a root-owned `turn` async task.
+    private func followUpCycle(_ kind: String, state: String, canStop: Bool? = nil) -> ACPSessionUpdateParams {
+        var update = ACPAsyncTaskUpdate(
+            sessionUpdate: kind, asyncTaskId: "cycle", name: "Follow-up", state: state, canStop: canStop)
+        update.taskType = "turn"
+        return .init(sessionId: "s", update: .asyncTask(update))
+    }
+
+    private func usageUpdate(_ amount: Double) -> ACPSessionUpdateParams {
+        .init(sessionId: "s", update: .usageUpdate(.init(used: 1, size: 10, cost: .init(amount: amount, currency: "USD"))))
+    }
+
+    /// A settling session whose prompts answer `end_turn`, the second only once `second` opens.
+    private func makeSettlingRunner(
+        onTurnCompleted: ((ACPTurnCompletion) -> Void)? = nil,
+        onTurnUsage: ((ACPTurnCompletion) -> Void)? = nil,
+        second: AsyncGate = AsyncGate(),
+        usageWaitSleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
+        pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
+        duringPrompt: @escaping @MainActor (_ call: Int, _ mock: ACPMockClient) -> Void = { _, _ in }
+    ) throws -> (ACPSessionRunner, ACPMockClient, () -> Int) {
+        let (runner, mock) = try makeRunner(
+            onTurnCompleted: onTurnCompleted, onTurnUsage: onTurnUsage, pluginContext: pluginContext,
+            incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos, usageWaitSleep: usageWaitSleep)
+        runner.turnPublicationTasksForTesting = [:]
+        runner.session.agentState = .ready
+        runner.session.settlesAtResult = true
+        var prompts = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                prompts += 1
+                duringPrompt(prompts, mock)
+                return prompts
+            }
+            if call == 2 { await second.wait() }
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        return (runner, mock, { prompts })
+    }
+
+    /// A turn that settled at its result leaves its child running: the child's later output lands in its own
+    /// transcript, background work shows until the child ends, and no second turn is reported. The turn reports
+    /// only once the updates sent before its result are applied, so a spawn still coalescing then already shows.
+    @Test func childSurvivesParentResult() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var workingAtCompletion: [Bool] = []
+        var observed: ACPSession?
+        let (runner, mock, _) = try makeSettlingRunner(
+            onTurnCompleted: {
+                completions.append($0)
+                workingAtCompletion.append(observed?.activity.backgroundWorking == true)
+            },
+            incomingUpdateCoalesceNanos: 100_000_000,
+            duringPrompt: { _, mock in
+                mock.emit(.init(sessionId: "s", update: .subagentSpawned(.init(subagentSessionId: "child-1"))))
+            })
+        let session = runner.session
+        observed = session
+        runner.start()
+        defer { runner.stop() }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "go", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { session.subagentRun("child-1") != nil && completions.count == 1 }
+        #expect(session.activity == .init(foreground: .idle, backgroundWorking: true))
+        #expect(workingAtCompletion == [true])
+
+        mock.emit(.init(sessionId: "child-1", update: .agentMessageChunk(.text("still digging"))))
+        mock.emit(.init(sessionId: "s", update: .subagentStateUpdate(.init(subagentSessionId: "child-1", state: .completed))))
+        try await waitUntil { !session.activity.backgroundWorking }
+        #expect(session.subagentRun("child-1")?.messages.count == 1)
+        #expect(session.transcript.streamingState == .idle)
+        #expect(completions.count == 1)
+    }
+
+    /// A prompt sent while an autonomous cycle runs takes it over: the cycle finishing and its cost arriving leave
+    /// the prompt in charge, and only the prompt's own result completes its turn.
+    @Test func promptDuringFollowUpKeepsOwnership() async throws {
+        var completions: [ACPTurnCompletion] = []
+        var usage: [ACPTurnCompletion] = []
+        let second = AsyncGate()
+        let (runner, mock, prompts) = try makeSettlingRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) }, second: second)
+        let session = runner.session
+        runner.start()
+        defer { runner.stop() }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "first", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        mock.emit(followUpCycle("async_task_spawned", state: "running"))
+        try await waitUntil { session.activity.backgroundWorking }
+
+        session.enqueue(blocks: [.text("second")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { prompts() == 2 && session.transcript.streamingState == .streaming }
+        mock.emit(followUpCycle("async_task_state_update", state: "completed"))
+        mock.emit(usageUpdate(2.0))
+        try await waitUntil { !session.activity.backgroundWorking && runner.pendingIncomingUpdateCountForTesting == 0 }
+        #expect(runner.activePromptIDForTesting == 1)
+        #expect(session.transcript.streamingState == .streaming)
+        #expect(session.queue.first?.status == .sending)
+        #expect(completions.count == 1)
+        let secondStartedAt = try #require(session.queue.first?.turnStartedAt)
+
+        await second.open()
+        try await waitUntil { completions.count == 2 }
+        #expect(completions.last?.startedAt == secondStartedAt)
+        #expect(await completions.last?.cost?.resolve() == .init(amount: 2.0, currency: "USD"))
+        // The cycle the prompt took over is no background usage of its own.
+        try await waitUntil { usage.count == 2 }
+        #expect(usage.map(\.background) == [false, false])
+    }
+
+    /// A prompt that took a cycle over and is then stopped keeps the cycle's spend: the cycle ending after the stop
+    /// is no background usage, and the stopped prompt's row gets the cost once its result comes.
+    @Test func aStoppedTakeoverKeepsTheCyclesSpend() async throws {
+        var usage: [ACPTurnCompletion] = []
+        let second = AsyncGate()
+        let never = AsyncGate()
+        let (runner, mock, prompts) = try makeSettlingRunner(
+            onTurnUsage: { usage.append($0) }, second: second, usageWaitSleep: { _ in await never.wait() })
+        let session = runner.session
+        runner.start()
+        defer { runner.stop() }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "first", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { usage.count == 1 }
+        mock.emit(followUpCycle("async_task_spawned", state: "running"))
+        try await waitUntil { session.activity.backgroundWorking }
+        session.enqueue(blocks: [.text("second")])
+        runner.flushQueueIfIdle()
+        try await waitUntil { prompts() == 2 && session.transcript.streamingState == .streaming }
+
+        await runner.userCancel()
+        mock.emit(followUpCycle("async_task_state_update", state: "failed"))
+        mock.emit(usageUpdate(2.0))
+        try await waitUntil { !session.activity.backgroundWorking }
+        await second.open()
+        try await waitUntil { usage.count == 2 }
+        #expect(usage.map(\.background) == [false, false])
+        #expect(await usage.last?.cost?.resolve() == .init(amount: 2.0, currency: "USD"))
+    }
+
+    /// The cost of an autonomous cycle, sent after its task finished, is reported as a background usage row of its
+    /// own, never charged to the prompt before or after it, whether the cycle ended on its own or was stopped, even
+    /// when Stop's reply is applied before the cycle's own stopped notice, or the cycle ends while the next prompt
+    /// still prepares. An adapter that does not settle at its result has no such cycles: its prompts keep every cost.
+    @Test(arguments: [
+        (true, "completed"), (true, "stopped"), (true, "stopped locally"), (true, "completed in preflight"),
+        (false, "completed"),
+    ])
+    func autonomousUsageIsReportedApart(settles: Bool, cycleEnd: String) async throws {
+        var usage: [ACPTurnCompletion] = []
+        var completions: [ACPTurnCompletion] = []
+        let second = AsyncGate()
+        await second.open()
+        let preflight = AsyncGate()
+        if cycleEnd != "completed in preflight" { await preflight.open() }
+        var contextCalls = 0
+        let (runner, mock, _) = try makeSettlingRunner(
+            onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) }, second: second,
+            pluginContext: { _ in
+                contextCalls += 1
+                if contextCalls == 2 { await preflight.wait() }
+                return []
+            },
+            duringPrompt: { call, mock in mock.emit(self.usageUpdate(call == 1 ? 1.0 : 3.5)) })
+        runner.session.settlesAtResult = settles
+        runner.start()
+        defer { runner.stop() }
+        _ = await withCheckedContinuation { continuation in
+            runner.send(text: "first", attachments: []) { continuation.resume(returning: $0) }
+        }
+        await runner.waitForTurnPublicationForTesting(promptID: 0)
+        try await waitUntil { usage.count == 1 }
+
+        if cycleEnd == "stopped locally" {
+            runner.session.backgroundTaskStopSupported = true
+            mock.script(method: "_session/async_task/stop") { _ in Data(#"{"stopped":true}"#.utf8) }
+            mock.emit(followUpCycle("async_task_spawned", state: "running", canStop: true))
+            try await waitUntil { runner.session.activity.backgroundWorking }
+            #expect(await runner.stopBackgroundTask(id: runner.session.backgroundTasks[0].id))
+            mock.emit(followUpCycle("async_task_state_update", state: "stopped"))
+        } else if cycleEnd == "completed in preflight" {
+            mock.emit(followUpCycle("async_task_spawned", state: "running"))
+            try await waitUntil { runner.session.activity.backgroundWorking }
+            runner.send(text: "second", attachments: []) { _ in }
+            try await waitUntil { contextCalls == 2 }
+            mock.emit(followUpCycle("async_task_state_update", state: "completed"))
+        } else {
+            mock.emit(followUpCycle("async_task_spawned", state: "running"))
+            mock.emit(followUpCycle("async_task_state_update", state: cycleEnd))
+        }
+        mock.emit(usageUpdate(3.0))
+        if settles {
+            try await waitUntil { usage.count == 2 }
+            #expect(usage.last?.result == .completed)
+            #expect(await usage.last?.cost?.resolve() == .init(amount: 3.0, currency: "USD"))
+        } else {
+            try await waitUntil { runner.session.backgroundTasks.first?.state == cycleEnd }
+        }
+        #expect(completions.count == 1)
+
+        if cycleEnd == "completed in preflight" {
+            await preflight.open()
+        } else {
+            _ = await withCheckedContinuation { continuation in
+                runner.send(text: "second", attachments: []) { continuation.resume(returning: $0) }
+            }
+        }
+        try await waitUntil { usage.count == (settles ? 3 : 2) }
+        #expect(usage.map(\.background) == (settles ? [false, true, false] : [false, false]))
+        #expect(await usage.last?.cost?.resolve() == .init(amount: 3.5, currency: "USD"))
+    }
+
+    /// After a reattach's replay ends, an autonomous cycle's text is live output even when it repeats part of an
+    /// earlier message: a new agent row, not a held replay candidate. A late replayed start of a cycle already known,
+    /// or an adapter that does not settle at its result, keeps such text held.
+    @Test(arguments: [
+        // settles, cycle known before the replay, new row
+        (true, false, true),
+        (true, true, false),
+        (false, false, false),
+    ])
+    func autonomousTextShowsAfterReplay(settles: Bool, known: Bool, showsRow: Bool) async throws {
+        let (runner, _) = try makeRunner()
+        defer { runner.stop() }
+        let session = runner.session
+        session.agentState = .ready
+        session.settlesAtResult = settles
+        if known { runner.applyIncomingUpdateForTesting(followUpCycle("async_task_spawned", state: "running")) }
+        func chunk(_ messageId: String, _ text: String) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .agentMessageChunk(.init(messageId: messageId, content: .text(text))))
+        }
+        session.apply(chunk("earlier", "Checking the build again").update)
+        // The replay is the one update after any applied above.
+        let replayEnd = known ? 2 : 1
+        runner.suppressLoadReplay(throughYieldedUpdateCount: replayEnd)
+        runner.applyIncomingUpdateForTesting(chunk("earlier", "Checking the build again"))
+        runner.finishSuppressingLoadReplay(throughYieldedUpdateCount: replayEnd)
+
+        runner.applyIncomingUpdateForTesting(followUpCycle("async_task_spawned", state: "running"))
+        runner.applyIncomingUpdateForTesting(chunk("cycle", "the build"))
+
+        #expect(session.transcript.messages.count == (showsRow ? 3 : 2))
+        guard showsRow else { return }
+        guard case .agent(_, _, let text) = session.transcript.messages.last else {
+            Issue.record("The cycle's text did not get a row")
+            return
+        }
+        #expect(text.value == "the build")
     }
 
     @Test("persistSessionRow skipped when lease is held by another instance")

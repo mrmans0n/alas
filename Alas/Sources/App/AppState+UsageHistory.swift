@@ -21,7 +21,8 @@ extension AppState {
                 completion: completion, agent: agent, model: model, cumulativeCost: await completion.cost?.resolve(),
                 project: project, worktree: worktree, endedAt: endedAt)
             if let episode { try? await store.record(episode) }
-            guard let turn = try? await store.record(input) else { return }
+            // An autonomous cycle's usage is no turn plugins hear of.
+            guard let turn = try? await store.record(input), !completion.background else { return }
             await self?.pluginManager?.turnFinished(turn)
         }
     }

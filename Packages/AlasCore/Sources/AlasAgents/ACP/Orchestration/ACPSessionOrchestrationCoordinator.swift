@@ -897,11 +897,103 @@ public final class ACPSessionOrchestrationCoordinator {
     /// shepherd, not the parent, asked for that work) are ignored; everything
     /// else becomes an inbox row for the parent, wake or notice per
     /// `outcomeDisposition`.
+    ///
+    /// A child turn that settled at its result while the child's own
+    /// background work still runs waits here (`defersOutcome`) and reports
+    /// once that work ends, with the text the child ended on, or as cancelled
+    /// when the user stopped that work. A later turn of
+    /// the same child replaces it. Held in memory only: a restart in between
+    /// loses it, and the child's turn then reports nothing, as a turn cut off
+    /// by a restart does.
     public func childTurnCompleted(_ completion: ACPTurnCompletion) async {
+        deferredOutcomes[completion.sessionId] = nil
         guard completion.delegatedSource?.isFromShepherd != true,
               let record = try? await environment.persistence.delegation(childSessionId: completion.sessionId),
               record.phase != .failed, record.phase != .closed
         else { return }
+        if let location = environment.sessionLocation(completion.sessionId) {
+            defer { location.release?() }
+            if let session = location.manager.liveSession(for: completion.sessionId),
+               ACPSessionOrchestrationPolicy.defersOutcome(result: completion.result, activity: session.activity) {
+                deferOutcome(completion, session: session)
+                return
+            }
+        }
+        await enqueueTurnOutcome(completion, record: record)
+    }
+
+    private final class DeferredOutcome {
+        let completion: ACPTurnCompletion
+        let promptIDAtResult: Int
+        /// Children still live at the result.
+        let liveChildIds: Set<String>
+        var subscriptions: [ChangeSubscription] = []
+        var checkScheduled = false
+
+        init(completion: ACPTurnCompletion, promptIDAtResult: Int, liveChildIds: Set<String>) {
+            self.completion = completion
+            self.promptIDAtResult = promptIDAtResult
+            self.liveChildIds = liveChildIds
+        }
+    }
+
+    private var deferredOutcomes: [String: DeferredOutcome] = [:]
+
+    private func deferOutcome(_ completion: ACPTurnCompletion, session: ACPSession) {
+        let childId = completion.sessionId
+        let deferred = DeferredOutcome(
+            completion: completion, promptIDAtResult: session.nextPromptID,
+            liveChildIds: Set(session.subagents.values.filter(\.isRunning).map(\.subagentSessionId)))
+        // Change signals fire before the new value is stored: look on the
+        // next main-actor turn, once per burst of changes.
+        let changed: () -> Void = { [weak self, weak deferred, weak session] in
+            guard let deferred, !deferred.checkScheduled else { return }
+            deferred.checkScheduled = true
+            Task { @MainActor [weak self, weak deferred, weak session] in
+                guard let deferred else { return }
+                deferred.checkScheduled = false
+                await self?.checkDeferredOutcome(deferred, childId: childId, session: session)
+            }
+        }
+        deferred.subscriptions = [session.willChange.observe(changed), session.transcript.willChange.observe(changed)]
+        deferredOutcomes[childId] = deferred
+    }
+
+    private func checkDeferredOutcome(_ deferred: DeferredOutcome, childId: String, session: ACPSession?) async {
+        guard deferredOutcomes[childId] === deferred else { return }
+        let step = ACPSessionOrchestrationPolicy.deferredOutcomeStep(
+            activity: session?.activity,
+            agentReady: session?.agentState == .ready,
+            promptSentSince: session.map { $0.nextPromptID != deferred.promptIDAtResult } ?? false
+        )
+        switch step {
+        case .wait:
+            return
+        case .discard:
+            deferredOutcomes[childId] = nil
+        case .deliver:
+            deferredOutcomes[childId] = nil
+            let original = deferred.completion
+            let finalText = session.flatMap { ACPSessionTranscriptReader.lastAgentText($0.transcript.messages) }
+            let root = session.map { $0.remoteSessionId ?? $0.id }
+            let latestCycle = session?.backgroundTasks.last {
+                $0.taskType == "turn" && $0.ownerSessionId == root
+                    && Int64($0.startedAt.timeIntervalSince1970 * 1000) >= original.startedAt
+            }
+            let childCancelled = deferred.liveChildIds.contains { session?.subagents[$0]?.state == .cancelled }
+            let completion = ACPTurnCompletion(
+                sessionId: original.sessionId, startedAt: original.startedAt,
+                result: ACPSessionOrchestrationPolicy.deferredOutcomeResult(
+                    original.result, latestCycleState: latestCycle?.state, childCancelled: childCancelled),
+                delegatedSource: original.delegatedSource, lastAgentText: finalText ?? original.lastAgentText)
+            guard let record = try? await environment.persistence.delegation(childSessionId: childId),
+                  record.phase != .failed, record.phase != .closed
+            else { return }
+            await enqueueTurnOutcome(completion, record: record)
+        }
+    }
+
+    private func enqueueTurnOutcome(_ completion: ACPTurnCompletion, record: ACPDelegationRecord) async {
         let disposition = ACPSessionOrchestrationPolicy.outcomeDisposition(
             result: completion.result,
             lastParentReportAt: record.lastParentReportAt,
@@ -1507,11 +1599,7 @@ public final class ACPSessionOrchestrationCoordinator {
     }
 
     private static func runtimeState(_ session: ACPSession) -> ACPOrchestrationRuntimeState {
-        switch session.transcript.streamingState {
-        case .idle: .idle
-        case .sending, .streaming: .running
-        case .awaitingPermission, .awaitingInput: .awaitingInput
-        }
+        ACPSessionOrchestrationPolicy.runtimeState(activity: session.activity)
     }
 
     private func json<T: Encodable>(_ value: T) -> AlasCLIResponse {

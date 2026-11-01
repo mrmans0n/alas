@@ -38,12 +38,31 @@ final class ACPHarnessBridge {
         let stop = session.$usageLimit.map { $0 != nil }.removeDuplicates()
             .combineLatest(resumeScheduled, session.$turnFailure.removeDuplicates())
             .map { IdleStop(limited: $0, resumeScheduled: $1, failure: $2) }
+        // Read from the published values: a tracked property's signal fires
+        // before the session stores the new value. Constant for sessions that
+        // do not settle at result, so they see no extra emissions.
+        let background = session.$backgroundTasks
+            .combineLatest(session.$liveSubagentCount, session.$agentState, session.$settlesAtResult)
+            .combineLatest(session.$disconnectingSubagents)
+            .map { work, disconnecting in
+                let (tasks, liveChildren, agentState, settles) = work
+                return BackgroundWork(
+                    working: ACPSessionActivity.project(
+                        foreground: .idle, settlesAtResult: settles, agentReady: agentState == .ready,
+                        backgroundTasks: tasks, liveSubagentCount: liveChildren
+                    ).backgroundWorking,
+                    // A stopping runner drops its children before the agent
+                    // leaves ready: that is the connection going, not a finish.
+                    agentLost: settles && (agentState != .ready || disconnecting)
+                )
+            }
+            .removeDuplicates()
         sessionCancellables[session.id] = session.$readOnlyRestricted
-            .combineLatest(session.transcript.$streamingState, stop)
-            .filter { restricted, _, _ in !restricted }
-            .sink { [weak self, weak session] _, state, stop in
+            .combineLatest(session.transcript.$streamingState, stop, background)
+            .filter { restricted, _, _, _ in !restricted }
+            .sink { [weak self, weak session] _, state, stop, background in
                 guard let self, let session else { return }
-                self.apply(state: state, stop: stop, session: session, isSnapshot: isSnapshot)
+                self.apply(state: state, stop: stop, background: background, session: session, isSnapshot: isSnapshot)
                 isSnapshot = false
             }
     }
@@ -101,10 +120,31 @@ final class ACPHarnessBridge {
         let failure: String?
     }
 
-    private func apply(state: ACPSession.StreamingState, stop: IdleStop, session: ACPSession, isSnapshot: Bool) {
+    /// Work a turn that settled at its result left running.
+    private struct BackgroundWork: Equatable {
+        let working: Bool
+        /// The agent is no longer ready, or its children are being marked
+        /// disconnected; `session.agentState` may still read the old value
+        /// while this change is delivered.
+        let agentLost: Bool
+    }
+
+    private func apply(
+        state: ACPSession.StreamingState,
+        stop: IdleStop,
+        background: BackgroundWork,
+        session: ACPSession,
+        isSnapshot: Bool
+    ) {
         let agent = Self.agentKind(for: session.agentId)
         let previousState = harness.activityBySession[session.id]?.state
         switch state {
+        case .idle where background.working && stop.failure == nil && !stop.limited:
+            // The turn settled at its result but its children or an
+            // autonomous cycle still run: stay busy, and finish once all
+            // work ends so the follow-up answer is what notifies.
+            acknowledgeIfUserAddressedAttention(previousState: previousState, session: session, isSnapshot: isSnapshot)
+            harness.setExternalActivity(sessionId: session.id, owner: session.owner, agent: agent, state: .busy, isSnapshot: isSnapshot)
         case .idle:
             if let failure = stop.failure {
                 // A failed turn is not a finish: keep the badge until the next
@@ -132,7 +172,7 @@ final class ACPHarnessBridge {
                 sessionId: session.id,
                 owner: session.owner,
                 agent: agent,
-                recordIdleTransition: !isSnapshot && session.agentState == .ready
+                recordIdleTransition: !isSnapshot && session.agentState == .ready && !background.agentLost
                     && harness.activityBySession[session.id] != nil
             )
         case .sending, .streaming:

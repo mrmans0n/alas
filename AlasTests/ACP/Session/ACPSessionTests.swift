@@ -5,6 +5,80 @@ import Testing
 @MainActor
 @Suite("ACPSession")
 struct ACPSessionTests {
+    @Test("background work is an autonomous turn or a live child, only on a ready adapter that settles at result", arguments: [
+        // settles, ready, turn task active, live child, background working
+        (true, true, true, false, true),
+        (true, true, false, true, true),
+        (true, true, false, false, false),
+        (true, false, true, true, false),
+        (false, true, true, true, false),
+    ])
+    func activityProjection(settles: Bool, ready: Bool, turnActive: Bool, liveChild: Bool, expected: Bool) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.settlesAtResult = settles
+        session.agentState = ready ? .ready : .disconnected
+        // A long-lived shell and a finished child never count.
+        session.applyBackgroundTask(.init(sessionUpdate: "async_task_spawned", asyncTaskId: "dev-server"), ownerSessionId: "s")
+        session.registerSubagent(.init(subagentSessionId: "done"))
+        session.applySubagentState(.init(subagentSessionId: "done", state: .completed))
+        var turn = ACPBackgroundTask(ownerSessionId: "s", asyncTaskId: "cycle", name: "Claude is working")
+        turn.taskType = "turn"
+        if !turnActive { turn.state = "completed" }
+        session.saveBackgroundTask(turn)
+        if liveChild {
+            session.registerSubagent(.init(subagentSessionId: "child"))
+            // A child blocked on the user is still live.
+            session.applySubagentState(.init(subagentSessionId: "child", state: .requiresAction))
+        }
+
+        #expect(session.liveSubagentCount == (liveChild ? 1 : 0))
+        #expect(session.activity == ACPSessionActivity(foreground: .idle, backgroundWorking: expected))
+        #expect(session.activity.allWorkFinished == !expected)
+    }
+
+    /// An older broker reports awaiting input for a child's request after the
+    /// parent settled and never clears it, and reports completion over
+    /// requests still open. Only a settling adapter derives past it; elsewhere
+    /// awaiting input without a prompt is a steering turn held for recovery.
+    @Test("a broker turn state keeps what still waits here", arguments: [
+        // broker state, prompt in flight, settles, pending here (or a turn the runner still runs), expected
+        (ACPBrokerTurnState.awaitingInput, false, true, "permission", ACPSession.StreamingState.awaitingPermission),
+        (.awaitingInput, false, true, "turn", .awaitingInput),
+        (.completed, false, true, "permission", .awaitingPermission),
+        (.awaitingInput, true, true, "permission", .awaitingPermission),
+        (.awaitingInput, false, true, "", .idle),
+        (.awaitingInput, true, true, "question", .awaitingInput),
+        (.awaitingInput, true, true, "", .awaitingInput),
+        (.streaming, true, true, "", .streaming),
+        (.awaitingInput, false, false, "", .awaitingInput),
+    ])
+    func brokerTurnStateKeepsPendingWaits(turnState: ACPBrokerTurnState, promptInFlight: Bool, settles: Bool,
+                                          pending: String, expected: ACPSession.StreamingState) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.settlesAtResult = settles
+        if pending == "turn" { session.foregroundTurnActive = { true } }
+        if pending == "question" {
+            session.transcript.pendingUserInputs = [ACPUserInputRequest(
+                id: UUID(),
+                source: .cursor(id: .string("q1"),
+                                params: ACPQuestionRequestParams(toolCallId: "t1", title: "Pick", questions: [])),
+                title: "Pick", message: "Pick", fields: [], mode: .form)]
+            session.transcript.streamingState = .streaming
+        }
+        if pending == "permission" {
+            session.transcript.pendingPermission = .init(id: .number(0), params: .init(
+                sessionId: "child-1",
+                toolCall: .init(toolCallId: "c", title: "Bash", kind: nil, status: nil,
+                                content: nil, locations: nil, rawInput: nil, rawOutput: nil),
+                options: [.init(optionId: "allow", name: "Allow", kind: "allow_once")]))
+            session.transcript.streamingState = .awaitingPermission
+        }
+
+        session.applyBrokerTurnState(turnState, promptInFlight: promptInFlight)
+
+        #expect(session.transcript.streamingState == expected)
+    }
+
     @Test("a session link in a user chunk from the agent is not recorded, so it grants nothing")
     func agentSentSessionLinkIsDropped() {
         let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")

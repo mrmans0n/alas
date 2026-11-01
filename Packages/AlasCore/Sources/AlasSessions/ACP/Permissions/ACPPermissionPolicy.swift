@@ -177,7 +177,9 @@ public final class ACPPermissionPolicy {
         let cont = pendingContinuation
         pendingContinuation = nil
         session.transcript.pendingPermission = nil
-        session.transcript.streamingState = .streaming
+        // A background child can ask after its parent's turn settled, so the
+        // answer must not claim a turn that is no longer running.
+        if wasPending { session.settleWaitingState() }
         if let stillAuthorized, await !stillAuthorized() {
             cont?.resume(returning: .init(outcome: .cancelled))
             return false
@@ -207,7 +209,7 @@ public final class ACPPermissionPolicy {
 
     public func userCancelled() {
         session.transcript.pendingPermission = nil
-        session.transcript.streamingState = .idle
+        session.settleWaitingState()
         let cont = pendingContinuation
         pendingContinuation = nil
         cont?.resume(returning: .init(outcome: .cancelled))

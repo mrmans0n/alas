@@ -3,10 +3,15 @@ import Foundation
 
 actor ForkSourceBrokerService: ACPBrokerServicing {
     private let remoteSessionID: String
+    private let turnState: ACPBrokerTurnState
+    private let operations: [ACPBrokerOperationSnapshot]
     private var nextRequestID: UInt64 = 0
 
-    init(remoteSessionID: String) {
+    init(remoteSessionID: String, turnState: ACPBrokerTurnState = .idle,
+         operations: [ACPBrokerOperationSnapshot] = []) {
         self.remoteSessionID = remoteSessionID
+        self.turnState = turnState
+        self.operations = operations
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -99,11 +104,11 @@ actor ForkSourceBrokerService: ACPBrokerServicing {
                 "authMethods": .array([])
             ]),
             remoteSessionResult: nil,
-            turnState: .idle,
+            turnState: turnState,
             acknowledgedCursor: acknowledgedCursor,
             journalTail: acknowledgedCursor,
             pendingRequests: [],
-            operations: []
+            operations: operations
         )
     }
 }

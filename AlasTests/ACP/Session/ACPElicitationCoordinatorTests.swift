@@ -47,6 +47,51 @@ struct ACPElicitationCoordinatorTests {
         #expect(session.transcript.streamingState == .idle)
     }
 
+    /// Claude scopes a background child's AskUserQuestion to the child's own
+    /// session id; only ids this session spawned are accepted.
+    @Test("session-scoped form to a spawned child is asked, a stranger's is rejected",
+          arguments: [("child-1", true), ("stranger", false)])
+    func childScopedElicitation(sessionId: String, accepted: Bool) async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        session.remoteSessionId = "remote-parent"
+        session.registerSubagent(.init(subagentSessionId: "child-1"))
+        coordinator.start()
+        let params = try decodeParams(#"""
+        {
+          "sessionId": "\#(sessionId)",
+          "mode": "form",
+          "message": "Pick one",
+          "requestedSchema": {
+            "type": "object",
+            "properties": {"choice": {"type": "string"}}
+          }
+        }
+        """#)
+
+        client.emitElicitation(id: .number(41), params: params)
+        guard accepted else {
+            try await waitUntil { client.elicitationResponses[.number(41)] != nil }
+            guard case .failure(let error) = client.elicitationResponses[.number(41)] else {
+                Issue.record("expected invalid params")
+                return
+            }
+            #expect(error.code == -32602)
+            return
+        }
+        try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        let request = try #require(session.transcript.pendingUserInputs.first)
+        #expect(session.transcript.streamingState == .awaitingInput)
+
+        coordinator.respond(to: request.id, action: .submit(["choice": .string("a")]))
+        try await waitUntil { client.elicitationResponses[.number(41)] != nil }
+        guard case .success(let response) = client.elicitationResponses[.number(41)] else {
+            Issue.record("expected success response")
+            return
+        }
+        #expect(response == .accept(["choice": .string("a")]))
+        #expect(session.transcript.streamingState == .idle)
+    }
+
     @Test("request-scoped elicitation can unblock initialize")
     func elicitationDuringInitialize() async throws {
         let (coordinator, session, client) = makeCoordinator()
@@ -78,6 +123,7 @@ struct ACPElicitationCoordinatorTests {
     func cursorAdapter() async throws {
         let (coordinator, session, client) = makeCoordinator()
         coordinator.start()
+        session.foregroundTurnActive = { true }
         session.transcript.streamingState = .streaming
         let params = ACPQuestionRequestParams(
             toolCallId: "call",
@@ -367,6 +413,7 @@ struct ACPElicitationCoordinatorTests {
     @Test("Cursor plan preserves the active turn state after response")
     func planResponseRestoresActiveTurnState() async throws {
         let (coordinator, session, client) = makeCoordinator()
+        session.foregroundTurnActive = { true }
         session.transcript.streamingState = .streaming
         coordinator.start()
 
@@ -386,6 +433,7 @@ struct ACPElicitationCoordinatorTests {
     @Test("broker-delivered Cursor plan preserves active state from awaiting input snapshot")
     func brokerPlanResponseRestoresActiveTurnState() async throws {
         let (coordinator, session, client) = makeCoordinator()
+        session.foregroundTurnActive = { true }
         session.transcript.streamingState = .awaitingInput
         coordinator.start()
 

@@ -6,6 +6,13 @@ import AlasFeatures
 import AlasCode
 import AlasACP
 
+/// See `ACPSessionOrchestrationPolicy.deferredOutcomeStep`.
+public enum ACPDeferredChildOutcomeStep: Equatable, Sendable {
+    case wait
+    case deliver
+    case discard
+}
+
 public enum ACPSessionOrchestrationPolicy: Sendable {
     public enum Error: Swift.Error, Equatable, Sendable {
         case delegatedSessionCannotCreateChild
@@ -329,6 +336,48 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
         }
     }
 
+    /// Whether a child's finished turn waits before its parent hears of it.
+    /// A turn that settled at its result while the child's own children or
+    /// autonomous follow-up still run would report interim text ("started a
+    /// background agent…"); the answer comes once that work ends. Failed,
+    /// stopped, cancelled and limited turns report at once.
+    public static func defersOutcome(result: ACPTurnCompletion.Result, activity: ACPSessionActivity?) -> Bool {
+        guard case .completed = result else { return false }
+        return activity?.backgroundWorking == true
+    }
+
+    /// What a deferred outcome does as the child's state changes. It is
+    /// delivered once all work has finished with the agent ready. A prompt
+    /// sent to the child since supersedes it: that turn reports on its own.
+    /// A child whose session left this instance drops it. An agent that is
+    /// not ready is reconnecting: an adapter that survives keeps its work,
+    /// and one that does not has its children and cycle marked gone, so the
+    /// outcome delivers once the agent is ready again.
+    public static func deferredOutcomeStep(
+        activity: ACPSessionActivity?,
+        agentReady: Bool,
+        promptSentSince: Bool
+    ) -> ACPDeferredChildOutcomeStep {
+        guard !promptSentSince, let activity else { return .discard }
+        guard agentReady else { return .wait }
+        return activity.allWorkFinished ? .deliver : .wait
+    }
+
+    /// The result a deferred outcome reports. The user stopping a settled
+    /// child's background work reports as a cancelled turn, as stopping its
+    /// held prompt did: the latest autonomous cycle since the turn ended
+    /// "stopped", or, with no cycle since, a child live at the result ended
+    /// cancelled. A model can only cancel its own subagent from a cycle,
+    /// and that cycle ends "completed", so it still reports as completed.
+    public static func deferredOutcomeResult(
+        _ result: ACPTurnCompletion.Result,
+        latestCycleState: String?,
+        childCancelled: Bool
+    ) -> ACPTurnCompletion.Result {
+        if let latestCycleState { return latestCycleState == "stopped" ? .cancelled : result }
+        return childCancelled ? .cancelled : result
+    }
+
     /// Whether startup must re-attach a ready delegated child, judged from
     /// its queue head as persisted. A head that was sending or dispatched
     /// when Alas quit is a turn the child's broker may still be running, or
@@ -367,6 +416,18 @@ public enum ACPSessionOrchestrationPolicy: Sendable {
         liveBlockedRequestKeys: Set<String>
     ) -> ACPBlockerEscalation {
         liveBlockedRequestKeys.contains(blocker.requestKey) ? .wake : .stillHandled
+    }
+
+    /// A child whose turn settled at its result is still running while its
+    /// background work runs, so a wait does not return interim text. A
+    /// foreground blocker still reads as awaiting input: only the user can
+    /// clear it, and the parent should hear about it.
+    public static func runtimeState(activity: ACPSessionActivity) -> ACPOrchestrationRuntimeState {
+        switch activity.foreground {
+        case .idle: activity.backgroundWorking ? .running : .idle
+        case .sending, .streaming: .running
+        case .awaitingPermission, .awaitingInput: .awaitingInput
+        }
     }
 
     public static func publicState(

@@ -67,6 +67,10 @@ public final class ACPSessionRunner {
     /// runs an outdated built-in MCP server. The next idle point calls it
     /// once, before the queue drains (see `flushQueueIfIdle`).
     public var restartAgentWhenIdle: (() -> Void)?
+    /// A pending idle restart held back because background children or an
+    /// autonomous cycle were still running; retried when that work ends.
+    private var restartAwaitsBackgroundWork = false
+    private var backgroundWorkObservations: [ChangeSubscription] = []
     private let onAuthRequired: ((ACPSessionRunner, String) async -> Void)?
     private let onPersist: (() -> Void)?
     /// Fires only when a message row was actually written (a normal
@@ -108,7 +112,18 @@ public final class ACPSessionRunner {
     /// Recent cost-bearing `usage_update`s by their position on the stream, so a turn's cost takes only those sent
     /// between its prompt and its result.
     private var costLog: [(index: Int, cost: ACPUsageInfo.Cost)] = []
+    /// An autonomous cycle that finished outside any prompt, whose cost the adapter sends after finishing its task:
+    /// reported as background usage once that cost is applied, or before the next prompt goes out with what arrived.
+    private var pendingAutonomousUsage: (startedAt: Int64, streamStart: Int)?
+    /// Autonomous cycles a prompt took over: running when one was sent, or started during one. Their spend is that
+    /// prompt's, even once it is stopped and the cycle ends outside any prompt.
+    private var takenOverCycles: Set<String> = []
+    /// Where the update being applied came off the stream; nil outside a buffered apply.
+    private var applyingStreamIndex: Int?
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
+    /// A settling session's turn result, reported once the updates sent before it are applied (see
+    /// `emitTurnCompleted`).
+    private var turnCompletionAwaitingDrain: ACPTurnCompletion?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
     /// a turn whose output hasn't drained yet reports no text rather than the
@@ -284,10 +299,13 @@ public final class ACPSessionRunner {
     private struct PendingIncomingUpdate {
         let params: ACPSessionUpdateParams
         let receivedWhileHoldingLease: Bool
+        /// The runner's `dequeuedUpdateCount` when it came off the stream.
+        var streamIndex: Int?
 
-        public init(params: ACPSessionUpdateParams, receivedWhileHoldingLease: Bool) {
+        public init(params: ACPSessionUpdateParams, receivedWhileHoldingLease: Bool, streamIndex: Int? = nil) {
             self.params = params
             self.receivedWhileHoldingLease = receivedWhileHoldingLease
+            self.streamIndex = streamIndex
         }
     }
 
@@ -475,6 +493,43 @@ public final class ACPSessionRunner {
             }
         )
         closeStoredSequenceGaps()
+        session.foregroundTurnActive = { [weak self] in self?.foregroundTurnActive ?? false }
+        backgroundWorkObservations = [
+            session.$liveSubagentCount.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
+            session.$backgroundTasks.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
+        ]
+    }
+
+    /// A foreground turn this runner sent, a detached steering turn, or a
+    /// turn a reattached broker still runs. A turn that settled at its result
+    /// is over even while its children run. Broker awaiting input alone is
+    /// not a turn: older brokers report it for a child's request after the
+    /// parent settled, so only an unanswered prompt counts there.
+    private var foregroundTurnActive: Bool {
+        guard !stopped, isConnectionCurrent() else { return false }
+        if activePromptID != nil || detachedSteeringTurn { return true }
+        guard let broker = connection.client as? ACPBrokerClient else { return false }
+        switch broker.currentTurnState {
+        case .sending, .streaming, .cancelling:
+            return true
+        case .awaitingInput:
+            // Elsewhere it is a steering turn held for recovery.
+            return broker.hasPromptInFlight || !session.settlesAtResult
+        case .idle, .completed, .ambiguous, .unknown:
+            return broker.hasPromptInFlight
+        }
+    }
+
+    /// Tracked signals fire before the new value is stored, so the restart
+    /// check reads the session on the next main-actor turn.
+    private func backgroundWorkChanged() {
+        guard restartAwaitsBackgroundWork else { return }
+        Task { @MainActor [weak self] in
+            guard let self, self.restartAwaitsBackgroundWork,
+                  !self.session.activity.backgroundWorking else { return }
+            self.restartAwaitsBackgroundWork = false
+            self.flushQueueIfIdle()
+        }
     }
 
     /// Rows are written as `msg-<session>-<index>`, so the store must hold
@@ -617,6 +672,10 @@ public final class ACPSessionRunner {
                 guard self.isConnectionCurrent() else { continue }
                 self.connection.client.respondToPermission(id: id, response: response)
                 await self.persistPermissionDecision(params: params, response: response)
+                // A permission answered after the turn settled (a background
+                // child) leaves the session idle; nothing else drains the
+                // prompt queued while it was parked.
+                self.flushQueueIfIdle()
             }
         }
 
@@ -1144,7 +1203,8 @@ public final class ACPSessionRunner {
         }
         pendingIncomingUpdates.append(.init(
             params: update,
-            receivedWhileHoldingLease: receivedWhileHoldingLease
+            receivedWhileHoldingLease: receivedWhileHoldingLease,
+            streamIndex: dequeuedUpdateCount
         ))
         guard incomingUpdateFlushTask == nil else { return }
         incomingUpdateFlushTask = Task { @MainActor [weak self] in
@@ -1215,7 +1275,10 @@ public final class ACPSessionRunner {
         guard !steeringRowPersistencePending, !pendingIncomingUpdates.isEmpty else { return }
         let updates = pendingIncomingUpdates
         pendingIncomingUpdates.removeAll(keepingCapacity: true)
+        let outerStreamIndex = applyingStreamIndex
+        defer { applyingStreamIndex = outerStreamIndex }
         for update in updates {
+            applyingStreamIndex = update.streamIndex
             applyIncomingUpdate(
                 update.params,
                 bufferedUpdateReceivedWhileHoldingLease: update.receivedWhileHoldingLease,
@@ -1232,7 +1295,9 @@ public final class ACPSessionRunner {
         treatBufferedUpdatesAsPromptOwned: Bool = false
     ) {
         if steeringRowPersistencePending {
-            pendingIncomingUpdates.append(.init(params: params, receivedWhileHoldingLease: bufferedUpdateReceivedWhileHoldingLease))
+            pendingIncomingUpdates.append(.init(
+                params: params, receivedWhileHoldingLease: bufferedUpdateReceivedWhileHoldingLease,
+                streamIndex: applyingStreamIndex))
             return
         }
 
@@ -1253,9 +1318,14 @@ public final class ACPSessionRunner {
         if case .asyncTask(let update) = params.update {
             let root = session.remoteSessionId ?? sessionId
             if params.sessionId == root || session.subagentRun(params.sessionId) != nil {
-                var dirty = session.applyBackgroundTask(update, ownerSessionId: params.sessionId)
                 let identity = ACPBackgroundTask(ownerSessionId: params.sessionId,
                     asyncTaskId: update.asyncTaskId, name: update.asyncTaskId).id
+                let previous = session.backgroundTasks.first(where: { $0.id == identity })
+                var dirty = session.applyBackgroundTask(update, ownerSessionId: params.sessionId)
+                if params.sessionId == root {
+                    noteAutonomousCycle(
+                        identity: identity, wasKnown: previous != nil, wasActive: previous?.isActive == true)
+                }
                 // An identical replay can match a mutation whose earlier write
                 // failed. Save its current row before consuming the broker event.
                 if let index = session.transcript.toolCallIndex(toolCallId: identity) { dirty.insert(index) }
@@ -1280,6 +1350,10 @@ public final class ACPSessionRunner {
             }
             applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenBoundaryReady)
             return
+        }
+        if pendingAutonomousUsage != nil, !activePromptSent, !suppressingLoadReplay, !isSubagentUpdate(params),
+           case .usageUpdate(let info) = params.update, let cost = info.cost {
+            reportAutonomousUsage(cost: ACPTurnCost(known: cost))
         }
         if isSubagentUpdate(params) {
             applySubagentUpdate(
@@ -1784,6 +1858,54 @@ public final class ACPSessionRunner {
         }
     }
 
+    /// An adapter that settles a turn at its result announces each autonomous follow-up cycle as a root-owned `turn`
+    /// task. A live one starting is new output, so its text may cross the streaming boundary; one ending outside any
+    /// prompt, on its own or stopped, leaves its cost to report on its own. A prompt sent meanwhile took the cycle
+    /// over and owns its cost.
+    private func noteAutonomousCycle(identity: String, wasKnown: Bool, wasActive: Bool) {
+        guard session.settlesAtResult, !suppressingLoadReplay,
+              let task = session.backgroundTasks.first(where: { $0.id == identity }), task.taskType == "turn"
+        else { return }
+        // Only a cycle first seen now: a late replayed start of a known one must not let replay through.
+        if !wasKnown, task.isActive {
+            session.allowsStreamingBoundaryCrossing = true
+            if activePromptSent { takenOverCycles.insert(identity) }
+        }
+        guard wasActive, !task.isActive else { return }
+        guard takenOverCycles.remove(identity) == nil,
+              ["completed", "failed", "stopped"].contains(task.state), !activePromptSent else { return }
+        // A cycle whose cost never came is reported with what did before the next one replaces it.
+        reportAutonomousUsage(cost: nil)
+        pendingAutonomousUsage = (
+            Int64(task.startedAt.timeIntervalSince1970 * 1000), applyingStreamIndex ?? dequeuedUpdateCount)
+    }
+
+    /// Whether the active prompt has gone out. One still preparing (checkpoints, attachments, context) has taken no
+    /// cycle over yet: a cycle ending meanwhile, and its cost, stay background usage.
+    private var activePromptSent: Bool {
+        activePromptID.map { sentStreamStarts[$0] != nil } ?? false
+    }
+
+    /// The prompt about to go out takes over any autonomous cycle still running.
+    private func takeOverRunningCycles() {
+        guard session.settlesAtResult else { return }
+        let root = session.remoteSessionId ?? sessionId
+        for task in session.backgroundTasks where task.isActive && task.taskType == "turn" && task.ownerSessionId == root {
+            takenOverCycles.insert(task.id)
+        }
+    }
+
+    /// Reports the pending autonomous cycle as background usage, with `cost`, or when nil whatever cost-bearing
+    /// update arrived on the stream since the cycle finished.
+    private func reportAutonomousUsage(cost: ACPTurnCost?) {
+        guard let pending = pendingAutonomousUsage else { return }
+        pendingAutonomousUsage = nil
+        onTurnUsage?(ACPTurnCompletion(
+            sessionId: sessionId, startedAt: pending.startedAt, result: .completed, delegatedSource: nil,
+            lastAgentText: nil, cost: cost ?? turnCost(streamStart: pending.streamStart),
+            sentAt: pending.startedAt, endedAt: Self.now(), model: session.currentModel, background: true))
+    }
+
     private func finishLoadReplaySuppression() {
         suppressingLoadReplay = false
         session.endSuppressedReplaySideEffects()
@@ -1808,6 +1930,8 @@ public final class ACPSessionRunner {
             flushQueueWhenBoundaryReady: false,
             treatBufferedUpdatesAsPromptOwned: true
         )
+        // A turn whose boundary never comes still reports.
+        reportTurnCompletionAwaitingDrain()
         session.clearRetryStatus()
         flushStreamingPersistOnStop()
         // Teardown always shuts this runner's connection down (see
@@ -1818,6 +1942,7 @@ public final class ACPSessionRunner {
         // `persistIndices` requires the writer lease, so an instance that
         // lost it in a takeover records nothing.
         persistIndices(session.markSubagentsDisconnected())
+        backgroundWorkObservations.removeAll()
         scheduledQueueWakeTask?.cancel()
         scheduledQueueWakeTask = nil
         incomingUpdateFlushTask?.cancel()
@@ -1999,8 +2124,12 @@ public final class ACPSessionRunner {
     /// `isActivePrompt` branch so a superseded prompt never reports.
     /// `usageAwaitsResult`: the prompt's result has not arrived yet (a user cancel), so a sent prompt's usage waits
     /// for it, which carries its tokens, for at most `cancelledUsageWait`; `onTurnCompleted` does not.
+    /// `reportsAtBoundary`: a completed-output boundary follows. A settling session then reports the turn once that
+    /// boundary has applied the updates sent before the result, so a child spawned during the turn already shows as
+    /// background work to whoever decides on that report.
     private func emitTurnCompleted(
-        _ result: ACPTurnCompletion.Result, promptID: Int, quota: ACPPromptQuota? = nil, usageAwaitsResult: Bool = false
+        _ result: ACPTurnCompletion.Result, promptID: Int, quota: ACPPromptQuota? = nil, usageAwaitsResult: Bool = false,
+        reportsAtBoundary: Bool = false
     ) {
         let terminalResult = promptLifecycle.finishV1(promptID, result: result)
         let result = terminalResult ?? result
@@ -2033,9 +2162,9 @@ public final class ACPSessionRunner {
         // with the queued-successor dispatch this same completion is in the
         // middle of, deadlocking
         // `userCancelDoesNotCancelQueuedSuccessorStartedByPendingBoundaryFlush`.
-        // Guaranteeing the final text needs the completion deferred into
-        // `applyPendingCompletedOutputBoundaryIfReady`, the way
-        // `NextPromptCompletedTurn` is — tracked as follow-up.
+        // A settling session's report is deferred into
+        // `applyPendingCompletedOutputBoundaryIfReady` (for its background
+        // work, not its text); a legacy one keeps reporting here.
         let lastAgentText = currentTurnLastAgentText()
         let completion = ACPTurnCompletion(
             sessionId: sessionId,
@@ -2052,7 +2181,12 @@ public final class ACPSessionRunner {
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
         activePromptTranscriptFloor = nil
-        onTurnCompleted?(completion)
+        if reportsAtBoundary, session.settlesAtResult {
+            reportTurnCompletionAwaitingDrain()
+            turnCompletionAwaitingDrain = completion
+        } else {
+            onTurnCompleted?(completion)
+        }
         // A prompt stopped or failed before it reached the agent is no turn: there is no usage to record.
         guard unreportedPrompts[promptID] != nil else { return }
         guard usageAwaitsResult else {
@@ -2566,6 +2700,13 @@ public final class ACPSessionRunner {
     /// to `.idle`. Persists all mutations so they survive a reload.
     /// Returns whether the cancel reached the agent: false when the runner
     /// lost its connection or writer lease before sending it.
+    ///
+    /// With no foreground prompt, only idle background work is stopped, and
+    /// only when nothing waits on the user. A parked out-of-turn permission or
+    /// question leaves the state non-idle, so Stop takes the root
+    /// `session/cancel` path below: no prompt exists and the queue is blocked,
+    /// so nothing later could cancel it. That path answers the pending request
+    /// as cancelled, never reports a turn completion, and settles to idle.
     @discardableResult
     public func userCancel(confirmingLease: Bool = true) async -> Bool {
         guard isConnectionCurrent() else { return false }
@@ -3297,6 +3438,14 @@ extension ACPSessionRunner {
            activePromptID == nil,
            session.transcript.streamingState == .idle,
            session.transcript.pendingUserInputs.isEmpty {
+            // A turn that settled at its result can leave children or an
+            // autonomous cycle running; a restart would kill them. The queue
+            // waits for the restart too: a drained turn would reach the
+            // outdated agent and could start more children.
+            if session.activity.backgroundWorking {
+                restartAwaitsBackgroundWork = true
+                return
+            }
             restartAgentWhenIdle = nil
             restart()
             return
@@ -4564,6 +4713,9 @@ extension ACPSessionRunner {
                         return false
                     }
                     // Usage starts when the prompt goes out, after checkpoints, attachments and context providers.
+                    // An autonomous cycle's cost not reported yet is what arrived before it.
+                    self.reportAutonomousUsage(cost: nil)
+                    self.takeOverRunningCycles()
                     let sentAt = self.nextSentAt()
                     // Updates sent during that work belong to what came before.
                     self.activePromptStreamStart = self.connection.client.yieldedUpdateCount
@@ -4686,7 +4838,8 @@ extension ACPSessionRunner {
                         }
                         self.activePromptID = nil
                         if !wasCancelled, self.session.lastError == lastErrorAtSend { self.session.lastError = nil }
-                        self.emitTurnCompleted(completionResult, promptID: promptID, quota: promptOutcome.quota)
+                        self.emitTurnCompleted(
+                            completionResult, promptID: promptID, quota: promptOutcome.quota, reportsAtBoundary: true)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in
                                 guard completionResult == .completed,
@@ -4858,6 +5011,8 @@ extension ACPSessionRunner {
                 self.resetStreamingPersistBuffer()
                 self.session.transcript.streamingState = .sending
                 // A recovery prompt is usage of its own, reported with its result (never as a turn completion).
+                self.reportAutonomousUsage(cost: nil)
+                self.takeOverRunningCycles()
                 let sentAt = self.nextSentAt()
                 self.unreportedPrompts[promptID] = (
                     sentAt, sentAt, self.connection.client.yieldedUpdateCount, self.session.currentModel, true)
@@ -4993,6 +5148,12 @@ extension ACPSessionRunner {
         applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenReady)
     }
 
+    private func reportTurnCompletionAwaitingDrain() {
+        guard let completion = turnCompletionAwaitingDrain else { return }
+        turnCompletionAwaitingDrain = nil
+        onTurnCompleted?(completion)
+    }
+
     private func applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: Bool) {
         guard !nativeSteeringInProgress, !detachedSteeringTurn,
               let boundary = pendingCompletedOutputBoundary,
@@ -5013,13 +5174,20 @@ extension ACPSessionRunner {
         if session.transcript.messages.count > before {
             persistFromIndex(before)
         }
+        reportTurnCompletionAwaitingDrain()
         guard activePromptID == nil else {
             if let turn = boundary.successfulTurn { nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: another prompt is active") }
             return
         }
         // The turn's updates have drained: its echoes have all arrived.
         session.endPromptEchoTurn()
-        session.transcript.streamingState = .idle
+        if session.settlesAtResult {
+            // A child's permission or question parked during the turn
+            // outlives its result: the turn ending must not hide it.
+            session.settleWaitingState(foregroundTurnActive: false)
+        } else {
+            session.transcript.streamingState = .idle
+        }
         guard flushQueueWhenReady else {
             if let turn = boundary.successfulTurn { nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: queue flush deferred") }
             return
@@ -5723,6 +5891,10 @@ extension ACPSessionRunner {
                 task.loseObservation()
                 dirty.formUnion(session.saveBackgroundTask(task))
             }
+            // Children of the replaced adapter died with it. One persisted as
+            // running, or resurrected by replay, would otherwise keep the
+            // session's background work open forever.
+            dirty.formUnion(session.markSubagentsDisconnected())
         }
         // Recover both pending completions and obsolete loss wakes after a
         // crash between the task snapshot write and its queue update.
@@ -5958,6 +6130,10 @@ extension ACPSessionRunner {
                 current.merge(.init(sessionUpdate: "async_task_state_update", asyncTaskId: current.asyncTaskId,
                     state: "stopped"), wakeOnCompletion: false)
                 persistIndices(session.saveBackgroundTask(current))
+                // The cycle ends here; its own stopped notice, applied later, finds it inactive and reports nothing.
+                if current.ownerSessionId == (session.remoteSessionId ?? sessionId) {
+                    noteAutonomousCycle(identity: id, wasKnown: true, wasActive: true)
+                }
             }
         } catch {
             errorMessage = "Could not stop task: \(error.localizedDescription)"

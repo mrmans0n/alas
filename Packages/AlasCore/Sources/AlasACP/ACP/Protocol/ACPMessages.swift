@@ -255,7 +255,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         parameterizedModelPicker: true,
         openCodeChildSessionUpdates: true,
         asyncTasks: true,
-        contextUsage: true)
+        contextUsage: true,
+        settleAtResult: true)
 
     public let terminalAuth: Bool
     public let parameterizedModelPicker: Bool
@@ -267,6 +268,9 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let asyncTasks: Bool
     /// Asks our Claude adapter fork to serve `_alas/context_usage`.
     public let contextUsage: Bool
+    /// Asks our Claude adapter fork to settle a foreground turn at its result
+    /// while background children keep running.
+    public let settleAtResult: Bool
     /// Opts a managed Codex launch into process-bound hook review.
     public let codexHooks: ACPCodexHooksDeclaration?
     /// Asks our Claude and Codex adapter forks for the client-neutral session index.
@@ -279,6 +283,7 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         goal: EmptyObject = .init(),
         asyncTasks: Bool = false,
         contextUsage: Bool = false,
+        settleAtResult: Bool = false,
         sessionIndex: ACPSessionIndexDeclaration = .init(),
         codexHooks: ACPCodexHooksDeclaration? = nil
     ) {
@@ -288,12 +293,13 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.goal = goal
         self.asyncTasks = asyncTasks
         self.contextUsage = contextUsage
+        self.settleAtResult = settleAtResult
         self.sessionIndex = sessionIndex
         self.codexHooks = codexHooks
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case contextUsage, sessionIndex, codexHooks
+        case contextUsage, settleAtResult, sessionIndex, codexHooks
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -310,6 +316,7 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         goal = try c.decodeIfPresent(EmptyObject.self, forKey: .goal) ?? .init()
         asyncTasks = try c.decodeIfPresent(Bool.self, forKey: .asyncTasks) ?? false
         contextUsage = try c.decodeIfPresent(Bool.self, forKey: .contextUsage) ?? false
+        settleAtResult = try c.decodeIfPresent(Bool.self, forKey: .settleAtResult) ?? false
         codexHooks = try? c.decodeIfPresent(ACPCodexHooksDeclaration.self, forKey: .codexHooks)
         sessionIndex = (try? c.decodeIfPresent(ACPSessionIndexDeclaration.self, forKey: .sessionIndex)) ?? .init()
     }
@@ -341,6 +348,10 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
 
     public var supportsContextBreakdown: Bool {
         meta?.contextUsage?.supported == true
+    }
+
+    public var supportsSettleAtResult: Bool {
+        meta?.settleAtResult?.supported == true
     }
 
     /// The adapter accepts `_meta.systemPrompt.append` on session requests.
@@ -387,6 +398,8 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let steering: Steering?
         /// `_alas/context_usage` extension (our Claude adapter fork).
         public let contextUsage: Steering?
+        /// Foreground turns settle at their result (our Claude adapter fork).
+        public let settleAtResult: Steering?
         /// `_meta.systemPrompt` session instruction append (our Codex
         /// adapter fork, upstream codex-acp PR #585).
         public let systemPrompt: SystemPromptCapability?
@@ -395,7 +408,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let codexHooks: ACPCodexHooksCapability?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, systemPrompt, sessionIndex, codexHooks
+            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks
             case asyncTasks = "async-tasks"
         }
 
@@ -405,6 +418,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             asyncTasks = try? c.decodeIfPresent(ACPAsyncTaskCapability.self, forKey: .asyncTasks)
             steering = try? c.decodeIfPresent(Steering.self, forKey: .steering)
             contextUsage = try? c.decodeIfPresent(Steering.self, forKey: .contextUsage)
+            settleAtResult = try? c.decodeIfPresent(Steering.self, forKey: .settleAtResult)
             systemPrompt = try? c.decodeIfPresent(SystemPromptCapability.self, forKey: .systemPrompt)
             sessionIndex = try? c.decodeIfPresent(ACPSessionIndexCapability.self, forKey: .sessionIndex)
             codexHooks = try? c.decodeIfPresent(ACPCodexHooksCapability.self, forKey: .codexHooks)

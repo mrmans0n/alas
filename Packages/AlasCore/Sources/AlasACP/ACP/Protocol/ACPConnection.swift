@@ -65,6 +65,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let supportsSteering: Bool
     public let supportsAsyncTasks: Bool
     public let supportsContextBreakdown: Bool
+    /// The adapter settles foreground turns at their result (`_meta.settleAtResult`).
+    public let settlesAtResult: Bool
     /// The adapter advertised `_meta.systemPrompt.append` (codex-acp).
     public let supportsSystemPromptAppend: Bool
     /// The advertised append limit in UTF-8 bytes, if any.
@@ -88,6 +90,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         supportsSteering: Bool = false,
         supportsAsyncTasks: Bool = false,
         supportsContextBreakdown: Bool = false,
+        settlesAtResult: Bool = false,
         supportsSystemPromptAppend: Bool = false,
         systemPromptAppendMaxBytes: Int? = nil,
         sessionIndex: ACPSessionIndexSupport? = nil
@@ -105,6 +108,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.supportsSteering = supportsSteering
         self.supportsAsyncTasks = supportsAsyncTasks
         self.supportsContextBreakdown = supportsContextBreakdown
+        self.settlesAtResult = settlesAtResult
         self.supportsSystemPromptAppend = supportsSystemPromptAppend
         self.systemPromptAppendMaxBytes = systemPromptAppendMaxBytes
         self.sessionIndex = sessionIndex
@@ -333,6 +337,7 @@ public final class ACPConnection: @unchecked Sendable {
             openCodeChildSessionUpdates: true,
             asyncTasks: true,
             contextUsage: true,
+            settleAtResult: true,
             codexHooks: codexHooksReviewEnabled ? .init() : nil
         )
         let req = ACPRequest(method: "initialize",
@@ -378,6 +383,7 @@ public final class ACPConnection: @unchecked Sendable {
             supportsSteering: result.supportsSteering,
             supportsAsyncTasks: result.meta?.asyncTasks?.supportsStop == true,
             supportsContextBreakdown: result.supportsContextBreakdown,
+            settlesAtResult: result.supportsSettleAtResult,
             supportsSystemPromptAppend: result.supportsSystemPromptAppend,
             systemPromptAppendMaxBytes: result.systemPromptAppendMaxBytes,
             sessionIndex: result.meta?.sessionIndex?.support

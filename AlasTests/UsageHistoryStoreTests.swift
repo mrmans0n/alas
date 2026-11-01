@@ -48,20 +48,34 @@ struct UsageHistoryStoreTests {
 
     /// Each turn's cost is what the session's cumulative cost grew by since its previous recorded turn; a lower
     /// total is a restarted count, and the first total, a change of currency or no cost at all leave it unknown.
-    @Test func aTurnsCostIsTheGrowthOfTheSessionsCumulativeCost() async throws {
+    /// A turn without a fresh total (nil) keeps the baseline, so the next one is given all the growth since. An
+    /// autonomous cycle's background row is a baseline of its own, so the prompt after it pays only its own growth.
+    @Test(arguments: [
+        ([(0.10, "USD"), nil, (0.25, "USD"), (0.05, "USD"), (0.07, "EUR")] as [(Double, String)?],
+         [false, false, false, false, false], [nil, 5, 15, nil, nil] as [Double?]),
+        ([(1.0, "USD"), (3.0, "USD"), (3.5, "USD")], [false, true, false], [50, 200, nil]),
+    ])
+    func aTurnsCostIsTheGrowthOfTheSessionsCumulativeCost(
+        cumulative: [(Double, String)?], background: [Bool], cents: [Double?]
+    ) async throws {
         let path = temporaryPath()
         defer { try? FileManager.default.removeItem(atPath: path) }
         let store = try UsageHistoryStore(path: path)
-        // A turn without a fresh total (nil) keeps the baseline, so the next one is given all the growth since.
-        let cumulative: [(Double, String)?] = [(0.10, "USD"), nil, (0.25, "USD"), (0.05, "USD"), (0.07, "EUR")]
-        for cost in cumulative {
-            _ = try await store.record(turn(cost: cost))
+        for (cost, background) in zip(cumulative, background) {
+            let completion = ACPTurnCompletion(
+                sessionId: "s1", startedAt: 1_000, result: .completed, delegatedSource: nil, lastAgentText: nil,
+                background: background)
+            _ = try await store.record(UsageTurnInput(
+                completion: completion, agent: "claude", model: nil,
+                cumulativeCost: cost.map { ACPUsageInfo.Cost(amount: $0.0, currency: $0.1) },
+                project: "proj", worktree: "wt", endedAt: 2_000))
         }
         // The other session's cost does not count towards this one's.
         _ = try await store.record(turn(session: "s2", cost: (1, "USD")))
         let read = try await store.turns(project: nil, since: 0, until: nil, limit: 10).turns.filter { $0.session == "s1" }
         // Newest first, in cents.
-        #expect(read.map { $0.cost.map { ($0.amount * 100).rounded() } } == [nil, 5, 15, nil, nil])
+        #expect(read.map { $0.cost.map { ($0.amount * 100).rounded() } } == cents)
+        #expect(read.map { $0.result == "background" } == background.reversed())
     }
 
     /// A stopped turn that reports after the turn sent next records its total but no cost, since the later turn's

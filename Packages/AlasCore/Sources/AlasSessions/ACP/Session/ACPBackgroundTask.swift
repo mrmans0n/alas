@@ -82,6 +82,9 @@ public struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
         finishedAt = Date()
         canStop = false
         summary = "The adapter was replaced; this task's process and completion can no longer be observed."
+        // An autonomous cycle is not work the agent can resume: waking it would
+        // invent a turn for a cycle that no longer exists.
+        guard taskType != "turn" else { return }
         wakeId = UUID()
         wakeDelivered = false
     }
@@ -120,7 +123,41 @@ public struct ACPBackgroundTask: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
+/// Foreground turn state plus whether work the adapter runs outside a turn is
+/// still going. Only adapters that settle a turn at its result have such work:
+/// an autonomous follow-up cycle (an active `turn` async task) or a live child.
+/// Long-lived background tasks such as dev servers do not count.
+public struct ACPSessionActivity: Equatable, Sendable {
+    public let foreground: ACPSession.StreamingState
+    public let backgroundWorking: Bool
+
+    public var allWorkFinished: Bool { foreground == .idle && !backgroundWorking }
+
+    public init(foreground: ACPSession.StreamingState, backgroundWorking: Bool) {
+        self.foreground = foreground
+        self.backgroundWorking = backgroundWorking
+    }
+
+    public static func project(
+        foreground: ACPSession.StreamingState,
+        settlesAtResult: Bool,
+        agentReady: Bool,
+        backgroundTasks: [ACPBackgroundTask],
+        liveSubagentCount: Int
+    ) -> ACPSessionActivity {
+        let working = settlesAtResult && agentReady
+            && (backgroundTasks.contains { $0.isActive && $0.taskType == "turn" } || liveSubagentCount > 0)
+        return .init(foreground: foreground, backgroundWorking: working)
+    }
+}
+
 extension ACPSession {
+    public var activity: ACPSessionActivity {
+        .project(foreground: transcript.streamingState, settlesAtResult: settlesAtResult,
+                 agentReady: agentState == .ready, backgroundTasks: backgroundTasks,
+                 liveSubagentCount: liveSubagentCount)
+    }
+
     public var activeBackgroundTasks: [ACPBackgroundTask] { backgroundTasks.filter(\.isActive) }
     public var hasCancellableBackgroundWork: Bool {
         agentState == .ready && (

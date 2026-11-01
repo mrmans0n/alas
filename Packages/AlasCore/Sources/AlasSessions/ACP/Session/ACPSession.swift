@@ -238,6 +238,73 @@ public final class ACPSession: ChangeTracking, Identifiable {
     public var supportsCodexSteeringCompletion = false
     /// Relearned on attach: the adapter serves `_alas/context_usage`.
     @Tracked public var supportsContextBreakdown = false
+    /// The adapter settles foreground turns at their result while background
+    /// children continue. Runtime only; relearned on attach.
+    @Tracked public var settlesAtResult = false
+    /// Whether a foreground turn is running. Installed by the session's
+    /// runner; a turn that settled at its result no longer counts, even while
+    /// its children still run.
+    public var foregroundTurnActive: @MainActor () -> Bool = { false }
+
+    /// Recomputes the streaming state from what still waits on the user, once
+    /// a permission, question or plan resolves. Children can ask after their
+    /// parent's turn settled, so the state is derived rather than restored.
+    /// Questions asked during a turn leave it streaming; only plans and
+    /// permissions take it over.
+    public func settleWaitingState(foregroundTurnActive foreground: Bool? = nil) {
+        guard transcript.streamingState != .sending else { return }
+        let foreground = foreground ?? foregroundTurnActive()
+        let settled: StreamingState
+        if transcript.pendingPermission != nil {
+            settled = .awaitingPermission
+        } else if transcript.pendingPlan != nil || (!foreground && !transcript.pendingUserInputs.isEmpty) {
+            settled = .awaitingInput
+        } else {
+            settled = foreground ? .streaming : .idle
+        }
+        if transcript.streamingState != settled { transcript.streamingState = settled }
+    }
+
+    /// Applies the turn state a broker reports. A prompt being sent or
+    /// cancelled owns the state. For an adapter that settles turns at their
+    /// result, the waits still pending here win: an older broker reports
+    /// awaiting input for a child's request outside any turn and never clears
+    /// it, and reports completion over requests still open. `promptInFlight`
+    /// says whether the broker still holds an unanswered `session/prompt`;
+    /// with one, or a turn the runner still runs (a page may arrive without
+    /// the broker's prompt snapshot), awaiting input is the turn's own wait
+    /// and shows as such.
+    /// Other adapters keep the broker's word: there, awaiting input with no
+    /// prompt is a steering turn held for recovery.
+    public func applyBrokerTurnState(_ turnState: ACPBrokerTurnState, promptInFlight: Bool) {
+        let foreground: Bool
+        switch turnState {
+        case .sending, .cancelling:
+            transcript.streamingState = .sending
+            return
+        case .streaming:
+            foreground = true
+        case .awaitingInput:
+            guard settlesAtResult, !(promptInFlight || foregroundTurnActive()) else {
+                // A turn really waits on the user; a question asked during it
+                // must still raise "needs input". A parked permission wins.
+                transcript.streamingState = settlesAtResult && transcript.pendingPermission != nil
+                    ? .awaitingPermission : .awaitingInput
+                return
+            }
+            foreground = false
+        case .idle, .completed, .ambiguous, .unknown:
+            foreground = false
+        }
+        guard settlesAtResult else {
+            transcript.streamingState = foreground ? .streaming : .idle
+            return
+        }
+        if transcript.streamingState == .sending {
+            transcript.streamingState = foreground ? .streaming : .idle
+        }
+        settleWaitingState(foregroundTurnActive: foreground)
+    }
 
     public var canSteerRunningTurn: Bool {
         agentState == .ready && supportsSteering
@@ -307,6 +374,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// its live child transcript from here; `subagentOrder` keeps spawn
     /// order for the rare consumer that wants the list rather than a row.
     @Tracked public private(set) var subagents: [String: ACPSubagentRun] = [:]
+    /// Children still running or blocked on the user.
+    @Tracked public private(set) var liveSubagentCount = 0
+    /// True only while `markSubagentsDisconnected` drops the live children,
+    /// so an observer of `liveSubagentCount` can tell a lost connection
+    /// from children finishing their work.
+    @Tracked public private(set) var disconnectingSubagents = false
     @Tracked public var backgroundTasks: [ACPBackgroundTask] = []
     @Tracked public var backgroundTaskStopSupported = false
     /// The user's explicit collapse choice for the background task tray; nil follows the default.
@@ -2416,6 +2489,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         subagents[id] = run
         subagentOrder.append(id)
         adoptDelegationLinks(for: run)
+        refreshLiveSubagentCount()
         clearRestoredContextRecoveryStatus()
         // A subagent row closes the current output run the same way a tool
         // call does, so held replay candidates must land ahead of it —
@@ -2688,6 +2762,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         delegationLinkOrder = linkOrder
         // A restored row may predate a link another child's row carries.
         for run in order.compactMap({ rebuilt[$0] }) { adoptDelegationLinks(for: run) }
+        refreshLiveSubagentCount()
+    }
+
+    private func refreshLiveSubagentCount() {
+        let count = subagents.values.filter { $0.state == .running || $0.state == .requiresAction }.count
+        if count != liveSubagentCount { liveSubagentCount = count }
     }
 
     /// Marks every still-running child as disconnected when the agent
@@ -2700,7 +2780,11 @@ public final class ACPSession: ChangeTracking, Identifiable {
         // Every child's observations, finished ones included, came from the
         // connection that just dropped.
         for run in orderedSubagents { run.markObservationsHistorical() }
-        for run in orderedSubagents where run.isRunning {
+        let running = orderedSubagents.filter(\.isRunning)
+        guard !running.isEmpty else { return dirty }
+        disconnectingSubagents = true
+        defer { disconnectingSubagents = false }
+        for run in running {
             nextPromptActivity.send()
             run.apply(state: .disconnected, at: timestamp)
             dirty.formUnion(refreshSubagentRow(for: run, at: timestamp))
@@ -2734,6 +2818,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     }
 
     private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {
+        refreshLiveSubagentCount()
         let toolCallId = ACPSubagentRowDescriptor.toolCallId(
             subagentSessionId: run.subagentSessionId)
         guard let index = transcript.toolCallIndex(toolCallId: toolCallId),
