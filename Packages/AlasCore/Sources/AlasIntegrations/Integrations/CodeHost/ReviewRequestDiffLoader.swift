@@ -9,6 +9,8 @@ public struct ReviewRequestDiffLoader: Sendable {
     private static let imageLogger = Logger(subsystem: "io.nlopez.alas", category: "review-image")
 
     public let provider: any CodeHostProvider
+    /// The largest image a review reads from its provider.
+    public static let maxImageBytes = 25 * 1024 * 1024
 
     public init(provider: any CodeHostProvider) {
         self.provider = provider
@@ -23,7 +25,7 @@ public struct ReviewRequestDiffLoader: Sendable {
         let diff = try await provider.reviewDiff(remote: remote, request: request, cwd: cwd)
         try Task.checkCancellation()
 
-        let sections = splitFileSections(diff)
+        let sections = Self.splitFileSections(diff)
         let imageRevisionContext = await hostedImageRevisionContext(
             ifNeededFor: sections,
             remote: remote,
@@ -258,6 +260,7 @@ public struct ReviewRequestDiffLoader: Sendable {
                     repository: repository,
                     revision: revision,
                     path: path,
+                    maxBytes: maxImageBytes,
                     cwd: cwd
                 )
                 let side = await decoding.decode(data, cwd)
@@ -279,6 +282,9 @@ public struct ReviewRequestDiffLoader: Sendable {
     }
 
     private static func imageFailureMessage(for error: Error) -> String {
+        if case ProcessError.outputTooLarge(let maxBytes) = error {
+            return "Image is larger than \(ByteCountFormatter.string(fromByteCount: Int64(maxBytes), countStyle: .file))."
+        }
         guard let error = error as? CodeHostProviderError else {
             return "Couldn't load image."
         }
@@ -308,7 +314,14 @@ public struct ReviewRequestDiffLoader: Sendable {
         )
     }
 
-    private func splitFileSections(_ rawDiff: String) -> [ProviderDiffFileSection] {
+    /// The paths a provider diff's image sides are read at: each file's
+    /// path after, and its path before (its original one when renamed or copied).
+    public static func imagePaths(in rawDiff: String) -> (after: Set<String>, before: Set<String>) {
+        let sections = splitFileSections(rawDiff)
+        return (Set(sections.map(\.path)), Set(sections.map { $0.originalPath ?? $0.path }))
+    }
+
+    private static func splitFileSections(_ rawDiff: String) -> [ProviderDiffFileSection] {
         var sections: [ProviderDiffFileSection] = []
         var currentLines: [String] = []
 

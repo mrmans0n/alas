@@ -45,6 +45,8 @@ public struct CodeHostReviewImageRevisions: Equatable, Sendable {
 public protocol CodeHostCommandRunning: Sendable {
     func run(_ executable: String, args: [String], cwd: URL?, stdin: String?) async throws -> ProcessResult
     func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData
+    /// As `runData`, throwing `ProcessError.outputTooLarge` past `maxBytes` of stdout.
+    func runData(_ executable: String, args: [String], cwd: URL?, maxBytes: Int) async throws -> ProcessResultData
 }
 
 extension CodeHostCommandRunning {
@@ -59,6 +61,13 @@ extension CodeHostCommandRunning {
             stdout: Data(result.stdout.utf8),
             stderr: result.stderr
         )
+    }
+
+    /// Checked once the output is read; only `ProcessCodeHostCommandRunner` stops a child early.
+    public func runData(_ executable: String, args: [String], cwd: URL?, maxBytes: Int) async throws -> ProcessResultData {
+        let result = try await runData(executable, args: args, cwd: cwd)
+        guard result.stdout.count <= maxBytes else { throw ProcessError.outputTooLarge(maxBytes: maxBytes) }
+        return result
     }
 }
 
@@ -79,6 +88,14 @@ public struct ProcessCodeHostCommandRunner: CodeHostCommandRunning, Sendable {
     }
 
     public func runData(_ executable: String, args: [String], cwd: URL?) async throws -> ProcessResultData {
+        try await runData(executable, args: args, cwd: cwd, maxBytes: nil)
+    }
+
+    public func runData(_ executable: String, args: [String], cwd: URL?, maxBytes: Int) async throws -> ProcessResultData {
+        try await runData(executable, args: args, cwd: cwd, maxBytes: Optional(maxBytes))
+    }
+
+    private func runData(_ executable: String, args: [String], cwd: URL?, maxBytes: Int?) async throws -> ProcessResultData {
         let invocation = CodeHostCommandInvocation.build(
             executable: executable,
             args: args,
@@ -88,7 +105,8 @@ public struct ProcessCodeHostCommandRunner: CodeHostCommandRunning, Sendable {
             invocation.executable,
             args: invocation.args,
             cwd: invocation.cwd,
-            env: invocation.env
+            env: invocation.env,
+            maxOutputBytes: maxBytes
         )
     }
 
@@ -166,11 +184,14 @@ public protocol CodeHostProvider: Sendable {
         request: ReviewRequest,
         cwd: URL
     ) async throws -> CodeHostReviewImageRevisions
+    /// `path` at `revision` of `repository`, refused with
+    /// `ProcessError.outputTooLarge` past `maxBytes` as it downloads.
     func reviewFileData(
         remote: CodeHostRemote,
         repository: String,
         revision: String,
         path: String,
+        maxBytes: Int,
         cwd: URL
     ) async throws -> Data
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem]
@@ -323,6 +344,7 @@ extension CodeHostProvider {
         repository: String,
         revision: String,
         path: String,
+        maxBytes: Int,
         cwd: URL
     ) async throws -> Data {
         throw CodeHostProviderError.unsupportedProvider(remote.kind)

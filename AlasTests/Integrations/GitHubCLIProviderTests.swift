@@ -523,6 +523,7 @@ struct GitHubCLIProviderTests {
             repository: "fork-owner/alas-fork",
             revision: revisions.afterSHA,
             path: "Assets/Diff image.png",
+            maxBytes: 1024,
             cwd: Self.cwd
         )
 
@@ -547,7 +548,7 @@ struct GitHubCLIProviderTests {
                     "api",
                     "--hostname", "github.com",
                     "--method", "GET",
-                    "--header", "Accept: application/vnd.github.raw+json",
+                    "--header", "Accept: application/vnd.github.raw",
                     "repos/fork-owner/alas-fork/contents/Assets%2FDiff%20image.png?ref=head-sha",
                 ],
                 cwd: Self.cwd

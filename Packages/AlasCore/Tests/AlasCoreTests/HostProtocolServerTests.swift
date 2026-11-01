@@ -634,9 +634,11 @@ struct HostProtocolServerTests {
         provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: first, afterSHA: second)
         let pullRequest = try await fixture.openPullRequestReview(provider)
         let worktree = try #require(fixture.core.projects.worktrees(projectId: fixture.projectID).first)
-        func side(_ after: Bool, head: String = provider.headSHA, in other: Worktree? = nil) async -> RemoteFileBytesResult {
+        func side(
+            _ after: Bool, path: String = "icon.png", head: String = provider.headSHA, in other: Worktree? = nil
+        ) async -> RemoteFileBytesResult {
             await fixture.core.remoteFileBytes(
-                in: .found(other ?? worktree), path: "icon.png",
+                in: .found(other ?? worktree), path: path,
                 revision: .providerReview(sessionID: pullRequest, after: after, head: head))
         }
         func diffRead() async throws {
@@ -654,12 +656,28 @@ struct HostProtocolServerTests {
         #expect(provider.revisionCalls == 1)
         #expect(await side(true, head: "stale") == .failure(
             reason: .gitFailed, byteSize: nil, message: "This pull request changed since it was loaded. Reload it and try again."))
-        provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: second, afterSHA: String(repeating: "1", count: 40))
+        // A side the host has no commit for (a fork's) is read through its
+        // provider, from the review's own repository, for a file of the diff it served.
+        let missing = String(repeating: "1", count: 40)
+        provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: second, afterSHA: missing)
+        provider.headRepositoryOwner = "fork"
+        provider.diff = "diff --git a/icon.png b/icon.png\nBinary files a/icon.png and b/icon.png differ\n"
         #expect(await side(false) == .success(data: added))
         try await diffRead()
         #expect(await side(false) == .success(data: changed))
-        #expect(await side(true) == .failure(reason: .notFound, byteSize: nil, message: nil))
+        #expect(await side(true) == .success(data: provider.fileData))
+        #expect(await side(true, path: "other.png") == .failure(reason: .pathRejected, byteSize: nil, message: nil))
+        provider.fileError = ProcessError.outputTooLarge(maxBytes: RemoteWorktreeFileAccess.maxPreviewBytes)
+        #expect(await side(true) == .failure(reason: .tooLarge, byteSize: nil, message: nil))
         #expect(provider.revisionCalls == 2)
+        // The before side, and an after side with no head repository, read the base repository.
+        provider.fileError = nil
+        provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: missing, afterSHA: missing)
+        provider.headRepositoryOwner = nil
+        try await diffRead()
+        #expect(await [side(false), side(true)] == Array(repeating: .success(data: provider.fileData), count: 2))
+        #expect(provider.fileReads
+            == Array(repeating: "fork/app@\(missing):icon.png", count: 2) + Array(repeating: "acme/app@\(missing):icon.png", count: 2))
         // Another worktree can't read this one's review, cached or not.
         let other = Worktree(
             id: "other", projectId: worktree.projectId, name: "other", branch: "other",
@@ -3192,11 +3210,24 @@ struct HostProtocolServerTests {
             if let readError { throw readError }
             return ReviewRequest(
                 remote: remote, number: number, title: "Fix", url: remote.reviewRequestURL(number: number), state: .open,
-                isDraft: false, headRefName: "feature", baseRefName: "main", headSHA: headSHA, reviewDecision: .unknown,
-                mergeState: .unknown, checks: [], threads: threads
+                isDraft: false, headRefName: "feature", baseRefName: "main", headSHA: headSHA,
+                headRepositoryOwner: headRepositoryOwner, headRepositoryName: headRepositoryOwner.map { _ in "app" },
+                reviewDecision: .unknown, mergeState: .unknown, checks: [], threads: threads
             )
         }
         func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+        var headRepositoryOwner: String?
+        var fileData = Data([0x89, 0x50, 0x06])
+        /// Thrown by `reviewFileData`.
+        var fileError: (any Error)?
+        var fileReads: [String] = []
+        @MainActor func reviewFileData(
+            remote: CodeHostRemote, repository: String, revision: String, path: String, maxBytes: Int, cwd: URL
+        ) async throws -> Data {
+            fileReads.append("\(repository)@\(revision):\(path)")
+            if let fileError { throw fileError }
+            return fileData
+        }
         var imageRevisions = CodeHostReviewImageRevisions(beforeSHA: "aaa", afterSHA: "bbb")
         var revisionCalls = 0
         /// The next `reviewImageRevisions` waits for `releaseRevisions` to be resumed.

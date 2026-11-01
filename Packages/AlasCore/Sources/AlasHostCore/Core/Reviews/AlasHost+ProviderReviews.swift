@@ -19,7 +19,10 @@ extension ReviewsAPI {
                 ? HostProviderReview.capped(try await provider.reviewDiff(remote: remote, request: request, cwd: worktree.path))
                 : nil
             // Its images are read at the head of the diff a Mac now shows.
-            if withDiff { core.providerReviewImages[record.target.draftSessionID] = ProviderReviewImages(request: request) }
+            if let diff {
+                core.providerReviewImages[record.target.draftSessionID] = ProviderReviewImages(
+                    request: request, paths: ReviewRequestDiffLoader.imagePaths(in: diff.diff))
+            }
             return HostProviderReview(
                 remote: remote,
                 request: request,
@@ -163,13 +166,7 @@ extension AlasCoreContext {
     func providerReviewImageRevisions(
         _ session: ReviewDraftSessionID, head: String, in worktree: Worktree
     ) async throws -> CodeHostReviewImageRevisions {
-        guard session.isFor(worktreeID: worktree.id),
-              let record = try reviewSessions.list(worktreeID: worktree.id)
-              .first(where: { $0.target.draftSessionID == session }),
-              case .reviewRequest = record.target.payload,
-              let remote = record.target.providerRemote,
-              let provider = codeHostProviders.provider(for: remote.kind)
-        else { throw HostError.notFound(what: "review \(session.rawValue)") }
+        let (remote, provider) = try providerReviewSource(session, in: worktree)
         guard var images = providerReviewImages[session] else {
             throw HostError.failed(message: "This review's diff isn't loaded on the host. Reload it and try again.")
         }
@@ -191,6 +188,21 @@ extension AlasCoreContext {
         } catch {
             throw HostError.failed(message: error.localizedDescription)
         }
+    }
+
+    /// The saved remote of pull or merge request review `session` of
+    /// `worktree`, and its provider.
+    func providerReviewSource(
+        _ session: ReviewDraftSessionID, in worktree: Worktree
+    ) throws -> (CodeHostRemote, any CodeHostProvider) {
+        guard session.isFor(worktreeID: worktree.id),
+              let record = try reviewSessions.list(worktreeID: worktree.id)
+              .first(where: { $0.target.draftSessionID == session }),
+              case .reviewRequest = record.target.payload,
+              let remote = record.target.providerRemote,
+              let provider = codeHostProviders.provider(for: remote.kind)
+        else { throw HostError.notFound(what: "review \(session.rawValue)") }
+        return (remote, provider)
     }
 
     /// The path renamed file `path` had before in pull or merge request
@@ -221,8 +233,10 @@ extension AlasCoreContext {
 }
 
 /// A pull or merge request review's request as the host served its diff,
-/// and the image diff commits its provider names for it once asked.
+/// that diff's image paths, and the image diff commits its provider names
+/// for it once asked.
 struct ProviderReviewImages {
     let request: ReviewRequest
+    let paths: (after: Set<String>, before: Set<String>)
     var revisions: Task<CodeHostReviewImageRevisions, any Error>?
 }
