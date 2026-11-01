@@ -749,7 +749,7 @@ fn computer_tools_without_vm() -> Vec<Value> {
         }),
         json!({
             "name": "computer_key",
-            "description": "Press a key or chord in a window, such as `return`, `cmd+s` or `shift+tab`. In a Linux VM, use `ctrl` (`cmd` also maps to Ctrl). Keys go to the window's app, not to the user's focused app. A bare `escape` or `return` on a window with a sheet or dialog presses its cancel or default button (the result's `button` names it). Returns the window's new elements (refs are replaced). The first use of each app asks the user for approval.",
+            "description": "Press a key or chord in a window, such as `return`, `cmd+s` or `shift+tab`. In a Linux VM, use `ctrl` (`cmd` also maps to Ctrl). Keys go to the window's app, not to the user's focused app. macOS: a bare `escape` or `return` on a window with a sheet or dialog presses its cancel or default button (the result's `button` names it). Returns the window's new elements (refs are replaced). The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({

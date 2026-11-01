@@ -153,11 +153,12 @@ extension AppState {
                     return .error((error as? VMGuestClient.Failure ?? .stopped).message(for: .linux))
                 }
             }
-            vmComputerUseSessions[sessionID] = VMIdentity.recordID(worktree: worktreeID, guest: guest)
-            if vmPendingResumes.contains(sessionID) {
+            let recordID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+            vmComputerUseSessions[sessionID, default: []].insert(recordID)
+            if vmPendingResumes[sessionID]?.contains(recordID) == true {
                 // Connects first, so the resume goes out ahead of the call on the same connection.
                 _ = try? await client.hello()
-                if await client.lifecycle(.resume, sessionID: sessionID) { vmPendingResumes.remove(sessionID) }
+                if await client.lifecycle(.resume, sessionID: sessionID) { resumeTold(sessionID, recordID) }
             }
             // Awaited in the request's own task, so a client disconnect cancels it and the
             // client tells the guest to cancel the call.
@@ -275,15 +276,18 @@ extension AppState {
 
     /// The badge's Stop: a VM session stops in its guest, the rest on the host.
     func stopComputerUse(sessionID: String) async {
-        guard vmDrivingSessions.contains(sessionID), let recordID = vmComputerUseSessions[sessionID] else {
+        let targets = VMComputerUseRoute.lifecycleTargets(vmComputerUseSessions[sessionID])
+        guard vmDrivingSessions.contains(sessionID), !targets.isEmpty else {
             await computerUse.stop(sessionID: sessionID)
             return
         }
         vmStoppedSessions.insert(sessionID)
         vmDrivingSessions.remove(sessionID)
-        vmPendingResumes.remove(sessionID)
-        let vm = VMIdentity.parse(recordID: recordID)
-        await vmManager.guestClient(for: vm.worktree, guest: vm.guest)?.lifecycle(.stop, sessionID: sessionID)
+        vmPendingResumes[sessionID] = nil
+        for recordID in targets {
+            let vm = VMIdentity.parse(recordID: recordID)
+            await vmManager.guestClient(for: vm.worktree, guest: vm.guest)?.lifecycle(.stop, sessionID: sessionID)
+        }
         if computerUse.driver?.sessionID == sessionID {
             // Also driving the desktop: the host's stop releases it and interrupts the session.
             await computerUse.stop(sessionID: sessionID)
@@ -297,12 +301,20 @@ extension AppState {
     func resumeComputerUse(sessionID: String) {
         computerUse.resume(sessionID: sessionID)
         guard vmStoppedSessions.remove(sessionID) != nil else { return }
-        vmPendingResumes.insert(sessionID)
-        guard let recordID = vmComputerUseSessions[sessionID],
-              let client = vmManager.existingGuestClient(for: recordID) else { return }
-        Task {
-            if await client.lifecycle(.resume, sessionID: sessionID) { vmPendingResumes.remove(sessionID) }
+        let targets = VMComputerUseRoute.lifecycleTargets(vmComputerUseSessions[sessionID])
+        vmPendingResumes[sessionID] = Set(targets)
+        for recordID in targets {
+            guard let client = vmManager.existingGuestClient(for: recordID) else { continue }
+            Task {
+                if await client.lifecycle(.resume, sessionID: sessionID) { resumeTold(sessionID, recordID) }
+            }
         }
+    }
+
+    /// The guest of VM `recordID` knows the session resumed.
+    private func resumeTold(_ sessionID: String, _ recordID: String) {
+        vmPendingResumes[sessionID]?.remove(recordID)
+        if vmPendingResumes[sessionID]?.isEmpty == true { vmPendingResumes[sessionID] = nil }
     }
 
     func computerUseTurnEnded(sessionID: String, owner: SessionOwnerID) {
@@ -318,12 +330,13 @@ extension AppState {
         vmComputerUseSessions[sessionID] = nil
     }
 
-    /// Only for sessions that used the guest of this owner's VM, and only over a client that exists.
+    /// To each guest of this owner's VMs the session used, and only over a client that exists.
     private func forwardVMLifecycle(_ event: VMGuestLifecycleEvent, sessionID: String, owner: SessionOwnerID) {
-        guard case .worktree(let worktreeID) = owner, let recordID = vmComputerUseSessions[sessionID],
-              VMIdentity.parse(recordID: recordID).worktree == worktreeID,
-              let client = vmManager.existingGuestClient(for: recordID) else { return }
-        Task { await client.lifecycle(event, sessionID: sessionID) }
+        guard case .worktree(let worktreeID) = owner else { return }
+        for recordID in VMComputerUseRoute.lifecycleTargets(vmComputerUseSessions[sessionID], worktreeID: worktreeID) {
+            guard let client = vmManager.existingGuestClient(for: recordID) else { continue }
+            Task { await client.lifecycle(event, sessionID: sessionID) }
+        }
     }
 
     func showComputerUseSession(_ sessionID: String) {

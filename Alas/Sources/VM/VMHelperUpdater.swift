@@ -151,7 +151,7 @@ extension VMHelperUpdater {
 
 /// Reinstalls the helper and Cua Driver in a running Linux VM from its share,
 /// through the helper it replaces: one root script runs the guest setup,
-/// whose last step restarts the helper's service, and the update is done once
+/// whose last step queues a restart of the helper's service, and the update is done once
 /// the restarted helper says it does computer use. The VM keeps running
 /// either way. A helper that no longer answers `run` can't be updated here.
 @MainActor
@@ -186,9 +186,11 @@ struct LinuxVMHelperUpdater {
 
     func run(user: String = VMGuestAccount.alas.shortName) async -> Outcome {
         do {
+            // The script queues the restart and ends; its reply may still be lost to the restart.
             let result = try await runInGuest(Self.command(user: user), Self.runTimeoutSeconds)
-            // The restart usually kills the script first; a reply means it ended some other way.
             if result.timedOut { return failed(Reason.timedOut) }
+            // A nil exit code is a script killed by a signal, as the restart may do.
+            if let exit = result.exitCode, exit != 0 { return failed(Self.reason(stderr: result.stderr, exitCode: exit)) }
         } catch VMGuestClient.Failure.stopped {
             // Expected: restarting the helper drops the connection the reply would come on.
         } catch {
@@ -206,6 +208,12 @@ struct LinuxVMHelperUpdater {
         guard ready else { return failed(answered ? Reason.noComputerUse : Reason.didNotReturn) }
         Self.logger.info("Updated the Linux helper")
         return .updated
+    }
+
+    /// The script's last line of stderr, which says why it stopped.
+    static func reason(stderr: String, exitCode: Int32) -> String {
+        let last = stderr.split(whereSeparator: \.isNewline).last.map { $0.trimmingCharacters(in: .whitespaces) }
+        return last.flatMap { $0.isEmpty ? nil : $0 } ?? "the setup failed in the VM with status \(exitCode)"
     }
 
     private func failed(_ reason: String) -> Outcome {

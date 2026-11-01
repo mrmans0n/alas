@@ -59,6 +59,13 @@ enum VMComputerUseRoute: Equatable {
         "computer_vm_missing: This worktree has no \(guest == .linux ? "Linux" : "macOS") VM. Create one from its VM tab."
     }
 
+    /// The VMs, by registry id, that a session's lifecycle event goes to: every VM in `recorded`
+    /// (the ones it made a call in), or only `worktreeID`'s for an event from that worktree's
+    /// session. Sorted, so events go out in a stable order.
+    static func lifecycleTargets(_ recorded: Set<String>?, worktreeID: String? = nil) -> [String] {
+        (recorded ?? []).filter { id in worktreeID.map { VMIdentity.parse(recordID: id).worktree == $0 } ?? true }.sorted()
+    }
+
     /// Where the guest sees the worktree VM's transfer folder.
     static let transferGuestPath = "/Volumes/My Shared Files/transfer"
     static let linuxTransferGuestPath = LinuxCloudInit.shareMountPoint + "/transfer"

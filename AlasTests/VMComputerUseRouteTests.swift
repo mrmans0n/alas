@@ -131,6 +131,19 @@ struct VMComputerUseRouteTests {
         #expect(VMComputerUseRoute.linuxComputerUse(capabilities: ["computer_use"]).refusal == nil)
     }
 
+    /// A session that drove both of its worktree's VMs tells both about its lifecycle; an event
+    /// from a worktree's session skips VMs of other worktrees, and Stop and Resume reach them all.
+    @Test(arguments: [
+        (nil as String?, ["/w", "/x", "linux:/w"]),
+        ("/w", ["/w", "linux:/w"]),
+        ("/y", []),
+    ])
+    func lifecycleReachesEveryVMTheSessionDrove(worktreeID: String?, expected: [String]) {
+        let recorded: Set<String> = ["/w", "linux:/w", "/x"]
+        #expect(VMComputerUseRoute.lifecycleTargets(recorded, worktreeID: worktreeID) == expected)
+        #expect(VMComputerUseRoute.lifecycleTargets(nil, worktreeID: worktreeID).isEmpty)
+    }
+
     @Test func runReplyKeepsANullExitCodeForAKilledCommand() throws {
         let result = VMGuestRunResult(exitCode: nil, stdout: "a", stderr: "b", truncated: true, timedOut: true)
         let expected = #"{"exit_code":null,"stdout":"a","stderr":"b","truncated":true,"timed_out":true}"#

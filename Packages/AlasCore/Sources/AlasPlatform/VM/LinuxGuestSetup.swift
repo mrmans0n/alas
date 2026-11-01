@@ -73,21 +73,29 @@ public enum LinuxGuestSetup {
                 "install -m 0755 \(cuaDriverSource) \(cuaDriverPath)",
                 // apt-daily or unattended-upgrades often hold the dpkg lock on first boot.
                 "dpkg -s mousepad >/dev/null 2>&1 || { apt-get -o DPkg::Lock::Timeout=300 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y mousepad; }",
-                "runuser -u \(user) -- env XDG_RUNTIME_DIR=/run/user/$(id -u \(user)) systemctl --user restart alas-vm-guest || true",
+                restartCommand(user: user),
             ]
     }
 
-    /// `commands(user:)` for a guest that has been running: before the
-    /// restart, which kills the script with the helper's service, it removes
-    /// `user`'s own screensaver channel (older guests wrote one, and it
-    /// overrides the `/etc/xdg` defaults) and ends a running locker. The
-    /// locker's name is longer than the 15 characters `pkill -x` sees, so it
-    /// matches the command line, anchored so it can't match this script's.
+    /// `commands(user:)` for a guest that has been running. It first stops
+    /// with exit status 3 when the share has no Cua Driver. Before the
+    /// restart it removes `user`'s own screensaver channel (older guests
+    /// wrote one, and it overrides the `/etc/xdg` defaults) and ends a running
+    /// locker. The locker's name is longer than the 15 characters `pkill -x`
+    /// sees, so it matches the command line, anchored so it can't match this
+    /// script's. The restart is only queued: the script runs inside the
+    /// helper's service, whose stop would otherwise wait for it.
     public static func updateCommands(user: String) -> [String] {
-        let setup = commands(user: user)
-        return setup.dropLast() + [
-            #"rm -f "$(getent passwd \#(user) | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#,
-            "pkill -f '^(/usr/bin/)?xfce4-screensaver' || true",
-        ] + setup.suffix(1)
+        [#"test -x \#(cuaDriverSource) || { echo "no Cua Driver in the helper share" >&2; exit 3; }"#]
+            + commands(user: user).dropLast()
+            + [
+                #"rm -f "$(getent passwd \#(user) | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#,
+                "pkill -f '^(/usr/bin/)?xfce4-screensaver' || true",
+                restartCommand(user: user, noBlock: true),
+            ]
+    }
+
+    private static func restartCommand(user: String, noBlock: Bool = false) -> String {
+        "runuser -u \(user) -- env XDG_RUNTIME_DIR=/run/user/$(id -u \(user)) systemctl --user\(noBlock ? " --no-block" : "") restart alas-vm-guest || true"
     }
 }

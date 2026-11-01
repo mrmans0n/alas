@@ -97,14 +97,17 @@ struct LinuxCloudInitTests {
             #expect(commands.contains { $0.hasPrefix("cat > \(file.path) ") })
         }
 
-        // On an older guest a per-user screensaver channel overrides those defaults and a locker may
-        // run, so Update helper also drops both before the restart, which ends the update script.
-        // The pkill is anchored: an unanchored -f would match the script's own command line.
+        // Update helper stops at once on a share without Cua Driver. On an older guest a per-user
+        // screensaver channel overrides those defaults and a locker may run, so it also drops both.
+        // The pkill is anchored: an unanchored -f would match the script's own command line. The
+        // restart is queued, so the script ends before it stops the service it runs in.
         let update = LinuxGuestSetup.updateCommands(user: "alas")
-        #expect(update == commands.dropLast() + [
+        #expect(update == [
+            #"test -x /mnt/alas/helper/cua-driver || { echo "no Cua Driver in the helper share" >&2; exit 3; }"#,
+        ] + commands.dropLast() + [
             #"rm -f "$(getent passwd alas | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#,
             "pkill -f '^(/usr/bin/)?xfce4-screensaver' || true",
-            commands.last!,
+            "runuser -u alas -- env XDG_RUNTIME_DIR=/run/user/$(id -u alas) systemctl --user --no-block restart alas-vm-guest || true",
         ])
     }
 

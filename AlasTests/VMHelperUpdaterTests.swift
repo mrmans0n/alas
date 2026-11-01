@@ -1,3 +1,4 @@
+import AlasComputerUseKit
 import AlasCore
 import Foundation
 import Testing
@@ -6,12 +7,14 @@ import Testing
 /// Main actor: the updaters and their seams are main-actor isolated.
 @MainActor
 struct VMHelperUpdaterTests {
-    /// A guest whose helper drops the connection when the script restarts it, then answers
-    /// hellos from `hellos` in turn (the last one repeats). Sleeps advance a fake clock.
+    /// A guest whose helper answers the script with `reply`, or drops the connection when nil as
+    /// the restart does, then answers hellos from `hellos` in turn (the last one repeats). Sleeps
+    /// advance a fake clock.
     @MainActor
     final class FakeLinuxGuest {
         var commands: [(command: String, timeout: Int)] = []
         var hellos: [VMGuestHello]
+        var reply: VMGuestRunResult?
         var helloCalls = 0
         var now = ContinuousClock.now
 
@@ -21,7 +24,8 @@ struct VMHelperUpdaterTests {
             LinuxVMHelperUpdater(
                 runInGuest: { command, timeout in
                     self.commands.append((command, timeout))
-                    throw VMGuestClient.Failure.stopped
+                    guard let reply = self.reply else { throw VMGuestClient.Failure.stopped }
+                    return reply
                 },
                 status: {
                     self.helloCalls += 1
@@ -61,5 +65,16 @@ struct VMHelperUpdaterTests {
 
         #expect(outcome == .failed(reason: LinuxVMHelperUpdater.Reason.noComputerUse))
         #expect(guest.now - start == .seconds(60))
+    }
+
+    /// A script that ran and failed says why in its last line of stderr; no hello is waited for.
+    @Test func linuxUpdateFailsWithTheScriptsLastErrorLine() async {
+        let guest = FakeLinuxGuest(hellos: [Self.hello(["run", "computer_use"])])
+        guest.reply = VMGuestRunResult(
+            exitCode: 3, stdout: "", stderr: "warning\nno Cua Driver in the helper share\n", truncated: false, timedOut: false)
+        let outcome = await guest.updater().run()
+
+        #expect(outcome == .failed(reason: "no Cua Driver in the helper share"))
+        #expect(guest.helloCalls == 0)
     }
 }
