@@ -1314,7 +1314,13 @@ final class NativePeerSessions {
     /// Sends `document`'s read: an image diff's two sides when its host serves file bytes, else its text read.
     private func sendDocumentRead(_ document: NativePeerWorkspace.Document) -> Bool {
         imageDiffRead = nil
+        // A stash's or checkpoint's sides are revisions only a newer host reads.
+        let newerRevisions = switch document {
+        case .stashDiff, .checkpointDiff: true
+        case .diff, .commitDiff, .file: false
+        }
         if let target = hostBytesTarget,
+           !newerRevisions || hosts?.servesImageRevisions(serverId: target.serverId) == true,
            let plan = workspace.imageDiffPlan(for: document, comparisonMode: comparisonMode()) {
             imageDiffRead = (document, plan)
             return readImageDiff(document, plan: plan, target: target)
@@ -1355,8 +1361,8 @@ final class NativePeerSessions {
         let serverId = selection.serverId
         let read: @MainActor () async -> Result<HostDiff, NativePeerReviewGitClientError>
         switch document {
-        case .stashDiff(let path, let stash) where hosts.servesStash(serverId: serverId):
-            read = { await hosts.stashDiff(stash, path: path, in: host, serverId: serverId) }
+        case .stashDiff(let file, let stash) where hosts.servesStash(serverId: serverId):
+            read = { await hosts.stashDiff(stash, path: file.path, in: host, serverId: serverId) }
         case .checkpointDiff(let path, let id) where hosts.servesCheckpoints(serverId: serverId):
             read = { await hosts.checkpointDiff(id, path: path, in: host, serverId: serverId) }
         default:

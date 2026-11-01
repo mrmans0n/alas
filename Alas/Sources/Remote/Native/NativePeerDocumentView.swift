@@ -255,7 +255,7 @@ struct NativePeerDocumentView: View {
     }
 
     /// Decodes in memory: a host's LFS store is out of reach, so a pointer fails as "LFS", as local's does.
-    private static func decodedSide(_ side: NativePeerWorkspace.ImageSide) -> ImageDiffSide {
+    static func decodedSide(_ side: NativePeerWorkspace.ImageSide) -> ImageDiffSide {
         switch side {
         case .data(let data):
             NSImage(data: data).map(GitService.imageSide(forDecodedImage:))
@@ -903,9 +903,11 @@ struct NativePeerReviewView: View {
         // One client per load: its notes are never reset.
         let hosts = hosts
         let selection = selection
-        let git = NativePeerReviewGitClient(read: { read in
+        var git = NativePeerReviewGitClient(read: { read in
             await hosts.read(read, in: selection.worktree, serverId: selection.serverId)
         })
+        git.readsImages = hosts.servesFileBytes(serverId: selection.serverId)
+        git.readsRangeImages = hosts.servesImageRevisions(serverId: selection.serverId)
         let message: String
         do {
             // Without the host's provider reviews, the loader refuses the target.

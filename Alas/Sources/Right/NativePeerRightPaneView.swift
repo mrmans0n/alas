@@ -541,9 +541,9 @@ struct NativePeerRightPaneView: View {
     /// An open stash diff follows its stash as refs shift after a push, pop
     /// or drop, and closes once the stash is gone.
     private func followOpenStashDiff(_ listed: [GitStash]) {
-        guard case .stashDiff(let path, let shown)? = client.workspace.document else { return }
+        guard case .stashDiff(let file, let shown)? = client.workspace.document else { return }
         if let stash = listed.first(where: { $0.sha == shown.sha }) {
-            if stash.ref != shown.ref { client.open(.stashDiff(path: path, stash: HostStashRef(stash))) }
+            if stash.ref != shown.ref { client.open(.stashDiff(file: file, stash: HostStashRef(stash))) }
         } else {
             client.closeDocument()
         }

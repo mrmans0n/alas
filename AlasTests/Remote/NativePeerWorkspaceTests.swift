@@ -3,6 +3,9 @@ import Testing
 @testable import Alas
 @_spi(Testing) import AlasCore
 
+private let planStash = HostStashRef(ref: "stash@{0}", sha: "abc")
+private let planCheckpoint = CheckpointID()
+
 struct NativePeerWorkspaceTests {
     private func changed(_ path: String, add: Int = 1) -> RemoteChangedFile {
         .init(path: path, status: "M", add: add, del: 0, conflict: nil, renameFrom: nil)
@@ -302,7 +305,8 @@ struct NativePeerWorkspaceTests {
 
     /// An image diff reads the sides local's image diffs compare: index to working tree when
     /// unstaged, HEAD to index when staged, the comparison ref to the working tree for the branch,
-    /// a commit's parent to itself; the old path for a rename, and no side an add or delete lacks.
+    /// a commit's parent to itself, a stash's base to its saved or untracked file, a checkpoint's
+    /// file to the working tree; the old path for a rename, and no side an add or delete lacks.
     @Test(arguments: [
         (NativePeerWorkspace.Document.diff(path: "a.png", stage: .unstaged), "M", nil as String?,
          PlanSide(path: "a.png", revision: .index) as PlanSide?, PlanSide(path: "a.png", revision: nil) as PlanSide?,
@@ -317,6 +321,14 @@ struct NativePeerWorkspaceTests {
          PlanSide(path: "new.png", revision: .commit(sha: "abc")), .renamed),
         (.diff(path: "a.png", stage: .staged), "A", nil, nil, PlanSide(path: "a.png", revision: .index), .added),
         (.diff(path: "a.png", stage: .unstaged), "D", nil, PlanSide(path: "a.png", revision: .index), nil, .deleted),
+        (.stashDiff(file: GitStashFile(path: "a.png", status: "M", add: 0, del: 0), stash: planStash), "M", nil,
+         PlanSide(path: "a.png", revision: .stashBase(planStash)),
+         PlanSide(path: "a.png", revision: .stash(planStash, untracked: false)), .modified),
+        (.stashDiff(file: GitStashFile(path: "a.png", status: "A", add: 0, del: 0, isUntracked: true), stash: planStash), "A", nil,
+         nil, PlanSide(path: "a.png", revision: .stash(planStash, untracked: true)), .added),
+        (.checkpointDiff(path: "a.png", checkpointID: planCheckpoint), "M", nil,
+         PlanSide(path: "a.png", revision: .checkpoint(id: planCheckpoint)), PlanSide(path: "a.png", revision: nil),
+         .modified),
     ])
     func imageDiffReadsTheSidesLocalCompares(
         document: NativePeerWorkspace.Document, status: String, renameFrom: String?,

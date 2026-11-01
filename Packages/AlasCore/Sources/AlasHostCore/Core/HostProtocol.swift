@@ -330,6 +330,14 @@ public enum HostFileRevision: Codable, Equatable, Sendable {
     case commit(sha: String)
     /// The commit before `sha`: a root commit's has no file.
     case parent(sha: String)
+    /// The commit a listed stash was made on, the old side of its diff.
+    case stashBase(HostStashRef)
+    /// A listed stash's file: from its saved tree, or with `untracked` from its untracked files.
+    case stash(HostStashRef, untracked: Bool)
+    /// The old side of a listed checkpoint's diff with the working tree.
+    case checkpoint(id: CheckpointID)
+    /// The old side of a range's diff, named as `HostWorktreeRead.rangeDiff` names the range.
+    case rangeBase(base: String, head: String, threeDot: Bool)
 }
 
 /// A draft review as a worktree's Reviews list shows it.

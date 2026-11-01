@@ -35,8 +35,8 @@ struct NativePeerWorkspace: Equatable {
         case diff(path: String, stage: ChangeStage?)
         case commitDiff(path: String, sha: String)
         case file(path: String)
-        /// Served over the host channel only, as the stash was listed.
-        case stashDiff(path: String, stash: HostStashRef)
+        /// Served over the host channel only, as the stash and its file were listed.
+        case stashDiff(file: GitStashFile, stash: HostStashRef)
         /// How `path` changed since a checkpoint; served over the host channel only.
         case checkpointDiff(path: String, checkpointID: CheckpointID)
 
@@ -55,8 +55,8 @@ struct NativePeerWorkspace: Equatable {
 
         var path: String {
             switch self {
-            case .diff(let path, _), .commitDiff(let path, _), .file(let path), .stashDiff(let path, _),
-                 .checkpointDiff(let path, _): path
+            case .diff(let path, _), .commitDiff(let path, _), .file(let path), .checkpointDiff(let path, _): path
+            case .stashDiff(let file, _): file.path
             }
         }
     }
@@ -197,8 +197,8 @@ struct NativePeerWorkspace: Equatable {
         }
     }
 
-    /// The sides an image path's diff `document` compares, from its row in the loaded lists; nil for
-    /// any other document.
+    /// The sides an image path's diff `document` compares, from its row in the loaded lists or the
+    /// stash file it names; nil for any other document.
     func imageDiffPlan(
         for document: Document, comparisonMode: AppConfig.Changes.ChangesComparisonMode?
     ) -> ImageDiffPlan? {
@@ -209,6 +209,8 @@ struct NativePeerWorkspace: Equatable {
         case (.diff(_, nil), .loaded(let loaded)): rows = loaded.branchFiles
         case (.commitDiff(_, let sha), _):
             if case .loaded(let loaded)? = commitFiles[sha] { rows = loaded.files }
+        case (.stashDiff(let file, _), _):
+            return Self.imageDiffPlan(for: document, status: file.status, renameFrom: file.oldPath, comparisonMode: comparisonMode)
         default: break
         }
         let row = rows.first { $0.path == document.path }
@@ -218,7 +220,9 @@ struct NativePeerWorkspace: Equatable {
 
     /// The sides an image diff reads, as local's image diffs pick them: unstaged compares the index with
     /// the working tree, staged HEAD with the index, a branch diff the comparison ref with the working
-    /// tree, and a commit its parent with itself. A rename's old side reads its old path.
+    /// tree, a commit its parent with itself, a stash the commit it was made on with its saved or
+    /// untracked file, and a checkpoint its saved file with the working tree. A rename's old side reads
+    /// its old path.
     static func imageDiffPlan(
         for document: Document, status: String, renameFrom: String?,
         comparisonMode: AppConfig.Changes.ChangesComparisonMode?
@@ -242,7 +246,16 @@ struct NativePeerWorkspace: Equatable {
             resolution = ImageDiffPairResolver.resolveCommit(
                 entry: CommitChangedFile(path: path, originalPath: renameFrom, status: status, add: 0, del: 0))
             revisions = (.parent(sha: sha), .commit(sha: sha))
-        case .file, .stashDiff, .checkpointDiff:
+        case .stashDiff(let file, let stash):
+            // An untracked file is new in the stash.
+            resolution = ImageDiffPairResolver.resolveCommit(entry: CommitChangedFile(
+                path: path, originalPath: renameFrom, status: file.isUntracked ? "A" : status, add: 0, del: 0))
+            revisions = (.stashBase(stash), .stash(stash, untracked: file.isUntracked))
+        case .checkpointDiff(_, let id):
+            // Whether either side is missing shows once they are read.
+            resolution = ImageDiffPairResolver.Result(kind: .modified, oldPath: nil)
+            revisions = (.checkpoint(id: id), nil)
+        case .file:
             return nil
         }
         return ImageDiffPlan(
@@ -267,7 +280,13 @@ struct NativePeerWorkspace: Equatable {
     /// Lands a host-served image diff for `document` if it is still the open one.
     mutating func finishImageDiff(_ document: Document, plan: ImageDiffPlan, before: ImageSide, after: ImageSide) {
         guard document == self.document else { return }
-        documentContent = .loaded(.imageDiff(before: before, after: after, kind: plan.kind, oldPath: plan.oldPath))
+        // A checkpoint's plan can't tell an add or delete from a change until its sides are read.
+        let kind: ImageDiffPairKind = switch (plan.kind, before, after) {
+        case (.modified, .missing, _): .added
+        case (.modified, _, .missing): .deleted
+        default: plan.kind
+        }
+        documentContent = .loaded(.imageDiff(before: before, after: after, kind: kind, oldPath: plan.oldPath))
     }
 
     mutating func closeDocument() {
@@ -525,7 +544,7 @@ struct NativePeerWorkspace: Equatable {
 /// The host's reads behind the review loaders. A file diff the host fails to
 /// read becomes an empty diff, which the loaders show as their "No text diff"
 /// placeholder; a failed file list, or no reply at all, throws. No context
-/// expansion or images from a peer.
+/// expansion from a peer, and images only from a host that reads their sides.
 struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient, RangeReviewGitClient {
     /// `@unchecked` is sound: its only state is main-actor isolated.
     final class Notes: @unchecked Sendable {
@@ -538,6 +557,12 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient,
     /// Which range `rangeDiff` reads: `base...head` from the merge base, or
     /// `base..head`. Set per review by `ReviewSessionLoader.peer(git:)`.
     var threeDot = false
+    /// Whether the host reads image sides: working copy and commit ones with
+    /// `fileBytes`, a range's with the newer revisions too.
+    var readsImages = false
+    var readsRangeImages = false
+    /// Names this load's working-copy images, which change under the same stage.
+    let loadToken = UUID().uuidString
 
     func status(worktreePath _: URL) async throws -> [ChangedFile] {
         switch await read(.changes(comparisonMode: nil)) {
@@ -638,35 +663,61 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient,
     }
 
     func workingCopyImageProvider(worktreePath: URL, change: ChangedFile) async -> DiffReviewImageProvider {
-        Self.unavailableImage(.workingCopy, worktreePath: worktreePath, revisions: (change.stage.rawValue, change.stage.rawValue),
-                              beforePath: change.renameFrom, path: change.path)
+        let staged = change.stage == .staged
+        return imageProvider(
+            .workingCopy, worktreePath: worktreePath, ids: ("\(change.stage.rawValue):\(loadToken)", loadToken),
+            resolution: ImageDiffPairResolver.resolveWorkingCopy(entry: change, fileExistsOnDisk: true, staged: staged),
+            path: change.path, sides: staged ? (.head, .index) : (.index, nil), reads: readsImages)
     }
 
     func commitImageProvider(worktreePath: URL, sha: String, file: CommitChangedFile) -> DiffReviewImageProvider {
-        Self.unavailableImage(.commit, worktreePath: worktreePath, revisions: (sha, sha), beforePath: file.originalPath, path: file.path)
+        imageProvider(
+            .commit, worktreePath: worktreePath, ids: ("\(sha)^", sha), resolution: ImageDiffPairResolver.resolveCommit(entry: file),
+            path: file.path, sides: (.parent(sha: sha), .commit(sha: sha)), reads: readsImages)
     }
 
     func rangeImageProvider(
         worktreePath: URL, revisions: (before: String, after: String), file: CommitChangedFile
     ) -> DiffReviewImageProvider {
-        Self.unavailableImage(.range, worktreePath: worktreePath, revisions: revisions, beforePath: file.originalPath, path: file.path)
+        let (base, head) = revisions
+        return imageProvider(
+            .range, worktreePath: worktreePath,
+            ids: (HostWorktreeRead.rangeSpec(base: base, head: head, threeDot: threeDot), head),
+            resolution: ImageDiffPairResolver.resolveCommit(entry: file), path: file.path,
+            sides: (.rangeBase(base: base, head: head, threeDot: threeDot), .commit(sha: head)), reads: readsRangeImages)
+    }
+
+    /// Reads an image's two sides from the host as the plan for a document reads them; a host that
+    /// can't fails them.
+    private func imageProvider(
+        _ source: DiffReviewImageProviderID.Source, worktreePath: URL, ids: (before: String, after: String),
+        resolution: ImageDiffPairResolver.Result, path: String, sides: (before: HostFileRevision?, after: HostFileRevision?),
+        reads: Bool
+    ) -> DiffReviewImageProvider {
+        let read = read
+        let beforePath = resolution.oldPath ?? path
+        return DiffReviewImageProvider(
+            id: DiffReviewImageProviderID(source: source, repository: worktreePath.path, beforeRevision: ids.before,
+                                          afterRevision: ids.after, beforePath: resolution.oldPath, afterPath: path),
+            load: {
+                guard reads else { return .failedLoading() }
+                func side(_ path: String, _ revision: HostFileRevision?, missing: Bool) async -> NativePeerWorkspace.ImageSide {
+                    missing ? .missing : NativePeerWorkspace.imageSide(await read(.fileBytes(path: path, revision: revision)))
+                }
+                // ponytail: the sides are read one after the other, as a document's are.
+                let before = await side(beforePath, sides.before, missing: resolution.kind == .added)
+                let after = await side(path, sides.after, missing: resolution.kind == .deleted)
+                return ImageDiffPair(
+                    before: NativePeerDocumentView.decodedSide(before), after: NativePeerDocumentView.decodedSide(after),
+                    oldPath: resolution.oldPath, kind: resolution.kind)
+            }
+        )
     }
 
     private func note(_ truncated: Bool) async {
         guard truncated else { return }
         let notes = notes
         await MainActor.run { notes.truncated = true }
-    }
-
-    private static func unavailableImage(
-        _ source: DiffReviewImageProviderID.Source, worktreePath: URL, revisions: (before: String, after: String),
-        beforePath: String?, path: String
-    ) -> DiffReviewImageProvider {
-        DiffReviewImageProvider(
-            id: DiffReviewImageProviderID(source: source, repository: worktreePath.path, beforeRevision: revisions.before,
-                                          afterRevision: revisions.after, beforePath: beforePath, afterPath: path),
-            load: { .failedLoading() }
-        )
     }
 }
 

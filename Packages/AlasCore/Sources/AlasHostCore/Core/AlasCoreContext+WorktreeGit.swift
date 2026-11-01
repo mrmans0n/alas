@@ -329,7 +329,7 @@ extension AlasCoreContext {
 
     /// The entry of `git stash list` equal to `stash`, else "This stash changed since it was listed. Refresh and try again."
     /// A client ref is never handed to git unless the list holds it.
-    private static func listedStash(_ stash: HostStashRef, at root: URL) async throws -> GitStash {
+    static func listedStash(_ stash: HostStashRef, at root: URL) async throws -> GitStash {
         guard let listed = try await GitService().stashes(worktreePath: root).first(where: { $0.ref == stash.ref && $0.sha == stash.sha })
         else { throw HostError.failed(message: "This stash changed since it was listed. Refresh and try again.") }
         return listed
