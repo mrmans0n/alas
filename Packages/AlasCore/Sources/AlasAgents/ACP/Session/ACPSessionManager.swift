@@ -6983,6 +6983,9 @@ extension ACPSessionManager {
                     session.composerDraft.appending(.init(segments: [.text(reason)])),
                     for: session
                 )
+            },
+            onOptionalAnswerSubmitted: { [weak self] in
+                self?.runners[sessionId]?.recordOptionalAnswer($0)
             }
         )
         elicitationCoordinators[sessionId] = elicitationCoordinator

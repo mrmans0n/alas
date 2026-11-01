@@ -276,6 +276,31 @@ struct ACPElicitationCoordinatorTests {
         #expect(client.elicitationResponses[.number(60)] == .success(.cancel))
     }
 
+    /// Only a submitted optional form with an answer reports its reply for
+    /// the transcript; a blocking form's answer is part of its own turn.
+    @Test("an answered optional form reports its replay text", arguments: [
+        (ACPUserInputRequest.Delivery.optional, ACPUserInputAction.submit(["question_0": .string("Staging")]), "> Q0\n\nStaging" as String?),
+        (.optional, .submit([:]), nil),
+        (.optional, .decline, nil),
+        (.optional, .cancel, nil),
+        (.blocking, .submit(["question_0": .string("Staging")]), nil),
+    ])
+    func optionalAnswerCallback(delivery: ACPUserInputRequest.Delivery, action: ACPUserInputAction, expected: String?) async throws {
+        var answers: [String] = []
+        let (coordinator, session, client) = makeCoordinator(onOptionalAnswerSubmitted: { answers.append($0) })
+        coordinator.start()
+        client.emitElicitation(id: .number(90), params: try decodeParams(codexAsyncFormJSON(
+            meta: delivery == .blocking ? "null" : #"{"codex":{"delivery":"async"}}"#
+        )))
+        try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        let request = try #require(session.transcript.pendingUserInputs.first)
+
+        coordinator.respond(to: request.id, action: action)
+
+        #expect(client.elicitationResponses[.number(90)] != nil)
+        #expect(answers == (expected.map { [$0] } ?? []))
+    }
+
     @Test("awaiting input callback fires again when a resolved request id is reused")
     func awaitingInputCallbackFiresAgainForReusedResolvedRequestId() async throws {
         var notifications: [(ACPSession, ACPUserInputRequest)] = []
@@ -593,7 +618,8 @@ struct ACPElicitationCoordinatorTests {
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
         onPlanAwaiting: @escaping (ACPSession, ACPCursorPlanRequest) -> Void = { _, _ in },
-        onPlanRejected: @escaping (String) -> Void = { _ in }
+        onPlanRejected: @escaping (String) -> Void = { _ in },
+        onOptionalAnswerSubmitted: @escaping (String) -> Void = { _ in }
     ) -> (ACPElicitationCoordinator, ACPSession, ACPMockClient) {
         let session = ACPSession(id: "local", agentId: "codex", worktreeId: "wt", title: "Test")
         let client = ACPMockClient()
@@ -606,7 +632,8 @@ struct ACPElicitationCoordinatorTests {
                 onInputAwaiting: onInputAwaiting,
                 onInputResolved: onInputResolved,
                 onPlanAwaiting: onPlanAwaiting,
-                onPlanRejected: onPlanRejected
+                onPlanRejected: onPlanRejected,
+                onOptionalAnswerSubmitted: onOptionalAnswerSubmitted
             ),
             session,
             client

@@ -4053,7 +4053,6 @@ extension ACPSessionRunner {
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-                let boundaryCrossingBefore = self.session.allowsStreamingBoundaryCrossing
                 if recordUserPrompt {
                     self.flushStreamingPersist()
                     let before = self.session.transcript.messages.count
@@ -4074,11 +4073,7 @@ extension ACPSessionRunner {
                     recordedMessageID = userMessageID
                     let recordedTitle = self.session.title
                     let userIndex = self.session.transcript.messages.count - 1
-                    var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
-                    self.session.allowsStreamingBoundaryCrossing = true
-                    let boundaryDirty = self.session.beginSteeringOutputBoundary(beforeUserMessageAt: userIndex) { text in
-                        boundaryMetadata.append((text, text.metadata))
-                    }
+                    let (boundaryDirty, rollBackBoundary) = self.beginOutputBoundary(beforeUserMessageAt: userIndex)
                     // Defer incoming mutations until commit/rollback so they
                     // cannot persist a provisional row or boundary separately.
                     self.steeringRowPersistencePending = true
@@ -4092,8 +4087,7 @@ extension ACPSessionRunner {
                                if case .user(let id, _, _, _, _, _) = $0 { return id == recordedMessageID }
                                return false
                            }) {
-                            boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
-                            self.session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
+                            rollBackBoundary()
                             self.session.transcript.messages.remove(at: index)
                             // Replay output materialized before this user row
                             // belongs to the preceding turn, even if steering
@@ -4126,11 +4120,7 @@ extension ACPSessionRunner {
                        let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedMessageID, from: symbolExpansion) {
                         self.persistIndices([index])
                     }
-                    self.session.allowsStreamingBoundaryCrossing = true
-                    var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
-                    let dirty = self.session.beginSteeringOutputBoundary(followingUserCount: 0) { text in
-                        boundaryMetadata.append((text, text.metadata))
-                    }
+                    let (dirty, rollBackBoundary) = self.beginOutputBoundary(followingUserCount: 0)
                     self.steeringRowPersistencePending = true
                     let persisted = await withCheckedContinuation { continuation in
                         if !self.persistIndices(dirty, completion: { continuation.resume(returning: $0) }) {
@@ -4138,8 +4128,7 @@ extension ACPSessionRunner {
                         }
                     }
                     if !persisted, self.isConnectionCurrent() {
-                        boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
-                        self.session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
+                        rollBackBoundary()
                     }
                     self.steeringRowPersistencePending = false
                     self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
@@ -4306,6 +4295,27 @@ extension ACPSessionRunner {
                 finishPrompt(false)
             }
         }
+    }
+
+    /// Split the live output run at a user row the agent reads mid-turn, so
+    /// its later chunks land below that row. Returns the rows to persist and
+    /// an undo for when they cannot be.
+    private func beginOutputBoundary(
+        beforeUserMessageAt userIndex: Int? = nil,
+        followingUserCount: Int = 1
+    ) -> (dirty: Set<Int>, rollBack: () -> Void) {
+        let crossingBefore = session.allowsStreamingBoundaryCrossing
+        var metadata: [(text: StreamingText, metadata: AnyCodable?)] = []
+        session.allowsStreamingBoundaryCrossing = true
+        let dirty = session.beginSteeringOutputBoundary(
+            beforeUserMessageAt: userIndex, followingUserCount: followingUserCount
+        ) { text in
+            metadata.append((text, text.metadata))
+        }
+        return (dirty, { [session] in
+            metadata.forEach { $0.text.restoreMetadata($0.metadata) }
+            session.allowsStreamingBoundaryCrossing = crossingBefore
+        })
     }
 
     private func persistSteeringUserRow(from index: Int, userMessageID: UUID, boundaryDirty: Set<Int>, queueItemID: UUID) async -> Bool {
@@ -5257,6 +5267,19 @@ extension ACPSessionRunner {
         let before = session.transcript.messages.count
         session.appendSystemNotice(text)
         persistFromIndex(before)
+    }
+
+    /// Record an answered optional question as the user row the adapter
+    /// replays for it. The agent reads the answer mid-turn, like a native
+    /// steer, so the row splits the running output the same way; it is not a
+    /// prompt, so nothing else about the turn changes.
+    public func recordOptionalAnswer(_ text: String) {
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        flushStreamingPersist()
+        let before = session.transcript.messages.count
+        let index = session.appendAnswerRow(text: text)
+        let (dirty, _) = beginOutputBoundary(beforeUserMessageAt: index)
+        persistIndices(dirty.union(before...index))
     }
 
     /// Append a system notice and report whether it actually reached the

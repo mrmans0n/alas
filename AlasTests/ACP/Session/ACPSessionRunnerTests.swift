@@ -5972,6 +5972,56 @@ struct ACPSessionRunnerTests {
         await second.open()
     }
 
+    /// An answered optional question is recorded the way the adapter replays
+    /// it: a user row that is not a new prompt, so the title stays, and that
+    /// splits the agent's running message like a native steer.
+    @Test("an optional answer row splits the running agent message")
+    func optionalAnswerRowSplitsStream() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        _ = session.recordUserPrompt(text: "go", attachments: [])
+        // A prompt would claim a placeholder title; the answer must not.
+        session.titleSource = .placeholder
+        let title = session.title
+        session.transcript.streamingState = .streaming
+        func chunk(_ text: String) {
+            runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+                messageId: "m1", content: .text(text)))))
+        }
+
+        chunk("Before")
+        runner.recordOptionalAnswer("> Q\n\nA")
+        chunk(" after")
+
+        func timeline(_ messages: [ACPMessage]) -> [String] {
+            messages.compactMap {
+                switch $0 {
+                case .user(_, _, let text, _, _, _): "user:\(text)"
+                case .agent(_, _, let text): "agent:\(text.value)"
+                default: nil
+                }
+            }
+        }
+        #expect(timeline(session.transcript.messages) == ["user:go", "agent:Before", "user:> Q\n\nA", "agent: after"])
+        #expect(session.title == title)
+        await runner.flushPersistence()
+        let restored = try store.loadMessages(sessionId: "s").map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload)
+        }
+        #expect(timeline(restored).contains("user:> Q\n\nA"))
+    }
+
     /// A started runner with a started question coordinator wired the way
     /// the manager wires them.
     private func makeRunnerWithQuestions() throws -> (ACPSessionRunner, ACPMockClient, ACPElicitationCoordinator) {

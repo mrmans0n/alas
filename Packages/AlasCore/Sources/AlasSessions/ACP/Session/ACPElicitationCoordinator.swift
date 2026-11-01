@@ -16,6 +16,9 @@ public final class ACPElicitationCoordinator {
     private let onInputResolved: () -> Void
     private let onPlanRejected: (String) -> Void
     private let onPlanAwaiting: (ACPSession, ACPCursorPlanRequest) -> Void
+    /// Receives an answered optional form's reply in the adapter's replay
+    /// format, for the transcript.
+    private let onOptionalAnswerSubmitted: (String) -> Void
     private var questionsTask: Task<Void, Never>?
     private var plansTask: Task<Void, Never>?
     private var elicitationsTask: Task<Void, Never>?
@@ -45,7 +48,8 @@ public final class ACPElicitationCoordinator {
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
         onPlanAwaiting: @escaping (ACPSession, ACPCursorPlanRequest) -> Void = { _, _ in },
-        onPlanRejected: @escaping (String) -> Void = { _ in }
+        onPlanRejected: @escaping (String) -> Void = { _ in },
+        onOptionalAnswerSubmitted: @escaping (String) -> Void = { _ in }
     ) {
         self.session = session
         self.client = client
@@ -55,6 +59,7 @@ public final class ACPElicitationCoordinator {
         self.onInputResolved = onInputResolved
         self.onPlanAwaiting = onPlanAwaiting
         self.onPlanRejected = onPlanRejected
+        self.onOptionalAnswerSubmitted = onOptionalAnswerSubmitted
     }
 
     public func start() {
@@ -123,6 +128,12 @@ public final class ACPElicitationCoordinator {
                 response = Self.elicitationResponse(action)
             }
             client.respondToElicitation(id: id, result: .success(response))
+            // A blocking answer belongs to its own turn; an optional one
+            // reaches the agent mid-turn and is replayed as a user message.
+            if !request.isBlocking, case .submit(let content) = action,
+               let text = request.optionalAnswerTranscriptText(content) {
+                onOptionalAnswerSubmitted(text)
+            }
         case .visualAid:
             assertionFailure("Visual aid questions never enter the elicitation coordinator")
         }

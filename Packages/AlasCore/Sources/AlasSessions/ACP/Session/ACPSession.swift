@@ -853,6 +853,26 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return id
     }
 
+    /// Append the user row of an answered optional question, as the adapter
+    /// replays it. The answer is not a new prompt, so unlike
+    /// `recordUserPrompt` it never retitles the session or touches echo and
+    /// output-boundary state. Held replay candidates are materialised first
+    /// so the agent text they carry keeps its place above the answer.
+    /// Returns the row's index.
+    public func appendAnswerRow(text: String) -> Int {
+        _ = flushPendingReplayCandidates()
+        transcript.appendMessage(.user(
+            id: UUID(),
+            messageId: nil,
+            text: text,
+            attachments: [],
+            delegatedSource: nil,
+            pastedSpans: []
+        ))
+        didAppendTranscriptMessage()
+        return transcript.messages.count - 1
+    }
+
     private static let steeringContinuationMetadataKey = "_alas/steeringContinuationMessageId"
     private static let steeringFollowingUsersMetadataKey = "_alas/steeringFollowingUserCount"
 
