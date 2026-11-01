@@ -245,6 +245,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// runner; a turn that settled at its result no longer counts, even while
     /// its children still run.
     public var foregroundTurnActive: @MainActor () -> Bool = { false }
+    /// The id of the foreground prompt the session's runner owns, or nil.
+    /// Installed by the runner; optional questions expire with the prompt
+    /// they arrived under.
+    public var activeForegroundPromptID: @MainActor () -> Int? = { nil }
 
     /// Recomputes the streaming state from what still waits on the user, once
     /// a permission, question or plan resolves. Children can ask after their

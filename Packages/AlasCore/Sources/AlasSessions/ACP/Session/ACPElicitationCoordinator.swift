@@ -23,6 +23,14 @@ public final class ACPElicitationCoordinator {
     private var pendingByToken: [UUID: ACPUserInputRequest] = [:]
     private var pendingPlans: [ACPCursorPlanRequest] = []
     private var notifiedRequestIds: Set<JSONRPCID> = []
+    /// The foreground prompt each optional form arrived under. A form that
+    /// arrived outside a prompt the runner owns (a broker-reattached turn or
+    /// an idle session) has no entry; it goes with the adapter's own
+    /// `$/cancel_request`, or with stop and cancel-all.
+    private var optionalArrivalPromptIDs: [UUID: Int] = [:]
+    /// Ids the adapter withdrew before their form arrived; the cancel and the
+    /// request travel on separate streams. Each id answers one form.
+    private var withdrawnRequestIDs: Set<JSONRPCID> = []
     private var didStop = false
 
     public init(
@@ -178,6 +186,40 @@ public final class ACPElicitationCoordinator {
         return true
     }
 
+    /// Withdraws a form the adapter cancelled with `$/cancel_request`. A
+    /// pending one is removed and answered `-32800`, which the client still
+    /// owes so a broker never replays it; an id not yet seen is remembered
+    /// and its form answered the same way when it arrives. Returns whether a
+    /// pending form was withdrawn.
+    @discardableResult
+    public func cancelRequest(id: JSONRPCID) -> Bool {
+        guard let request = pendingByToken.values.first(where: {
+            if case .elicitation(let requestId, _) = $0.source { return requestId == id }
+            return false
+        }) else {
+            withdrawnRequestIDs.insert(id)
+            return false
+        }
+        // An optional form never set the waiting state, so withdrawing it
+        // must not settle it either; a blocking one did.
+        removePending(token: request.id, settle: request.isBlocking)
+        client.respondToElicitation(id: id, result: .failure(Self.requestCancelled))
+        if request.isBlocking { onInputResolved() }
+        return true
+    }
+
+    /// Expires the optional forms that arrived under a foreground prompt that
+    /// just ended: an answer sent after its turn is not delivered. Called from
+    /// the runner's prompt bookkeeping, mid-steer included, so it never
+    /// settles the waiting state.
+    public func foregroundPromptEnded(_ promptID: Int) {
+        let expired = optionalArrivalPromptIDs.filter { $0.value == promptID }.map(\.key)
+        for token in expired {
+            guard let request = removePending(token: token, settle: false) else { continue }
+            cancel(request)
+        }
+    }
+
     public func dismissURLWait(elicitationId: String) {
         session.transcript.urlElicitationWaits.removeAll { $0.id == elicitationId }
     }
@@ -188,6 +230,10 @@ public final class ACPElicitationCoordinator {
     }
 
     private func handleElicitation(_ request: ACPElicitationRequest) {
+        if withdrawnRequestIDs.remove(request.id) != nil {
+            client.respondToElicitation(id: request.id, result: .failure(Self.requestCancelled))
+            return
+        }
         guard request.params.hasExactlyOneScope,
               scopeMatches(request.params),
               let normalized = ACPUserInputRequest.elicitation(request)
@@ -241,6 +287,9 @@ public final class ACPElicitationCoordinator {
         let wasEmpty = !pendingByToken.values.contains(where: \.isBlocking)
         pendingByToken[request.id] = request
         session.transcript.pendingUserInputs.append(request)
+        if !request.isBlocking, let promptID = session.activeForegroundPromptID() {
+            optionalArrivalPromptIDs[request.id] = promptID
+        }
         if request.isBlocking, let id = request.jsonRPCID, notifiedRequestIds.insert(id).inserted {
             onInputAwaiting(session, request)
         }
@@ -253,8 +302,12 @@ public final class ACPElicitationCoordinator {
         }
     }
 
-    private func removePending(token: UUID) -> ACPUserInputRequest? {
+    /// Without `settle`, the waiting state and the plan queue are left alone:
+    /// withdrawing or expiring an optional form changes neither.
+    @discardableResult
+    private func removePending(token: UUID, settle: Bool = true) -> ACPUserInputRequest? {
         guard let request = pendingByToken.removeValue(forKey: token) else { return nil }
+        optionalArrivalPromptIDs.removeValue(forKey: token)
         session.transcript.pendingUserInputs.removeAll { $0.id == token }
         clearNotificationDedupeIfResolved(for: request)
         if case .cursor = request.source {
@@ -265,8 +318,10 @@ public final class ACPElicitationCoordinator {
                 return nil
             }.first
         }
-        session.settleWaitingState()
-        presentNextPlan()
+        if settle {
+            session.settleWaitingState()
+            presentNextPlan()
+        }
         return request
     }
 
@@ -306,6 +361,8 @@ public final class ACPElicitationCoordinator {
     private func cancelAll() {
         let pending = session.transcript.pendingUserInputs
         pendingByToken.removeAll()
+        optionalArrivalPromptIDs.removeAll()
+        withdrawnRequestIDs.removeAll()
         session.transcript.pendingUserInputs.removeAll()
         session.transcript.pendingQuestion = nil
         notifiedRequestIds.removeAll()
@@ -332,6 +389,8 @@ public final class ACPElicitationCoordinator {
             break
         }
     }
+
+    private static let requestCancelled = JSONRPCError(code: -32800, message: "Request cancelled", data: nil)
 
     private static func elicitationResponse(_ action: ACPUserInputAction) -> ACPElicitationResponse {
         switch action {

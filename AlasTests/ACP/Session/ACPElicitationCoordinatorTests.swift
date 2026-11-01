@@ -199,6 +199,68 @@ struct ACPElicitationCoordinatorTests {
         #expect(session.transcript.hasBlockingUserInput == blocking)
     }
 
+    /// The adapter withdraws an optional question at turn end with
+    /// `$/cancel_request`, which can overtake the request itself. Either way
+    /// the form is never shown and is answered "Request cancelled".
+    @Test("a withdrawn form is answered cancelled and never shown",
+          arguments: ["afterArrival", "beforeArrival"])
+    func withdrawnElicitation(order: String) async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+        let params = try decodeParams(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#))
+
+        let withdrew: Bool
+        if order == "afterArrival" {
+            client.emitElicitation(id: .number(50), params: params)
+            try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+            withdrew = coordinator.cancelRequest(id: .number(50))
+        } else {
+            withdrew = coordinator.cancelRequest(id: .number(50))
+            client.emitElicitation(id: .number(50), params: params)
+        }
+
+        try await waitUntil { client.elicitationResponses[.number(50)] != nil }
+        guard case .failure(let error) = client.elicitationResponses[.number(50)] else {
+            Issue.record("expected a cancelled-request error")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(session.transcript.pendingUserInputs.isEmpty)
+        #expect(withdrew == (order == "afterArrival"))
+    }
+
+    /// An optional answer sent after its turn ended would reach the next one,
+    /// so the forms of an ended prompt are cancelled; blocking forms and
+    /// forms of a later prompt stay.
+    @Test("optional forms expire with the prompt they arrived under")
+    func optionalFormsExpireWithTheirPrompt() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+        let optional = try decodeParams(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#))
+        let blocking = try decodeParams(codexAsyncFormJSON(meta: "null"))
+
+        session.activeForegroundPromptID = { 7 }
+        client.emitElicitation(id: .number(60), params: optional)
+        client.emitElicitation(id: .number(61), params: blocking)
+        try await waitUntil { session.transcript.pendingUserInputs.count == 2 }
+        session.activeForegroundPromptID = { 8 }
+        client.emitElicitation(id: .number(62), params: optional)
+        try await waitUntil { session.transcript.pendingUserInputs.count == 3 }
+        let expiring = try #require(session.transcript.pendingUserInputs.first)
+        let stateBefore = session.transcript.streamingState
+
+        coordinator.foregroundPromptEnded(7)
+
+        #expect(client.elicitationResponses[.number(60)] == .success(.cancel))
+        #expect(session.transcript.pendingUserInputs.map(\.source) == [
+            .elicitation(id: .number(61), params: blocking),
+            .elicitation(id: .number(62), params: optional),
+        ])
+        #expect(session.transcript.streamingState == stateBefore)
+        coordinator.respond(to: expiring.id, action: .submit(["question_1": .string("late")]))
+        #expect(client.elicitationResponses[.number(60)] == .success(.cancel))
+    }
+
     @Test("awaiting input callback fires again when a resolved request id is reused")
     func awaitingInputCallbackFiresAgainForReusedResolvedRequestId() async throws {
         var notifications: [(ACPSession, ACPUserInputRequest)] = []

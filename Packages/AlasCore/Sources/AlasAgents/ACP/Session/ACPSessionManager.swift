@@ -7448,6 +7448,12 @@ extension ACPSessionManager {
                                           onUserCancel: { [weak elicitationCoordinator] in
                                               elicitationCoordinator?.cancelPendingInputs()
                                           },
+                                          onCancelRequest: { [weak elicitationCoordinator] id in
+                                              elicitationCoordinator?.cancelRequest(id: id) ?? false
+                                          },
+                                          onForegroundPromptEnded: { [weak elicitationCoordinator] promptID in
+                                              elicitationCoordinator?.foregroundPromptEnded(promptID)
+                                          },
                                           onAuthRequired: { [weak self] runner, _ in
                                               await self?.handleAuthRequiredRunner(
                                                 runner,

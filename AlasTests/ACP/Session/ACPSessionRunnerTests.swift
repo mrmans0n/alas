@@ -3652,6 +3652,27 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.pendingPermission != nil)
     }
 
+    @Test("$/cancel_request withdraws a pending optional form")
+    func cancelRequestWithdrawsForm() async throws {
+        let (runner, mock, coordinator) = try makeRunnerWithQuestions()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        mock.emitElicitation(id: .number(50), params: try codexAsyncForm())
+        try await waitUntil { !runner.session.transcript.pendingUserInputs.isEmpty }
+
+        mock.emitCancelRequest(id: .number(50))
+
+        try await waitUntil { mock.elicitationResponses[.number(50)] != nil }
+        guard case .failure(let error) = mock.elicitationResponses[.number(50)] else {
+            Issue.record("expected a cancelled-request error")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(runner.session.transcript.pendingUserInputs.isEmpty)
+    }
+
     @Test("a $/cancel_request that lands before dequeue still materializes a canceled row with its facts")
     func earlyCancelStillPersistsPermissionFacts() async throws {
         let (runner, mock) = try makeRunner()
@@ -4600,6 +4621,8 @@ struct ACPSessionRunnerTests {
 
     private func makeRunner(
         onUserCancel: (() -> Void)? = nil,
+        onCancelRequest: ((JSONRPCID) -> Bool)? = nil,
+        onForegroundPromptEnded: ((Int) -> Void)? = nil,
         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
         session suppliedSession: ACPSession? = nil,
         isConnectionCurrent: @escaping () -> Bool = { true },
@@ -4629,6 +4652,8 @@ struct ACPSessionRunnerTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onUserCancel: onUserCancel,
+            onCancelRequest: onCancelRequest,
+            onForegroundPromptEnded: onForegroundPromptEnded,
             onSuccessfulTurn: onSuccessfulTurn,
             onTurnCompleted: onTurnCompleted,
             onTurnUsage: onTurnUsage,
@@ -5858,17 +5883,112 @@ struct ACPSessionRunnerTests {
             runner.stop()
         }
         mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
-        mock.emitElicitation(id: .number(31), params: try JSONDecoder().decode(
-            ACPElicitationRequestParams.self,
-            from: Data(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#).utf8)))
+        mock.emitElicitation(id: .number(31), params: try codexAsyncForm())
         try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
-        #expect(session.transcript.streamingState != .awaitingInput)
+        #expect(session.transcript.streamingState == .idle)
         #expect(session.transcript.pendingUserInputs.count == 1)
 
         runner.send(text: "next", attachments: [])
 
         try await waitUntil { mock.sent.contains { $0.method == "session/prompt" } }
         #expect(session.transcript.pendingUserInputs.count == 1)
+    }
+
+    /// An optional answer sent after its turn would land in the next one, so
+    /// the form goes with the turn it was asked in.
+    @Test("an optional form expires with its turn")
+    func optionalFormExpiresWithItsTurn() async throws {
+        let (runner, mock, coordinator) = try makeRunnerWithQuestions()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        let session = runner.session
+        let form = try codexAsyncForm()
+        let turnCanEnd = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emitElicitation(id: .number(70), params: form)
+            await turnCanEnd.wait()
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        runner.send(text: "go", attachments: [])
+        try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        let request = try #require(session.transcript.pendingUserInputs.first)
+
+        await turnCanEnd.open()
+
+        try await waitUntil { mock.elicitationResponses[.number(70)] != nil }
+        #expect(mock.elicitationResponses[.number(70)] == .success(.cancel))
+        #expect(session.transcript.pendingUserInputs.isEmpty)
+        coordinator.respond(to: request.id, action: .submit(["question_1": .string("late")]))
+        #expect(mock.elicitationResponses[.number(70)] == .success(.cancel))
+    }
+
+    /// A native steer keeps the turn, so its form stays. The fallback ends
+    /// the turn and expires the form while the redirect is still in flight,
+    /// without dropping the session to idle in between.
+    @Test("an optional form follows its turn across a steer", arguments: [true, false])
+    func optionalFormAcrossSteer(native: Bool) async throws {
+        let (runner, mock, coordinator) = try makeRunnerWithQuestions()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        let session = runner.session
+        session.supportsSteering = native
+        let form = try codexAsyncForm()
+        let first = AsyncGate()
+        let second = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            if call == 1 { mock.emitElicitation(id: .number(80), params: form) }
+            await (call == 1 ? first : second).wait()
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        runner.send(text: "go", attachments: [])
+        try await waitUntil {
+            !session.transcript.pendingUserInputs.isEmpty && session.transcript.streamingState == .streaming
+        }
+
+        runner.steer(blocks: [.text("instead")])
+
+        if native {
+            try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+            #expect(mock.elicitationResponses[.number(80)] == nil)
+            #expect(session.transcript.pendingUserInputs.count == 1)
+        } else {
+            #expect(mock.elicitationResponses[.number(80)] == .success(.cancel))
+            #expect(session.transcript.pendingUserInputs.isEmpty)
+            #expect(session.transcript.streamingState != .idle)
+        }
+        await first.open()
+        await second.open()
+    }
+
+    /// A started runner with a started question coordinator wired the way
+    /// the manager wires them.
+    private func makeRunnerWithQuestions() throws -> (ACPSessionRunner, ACPMockClient, ACPElicitationCoordinator) {
+        var coordinator: ACPElicitationCoordinator?
+        let (runner, mock) = try makeRunner(
+            onCancelRequest: { coordinator?.cancelRequest(id: $0) ?? false },
+            onForegroundPromptEnded: { coordinator?.foregroundPromptEnded($0) })
+        runner.session.agentState = .ready
+        let wired = ACPElicitationCoordinator(session: runner.session, client: mock)
+        coordinator = wired
+        wired.start()
+        runner.start()
+        return (runner, mock, wired)
+    }
+
+    private func codexAsyncForm() throws -> ACPElicitationRequestParams {
+        try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#).utf8))
     }
 
     /// Older brokers report awaiting input for a background child's request

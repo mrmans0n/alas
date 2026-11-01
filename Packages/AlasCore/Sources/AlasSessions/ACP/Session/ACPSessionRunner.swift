@@ -46,6 +46,10 @@ public final class ACPSessionRunner {
     /// closure returns `nil`. Lets the agent see what the user sees.
     private let onLiveBufferRead: ((String) -> String?)?
     private let onUserCancel: (() -> Void)?
+    /// Offered each `$/cancel_request` first; true when it withdrew a form.
+    private let onCancelRequest: ((JSONRPCID) -> Bool)?
+    /// Called with the id of a foreground prompt that stopped being active.
+    private let onForegroundPromptEnded: ((Int) -> Void)?
     /// Called when the runner forces transcript tail-follow before recording
     /// a user prompt, so manager-owned scroll memory stays in sync with the
     /// runtime session state.
@@ -187,7 +191,14 @@ public final class ACPSessionRunner {
     /// `streamingState`; `cancelledPromptIDs` carries explicit
     /// invalidations (steer, userCancel) so a slow `session/cancel`
     /// can't let a stale completion clobber the successor task.
-    private var activePromptID: Int? { willSet { session.nextPromptActivity.send() } }
+    private var activePromptID: Int? {
+        willSet { session.nextPromptActivity.send() }
+        // Optional questions expire with their prompt. A non-native steer
+        // clears the id mid-steer, so the hook must not settle the state.
+        didSet {
+            if let oldValue, oldValue != activePromptID { onForegroundPromptEnded?(oldValue) }
+        }
+    }
     // The current runner consumes v1. V2 ingress will use the same decision
     // model with its own acceptance and foreground-state inputs.
     private var promptLifecycle = ACPSessionLifecycle(protocolVersion: .v1)
@@ -372,6 +383,8 @@ public final class ACPSessionRunner {
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
          onUserCancel: (() -> Void)? = nil,
+         onCancelRequest: ((JSONRPCID) -> Bool)? = nil,
+         onForegroundPromptEnded: ((Int) -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
          onMessageActivity: (() -> Void)? = nil,
@@ -440,6 +453,8 @@ public final class ACPSessionRunner {
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onUserCancel = onUserCancel
+        self.onCancelRequest = onCancelRequest
+        self.onForegroundPromptEnded = onForegroundPromptEnded
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.onCheckpointCapture = onCheckpointCapture
         self.pluginContext = pluginContext
@@ -494,6 +509,7 @@ public final class ACPSessionRunner {
         )
         closeStoredSequenceGaps()
         session.foregroundTurnActive = { [weak self] in self?.foregroundTurnActive ?? false }
+        session.activeForegroundPromptID = { [weak self] in self?.activePromptID }
         backgroundWorkObservations = [
             session.$liveSubagentCount.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
             session.$backgroundTasks.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
@@ -683,6 +699,7 @@ public final class ACPSessionRunner {
             guard let self else { return }
             for await id in self.connection.client.cancelRequests {
                 guard self.isConnectionCurrent() else { continue }
+                if self.onCancelRequest?(id) == true { continue }
                 if self.policy.cancelRequest(id: id) { continue }
                 self.pendingCancelledRequestIDs.insert(id)
             }
