@@ -256,6 +256,10 @@ impl<D: Driver + Send + 'static> Connection<D> {
         for (_, canceller) in lock(&self.runs).drain() {
             canceller.cancel();
         }
+        // Calls without a `call_id` are reachable only through their own flag.
+        for command in lock(&self.commands).values() {
+            command.cancelled.store(true, Ordering::SeqCst);
+        }
         for session in std::mem::take(&mut *lock(&self.sessions)) {
             self.desktop.end(session.clone(), LifecycleEvent::TurnEnded);
             self.desktop.end(session, LifecycleEvent::SessionEnded);
@@ -427,6 +431,11 @@ mod tests {
 
     /// A host whose `wait` (request 1, `call_id` "c1") holds the computer until `release`.
     fn holding_the_computer(fake: &Fake) -> (Host, mpsc::Sender<()>) {
+        holding_the_computer_with(fake, Some("c1"))
+    }
+
+    /// A `wait` holds the computer until `release`, with `call_id` if given.
+    fn holding_the_computer_with(fake: &Fake, call_id: Option<&str>) -> (Host, mpsc::Sender<()>) {
         fake.script("get_window_state", vec![fixture("gws_elements_query")]);
         let (reached_sender, reached) = mpsc::channel();
         let (release, release_receiver) = mpsc::channel();
@@ -436,14 +445,12 @@ mod tests {
             release: release_receiver,
         });
         let host = Host::connect(fake);
-        host.command(
-            1,
-            &request(
-                "wait",
-                json!({"window_id": WINDOW, "query": "Edit", "condition": "disappear",
-                       "timeout_ms": 20000, "call_id": "c1"}),
-            ),
-        );
+        let mut params = json!({"window_id": WINDOW, "query": "Edit", "condition": "disappear",
+                                "timeout_ms": 20000});
+        if let Some(call_id) = call_id {
+            params["call_id"] = json!(call_id);
+        }
+        host.command(1, &request("wait", params));
         reached
             .recv_timeout(Duration::from_secs(10))
             .expect("the wait reads the window");
@@ -532,5 +539,23 @@ mod tests {
             );
             assert_eq!(fake.tools(), tools, "{stop}");
         }
+    }
+
+    #[test]
+    fn a_disconnect_cancels_a_running_call_without_a_call_id() {
+        let fake = Fake::mousepad();
+        // Only its own flag reaches a call without a `call_id`; the wait would poll for 20 s.
+        let (host, release) = holding_the_computer_with(&fake, None);
+
+        host.connection.close();
+        let tools = fake.tools();
+        release.send(()).unwrap();
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !lock(&host.connection.commands).is_empty() {
+            assert!(std::time::Instant::now() < deadline, "the calls end");
+            std::thread::yield_now();
+        }
+        assert_eq!(fake.tools(), tools);
     }
 }
