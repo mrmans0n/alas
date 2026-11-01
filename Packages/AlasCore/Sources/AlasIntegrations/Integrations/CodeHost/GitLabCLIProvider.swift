@@ -439,6 +439,7 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         repository: String,
         revision: String,
         path: String,
+        maxBytes: Int,
         cwd: URL
     ) async throws -> Data {
         // `/raw` answers the file's bytes, so the cap counts them, not base64 JSON.
@@ -451,7 +452,7 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                 "--hostname", remote.host,
             ],
             cwd: cwd,
-            maxBytes: RemoteWorktreeFileAccess.maxPreviewBytes
+            maxBytes: maxBytes
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "glab api repository file", stderr: result.stderr)
@@ -1366,7 +1367,8 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
 
     public static func encodedFilePath(_ path: String) -> String {
         var allowed = CharacterSet.urlPathAllowed
-        allowed.remove(charactersIn: "/")
+        // `:` too: glab expands `:id`, `:fullpath` and the like in an API path.
+        allowed.remove(charactersIn: "/:")
         return path.addingPercentEncoding(withAllowedCharacters: allowed) ?? path
     }
 

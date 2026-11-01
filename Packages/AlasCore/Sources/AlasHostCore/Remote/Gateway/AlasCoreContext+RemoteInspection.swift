@@ -888,7 +888,7 @@ extension AlasCoreContext {
                 } catch let error as NSError where error.domain == "GitService.resolveRevision" {
                     // git ran and has no such commit (a fork's, say): the provider reads it.
                     return await providerReviewBytes(
-                        session, after: after, sha: sha, path: normalizedPath, in: worktree, maxBytes: maxBytes)
+                        session, after: after, head: head, sha: sha, path: normalizedPath, in: worktree, maxBytes: maxBytes)
                 }
             case .checkpoint:
                 preconditionFailure("read above")
@@ -925,21 +925,29 @@ extension AlasCoreContext {
     /// provider as the host's user: only a file of the diff it served for
     /// `session`, from the review's own repositories, at the provider's `sha`.
     private func providerReviewBytes(
-        _ session: ReviewDraftSessionID, after: Bool, sha: String, path: String, in worktree: Worktree, maxBytes: Int
+        _ session: ReviewDraftSessionID, after: Bool, head: String, sha: String, path: String,
+        in worktree: Worktree, maxBytes: Int
     ) async -> RemoteFileBytesResult {
-        guard let images = providerReviewImages[session],
-              (after ? images.paths.after : images.paths.before).contains(path)
-        else { return .failure(reason: .pathRejected, byteSize: nil, message: nil) }
+        guard let images = providerReviewImages[session] else {
+            return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+        }
+        // A diff read since may have moved the review on.
+        guard images.request.headSHA == head else {
+            return .failure(
+                reason: .gitFailed, byteSize: nil,
+                message: "This pull request changed since it was loaded. Reload it and try again.")
+        }
+        guard (after ? images.paths.after : images.paths.before).contains(path) else {
+            return .failure(reason: .pathRejected, byteSize: nil, message: nil)
+        }
         do {
             let (remote, provider) = try providerReviewSource(session, in: worktree)
             // As the Mac's own read: the head repository's after side, the base's otherwise.
             let repository = after ? images.request.headRepositorySlug ?? remote.repositorySlug : remote.repositorySlug
             guard Self.isRepositorySlug(repository) else { return .failure(reason: .notFound, byteSize: nil, message: nil) }
-            // The provider stops past `maxPreviewBytes` as it streams.
-            let data = try await provider.reviewFileData(
-                remote: remote, repository: repository, revision: sha, path: path, cwd: worktree.path)
-            guard data.count <= maxBytes else { return .failure(reason: .tooLarge, byteSize: data.count, message: nil) }
-            return .success(data: data)
+            // The provider stops past `maxBytes` as it streams.
+            return .success(data: try await provider.reviewFileData(
+                remote: remote, repository: repository, revision: sha, path: path, maxBytes: maxBytes, cwd: worktree.path))
         } catch ProcessError.outputTooLarge {
             return .failure(reason: .tooLarge, byteSize: nil, message: nil)
         } catch {

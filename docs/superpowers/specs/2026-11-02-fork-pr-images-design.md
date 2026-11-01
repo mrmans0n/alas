@@ -178,8 +178,9 @@ cleanup lifecycle) and C (Mac auth and reachability, reverse trust).
 ### Failure behaviour
 
 - Path not in the served diff: `.pathRejected` (as an unknown path is today).
-- Provider 404 for that path and SHA: `.notFound` (the Mac shows "missing",
-  which is right for an add/delete side).
+- Provider 404 for that path and SHA: `.gitFailed` with the provider's
+  message, as any other provider error. The loader never asks for the
+  missing side of an added or deleted file, so a 404 is a real failure.
 - Over the cap: `.tooLarge` with `byteSize: nil` (the size is unknown once the
   read stops).
 - Provider auth, CLI missing, network: `.gitFailed` with the provider's
@@ -205,7 +206,7 @@ Extend `aMacReadsStashCheckpointAndRangeSidesBytes` (or its PR section) in
    repo is nil), the provider's SHA and the diff's path.
 2. A path the served diff doesn't list is refused without a provider call.
 3. A local commit never reaches the provider.
-4. A provider error maps to `.notFound` / `.gitFailed` as above.
+4. A provider error maps to `.gitFailed` as above.
 
 Plus one runner test for the streaming cap (a child writing past `maxBytes` is
 terminated and throws), next to the existing `gitDataPrefix` coverage. Drop any

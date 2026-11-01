@@ -754,7 +754,7 @@ struct NativePeerProviderDiff: CodeHostProvider {
     }
 
     func reviewFileData(
-        remote _: CodeHostRemote, repository _: String, revision: String, path: String, cwd _: URL
+        remote _: CodeHostRemote, repository _: String, revision: String, path: String, maxBytes _: Int, cwd _: URL
     ) async throws -> Data {
         guard let readImage else { throw CodeHostProviderError.unsupportedProvider(kind) }
         let reply = await readImage(path, revision.hasPrefix(Self.afterPrefix))

@@ -9,6 +9,8 @@ public struct ReviewRequestDiffLoader: Sendable {
     private static let imageLogger = Logger(subsystem: "io.nlopez.alas", category: "review-image")
 
     public let provider: any CodeHostProvider
+    /// The largest image a review reads from its provider.
+    public static let maxImageBytes = 25 * 1024 * 1024
 
     public init(provider: any CodeHostProvider) {
         self.provider = provider
@@ -258,6 +260,7 @@ public struct ReviewRequestDiffLoader: Sendable {
                     repository: repository,
                     revision: revision,
                     path: path,
+                    maxBytes: maxImageBytes,
                     cwd: cwd
                 )
                 let side = await decoding.decode(data, cwd)
@@ -279,6 +282,9 @@ public struct ReviewRequestDiffLoader: Sendable {
     }
 
     private static func imageFailureMessage(for error: Error) -> String {
+        if case ProcessError.outputTooLarge(let maxBytes) = error {
+            return "Image is larger than \(ByteCountFormatter.string(fromByteCount: Int64(maxBytes), countStyle: .file))."
+        }
         guard let error = error as? CodeHostProviderError else {
             return "Couldn't load image."
         }

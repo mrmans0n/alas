@@ -932,6 +932,7 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         repository: String,
         revision: String,
         path: String,
+        maxBytes: Int,
         cwd: URL
     ) async throws -> Data {
         let result = try await runner.runData(
@@ -945,7 +946,7 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                 "repos/\(repository)/contents/\(Self.encodedFilePath(path))?ref=\(revision)",
             ],
             cwd: cwd,
-            maxBytes: RemoteWorktreeFileAccess.maxPreviewBytes
+            maxBytes: maxBytes
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api contents", stderr: result.stderr)

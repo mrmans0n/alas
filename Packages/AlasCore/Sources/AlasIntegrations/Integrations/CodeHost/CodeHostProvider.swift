@@ -184,11 +184,14 @@ public protocol CodeHostProvider: Sendable {
         request: ReviewRequest,
         cwd: URL
     ) async throws -> CodeHostReviewImageRevisions
+    /// `path` at `revision` of `repository`, refused with
+    /// `ProcessError.outputTooLarge` past `maxBytes` as it downloads.
     func reviewFileData(
         remote: CodeHostRemote,
         repository: String,
         revision: String,
         path: String,
+        maxBytes: Int,
         cwd: URL
     ) async throws -> Data
     func failedCheckEvidence(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> [ReviewEvidenceItem]
@@ -341,6 +344,7 @@ extension CodeHostProvider {
         repository: String,
         revision: String,
         path: String,
+        maxBytes: Int,
         cwd: URL
     ) async throws -> Data {
         throw CodeHostProviderError.unsupportedProvider(remote.kind)

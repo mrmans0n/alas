@@ -573,6 +573,7 @@ private actor FakeHostedImageProvider: CodeHostProvider {
         repository: String,
         revision: String,
         path: String,
+        maxBytes: Int,
         cwd: URL
     ) async throws -> Data {
         fileRequests.append(FileRequest(repository: repository, revision: revision, path: path))

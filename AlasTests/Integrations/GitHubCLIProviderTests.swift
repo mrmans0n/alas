@@ -523,6 +523,7 @@ struct GitHubCLIProviderTests {
             repository: "fork-owner/alas-fork",
             revision: revisions.afterSHA,
             path: "Assets/Diff image.png",
+            maxBytes: 1024,
             cwd: Self.cwd
         )
 

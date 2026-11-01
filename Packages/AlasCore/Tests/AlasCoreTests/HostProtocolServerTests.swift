@@ -669,8 +669,15 @@ struct HostProtocolServerTests {
         #expect(await side(true, path: "other.png") == .failure(reason: .pathRejected, byteSize: nil, message: nil))
         provider.fileError = ProcessError.outputTooLarge(maxBytes: RemoteWorktreeFileAccess.maxPreviewBytes)
         #expect(await side(true) == .failure(reason: .tooLarge, byteSize: nil, message: nil))
-        #expect(provider.fileReads == Array(repeating: "fork/app@\(missing):icon.png", count: 2))
         #expect(provider.revisionCalls == 2)
+        // The before side, and an after side with no head repository, read the base repository.
+        provider.fileError = nil
+        provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: missing, afterSHA: missing)
+        provider.headRepositoryOwner = nil
+        try await diffRead()
+        #expect(await [side(false), side(true)] == Array(repeating: .success(data: provider.fileData), count: 2))
+        #expect(provider.fileReads
+            == Array(repeating: "fork/app@\(missing):icon.png", count: 2) + Array(repeating: "acme/app@\(missing):icon.png", count: 2))
         // Another worktree can't read this one's review, cached or not.
         let other = Worktree(
             id: "other", projectId: worktree.projectId, name: "other", branch: "other",
@@ -3215,7 +3222,7 @@ struct HostProtocolServerTests {
         var fileError: (any Error)?
         var fileReads: [String] = []
         @MainActor func reviewFileData(
-            remote: CodeHostRemote, repository: String, revision: String, path: String, cwd: URL
+            remote: CodeHostRemote, repository: String, revision: String, path: String, maxBytes: Int, cwd: URL
         ) async throws -> Data {
             fileReads.append("\(repository)@\(revision):\(path)")
             if let fileError { throw fileError }

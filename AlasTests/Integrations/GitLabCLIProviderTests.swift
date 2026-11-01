@@ -224,7 +224,8 @@ struct GitLabCLIProviderTests {
             remote: Self.remote,
             repository: "nacho/alas-fork",
             revision: revisions.afterSHA,
-            path: "Assets/Diff image.png",
+            path: "Assets/:id/Diff image.png",
+            maxBytes: 1024,
             cwd: Self.cwd
         )
 
@@ -248,7 +249,7 @@ struct GitLabCLIProviderTests {
                 executable: "glab",
                 args: [
                     "api",
-                    "projects/nacho%2Falas-fork/repository/files/Assets%2FDiff%20image.png/raw?ref=reviewed-head",
+                    "projects/nacho%2Falas-fork/repository/files/Assets%2F%3Aid%2FDiff%20image.png/raw?ref=reviewed-head",
                     "--method", "GET",
                     "--hostname", "gitlab.example.com",
                 ],
