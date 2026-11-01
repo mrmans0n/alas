@@ -23,6 +23,7 @@ const PROBE_TTL: Duration = Duration::from_secs(30);
 /// The driver's stderr kept in `$CUA_HOME/driver.log` per spawn.
 const LOG_LIMIT: u64 = 1024 * 1024;
 
+#[derive(Clone)]
 pub struct CuaConfig {
     pub program: PathBuf,
     pub args: Vec<String>,
@@ -377,16 +378,17 @@ fn log_stderr(stderr: Option<impl Read + Send + 'static>, path: Option<PathBuf>)
 
 /// The helper's handle on Cua Driver. Nothing starts until the first `call` or `available`.
 pub struct CuaDriver {
-    config: CuaConfig,
+    /// Builds each spawn's config, so a respawn sees the desktop session as it is then.
+    config: Box<dyn FnMut() -> CuaConfig + Send>,
     process: Option<Process>,
     /// When `available` last answered, and its answer.
     probe: Option<(Instant, bool)>,
 }
 
 impl CuaDriver {
-    pub fn new(config: CuaConfig) -> Self {
+    pub fn new(config: impl FnMut() -> CuaConfig + Send + 'static) -> Self {
         Self {
-            config,
+            config: Box::new(config),
             process: None,
             probe: None,
         }
@@ -437,7 +439,7 @@ impl CuaDriver {
             self.process = None;
         }
         if self.process.is_none() {
-            self.process = Some(Process::spawn(&self.config)?);
+            self.process = Some(Process::spawn(&(self.config)())?);
         }
         Ok(self.process.as_mut().expect("just started"))
     }
@@ -482,7 +484,7 @@ mod tests {
     fn fake_driver(dir: &TempDir, script: Value) -> CuaDriver {
         let script_path = dir.0.join("script.json");
         fs::write(&script_path, script.to_string()).unwrap();
-        CuaDriver::new(CuaConfig {
+        let config = CuaConfig {
             program: PathBuf::from("python3"),
             args: vec![
                 concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fake_cua.py").to_string(),
@@ -492,7 +494,8 @@ mod tests {
                 "CUA_HOME".to_string(),
                 dir.0.join("cua").to_string_lossy().into_owned(),
             )],
-        })
+        };
+        CuaDriver::new(move || config.clone())
     }
 
     fn text_result(text: &str) -> Value {
@@ -623,7 +626,7 @@ mod tests {
 
     #[test]
     fn missing_program_is_unavailable() {
-        let mut driver = CuaDriver::new(CuaConfig {
+        let mut driver = CuaDriver::new(|| CuaConfig {
             program: PathBuf::from("/nonexistent/cua-driver"),
             args: vec![],
             env: vec![],

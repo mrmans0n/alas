@@ -42,9 +42,10 @@ mod guest {
     use std::thread;
 
     /// Binds the vsock port and serves each host connection on a thread of its own. Every
-    /// connection shares the one desktop; Cua Driver starts on the first hello or call.
+    /// connection shares the one desktop; Cua Driver starts on the first hello or call, and each
+    /// start reads the desktop session's environment afresh.
     pub fn serve() -> io::Result<()> {
-        let desktop = Desktop::new(Computer::new(CuaDriver::new(CuaConfig::for_session())));
+        let desktop = Desktop::new(Computer::new(CuaDriver::new(CuaConfig::for_session)));
         let fd = unsafe { libc::socket(libc::AF_VSOCK, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
         if fd < 0 {
             return Err(io::Error::last_os_error());

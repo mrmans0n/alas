@@ -8,13 +8,15 @@ use crate::runner::{self, Run};
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet};
 use std::io::Write;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, mpsc};
 use std::thread;
 use std::time::Duration;
 
-/// How long `hello` waits for Cua Driver to answer. A first start may take longer; the driver
-/// finishes starting anyway, and the next hello sees it.
-const PROBE_CEILING: Duration = Duration::from_secs(5);
+/// How long `hello` waits for Cua Driver to answer, well inside the host's 5 s hello timeout
+/// (`VMGuestClient.helloTimeout`). A first start may take longer; the driver finishes starting
+/// anyway, and the next hello sees it.
+const PROBE_CEILING: Duration = Duration::from_secs(2);
 /// `VMGuestService`'s answer to a request it can't decode.
 const MALFORMED: &str = "computer_malformed: The VM guest helper couldn't read the request.";
 
@@ -32,6 +34,8 @@ pub struct Desktop<D: Driver> {
     /// Turn and session ends not applied yet, in arrival order. Whoever takes the computer applies
     /// them first, so a command read after one never runs before it.
     ended: Mutex<Vec<(String, LifecycleEvent)>>,
+    /// The last probe's answer, for a hello that can't wait for the driver.
+    last_available: AtomicBool,
 }
 
 impl<D: Driver + Send + 'static> Desktop<D> {
@@ -40,6 +44,7 @@ impl<D: Driver + Send + 'static> Desktop<D> {
             canceller: computer.canceller(),
             computer: Mutex::new(computer),
             ended: Mutex::default(),
+            last_available: AtomicBool::new(false),
         })
     }
 
@@ -66,24 +71,31 @@ impl<D: Driver + Send + 'static> Desktop<D> {
         thread::spawn(move || drop(desktop.computer()));
     }
 
-    /// Whether Cua Driver answers, within `PROBE_CEILING`.
+    /// Whether Cua Driver answers, within `PROBE_CEILING`. While a call holds the computer, and
+    /// with it the driver, or when the probe runs out of time, the last answer stands; a slow
+    /// probe carries on and updates it for the next hello.
     fn computer_use_available(self: &Arc<Self>) -> bool {
+        let cached = self.last_available.load(Ordering::SeqCst);
+        if let Err(TryLockError::WouldBlock) = self.computer.try_lock() {
+            return cached;
+        }
         let (sender, answer) = mpsc::channel();
         let desktop = Arc::clone(self);
         thread::spawn(move || {
             let available = desktop.computer().driver_mut().available();
+            desktop.last_available.store(available, Ordering::SeqCst);
             let _ = sender.send(available);
         });
-        answer.recv_timeout(PROBE_CEILING).unwrap_or(false)
+        answer.recv_timeout(PROBE_CEILING).unwrap_or(cached)
     }
 }
 
-/// A computer-use command in flight, for `cancel{id}`.
+/// A computer-use command queued or in flight, for `cancel{id}`, `stop` and `computer_cancel`.
 struct Pending {
     session: String,
     call_id: Option<String>,
-    /// Cancelled before it reached the computer.
-    cancelled: bool,
+    /// The call's cancel flag, set before or while it runs.
+    cancelled: Arc<AtomicBool>,
 }
 
 /// One host connection.
@@ -92,6 +104,8 @@ pub struct Connection<D: Driver> {
     /// None once the host went away, so no reply reaches a closed connection. The lock keeps
     /// frames whole when replies finish together.
     writer: Mutex<Option<Box<dyn Write + Send>>>,
+    /// Set once the host went away, so work still queued from it is dropped, not started.
+    closed: AtomicBool,
     runs: Mutex<HashMap<u64, runner::Canceller>>,
     commands: Mutex<HashMap<u64, Pending>>,
     /// The sessions this connection used and hasn't ended, so a disconnect can end them.
@@ -103,6 +117,7 @@ impl<D: Driver + Send + 'static> Connection<D> {
         Arc::new(Self {
             desktop,
             writer: Mutex::new(Some(writer)),
+            closed: AtomicBool::new(false),
             runs: Mutex::default(),
             commands: Mutex::default(),
             sessions: Mutex::default(),
@@ -128,20 +143,21 @@ impl<D: Driver + Send + 'static> Connection<D> {
                 if let Some(canceller) = lock(&self.runs).get(&id) {
                     canceller.cancel();
                 }
-                if let Some(command) = lock(&self.commands).get_mut(&id) {
-                    command.cancelled = true;
-                    if let Some(call_id) = &command.call_id {
-                        self.desktop.canceller.cancel(&command.session, call_id);
-                    }
+                if let Some(command) = lock(&self.commands).get(&id) {
+                    command.cancelled.store(true, Ordering::SeqCst);
                 }
             }
             Message::Lifecycle { session_id, event } => match event {
-                LifecycleEvent::Stop => self.desktop.canceller.cancel_session(&session_id),
+                LifecycleEvent::Stop => {
+                    self.desktop.canceller.cancel_session(&session_id);
+                    self.cancel_pending(&session_id, None);
+                }
                 // The host refuses a stopped session's calls itself, until it resumes.
                 LifecycleEvent::Resume => {}
                 LifecycleEvent::TurnEnded => self.desktop.end(session_id, event),
                 LifecycleEvent::SessionEnded => {
                     lock(&self.sessions).remove(&session_id);
+                    self.cancel_pending(&session_id, None);
                     self.desktop.end(session_id, event);
                 }
             },
@@ -195,37 +211,27 @@ impl<D: Driver + Send + 'static> Connection<D> {
         if request.get("command").and_then(Value::as_str) == Some("computer_cancel") {
             if let Some(call_id) = &call_id {
                 self.desktop.canceller.cancel(&session, call_id);
-                // A call still waiting for the computer has no flag to set yet.
-                for command in lock(&self.commands).values_mut() {
-                    if command.session == session && command.call_id.as_ref() == Some(call_id) {
-                        command.cancelled = true;
-                    }
-                }
+                self.cancel_pending(&session, Some(call_id));
             }
             self.respond(id, &json!({"ok": true}));
             return;
         }
+        let cancelled = Arc::new(AtomicBool::new(false));
         lock(&self.commands).insert(
             id,
             Pending {
                 session: session.clone(),
                 call_id,
-                cancelled: false,
+                cancelled: Arc::clone(&cancelled),
             },
         );
         thread::spawn(move || {
             let response = {
                 let mut computer = self.desktop.computer();
-                if lock(&self.writer).is_none() {
-                    // Work queued from a connection that closed is dropped, not started.
+                if self.closed.load(Ordering::SeqCst) {
                     None
-                } else if lock(&self.commands)
-                    .get(&id)
-                    .is_some_and(|command| command.cancelled)
-                {
-                    Some(computer::error_response(computer::message::CANCELLED))
                 } else {
-                    Some(computer.perform(&session, &request))
+                    Some(computer.perform_with_cancel(&session, &request, cancelled))
                 }
             };
             lock(&self.commands).remove(&id);
@@ -237,6 +243,7 @@ impl<D: Driver + Send + 'static> Connection<D> {
 
     /// The host went away: nobody waits for this connection's answers, and its sessions end.
     pub fn close(&self) {
+        self.closed.store(true, Ordering::SeqCst);
         lock(&self.writer).take();
         for (_, canceller) in lock(&self.runs).drain() {
             canceller.cancel();
@@ -244,6 +251,18 @@ impl<D: Driver + Send + 'static> Connection<D> {
         for session in std::mem::take(&mut *lock(&self.sessions)) {
             self.desktop.end(session.clone(), LifecycleEvent::TurnEnded);
             self.desktop.end(session, LifecycleEvent::SessionEnded);
+        }
+    }
+
+    /// Cancels this connection's commands of `session`, queued or running: all of them, or the
+    /// one with `call_id`.
+    fn cancel_pending(&self, session: &str, call_id: Option<&String>) {
+        for command in lock(&self.commands).values() {
+            if command.session == session
+                && (call_id.is_none() || command.call_id.as_ref() == call_id)
+            {
+                command.cancelled.store(true, Ordering::SeqCst);
+            }
         }
     }
 
@@ -382,49 +401,112 @@ mod tests {
         assert_eq!(host.response(4), expected);
     }
 
+    /// A host whose `wait` (request 1, `call_id` "c1") holds the computer until `release`.
+    fn holding_the_computer(fake: &Fake) -> (Host, mpsc::Sender<()>) {
+        fake.script("get_window_state", vec![fixture("gws_elements_query")]);
+        let (reached_sender, reached) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        fake.0.lock().unwrap().gate = Some(Gate {
+            tool: "get_window_state".to_string(),
+            reached: reached_sender,
+            release: release_receiver,
+        });
+        let host = Host::connect(fake);
+        host.command(
+            1,
+            &request(
+                "wait",
+                json!({"window_id": WINDOW, "query": "Edit", "condition": "disappear",
+                       "timeout_ms": 20000, "call_id": "c1"}),
+            ),
+        );
+        reached
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the wait reads the window");
+        (host, release)
+    }
+
+    #[test]
+    fn hello_answers_from_the_last_probe_while_a_call_holds_the_computer() {
+        let fake = Fake::mousepad();
+        fake.0.lock().unwrap().available = true;
+        let (mut host, release) = holding_the_computer(&fake);
+        // A probe before the call took the computer saw the driver.
+        host.connection
+            .desktop
+            .last_available
+            .store(true, Ordering::SeqCst);
+        fake.0.lock().unwrap().available = false;
+
+        let started = std::time::Instant::now();
+        host.send(Message::Hello {
+            host_version: "1".to_string(),
+        });
+        let reply = host.reply();
+
+        assert!(started.elapsed() < PROBE_CEILING);
+        match reply {
+            Message::HelloReply { capabilities, .. } => assert_eq!(
+                capabilities,
+                Some(vec!["run".to_string(), "computer_use".to_string()])
+            ),
+            other => panic!("expected a hello reply, got {other:?}"),
+        }
+        release.send(()).unwrap();
+    }
+
     /// A stop, a `cancel` of the request, and an agent's `computer_cancel` all end the wait in
-    /// flight. The `computer_cancel` is answered while the wait still holds the computer.
+    /// flight and the call queued behind it, which never reaches the driver. The
+    /// `computer_cancel` is answered while the wait still holds the computer.
     #[test]
     fn stop_cancels_the_sessions_wait() {
         for stop in ["lifecycle", "cancel", "computer_cancel"] {
             let fake = Fake::mousepad();
-            fake.script("get_window_state", vec![fixture("gws_elements_query")]);
-            let (reached_sender, reached) = mpsc::channel();
-            let (release, release_receiver) = mpsc::channel();
-            fake.0.lock().unwrap().gate = Some(Gate {
-                tool: "get_window_state".to_string(),
-                reached: reached_sender,
-                release: release_receiver,
-            });
-            let mut host = Host::connect(&fake);
-            host.command(
-                1,
-                &request(
-                    "wait",
-                    json!({"window_id": WINDOW, "query": "Edit", "condition": "disappear",
-                           "timeout_ms": 20000, "call_id": "c1"}),
-                ),
-            );
-            reached.recv().unwrap();
+            let (mut host, release) = holding_the_computer(&fake);
+            // Without a `call_id`, only the request id or a stop reaches it.
+            let queued = if stop == "computer_cancel" {
+                json!({"call_id": "c2"})
+            } else {
+                json!({})
+            };
+            host.command(3, &request("apps", queued));
 
             match stop {
                 "lifecycle" => host.send(Message::Lifecycle {
                     session_id: SESSION.to_string(),
                     event: LifecycleEvent::Stop,
                 }),
-                "cancel" => host.send(Message::Cancel { id: 1 }),
+                "cancel" => {
+                    host.send(Message::Cancel { id: 1 });
+                    host.send(Message::Cancel { id: 3 });
+                }
                 _ => {
-                    host.command(2, &request("cancel", json!({"call_id": "c1"})));
-                    assert_eq!(host.response(2), json!({"ok": true}));
+                    for (id, call_id) in [(2, "c1"), (4, "c2")] {
+                        host.command(id, &request("cancel", json!({"call_id": call_id})));
+                        assert_eq!(host.response(id), json!({"ok": true}));
+                    }
                 }
             }
+            let tools = fake.tools();
             release.send(()).unwrap();
 
+            let mut errors = HashMap::new();
+            for _ in 0..2 {
+                match host.reply() {
+                    Message::Response { id, body } => {
+                        let body = serde_json::from_slice(&protocol::unbase64(&body).unwrap());
+                        errors.insert(id, error(&body.unwrap()));
+                    }
+                    other => panic!("expected a response, got {other:?}"),
+                }
+            }
+            let cancelled = "computer_cancelled: The call was cancelled.".to_string();
             assert_eq!(
-                error(&host.response(1)),
-                "computer_cancelled: The call was cancelled.",
+                errors,
+                HashMap::from([(1, cancelled.clone()), (3, cancelled)]),
                 "{stop}"
             );
+            assert_eq!(fake.tools(), tools, "{stop}");
         }
     }
 }

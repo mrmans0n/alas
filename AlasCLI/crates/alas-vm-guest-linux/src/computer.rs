@@ -94,7 +94,7 @@ impl Canceller {
 
 // MARK: - Messages, copied from `ComputerUseCoordinator.Message`.
 
-pub(crate) mod message {
+mod message {
     pub const CANCELLED: &str = "computer_cancelled: The call was cancelled.";
     pub const LIMIT: &str = "computer_limit: The result exceeds the response limit. Inspect with a query or a smaller limit.";
     pub const NO_QUITTING: &str = "Agents can't quit apps.";
@@ -497,8 +497,20 @@ impl<D: Driver> Computer<D> {
     }
 
     /// Answers a `{"command":"computer_<action>","params":{…}}` request with an
-    /// `AlasCLIResponse` encoding.
+    /// `AlasCLIResponse` encoding. The helper uses `perform_with_cancel`.
+    #[cfg(test)]
     pub fn perform(&mut self, session: &str, request: &Value) -> Value {
+        self.perform_with_cancel(session, request, Arc::new(AtomicBool::new(false)))
+    }
+
+    /// `perform`, stopped once `cancelled` is set, whether by its `call_id` or by the caller.
+    /// A call cancelled before it starts never reaches the driver.
+    pub fn perform_with_cancel(
+        &mut self,
+        session: &str,
+        request: &Value,
+        cancelled: Arc<AtomicBool>,
+    ) -> Value {
         let action = request
             .get("command")
             .and_then(Value::as_str)
@@ -521,8 +533,11 @@ impl<D: Driver> Computer<D> {
         let call = Call {
             session: session.to_string(),
             window_id: params.window_id,
-            cancelled: Arc::new(AtomicBool::new(false)),
+            cancelled,
         };
+        if let Err(error) = call.check() {
+            return error_response(&error);
+        }
         if let Some(call_id) = &params.call_id {
             self.canceller.register(session, call_id, &call.cancelled);
         }
@@ -1515,7 +1530,7 @@ pub(crate) mod tests {
                 .collect()
         }
 
-        fn tools(&self) -> Vec<String> {
+        pub(crate) fn tools(&self) -> Vec<String> {
             let state = self.0.lock().unwrap();
             state.calls.iter().map(|(name, _)| name.clone()).collect()
         }
