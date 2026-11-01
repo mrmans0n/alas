@@ -247,6 +247,7 @@ final class WorktreeVMManager {
     }
 
     /// The guest client already made for a VM this process runs, without creating one.
+    /// `worktreeID` is the VM's registry id (`VMIdentity.recordID`).
     func existingGuestClient(for worktreeID: String) -> VMGuestClient? {
         runningVMs[worktreeID] == nil ? nil : guestClients[worktreeID]
     }
@@ -564,7 +565,7 @@ final class WorktreeVMManager {
     /// or unresponsive, or of another protocol revision, offers an update.
     func noteHelperCheck(_ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>) {
         guard runningVMs[id] != nil else { return }
-        if Self.helperNeedsUpdate(result) {
+        if Self.helperNeedsUpdate(result, guest: VMIdentity.parse(recordID: id).guest) {
             helpersNeedingUpdate.insert(id)
         } else {
             helpersNeedingUpdate.remove(id)
@@ -572,9 +573,17 @@ final class WorktreeVMManager {
     }
 
     /// Whether a helper check result calls for Update helper. A stopped VM
-    /// or a cancelled check says nothing about the helper.
-    nonisolated static func helperNeedsUpdate(_ result: Result<VMGuestHello, VMGuestClient.Failure>) -> Bool {
-        switch result {
+    /// or a cancelled check says nothing about the helper. A Linux helper is
+    /// updated through itself, so only one that answers and can't do
+    /// computer use yet calls for it.
+    nonisolated static func helperNeedsUpdate(
+        _ result: Result<VMGuestHello, VMGuestClient.Failure>, guest: VMGuestOS = .macOS
+    ) -> Bool {
+        if guest == .linux {
+            guard case .success(let hello) = result, hello.protocolRevision == VMGuestProtocol.revision else { return false }
+            return VMComputerUseRoute.linuxComputerUse(capabilities: hello.capabilities) == .outdated
+        }
+        return switch result {
         case .success(let hello): hello.protocolRevision != VMGuestProtocol.revision
         case .failure(.helperMissing), .failure(.helperUnresponsive), .failure(.outdated): true
         case .failure: false
@@ -588,7 +597,10 @@ final class WorktreeVMManager {
     /// Reinstalls the helper in VM `id` (a worktree's, or a golden's awaiting
     /// setup) through `VMHelperUpdater`: restarts the VM, which ends up
     /// running with the new helper, or stopped with `helperUpdateFailures` set.
+    /// A Linux VM's helper is reinstalled in place instead.
     func updateHelper(_ id: String) async {
+        let vm = VMIdentity.parse(recordID: id)
+        if vm.guest == .linux { return await updateLinuxHelper(id, worktreeID: vm.worktree) }
         if id.hasPrefix(Self.goldenIDPrefix),
            !isGoldenCustomized(build: String(id.dropFirst(Self.goldenIDPrefix.count))) {
             // A golden awaiting its first setup has no helper to update yet.
@@ -603,6 +615,25 @@ final class WorktreeVMManager {
             helpersNeedingUpdate.remove(id)
         case .failed(let reason):
             helperUpdateFailures[id] = "Couldn't update the helper (\(reason)). Start the VM and try again, or install it from My Shared Files › helper › Install Alas VM Guest."
+        }
+    }
+
+    /// Reinstalls the helper of Linux VM `id` through the helper itself; the
+    /// VM keeps running.
+    private func updateLinuxHelper(_ id: String, worktreeID: String) async {
+        guard updatingHelpers.insert(id).inserted else { return }
+        defer { updatingHelpers.remove(id) }
+        helperUpdateFailures.removeValue(forKey: id)
+        let outcome = if let client = guestClient(for: worktreeID, guest: .linux) {
+            await LinuxVMHelperUpdater.live(client: client).run()
+        } else {
+            VMHelperUpdater.Outcome.failed(reason: LinuxVMHelperUpdater.Reason.notRunning)
+        }
+        switch outcome {
+        case .updated:
+            helpersNeedingUpdate.remove(id)
+        case .failed(let reason):
+            helperUpdateFailures[id] = "Couldn't update the helper (\(reason)). Restart the VM and try again."
         }
     }
 

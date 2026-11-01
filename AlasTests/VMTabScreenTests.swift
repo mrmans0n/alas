@@ -70,7 +70,9 @@ struct VMTabScreenTests {
         Case(name: "Linux VM stopped", guest: .linux, hasVM: true, phase: .awaitingSetup(build: "25A1"),
              linuxPhase: .converting(0.5), expected: .stopped),
         Case(name: "Linux VM running", guest: .linux, runningHere: true, hasVM: true, helper: .available,
-             expected: .running(updateHelper: false)),
+             expected: .running(updateHelper: true)),
+        Case(name: "Linux VM updating its helper", guest: .linux, runningHere: true, hasVM: true, helper: .updating,
+             expected: .updatingHelper),
         Case(name: "Linux VM running elsewhere", guest: .linux, runningElsewhere: "Alas Dev", hasVM: true,
              expected: .runningElsewhere(label: "Alas Dev")),
     ]

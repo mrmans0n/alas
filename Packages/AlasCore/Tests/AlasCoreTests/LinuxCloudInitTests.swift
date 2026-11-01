@@ -45,8 +45,8 @@ struct LinuxCloudInitTests {
         #expect(user.contains("touch /etc/cloud/cloud-init.disabled"))
         #expect(user.contains("systemctl set-default graphical.target"))
         // The power button (the host's Stop) shuts down rather than being swallowed by Xfce.
-        #expect(user.contains("path: /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml"))
-        #expect(user.contains(#"<property name="power-button-action" type="uint" value="4"/>"#))
+        let powerManager = try #require(LinuxGuestSetup.lockerOffFiles.first { $0.path.hasSuffix("/xfce4-power-manager.xml") })
+        #expect(powerManager.content.contains(#"<property name="power-button-action" type="uint" value="4"/>"#))
         // A clone regenerates the SSH host keys the golden's seal removed, before sshd's own check.
         #expect(user.contains("path: /etc/systemd/system/ssh.service.d/alas-host-keys.conf"))
         #expect(user.contains("ExecStartPre=\n      ExecStartPre=/usr/bin/ssh-keygen -A\n      ExecStartPre=/usr/sbin/sshd -t\n"))
@@ -54,16 +54,64 @@ struct LinuxCloudInitTests {
         // Power off only once setup really happened; otherwise the host's deadline fails the build.
         #expect(!user.contains("condition: true"))
         #expect(user.contains(
-            #"condition: "test -x /usr/local/bin/alas-vm-guest && test -L /home/alas/.config/systemd/user/default.target.wants/alas-vm-guest.service && dpkg -s xubuntu-core lightdm >/dev/null 2>&1""#
+            #"condition: "test -x /usr/local/bin/alas-vm-guest && test -x /usr/local/bin/cua-driver && test -L /home/alas/.config/systemd/user/default.target.wants/alas-vm-guest.service && dpkg -s xubuntu-core lightdm mousepad >/dev/null 2>&1""#
         ))
-        // The mount must be in place before the helper is copied from it.
-        let mount = try #require(user.range(of: "mount /mnt/alas"))
-        let install = try #require(user.range(of: "/mnt/alas/helper/alas-vm-guest-linux"))
-        #expect(mount.lowerBound < install.lowerBound)
+        // The shared guest setup runs in order, once the share it installs from is mounted.
+        var cursor = try #require(user.range(of: "  - \"mount /mnt/alas\"\n")).upperBound
+        for command in LinuxGuestSetup.commands(user: "alas") {
+            let line = try #require(
+                user.range(of: "  - \(LinuxCloudInit.quoted(command))\n", range: cursor ..< user.endIndex),
+                "missing or out of order: \(command)"
+            )
+            cursor = line.upperBound
+        }
 
         let network = try #require(files["network-config"])
         #expect(network.contains("version: 2"))
         #expect(network.contains("dhcp-identifier: mac"))
+    }
+
+    @Test
+    func guestSetupInstallsBothBinariesAndTurnsTheLockerOff() throws {
+        let commands = LinuxGuestSetup.commands(user: "alas")
+        #expect(commands.contains("install -m 0755 /mnt/alas/helper/cua-driver /usr/local/bin/cua-driver"))
+        // The dpkg lock is often held by apt-daily on first boot, so apt waits for it.
+        let mousepad = try #require(commands.first { $0.contains("install -y mousepad") })
+        #expect(mousepad.hasPrefix("dpkg -s mousepad >/dev/null 2>&1 || "))
+        #expect(mousepad.contains("apt-get -o DPkg::Lock::Timeout=300 update"))
+        #expect(mousepad.contains("apt-get -o DPkg::Lock::Timeout=300 install -y mousepad"))
+        #expect(commands.last == "runuser -u alas -- env XDG_RUNTIME_DIR=/run/user/$(id -u alas) systemctl --user restart alas-vm-guest || true")
+
+        // The lock screen swallows foreground input, so the screensaver, its locker and DPMS stay off.
+        let screensaver = try #require(LinuxGuestSetup.lockerOffFiles.first { $0.path.hasSuffix("/xfce4-screensaver.xml") })
+        for group in ["lock", "saver"] {
+            #expect(screensaver.content.contains(
+                #"<property name="\#(group)" type="empty">\#n    <property name="enabled" type="bool" value="false"/>"#
+            ))
+        }
+        let powerManager = try #require(LinuxGuestSetup.lockerOffFiles.first { $0.path.hasSuffix("/xfce4-power-manager.xml") })
+        #expect(powerManager.content.contains(#"<property name="dpms-enabled" type="bool" value="false"/>"#))
+
+        // Update helper writes the same files by shell, so every file has a heredoc in the commands.
+        for file in LinuxGuestSetup.lockerOffFiles {
+            #expect(commands.contains { $0.hasPrefix("cat > \(file.path) ") })
+        }
+
+        // Update helper stops at once on a share without Cua Driver. On an older guest a per-user
+        // screensaver channel overrides those defaults and a locker may run, so it also drops both,
+        // and tells a running xfconfd too, which would otherwise write the old values back.
+        // The pkill is anchored: an unanchored -f would match the script's own command line. The
+        // restart is queued, so the script ends before it stops the service it runs in.
+        let update = LinuxGuestSetup.updateCommands(user: "alas")
+        #expect(update == [
+            #"test -x /mnt/alas/helper/cua-driver || { echo "no Cua Driver in the helper share" >&2; exit 3; }"#,
+        ] + commands.dropLast() + [
+            #"rm -f "$(getent passwd alas | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#,
+            "runuser -u alas -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u alas)/bus xfconf-query -c xfce4-screensaver -p /lock/enabled -n -t bool -s false || true",
+            "runuser -u alas -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u alas)/bus xfconf-query -c xfce4-screensaver -p /saver/enabled -n -t bool -s false || true",
+            "pkill -f '^(/usr/bin/)?xfce4-screensaver' || true",
+            "runuser -u alas -- env XDG_RUNTIME_DIR=/run/user/$(id -u alas) systemctl --user --no-block restart alas-vm-guest || true",
+        ])
     }
 
     @Test

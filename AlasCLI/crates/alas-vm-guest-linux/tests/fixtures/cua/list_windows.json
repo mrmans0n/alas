@@ -1,0 +1,72 @@
+{
+ "tool": "list_windows",
+ "arguments": {
+  "on_screen_only": true
+ },
+ "result": {
+  "content": [
+   {
+    "text": "Found 3 windows:\n  window_id=18874391 pid=1449 \"Desktop\" 2112x1990+0+0 app=Xfdesktop\n  window_id=14680067 pid=1430 \"xfce4-panel\" 2112x27+0+0 app=Xfce4-panel\n  window_id=14680078 pid=1430 \"xfce4-panel\" 306x49+903+1941 app=Xfce4-panel",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "windows": [
+    {
+     "app_name": "Xfdesktop",
+     "bounds": {
+      "height": 1990,
+      "width": 2112,
+      "x": 0,
+      "y": 0
+     },
+     "height": 1990,
+     "is_on_screen": true,
+     "pid": 1449,
+     "title": "Desktop",
+     "width": 2112,
+     "window_id": 18874391,
+     "x": 0,
+     "y": 0,
+     "z_index": 0
+    },
+    {
+     "app_name": "Xfce4-panel",
+     "bounds": {
+      "height": 27,
+      "width": 2112,
+      "x": 0,
+      "y": 0
+     },
+     "height": 27,
+     "is_on_screen": true,
+     "pid": 1430,
+     "title": "xfce4-panel",
+     "width": 2112,
+     "window_id": 14680067,
+     "x": 0,
+     "y": 0,
+     "z_index": 1
+    },
+    {
+     "app_name": "Xfce4-panel",
+     "bounds": {
+      "height": 49,
+      "width": 306,
+      "x": 903,
+      "y": 1941
+     },
+     "height": 49,
+     "is_on_screen": true,
+     "pid": 1430,
+     "title": "xfce4-panel",
+     "width": 306,
+     "window_id": 14680078,
+     "x": 903,
+     "y": 1941,
+     "z_index": 2
+    }
+   ]
+  }
+ }
+}

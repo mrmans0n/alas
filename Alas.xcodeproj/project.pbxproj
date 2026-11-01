@@ -1480,6 +1480,7 @@
 		CDEE1CFA85DF21346B05C2E2 /* Icon.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29313DDC46A0CCA2FA42CDE9 /* Icon.swift */; };
 		CDF6E4EB92096BEE3423499C /* ACPDetectedAgentUpdaterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 995DE1571DF674D92D74996B /* ACPDetectedAgentUpdaterTests.swift */; };
 		CE24C8CA495726CD294FD223 /* CommitsSectionView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FFE12732C0D83715FC990A9 /* CommitsSectionView.swift */; };
+		CEA1C5AD43AD79AB976C7103 /* VMHelperUpdaterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1471B3F3028207AC3139B6DE /* VMHelperUpdaterTests.swift */; };
 		CEC8F80B42EB6B8FBCC84AE2 /* AppState+Plugins.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F6602E3EE8B43A85FB5C881 /* AppState+Plugins.swift */; };
 		CECFCEBC6705503674BA8E8F /* EditorInlayLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8318AB3A73852C9D66957A8C /* EditorInlayLayoutTests.swift */; };
 		CF105C488C01331534C65D88 /* MergeConflictBinaryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 69B7FA3997B6A60397B56CD4 /* MergeConflictBinaryView.swift */; };
@@ -1905,10 +1906,10 @@
 		2712E12EE8A4AD5B52367A67 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-host";
+			dstPath = "alas-vm-guest";
 			dstSubfolderSpec = 7;
 			files = (
-				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
+				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -1926,10 +1927,10 @@
 		DF16EBE2557E441D41DDC075 /* Embed Dependencies */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 2147483647;
-			dstPath = "alas-vm-guest";
+			dstPath = "alas-host";
 			dstSubfolderSpec = 7;
 			files = (
-				4E3DCCD78EA9291794E64710 /* AlasVMGuest.app in Embed Dependencies */,
+				EEC769084EDF915C1A64519F /* AlasHost in Embed Dependencies */,
 			);
 			name = "Embed Dependencies";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2089,6 +2090,7 @@
 		143995043B72B58B5F32ABCE /* VirtualMachineTabView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VirtualMachineTabView.swift; sourceTree = "<group>"; };
 		1440CBF73B5E39F6CD4C1001 /* PaneBandStyle.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneBandStyle.swift; sourceTree = "<group>"; };
 		145A3CF92ED4EEF2A0D8F5FB /* EditorNavigationHistoryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorNavigationHistoryTests.swift; sourceTree = "<group>"; };
+		1471B3F3028207AC3139B6DE /* VMHelperUpdaterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMHelperUpdaterTests.swift; sourceTree = "<group>"; };
 		14907D679267359B3FB8A848 /* TabMergeConflictCodingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TabMergeConflictCodingTests.swift; sourceTree = "<group>"; };
 		149AB7104993DEC73FD4BC45 /* WorkspaceSpaceMigrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkspaceSpaceMigrationTests.swift; sourceTree = "<group>"; };
 		14B50A6DC07A0EB1A34BBD91 /* DiffSplitCoreTextRowViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiffSplitCoreTextRowViewTests.swift; sourceTree = "<group>"; };
@@ -4455,6 +4457,7 @@
 				4E6980C00CA3BEB4546D31EC /* VMGuestClientTests.swift */,
 				2A60808C8CBCC1A935CC7E4B /* VMGuestPatcherTests.swift */,
 				AF2DB338CB6309A753612B8A /* VMGuestServiceTests.swift */,
+				1471B3F3028207AC3139B6DE /* VMHelperUpdaterTests.swift */,
 				CA2CB1CFE73EDF0BDA6C8E18 /* VMTabScreenTests.swift */,
 				CF0005D9107053886C37A3AC /* WarningCharacterTests.swift */,
 				D539F34969F540B8294BDC35 /* WebPreviewAutomationBrowserTests.swift */,
@@ -6969,6 +6972,7 @@
 				2A52B3AA269E67D4B89E4A6B /* Build zmx */,
 				A8FC861C1A7630AE525F4E85 /* Build Alas Helper */,
 				B61E07FE4E3F429B160A7D89 /* Build Alas VM Guest (Linux) */,
+				0DA4791F4F292456C1A3FE30 /* Fetch Cua Driver */,
 				E7133D66219548A98B3DF549 /* Build Alas CLI */,
 				4609384BD7FA0393B4CE182E /* Build fff */,
 				A4E68D93681832810FDA0179 /* Build TreeSitter Pack */,
@@ -7140,6 +7144,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		0DA4791F4F292456C1A3FE30 /* Fetch Cua Driver */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Fetch Cua Driver";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "\"${SRCROOT}/scripts/fetch-cua-driver.sh\"";
+		};
 		2A52B3AA269E67D4B89E4A6B /* Build zmx */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -9017,6 +9040,7 @@
 				3350BDDA46BDED71D72FB0CF /* VMGuestClientTests.swift in Sources */,
 				D8C50433D3268DA1F43DCB72 /* VMGuestPatcherTests.swift in Sources */,
 				6842A416A8EBECAD7711B167 /* VMGuestServiceTests.swift in Sources */,
+				CEA1C5AD43AD79AB976C7103 /* VMHelperUpdaterTests.swift in Sources */,
 				DC7A064D521B8A7C2BE77B78 /* VMTabScreenTests.swift in Sources */,
 				9D7DD578147C591E0403BEAD /* VisualAidWebPolicyTests.swift in Sources */,
 				0294BEA9FB3A117314ED0C48 /* WarningCharacterTests.swift in Sources */,

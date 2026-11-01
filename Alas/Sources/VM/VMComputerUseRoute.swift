@@ -26,11 +26,78 @@ enum VMComputerUseRoute: Equatable {
     static let vmUnsupportedMessage = "computer_vm_unsupported: \(WorktreeVMManager.unsupportedMessage)."
     static let vmAmbiguousMessage =
         #"computer_vm_ambiguous: This worktree has a macOS and a Linux VM. Pass vm: "macos" or "linux"."#
+    /// Only for a Linux helper whose hello lists no capabilities at all.
     static let linuxComputerUseUnsupportedMessage = "computer_vm_unsupported: Computer use isn't available in Linux VMs yet."
+    static let linuxHelperOutdatedMessage =
+        "computer_vm_helper_outdated: This Linux VM's helper can't do computer use yet. Click Update helper in its VM tab."
+
+    /// Whether a Linux helper takes `computer_*` calls, from its hello's `capabilities`.
+    enum LinuxComputerUseDecision: Equatable {
+        case forward
+        /// It only runs commands: Update helper installs one that can.
+        case outdated
+        /// Its hello says nothing about what it can do.
+        case unsupported
+
+        /// The error the agent gets; nil when the call goes to the guest.
+        var refusal: String? {
+            switch self {
+            case .forward: nil
+            case .outdated: VMComputerUseRoute.linuxHelperOutdatedMessage
+            case .unsupported: VMComputerUseRoute.linuxComputerUseUnsupportedMessage
+            }
+        }
+    }
+
+    static func linuxComputerUse(capabilities: [String]?) -> LinuxComputerUseDecision {
+        guard let capabilities else { return .unsupported }
+        return capabilities.contains(VMGuestHello.computerUseCapability) ? .forward : .outdated
+    }
+
+    /// How long a call waits for a Linux helper of this build's revision that can't do computer
+    /// use yet: its hello may have come before Cua Driver finished starting, or before the
+    /// desktop session it needs was up.
+    static let linuxComputerUseWait: Duration = .seconds(10)
+    static let linuxComputerUseRetryInterval: Duration = .seconds(1)
+
+    /// The refusal for a call to a Linux helper whose last hello was `hello`, or nil to forward
+    /// it. Only a helper of this build's revision that can't do computer use yet is asked again,
+    /// through `refresh`, until it can or `timeout` passes on the given clock; an ask that fails
+    /// refuses with that failure.
+    static func linuxComputerUseRefusal(
+        hello: VMGuestHello,
+        refresh: @Sendable () async throws -> VMGuestHello,
+        timeout: Duration = linuxComputerUseWait,
+        interval: Duration = linuxComputerUseRetryInterval,
+        sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        now: @Sendable () -> ContinuousClock.Instant = { .now }
+    ) async -> String? {
+        var decision = linuxComputerUse(capabilities: hello.capabilities)
+        guard decision == .outdated, hello.protocolRevision == VMGuestProtocol.revision else { return decision.refusal }
+        let deadline = now() + timeout
+        while decision == .outdated, !Task.isCancelled {
+            do {
+                decision = linuxComputerUse(capabilities: try await refresh().capabilities)
+            } catch {
+                return (error as? VMGuestClient.Failure ?? .stopped).message(for: .linux)
+            }
+            let remaining = deadline - now()
+            guard decision == .outdated, remaining > .zero else { break }
+            await sleep(min(interval, remaining))
+        }
+        return decision.refusal
+    }
 
     /// The reply to a call naming a guest the worktree has no VM of.
     static func vmMissingMessage(for guest: VMGuestOS) -> String {
         "computer_vm_missing: This worktree has no \(guest == .linux ? "Linux" : "macOS") VM. Create one from its VM tab."
+    }
+
+    /// The VMs, by registry id, that a session's lifecycle event goes to: every VM in `recorded`
+    /// (the ones it made a call in), or only `worktreeID`'s for an event from that worktree's
+    /// session. Sorted, so events go out in a stable order.
+    static func lifecycleTargets(_ recorded: Set<String>?, worktreeID: String? = nil) -> [String] {
+        (recorded ?? []).filter { id in worktreeID.map { VMIdentity.parse(recordID: id).worktree == $0 } ?? true }.sorted()
     }
 
     /// Where the guest sees the worktree VM's transfer folder.

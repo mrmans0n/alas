@@ -1,0 +1,27 @@
+{
+ "tool": "click",
+ "arguments": {
+  "element_token": "s00000003:1"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "Clicked element [1] (pid 64288).",
+    "type": "text"
+   },
+   {
+    "text": "A popup menu is open, so pid 64288 holds a keyboard grab until it closes.",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "delivery": {
+    "mode": "background"
+   },
+   "effect": "unverifiable",
+   "hint": "The click was sent but nothing confirmed it. Read what changed before clicking again; a repeat can toggle or double-fire.",
+   "route": "accessibility",
+   "summary": "Clicked element [1] (pid 64288)."
+  }
+ }
+}

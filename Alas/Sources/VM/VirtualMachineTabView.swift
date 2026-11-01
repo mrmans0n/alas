@@ -5,8 +5,8 @@ import Virtualization
 
 /// A worktree's VM tab for one guest: golden image setup, VM creation, start
 /// and stop, and the live screen. Closing the tab leaves the VM running. A
-/// Linux tab builds its image unattended and has no customizing or helper
-/// update.
+/// Linux tab builds its image unattended, has no customizing, and updates
+/// its helper without restarting the VM.
 struct VirtualMachineTabView: View {
     let state: AppState
     let tab: VirtualMachineTabState
@@ -107,7 +107,7 @@ struct VirtualMachineTabView: View {
     /// customized golden it shows setup for.
     private var helperCheckTarget: String? {
         switch screen {
-        case .running: isLinux ? nil : worktreeID
+        case .running: recordID
         case .goldenSetup:
             customizedGoldenID.flatMap { vms.running($0) != nil ? $0 : nil }
         default: nil
@@ -152,7 +152,9 @@ struct VirtualMachineTabView: View {
             Button("Update") { updateHelper(id) }
             Button("Cancel", role: .cancel) {}
         } message: { _ in
-            Text("This restarts the VM; unsaved work inside it is lost.")
+            Text(isLinux
+                ? "This reinstalls the helper from the share and restarts it; the VM keeps running."
+                : "This restarts the VM; unsaved work inside it is lost.")
         }
         .alert("Delete this worktree's VM?", isPresented: $confirmingDelete) {
             Button("Delete", role: .destructive, action: deleteVM)
@@ -371,7 +373,8 @@ struct VirtualMachineTabView: View {
         case .updatingHelper:
             VMEmptyStateCard(
                 icon: "desktopcomputer", title: "Updating the helper",
-                subtitle: "The VM restarts with the new helper.", busy: true)
+                subtitle: isLinux ? "Ubuntu installs the new helper and restarts it." : "The VM restarts with the new helper.",
+                busy: true)
         case .loading:
             Spinner().frame(width: 16, height: 16)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -695,12 +698,15 @@ struct VirtualMachineTabView: View {
     }
 
     /// Asks the helper of a VM running here whether it is installed and
-    /// current. A freshly booted guest starts it only after logging in, so
-    /// a missing helper is asked again for a while before Update helper shows.
+    /// current. A freshly booted guest starts it only after logging in, and
+    /// a Linux one starts its computer-use driver after that, so a missing
+    /// helper, or a Linux one that can't do computer use yet, is asked again
+    /// for a while before Update helper shows.
     private func checkHelper(_ id: String?) async {
         guard let id else { return }
         let deadline = ContinuousClock.now + .seconds(120)
-        while !Task.isCancelled, let client = vms.guestClient(for: id) {
+        let vm = VMIdentity.parse(recordID: id)
+        while !Task.isCancelled, let client = vms.guestClient(for: vm.worktree, guest: vm.guest) {
             let result: Result<VMGuestHello, VMGuestClient.Failure>
             do {
                 result = .success(try await client.status())
@@ -710,6 +716,8 @@ struct VirtualMachineTabView: View {
             guard !Task.isCancelled else { return }
             let notUpYet = switch result {
             case .failure(.helperMissing), .failure(.helperUnresponsive): true
+            // A current Linux helper that can't do computer use yet may still be starting its driver.
+            case .success where vm.guest == .linux: WorktreeVMManager.helperNeedsUpdate(result, guest: .linux)
             default: false
             }
             guard notUpYet, ContinuousClock.now < deadline else {

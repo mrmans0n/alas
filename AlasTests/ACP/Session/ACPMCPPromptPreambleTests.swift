@@ -145,6 +145,7 @@ struct ACPMCPPromptPreambleTests {
         "A result with a warning wasn't confirmed: inspect before retrying, and never repeat a drag on a warning, except once with delivery \"direct\" when the warning suggests it.",
         "computer_user_active means the user is working there: wait and retry later instead of switching apps.",
         "Secure fields can't be typed into; ask the user instead.",
+        "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.",
     ]
 
     @Test("mcp mode notes the alas CLI fallback for blocked servers")

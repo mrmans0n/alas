@@ -3,15 +3,13 @@ import Foundation
 
 /// The NoCloud seed (`meta-data`, `user-data`, `network-config`) for the first
 /// boot of a Linux golden image. The guest installs Xfce, logs `account` in
-/// automatically, mounts the `alas` virtiofs share, installs the guest helper
-/// as a systemd user service, disables cloud-init for later boots and powers
-/// off, which is how the host knows setup finished.
+/// automatically, mounts the `alas` virtiofs share, runs `LinuxGuestSetup`,
+/// enables the guest helper as a systemd user service, disables cloud-init for
+/// later boots and powers off, which is how the host knows setup finished.
 public enum LinuxCloudInit {
     /// The virtiofs tag of the host's helper/worktree/transfer share.
     public static let shareTag = "alas"
     public static let shareMountPoint = "/mnt/alas"
-    public static let helperSource = "/mnt/alas/helper/alas-vm-guest-linux"
-    public static let helperPath = "/usr/local/bin/alas-vm-guest"
 
     static let packages = ["xubuntu-core", "lightdm", "spice-vdagent", "at-spi2-core", "git", "build-essential"]
 
@@ -66,19 +64,21 @@ public enum LinuxCloudInit {
         // Power off only when setup really happened. Otherwise the guest stays
         // up and the host's first-boot deadline fails the build.
         let setupDone = [
-            "test -x \(helperPath)",
+            "test -x \(LinuxGuestSetup.helperPath)",
+            "test -x \(LinuxGuestSetup.cuaDriverPath)",
             "test -L \(wantsLink)",
-            "dpkg -s xubuntu-core lightdm >/dev/null 2>&1",
+            "dpkg -s xubuntu-core lightdm mousepad >/dev/null 2>&1",
         ].joined(separator: " && ")
         // The share's fstab line is written directly rather than through
         // `mounts:`, so it doesn't depend on cc_mounts' device-name sanitizing
         // (which has changed across cloud-init releases) and is mounted before
         // the helper is copied from it. Lima also writes its fstab lines itself.
-        let runcmd = [
+        // runcmd runs after `packages:`, so the xfconf defaults that
+        // `LinuxGuestSetup` writes land after Xfce is installed.
+        var runcmd = [
             "mkdir -p \(shareMountPoint)",
             "grep -q ' \(shareMountPoint) ' /etc/fstab || echo '\(shareTag) \(shareMountPoint) virtiofs defaults,nofail 0 0' >> /etc/fstab",
             "mount \(shareMountPoint)",
-            "install -m 0755 \(helperSource) \(helperPath)",
             // Each level is created owned by the user; a root-owned ~/.config breaks the desktop session.
             "install -d -o \(name) -g \(name) -m 0755 \(home)/.config \(home)/.config/systemd \(userUnits) \(userUnits)/default.target.wants",
             "install -o \(name) -g \(name) -m 0644 \(stagedUnit) \(userUnits)/alas-vm-guest.service",
@@ -86,6 +86,9 @@ public enum LinuxCloudInit {
             "ln -sfn ../alas-vm-guest.service \(wantsLink)",
             "chown -h \(name):\(name) \(wantsLink)",
             "loginctl enable-linger \(name)",
+        ]
+        runcmd += LinuxGuestSetup.commands(user: name)
+        runcmd += [
             "systemctl set-default graphical.target",
             "touch /etc/cloud/cloud-init.disabled",
         ]
@@ -115,18 +118,6 @@ public enum LinuxCloudInit {
               autologin-user=\(name)
               autologin-session=xfce
               user-session=xfce
-          # Xfce's power manager takes the power key from logind and by default does
-          # nothing, so the host's Stop (an ACPI power button press) would end in a
-          # forced power-off. 4 is XFPM_DO_SHUTDOWN, which powers off through logind.
-          - path: /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml
-            defer: true
-            content: |
-              <?xml version="1.0" encoding="UTF-8"?>
-              <channel name="xfce4-power-manager" version="1.0">
-                <property name="xfce4-power-manager" type="empty">
-                  <property name="power-button-action" type="uint" value="4"/>
-                </property>
-              </channel>
           # The golden image is sealed without SSH host keys, and cloud-init no longer
           # runs in clones, so sshd makes them; ahead of its own `sshd -t`, which fails
           # without them.
@@ -142,7 +133,7 @@ public enum LinuxCloudInit {
               Description=Alas VM guest helper
 
               [Service]
-              ExecStart=\(helperPath)
+              ExecStart=\(LinuxGuestSetup.helperPath)
               Restart=always
               RestartSec=1
 

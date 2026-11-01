@@ -1,0 +1,25 @@
+{
+ "tool": "click",
+ "arguments": {
+  "pid": 64176,
+  "window_id": 39845896,
+  "x": 200,
+  "y": 150,
+  "delivery_mode": "foreground"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "No screenshot frame for window 39845896: its latest read had no screenshot and the window changed size since the last one (or it was never captured). Call get_window_state(pid:64176, window_id:39845896) with the default screenshot and take x,y from that image.",
+    "type": "text"
+   }
+  ],
+  "isError": true,
+  "structuredContent": {
+   "code": "screenshot_context_missing",
+   "pid": 64176,
+   "reason": "no_screenshot",
+   "window_id": 39845896
+  }
+ }
+}

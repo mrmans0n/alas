@@ -1,3 +1,5 @@
+import AlasComputerUseKit
+import AlasCore
 import Foundation
 import os
 
@@ -144,5 +146,89 @@ extension VMHelperUpdater {
                 manager.requestGuestCommand(id: id, GoldenProvisioner.restartCommand(account: account))
             },
             steps: steps)
+    }
+}
+
+/// Reinstalls the helper and Cua Driver in a running Linux VM from its share,
+/// through the helper it replaces: one root script runs the guest setup,
+/// whose last step queues a restart of the helper's service, and the update is done once
+/// the restarted helper says it does computer use. The VM keeps running
+/// either way. A helper that no longer answers `run` can't be updated here.
+@MainActor
+struct LinuxVMHelperUpdater {
+    typealias Outcome = VMHelperUpdater.Outcome
+
+    enum Reason {
+        static let notRunning = "the VM isn't running"
+        static let unreachable = "the helper isn't answering"
+        static let timedOut = "the setup didn't finish in the VM"
+        static let noComputerUse = "the helper restarted without computer use"
+        static let didNotReturn = "the helper didn't come back"
+    }
+
+    static let runTimeoutSeconds = 600
+    static let helloTimeout: Duration = .seconds(60)
+    static let helloInterval: Duration = .seconds(2)
+
+    /// Runs a shell command in the guest, as `VMGuestClient.run` does.
+    var runInGuest: @MainActor (String, Int) async throws -> VMGuestRunResult
+    /// Asks the helper for a fresh hello, reconnecting when the connection dropped.
+    var status: @MainActor () async throws -> VMGuestHello
+    var sleep: @MainActor (Duration) async -> Void
+    var now: @MainActor () -> ContinuousClock.Instant
+
+    private static let logger = Logger(subsystem: "io.nlopez.alas", category: "vm-helper-updater")
+
+    /// The guest setup for `user`, run as root by one shell.
+    static func command(user: String) -> String {
+        "sudo sh -c " + SSHCommand.shellQuote(LinuxGuestSetup.updateCommands(user: user).joined(separator: "\n"))
+    }
+
+    func run(user: String = VMGuestAccount.alas.shortName) async -> Outcome {
+        do {
+            // The script queues the restart and ends; its reply may still be lost to the restart.
+            let result = try await runInGuest(Self.command(user: user), Self.runTimeoutSeconds)
+            if result.timedOut { return failed(Reason.timedOut) }
+            // A nil exit code is a script killed by a signal, as the restart may do.
+            if let exit = result.exitCode, exit != 0 { return failed(Self.reason(stderr: result.stderr, exitCode: exit)) }
+        } catch VMGuestClient.Failure.stopped {
+            // Expected: restarting the helper drops the connection the reply would come on.
+        } catch {
+            let failure = error as? VMGuestClient.Failure
+            return failed(failure == .outdated ? GoldenProvisioner.Reason.helperOutdated : Reason.unreachable)
+        }
+        var answered = false
+        let ready = await GuestSetupSteps.waitUntil(
+            timeout: Self.helloTimeout, interval: Self.helloInterval, sleep: sleep, now: now
+        ) {
+            guard let hello = try? await status() else { return false }
+            answered = true
+            return VMComputerUseRoute.linuxComputerUse(capabilities: hello.capabilities) == .forward
+        }
+        guard ready else { return failed(answered ? Reason.noComputerUse : Reason.didNotReturn) }
+        Self.logger.info("Updated the Linux helper")
+        return .updated
+    }
+
+    /// The script's last line of stderr, which says why it stopped.
+    static func reason(stderr: String, exitCode: Int32) -> String {
+        let last = stderr.split(whereSeparator: \.isNewline).last.map { $0.trimmingCharacters(in: .whitespaces) }
+        return last.flatMap { $0.isEmpty ? nil : $0 } ?? "the setup failed in the VM with status \(exitCode)"
+    }
+
+    private func failed(_ reason: String) -> Outcome {
+        Self.logger.error("Updating the Linux helper stopped: \(reason, privacy: .public)")
+        return .failed(reason: reason)
+    }
+}
+
+extension LinuxVMHelperUpdater {
+    /// The updater talking to the helper through `client`.
+    static func live(client: VMGuestClient) -> LinuxVMHelperUpdater {
+        LinuxVMHelperUpdater(
+            runInGuest: { command, timeout in try await client.run(command, timeoutSeconds: timeout) },
+            status: { try await client.status() },
+            sleep: { try? await Task.sleep(for: $0) },
+            now: { ContinuousClock.now })
     }
 }

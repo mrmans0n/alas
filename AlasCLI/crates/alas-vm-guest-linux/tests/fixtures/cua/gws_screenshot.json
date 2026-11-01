@@ -1,0 +1,36 @@
+{
+ "tool": "get_window_state",
+ "arguments": {
+  "pid": 64288,
+  "window_id": 39845891,
+  "include_accessibility_tree": false,
+  "max_image_dimension": 1280
+ },
+ "result": {
+  "content": [
+   {
+    "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+    "mimeType": "image/png",
+    "type": "image"
+   }
+  ],
+  "structuredContent": {
+   "app_name": "Org.xfce.mousepad",
+   "capture_id": "capture_313c65c3bd684ff3a36a01314d81d37b_0000000000000000",
+   "coordinate_frame": "window",
+   "pid": 64288,
+   "screenshot_frame_valid": true,
+   "screenshot_height": 480,
+   "screenshot_mime_type": "image/png",
+   "screenshot_width": 640,
+   "window_bounds": {
+    "height": 480,
+    "width": 640,
+    "x": 736,
+    "y": 780
+   },
+   "window_id": 39845891,
+   "window_title": "Untitled 1 - Mousepad"
+  }
+ }
+}

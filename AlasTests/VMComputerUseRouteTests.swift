@@ -110,6 +110,113 @@ struct VMComputerUseRouteTests {
         #expect(try Self.object(reply) == Self.object(expected))
     }
 
+    /// A Linux helper answers computer use only when its hello says so. The agent is told to
+    /// update an older one that only runs commands, never that Linux can't do computer use; only
+    /// a helper with no capabilities at all is unsupported.
+    @Test(arguments: [
+        (nil, VMComputerUseRoute.LinuxComputerUseDecision.unsupported,
+         "computer_vm_unsupported: Computer use isn't available in Linux VMs yet."),
+        (["run"], .outdated,
+         "computer_vm_helper_outdated: This Linux VM's helper can't do computer use yet. Click Update helper in its VM tab."),
+        (["run", "computer_use"], .forward, nil),
+    ] as [([String]?, VMComputerUseRoute.LinuxComputerUseDecision, String?)])
+    func linuxComputerUseDecision(
+        capabilities: [String]?, expected: VMComputerUseRoute.LinuxComputerUseDecision, refusal: String?
+    ) {
+        let decision = VMComputerUseRoute.linuxComputerUse(capabilities: capabilities)
+        #expect(decision == expected)
+        #expect(decision.refusal == refusal)
+    }
+
+    private static func linuxHello(_ capabilities: [String]?, revision: Int = VMGuestProtocol.revision) -> VMGuestHello {
+        VMGuestHello(guestVersion: "0.1", accessibility: false, screenRecording: false, protocolRevision: revision,
+                     guestKind: "linux", capabilities: capabilities)
+    }
+
+    /// Update helper shows for a Linux helper only when it answers at this build's revision and
+    /// can't do computer use; a macOS helper is updated when it is missing or of another revision.
+    @Test(arguments: [
+        ("Linux, only runs commands", .linux, .success(linuxHello(["run"])), true),
+        ("Linux, does computer use", .linux, .success(linuxHello(["run", "computer_use"])), false),
+        ("Linux, another revision", .linux, .success(linuxHello(["run"], revision: VMGuestProtocol.revision - 1)), false),
+        ("Linux, helper missing", .linux, .failure(.helperMissing), false),
+        ("macOS, another revision", .macOS,
+         .success(VMGuestHello(guestVersion: "1", accessibility: true, screenRecording: true,
+                               protocolRevision: VMGuestProtocol.revision - 1)), true),
+        ("macOS, helper missing", .macOS, .failure(.helperMissing), true),
+    ] as [(String, VMGuestOS, Result<VMGuestHello, VMGuestClient.Failure>, Bool)])
+    func helperNeedsUpdate(_ name: String, guest: VMGuestOS, result: Result<VMGuestHello, VMGuestClient.Failure>, expected: Bool) {
+        #expect(WorktreeVMManager.helperNeedsUpdate(result, guest: guest) == expected, "\(name)")
+    }
+
+    /// A fake clock that only moves when slept on, and the hellos a helper answers in turn.
+    private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var hellos: [Result<VMGuestHello, VMGuestClient.Failure>]
+        private var clock = ContinuousClock.now
+        private(set) var asks = 0
+        let start: ContinuousClock.Instant
+
+        init(_ hellos: [Result<VMGuestHello, VMGuestClient.Failure>]) {
+            self.hellos = hellos
+            start = clock
+        }
+
+        func refresh() throws -> VMGuestHello {
+            try lock.withLock {
+                asks += 1
+                return try (hellos.count > 1 ? hellos.removeFirst() : hellos[0]).get()
+            }
+        }
+
+        func sleep(_ duration: Duration) { lock.withLock { clock += duration } }
+        var now: ContinuousClock.Instant { lock.withLock { clock } }
+    }
+
+    /// A current Linux helper whose hello came before its driver started is asked again until it
+    /// can do computer use, for at most 10 s; an old or capability-less helper is refused at once,
+    /// and a helper that stops answering refuses with why.
+    @Test(arguments: [
+        ("driver starts after a few asks", linuxHello(["run"]),
+         [.success(linuxHello(["run"])), .success(linuxHello(["run"])), .success(linuxHello(["run", "computer_use"]))],
+         nil, 3, Duration.seconds(2)),
+        ("driver never starts", linuxHello(["run"]), [.success(linuxHello(["run"]))],
+         "computer_vm_helper_outdated: This Linux VM's helper can't do computer use yet. Click Update helper in its VM tab.",
+         11, .seconds(10)),
+        ("helper of another revision", linuxHello(["run"], revision: VMGuestProtocol.revision - 1), [],
+         "computer_vm_helper_outdated: This Linux VM's helper can't do computer use yet. Click Update helper in its VM tab.",
+         0, .zero),
+        ("helper without capabilities", linuxHello(nil), [],
+         "computer_vm_unsupported: Computer use isn't available in Linux VMs yet.", 0, .zero),
+        ("helper stops answering", linuxHello(["run"]), [.failure(.stopped)],
+         VMGuestClient.Failure.stopped.message(for: .linux), 1, .zero),
+    ] as [(String, VMGuestHello, [Result<VMGuestHello, VMGuestClient.Failure>], String?, Int, Duration)])
+    func linuxComputerUseRefusalAsksAgain(
+        _ name: String, hello: VMGuestHello, answers: [Result<VMGuestHello, VMGuestClient.Failure>],
+        refusal: String?, asks: Int, waited: Duration
+    ) async {
+        let asked = Asked(answers.isEmpty ? [.failure(.malformed)] : answers)
+        let got = await VMComputerUseRoute.linuxComputerUseRefusal(
+            hello: hello, refresh: { try asked.refresh() }, sleep: { asked.sleep($0) }, now: { asked.now }
+        )
+        #expect(got == refusal, "\(name)")
+        #expect(asked.asks == asks, "\(name)")
+        #expect(asked.now - asked.start == waited, "\(name)")
+    }
+
+    /// A session that drove both of its worktree's VMs tells both about its lifecycle; an event
+    /// from a worktree's session skips VMs of other worktrees, and Stop and Resume reach them all.
+    @Test(arguments: [
+        (nil as String?, ["/w", "/x", "linux:/w"]),
+        ("/w", ["/w", "linux:/w"]),
+        ("/y", []),
+    ])
+    func lifecycleReachesEveryVMTheSessionDrove(worktreeID: String?, expected: [String]) {
+        let recorded: Set<String> = ["/w", "linux:/w", "/x"]
+        #expect(VMComputerUseRoute.lifecycleTargets(recorded, worktreeID: worktreeID) == expected)
+        #expect(VMComputerUseRoute.lifecycleTargets(nil, worktreeID: worktreeID).isEmpty)
+    }
+
     @Test func runReplyKeepsANullExitCodeForAKilledCommand() throws {
         let result = VMGuestRunResult(exitCode: nil, stdout: "a", stderr: "b", truncated: true, timedOut: true)
         let expected = #"{"exit_code":null,"stdout":"a","stderr":"b","truncated":true,"timed_out":true}"#

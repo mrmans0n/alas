@@ -41,6 +41,14 @@ linux_guest="${srcroot}/.build/alas-vm-guest-linux/aarch64-unknown-linux-musl/re
 mkdir -p "$(dirname "${linux_guest}")"
 printf '#!/bin/sh\n' > "${linux_guest}"
 chmod +x "${linux_guest}"
+cua_driver_dir="${srcroot}/.build/cua-driver/0.0.0-test"
+mkdir -p "${cua_driver_dir}"
+printf '#!/bin/sh\n' > "${cua_driver_dir}/cua-driver"
+chmod +x "${cua_driver_dir}/cua-driver"
+echo "Cua Driver 0.0.0-test" > "${cua_driver_dir}/CUA-DRIVER-LICENSE.txt"
+echo 0.0.0-test > "${srcroot}/.build/cua-driver/current"
+mkdir -p "${srcroot}/ThirdParty/cua-driver"
+echo "Cua Driver third-party notices" > "${srcroot}/ThirdParty/cua-driver/THIRD-PARTY-NOTICES.txt"
 touch "${srcroot}/.build/fff/arm64/install/lib/libfff_c.dylib"
 for tool in install_name_tool codesign; do
     printf '#!/bin/sh\nexit 0\n' > "${tmp}/bin/${tool}"
@@ -84,6 +92,11 @@ cmp "${srcroot}/AlasHelper/manifest.json" "${resources}/alas-helper/manifest.jso
 test -x "${resources}/alas-cli/macos-x86_64/alas"
 test -x "${resources}/alas-cli/macos-aarch64/alas"
 cmp "${srcroot}/AlasCLI/manifest.json" "${resources}/alas-cli/manifest.json"
+
+test -x "${resources}/alas-vm-guest-linux/alas-vm-guest-linux"
+test -x "${resources}/alas-vm-guest-linux/cua-driver"
+cmp "${cua_driver_dir}/CUA-DRIVER-LICENSE.txt" "${resources}/alas-vm-guest-linux/CUA-DRIVER-LICENSE.txt"
+cmp "${srcroot}/ThirdParty/cua-driver/THIRD-PARTY-NOTICES.txt" "${resources}/alas-vm-guest-linux/THIRD-PARTY-NOTICES.txt"
 
 # Xcode can report undefined_arch for the parent target while ARCHS still
 # names the single requested slice. Resource embedding must select that same
@@ -130,3 +143,23 @@ if [ -e "${resources}/zmx/zmx" ]; then
     ls -l "${resources}/zmx/zmx" >&2
     exit 1
 fi
+
+# The Cua Driver ships only with the notices of the crates it links.
+mv "${srcroot}/ThirdParty/cua-driver/THIRD-PARTY-NOTICES.txt" "${tmp}/notices.txt"
+if TARGET_BUILD_DIR="${tmp}/build" \
+    UNLOCALIZED_RESOURCES_FOLDER_PATH="Resources" \
+    FRAMEWORKS_FOLDER_PATH="Frameworks" \
+    SRCROOT="${srcroot}" \
+    ALAS_FFF_TARGET_ARCH="arm64" \
+    ALAS_ZMX_TARGET_ARCH="arm64" \
+    ALAS_ZMX_OPTIONAL="1" \
+    PATH="${tmp}/bin:${PATH}" \
+    bash "${repo_root}/scripts/embed-ghostty-resources.sh" >"${tmp}/notices.out" 2>"${tmp}/notices.err"; then
+    echo "expected missing Cua Driver notices to fail" >&2
+    exit 1
+fi
+grep -q "error: Cua Driver third-party notices not found" "${tmp}/notices.err" || {
+    echo "missing notices error" >&2
+    cat "${tmp}/notices.err" >&2
+    exit 1
+}

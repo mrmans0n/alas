@@ -664,7 +664,7 @@ fn workspace_tool_definitions() -> Vec<Value> {
 
 fn computer_tool_definitions() -> Vec<Value> {
     with_vm_argument(
-        "Which of this worktree's VMs to drive, needed when it has a macOS and a Linux VM. Computer use works only in the macOS VM.",
+        "Which of this worktree's VMs to drive, needed when it has a macOS and a Linux VM.",
         computer_tools_without_vm(),
     )
 }
@@ -704,7 +704,7 @@ fn computer_tools_without_vm() -> Vec<Value> {
         }),
         json!({
             "name": "computer_inspect",
-            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). Use `query` to filter (a query searches 32 levels unless max_depth is given) and `limit`/`max_depth` to bound the result. Prefer this over screenshots. Refs hold for the current turn only: after a stop, a resume or a new turn, inspect again before using them. The first use of each app asks the user for approval.",
+            "description": "Read a window's Accessibility tree as numbered elements (ref, role, title, value, frame). In a Linux VM, roles are AT-SPI names such as `push button`. Use `query` to filter (a query searches 32 levels unless max_depth is given) and `limit`/`max_depth` to bound the result. Prefer this over screenshots. Refs hold for the current turn only: after a stop, a resume or a new turn, inspect again before using them. The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": true },
             "inputSchema": {
                 "type": "object",
@@ -749,7 +749,7 @@ fn computer_tools_without_vm() -> Vec<Value> {
         }),
         json!({
             "name": "computer_key",
-            "description": "Press a key or chord in a window, such as `return`, `cmd+s` or `shift+tab`. Keys go to the window's app, not to the user's focused app. A bare `escape` or `return` on a window with a sheet or dialog presses its cancel or default button (the result's `button` names it). Returns the window's new elements (refs are replaced). The first use of each app asks the user for approval.",
+            "description": "Press a key or chord in a window, such as `return`, `cmd+s` or `shift+tab`. In a Linux VM, use `ctrl` (`cmd` also maps to Ctrl). Keys go to the window's app, not to the user's focused app. macOS: a bare `escape` or `return` on a window with a sheet or dialog presses its cancel or default button (the result's `button` names it). Returns the window's new elements (refs are replaced). The first use of each app asks the user for approval.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": computer_action_schema(
                 json!({
@@ -808,7 +808,7 @@ fn computer_tools_without_vm() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "name": { "type": "string", "maxLength": 256, "description": "The app's name, such as `TextEdit`. Use instead of bundle_id." },
-                    "bundle_id": { "type": "string", "maxLength": 256, "description": "The app's bundle identifier, such as `com.apple.TextEdit`. Use instead of name." }
+                    "bundle_id": { "type": "string", "maxLength": 256, "description": "The app's bundle identifier, such as `com.apple.TextEdit`; in a Linux VM, its `.desktop` id, such as `org.xfce.mousepad`. Use instead of name." }
                 }
             }
         }),
@@ -4462,6 +4462,17 @@ mod tests {
             let required = schema["required"].as_array().cloned().unwrap_or_default();
             assert!(!required.contains(&json!("vm")), "{name}");
         }
+        // A Linux VM names apps by their `.desktop` id.
+        let open_app = tools
+            .iter()
+            .find(|tool| tool["name"] == "computer_open_app")
+            .unwrap();
+        assert!(
+            open_app["inputSchema"]["properties"]["bundle_id"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("`.desktop` id")
+        );
         // Every computer tool takes `vm`, with arguments it otherwise accepts.
         for (tool, args) in [
             ("computer_apps", json!({})),

@@ -1,0 +1,36 @@
+{
+ "tool": "list_windows",
+ "arguments": {
+  "app": "mousepad"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "Found 1 windows:\n  window_id=39845891 pid=64288 \"Untitled 1 - Mousepad\" 640x480+736+780 app=Org.xfce.mousepad",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "windows": [
+    {
+     "app_name": "Org.xfce.mousepad",
+     "bounds": {
+      "height": 480,
+      "width": 640,
+      "x": 736,
+      "y": 780
+     },
+     "height": 480,
+     "is_on_screen": true,
+     "pid": 64288,
+     "title": "Untitled 1 - Mousepad",
+     "width": 640,
+     "window_id": 39845891,
+     "x": 736,
+     "y": 780,
+     "z_index": 1
+    }
+   ]
+  }
+ }
+}

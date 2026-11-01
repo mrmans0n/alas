@@ -1,0 +1,141 @@
+{
+ "tool": "list_apps",
+ "arguments": {},
+ "result": {
+  "content": [
+   {
+    "text": "✅ Found 5 app(s): 3 running, 2 installed-not-running.\n- systemd (pid 1)\n- Panel (pid 1430)\n- xfdesktop (pid 1449)",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "apps": [
+    {
+     "active": false,
+     "bundle_id": null,
+     "kind": null,
+     "last_used": null,
+     "launch_path": null,
+     "name": "systemd",
+     "pid": 1,
+     "running": true,
+     "windows": []
+    },
+    {
+     "active": false,
+     "bundle_id": "panel-preferences",
+     "kind": "desktop",
+     "last_used": "2026-03-07T13:29:34Z",
+     "launch_path": "xfce4-panel --preferences",
+     "name": "Panel",
+     "pid": 1430,
+     "running": true,
+     "windows": [
+      {
+       "app_name": "Xfce4-panel",
+       "bounds": {
+        "height": 27,
+        "width": 2112,
+        "x": 0,
+        "y": 0
+       },
+       "height": 27,
+       "is_on_screen": true,
+       "pid": 1430,
+       "title": "xfce4-panel",
+       "width": 2112,
+       "window_id": 14680067,
+       "x": 0,
+       "y": 0,
+       "z_index": 1
+      },
+      {
+       "app_name": "Xfce4-panel",
+       "bounds": {
+        "height": 49,
+        "width": 306,
+        "x": 903,
+        "y": 1941
+       },
+       "height": 49,
+       "is_on_screen": true,
+       "pid": 1430,
+       "title": "xfce4-panel",
+       "width": 306,
+       "window_id": 14680078,
+       "x": 903,
+       "y": 1941,
+       "z_index": 2
+      }
+     ]
+    },
+    {
+     "active": false,
+     "bundle_id": null,
+     "kind": null,
+     "last_used": null,
+     "launch_path": null,
+     "name": "xfdesktop",
+     "pid": 1449,
+     "running": true,
+     "windows": [
+      {
+       "app_name": "Xfdesktop",
+       "bounds": {
+        "height": 1990,
+        "width": 2112,
+        "x": 0,
+        "y": 0
+       },
+       "height": 1990,
+       "is_on_screen": true,
+       "pid": 1449,
+       "title": "Desktop",
+       "width": 2112,
+       "window_id": 18874391,
+       "x": 0,
+       "y": 0,
+       "z_index": 0
+      }
+     ]
+    },
+    {
+     "active": false,
+     "bundle_id": "org.xfce.mousepad",
+     "kind": "desktop",
+     "last_used": "2026-03-07T13:36:37Z",
+     "launch_path": "mousepad",
+     "name": "Mousepad",
+     "pid": 0,
+     "running": false,
+     "windows": []
+    },
+    {
+     "active": false,
+     "bundle_id": "debian-xterm",
+     "kind": "desktop",
+     "last_used": "2026-02-20T16:51:56Z",
+     "launch_path": "xterm",
+     "name": "XTerm",
+     "pid": 0,
+     "running": false,
+     "windows": []
+    }
+   ],
+   "processes": [
+    {
+     "name": "systemd",
+     "pid": 1
+    },
+    {
+     "name": "Panel",
+     "pid": 1430
+    },
+    {
+     "name": "xfdesktop",
+     "pid": 1449
+    }
+   ]
+  }
+ }
+}
