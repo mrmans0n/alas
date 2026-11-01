@@ -148,6 +148,9 @@ public final class AlasCoreContext {
     /// Each pull or merge request review's files, loaded once so repeated
     /// comments share one provider diff fetch.
     @ObservationIgnored var providerReviewFiles: [ReviewDraftSessionID: [DiffReviewFileSummary]] = [:] // ponytail: kept until the host stops, as the app's cache was
+    /// Each pull or merge request review's image diff commits, as its
+    /// provider named them; dropped when a Mac reads the review's diff again.
+    @ObservationIgnored var providerReviewImageRevisions: [ReviewDraftSessionID: CodeHostReviewImageRevisions] = [:]
     /// Each delegated session's parent, by child id. Observed: the app draws
     /// children under their parents from it.
     public internal(set) var delegatedSessionParents: [String: String] = [:] {

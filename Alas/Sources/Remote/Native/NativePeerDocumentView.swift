@@ -908,6 +908,7 @@ struct NativePeerReviewView: View {
         })
         git.readsImages = hosts.servesFileBytes(serverId: selection.serverId)
         git.readsRangeImages = hosts.servesImageRevisions(serverId: selection.serverId)
+        git.readsProviderReviewImages = hosts.servesProviderReviewImages(serverId: selection.serverId)
         let message: String
         do {
             // Without the host's provider reviews, the loader refuses the target.

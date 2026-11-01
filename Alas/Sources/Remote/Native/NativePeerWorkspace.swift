@@ -558,9 +558,10 @@ struct NativePeerReviewGitClient: ReviewChangesGitClient, CommitReviewGitClient,
     /// `base..head`. Set per review by `ReviewSessionLoader.peer(git:)`.
     var threeDot = false
     /// Whether the host reads image sides: working copy and commit ones with
-    /// `fileBytes`, a range's with the newer revisions too.
+    /// `fileBytes`, a range's and a pull request's with the newer revisions too.
     var readsImages = false
     var readsRangeImages = false
+    var readsProviderReviewImages = false
     /// Names this load's working-copy images, which change under the same stage.
     let loadToken = UUID().uuidString
 
@@ -729,13 +730,37 @@ struct NativePeerReviewGitClientError: LocalizedError {
 }
 
 /// The host's provider diff, for `ReviewRequestDiffLoader`. Runs no gh or
-/// glab: everything else is unsupported, so image sides fail, as for the
-/// peer's draft reviews.
+/// glab: image sides are read from the host with `readImage`, which an older
+/// host leaves nil and fails them; everything else is unsupported.
 struct NativePeerProviderDiff: CodeHostProvider {
     let kind: CodeHostKind
     let diff: String
+    /// Reads a side of the review's image diff from the host, the head's with `after`.
+    var readImage: (@Sendable (_ path: String, _ after: Bool) async -> RemoteServerMessage?)?
+
+    private static let afterPrefix = "host-after:"
 
     func reviewDiff(remote _: CodeHostRemote, request _: ReviewRequest, cwd _: URL) async throws -> String { diff }
+
+    /// Names for the host's sides, not commits: the host resolves the review's
+    /// own. The head keeps a new push's images apart in the image cache.
+    func reviewImageRevisions(
+        remote _: CodeHostRemote, request: ReviewRequest, cwd _: URL
+    ) async throws -> CodeHostReviewImageRevisions {
+        guard readImage != nil, let head = request.headSHA else { throw CodeHostProviderError.unsupportedProvider(kind) }
+        return CodeHostReviewImageRevisions(beforeSHA: "host-before:\(head)", afterSHA: Self.afterPrefix + head)
+    }
+
+    func reviewFileData(
+        remote _: CodeHostRemote, repository _: String, revision: String, path: String, cwd _: URL
+    ) async throws -> Data {
+        guard let readImage else { throw CodeHostProviderError.unsupportedProvider(kind) }
+        let reply = await readImage(path, revision.hasPrefix(Self.afterPrefix))
+        guard case .data(let data) = NativePeerWorkspace.imageSide(reply) else {
+            throw CodeHostProviderError.malformedOutput("The host could not read this image side.")
+        }
+        return data
+    }
 
     func isAvailable(cwd _: URL) async -> Bool { false }
     func isAuthenticated(remote _: CodeHostRemote, cwd _: URL) async -> Bool { false }

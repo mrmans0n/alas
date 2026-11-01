@@ -136,6 +136,11 @@ final class NativePeerHosts {
         servesFileBytes(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesFileBytesV2)
     }
 
+    /// Whether `serverId`'s `fileBytes` also reads pull and merge request review sides.
+    func servesProviderReviewImages(serverId: String) -> Bool {
+        servesFileBytes(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesFileBytesV3)
+    }
+
     /// Whether `serverId` serves `HostWorktreeRead.fileHistory`.
     func servesFileHistory(serverId: String) -> Bool {
         canRead(serverId: serverId) && supports(serverId, HostProtocolCapability.worktreesFileHistoryV1)

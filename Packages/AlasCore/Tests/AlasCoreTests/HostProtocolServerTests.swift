@@ -627,6 +627,22 @@ struct HostProtocolServerTests {
         #expect(try await read("icon.png", at: .rangeBase(base: "HEAD~1", head: second, threeDot: false))
             == refused("icon.png", .pathRejected))
 
+        // A pull request's sides are the commits its provider names to the
+        // host, as of the last read of its diff, and only ones the host has.
+        let provider = FakeReviewProvider(kind: .github)
+        provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: first, afterSHA: second)
+        let pullRequest = try await fixture.openPullRequestReview(provider)
+        #expect(try await read("icon.png", at: .providerReview(sessionID: pullRequest, after: false)) == bytes(added))
+        #expect(try await read("icon.png", at: .providerReview(sessionID: pullRequest, after: true)) == bytes(changed))
+        provider.imageRevisions = CodeHostReviewImageRevisions(beforeSHA: second, afterSHA: String(repeating: "1", count: 40))
+        #expect(try await read("icon.png", at: .providerReview(sessionID: pullRequest, after: false)) == bytes(added))
+        _ = try await fixture.request(.readProviderReview(worktree: ref, sessionID: pullRequest, withDiff: true))
+        #expect(try await read("icon.png", at: .providerReview(sessionID: pullRequest, after: false)) == bytes(changed))
+        #expect(try await read("icon.png", at: .providerReview(sessionID: pullRequest, after: true)) == refused("icon.png", .notFound))
+        let localChanges = ReviewDraftSessionID.localChanges(
+            worktreeID: id, worktreePath: repo, scope: .all).rawValue
+        #expect(try await read("icon.png", at: .providerReview(sessionID: localChanges, after: true)) == refused("icon.png", .pathRejected))
+
         // Unchanged since HEAD when the checkpoint was taken: HEAD's bytes, not the working file's.
         // Even with the working file unreadable now.
         let unchanged = try await fixture.checkpoint("Unchanged", in: ref).id
@@ -3143,6 +3159,10 @@ struct HostProtocolServerTests {
             )
         }
         func reviewDiff(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> String { diff }
+        var imageRevisions = CodeHostReviewImageRevisions(beforeSHA: "aaa", afterSHA: "bbb")
+        func reviewImageRevisions(remote: CodeHostRemote, request: ReviewRequest, cwd: URL) async throws -> CodeHostReviewImageRevisions {
+            imageRevisions
+        }
         @MainActor func mutateReviewThread(_ mutation: ProviderThreadMutation) async throws -> ProviderThreadMutationResult {
             threadMutations.append(mutation)
             return ProviderThreadMutationResult(refreshedRequest: mutation.reviewRequest, providerURL: nil)

@@ -13,6 +13,8 @@ extension ReviewsAPI {
         guard case .reviewRequest(_, _, _, let number, _) = record.target.payload else {
             throw HostError.invalidRequest(reason: "This review has no pull or merge request.")
         }
+        // A new read of the diff may be of a new head: its images follow it.
+        if withDiff { core.providerReviewImageRevisions[record.target.draftSessionID] = nil }
         do {
             let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
             let diff = withDiff
@@ -154,6 +156,30 @@ extension ReviewsAPI {
 }
 
 extension AlasCoreContext {
+    /// The commits pull or merge request review `session` of `worktree`
+    /// compares in an image diff, as its provider names them to this host
+    /// (asked once per read of its diff).
+    func providerReviewImageRevisions(
+        _ session: ReviewDraftSessionID, in worktree: Worktree
+    ) async throws -> CodeHostReviewImageRevisions {
+        if let revisions = providerReviewImageRevisions[session] { return revisions }
+        guard session.isFor(worktreeID: worktree.id),
+              let record = try reviewSessions.list(worktreeID: worktree.id)
+              .first(where: { $0.target.draftSessionID == session }),
+              case .reviewRequest(_, _, _, let number, _) = record.target.payload,
+              let remote = record.target.providerRemote,
+              let provider = codeHostProviders.provider(for: remote.kind)
+        else { throw HostError.notFound(what: "review \(session.rawValue)") }
+        do {
+            let request = try await provider.reviewRequest(remote: remote, number: number, cwd: worktree.path)
+            let revisions = try await provider.reviewImageRevisions(remote: remote, request: request, cwd: worktree.path)
+            providerReviewImageRevisions[session] = revisions
+            return revisions
+        } catch {
+            throw HostError.failed(message: error.localizedDescription)
+        }
+    }
+
     /// The path renamed file `path` had before in pull or merge request
     /// review `session`, from its provider diff (loaded once per review);
     /// nil on any failure, which files the comment without it.

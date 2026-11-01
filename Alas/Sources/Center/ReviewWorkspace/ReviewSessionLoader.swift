@@ -348,9 +348,15 @@ struct ReviewSessionLoader: @unchecked Sendable {
             reviewRequest: { target in
                 guard let providerReview else { throw ReviewSessionLoaderError.unsupportedTarget }
                 let remote = providerReview.remote, request = providerReview.request
-                let loadedSession = try await ReviewRequestDiffLoader(
-                    provider: NativePeerProviderDiff(kind: remote.kind, diff: providerReview.diff ?? "")
-                ).load(remote: remote, request: request, cwd: target.repositoryPath)
+                var provider = NativePeerProviderDiff(kind: remote.kind, diff: providerReview.diff ?? "")
+                if git.readsProviderReviewImages {
+                    let read = git.read, sessionID = target.draftSessionID.rawValue
+                    provider.readImage = { path, after in
+                        await read(.fileBytes(path: path, revision: .providerReview(sessionID: sessionID, after: after)))
+                    }
+                }
+                let loadedSession = try await ReviewRequestDiffLoader(provider: provider)
+                    .load(remote: remote, request: request, cwd: target.repositoryPath)
                 return ReviewSessionProviderLoadedSession(
                     loadedSession: loadedSession,
                     providerContext: ReviewSessionProviderContext(remote: remote, reviewRequest: request)
