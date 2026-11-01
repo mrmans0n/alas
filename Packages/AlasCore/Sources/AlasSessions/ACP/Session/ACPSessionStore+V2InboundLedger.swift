@@ -156,7 +156,7 @@ extension ACPSessionStore {
         }
     }
 
-    private func requireCurrentInboundSource(_ source: ACPV2InboundLedgerSource, sessionId: String) throws -> ACPBrokerEventCursor? {
+    func requireCurrentInboundSource(_ source: ACPV2InboundLedgerSource, sessionId: String) throws -> ACPBrokerEventCursor? {
         guard let row = try db.query("""
         SELECT acp_broker_id, acp_broker_generation, acp_broker_wire_context, acp_broker_acknowledged_cursor,
           CAST(acp_broker_wire_context AS BLOB) AS context_bytes FROM sessions WHERE id = ?
