@@ -201,21 +201,34 @@ struct ACPElicitationCoordinatorTests {
 
     /// The adapter withdraws an optional question at turn end with
     /// `$/cancel_request`, which can overtake the request itself. Either way
-    /// the form is never shown and is answered "Request cancelled".
-    @Test("a withdrawn form is answered cancelled and never shown",
-          arguments: ["afterArrival", "beforeArrival"])
-    func withdrawnElicitation(order: String) async throws {
-        let (coordinator, session, client) = makeCoordinator()
+    /// the form is never shown and is answered "Request cancelled". A pending
+    /// blocking form also releases the waiting state it took; an optional one
+    /// never touched it.
+    @Test("a withdrawn form is answered cancelled and never shown", arguments: [
+        ("afterArrival", ACPUserInputRequest.Delivery.optional),
+        ("beforeArrival", .optional),
+        ("afterArrival", .blocking),
+        ("beforeArrival", .blocking),
+    ])
+    func withdrawnElicitation(order: String, delivery: ACPUserInputRequest.Delivery) async throws {
+        var resolved = 0
+        let (coordinator, session, client) = makeCoordinator(onInputResolved: { resolved += 1 })
         coordinator.start()
-        let params = try decodeParams(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#))
+        let params = try decodeParams(codexAsyncFormJSON(
+            meta: delivery == .blocking ? "null" : #"{"codex":{"delivery":"async"}}"#
+        ))
+        let afterArrival = order == "afterArrival"
 
         let withdrew: Bool
-        if order == "afterArrival" {
+        if afterArrival {
             client.emitElicitation(id: .number(50), params: params)
             try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+            #expect(session.transcript.streamingState == (delivery == .blocking ? .awaitingInput : .idle))
             withdrew = coordinator.cancelRequest(id: .number(50))
         } else {
+            // As the runner does: an id nothing claimed is remembered.
             withdrew = coordinator.cancelRequest(id: .number(50))
+            coordinator.rememberWithdrawn(id: .number(50))
             client.emitElicitation(id: .number(50), params: params)
         }
 
@@ -226,7 +239,9 @@ struct ACPElicitationCoordinatorTests {
         }
         #expect(error.code == -32800)
         #expect(session.transcript.pendingUserInputs.isEmpty)
-        #expect(withdrew == (order == "afterArrival"))
+        #expect(withdrew == afterArrival)
+        #expect(session.transcript.streamingState == .idle)
+        #expect(resolved == (afterArrival && delivery == .blocking ? 1 : 0))
     }
 
     /// An optional answer sent after its turn ended would reach the next one,

@@ -24,12 +24,16 @@ public final class ACPElicitationCoordinator {
     private var pendingPlans: [ACPCursorPlanRequest] = []
     private var notifiedRequestIds: Set<JSONRPCID> = []
     /// The foreground prompt each optional form arrived under. A form that
-    /// arrived outside a prompt the runner owns (a broker-reattached turn or
-    /// an idle session) has no entry; it goes with the adapter's own
-    /// `$/cancel_request`, or with stop and cancel-all.
+    /// arrived outside a prompt the runner owns has no entry: an idle
+    /// session, a broker-reattached or detached steering turn, or the window
+    /// of a non-native steer between clearing the old prompt and the
+    /// redirect's `sendNow` installing the new one. Such a form goes with the
+    /// adapter's own `$/cancel_request`, or with stop and cancel-all.
     private var optionalArrivalPromptIDs: [UUID: Int] = [:]
     /// Ids the adapter withdrew before their form arrived; the cancel and the
-    /// request travel on separate streams. Each id answers one form.
+    /// request travel on separate streams. Only ids no other pending request
+    /// claimed land here (see `rememberWithdrawn(id:)`). Each id answers one
+    /// form.
     private var withdrawnRequestIDs: Set<JSONRPCID> = []
     private var didStop = false
 
@@ -188,24 +192,26 @@ public final class ACPElicitationCoordinator {
 
     /// Withdraws a form the adapter cancelled with `$/cancel_request`. A
     /// pending one is removed and answered `-32800`, which the client still
-    /// owes so a broker never replays it; an id not yet seen is remembered
-    /// and its form answered the same way when it arrives. Returns whether a
-    /// pending form was withdrawn.
+    /// owes so a broker never replays it. Returns whether a pending form was
+    /// withdrawn.
     @discardableResult
     public func cancelRequest(id: JSONRPCID) -> Bool {
         guard let request = pendingByToken.values.first(where: {
             if case .elicitation(let requestId, _) = $0.source { return requestId == id }
             return false
-        }) else {
-            withdrawnRequestIDs.insert(id)
-            return false
-        }
+        }) else { return false }
         // An optional form never set the waiting state, so withdrawing it
         // must not settle it either; a blocking one did.
         removePending(token: request.id, settle: request.isBlocking)
         client.respondToElicitation(id: id, result: .failure(Self.requestCancelled))
         if request.isBlocking { onInputResolved() }
         return true
+    }
+
+    /// Remembers a cancelled id no pending request claimed, so a form that
+    /// arrives under it later is answered `-32800` and never shown.
+    public func rememberWithdrawn(id: JSONRPCID) {
+        withdrawnRequestIDs.insert(id)
     }
 
     /// Expires the optional forms that arrived under a foreground prompt that

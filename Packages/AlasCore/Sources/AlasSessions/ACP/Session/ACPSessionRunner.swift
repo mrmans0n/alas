@@ -48,6 +48,9 @@ public final class ACPSessionRunner {
     private let onUserCancel: (() -> Void)?
     /// Offered each `$/cancel_request` first; true when it withdrew a form.
     private let onCancelRequest: ((JSONRPCID) -> Bool)?
+    /// Told of a `$/cancel_request` nothing pending claimed; its request may
+    /// still arrive.
+    private let onUnclaimedCancelRequest: ((JSONRPCID) -> Void)?
     /// Called with the id of a foreground prompt that stopped being active.
     private let onForegroundPromptEnded: ((Int) -> Void)?
     /// Called when the runner forces transcript tail-follow before recording
@@ -384,6 +387,7 @@ public final class ACPSessionRunner {
          onLiveBufferRead: ((String) -> String?)? = nil,
          onUserCancel: (() -> Void)? = nil,
          onCancelRequest: ((JSONRPCID) -> Bool)? = nil,
+         onUnclaimedCancelRequest: ((JSONRPCID) -> Void)? = nil,
          onForegroundPromptEnded: ((Int) -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
@@ -454,6 +458,7 @@ public final class ACPSessionRunner {
         self.onLiveBufferRead = onLiveBufferRead
         self.onUserCancel = onUserCancel
         self.onCancelRequest = onCancelRequest
+        self.onUnclaimedCancelRequest = onUnclaimedCancelRequest
         self.onForegroundPromptEnded = onForegroundPromptEnded
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.onCheckpointCapture = onCheckpointCapture
@@ -702,6 +707,7 @@ public final class ACPSessionRunner {
                 if self.onCancelRequest?(id) == true { continue }
                 if self.policy.cancelRequest(id: id) { continue }
                 self.pendingCancelledRequestIDs.insert(id)
+                self.onUnclaimedCancelRequest?(id)
             }
         }
 

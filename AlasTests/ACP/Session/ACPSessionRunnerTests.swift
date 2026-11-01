@@ -4622,6 +4622,7 @@ struct ACPSessionRunnerTests {
     private func makeRunner(
         onUserCancel: (() -> Void)? = nil,
         onCancelRequest: ((JSONRPCID) -> Bool)? = nil,
+        onUnclaimedCancelRequest: ((JSONRPCID) -> Void)? = nil,
         onForegroundPromptEnded: ((Int) -> Void)? = nil,
         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
         session suppliedSession: ACPSession? = nil,
@@ -4653,6 +4654,7 @@ struct ACPSessionRunnerTests {
             worktreePath: FileManager.default.temporaryDirectory.path,
             onUserCancel: onUserCancel,
             onCancelRequest: onCancelRequest,
+            onUnclaimedCancelRequest: onUnclaimedCancelRequest,
             onForegroundPromptEnded: onForegroundPromptEnded,
             onSuccessfulTurn: onSuccessfulTurn,
             onTurnCompleted: onTurnCompleted,
@@ -5976,6 +5978,7 @@ struct ACPSessionRunnerTests {
         var coordinator: ACPElicitationCoordinator?
         let (runner, mock) = try makeRunner(
             onCancelRequest: { coordinator?.cancelRequest(id: $0) ?? false },
+            onUnclaimedCancelRequest: { coordinator?.rememberWithdrawn(id: $0) },
             onForegroundPromptEnded: { coordinator?.foregroundPromptEnded($0) })
         runner.session.agentState = .ready
         let wired = ACPElicitationCoordinator(session: runner.session, client: mock)

@@ -7451,6 +7451,9 @@ extension ACPSessionManager {
                                           onCancelRequest: { [weak elicitationCoordinator] id in
                                               elicitationCoordinator?.cancelRequest(id: id) ?? false
                                           },
+                                          onUnclaimedCancelRequest: { [weak elicitationCoordinator] id in
+                                              elicitationCoordinator?.rememberWithdrawn(id: id)
+                                          },
                                           onForegroundPromptEnded: { [weak elicitationCoordinator] promptID in
                                               elicitationCoordinator?.foregroundPromptEnded(promptID)
                                           },
