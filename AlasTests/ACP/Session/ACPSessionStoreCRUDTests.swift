@@ -2,6 +2,7 @@ import Foundation
 import Synchronization
 import Testing
 @testable import Alas
+@testable import AlasACP
 
 @Suite("ACPSessionStore CRUD")
 struct ACPSessionStoreCRUDTests {
@@ -329,6 +330,301 @@ struct ACPSessionStoreCRUDTests {
             }
         }
         #expect(try store.db.query("SELECT frame FROM acp_v2_inbound_records").first?["frame"] as? Data == Data([255]))
+    }
+
+    private func responseFixture(broker: Bool = true, frame: Data? = nil, pending: String? = "opaque-helper",
+        callback: ACPDurableConsumptionAcknowledgement? = nil) throws -> (ACPSessionStore, ACPSessionLeaseFence, ACPV2InboundLedgerStream, ACPV2InboundLedgerRecord) {
+        let connection = UUID()
+        let (store, fence, stream) = try inboundFixture(source: broker ? nil : .stdio(connectionID: connection))
+        let bytes = frame ?? Data(#"{"jsonrpc":"2.0","id":7,"method":"peer/request","params":{"n":1e999}}"#.utf8)
+        let delivery = broker ? inbound(bytes, pending: pending, callback: callback) : ACPV2InboundDelivery(frame: bytes, connectionID: connection, source: .stdio, durableConsumptionAcknowledgement: callback)
+        return (store, fence, stream, try store.retainV2Inbound(delivery, to: stream, fence: fence).record)
+    }
+
+    @Test(arguments: [false, true])
+    func responseIntentsKeepOneExactDecisionPerRetainedOrigin(broker: Bool) throws {
+        let count = Mutex(0)
+        let (store, fence, stream, request) = try responseFixture(broker: broker, callback: { count.withLock { $0 += 1 } })
+        let bytes = Data(#" {"jsonrpc":"2.0","id":7,"result":{"n":1e999}} "#.utf8)
+        let id = UUID()
+        let first = try store.registerV2ResponseIntent(id: id, request: request, in: stream, frame: bytes, fence: fence)
+        let reopened = try ACPSessionStore(path: store.path)
+        let retry = try reopened.registerV2ResponseIntent(id: id, request: request, in: stream, frame: bytes, fence: fence)
+        #expect(first.wasInserted && !retry.wasInserted && first.value == retry.value)
+        #expect(first.value.frame == bytes && first.value.request == request)
+        if broker {
+            let redelivery = try reopened.retainV2Inbound(inbound(request.frame, origin: .pendingSnapshot), to: stream, fence: fence)
+            #expect(try !reopened.registerV2ResponseIntent(id: id, request: redelivery.record, in: stream, frame: bytes, fence: fence).wasInserted)
+        }
+        for (otherID, frame) in [(UUID(), bytes), (id, Data(#"{"jsonrpc":"2.0","id":7,"result":false}"#.utf8))] {
+            #expect(throws: ACPV2ResponseLedgerError.conflict) { try reopened.registerV2ResponseIntent(id: otherID, request: request, in: stream, frame: frame, fence: fence) }
+        }
+        let key = ACPV2ReplyOperationKey(rawValue: "\u{feff}é\0answer")
+        let attemptID = UUID()
+        let attempt = try reopened.registerV2ResponseAttempt(id: attemptID, for: first.value, operationKey: key, fence: fence)
+        #expect(attempt.value.sequence == 1)
+        #expect(try !reopened.registerV2ResponseAttempt(id: attemptID, for: first.value, operationKey: key, fence: fence).wasInserted)
+        #expect(throws: ACPV2ResponseLedgerError.conflict) { try reopened.registerV2ResponseAttempt(id: UUID(), for: first.value, operationKey: .init(rawValue: "new"), fence: fence) }
+        #expect(count.withLock { $0 } == 0)
+        #expect(try store.loadSession(id: "journal")?.acpBrokerAcknowledgedCursor == 4)
+    }
+
+    @Test(arguments: ["notification", "malformed", "missing-pending", "wrong-id", "changed-record", "invalid-response"])
+    func responseIntentRejectsNonRequestOrMismatchedEvidence(reason: String) throws {
+        let frame = reason == "notification" ? Data(#"{"jsonrpc":"2.0","method":"notice"}"#.utf8) : (reason == "malformed" ? Data([255]) : nil)
+        let (store, fence, stream, request) = try responseFixture(frame: frame, pending: reason == "missing-pending" ? nil : "opaque-helper")
+        if reason == "changed-record" { try store.db.exec("UPDATE acp_v2_inbound_records SET frame = ?", bindings: [Data("changed".utf8)]) }
+        let response = reason == "wrong-id" ? #"{"jsonrpc":"2.0","id":8,"result":null}"# : (reason == "invalid-response" ? "{}" : #"{"jsonrpc":"2.0","id":7,"result":null}"#)
+        #expect(throws: (any Error).self) { try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(response.utf8), fence: fence) }
+        #expect(try store.db.query("SELECT id FROM acp_v2_response_intents").isEmpty)
+    }
+
+    @Test(arguments: ["lease", "generation", "context", "sql"])
+    func responseRegistrationAuthorityAndRollbackAreAtomic(reason: String) throws {
+        let (store, fence, stream, request) = try responseFixture()
+        if reason == "lease" { try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new") }
+        if reason == "generation" { _ = try store.updateACPBrokerState(sessionId: "journal", brokerId: "broker", generation: 8, acknowledgedCursor: 0, wireContext: .rawV2) }
+        if reason == "context" { try store.db.exec("UPDATE sessions SET acp_broker_wire_context = '{bad}'") }
+        if reason == "sql" { try store.db.exec("CREATE TRIGGER fail_response AFTER INSERT ON acp_v2_response_intents BEGIN SELECT RAISE(ABORT, 'injected'); END") }
+        let saved = try store.loadSession(id: "journal")
+        #expect(throws: (any Error).self) { try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence) }
+        #expect(try store.db.query("SELECT id FROM acp_v2_response_intents").isEmpty)
+        #expect(try store.loadSession(id: "journal") == saved)
+    }
+
+    private func responseStdioProof(_ intent: ACPV2ResponseIntent, _ attempt: ACPV2ResponseAttempt,
+        status: ACPV2StdioReplyStatus) throws -> ACPV2StdioReplyResult {
+        .init(connectionID: intent.request.connectionID, receiptID: intent.request.receiptID,
+            requestID: try #require(intent.request.decodeHeader().id), operationKey: attempt.operationKey, status: status)
+    }
+
+    private func responseBrokerProof(_ intent: ACPV2ResponseIntent, _ attempt: ACPV2ResponseAttempt,
+        status: ACPBrokerRawReplyStatus) throws -> ACPBrokerRawReplyResult {
+        guard case .broker(let provenance, let pending) = intent.request.source else { throw ACPV2ResponseLedgerError.invalidInput }
+        let params = ACPBrokerRespondExactParams(brokerId: provenance.brokerID, generation: provenance.generation,
+            pendingRequestId: try #require(pending), originCursor: provenance.cursor,
+            operationKey: .init(rawValue: attempt.operationKey.rawValue), frame: .init(bytes: intent.frame))
+        return .init(params: params, status: status)
+    }
+
+    @Test(arguments: [false, true])
+    func responseFactsRefineUncertaintyWithoutRegressingTerminalEvidence(broker: Bool) throws {
+        let (store, fence, stream, request) = try responseFixture(broker: broker)
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        let attempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "answer"), fence: fence).value
+        let id = UUID()
+        let unknown = try store.retainV2ResponseObservation(id: id, for: attempt, evidence: .uncertain(message: "\u{feff}é\0"), fence: fence)
+        #expect(try !store.retainV2ResponseObservation(id: id, for: attempt, evidence: .uncertain(message: "\u{feff}é\0"), fence: fence).wasInserted)
+        #expect(unknown.value.sequence == 1)
+        #expect(throws: ACPV2ResponseLedgerError.conflict) { try store.retainV2ResponseObservation(id: id, for: attempt, evidence: .uncertain(message: "\u{feff}e\u{301}\0"), fence: fence) }
+        let terminal: ACPV2ResponseEvidence = broker ? .broker(try responseBrokerProof(intent, attempt, status: .written)) : .stdio(try responseStdioProof(intent, attempt, status: .written))
+        _ = try store.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: terminal, fence: fence)
+        let stale: ACPV2ResponseEvidence = broker ? .broker(try responseBrokerProof(intent, attempt, status: .inFlight)) : .stdio(try responseStdioProof(intent, attempt, status: .queued))
+        _ = try store.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: stale, fence: fence)
+        #expect(try ACPSessionStore(path: store.path).loadV2ResponseAttempt(id: attempt.id)?.recovery == .written)
+        #expect(throws: ACPV2ResponseLedgerError.conflict) { try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "new"), fence: fence) }
+    }
+
+    @Test func responseNotWrittenPermitsOnlyAnExplicitNextAttempt() throws {
+        let (store, fence, stream, request) = try responseFixture(broker: false)
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        let first = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "first"), fence: fence).value
+        _ = try store.retainV2ResponseObservation(id: UUID(), for: first, evidence: .stdio(responseStdioProof(intent, first, status: .notWritten)), fence: fence)
+        #expect(throws: ACPV2ResponseLedgerError.conflict) { try store.retainV2ResponseObservation(id: UUID(), for: first, evidence: .stdio(responseStdioProof(intent, first, status: .written)), fence: fence) }
+        let reopened = try ACPSessionStore(path: store.path)
+        let second = try reopened.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "second"), fence: fence).value
+        #expect(second.sequence == 2)
+        #expect(try reopened.loadV2ResponseAttempt(id: first.id)?.recovery == .notWritten)
+        #expect(try reopened.loadV2ResponseAttempt(id: second.id)?.recovery == .uncertain)
+        #expect(throws: ACPV2ResponseLedgerError.conflict) { try reopened.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "third"), fence: fence) }
+        #expect(try reopened.db.query("SELECT id FROM acp_v2_response_observations").count == 1)
+    }
+
+    @Test(arguments: ["key", "request", "receipt", "connection", "source", "lease", "sql"])
+    func responseObservationIdentityAndContradictionCannotMutateHistory(reason: String) throws {
+        let (store, fence, stream, request) = try responseFixture(broker: false)
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        let attempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "é"), fence: fence).value
+        let proof = ACPV2StdioReplyResult(connectionID: reason == "connection" ? UUID() : request.connectionID,
+            receiptID: reason == "receipt" ? UUID() : request.receiptID, requestID: .number(reason == "request" ? 8 : 7),
+            operationKey: reason == "key" ? .init(rawValue: "e\u{301}") : attempt.operationKey, status: .written)
+        if reason == "lease" { try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new") }
+        if reason == "sql" { try store.db.exec("CREATE TRIGGER fail_response_observation AFTER INSERT ON acp_v2_response_observations BEGIN SELECT RAISE(ABORT, 'injected'); END") }
+        let evidence: ACPV2ResponseEvidence = reason == "source" ? .broker(.init(params: .init(brokerId: .init(rawValue: "broker"), generation: .init(rawValue: 7), pendingRequestId: "opaque-helper", originCursor: .init(rawValue: 5), operationKey: .init(rawValue: "é"), frame: .init(bytes: intent.frame)), status: .written)) : .stdio(proof)
+        #expect(throws: (any Error).self) { try store.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: evidence, fence: fence) }
+        #expect(try store.db.query("SELECT id FROM acp_v2_response_observations").isEmpty)
+        #expect(try store.loadV2ResponseAttempt(id: attempt.id)?.recovery == .uncertain)
+    }
+
+    @Test func responseAttemptKeysRemainExactAcrossDistinctReusedOrigins() throws {
+        let (store, fence, stream, firstRequest) = try responseFixture()
+        let bytes = Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)
+        let first = try store.registerV2ResponseIntent(id: UUID(), request: firstRequest, in: stream, frame: bytes, fence: fence).value
+        let secondRequest = try store.retainV2Inbound(inbound(firstRequest.frame, cursor: 6), to: stream, fence: fence).record
+        let second = try store.registerV2ResponseIntent(id: UUID(), request: secondRequest, in: stream, frame: bytes, fence: fence).value
+        let firstKey = ACPV2ReplyOperationKey(rawValue: "\u{feff}é\0")
+        _ = try store.registerV2ResponseAttempt(id: UUID(), for: first, operationKey: firstKey, fence: fence)
+        #expect(throws: ACPV2ResponseLedgerError.conflict) { try store.registerV2ResponseAttempt(id: UUID(), for: second, operationKey: firstKey, fence: fence) }
+        let secondAttempt = try store.registerV2ResponseAttempt(id: UUID(), for: second, operationKey: .init(rawValue: "\u{feff}e\u{301}\0"), fence: fence)
+        #expect(secondAttempt.value.sequence == 1)
+    }
+
+    @Test func responseRecoveryPagesKeepContextsAndOversizedPayloads() throws {
+        let (store, fence, stream, request) = try responseFixture(broker: false)
+        let frame = Data("{\"jsonrpc\":\"2.0\",\"id\":7,\"result\":\"\(String(repeating: "x", count: 512))\"}".utf8)
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: frame, fence: fence).value
+        let nextRequest = try store.retainV2Inbound(.init(frame: request.frame, connectionID: request.connectionID, source: .stdio), to: stream, fence: fence).record
+        let nextIntent = try store.registerV2ResponseIntent(id: UUID(), request: nextRequest, in: stream, frame: frame, fence: fence).value
+        let attempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "\u{feff}é\0"), fence: fence).value
+        let message = "\u{feff}" + String(repeating: "n", count: 200) + "\0"
+        let observation = try store.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: .uncertain(message: message), fence: fence).value
+        _ = try store.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: .stdio(responseStdioProof(intent, attempt, status: .notWritten)), fence: fence)
+        let secondAttempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "second"), fence: fence).value
+        let reopened = try ACPSessionStore(path: store.path)
+        let first = try reopened.loadV2ResponseIntentPage(stream: stream, maxBytes: 16)
+        #expect(first.records == [intent] && first.containsOversizedRecord && !first.isAtEnd)
+        let byCount = try reopened.loadV2ResponseIntentPage(stream: stream, maxRecords: 1)
+        #expect(byCount.records == [intent] && !byCount.isAtEnd && !byCount.containsOversizedRecord)
+        let second = try reopened.loadV2ResponseIntentPage(stream: stream, after: first.next, maxBytes: 16)
+        #expect(second.records == [nextIntent] && second.isAtEnd)
+        let attempts = try reopened.loadV2ResponseAttemptPage(intentID: intent.id, maxBytes: 16)
+        #expect(attempts.records.first?.attempt == attempt && attempts.records.first?.recovery == .notWritten)
+        #expect(attempts.containsOversizedRecord && !attempts.isAtEnd)
+        let final = try reopened.loadV2ResponseAttemptPage(intentID: intent.id, after: attempts.next, maxBytes: 16)
+        #expect(final.records.first?.attempt == secondAttempt && final.records.first?.recovery == .uncertain && final.isAtEnd)
+        let observations = try reopened.loadV2ResponseObservationPage(attemptID: attempt.id, maxBytes: 16)
+        #expect(observations.records == [observation] && observations.containsOversizedRecord && !observations.isAtEnd)
+        #expect(try reopened.loadV2ResponseObservationPage(attemptID: attempt.id, after: observations.next).records.count == 1)
+        #expect(try reopened.loadV2ResponseObservationPage(attemptID: secondAttempt.id).records.isEmpty)
+        let empty = try reopened.loadV2ResponseAttemptPage(intentID: nextIntent.id, maxBytes: 16)
+        #expect(empty.records.isEmpty && empty.isAtEnd && empty.containsOversizedRecord)
+        #expect(throws: ACPV2ResponseLedgerError.invalidInput) { try reopened.loadV2ResponseIntentPage(stream: stream, after: .init(kind: .observations, parentID: stream.id, afterSequence: 1)) }
+        #expect(throws: ACPV2ResponseLedgerError.invalidInput) { try reopened.loadV2ResponseAttemptPage(intentID: nextIntent.id, after: attempts.next) }
+        #expect(throws: ACPV2ResponseLedgerError.invalidInput) { try reopened.loadV2ResponseObservationPage(attemptID: attempt.id, maxRecords: 0) }
+        #expect(throws: ACPV2ResponseLedgerError.invalidInput) { try reopened.loadV2ResponseIntentPage(stream: stream, maxBytes: 0) }
+    }
+
+    @Test(arguments: ["intent-format", "attempt-format", "key-type", "key-utf8", "namespace", "message-utf8", "observation-id", "observation-status"])
+    func responseRecoveryRejectsCorruptMetadataInsteadOfRepairingIt(field: String) throws {
+        let (store, fence, stream, request) = try responseFixture()
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        let attempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "key"), fence: fence).value
+        _ = try store.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: .uncertain(message: "message"), fence: fence)
+        switch field {
+        case "intent-format": try store.db.exec("UPDATE acp_v2_response_intents SET format_version = 9")
+        case "attempt-format": try store.db.exec("UPDATE acp_v2_response_attempts SET format_version = 9")
+        case "key-type": try store.db.exec("UPDATE acp_v2_response_attempts SET operation_key = 'key'")
+        case "key-utf8": try store.db.exec("UPDATE acp_v2_response_attempts SET operation_key = x'ff'")
+        case "namespace": try store.db.exec("UPDATE acp_v2_response_attempts SET namespace = x'ff'")
+        case "message-utf8": try store.db.exec("UPDATE acp_v2_response_observations SET message = x'ff'")
+        case "observation-id": try store.db.exec("UPDATE acp_v2_response_observations SET id = 'invalid'")
+        default: try store.db.exec("UPDATE acp_v2_response_observations SET kind = 1, status = 4, message = NULL")
+        }
+        if field == "intent-format" { #expect(throws: (any Error).self) { try store.loadV2ResponseIntent(id: intent.id) } }
+        else if field == "message-utf8" { #expect(throws: ACPV2ResponseLedgerError.corruptRecord) { try store.loadV2ResponseObservationPage(attemptID: attempt.id) } }
+        else { #expect(throws: (any Error).self) { try store.loadV2ResponseAttempt(id: attempt.id) } }
+    }
+
+    @Test func responseHistorySurvivesLostLeaseAndChangedCurrentGenerationWithoutGrantingRetry() throws {
+        let (store, fence, stream, request) = try responseFixture()
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        let attempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "key"), fence: fence).value
+        try store.seizeLease(sessionId: "journal", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        _ = try store.updateACPBrokerState(sessionId: "journal", brokerId: "broker", generation: 8, acknowledgedCursor: 0, wireContext: .rawV2)
+        let reopened = try ACPSessionStore(path: store.path)
+        #expect(try reopened.loadV2ResponseIntent(id: intent.id) == intent)
+        #expect(try reopened.loadV2ResponseAttempt(id: attempt.id)?.recovery == .uncertain)
+        #expect(try reopened.loadV2ResponseIntentPage(stream: stream).records == [intent])
+        #expect(try reopened.loadV2ResponseObservationPage(attemptID: attempt.id).isAtEnd)
+        #expect(throws: ACPV2ResponseLedgerError.staleLease) { try reopened.registerV2ResponseAttempt(id: attempt.id, for: intent, operationKey: attempt.operationKey, fence: fence) }
+        let currentFence = ACPSessionLeaseFence(sessionId: "journal", ownerInstance: "B", token: "new")
+        #expect(throws: ACPV2ResponseLedgerError.incompatibleSource) { try reopened.registerV2ResponseAttempt(id: attempt.id, for: intent, operationKey: attempt.operationKey, fence: currentFence) }
+        #expect(throws: ACPV2ResponseLedgerError.incompatibleSource) { try reopened.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: .uncertain(message: "lost"), fence: currentFence) }
+    }
+
+    @Test(arguments: ["pending", "cursor", "generation", "broker", "key"])
+    func responseBrokerFactsRequireTheExactOriginalBinding(field: String) throws {
+        let pending = "\u{feff}é\0"
+        let (store, fence, stream, _) = try responseFixture()
+        let request = try store.retainV2Inbound(inbound(Data(#"{"jsonrpc":"2.0","id":7,"method":"m"}"#.utf8), cursor: 6, pending: pending), to: stream, fence: fence).record
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        let attempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "é"), fence: fence).value
+        let params = ACPBrokerRespondExactParams(brokerId: .init(rawValue: field == "broker" ? "other" : "broker"), generation: .init(rawValue: field == "generation" ? 8 : 7),
+            pendingRequestId: field == "pending" ? "\u{feff}e\u{301}\0" : pending, originCursor: .init(rawValue: field == "cursor" ? 5 : 6),
+            operationKey: .init(rawValue: field == "key" ? "e\u{301}" : "é"), frame: .init(bytes: intent.frame))
+        #expect(throws: ACPV2ResponseLedgerError.incompatibleSource) { try store.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: .broker(.init(params: params, status: .written)), fence: fence) }
+        #expect(try store.loadV2ResponseAttempt(id: attempt.id)?.recovery == .uncertain)
+    }
+
+    @Test(arguments: [false, true])
+    func responseStringIDsMustKeepTheirExactUnicodeSpelling(mismatch: Bool) throws {
+        let (store, fence, stream, request) = try responseFixture(frame: Data(#"{"jsonrpc":"2.0","id":"é","method":"m"}"#.utf8))
+        let frame = Data((mismatch ? #"{"jsonrpc":"2.0","id":"e\u0301","result":null}"# : #"{"jsonrpc":"2.0","id":"é","result":null}"#).utf8)
+        if mismatch {
+            #expect(throws: ACPV2ResponseLedgerError.invalidInput) { try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: frame, fence: fence) }
+        } else { #expect(try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: frame, fence: fence).value.frame == frame) }
+    }
+
+    @Test func responseAttemptInsertFailureDoesNotReserveTheNextKeyOrSequence() throws {
+        let (store, fence, stream, request) = try responseFixture(broker: false)
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        let first = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "first"), fence: fence).value
+        _ = try store.retainV2ResponseObservation(id: UUID(), for: first, evidence: .stdio(responseStdioProof(intent, first, status: .notWritten)), fence: fence)
+        try store.db.exec("CREATE TRIGGER fail_response_attempt AFTER INSERT ON acp_v2_response_attempts BEGIN SELECT RAISE(ABORT, 'injected'); END")
+        let id = UUID()
+        #expect(throws: SQLiteError.self) { try store.registerV2ResponseAttempt(id: id, for: intent, operationKey: .init(rawValue: "second"), fence: fence) }
+        try store.db.exec("DROP TRIGGER fail_response_attempt")
+        #expect(try store.registerV2ResponseAttempt(id: id, for: intent, operationKey: .init(rawValue: "second"), fence: fence).value.sequence == 2)
+    }
+
+    @Test(arguments: ["request", "answer", "pending", "upstream"])
+    func responseIntentCannotBeReboundByChangingValidParentEvidence(field: String) throws {
+        let (store, fence, stream, request) = try responseFixture()
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        switch field {
+        case "request": try store.db.exec("UPDATE acp_v2_inbound_records SET frame = ?", bindings: [Data(#"{"jsonrpc":"2.0","id":7,"method":"different"}"#.utf8)])
+        case "answer": try store.db.exec("UPDATE acp_v2_response_intents SET frame = ?", bindings: [Data(#"{"jsonrpc":"2.0","id":7,"result":true}"#.utf8)])
+        case "pending": try store.db.exec("UPDATE acp_v2_inbound_records SET pending_request_id = 'different'")
+        default: try store.db.exec("UPDATE acp_v2_inbound_streams SET upstream_session_id = 'different'")
+        }
+        #expect(throws: ACPV2ResponseLedgerError.corruptRecord) { try store.loadV2ResponseIntent(id: intent.id) }
+    }
+
+    @Test func corruptObservationUUIDCannotGrantASecondResponseAttempt() throws {
+        let (store, fence, stream, request) = try responseFixture(broker: false)
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        let attempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "first"), fence: fence).value
+        let observation = try store.retainV2ResponseObservation(id: UUID(), for: attempt, evidence: .stdio(responseStdioProof(intent, attempt, status: .notWritten)), fence: fence).value
+        try store.db.exec("UPDATE acp_v2_response_observations SET id = ?", bindings: [observation.id.uuidString + "\0suffix"])
+        #expect(throws: ACPV2ResponseLedgerError.corruptRecord) { try store.loadV2ResponseAttempt(id: attempt.id) }
+        #expect(throws: ACPV2ResponseLedgerError.corruptRecord) { try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "second"), fence: fence) }
+        #expect(try store.db.query("SELECT id FROM acp_v2_response_attempts").count == 1)
+    }
+
+    @Test(arguments: ["binding", "large-digest", "digest-type", "key", "namespace", "large-parent-id"])
+    func emptyResponseHistoryStillValidatesItsRequestedParent(field: String) throws {
+        let (store, fence, stream, request) = try responseFixture()
+        let intent = try store.registerV2ResponseIntent(id: UUID(), request: request, in: stream, frame: Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8), fence: fence).value
+        if ["binding", "large-digest", "digest-type"].contains(field) {
+            switch field {
+            case "binding": try store.db.exec("UPDATE acp_v2_response_intents SET binding_digest = zeroblob(32)")
+            case "large-digest": try store.db.exec("UPDATE acp_v2_response_intents SET binding_digest = zeroblob(1048576)")
+            default: try store.db.exec("UPDATE acp_v2_response_intents SET binding_digest = 'not-a-digest'")
+            }
+            #expect(throws: ACPV2ResponseLedgerError.corruptRecord) { try store.loadV2ResponseAttemptPage(intentID: intent.id, maxBytes: 16) }
+            #expect(throws: ACPV2ResponseLedgerError.corruptRecord) { try store.loadV2ResponseIntentPage(stream: stream, maxBytes: 16) }
+        } else {
+            let attempt = try store.registerV2ResponseAttempt(id: UUID(), for: intent, operationKey: .init(rawValue: "first"), fence: fence).value
+            switch field {
+            case "key": try store.db.exec("UPDATE acp_v2_response_attempts SET operation_key = x'ff'")
+            case "namespace": try store.db.exec("UPDATE acp_v2_response_attempts SET namespace = zeroblob(1048576)")
+            default:
+                // Disable constraints only to simulate persisted corrupt metadata.
+                try store.db.exec("PRAGMA foreign_keys = OFF")
+                try store.db.exec("UPDATE acp_v2_response_attempts SET intent_id = ?", bindings: [intent.id.uuidString + "\0" + String(repeating: "x", count: 1024)])
+            }
+            #expect(throws: ACPV2ResponseLedgerError.corruptRecord) { try store.loadV2ResponseObservationPage(attemptID: attempt.id, maxBytes: 16) }
+        }
     }
 
     private func submission(_ store: ACPSessionStore, fence: ACPSessionLeaseFence, id: UUID = UUID(),

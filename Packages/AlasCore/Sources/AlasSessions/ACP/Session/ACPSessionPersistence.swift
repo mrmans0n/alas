@@ -215,6 +215,44 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
             after: after, maxRecords: maxRecords, maxBytes: maxBytes)
     }
 
+    public func registerV2ResponseIntent(id: UUID, request: ACPV2InboundLedgerRecord, in stream: ACPV2InboundLedgerStream,
+        frame: Data, fence: ACPSessionLeaseFence) throws -> ACPV2ResponseLedgerReceipt<ACPV2ResponseIntent> {
+        try openedStore().registerV2ResponseIntent(id: id, request: request, in: stream, frame: frame, fence: fence)
+    }
+
+    public func registerV2ResponseAttempt(id: UUID, for intent: ACPV2ResponseIntent, operationKey: ACPV2ReplyOperationKey,
+        fence: ACPSessionLeaseFence) throws -> ACPV2ResponseLedgerReceipt<ACPV2ResponseAttempt> {
+        try openedStore().registerV2ResponseAttempt(id: id, for: intent, operationKey: operationKey, fence: fence)
+    }
+
+    public func retainV2ResponseObservation(id: UUID, for attempt: ACPV2ResponseAttempt, evidence: ACPV2ResponseEvidence,
+        fence: ACPSessionLeaseFence) throws -> ACPV2ResponseLedgerReceipt<ACPV2ResponseObservation> {
+        try openedStore().retainV2ResponseObservation(id: id, for: attempt, evidence: evidence, fence: fence)
+    }
+
+    public func loadV2ResponseAttempt(id: UUID) throws -> ACPV2ResponseAttemptRecord? {
+        try openedStore().loadV2ResponseAttempt(id: id)
+    }
+
+    public func loadV2ResponseIntent(id: UUID) throws -> ACPV2ResponseIntent? {
+        try openedStore().loadV2ResponseIntent(id: id)
+    }
+
+    public func loadV2ResponseIntentPage(stream: ACPV2InboundLedgerStream, after: ACPV2ResponseLedgerContinuation? = nil,
+        maxRecords: Int = 128, maxBytes: Int = 1_048_576) throws -> ACPV2ResponseLedgerPage<ACPV2ResponseIntent> {
+        try openedStore().loadV2ResponseIntentPage(stream: stream, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
+    }
+
+    public func loadV2ResponseAttemptPage(intentID: UUID, after: ACPV2ResponseLedgerContinuation? = nil,
+        maxRecords: Int = 128, maxBytes: Int = 1_048_576) throws -> ACPV2ResponseLedgerPage<ACPV2ResponseAttemptRecord> {
+        try openedStore().loadV2ResponseAttemptPage(intentID: intentID, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
+    }
+
+    public func loadV2ResponseObservationPage(attemptID: UUID, after: ACPV2ResponseLedgerContinuation? = nil,
+        maxRecords: Int = 128, maxBytes: Int = 1_048_576) throws -> ACPV2ResponseLedgerPage<ACPV2ResponseObservation> {
+        try openedStore().loadV2ResponseObservationPage(attemptID: attemptID, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
+    }
+
     public func registerV2InboundLedger(sessionId: String, upstreamSessionId: String,
         source: ACPV2InboundLedgerSource, fence: ACPSessionLeaseFence) throws -> ACPV2InboundLedgerStream {
         try openedStore().registerV2InboundLedger(sessionId: sessionId, upstreamSessionId: upstreamSessionId, source: source, fence: fence)

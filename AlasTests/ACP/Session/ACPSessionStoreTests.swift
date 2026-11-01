@@ -9,6 +9,24 @@ struct ACPSessionStoreSchemaTests {
         return try ACPSessionStore(path: url.path)
     }
 
+    @Test func responseMigrationPreservesExistingJournals() throws {
+        let store = try tmpStore()
+        try store.upsertSession(.init(id: "response", agentId: "fixture", title: "Saved", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        try store.seizeLease(sessionId: "response", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let fence = ACPSessionLeaseFence(sessionId: "response", ownerInstance: "A", token: "owner")
+        let connection = UUID()
+        let stream = try store.registerV2InboundLedger(sessionId: "response", upstreamSessionId: "u", source: .stdio(connectionID: connection), fence: fence)
+        let record = try store.retainV2Inbound(.init(frame: Data([255]), connectionID: connection, source: .stdio), to: stream, fence: fence)
+        let saved = try store.loadSession(id: "response")
+        for table in ["acp_v2_response_observations", "acp_v2_response_attempts", "acp_v2_response_intents"] { try store.db.exec("DROP TABLE IF EXISTS \(table)") }
+        try store.db.exec("UPDATE schema_version SET version = 33")
+        let reopened = try ACPSessionStore(path: store.path)
+        #expect(try reopened.currentSchemaVersion() == 34)
+        #expect(try reopened.loadSession(id: "response") == saved)
+        #expect(try reopened.loadV2InboundLedgerPage(stream: stream).records == [record.record])
+        for table in ["acp_v2_response_intents", "acp_v2_response_attempts", "acp_v2_response_observations"] { #expect(try reopened.db.query("SELECT id FROM \(table)").isEmpty) }
+    }
+
     @Test func inboundMigrationPreservesOtherJournalsAndStartsWithoutReceipts() throws {
         let store = try tmpStore()
         try store.upsertSession(.init(id: "inbound-migration", agentId: "fixture", title: "Saved", autoRun: false,
@@ -25,7 +43,7 @@ struct ACPSessionStoreSchemaTests {
         try store.db.exec("DROP TABLE IF EXISTS acp_v2_inbound_streams")
         try store.db.exec("UPDATE schema_version SET version = 32")
         let reopened = try ACPSessionStore(path: store.path)
-        #expect(try reopened.currentSchemaVersion() == 33)
+        #expect(try reopened.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
         #expect(try reopened.loadSession(id: "inbound-migration") == saved)
         #expect(try reopened.loadV2UpdateJournalPage(stream: updateStream).records == [update.record])
         #expect(try reopened.loadV2Submission(id: submission.id)?.registration == submission)
