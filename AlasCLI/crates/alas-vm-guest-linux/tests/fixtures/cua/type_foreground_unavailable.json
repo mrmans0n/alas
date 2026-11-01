@@ -1,0 +1,31 @@
+{
+ "tool": "type_text",
+ "arguments": {
+  "pid": 64176,
+  "window_id": 39845896,
+  "text": "fixture ✓",
+  "delivery_mode": "foreground"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "foreground_unavailable: window 0x2600008 did not become the active, focused window within 1.512896152s (active=0x2600024, focus_within_target=false, input focus: 0x2600025 (Org.xfce.mousepad, pid 64176 mousepad)); no input was sent. The window may be minimized, on another workspace, or blocked by a modal dialog — bring_to_front it or target that dialog instead",
+    "type": "text"
+   }
+  ],
+  "isError": true,
+  "structuredContent": {
+   "code": "foreground_unavailable",
+   "detail": "foreground_unavailable: window 0x2600008 did not become the active, focused window within 1.512896152s (active=0x2600024, focus_within_target=false, input focus: 0x2600025 (Org.xfce.mousepad, pid 64176 mousepad)); no input was sent. The window may be minimized, on another workspace, or blocked by a modal dialog — bring_to_front it or target that dialog instead",
+   "effect": "none",
+   "hint": "The window could not be brought forward, so nothing was sent. List the app's windows, check the window still exists, then retry or act by element instead.",
+   "next_call": {
+    "arguments": {
+     "pid": 64176
+    },
+    "tool": "list_windows"
+   },
+   "suggestion": "Call bring_to_front on the window (or its modal dialog), confirm with get_window_state, then retry."
+  }
+ }
+}

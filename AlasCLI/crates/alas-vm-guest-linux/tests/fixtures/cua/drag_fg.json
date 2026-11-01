@@ -1,0 +1,37 @@
+{
+ "tool": "drag",
+ "arguments": {
+  "pid": 64288,
+  "window_id": 39845891,
+  "from_x": 40,
+  "from_y": 60,
+  "to_x": 200,
+  "to_y": 80,
+  "delivery_mode": "foreground"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "Dragged (left) to pid 64288 from (40, 60) to (200, 80) in 500ms / 20 steps (delivery_mode=foreground).",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "delivery": {
+    "mode": "foreground"
+   },
+   "effect": "unverifiable",
+   "hint": "The drag was posted but no drop was confirmed. Read what changed before repeating. If nothing moved, start the press inside the item (pixels of the latest screenshot) or use a Move control or menu instead.",
+   "next_call": {
+    "arguments": {
+     "pid": 64288,
+     "since": "latest",
+     "window_id": 39845891
+    },
+    "tool": "get_window_state"
+   },
+   "route": "global_input",
+   "summary": "Dragged (left) to pid 64288 from (40, 60) to (200, 80) in 500ms / 20 steps (delivery_mode=foreground)."
+  }
+ }
+}

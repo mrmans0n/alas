@@ -1,0 +1,324 @@
+{
+ "tool": "get_window_state",
+ "arguments": {
+  "pid": 64288,
+  "window_id": 39845891,
+  "include_screenshot": false,
+  "tree_format": "elements",
+  "max_elements": 300,
+  "max_depth": 12
+ },
+ "result": {
+  "content": [
+   {
+    "text": "window_id=39845891 pid=64288 elements=20 walk_ms=60 snapshot_id=s00000002\n\n(tree is in structuredContent.elements; pass tree_format \"markdown\" for the compact text rendering)",
+    "type": "text"
+   },
+   {
+    "text": "Invalidated snapshots s00000001: their element_tokens are stale.",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "app_name": "Org.xfce.mousepad",
+   "bounds_complete": true,
+   "coordinate_frame": "window",
+   "element_count": 20,
+   "elements": [
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 4,
+     "description": "File menu; closed menu with 19 items; not expanded: click it to open",
+     "element_index": 0,
+     "element_token": "s00000002:0",
+     "enabled": true,
+     "frame": {
+      "h": 27,
+      "w": 39,
+      "x": 736,
+      "y": 780
+     },
+     "label": "File",
+     "role": "menu"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 4,
+     "description": "Edit menu; closed menu with 19 items; not expanded: click it to open",
+     "element_index": 1,
+     "element_token": "s00000002:1",
+     "enabled": true,
+     "frame": {
+      "h": 27,
+      "w": 41,
+      "x": 775,
+      "y": 780
+     },
+     "label": "Edit",
+     "role": "menu"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 4,
+     "description": "Search menu; closed menu with 9 items; not expanded: click it to open",
+     "element_index": 2,
+     "element_token": "s00000002:2",
+     "enabled": true,
+     "frame": {
+      "h": 27,
+      "w": 59,
+      "x": 816,
+      "y": 780
+     },
+     "label": "Search",
+     "role": "menu"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 4,
+     "description": "View menu; closed menu with 10 items; not expanded: click it to open",
+     "element_index": 3,
+     "element_token": "s00000002:3",
+     "enabled": true,
+     "frame": {
+      "h": 27,
+      "w": 46,
+      "x": 875,
+      "y": 780
+     },
+     "label": "View",
+     "role": "menu"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 4,
+     "description": "Document menu; closed menu with 12 items; not expanded: click it to open",
+     "element_index": 4,
+     "element_token": "s00000002:4",
+     "enabled": true,
+     "frame": {
+      "h": 27,
+      "w": 83,
+      "x": 921,
+      "y": 780
+     },
+     "label": "Document",
+     "role": "menu"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 4,
+     "description": "Help menu; closed menu with 2 items; not expanded: click it to open",
+     "element_index": 5,
+     "element_token": "s00000002:5",
+     "enabled": true,
+     "frame": {
+      "h": 27,
+      "w": 47,
+      "x": 1004,
+      "y": 780
+     },
+     "label": "Help",
+     "role": "menu"
+    },
+    {
+     "depth": 5,
+     "description": "unlabelled text; 1st of 1 text in this window",
+     "element_index": 17,
+     "element_token": "s00000002:17",
+     "enabled": true,
+     "frame": {
+      "h": 447,
+      "w": 638,
+      "x": 737,
+      "y": 810
+     },
+     "parent_index": 16,
+     "role": "text",
+     "unlabelled": true
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Create a new document; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 6,
+     "element_token": "s00000002:6",
+     "enabled": true,
+     "label": "New",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Open a file; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 7,
+     "element_token": "s00000002:7",
+     "enabled": true,
+     "label": "Open...",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Save the current document; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 8,
+     "element_token": "s00000002:8",
+     "enabled": true,
+     "label": "Save",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Save current document as another file; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 9,
+     "element_token": "s00000002:9",
+     "enabled": true,
+     "label": "Save As...",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Close the current document; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 10,
+     "element_token": "s00000002:10",
+     "enabled": true,
+     "label": "Close Tab",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Paste the clipboard; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 11,
+     "element_token": "s00000002:11",
+     "enabled": true,
+     "label": "Paste",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Search for text; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 12,
+     "element_token": "s00000002:12",
+     "enabled": true,
+     "label": "Find",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Search for and replace text; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 13,
+     "element_token": "s00000002:13",
+     "enabled": true,
+     "label": "Find and Replace...",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Go to a specific location in the document; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 14,
+     "element_token": "s00000002:14",
+     "enabled": true,
+     "label": "Go to...",
+     "role": "button"
+    },
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 5,
+     "description": "Make the window fullscreen; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 15,
+     "element_token": "s00000002:15",
+     "enabled": true,
+     "label": "Fullscreen",
+     "role": "button"
+    },
+    {
+     "depth": 3,
+     "element_index": 16,
+     "element_token": "s00000002:16",
+     "enabled": true,
+     "role": "page tab",
+     "selected": true
+    },
+    {
+     "depth": 5,
+     "description": "unlabelled scroll bar; 1st of 2 scroll bars in this window; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 18,
+     "element_token": "s00000002:18",
+     "enabled": true,
+     "parent_index": 16,
+     "role": "scroll bar",
+     "unlabelled": true,
+     "value": "0.0"
+    },
+    {
+     "depth": 5,
+     "description": "unlabelled scroll bar; 2nd of 2 scroll bars in this window; off-screen: scroll it into view before a pixel action; element actions still reach it",
+     "element_index": 19,
+     "element_token": "s00000002:19",
+     "enabled": true,
+     "parent_index": 16,
+     "role": "scroll bar",
+     "unlabelled": true,
+     "value": "0.0"
+    }
+   ],
+   "elements_complete": true,
+   "invalidated_snapshot_ids": [
+    "s00000001"
+   ],
+   "pid": 64288,
+   "returned_element_count": 20,
+   "snapshot_id": "s00000002",
+   "timeout_ms": 2000,
+   "total_element_count": 20,
+   "tree_format": "elements",
+   "truncated": false,
+   "window_bounds": {
+    "height": 480,
+    "width": 640,
+    "x": 736,
+    "y": 780
+   },
+   "window_id": 39845891,
+   "window_title": "Untitled 1 - Mousepad"
+  }
+ }
+}

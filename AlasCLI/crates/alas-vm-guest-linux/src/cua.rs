@@ -110,8 +110,8 @@ fn real_uid(status: &Path) -> Option<u32> {
         .ok()
 }
 
-/// A `tools/call` result. A JSON-RPC error answer is a result too, with `is_error` set and the
-/// error's message as `text`.
+/// A `tools/call` result. A JSON-RPC error answer is a result too, with `is_error` set, the
+/// error's message as `text` and its `{code, message}` as `structured`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CuaResult {
     pub is_error: bool,
@@ -124,15 +124,19 @@ pub struct CuaResult {
 }
 
 impl CuaResult {
-    fn from_response(response: &Value) -> Self {
+    pub(crate) fn from_response(response: &Value) -> Self {
         let Some(result) = response.get("result") else {
             let message = response
                 .pointer("/error/message")
                 .and_then(Value::as_str)
                 .unwrap_or("the driver answered without a result");
+            let code = response
+                .pointer("/error/code")
+                .cloned()
+                .unwrap_or(Value::Null);
             return Self {
                 is_error: true,
-                structured: Value::Null,
+                structured: json!({"code": code, "message": message}),
                 text: message.to_string(),
                 image_png_base64: None,
             };
@@ -526,6 +530,23 @@ mod tests {
         assert_eq!(click.structured, json!({"x": 1, "y": 2}));
         assert_eq!(click.text, "stale window");
         assert_eq!(click.image_png_base64, None);
+    }
+
+    #[test]
+    fn json_rpc_error_answer_carries_its_code_and_message() {
+        let result = CuaResult::from_response(&json!({
+            "jsonrpc": "2.0", "id": 3,
+            "error": {"code": -32602, "message": "unknown tool: nope"}
+        }));
+        assert_eq!(
+            result,
+            CuaResult {
+                is_error: true,
+                structured: json!({"code": -32602, "message": "unknown tool: nope"}),
+                text: "unknown tool: nope".to_string(),
+                image_png_base64: None,
+            }
+        );
     }
 
     #[test]

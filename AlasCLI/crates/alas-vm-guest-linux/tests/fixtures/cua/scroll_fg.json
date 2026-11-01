@@ -1,0 +1,37 @@
+{
+ "tool": "scroll",
+ "arguments": {
+  "pid": 64288,
+  "window_id": 39845891,
+  "direction": "down",
+  "amount": 3,
+  "x": 200,
+  "y": 150,
+  "delivery_mode": "foreground"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "Scrolled down 3 ticks (delivery_mode=foreground).",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "delivery": {
+    "mode": "foreground"
+   },
+   "effect": "unverifiable",
+   "hint": "The scroll was sent but not confirmed. Check that the content moved before scrolling more. Three single actions in a row: send the next ones as one run_steps call. It runs them in order, stops at the first failure and returns what changed.",
+   "next_call": {
+    "arguments": {
+     "pid": 64288,
+     "since": "latest",
+     "window_id": 39845891
+    },
+    "tool": "get_window_state"
+   },
+   "route": "global_input",
+   "summary": "Scrolled down 3 ticks (delivery_mode=foreground)."
+  }
+ }
+}

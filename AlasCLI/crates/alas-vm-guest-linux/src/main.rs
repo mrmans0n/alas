@@ -8,6 +8,9 @@
 // Not used on Linux until the computer-use commands are wired to it.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 mod cua;
+// Not used on Linux until the vsock commands are wired to it.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
+mod computer;
 mod protocol;
 mod runner;
 

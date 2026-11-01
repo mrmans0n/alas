@@ -1,0 +1,67 @@
+{
+ "tool": "get_window_state",
+ "arguments": {
+  "pid": 64288,
+  "window_id": 39845891,
+  "include_screenshot": false,
+  "tree_format": "elements",
+  "query": "Edit"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "window_id=39845891 pid=64288 elements=20 walk_ms=63 snapshot_id=s00000003\n\n(tree is in structuredContent.elements; pass tree_format \"markdown\" for the compact text rendering)",
+    "type": "text"
+   },
+   {
+    "text": "Invalidated snapshots s00000002: their element_tokens are stale.",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "app_name": "Org.xfce.mousepad",
+   "bounds_complete": true,
+   "coordinate_frame": "window",
+   "element_count": 20,
+   "elements": [
+    {
+     "actions": [
+      "click"
+     ],
+     "depth": 4,
+     "description": "Edit menu; closed menu with 19 items; not expanded: click it to open",
+     "element_index": 1,
+     "element_token": "s00000003:1",
+     "enabled": true,
+     "frame": {
+      "h": 27,
+      "w": 41,
+      "x": 775,
+      "y": 780
+     },
+     "label": "Edit",
+     "role": "menu"
+    }
+   ],
+   "elements_complete": true,
+   "invalidated_snapshot_ids": [
+    "s00000002"
+   ],
+   "pid": 64288,
+   "returned_element_count": 1,
+   "snapshot_id": "s00000003",
+   "timeout_ms": 1000,
+   "total_element_count": 20,
+   "tree_format": "elements",
+   "truncated": false,
+   "window_bounds": {
+    "height": 480,
+    "width": 640,
+    "x": 736,
+    "y": 780
+   },
+   "window_id": 39845891,
+   "window_title": "Untitled 1 - Mousepad"
+  }
+ }
+}

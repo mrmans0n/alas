@@ -1,0 +1,33 @@
+{
+ "tool": "hotkey",
+ "arguments": {
+  "pid": 64288,
+  "window_id": 39845891,
+  "keys": [
+   "Escape"
+  ],
+  "delivery_mode": "foreground"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "Pressed +Escape on pid 64288 as a real key event (delivery_mode=foreground, focus_after=target); not verified — confirm with a screenshot.",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "delivery": {
+    "mode": "foreground"
+   },
+   "effect": "confirmed",
+   "evidence": [
+    {
+     "detail": "focus_after=target; closed: popup window 39845926 \"Mousepad\" (329x425 at 769,802)",
+     "kind": "window_change"
+    }
+   ],
+   "route": "global_input",
+   "summary": "Pressed +Escape on pid 64288 as a real key event (delivery_mode=foreground, focus_after=target); not verified — confirm with a screenshot."
+  }
+ }
+}

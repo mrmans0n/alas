@@ -1,0 +1,34 @@
+{
+ "tool": "type_text",
+ "arguments": {
+  "pid": 64288,
+  "window_id": 39845891,
+  "text": "fixture ✓",
+  "delivery_mode": "foreground"
+ },
+ "result": {
+  "content": [
+   {
+    "text": "Typed 9 character(s) as real key events (delivery_mode=foreground, focus_after=target); not verified — confirm with a screenshot.",
+    "type": "text"
+   }
+  ],
+  "structuredContent": {
+   "delivery": {
+    "mode": "foreground"
+   },
+   "effect": "unverifiable",
+   "hint": "The text was delivered but not read back. Read the field before typing again, or it may be duplicated.",
+   "next_call": {
+    "arguments": {
+     "pid": 64288,
+     "since": "latest",
+     "window_id": 39845891
+    },
+    "tool": "get_window_state"
+   },
+   "route": "global_input",
+   "summary": "Typed 9 character(s) as real key events (delivery_mode=foreground, focus_after=target); not verified — confirm with a screenshot."
+  }
+ }
+}
