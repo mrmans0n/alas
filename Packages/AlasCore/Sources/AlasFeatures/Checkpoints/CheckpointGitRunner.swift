@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import Synchronization
 import AlasFoundation
 import AlasModel
 import AlasPlatform
@@ -7,10 +8,10 @@ import AlasPlatform
 public protocol CheckpointGitRunning: Sendable {
     func run(_ args: [String], cwd: URL, environment: [String: String]) async throws -> ProcessResult
     func runData(_ args: [String], cwd: URL, environment: [String: String]) async throws -> ProcessResultData
-    /// Blob sizes from one `cat-file --batch-check`, keyed by OID.
-    func blobSizes(oids: [String], cwd: URL) async throws -> [String: Int64]
-    /// Blob bytes from one `cat-file --batch`, keyed by OID.
-    func blobContents(oids: [String], cwd: URL) async throws -> [String: Data]
+    /// Blob bytes keyed by OID. `checkingSizes` sees every size, keyed by
+    /// OID, before any content is read; throwing from it stops the read.
+    func blobContents(oids: [String], cwd: URL,
+                      checkingSizes: @escaping @Sendable ([String: Int64]) throws -> Void) async throws -> [String: Data]
     /// Blob references from one `cat-file --batch`, hashed as each object
     /// streams so no whole object is buffered.
     func blobReferences(oids: [String], cwd: URL) async throws -> [String: CheckpointBlobReference]
@@ -65,6 +66,9 @@ public struct CheckpointGitPaths: Equatable, Sendable {
 }
 
 public struct LiveCheckpointGitRunner: CheckpointGitRunning, Sendable {
+    /// Cleared, once per process, by a git older than 2.36.
+    private static let supportsBatchCommand = Atomic(true)
+
     public func run(_ args: [String], cwd: URL, environment: [String: String] = [:]) async throws -> ProcessResult {
         let invocation = try invocation(args, cwd: cwd)
         return try await Process.run(invocation.executable, args: invocation.args, cwd: invocation.cwd,
@@ -77,6 +81,39 @@ public struct LiveCheckpointGitRunner: CheckpointGitRunning, Sendable {
                                          env: gitEnvironment(environment))
     }
 
+    /// Sizes and contents from one `cat-file --batch-command`, or, on a git
+    /// without it, from `blobSizes` and then `blobContents`.
+    public func blobContents(oids: [String], cwd: URL,
+                             checkingSizes: @escaping @Sendable ([String: Int64]) throws -> Void) async throws -> [String: Data] {
+        guard !oids.isEmpty else { return [:] }
+        if Self.supportsBatchCommand.load(ordering: .relaxed) {
+            do {
+                return try await batchCommandContents(oids: oids, cwd: cwd, checkingSizes: checkingSizes)
+            } catch ProcessError.nonZeroExit(129, _) {
+                // 129 is git's usage error: the option is unknown.
+                Self.supportsBatchCommand.store(false, ordering: .relaxed)
+            }
+        }
+        let sizes = try await blobSizes(oids: oids, cwd: cwd)
+        try checkingSizes(sizes)
+        return try await blobContents(oids: oids, cwd: cwd)
+    }
+
+    /// Asks for every size and flushes, then asks for the contents only once
+    /// the sizes pass, so an oversized object is never read.
+    private func batchCommandContents(oids: [String], cwd: URL,
+                                      checkingSizes: @escaping @Sendable ([String: Int64]) throws -> Void) async throws -> [String: Data] {
+        let gate = StdinGate()
+        return try await stream(["cat-file", "--batch-command", "--buffer"], lines: oids.map { "info \($0)" } + ["flush"],
+                                cwd: cwd, gate: gate) { reader in
+            var sizes: [String: Int64] = [:]
+            for oid in oids { sizes[oid] = try reader.header(for: oid) }
+            try checkingSizes(sizes)
+            gate.release(Data(oids.map { "contents \($0)\n" }.joined().utf8))
+            return try Self.readContents(oids: oids, from: &reader)
+        }
+    }
+
     public func blobSizes(oids: [String], cwd: URL) async throws -> [String: Int64] {
         try await stream(["cat-file", "--batch-check"], lines: oids, cwd: cwd) { reader in
             var sizes: [String: Int64] = [:]
@@ -86,16 +123,18 @@ public struct LiveCheckpointGitRunner: CheckpointGitRunning, Sendable {
     }
 
     public func blobContents(oids: [String], cwd: URL) async throws -> [String: Data] {
-        try await stream(["cat-file", "--batch"], lines: oids, cwd: cwd) { reader in
-            var contents: [String: Data] = [:]
-            for oid in oids {
-                let byteCount = try reader.header(for: oid)
-                var bytes = Data(capacity: Int(byteCount))
-                try reader.body(byteCount: byteCount) { bytes.append($0) }
-                contents[oid] = bytes
-            }
-            return contents
+        try await stream(["cat-file", "--batch"], lines: oids, cwd: cwd) { try Self.readContents(oids: oids, from: &$0) }
+    }
+
+    private static func readContents(oids: [String], from reader: inout CheckpointGitStreamReader) throws -> [String: Data] {
+        var contents: [String: Data] = [:]
+        for oid in oids {
+            let byteCount = try reader.header(for: oid)
+            var bytes = Data(capacity: Int(byteCount))
+            try reader.body(byteCount: byteCount) { bytes.append($0) }
+            contents[oid] = bytes
         }
+        return contents
     }
 
     public func blobReferences(oids: [String], cwd: URL) async throws -> [String: CheckpointBlobReference] {
@@ -139,9 +178,10 @@ public struct LiveCheckpointGitRunner: CheckpointGitRunning, Sendable {
     /// arrives. Stdin is written while stdout drains, so a request larger than
     /// the pipe buffers cannot deadlock. No timeout applies: a batch can
     /// legitimately stream many large objects, just as the per-object
-    /// streaming read it replaces. Empty input spawns nothing.
+    /// streaming read it replaces. Empty input spawns nothing. With a `gate`,
+    /// stdin stays open after `lines` until the reader releases the gate.
     private func stream<Result: Sendable>(
-        _ args: [String], lines: [String], cwd: URL,
+        _ args: [String], lines: [String], cwd: URL, gate: StdinGate? = nil,
         read: @escaping @Sendable (inout CheckpointGitStreamReader) throws -> Result
     ) async throws -> Result {
         if lines.isEmpty {
@@ -185,6 +225,7 @@ public struct LiveCheckpointGitRunner: CheckpointGitRunning, Sendable {
         async let written: Void = BlockingWork.run {
             let handle = stdin.fileHandleForWriting
             try? handle.write(contentsOf: request)
+            if let more = gate?.wait() { try? handle.write(contentsOf: more) }
             try? handle.close()
         }
         async let errorOutput = BlockingWork.run {
@@ -200,6 +241,8 @@ public struct LiveCheckpointGitRunner: CheckpointGitRunning, Sendable {
         } onCancel: {
             terminateProcessWithEscalation(process)
         }
+        // A reader that never released the gate leaves the writer waiting.
+        gate?.release(nil)
         // A reader that stopped early no longer drains stdout, so git could
         // block forever on a full pipe.
         if case .failure = result { terminateProcessWithEscalation(process) }
@@ -268,14 +311,44 @@ public struct CheckpointGitStreamReader: Sendable {
         if offset == buffer.count, !(try fill()) { throw CheckpointSnapshotError.invalidGitOutput }
     }
 
-    /// Appends the next chunk, keeping the buffer zero-based.
+    /// Appends the next chunk, keeping the buffer zero-based. Returns what
+    /// one read yields: `FileHandle.read(upToCount:)` waits for the whole
+    /// count, which never arrives while git waits for more stdin.
     private mutating func fill() throws -> Bool {
-        // Drain Foundation's temporaries per chunk; one batch can stream gigabytes.
-        let chunk = try autoreleasepool { try handle?.read(upToCount: 1024 * 1024) }
-        guard let chunk, !chunk.isEmpty else { return false }
+        guard let handle else { return false }
+        var chunk = Data(count: 1024 * 1024)
+        let count = chunk.withUnsafeMutableBytes { bytes in
+            var count: Int
+            repeat { count = read(handle.fileDescriptor, bytes.baseAddress, bytes.count) } while count < 0 && errno == EINTR
+            return count
+        }
+        guard count >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        guard count > 0 else { return false }
+        chunk.count = count
         buffer = offset < buffer.count ? buffer.subdata(in: offset..<buffer.count) + chunk : chunk
         offset = 0
         return true
+    }
+}
+
+/// Holds a batch's follow-up request until its reader has seen the first
+/// replies. The first release wins; `nil` closes stdin.
+private final class StdinGate: Sendable {
+    private let released = DispatchSemaphore(value: 0)
+    private let request = Mutex<Data??>(nil)
+
+    func release(_ data: Data?) {
+        let first = request.withLock { request in
+            guard request == nil else { return false }
+            request = .some(data)
+            return true
+        }
+        if first { released.signal() }
+    }
+
+    func wait() -> Data? {
+        released.wait()
+        return request.withLock { $0 ?? nil }
     }
 }
 
