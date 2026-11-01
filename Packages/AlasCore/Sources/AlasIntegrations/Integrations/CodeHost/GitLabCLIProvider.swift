@@ -441,32 +441,22 @@ public struct GitLabCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         path: String,
         cwd: URL
     ) async throws -> Data {
-        let result = try await runner.run(
+        // `/raw` answers the file's bytes, so the cap counts them, not base64 JSON.
+        let result = try await runner.runData(
             "glab",
             args: [
                 "api",
-                "projects/\(Self.encodedProjectPath(repository))/repository/files/\(Self.encodedFilePath(path))?ref=\(revision)",
+                "projects/\(Self.encodedProjectPath(repository))/repository/files/\(Self.encodedFilePath(path))/raw?ref=\(revision)",
                 "--method", "GET",
                 "--hostname", remote.host,
-                "--output", "json",
             ],
-            cwd: cwd
+            cwd: cwd,
+            maxBytes: RemoteWorktreeFileAccess.maxPreviewBytes
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "glab api repository file", stderr: result.stderr)
         }
-
-        let response: GitLabFileContentResponse
-        do {
-            response = try JSONDecoder().decode(GitLabFileContentResponse.self, from: Data(result.stdout.utf8))
-        } catch {
-            throw CodeHostProviderError.malformedOutput("Unable to parse glab api repository file output")
-        }
-        let normalizedBase64 = response.content.filter { !$0.isWhitespace }
-        guard let data = Data(base64Encoded: normalizedBase64) else {
-            throw CodeHostProviderError.malformedOutput("glab api repository file returned invalid base64 content")
-        }
-        return data
+        return result.stdout
     }
 
     public func publishReview(_ request: ProviderReviewPublishRequest) async throws -> ProviderReviewPublishResult {
@@ -2820,14 +2810,6 @@ private struct GitLabMRVersion: Decodable {
             startSHA: try container.decodeIfPresent(String.self, forKey: .startCommitSHA) ?? "",
             headSHA: try container.decodeIfPresent(String.self, forKey: .headCommitSHA) ?? ""
         )
-    }
-}
-
-private struct GitLabFileContentResponse: Decodable {
-    let content: String
-
-    public init(content: String) {
-        self.content = content
     }
 }
 

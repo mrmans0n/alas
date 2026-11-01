@@ -210,7 +210,7 @@ struct GitLabCLIProviderTests {
     @Test func reviewImageRevisionsAndFileDataUseReviewedGitLabDiffRefs() async throws {
         let runner = FakeRunner(results: [
             ProcessResult(exitCode: 0, stdout: Self.versionsWithMultipleHeadsOutput, stderr: ""),
-            ProcessResult(exitCode: 0, stdout: #"{"content":"iVBO\nRw==","encoding":"base64"}"#, stderr: ""),
+            ProcessResult(exitCode: 0, stdout: "PNG-bytes", stderr: ""),
         ])
         let request = Self.makeRequest(headSHA: "reviewed-head")
         let provider = GitLabCLIProvider(runner: runner)
@@ -232,7 +232,7 @@ struct GitLabCLIProviderTests {
             beforeSHA: "reviewed-base",
             afterSHA: "reviewed-head"
         ))
-        #expect(data == Data([0x89, 0x50, 0x4e, 0x47]))
+        #expect(data == Data("PNG-bytes".utf8))
         #expect(await runner.commands == [
             FakeRunner.Command(
                 executable: "glab",
@@ -248,10 +248,9 @@ struct GitLabCLIProviderTests {
                 executable: "glab",
                 args: [
                     "api",
-                    "projects/nacho%2Falas-fork/repository/files/Assets%2FDiff%20image.png?ref=reviewed-head",
+                    "projects/nacho%2Falas-fork/repository/files/Assets%2FDiff%20image.png/raw?ref=reviewed-head",
                     "--method", "GET",
                     "--hostname", "gitlab.example.com",
-                    "--output", "json",
                 ],
                 cwd: Self.cwd
             ),
@@ -269,22 +268,6 @@ struct GitLabCLIProviderTests {
             )
         }
         #expect(await runner.commands.isEmpty)
-    }
-
-    @Test func reviewFileDataRejectsInvalidBase64() async {
-        let runner = FakeRunner(results: [
-            ProcessResult(exitCode: 0, stdout: #"{"content":"not valid base64!","encoding":"base64"}"#, stderr: ""),
-        ])
-
-        await #expect(throws: CodeHostProviderError.malformedOutput("glab api repository file returned invalid base64 content")) {
-            _ = try await GitLabCLIProvider(runner: runner).reviewFileData(
-                remote: Self.remote,
-                repository: "platform/mobile/alas",
-                revision: "head-sha",
-                path: "Assets/Diff image.png",
-                cwd: Self.cwd
-            )
-        }
     }
 
     @Test func mrListJSONParsesReviewRequest() throws {
