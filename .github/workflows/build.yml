@@ -243,7 +243,7 @@ jobs:
             git rev-parse HEAD:AlasHelper
             git rev-parse HEAD:AlasCLI
             git rev-parse HEAD:ThirdParty/treesitter-pack
-            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-alas-vm-guest-linux.sh scripts/build-treesitter-pack.sh
+            shasum scripts/build-zmx.sh scripts/build-fff.sh scripts/build-alas-helper.sh scripts/build-alas-cli.sh scripts/build-alas-vm-guest-linux.sh scripts/fetch-cua-driver.sh scripts/build-treesitter-pack.sh
             shasum -a 256 "$(brew --prefix zig@0.17)/bin/zig" "$(brew --prefix zig@0.16)/bin/zig"
           } >> .tools-pin
           cat .tools-pin
@@ -278,6 +278,10 @@ jobs:
             .build/alas-cli/fingerprint
             .build/alas-vm-guest-linux/*/release/alas-vm-guest-linux
             .build/alas-vm-guest-linux/fingerprint
+            .build/cua-driver/current
+            .build/cua-driver/*/cua-driver
+            .build/cua-driver/*/CUA-DRIVER-LICENSE.txt
+            .build/cua-driver/fingerprint
           key: tools-${{ runner.os }}-arm64-${{ hashFiles('.tools-pin') }}
           restore-keys: |
             tools-${{ runner.os }}-arm64-
@@ -295,6 +299,7 @@ jobs:
           ./scripts/build-alas-helper.sh
           ./scripts/build-alas-cli.sh
           ./scripts/build-alas-vm-guest-linux.sh
+          ./scripts/fetch-cua-driver.sh
 
       - name: Save prebuilt tools cache
         # Save immediately after the prebuild step succeeds, BEFORE
@@ -319,6 +324,10 @@ jobs:
             .build/alas-cli/fingerprint
             .build/alas-vm-guest-linux/*/release/alas-vm-guest-linux
             .build/alas-vm-guest-linux/fingerprint
+            .build/cua-driver/current
+            .build/cua-driver/*/cua-driver
+            .build/cua-driver/*/CUA-DRIVER-LICENSE.txt
+            .build/cua-driver/fingerprint
           key: ${{ steps.tools-cache.outputs.cache-primary-key }}
 
       - name: Generate Xcode project

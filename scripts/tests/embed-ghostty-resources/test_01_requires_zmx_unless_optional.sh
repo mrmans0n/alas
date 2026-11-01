@@ -41,6 +41,12 @@ linux_guest="${srcroot}/.build/alas-vm-guest-linux/aarch64-unknown-linux-musl/re
 mkdir -p "$(dirname "${linux_guest}")"
 printf '#!/bin/sh\n' > "${linux_guest}"
 chmod +x "${linux_guest}"
+cua_driver_dir="${srcroot}/.build/cua-driver/0.0.0-test"
+mkdir -p "${cua_driver_dir}"
+printf '#!/bin/sh\n' > "${cua_driver_dir}/cua-driver"
+chmod +x "${cua_driver_dir}/cua-driver"
+echo "Cua Driver 0.0.0-test" > "${cua_driver_dir}/CUA-DRIVER-LICENSE.txt"
+echo 0.0.0-test > "${srcroot}/.build/cua-driver/current"
 touch "${srcroot}/.build/fff/arm64/install/lib/libfff_c.dylib"
 for tool in install_name_tool codesign; do
     printf '#!/bin/sh\nexit 0\n' > "${tmp}/bin/${tool}"
@@ -84,6 +90,10 @@ cmp "${srcroot}/AlasHelper/manifest.json" "${resources}/alas-helper/manifest.jso
 test -x "${resources}/alas-cli/macos-x86_64/alas"
 test -x "${resources}/alas-cli/macos-aarch64/alas"
 cmp "${srcroot}/AlasCLI/manifest.json" "${resources}/alas-cli/manifest.json"
+
+test -x "${resources}/alas-vm-guest-linux/alas-vm-guest-linux"
+test -x "${resources}/alas-vm-guest-linux/cua-driver"
+cmp "${cua_driver_dir}/CUA-DRIVER-LICENSE.txt" "${resources}/alas-vm-guest-linux/CUA-DRIVER-LICENSE.txt"
 
 # Xcode can report undefined_arch for the parent target while ARCHS still
 # names the single requested slice. Resource embedding must select that same

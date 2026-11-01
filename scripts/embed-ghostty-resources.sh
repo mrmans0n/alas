@@ -85,8 +85,9 @@ for mapping in "${helper_targets[@]}"; do
 done
 rsync -a "${SRCROOT}/AlasHelper/manifest.json" "${helper_destination_root}/manifest.json"
 
-# The Linux worktree VM helper. A Linux VM's helper share points at this
-# directory, and the guest installs the binary from it.
+# The Linux worktree VM helper and the Cua Driver it runs for computer use. A
+# Linux VM's helper share points at this directory, and the guest installs the
+# binaries from it.
 linux_guest_destination_root="${destination_root}/alas-vm-guest-linux"
 linux_guest_source="${SRCROOT}/.build/alas-vm-guest-linux/aarch64-unknown-linux-musl/release/alas-vm-guest-linux"
 rm -rf "${linux_guest_destination_root}"
@@ -97,6 +98,14 @@ fi
 mkdir -p "${linux_guest_destination_root}"
 rsync -a "${linux_guest_source}" "${linux_guest_destination_root}/alas-vm-guest-linux"
 chmod +x "${linux_guest_destination_root}/alas-vm-guest-linux"
+cua_driver_version="$(cat "${SRCROOT}/.build/cua-driver/current" 2>/dev/null || true)"
+cua_driver_source_dir="${SRCROOT}/.build/cua-driver/${cua_driver_version}"
+if [ -z "${cua_driver_version}" ] || [ ! -x "${cua_driver_source_dir}/cua-driver" ] || [ ! -f "${cua_driver_source_dir}/CUA-DRIVER-LICENSE.txt" ]; then
+    echo "embed-ghostty-resources.sh: error: Cua Driver or its licence not found in ${cua_driver_source_dir}" >&2
+    exit 1
+fi
+rsync -a "${cua_driver_source_dir}/cua-driver" "${cua_driver_source_dir}/CUA-DRIVER-LICENSE.txt" "${linux_guest_destination_root}/"
+chmod +x "${linux_guest_destination_root}/cua-driver"
 
 # Alas CLI. macOS-only; the running Mac's slice is selected by
 # TerminalCLIInjection at install time.
