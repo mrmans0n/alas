@@ -5898,10 +5898,11 @@ struct ACPSessionRunnerTests {
         second: AsyncGate = AsyncGate(),
         usageWaitSleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         incomingUpdateCoalesceNanos: UInt64 = 16_000_000,
+        pluginContext: (@MainActor (_ sessionID: String) async -> [String])? = nil,
         duringPrompt: @escaping @MainActor (_ call: Int, _ mock: ACPMockClient) -> Void = { _, _ in }
     ) throws -> (ACPSessionRunner, ACPMockClient, () -> Int) {
         let (runner, mock) = try makeRunner(
-            onTurnCompleted: onTurnCompleted, onTurnUsage: onTurnUsage,
+            onTurnCompleted: onTurnCompleted, onTurnUsage: onTurnUsage, pluginContext: pluginContext,
             incomingUpdateCoalesceNanos: incomingUpdateCoalesceNanos, usageWaitSleep: usageWaitSleep)
         runner.turnPublicationTasksForTesting = [:]
         runner.session.agentState = .ready
@@ -6028,16 +6029,27 @@ struct ACPSessionRunnerTests {
 
     /// The cost of an autonomous cycle, sent after its task finished, is reported as a background usage row of its
     /// own, never charged to the prompt before or after it, whether the cycle ended on its own or was stopped, even
-    /// when Stop's reply is applied before the cycle's own stopped notice. An adapter that does not settle at its
-    /// result has no such cycles: its prompts keep every cost.
-    @Test(arguments: [(true, "completed"), (true, "stopped"), (true, "stopped locally"), (false, "completed")])
+    /// when Stop's reply is applied before the cycle's own stopped notice, or the cycle ends while the next prompt
+    /// still prepares. An adapter that does not settle at its result has no such cycles: its prompts keep every cost.
+    @Test(arguments: [
+        (true, "completed"), (true, "stopped"), (true, "stopped locally"), (true, "completed in preflight"),
+        (false, "completed"),
+    ])
     func autonomousUsageIsReportedApart(settles: Bool, cycleEnd: String) async throws {
         var usage: [ACPTurnCompletion] = []
         var completions: [ACPTurnCompletion] = []
         let second = AsyncGate()
         await second.open()
+        let preflight = AsyncGate()
+        if cycleEnd != "completed in preflight" { await preflight.open() }
+        var contextCalls = 0
         let (runner, mock, _) = try makeSettlingRunner(
             onTurnCompleted: { completions.append($0) }, onTurnUsage: { usage.append($0) }, second: second,
+            pluginContext: { _ in
+                contextCalls += 1
+                if contextCalls == 2 { await preflight.wait() }
+                return []
+            },
             duringPrompt: { call, mock in mock.emit(self.usageUpdate(call == 1 ? 1.0 : 3.5)) })
         runner.session.settlesAtResult = settles
         runner.start()
@@ -6055,6 +6067,12 @@ struct ACPSessionRunnerTests {
             try await waitUntil { runner.session.activity.backgroundWorking }
             #expect(await runner.stopBackgroundTask(id: runner.session.backgroundTasks[0].id))
             mock.emit(followUpCycle("async_task_state_update", state: "stopped"))
+        } else if cycleEnd == "completed in preflight" {
+            mock.emit(followUpCycle("async_task_spawned", state: "running"))
+            try await waitUntil { runner.session.activity.backgroundWorking }
+            runner.send(text: "second", attachments: []) { _ in }
+            try await waitUntil { contextCalls == 2 }
+            mock.emit(followUpCycle("async_task_state_update", state: "completed"))
         } else {
             mock.emit(followUpCycle("async_task_spawned", state: "running"))
             mock.emit(followUpCycle("async_task_state_update", state: cycleEnd))
@@ -6069,8 +6087,12 @@ struct ACPSessionRunnerTests {
         }
         #expect(completions.count == 1)
 
-        _ = await withCheckedContinuation { continuation in
-            runner.send(text: "second", attachments: []) { continuation.resume(returning: $0) }
+        if cycleEnd == "completed in preflight" {
+            await preflight.open()
+        } else {
+            _ = await withCheckedContinuation { continuation in
+                runner.send(text: "second", attachments: []) { continuation.resume(returning: $0) }
+            }
         }
         try await waitUntil { usage.count == (settles ? 3 : 2) }
         #expect(usage.map(\.background) == (settles ? [false, true, false] : [false, false]))

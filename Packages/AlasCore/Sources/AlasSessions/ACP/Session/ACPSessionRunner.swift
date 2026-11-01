@@ -1351,7 +1351,7 @@ public final class ACPSessionRunner {
             applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenBoundaryReady)
             return
         }
-        if pendingAutonomousUsage != nil, activePromptID == nil, !suppressingLoadReplay, !isSubagentUpdate(params),
+        if pendingAutonomousUsage != nil, !activePromptSent, !suppressingLoadReplay, !isSubagentUpdate(params),
            case .usageUpdate(let info) = params.update, let cost = info.cost {
             reportAutonomousUsage(cost: ACPTurnCost(known: cost))
         }
@@ -1869,15 +1869,21 @@ public final class ACPSessionRunner {
         // Only a cycle first seen now: a late replayed start of a known one must not let replay through.
         if !wasKnown, task.isActive {
             session.allowsStreamingBoundaryCrossing = true
-            if activePromptID != nil { takenOverCycles.insert(identity) }
+            if activePromptSent { takenOverCycles.insert(identity) }
         }
         guard wasActive, !task.isActive else { return }
         guard takenOverCycles.remove(identity) == nil,
-              ["completed", "failed", "stopped"].contains(task.state), activePromptID == nil else { return }
+              ["completed", "failed", "stopped"].contains(task.state), !activePromptSent else { return }
         // A cycle whose cost never came is reported with what did before the next one replaces it.
         reportAutonomousUsage(cost: nil)
         pendingAutonomousUsage = (
             Int64(task.startedAt.timeIntervalSince1970 * 1000), applyingStreamIndex ?? dequeuedUpdateCount)
+    }
+
+    /// Whether the active prompt has gone out. One still preparing (checkpoints, attachments, context) has taken no
+    /// cycle over yet: a cycle ending meanwhile, and its cost, stay background usage.
+    private var activePromptSent: Bool {
+        activePromptID.map { sentStreamStarts[$0] != nil } ?? false
     }
 
     /// The prompt about to go out takes over any autonomous cycle still running.
