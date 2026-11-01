@@ -292,7 +292,7 @@ public actor RemoteVisualMCPBridge {
         case .stderr:
             // Diagnostic only; it may echo request content, so it is not kept.
             break
-        case .exited:
+        case .observationLost, .exited:
             await backendEnded(epoch: epoch)
         }
     }

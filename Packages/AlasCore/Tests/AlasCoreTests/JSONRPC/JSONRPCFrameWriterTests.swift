@@ -121,17 +121,30 @@ struct JSONRPCFrameWriterTests {
         #expect(throws: (any Error).self) { try transport.send(Data("ordinary".utf8)) }
         try await eventually { finished.withLock { $0 } }
     }
-    @Test func stdoutClosureEndsReplyObservationWithoutWaitingForProcessExit() async throws {
-        let fixture = try GatedPipeFixture(closeOutput: true)
+    @Test func stdoutClosureInvalidatesWriterAndPreservesActualExitStatus() async throws {
+        let fixture = try GatedPipeFixture(closeOutput: true, exitAfterRelease: 255)
         let transport = fixture.transport
         defer { fixture.cleanup() }
         try transport.start()
         let finished = Mutex(false)
-        let reading = Task { for await _ in transport.incoming {}
-        finished.withLock { $0 = true } }
+        let observationLost = Mutex(false)
+        let exitStatus = Mutex<Int32?>(nil)
+        let reading = Task {
+            for await event in transport.incoming {
+                if case .observationLost = event { observationLost.withLock { $0 = true } }
+                if case .exited(let status) = event { exitStatus.withLock { $0 = status } }
+            }
+            finished.withLock { $0 = true }
+        }
         defer { reading.cancel() }
-        try await eventually { finished.withLock { $0 } }
+        // EOF closes the writer even while the child is alive and withholding
+        // its actual exit. Ignoring TERM makes this ordering deterministic.
+        try await eventually { observationLost.withLock { $0 } }
+        #expect(!finished.withLock { $0 })
         #expect(await transport.writeFrame(Data("late".utf8), authorize: { true }) == .notWritten)
+        try await eventually { fixture.release() }
+        try await eventually { finished.withLock { $0 } }
+        #expect(exitStatus.withLock { $0 } == 255)
     }
 }
 
@@ -141,19 +154,24 @@ private struct GatedPipeFixture {
     let root: URL
     let fifo: String
     let transport: JSONRPCStdioTransport
-    init(closeInput: Bool = false, closeOutput: Bool = false) throws {
+    init(closeInput: Bool = false, closeOutput: Bool = false, exitAfterRelease: Int32? = nil) throws {
         root = FileManager.default.temporaryDirectory.appendingPathComponent("alas-stdio-write-\(UUID())")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         fifo = root.appendingPathComponent("gate").path
         #expect(mkfifo(fifo, 0o600) == 0)
-        let script = (closeInput ? "exec 0<&-; " : "") + "printf 'ready\\n'; " + (closeOutput ? "exec 1>&-; " : "") + "IFS= read -r gate < \"$1\""
+        let script = (exitAfterRelease != nil ? "trap '' TERM; " : "") + (closeInput ? "exec 0<&-; " : "") + "printf 'ready\\n'; " + (closeOutput ? "exec 1>&-; " : "") + "IFS= read -r gate < \"$1\"; exit \(exitAfterRelease ?? 0)"
         transport = JSONRPCStdioTransport(executable: URL(fileURLWithPath: "/bin/sh"),
             arguments: ["-c", script, "fixture", fifo], environment: nil, framing: .newline)
     }
-    func cleanup() {
+    @discardableResult
+    func release() -> Bool {
         let fd = open(fifo, O_WRONLY | O_NONBLOCK)
         if fd >= 0 { _ = "release\n".withCString { Darwin.write(fd, $0, 8) }
         Darwin.close(fd) }
+        return fd >= 0
+    }
+    func cleanup() {
+        release()
         transport.terminate()
         try? FileManager.default.removeItem(at: root)
     }

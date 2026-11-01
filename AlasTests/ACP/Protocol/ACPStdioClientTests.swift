@@ -452,9 +452,9 @@ struct ACPStdioClientTests {
         #expect(underlying.sentFrames.isEmpty)
     }
 
-    @Test(arguments: [ACPProtocolVersion.v1, .v2])
-    func observationEndWithoutExitCannotLeaveAnRPCWaiting(version: ACPProtocolVersion) async throws {
-        let transport = FakeJSONRPCTransport()
+    @Test(arguments: [ACPProtocolVersion.v1, .v2], [false, true])
+    func observationEndWithoutExitCannotLeaveAnRPCWaiting(version: ACPProtocolVersion, explicitLoss: Bool) async throws {
+        let transport = FakeJSONRPCTransport(responseForRequest: { _ in explicitLoss ? .observationLost : nil })
         transport.emitExitOnTerminate = false
         let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: version)
         try client.start()
@@ -464,7 +464,7 @@ struct ACPStdioClientTests {
         _ = try #require(await boundedResult { while transport.sentFrames.isEmpty { if Task.isCancelled { return false }
         await Task.yield() }
         return true })
-        transport.terminate()
+        if !explicitLoss { transport.terminate() }
         let result = try #require(await boundedResult { await sending.result })
         if case .success = result { Issue.record("Lost observation fabricated RPC success") }
         #expect(!client.hasPendingOutboundRequest(id: .number(1)))

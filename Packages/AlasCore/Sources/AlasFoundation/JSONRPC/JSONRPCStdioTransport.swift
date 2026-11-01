@@ -33,6 +33,8 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
     public enum Incoming: Sendable {
         case frame(Data, onConsumed: (@Sendable () -> Void)? = nil)
         case stderr(Data)
+        /// Response observation ended; a later process exit still carries its actual status.
+        case observationLost
         case exited(Int32)
     }
 
@@ -136,7 +138,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
             guard !d.isEmpty else {
                 h.readabilityHandler = nil
                 self.frameWriter.close()
-                self.continuation?.finish()
+                self.continuation?.yield(.observationLost)
                 self.terminate()
                 return
             }
@@ -156,7 +158,7 @@ public final class JSONRPCStdioTransport: @unchecked Sendable, JSONRPCStdioTrans
             self.lock.unlock()
             if framingFailed {
                 self.frameWriter.close()
-                self.continuation?.finish()
+                self.continuation?.yield(.observationLost)
                 self.terminate()
                 return
             }

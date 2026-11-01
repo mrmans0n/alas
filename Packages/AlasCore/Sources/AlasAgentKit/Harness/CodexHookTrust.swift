@@ -131,6 +131,7 @@ private final class AppServerSession: @unchecked Sendable {
         try transport.send(data)
         while let incoming = await iterator.next() {
             guard case .frame(let frame, let onConsumed) = incoming else {
+                if case .observationLost = incoming { break }
                 if case .exited(let status) = incoming {
                     throw CodexInstallerError.trustHooksFailed("codex app-server exited with status \(status).")
                 }

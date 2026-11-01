@@ -91,3 +91,11 @@ Reviewer declined judgments accepted:
 - Unrelated Ghostty and adapter research remain untouched.
 
 The cost of these boundaries is explicit remaining qualification and integration work before v2 eligibility. Production remains v1-only. Changes remain uncommitted until shipping is requested.
+
+## PR review follow-up
+
+PR #2311 exposed a distinction the initial EOF checks missed: finishing the transport stream at stdout EOF discarded the later reaper's actual exit status, including SSH255 connection failures. A gated real-process regression reproduced the missing status before the fix.
+
+The transport now emits `observationLost` to invalidate writes and pending calls promptly, then retains its event stream until the reaper publishes the actual exit. ACP, visual MCP and hook-trust consumers withdraw pending work on that event. The helper records a same-generation late status and classifies connection failures without repeating attachment cleanup; replacement-generation exits remain fenced.
+
+Validation:6 real/injected writer tests passed;100 tests/7 suites passed with temporary import-adjusted app sources;85 tests/7 suites passed after removing those copies. The helper regression verifies pending-call settlement before exit and offline classification after a late255. Full SwiftFormat lint reports0/2742 files requiring formatting,1 skipped; whitespace checks passed. Focused native validation again stopped before compilation on missing dependency manifests and cache access errors, so no native pass is claimed. Logs: `/private/tmp/alas-pr2311-eof-exit-red.log`, `/private/tmp/alas-pr2311-combined.log`, `/private/tmp/alas-pr2311-package-final.log`, `/private/tmp/alas-pr2311-native.log`.

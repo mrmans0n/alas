@@ -1040,6 +1040,8 @@ public actor RemoteHelperClient {
             handleFrame(data)
         case .stderr:
             break
+        case .observationLost:
+            finishObservation(generation: eventGeneration)
         case .exited(let status):
             handleExit(status)
         }
@@ -1200,6 +1202,14 @@ public actor RemoteHelperClient {
 
     private func handleExit(_ status: Int32?) {
         lastExitStatus = status
+        if let status, RemoteExec.isConnectionFailure(exitCode: status) {
+            Task { @MainActor [host] in
+                RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
+            }
+        }
+        // EOF already withdrew this attachment. Keep a late factual status,
+        // without publishing a second set of unavailable notifications.
+        guard transport != nil else { return }
         transport = nil
         dispatchTask = nil
         subscriptionsNeedReplay = !activeSubscriptions.isEmpty || !mcpRoutes.isEmpty
@@ -1231,11 +1241,6 @@ public actor RemoteHelperClient {
         pluginProcStreams.removeAll()
         earlyProcEvents.removeAll()
         detachedProcIds.removeAll()
-        if let status, RemoteExec.isConnectionFailure(exitCode: status) {
-            Task { @MainActor [host] in
-                RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
-            }
-        }
     }
 
     private func rememberProcOffsetIfNeeded(_ event: RemoteHelperProcEvent, procId: String) {

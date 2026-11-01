@@ -235,7 +235,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
             handleFrame(data, onConsumed: onConsumed)
         case .stderr(let data):
             stderrCont.yield(data)
-        case .exited:
+        case .observationLost, .exited:
             finishObservation()
         }
     }
