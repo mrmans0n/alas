@@ -35,6 +35,77 @@ public struct ACPUserInputRequest: Identifiable, Equatable, Sendable {
     public let fields: [ACPUserInputField]
     public let mode: Mode
 
+    public enum Delivery: Equatable, Sendable {
+        /// The agent waits for the answer.
+        case blocking
+        /// The agent keeps working; the answer is optional and turn-bound.
+        case optional
+    }
+
+    public var delivery: Delivery {
+        switch source {
+        case .elicitation(_, let params):
+            return params.isAsyncDelivery && mode == .form ? .optional : .blocking
+        case .cursor, .visualAid:
+            return .blocking
+        }
+    }
+
+    public var isBlocking: Bool { delivery == .blocking }
+
+    public struct FieldGroup: Identifiable, Equatable, Sendable {
+        public let field: ACPUserInputField
+        public let note: ACPUserInputField?
+        public var id: String { field.key }
+    }
+
+    /// Fields in display order with each note under its question. A note whose
+    /// question is missing stays its own group.
+    public var fieldGroups: [FieldGroup] {
+        let keys = Set(fields.map(\.key))
+        var notes: [String: ACPUserInputField] = [:]
+        for field in fields {
+            if let q = field.schema.noteForQuestion, q != field.key, keys.contains(q), notes[q] == nil {
+                notes[q] = field
+            }
+        }
+        let attached = Set(notes.values.map(\.key))
+        return fields
+            .filter { !attached.contains($0.key) }
+            .map { FieldGroup(field: $0, note: notes[$0.key]) }
+    }
+
+    /// The option codex-acp adds when a question accepts an own answer.
+    public static let ownAnswerOptionConst = "None of the above"
+
+    /// The text codex-acp replays into the transcript for an answered optional
+    /// form (`userInputAnswerText` / `displayReplies`), or nil when no
+    /// question has an answer.
+    public func optionalAnswerTranscriptText(_ content: [String: ACPElicitationValue]) -> String? {
+        func string(_ key: String?) -> String? {
+            guard let key, case .string(let value)? = content[key] else { return nil }
+            return value
+        }
+        let blocks: [String] = fieldGroups.compactMap { group in
+            guard group.field.schema.noteForQuestion == nil else { return nil }
+            var parts: [String] = []
+            if let choice = string(group.field.key), choice != Self.ownAnswerOptionConst,
+               !choice.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                parts.append(choice)
+            }
+            if let note = string(group.note?.key)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !note.isEmpty {
+                parts.append(note)
+            }
+            guard !parts.isEmpty else { return nil }
+            let title = String(String.UnicodeScalarView(group.field.label.unicodeScalars.prefix(512)))
+                .replacingOccurrences(of: "\r", with: " ")
+                .replacingOccurrences(of: "\n", with: " ")
+            return "> \(title)\n\n" + parts.joined(separator: "\n\n")
+        }
+        return blocks.isEmpty ? nil : blocks.joined(separator: "\n\n")
+    }
+
     public static func cursor(_ request: ACPQuestionRequest) -> Self {
         let fields = request.params.questions.map { question in
             let options = question.options.map {
@@ -141,6 +212,10 @@ public struct ACPUserInputField: Identifiable, Equatable, Sendable {
         public let options: [ACPElicitationOption]
         public let defaultValue: AnyCodable?
         public let isSecret: Bool
+        /// The question accepts an own answer through its note field.
+        public let acceptsOwnAnswer: Bool
+        /// Set on a note field: the key of the question it annotates.
+        public let noteForQuestion: String?
 
         public init(
             type: String,
@@ -156,7 +231,9 @@ public struct ACPUserInputField: Identifiable, Equatable, Sendable {
             maxItems: Int?,
             options: [ACPElicitationOption],
             defaultValue: AnyCodable?,
-            isSecret: Bool
+            isSecret: Bool,
+            acceptsOwnAnswer: Bool = false,
+            noteForQuestion: String? = nil
         ) {
             self.type = type
             self.title = title
@@ -172,6 +249,8 @@ public struct ACPUserInputField: Identifiable, Equatable, Sendable {
             self.options = options
             self.defaultValue = defaultValue
             self.isSecret = isSecret
+            self.acceptsOwnAnswer = acceptsOwnAnswer
+            self.noteForQuestion = noteForQuestion
         }
 
         public init(_ property: ACPElicitationPropertySchema) {
@@ -187,6 +266,8 @@ public struct ACPUserInputField: Identifiable, Equatable, Sendable {
             minItems = property.minItems
             maxItems = property.maxItems
             isSecret = property.isSecret
+            acceptsOwnAnswer = property.acceptsOwnAnswer
+            noteForQuestion = property.noteQuestionId
             if let titled = property.oneOf {
                 options = titled
             } else if let values = property.values {
