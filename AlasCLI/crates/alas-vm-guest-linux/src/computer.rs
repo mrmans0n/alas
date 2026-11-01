@@ -557,7 +557,7 @@ impl<D: Driver> Computer<D> {
         let mut payload = json!({"version": 1, "window_id": window.id, "app": app.json()});
         match action {
             "screenshot" => {
-                let (shot, png, title) = self.capture(call, &window)?;
+                let (shot, png, title) = self.capture(call, &window, true)?;
                 let title = if title.is_empty() {
                     window.title.clone()
                 } else {
@@ -594,7 +594,7 @@ impl<D: Driver> Computer<D> {
                 payload["truncated"] = json!(read.truncated);
                 payload["elements"] = Value::Array(read.elements);
                 if params.include_screenshot {
-                    match self.capture(call, &window) {
+                    match self.capture(call, &window, true) {
                         Ok((shot, png, _)) => {
                             payload["scale"] = json!(shot.scale());
                             payload["image"] = image(&png);
@@ -754,8 +754,14 @@ impl<D: Driver> Computer<D> {
         Ok(())
     }
 
-    /// Takes a screenshot of the window and records it as what its x/y pixels mean.
-    fn capture(&mut self, call: &Call, window: &Window) -> Result<(Shot, String, String), String> {
+    /// Takes a screenshot of the window. `record` makes it what the agent's x/y pixels mean; a
+    /// capture the agent never saw must not be.
+    fn capture(
+        &mut self,
+        call: &Call,
+        window: &Window,
+        record: bool,
+    ) -> Result<(Shot, String, String), String> {
         let state = self.cua(
             call,
             "get_window_state",
@@ -783,9 +789,11 @@ impl<D: Driver> Computer<D> {
         })()
         .ok_or_else(|| message::capture_failed("Cua Driver returned an incomplete screenshot."))?;
         let title = str_field(structured, "window_title").unwrap_or_default();
-        self.session(&call.session)
-            .shots
-            .insert(window.id, shot.clone());
+        if record {
+            self.session(&call.session)
+                .shots
+                .insert(window.id, shot.clone());
+        }
         Ok((shot, png, title))
     }
 
@@ -990,17 +998,25 @@ impl<D: Driver> Computer<D> {
                     None => Some(self.point(call, window, params.to_x, params.to_y)?),
                     Some(_) => None,
                 };
+                // Taken for the ref ends when the agent's screenshot doesn't fit; never recorded.
+                let mut own_shot = None;
                 let from = match (from_point, &params.reference) {
                     (Some(point), _) => point,
-                    (None, reference) => {
-                        self.ref_point(call, window, reference.as_deref().unwrap_or_default())?
-                    }
+                    (None, reference) => self.ref_point(
+                        call,
+                        window,
+                        reference.as_deref().unwrap_or_default(),
+                        &mut own_shot,
+                    )?,
                 };
                 let to = match (to_point, &params.to_ref) {
                     (Some(point), _) => point,
-                    (None, reference) => {
-                        self.ref_point(call, window, reference.as_deref().unwrap_or_default())?
-                    }
+                    (None, reference) => self.ref_point(
+                        call,
+                        window,
+                        reference.as_deref().unwrap_or_default(),
+                        &mut own_shot,
+                    )?,
                 };
                 let mut args = merge(
                     &target,
@@ -1077,18 +1093,23 @@ impl<D: Driver> Computer<D> {
         })
     }
 
-    /// A ref's centre in pixels of the window's latest screenshot. Without a screenshot that
-    /// still fits the window, one is taken first: Cua's `drag` needs it as its frame too.
+    /// A ref's centre in pixels of the window's latest screenshot. Without one that still fits
+    /// the window, `own` is used, taken first if it's empty: Cua's `drag` needs a screenshot as
+    /// its frame too. `own` isn't recorded, so the agent's x/y still need its own screenshot.
     fn ref_point(
         &mut self,
         call: &Call,
         window: &Window,
         reference: &str,
+        own: &mut Option<Shot>,
     ) -> Result<Point, String> {
         let element = self.element(call, window.id, reference)?;
         let shot = match self.shot(call, window) {
             Ok(shot) => shot,
-            Err(_) => self.capture(call, window)?.0,
+            Err(_) => match own {
+                Some(shot) => shot.clone(),
+                None => own.insert(self.capture(call, window, false)?.0).clone(),
+            },
         };
         let frame = element
             .frame
@@ -2190,6 +2211,15 @@ mod tests {
                 "modifier": ["ctrl", "shift"], "delivery_mode": "foreground",
             })]
         );
+        // The drag's own capture isn't the agent's: its x/y still need a screenshot.
+        assert_eq!(
+            error(&computer.perform(
+                SESSION,
+                &request("click", json!({"window_id": WINDOW, "x": 10, "y": 10})),
+            )),
+            "computer_needs_screenshot: x/y are pixels in a screenshot of window 39845891. Call computer_screenshot first."
+        );
+        assert!(fake.calls("click").is_empty());
     }
 
     #[test]
