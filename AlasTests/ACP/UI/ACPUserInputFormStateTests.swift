@@ -84,12 +84,15 @@ struct ACPUserInputFormStateTests {
         #expect(state.submittedContent() == [:])
     }
 
-    @Test("an optional form has content to submit only once something is chosen or typed", arguments: [
+    @Test("an optional form has an answer only when Codex would get one", arguments: [
         (nil, nil, false),
         ("Prod", nil, true),
         (nil, "mine", true),
+        ("None of the above", nil, false),
+        ("None of the above", "mine", true),
+        (nil, "   ", false),
     ] as [(String?, String?, Bool)])
-    func optionalFormContentToSubmit(choice: String?, note: String?, expected: Bool) throws {
+    func optionalFormHasAnswer(choice: String?, note: String?, expected: Bool) throws {
         let request = try formRequest(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#))
         let state = ACPUserInputFormState(request: request)
         if let choice {
@@ -100,7 +103,7 @@ struct ACPUserInputFormStateTests {
             state.markTouched("question_0_note")
         }
 
-        #expect(state.hasContentToSubmit == expected)
+        #expect(state.hasOptionalAnswer == expected)
         #expect(!state.attemptedSubmit)
     }
 

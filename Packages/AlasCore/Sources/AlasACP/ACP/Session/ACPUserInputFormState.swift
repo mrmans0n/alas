@@ -122,6 +122,19 @@ public final class ACPUserInputFormState {
     public func submittedContent() -> [String: ACPElicitationValue]? {
         attemptedSubmit = true
         guard request.fields.allSatisfy({ validationError(for: $0) == nil }) else { return nil }
+        return currentContent()
+    }
+
+    /// Whether submitting an optional form would give the agent an answer:
+    /// the text codex-acp replays for it is non-empty. "None of the above"
+    /// alone or a blank note sends nothing, so Submit would act like Skip.
+    /// Side-effect free, unlike `submittedContent()`.
+    public var hasOptionalAnswer: Bool {
+        request.optionalAnswerTranscriptText(currentContent()) != nil
+    }
+
+    /// The fields a submit would send, without validating or marking an attempt.
+    private func currentContent() -> [String: ACPElicitationValue] {
         var content: [String: ACPElicitationValue] = [:]
         for field in request.fields where shouldInclude(field) {
             switch field.schema.type {
@@ -155,12 +168,6 @@ public final class ACPUserInputFormState {
             }
         }
         return content
-    }
-
-    /// Whether submitting would send any field. Unlike `submittedContent()`
-    /// it has no side effects, so a view can gate its Submit button on it.
-    public var hasContentToSubmit: Bool {
-        request.fields.contains(where: shouldInclude)
     }
 
     public func shouldShowError(for field: ACPUserInputField) -> Bool {

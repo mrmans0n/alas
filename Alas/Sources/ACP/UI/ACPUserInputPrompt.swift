@@ -95,7 +95,7 @@ struct ACPUserInputPrompt: View {
             ForEach(renderedGroups) { group in
                 VStack(alignment: .leading, spacing: 8) {
                     fieldView(group.field)
-                    if let note = group.note, Self.isRendered(note) {
+                    if let note = group.note {
                         noteView(note)
                     }
                 }
@@ -148,10 +148,23 @@ struct ACPUserInputPrompt: View {
         field.isSupported || field.required
     }
 
+    private struct RenderedGroup: Identifiable {
+        let field: ACPUserInputField
+        let note: ACPUserInputField?
+        var id: String { field.key }
+    }
+
     /// Each rendered question with its note field, so the note sits directly
-    /// under the question it belongs to.
-    private var renderedGroups: [ACPUserInputRequest.FieldGroup] {
-        request.fieldGroups.filter { Self.isRendered($0.field) }
+    /// under the question it belongs to. A note whose question is not
+    /// rendered stays a field of its own rather than disappearing.
+    private var renderedGroups: [RenderedGroup] {
+        request.fieldGroups.flatMap { group -> [RenderedGroup] in
+            let note = group.note.flatMap { Self.isRendered($0) ? $0 : nil }
+            if Self.isRendered(group.field) {
+                return [RenderedGroup(field: group.field, note: note)]
+            }
+            return note.map { [RenderedGroup(field: $0, note: nil)] } ?? []
+        }
     }
 
     /// A question's note field, under its question rather than as a field of
@@ -365,8 +378,8 @@ struct ACPUserInputPrompt: View {
                 }
             }
             .buttonStyle(.borderedProminent)
-            // An empty optional answer would send nothing; Skip says that.
-            .disabled(!request.isBlocking && !formState.hasContentToSubmit)
+            // An optional submit that gives Codex no answer is a Skip.
+            .disabled(!request.isBlocking && !formState.hasOptionalAnswer)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)
