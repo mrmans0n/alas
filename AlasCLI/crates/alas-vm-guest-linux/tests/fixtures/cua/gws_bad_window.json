@@ -1,0 +1,19 @@
+{
+ "tool": "get_window_state",
+ "arguments": {
+  "pid": 64288,
+  "window_id": 1
+ },
+ "result": {
+  "content": [
+   {
+    "text": "Window target pid 64288, window_id 1 is stale or no longer running; refresh list_windows.",
+    "type": "text"
+   }
+  ],
+  "isError": true,
+  "structuredContent": {
+   "code": "tool_invocation_failed"
+  }
+ }
+}

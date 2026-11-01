@@ -558,10 +558,16 @@ impl<D: Driver> Computer<D> {
         match action {
             "screenshot" => {
                 let (shot, png, title) = self.capture(call, &window)?;
-                payload["window"] = json!({
-                    "frame": shot.window_bounds.json(),
-                    "title": if title.is_empty() { window.title.clone() } else { title },
-                });
+                let title = if title.is_empty() {
+                    window.title.clone()
+                } else {
+                    title
+                };
+                payload["window"] = json!({"frame": shot.window_bounds.json()});
+                // macOS leaves out a window's missing title.
+                if !title.is_empty() {
+                    payload["window"]["title"] = json!(title);
+                }
                 payload["image_size"] =
                     json!({"width": shot.width as u64, "height": shot.height as u64});
                 payload["scale"] = json!(shot.scale());
@@ -626,6 +632,8 @@ impl<D: Driver> Computer<D> {
                 let app = index.app(pid, &windows[0].app_name);
                 identities.insert(pid, app.clone());
                 let mut object = app.json();
+                // The VM is the permission: every app in it is allowed.
+                object["approval"] = json!("allowed");
                 object["windows"] = windows.iter().map(Window::entry).collect();
                 (app.name.to_lowercase(), pid, object)
             })
@@ -928,71 +936,78 @@ impl<D: Driver> Computer<D> {
                 Ok("activation")
             }
             "scroll" => {
-                let point = self.target_point(
-                    call,
-                    window,
-                    params.reference.as_deref(),
-                    params.x,
-                    params.y,
-                )?;
+                // A ref scrolls its element with Cua's default delivery; x/y are foreground input.
+                let at = match &params.reference {
+                    Some(reference) => {
+                        let element = self.element(call, window.id, reference)?;
+                        merge(&target, json!({"element_token": element.token}))
+                    }
+                    None => {
+                        let point = self.point(call, window, params.x, params.y)?;
+                        foreground(merge(&target, json!({"x": point.x, "y": point.y})))
+                    }
+                };
                 let mut scrolls = Vec::new();
-                if params.dy != 0 {
-                    scrolls.push((
-                        if params.dy > 0 { "down" } else { "up" },
-                        params.dy.unsigned_abs(),
-                    ));
-                }
-                if params.dx != 0 {
-                    scrolls.push((
-                        if params.dx > 0 { "right" } else { "left" },
-                        params.dx.unsigned_abs(),
-                    ));
+                for (delta, positive, negative) in
+                    [(params.dy, "down", "up"), (params.dx, "right", "left")]
+                {
+                    let direction = if delta > 0 { positive } else { negative };
+                    scrolls.extend(
+                        scroll_steps(delta.unsigned_abs()).map(|amount| (direction, amount)),
+                    );
                 }
                 for (index, (direction, amount)) in scrolls.into_iter().enumerate() {
                     if index > 0 {
                         call.check()?;
                     }
-                    let args = merge(
-                        &target,
-                        json!({"direction": direction, "amount": amount, "x": point.x, "y": point.y}),
-                    );
-                    self.input_call(call, "scroll", foreground(args), None)?;
+                    let args = merge(&at, json!({"direction": direction, "amount": amount}));
+                    self.input_call(call, "scroll", args, params.reference.as_deref())?;
                 }
-                Ok("activation")
+                Ok(if params.reference.is_some() {
+                    "ax"
+                } else {
+                    "activation"
+                })
             }
             "drag" => {
                 if params.to_window_id.is_some_and(|id| id != window.id) {
                     return Err(message::action_failed(message::NO_CROSS_APP_DRAG));
                 }
-                let modifier = match params.modifiers.as_slice() {
-                    [] => None,
-                    [modifier] => Some(drag_modifier(modifier)?),
-                    _ => {
-                        return Err(message::action_failed(
-                            "A drag in a Linux VM can hold one modifier at most.",
-                        ));
+                let mut modifiers: Vec<&'static str> = Vec::new();
+                for modifier in &params.modifiers {
+                    let key = drag_modifier(modifier)?;
+                    if !modifiers.contains(&key) {
+                        modifiers.push(key);
+                    }
+                }
+                // x/y ends first: they must match the agent's own screenshot, which a ref end's
+                // capture would replace.
+                let from_point = match params.reference {
+                    None => Some(self.point(call, window, params.x, params.y)?),
+                    Some(_) => None,
+                };
+                let to_point = match params.to_ref {
+                    None => Some(self.point(call, window, params.to_x, params.to_y)?),
+                    Some(_) => None,
+                };
+                let from = match (from_point, &params.reference) {
+                    (Some(point), _) => point,
+                    (None, reference) => {
+                        self.ref_point(call, window, reference.as_deref().unwrap_or_default())?
                     }
                 };
-                let from = self.target_point(
-                    call,
-                    window,
-                    params.reference.as_deref(),
-                    params.x,
-                    params.y,
-                )?;
-                let to = self.target_point(
-                    call,
-                    window,
-                    params.to_ref.as_deref(),
-                    params.to_x,
-                    params.to_y,
-                )?;
+                let to = match (to_point, &params.to_ref) {
+                    (Some(point), _) => point,
+                    (None, reference) => {
+                        self.ref_point(call, window, reference.as_deref().unwrap_or_default())?
+                    }
+                };
                 let mut args = merge(
                     &target,
                     json!({"from_x": from.x, "from_y": from.y, "to_x": to.x, "to_y": to.y}),
                 );
-                if let Some(modifier) = modifier {
-                    args["modifier"] = json!(modifier);
+                if !modifiers.is_empty() {
+                    args["modifier"] = json!(modifiers);
                 }
                 self.input_call(call, "drag", foreground(args), None)?;
                 Ok("activation")
@@ -1062,20 +1077,19 @@ impl<D: Driver> Computer<D> {
         })
     }
 
-    /// A ref's centre, or x/y, in pixels of the window's latest screenshot.
-    fn target_point(
+    /// A ref's centre in pixels of the window's latest screenshot. Without a screenshot that
+    /// still fits the window, one is taken first: Cua's `drag` needs it as its frame too.
+    fn ref_point(
         &mut self,
         call: &Call,
         window: &Window,
-        reference: Option<&str>,
-        x: Option<f64>,
-        y: Option<f64>,
+        reference: &str,
     ) -> Result<Point, String> {
-        let Some(reference) = reference else {
-            return self.point(call, window, x, y);
-        };
         let element = self.element(call, window.id, reference)?;
-        let shot = self.shot(call, window)?;
+        let shot = match self.shot(call, window) {
+            Ok(shot) => shot,
+            Err(_) => self.capture(call, window)?.0,
+        };
         let frame = element
             .frame
             .ok_or_else(|| message::out_of_bounds(window.id))?;
@@ -1345,6 +1359,11 @@ fn named_key(name: &str) -> Option<&'static str> {
         "f12" => "F12",
         _ => return None,
     })
+}
+
+/// Cua's `scroll.amount` is 1…50 steps: a larger delta goes as several scrolls.
+fn scroll_steps(delta: u32) -> impl Iterator<Item = u32> {
+    (0..delta.div_ceil(50)).map(move |index| (delta - index * 50).min(50))
 }
 
 /// A drag's `ComputerUseKeyChord.Modifier` as the key Cua holds.
@@ -1738,6 +1757,12 @@ mod tests {
             "computer_stale: The element ref e1 is no longer valid. Call computer_inspect on window 39845891 again."
         );
         assert!(fake.calls("click").is_empty());
+        // Cua reports the window itself gone.
+        fake.script("get_window_state", vec![fixture("gws_bad_window")]);
+        assert_eq!(
+            error(&computer.perform(SESSION, &request("inspect", json!({"window_id": WINDOW})))),
+            "computer_window_not_found: No on-screen window 39845891. Call computer_apps again."
+        );
     }
 
     #[test]
@@ -1860,7 +1885,7 @@ mod tests {
             SESSION,
             &request(
                 "scroll",
-                json!({"window_id": WINDOW, "x": 200, "y": 150, "dx": -2, "dy": 3}),
+                json!({"window_id": WINDOW, "x": 200, "y": 150, "dx": -2, "dy": 120}),
             ),
         ));
 
@@ -1870,7 +1895,16 @@ mod tests {
                 "direction": direction, "amount": amount, "delivery_mode": "foreground",
             })
         };
-        assert_eq!(fake.calls("scroll"), vec![at("down", 3), at("left", 2)]);
+        // Cua scrolls at most 50 steps a call.
+        assert_eq!(
+            fake.calls("scroll"),
+            vec![
+                at("down", 50),
+                at("down", 50),
+                at("down", 20),
+                at("left", 2)
+            ]
+        );
     }
 
     #[test]
@@ -2091,6 +2125,16 @@ mod tests {
             assert_eq!(result["app"], mousepad_app());
             assert_eq!(result["elements"], json!([edit_menu()]), "{action}");
             assert_eq!(result["truncated"], false);
+            if action == "scroll" {
+                // A ref scroll goes by element, with Cua's default delivery.
+                assert_eq!(
+                    fake.calls("scroll"),
+                    vec![json!({
+                        "pid": PID, "window_id": WINDOW, "element_token": "s00000002:0",
+                        "direction": "down", "amount": 1,
+                    })]
+                );
+            }
             let reads = fake.calls("get_window_state");
             assert_eq!(
                 reads.last().unwrap(),
@@ -2102,5 +2146,102 @@ mod tests {
                 "{action}"
             );
         }
+    }
+
+    #[test]
+    fn drag_from_refs_converts_centres_and_holds_modifiers() {
+        let fake = Fake::mousepad();
+        // No screenshot of the agent's: the drag takes one, drawn at twice the window's size.
+        fake.script(
+            "get_window_state",
+            vec![
+                fixture("gws_elements"),
+                fixture_with("gws_screenshot", |result| {
+                    result["structuredContent"]["screenshot_width"] = json!(1280);
+                    result["structuredContent"]["screenshot_height"] = json!(960);
+                }),
+                fixture("gws_elements_query"),
+            ],
+        );
+        fake.script("drag", vec![fixture("drag_fg")]);
+        let mut computer = new_computer(&fake);
+        inspect(&mut computer, None);
+
+        payload(&computer.perform(
+            SESSION,
+            &request(
+                "drag",
+                json!({"window_id": WINDOW, "ref": "e1", "to_ref": "e2",
+                       "modifiers": ["command", "control", "shift"]}),
+            ),
+        ));
+
+        assert_eq!(
+            fake.calls("get_window_state")[1]["max_image_dimension"],
+            1280
+        );
+        // File's centre (755.5, 793.5) and Edit's (795.5, 793.5), less the window's origin
+        // (736, 780), times 2.
+        assert_eq!(
+            fake.calls("drag"),
+            vec![json!({
+                "pid": PID, "window_id": WINDOW,
+                "from_x": 39.0, "from_y": 27.0, "to_x": 119.0, "to_y": 27.0,
+                "modifier": ["ctrl", "shift"], "delivery_mode": "foreground",
+            })]
+        );
+    }
+
+    #[test]
+    fn apps_lists_apps_with_windows_by_name() {
+        let fake = Fake::mousepad();
+        fake.script(
+            "list_windows",
+            vec![fixture_with("list_windows", |result| {
+                let mousepad = fixture("list_windows_mousepad").structured["windows"][0].clone();
+                result["structuredContent"]["windows"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(mousepad);
+            })],
+        );
+        let mut computer = new_computer(&fake);
+
+        let apps = payload(&computer.perform(SESSION, &request("apps", json!({}))));
+
+        let panel = |id: u64, frame: Value| json!({"window_id": id, "frame": frame, "title": "xfce4-panel"});
+        assert_eq!(
+            apps,
+            json!({
+                "version": 1,
+                "apps": [
+                    {
+                        "name": "Mousepad", "pid": PID, "bundle_id": "org.xfce.mousepad",
+                        "approval": "allowed",
+                        "windows": [{
+                            "window_id": WINDOW,
+                            "frame": {"x": 736.0, "y": 780.0, "width": 640.0, "height": 480.0},
+                            "title": "Untitled 1 - Mousepad",
+                        }],
+                    },
+                    {
+                        "name": "Panel", "pid": 1430, "bundle_id": "panel-preferences",
+                        "approval": "allowed",
+                        "windows": [
+                            panel(14680067, json!({"x": 0.0, "y": 0.0, "width": 2112.0, "height": 27.0})),
+                            panel(14680078, json!({"x": 903.0, "y": 1941.0, "width": 306.0, "height": 49.0})),
+                        ],
+                    },
+                    {
+                        "name": "xfdesktop", "pid": 1449, "approval": "allowed",
+                        "windows": [{
+                            "window_id": 18874391,
+                            "frame": {"x": 0.0, "y": 0.0, "width": 2112.0, "height": 1990.0},
+                            "title": "Desktop",
+                        }],
+                    },
+                ],
+            })
+        );
     }
 }
