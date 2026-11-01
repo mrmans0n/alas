@@ -191,7 +191,7 @@ struct GitServiceStashTests {
             Issue.record("Expected corrupt stash image data to be a failed side.")
             return
         }
-        #expect(failure.message == "decode")
+        #expect(failure == .undecodable)
         #expect(pair.hasFailure)
     }
 

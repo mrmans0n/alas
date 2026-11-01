@@ -6,12 +6,18 @@ import AlasPlatform
 /// A decoded image owned by the platform layer (an `NSImage` in the app).
 public protocol DiffImage: AnyObject, Sendable {}
 
-public struct ImageDiffLoadFailure: Equatable, Sendable {
+/// Why an image side couldn't load; `message` is shown in place of the image.
+public struct ImageDiffLoadFailure: Error, Equatable, Sendable {
     public let message: String
 
     public init(message: String) {
         self.message = message
     }
+
+    public static let undecodable = ImageDiffLoadFailure(message: "Image could not be decoded.")
+    public static let lfsPointer = ImageDiffLoadFailure(message: "Git LFS content isn't available.")
+    public static let gitFailed = ImageDiffLoadFailure(message: "Git couldn't read this revision.")
+    public static let changedOnDisk = ImageDiffLoadFailure(message: "The file changed while loading.")
 }
 
 public enum ImageDiffSide: Sendable {
@@ -45,8 +51,8 @@ public struct ImageDiffPair: Sendable {
         return false
     }
 
-    public static func failedLoading() -> ImageDiffPair {
-        let failure = ImageDiffLoadFailure(message: "Image diff could not be loaded.")
+    public static func failedLoading(_ message: String = "Image diff could not be loaded.") -> ImageDiffPair {
+        let failure = ImageDiffLoadFailure(message: message)
         return ImageDiffPair(
             before: .failed(failure),
             after: .failed(failure),

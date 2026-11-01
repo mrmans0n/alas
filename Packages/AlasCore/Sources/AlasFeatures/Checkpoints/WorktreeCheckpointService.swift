@@ -150,7 +150,7 @@ public actor WorktreeCheckpointService: WorktreeCheckpointServicing {
                     let decoded = await Self.decodeImage(data, worktreePath: target.path)
                     // The pane shows the message verbatim, so keep the checkpoint copy for every failure.
                     if case .failed = decoded {
-                        return .failed(.init(message: "Image could not be decoded."))
+                        return .failed(.undecodable)
                     }
                     return decoded
                 }

@@ -16,7 +16,7 @@ extension GitService {
         worktreePath: URL
     ) async -> ImageDiffSide {
         guard let image = await GitLFSBlobResolver.image(fromGitBlobData: data, worktreePath: worktreePath) else {
-            return .failed(ImageDiffLoadFailure(message: isLFSPointer(data) ? "LFS" : "decode"))
+            return .failed(isLFSPointer(data) ? .lfsPointer : .undecodable)
         }
         return imageSide(forDecodedImage: image)
     }
@@ -40,7 +40,7 @@ extension GitService {
                     category: "changed-on-disk", worktreePath: worktreePath, revision: revision, path: path,
                     diagnostic: "Working-tree image disappeared while loading"
                 )
-                return .failed(ImageDiffLoadFailure(message: "changed-on-disk"))
+                return .failed(.changedOnDisk)
             }
             let afterToken = fileMetadataToken(worktreePath: worktreePath, path: path)
             guard beforeToken == afterToken else {
@@ -48,7 +48,7 @@ extension GitService {
                     category: "changed-on-disk", worktreePath: worktreePath, revision: revision, path: path,
                     diagnostic: "Working-tree image changed while loading"
                 )
-                return .failed(ImageDiffLoadFailure(message: "changed-on-disk"))
+                return .failed(.changedOnDisk)
             }
             let side = await Self.imageSide(fromRawData: data, worktreePath: worktreePath)
             if case .failed(let failure) = side {
@@ -489,7 +489,7 @@ extension GitService {
                     category: "Git", worktreePath: worktreePath, revision: ref, path: path,
                     diagnostic: stderr
                 )
-                return .failed(ImageDiffLoadFailure(message: "Git"))
+                return .failed(.gitFailed)
             }
             return await Self.imageSide(fromRawData: result.stdout, worktreePath: worktreePath)
         } catch {
@@ -497,7 +497,7 @@ extension GitService {
                 category: "Git", worktreePath: worktreePath, revision: ref, path: path,
                 diagnostic: error.localizedDescription
             )
-            return .failed(ImageDiffLoadFailure(message: "Git"))
+            return .failed(.gitFailed)
         }
     }
 
@@ -625,7 +625,7 @@ extension GitService {
                     category: "Git", worktreePath: worktreePath, revision: revision, path: path,
                     diagnostic: diagnostic
                 )
-                return .failed(ImageDiffLoadFailure(message: "Git"))
+                return .failed(.gitFailed)
             }
 
             let side = await Self.imageSide(fromRawData: result.stdout, worktreePath: worktreePath)
@@ -633,18 +633,17 @@ extension GitService {
                 return side
             }
 
-            let category = Self.isLFSPointer(result.stdout) ? "LFS" : "decode"
             Self.logImageSideFailure(
-                category: category, worktreePath: worktreePath, revision: revision, path: path,
-                diagnostic: "Image data could not be decoded"
+                category: Self.isLFSPointer(result.stdout) ? "LFS" : "decode", worktreePath: worktreePath,
+                revision: revision, path: path, diagnostic: "Image data could not be decoded"
             )
-            return .failed(ImageDiffLoadFailure(message: category))
+            return side
         } catch {
             Self.logImageSideFailure(
                 category: "Git", worktreePath: worktreePath, revision: revision, path: path,
                 diagnostic: error.localizedDescription
             )
-            return .failed(ImageDiffLoadFailure(message: "Git"))
+            return .failed(.gitFailed)
         }
     }
 
