@@ -607,8 +607,6 @@ extension RightPaneState {
         return message
     }
 
-    @ObservationIgnored var requestGGSplitCommit: ((GGStackEntry) -> Void)? = nil
-
     func loadDescription(target: GGSplitCommitTarget) async throws -> GGSplitLoadedDescription {
         guard let snapshot = cachedGGStackSnapshot,
               let identity = snapshot.identity,

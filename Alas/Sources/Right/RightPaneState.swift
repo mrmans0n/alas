@@ -82,6 +82,7 @@ final class RightPaneState: GGSplitCommitServicing {
     let isFolder: Bool
     var defaultTab: RightPaneTab { isFolder ? .files : .changes }
     let reviewLoop: ReviewLoopState
+    @ObservationIgnored var requestGGSplitCommit: ((GGStackEntry) -> Void)? = nil
     @ObservationIgnored
     var reviewSnapshotDidChange: ((ReviewLoopSnapshot) -> Void)?
     @ObservationIgnored
