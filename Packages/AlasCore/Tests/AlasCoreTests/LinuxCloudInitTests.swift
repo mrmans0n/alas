@@ -98,7 +98,8 @@ struct LinuxCloudInitTests {
         }
 
         // Update helper stops at once on a share without Cua Driver. On an older guest a per-user
-        // screensaver channel overrides those defaults and a locker may run, so it also drops both.
+        // screensaver channel overrides those defaults and a locker may run, so it also drops both,
+        // and tells a running xfconfd too, which would otherwise write the old values back.
         // The pkill is anchored: an unanchored -f would match the script's own command line. The
         // restart is queued, so the script ends before it stops the service it runs in.
         let update = LinuxGuestSetup.updateCommands(user: "alas")
@@ -106,6 +107,8 @@ struct LinuxCloudInitTests {
             #"test -x /mnt/alas/helper/cua-driver || { echo "no Cua Driver in the helper share" >&2; exit 3; }"#,
         ] + commands.dropLast() + [
             #"rm -f "$(getent passwd alas | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#,
+            "runuser -u alas -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u alas)/bus xfconf-query -c xfce4-screensaver -p /lock/enabled -n -t bool -s false || true",
+            "runuser -u alas -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u alas)/bus xfconf-query -c xfce4-screensaver -p /saver/enabled -n -t bool -s false || true",
             "pkill -f '^(/usr/bin/)?xfce4-screensaver' || true",
             "runuser -u alas -- env XDG_RUNTIME_DIR=/run/user/$(id -u alas) systemctl --user --no-block restart alas-vm-guest || true",
         ])

@@ -80,16 +80,23 @@ public enum LinuxGuestSetup {
     /// `commands(user:)` for a guest that has been running. It first stops
     /// with exit status 3 when the share has no Cua Driver. Before the
     /// restart it removes `user`'s own screensaver channel (older guests
-    /// wrote one, and it overrides the `/etc/xdg` defaults) and ends a running
-    /// locker. The locker's name is longer than the 15 characters `pkill -x`
-    /// sees, so it matches the command line, anchored so it can't match this
-    /// script's. The restart is only queued: the script runs inside the
-    /// helper's service, whose stop would otherwise wait for it.
+    /// wrote one, and it overrides the `/etc/xdg` defaults), turns the locker
+    /// and saver off in a running xfconfd too, which could otherwise write
+    /// the old values back, and ends a running locker. The locker's name is
+    /// longer than the 15 characters `pkill -x` sees, so it matches the
+    /// command line, anchored so it can't match this script's. The restart is
+    /// only queued: the script runs inside the helper's service, whose stop
+    /// would otherwise wait for it.
     public static func updateCommands(user: String) -> [String] {
-        [#"test -x \#(cuaDriverSource) || { echo "no Cua Driver in the helper share" >&2; exit 3; }"#]
+        let xfconfOff = ["/lock/enabled", "/saver/enabled"].map { property in
+            "runuser -u \(user) -- env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u \(user))/bus "
+                + "xfconf-query -c xfce4-screensaver -p \(property) -n -t bool -s false || true"
+        }
+        return [#"test -x \#(cuaDriverSource) || { echo "no Cua Driver in the helper share" >&2; exit 3; }"#]
             + commands(user: user).dropLast()
+            + [#"rm -f "$(getent passwd \#(user) | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#]
+            + xfconfOff
             + [
-                #"rm -f "$(getent passwd \#(user) | cut -d: -f6)/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-screensaver.xml""#,
                 "pkill -f '^(/usr/bin/)?xfce4-screensaver' || true",
                 restartCommand(user: user, noBlock: true),
             ]
