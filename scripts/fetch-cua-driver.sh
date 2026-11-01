@@ -43,7 +43,8 @@ mkdir -p "${build_root}"
 work_dir="$(mktemp -d "${build_root}/download.XXXXXX")"
 trap 'rm -rf "${work_dir}"' EXIT
 
-curl -fL --retry 3 --silent --show-error -o "${work_dir}/${asset}" "${url}"
+curl -fL --retry 3 --silent --show-error -o "${work_dir}/${asset}" "${url}" \
+    || die "could not download ${url}; Cua Driver is needed for the Linux VM guest (network required on first build)"
 actual_sha256="$(shasum -a 256 < "${work_dir}/${asset}" | awk '{print $1}')"
 [ "${actual_sha256}" = "${asset_sha256}" ] \
     || die "${asset} has SHA256 ${actual_sha256}, expected ${asset_sha256}"

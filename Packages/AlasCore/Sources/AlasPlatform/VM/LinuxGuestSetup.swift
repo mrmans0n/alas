@@ -53,7 +53,7 @@ public enum LinuxGuestSetup {
     /// One `cat > path <<'EOF'` heredoc per `lockerOffFiles` entry. Each is a
     /// single multi-line shell command; the contents never contain a line
     /// that is exactly `EOF`.
-    public static func writeFilesCommands() -> [String] {
+    static func writeFilesCommands() -> [String] {
         lockerOffFiles.map { "cat > \($0.path) <<'EOF'\n\($0.content)EOF" }
     }
 
@@ -70,7 +70,8 @@ public enum LinuxGuestSetup {
             + [
                 "install -m 0755 \(helperSource) \(helperPath)",
                 "install -m 0755 \(cuaDriverSource) \(cuaDriverPath)",
-                "dpkg -s mousepad >/dev/null 2>&1 || { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y mousepad; }",
+                // apt-daily or unattended-upgrades often hold the dpkg lock on first boot.
+                "dpkg -s mousepad >/dev/null 2>&1 || { apt-get -o DPkg::Lock::Timeout=300 update && DEBIAN_FRONTEND=noninteractive apt-get -o DPkg::Lock::Timeout=300 install -y mousepad; }",
                 "runuser -u \(user) -- env XDG_RUNTIME_DIR=/run/user/$(id -u \(user)) systemctl --user restart alas-vm-guest || true",
             ]
     }

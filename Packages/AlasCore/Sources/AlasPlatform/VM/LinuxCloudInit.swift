@@ -67,7 +67,7 @@ public enum LinuxCloudInit {
             "test -x \(LinuxGuestSetup.helperPath)",
             "test -x \(LinuxGuestSetup.cuaDriverPath)",
             "test -L \(wantsLink)",
-            "dpkg -s xubuntu-core lightdm >/dev/null 2>&1",
+            "dpkg -s xubuntu-core lightdm mousepad >/dev/null 2>&1",
         ].joined(separator: " && ")
         // The share's fstab line is written directly rather than through
         // `mounts:`, so it doesn't depend on cc_mounts' device-name sanitizing
