@@ -13,11 +13,17 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// The Cua Driver calls `Computer` makes; a scripted fake stands in for it in tests.
 pub trait Driver {
     fn call(&mut self, tool: &str, args: Value, timeout: Duration) -> Result<CuaResult, CuaError>;
+    /// Whether the driver runs and answered the MCP handshake, for the hello's capabilities.
+    fn available(&mut self) -> bool;
 }
 
 impl Driver for CuaDriver {
     fn call(&mut self, tool: &str, args: Value, timeout: Duration) -> Result<CuaResult, CuaError> {
         CuaDriver::call(self, tool, args, timeout)
+    }
+
+    fn available(&mut self) -> bool {
+        CuaDriver::available(self)
     }
 }
 
@@ -57,7 +63,8 @@ impl Canceller {
         }
     }
 
-    fn cancel_session(&self, session: &str) {
+    /// Stops every call of the session in flight.
+    pub fn cancel_session(&self, session: &str) {
         for ((owner, _), flag) in self.calls.lock().unwrap().iter() {
             if owner == session {
                 flag.store(true, Ordering::SeqCst);
@@ -87,7 +94,7 @@ impl Canceller {
 
 // MARK: - Messages, copied from `ComputerUseCoordinator.Message`.
 
-mod message {
+pub(crate) mod message {
     pub const CANCELLED: &str = "computer_cancelled: The call was cancelled.";
     pub const LIMIT: &str = "computer_limit: The result exceeds the response limit. Inspect with a query or a smaller limit.";
     pub const NO_QUITTING: &str = "Agents can't quit apps.";
@@ -482,6 +489,11 @@ impl<D: Driver> Computer<D> {
     /// A handle that cancels this computer's calls from another thread.
     pub fn canceller(&self) -> Canceller {
         self.canceller.clone()
+    }
+
+    /// The driver, for its `available` probe.
+    pub fn driver_mut(&mut self) -> &mut D {
+        &mut self.driver
     }
 
     /// Answers a `{"command":"computer_<action>","params":{…}}` request with an
@@ -1207,7 +1219,7 @@ impl<D: Driver> Computer<D> {
     }
 }
 
-fn error_response(message: &str) -> Value {
+pub(crate) fn error_response(message: &str) -> Value {
     json!({"ok": false, "error": message})
 }
 
@@ -1429,20 +1441,20 @@ fn iso8601_now() -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::collections::{BTreeSet, VecDeque};
     use std::sync::atomic::AtomicU64;
     use std::sync::mpsc;
     use std::thread;
 
-    const WINDOW: u64 = 39845891;
+    pub(crate) const WINDOW: u64 = 39845891;
     const PID: u64 = 64288;
-    const SESSION: &str = "s1";
+    pub(crate) const SESSION: &str = "s1";
     const ONE_PIXEL_PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
     /// A recorded Cua answer from `tests/fixtures/cua`, edited by `edit` first.
-    fn fixture_with(name: &str, edit: impl FnOnce(&mut Value)) -> CuaResult {
+    pub(crate) fn fixture_with(name: &str, edit: impl FnOnce(&mut Value)) -> CuaResult {
         let path = format!(
             "{}/tests/fixtures/cua/{name}.json",
             env!("CARGO_MANIFEST_DIR")
@@ -1453,38 +1465,39 @@ mod tests {
         CuaResult::from_response(&json!({"result": result}))
     }
 
-    fn fixture(name: &str) -> CuaResult {
+    pub(crate) fn fixture(name: &str) -> CuaResult {
         fixture_with(name, |_| {})
     }
 
     /// Pauses the first call of `tool` until the test lets it go.
-    struct Gate {
-        tool: String,
-        reached: mpsc::Sender<()>,
-        release: mpsc::Receiver<()>,
+    pub(crate) struct Gate {
+        pub(crate) tool: String,
+        pub(crate) reached: mpsc::Sender<()>,
+        pub(crate) release: mpsc::Receiver<()>,
     }
 
     #[derive(Default)]
-    struct FakeState {
+    pub(crate) struct FakeState {
         /// Answers per tool, in order; the last one repeats.
         scripts: HashMap<String, VecDeque<CuaResult>>,
         calls: Vec<(String, Value)>,
-        gate: Option<Gate>,
+        pub(crate) gate: Option<Gate>,
+        pub(crate) available: bool,
     }
 
     #[derive(Clone, Default)]
-    struct Fake(Arc<Mutex<FakeState>>);
+    pub(crate) struct Fake(pub(crate) Arc<Mutex<FakeState>>);
 
     impl Fake {
         /// Mousepad's one window, and the guest's apps.
-        fn mousepad() -> Self {
+        pub(crate) fn mousepad() -> Self {
             let fake = Self::default();
             fake.script("list_windows", vec![fixture("list_windows_mousepad")]);
             fake.script("list_apps", vec![fixture("list_apps")]);
             fake
         }
 
-        fn script(&self, tool: &str, answers: Vec<CuaResult>) {
+        pub(crate) fn script(&self, tool: &str, answers: Vec<CuaResult>) {
             self.0
                 .lock()
                 .unwrap()
@@ -1492,7 +1505,7 @@ mod tests {
                 .insert(tool.to_string(), answers.into());
         }
 
-        fn calls(&self, tool: &str) -> Vec<Value> {
+        pub(crate) fn calls(&self, tool: &str) -> Vec<Value> {
             let state = self.0.lock().unwrap();
             state
                 .calls
@@ -1537,11 +1550,15 @@ mod tests {
             }
             answer.ok_or_else(|| CuaError::Unavailable(format!("{tool} isn't scripted")))
         }
+
+        fn available(&mut self) -> bool {
+            self.0.lock().unwrap().available
+        }
     }
 
     /// Advances only when slept on.
     #[derive(Default)]
-    struct FakeClock(AtomicU64);
+    pub(crate) struct FakeClock(AtomicU64);
 
     impl Clock for FakeClock {
         fn now(&self) -> Duration {
@@ -1554,11 +1571,11 @@ mod tests {
         }
     }
 
-    fn new_computer(fake: &Fake) -> Computer<Fake> {
+    pub(crate) fn new_computer(fake: &Fake) -> Computer<Fake> {
         Computer::with_clock(fake.clone(), Arc::new(FakeClock::default()))
     }
 
-    fn request(action: &str, params: Value) -> Value {
+    pub(crate) fn request(action: &str, params: Value) -> Value {
         json!({"command": format!("computer_{action}"), "params": params})
     }
 
@@ -1570,7 +1587,7 @@ mod tests {
         serde_json::from_str(lines[0].as_str().unwrap()).unwrap()
     }
 
-    fn error(response: &Value) -> String {
+    pub(crate) fn error(response: &Value) -> String {
         assert_eq!(response["ok"], false, "{response}");
         response["error"].as_str().unwrap().to_string()
     }

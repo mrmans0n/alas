@@ -122,30 +122,26 @@ impl Framer {
     }
 }
 
-/// The reply to `hello`: this helper runs commands and has no computer use yet.
-pub fn hello_reply() -> Message {
+/// The reply to `hello`. Computer use is advertised only while Cua Driver answers.
+pub fn hello_reply(computer_use: bool) -> Message {
+    let mut capabilities = vec!["run".to_string()];
+    if computer_use {
+        capabilities.push("computer_use".to_string());
+    }
     Message::HelloReply {
         guest_version: env!("CARGO_PKG_VERSION").to_string(),
         protocol_revision: REVISION,
         accessibility: false,
         screen_recording: false,
         guest_kind: Some("linux".to_string()),
-        capabilities: Some(vec!["run".to_string()]),
+        capabilities: Some(capabilities),
     }
 }
 
-/// The reply to any computer-use `command`: an `AlasCLIResponse` error.
-pub fn unsupported_command_response(id: u64) -> Message {
-    const BODY: &str = r#"{"ok":false,"error":"computer_vm_unsupported: Computer use isn't available in Linux VMs yet."}"#;
-    Message::Response {
-        id,
-        body: base64(BODY.as_bytes()),
-    }
-}
+const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 /// Standard base64 with padding, what Swift's `JSONEncoder` produces for `Data`.
 pub fn base64(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let n = (u32::from(chunk[0]) << 16)
@@ -160,6 +156,30 @@ pub fn base64(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// Decodes `base64`'s output: padded standard base64. None for anything else.
+pub fn unbase64(text: &str) -> Option<Vec<u8>> {
+    let text = text.as_bytes();
+    if !text.len().is_multiple_of(4) {
+        return None;
+    }
+    let mut out = Vec::with_capacity(text.len() / 4 * 3);
+    for (index, chunk) in text.chunks(4).enumerate() {
+        let last = index == text.len() / 4 - 1;
+        let padding = chunk.iter().rev().take_while(|byte| **byte == b'=').count();
+        if padding > 2 || (padding > 0 && !last) {
+            return None;
+        }
+        let mut n = 0u32;
+        for byte in &chunk[..4 - padding] {
+            let value = ALPHABET.iter().position(|letter| letter == byte)?;
+            n = (n << 6) | value as u32;
+        }
+        n <<= 6 * padding as u32;
+        out.extend_from_slice(&n.to_be_bytes()[1..4 - padding]);
+    }
+    Some(out)
 }
 
 #[cfg(test)]
@@ -186,15 +206,15 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_command_response_matches_the_fixture() {
-        let text = std::fs::read_to_string(FIXTURE).unwrap();
-        let samples: Vec<Value> = serde_json::from_str(&text).unwrap();
-        let fixture = samples
-            .iter()
-            .find(|sample| sample["type"] == "response")
-            .unwrap();
-        let reply = serde_json::to_value(unsupported_command_response(9)).unwrap();
-        assert_eq!(&reply, fixture);
+    fn base64_round_trips_every_padding() {
+        let bytes = b"\x00\xff{\"ok\":true}";
+        for length in 0..=bytes.len() {
+            let text = base64(&bytes[..length]);
+            assert_eq!(unbase64(&text).as_deref(), Some(&bytes[..length]), "{text}");
+        }
+        for invalid in ["abc", "a===", "ab=c", "ab==abcd", "ab!d"] {
+            assert_eq!(unbase64(invalid), None, "{invalid}");
+        }
     }
 
     #[test]

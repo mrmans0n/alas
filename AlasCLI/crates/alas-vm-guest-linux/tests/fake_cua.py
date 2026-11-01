@@ -4,7 +4,8 @@ Usage: fake_cua.py <script.json>. The script is
 
     {"tools": {"<tool>": [<tools/call result>, ...]},
      "crash_on_call": N,     # exit without answering the Nth tools/call, counted across processes
-     "hang_on": "<tool>"}    # never answer that tool
+     "hang_on": "<tool>",    # never answer that tool
+     "server_request_on": "<tool>"}  # send a request first and echo the client's answer
 
 Each tool's results are used in turn; the last one repeats. A result whose structuredContent is
 "$arguments" echoes the call's arguments. Calls are counted in <script.json>.calls so a respawned
@@ -60,6 +61,13 @@ for line in sys.stdin:
             sys.exit(1)
         if name == script.get("hang_on"):
             time.sleep(3600)
+        if name == script.get("server_request_on"):
+            # Reuses the call's id, as a server may.
+            send({"jsonrpc": "2.0", "id": request_id, "method": "roots/list"})
+            answer = json.loads(sys.stdin.readline())
+            send({"jsonrpc": "2.0", "id": request_id,
+                  "result": {"content": [], "structuredContent": answer}})
+            continue
         results = script["tools"][name]
         result = results[min(served.get(name, 0), len(results) - 1)]
         served[name] = served.get(name, 0) + 1

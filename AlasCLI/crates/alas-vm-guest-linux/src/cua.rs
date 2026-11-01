@@ -255,8 +255,9 @@ impl Process {
         }
     }
 
-    /// Sends a request and waits for the answer with its id. Lines that aren't answers to it, such
-    /// as notifications, are skipped.
+    /// Sends a request and waits for the answer with its id. A request from the driver gets a
+    /// method-not-found error; other lines that aren't the answer, such as notifications, are
+    /// skipped.
     fn request(
         &mut self,
         method: &str,
@@ -272,10 +273,18 @@ impl Process {
                 .incoming
                 .recv_timeout(deadline.saturating_duration_since(Instant::now()))
             {
-                // A server-to-client request has a method and may reuse the id.
+                // A server-to-client request has a method and may reuse the id. This client
+                // offers no capabilities, so it answers none of them.
                 Ok(Incoming::Message(message))
-                    if message.get("id") == Some(&json!(id)) && message.get("method").is_none() =>
+                    if message.get("method").is_some() && message.get("id").is_some() =>
                 {
+                    self.send(&json!({
+                        "jsonrpc": "2.0",
+                        "id": message["id"],
+                        "error": {"code": -32601, "message": "Method not found"},
+                    }))?;
+                }
+                Ok(Incoming::Message(message)) if message.get("id") == Some(&json!(id)) => {
                     return Ok(message);
                 }
                 Ok(Incoming::Message(_)) => {}
@@ -348,13 +357,15 @@ fn driver_log(config: &CuaConfig) -> Option<PathBuf> {
     Some(Path::new(home).join("driver.log"))
 }
 
-/// Writes the first `LOG_LIMIT` bytes of the driver's stderr to `path`, truncating it first, and
-/// drains the rest so the driver never blocks on a full pipe.
+/// Writes the first `LOG_LIMIT` bytes of the driver's stderr to `path`, and drains the rest so the
+/// driver never blocks on a full pipe. The previous driver's log moves to `driver.log.1`, so a
+/// crash's stderr outlives the respawn.
 fn log_stderr(stderr: Option<impl Read + Send + 'static>, path: Option<PathBuf>) {
     let Some(mut stderr) = stderr else { return };
     thread::spawn(move || {
         let log = path.and_then(|path| {
             fs::create_dir_all(path.parent()?).ok()?;
+            let _ = fs::rename(&path, path.with_extension("log.1"));
             File::create(path).ok()
         });
         if let Some(log) = log {
@@ -381,7 +392,9 @@ impl CuaDriver {
         }
     }
 
-    /// Calls an MCP tool, starting the driver first if none is running.
+    /// Calls an MCP tool, starting the driver first if none is running. `timeout` covers the call
+    /// alone: starting the driver and its `initialize` handshake are bounded by their own timeout
+    /// first.
     pub fn call(
         &mut self,
         tool: &str,
@@ -565,6 +578,21 @@ mod tests {
             driver.call("list_apps", json!({}), TIMEOUT).unwrap().text,
             "apps"
         );
+    }
+
+    #[test]
+    fn driver_requests_get_method_not_found() {
+        let dir = TempDir::new();
+        let mut driver = fake_driver(
+            &dir,
+            json!({"tools": {"list_apps": [text_result("apps")]}, "server_request_on": "list_apps"}),
+        );
+
+        let answer = driver.call("list_apps", json!({}), TIMEOUT).unwrap();
+
+        // The id the driver used, which is the call's, the one after `initialize`.
+        assert_eq!(answer.structured["id"], 2);
+        assert_eq!(answer.structured["error"]["code"], -32601);
     }
 
     #[test]
