@@ -2787,7 +2787,8 @@ fn request_awaits_user(kind: PendingClientRequestKind, params: &Value) -> bool {
 
 fn is_async_delivery(kind: PendingClientRequestKind, params: &Value) -> bool {
     kind == PendingClientRequestKind::Elicitation
-        && params.get("mode").and_then(Value::as_str) == Some("form")
+        // The client decodes a missing mode as a form.
+        && params.get("mode").and_then(Value::as_str).unwrap_or("form") == "form"
         && params.pointer("/_meta/codex/delivery").and_then(Value::as_str) == Some("async")
 }
 
@@ -4438,6 +4439,13 @@ mod tests {
 
         park(&mut state, "async", form(json!({ "codex": { "delivery": "async" } })));
         assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Streaming);
+        // A missing mode is a form, as the Swift client decodes it.
+        park(
+            &mut state,
+            "async-no-mode",
+            json!({ "message": "Q", "_meta": { "codex": { "delivery": "async" } } }),
+        );
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Streaming);
 
         park(&mut state, "blocking", form(Value::Null));
         assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::AwaitingInput);
@@ -4452,7 +4460,7 @@ mod tests {
             .unwrap();
         state.user_request_answered();
         assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Streaming);
-        assert_eq!(state.broker.snapshot().pending_requests.len(), 1);
+        assert_eq!(state.broker.snapshot().pending_requests.len(), 2);
     }
 
     #[test]
