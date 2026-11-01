@@ -279,6 +279,8 @@ public struct ReviewRequestDiffLoader: Sendable {
     }
 
     private static func imageFailureMessage(for error: Error) -> String {
+        // A provider that knows why a side failed says so.
+        if let failure = error as? ImageDiffLoadFailure { return failure.message }
         guard let error = error as? CodeHostProviderError else {
             return "Couldn't load image."
         }
