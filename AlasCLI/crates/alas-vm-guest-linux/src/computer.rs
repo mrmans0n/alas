@@ -931,37 +931,37 @@ impl<D: Driver> Computer<D> {
             }
             "type" => {
                 let text = params.text.clone().unwrap_or_default();
-                // Typing goes key by key: about 40 characters a second.
-                let timeout =
-                    INPUT_TIMEOUT + Duration::from_millis(text.chars().count() as u64 * 25);
-                let Some(reference) = &params.reference else {
-                    let args = merge(&target, json!({"text": text}));
-                    self.cua(
-                        call,
-                        "type_text",
-                        foreground(args),
-                        timeout,
-                        Kind::Input { reference: None },
-                    )?;
-                    return Ok("activation");
+                let (at, kind, delivery) = match &params.reference {
+                    None => (target, Kind::Input { reference: None }, "activation"),
+                    Some(reference) => {
+                        let element = self.element(call, window.id, reference)?;
+                        let at = merge(&target, json!({"element_token": element.token}));
+                        if params.mode.as_deref() == Some("replace") {
+                            let select_all = merge(&at, json!({"keys": ["ctrl", "a"]}));
+                            self.input_call(call, "hotkey", select_all, Some(reference))?;
+                            call.check()?;
+                        }
+                        let kind = Kind::Input {
+                            reference: Some(reference),
+                        };
+                        (at, kind, "ax")
+                    }
                 };
-                let element = self.element(call, window.id, reference)?;
-                let at = merge(&target, json!({"element_token": element.token}));
-                if params.mode.as_deref() == Some("replace") {
-                    let select_all = merge(&at, json!({"keys": ["ctrl", "a"]}));
-                    self.input_call(call, "hotkey", select_all, Some(reference))?;
-                    call.check()?;
+                // Chunks keep each call short, and a stop takes effect between them.
+                for (index, chunk) in type_chunks(&text).enumerate() {
+                    if index > 0 {
+                        call.check()?;
+                    }
+                    // Typing goes key by key: about 40 characters a second.
+                    let timeout =
+                        INPUT_TIMEOUT + Duration::from_millis(chunk.chars().count() as u64 * 25);
+                    let mut args = merge(&at, json!({"text": chunk}));
+                    if params.reference.is_none() {
+                        args = foreground(args);
+                    }
+                    self.cua(call, "type_text", args, timeout, kind)?;
                 }
-                self.cua(
-                    call,
-                    "type_text",
-                    merge(&at, json!({"text": text})),
-                    timeout,
-                    Kind::Input {
-                        reference: Some(reference),
-                    },
-                )?;
-                Ok("ax")
+                Ok(delivery)
             }
             "key" => {
                 let chord = params.keys.clone().unwrap_or_default();
@@ -1410,6 +1410,38 @@ fn named_key(name: &str) -> Option<&'static str> {
 }
 
 /// Cua's `scroll.amount` is 1…50 steps: a larger delta goes as several scrolls.
+/// The most characters one `type_text` call types.
+const TYPE_CHUNK_CHARS: usize = 256;
+
+/// `text` in pieces of at most `TYPE_CHUNK_CHARS` characters, typed one call each; empty text is
+/// one empty piece. A piece never ends before a combining mark, a variation selector, an emoji
+/// modifier or after a joiner, so those stay with the characters they join, unless such a run is
+/// longer than a whole piece.
+fn type_chunks(text: &str) -> impl Iterator<Item = &str> {
+    let joins = |previous: char, next: char| {
+        previous == '\u{200D}'
+            || matches!(next, '\u{0300}'..='\u{036F}' | '\u{200D}' | '\u{FE00}'..='\u{FE0F}' | '\u{1F3FB}'..='\u{1F3FF}')
+    };
+    let mut rest = Some(text);
+    std::iter::from_fn(move || {
+        let text = rest.take()?;
+        let chars: Vec<(usize, char)> = text.char_indices().take(TYPE_CHUNK_CHARS + 1).collect();
+        if chars.len() <= TYPE_CHUNK_CHARS {
+            return Some(text);
+        }
+        let mut cut = TYPE_CHUNK_CHARS;
+        while cut > 1 && joins(chars[cut - 1].1, chars[cut].1) {
+            cut -= 1;
+        }
+        if joins(chars[cut - 1].1, chars[cut].1) {
+            cut = TYPE_CHUNK_CHARS;
+        }
+        let (chunk, tail) = text.split_at(chars[cut].0);
+        rest = Some(tail);
+        Some(chunk)
+    })
+}
+
 fn scroll_steps(delta: u32) -> impl Iterator<Item = u32> {
     (0..delta.div_ceil(50)).map(move |index| (delta - index * 50).min(50))
 }
@@ -1990,6 +2022,80 @@ pub(crate) mod tests {
         assert_eq!(inputs, ["hotkey", "type_text"]);
         assert_eq!(fake.calls("hotkey"), vec![select_all]);
         assert_eq!(fake.calls("type_text"), vec![typed]);
+    }
+
+    /// Long text goes in calls of at most 256 characters, never splitting an accent from its
+    /// letter.
+    #[test]
+    fn long_text_types_in_chunks() {
+        let fake = Fake::mousepad();
+        fake.script("get_window_state", vec![fixture("gws_elements")]);
+        fake.script("type_text", vec![fixture("type_fg")]);
+        let mut computer = new_computer(&fake);
+        let text = format!("{}e\u{301}{}", "a".repeat(255), "b".repeat(300));
+
+        payload(&computer.perform(
+            SESSION,
+            &request("type", json!({"window_id": WINDOW, "text": text})),
+        ));
+
+        let typed: Vec<Value> = fake
+            .calls("type_text")
+            .iter()
+            .map(|args| args["text"].clone())
+            .collect();
+        assert_eq!(
+            typed,
+            vec![
+                json!("a".repeat(255)),
+                json!(format!("e\u{301}{}", "b".repeat(254))),
+                json!("b".repeat(46)),
+            ]
+        );
+        assert!(
+            fake.calls("type_text")
+                .iter()
+                .all(|args| args["delivery_mode"] == "foreground")
+        );
+    }
+
+    /// A stop while a chunk is typed ends the call before the next chunk.
+    #[test]
+    fn cancel_stops_typing_between_chunks() {
+        let fake = Fake::mousepad();
+        fake.script("type_text", vec![fixture("type_fg")]);
+        let (reached_sender, reached) = mpsc::channel();
+        let (release, release_receiver) = mpsc::channel();
+        fake.0.lock().unwrap().gate = Some(Gate {
+            tool: "type_text".to_string(),
+            reached: reached_sender,
+            release: release_receiver,
+        });
+        let mut computer = new_computer(&fake);
+        let cancelled = Arc::new(AtomicBool::new(false));
+
+        let typing = {
+            let cancelled = Arc::clone(&cancelled);
+            thread::spawn(move || {
+                computer.perform_with_cancel(
+                    SESSION,
+                    &request(
+                        "type",
+                        json!({"window_id": WINDOW, "text": "x".repeat(600)}),
+                    ),
+                    cancelled,
+                )
+            })
+        };
+        reached.recv().unwrap();
+        cancelled.store(true, Ordering::SeqCst);
+        release.send(()).unwrap();
+
+        assert_eq!(
+            error(&typing.join().unwrap()),
+            "computer_cancelled: The call was cancelled."
+        );
+        assert_eq!(fake.calls("type_text").len(), 1);
     }
 
     #[test]
