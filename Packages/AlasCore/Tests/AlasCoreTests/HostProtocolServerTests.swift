@@ -1741,21 +1741,24 @@ struct HostProtocolServerTests {
         #expect(catalog.summaries.contains { $0.kind == .recovery && $0.label == "Before checkpoint restore" })
     }
 
-    /// A restore that died midway, its rollback too, blocks git on the host
-    /// until a Mac recovers it, back to the state before the restore.
-    @Test func aMacRecoversAnInterruptedHostRestore() async throws {
+    /// A restore that died midway, its rollback too, blocks git and saves on
+    /// the host until a Mac recovers it, back to the state before the restore.
+    @Test(arguments: [
+        CheckpointRestoreFaultPoint.afterFileMove(path: "a.txt"), .beforeIndexInstall, .afterIndexInstall,
+    ])
+    func aMacRecoversAnInterruptedHostRestore(at fault: CheckpointRestoreFaultPoint) async throws {
         let interrupting = Mutex(true)
         let fixture = try await RepoFixture(restoreFaults: CheckpointRestoreFaultInjector { point in
             guard interrupting.withLock({ $0 }) else { return }
-            if point == .beforeIndexInstall { throw HostError.failed(message: "interrupted") }
+            if point == fault { throw HostError.failed(message: "interrupted") }
             if case .duringRollback = point { throw HostError.failed(message: "interrupted") }
         })
         defer { fixture.tearDown() }
         let (repo, ref) = try await fixture.mainWorktree()
-        let file = repo.appendingPathComponent("a.txt")
-        try "one\n".write(to: file, atomically: true, encoding: .utf8)
+        let files = ["a.txt", "b.txt"].map { repo.appendingPathComponent($0) }
+        for file in files { try "one\n".write(to: file, atomically: true, encoding: .utf8) }
         let manifest = try await fixture.checkpoint("Before", in: ref)
-        try "two\n".write(to: file, atomically: true, encoding: .utf8)
+        for file in files { try "two\n".write(to: file, atomically: true, encoding: .utf8) }
         let preview = try await fixture.restorePreview(manifest.id, in: ref)
         guard case .failure = try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .restoreCheckpoint(
             id: manifest.id, groupIDs: preview.selectedGroupIDs, fingerprint: preview.currentFingerprint
@@ -1764,18 +1767,27 @@ struct HostProtocolServerTests {
             return
         }
         interrupting.withLock { $0 = false }
+        let journals = try FileManager.default.subpathsOfDirectory(atPath: fixture.root.appendingPathComponent("checkpoints").path)
+            .filter { $0.contains("journals/") && $0.hasSuffix(".json") }
+        #expect(journals.count == 1)
         let stage = HostRequest.mutateWorktree(worktree: ref, branch: "main", change: .stage(paths: ["a.txt"]))
+        let interruptedMessage = "A checkpoint restore was interrupted on the host; recover it from Checkpoints first."
 
         guard case .checkpoints(_, let interrupted) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
             Issue.record("expected checkpoints")
             return
         }
         #expect(interrupted == true)
-        #expect(try await fixture.request(stage)
-            == .failure(error: .failed(message: "A checkpoint restore was interrupted on the host; recover it from Checkpoints first.")))
+        #expect(try await fixture.request(stage) == .failure(error: .failed(message: interruptedMessage)))
+        #expect(try await fixture.request(.writeFile(worktree: ref, path: "a.txt", text: "three\n", expected: nil))
+            == .failure(error: .failed(message: interruptedMessage)))
 
         #expect(try await fixture.request(.mutateWorktree(worktree: ref, branch: "main", change: .recoverCheckpointRestore)) == .done)
-        #expect(try String(contentsOf: file, encoding: .utf8) == "two\n")
+        for file in files { #expect(try String(contentsOf: file, encoding: .utf8) == "two\n") }
+        let checkpoints = fixture.root.appendingPathComponent("checkpoints")
+        for journal in journals {
+            #expect(!FileManager.default.fileExists(atPath: checkpoints.appendingPathComponent(journal).path))
+        }
         guard case .checkpoints(_, let after) = try await fixture.request(.listCheckpoints(worktree: ref)) else {
             Issue.record("expected checkpoints")
             return
