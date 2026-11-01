@@ -452,7 +452,7 @@ extension SessionsAPI {
     ) async throws {
         caller.log("sessions.respondToUserInput", sessionID)
         let manager = try await answeringManager(for: sessionID)
-        guard let pending = manager.liveSession(for: sessionID)?.transcript.pendingUserInputs.first,
+        guard let pending = manager.liveSession(for: sessionID)?.transcript.blockingUserInputs.first,
               pending.id == requestID, case .elicitation = pending.source
         else { throw SessionRefusal.notPending }
         guard let action = ACPRequestAnswers.userInput(pending, answer: answer) else { throw SessionRefusal.invalidAnswer }

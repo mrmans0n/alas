@@ -222,7 +222,7 @@ final class FollowedSession {
         if let plan = transcript.pendingPlan {
             requests.append(.plan(requestID: plan.id, params: plan.params))
         }
-        if let input = transcript.pendingUserInputs.first, case .elicitation(_, let params) = input.source {
+        if let input = transcript.blockingUserInputs.first, case .elicitation(_, let params) = input.source {
             requests.append(.userInput(requestID: input.id, params: params))
         }
         return Dictionary(requests.map { ($0.id, $0) }, uniquingKeysWith: { _, last in last })

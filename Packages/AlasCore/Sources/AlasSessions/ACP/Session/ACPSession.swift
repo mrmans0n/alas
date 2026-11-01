@@ -257,7 +257,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         let settled: StreamingState
         if transcript.pendingPermission != nil {
             settled = .awaitingPermission
-        } else if transcript.pendingPlan != nil || (!foreground && !transcript.pendingUserInputs.isEmpty) {
+        } else if transcript.pendingPlan != nil || (!foreground && transcript.hasBlockingUserInput) {
             settled = .awaitingInput
         } else {
             settled = foreground ? .streaming : .idle

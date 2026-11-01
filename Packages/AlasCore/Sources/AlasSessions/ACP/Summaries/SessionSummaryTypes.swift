@@ -103,7 +103,7 @@ extension SessionSummaryIdleFacts {
             pendingPermission: transcript.pendingPermission != nil,
             pendingQuestion: transcript.pendingQuestion != nil,
             pendingPlan: transcript.pendingPlan != nil,
-            pendingUserInputCount: transcript.pendingUserInputs.count,
+            pendingUserInputCount: transcript.blockingUserInputs.count,
             urlElicitationCount: transcript.urlElicitationWaits.count,
             pendingWorkCount: session.nextPromptWorkCount,
             hasPendingDelegatedMessages: session.hasPendingDelegatedMessages,

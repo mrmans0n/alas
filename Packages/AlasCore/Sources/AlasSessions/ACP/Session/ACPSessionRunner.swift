@@ -2717,7 +2717,7 @@ public final class ACPSessionRunner {
         let childIds = session.orderedSubagents.filter { $0.isRunning && $0.capabilities.supportsCancel }
             .map(\.subagentSessionId)
         let cancellingBackground = activePromptID == nil && session.transcript.streamingState == .idle
-            && session.transcript.pendingUserInputs.isEmpty && (!backgroundIds.isEmpty || !childIds.isEmpty)
+            && !session.transcript.hasBlockingUserInput && (!backgroundIds.isEmpty || !childIds.isEmpty)
         if cancellingBackground {
             guard !backgroundCancellationInProgress else { return false }
             backgroundCancellationInProgress = true
@@ -3162,7 +3162,7 @@ extension ACPSessionRunner {
             state: session.transcript.streamingState,
             queueEmpty: session.queue.isEmpty,
             blocksEmpty: blocks.isEmpty,
-            hasPendingInput: !session.transcript.pendingUserInputs.isEmpty,
+            hasPendingInput: session.transcript.hasBlockingUserInput,
             inFlightSteer: steerInProgress,
             hasActivePrompt: activePromptID != nil || detachedSteeringTurn
         )
@@ -3437,7 +3437,7 @@ extension ACPSessionRunner {
            session.agentState == .ready,
            activePromptID == nil,
            session.transcript.streamingState == .idle,
-           session.transcript.pendingUserInputs.isEmpty {
+           !session.transcript.hasBlockingUserInput {
             // A turn that settled at its result can leave children or an
             // autonomous cycle running; a restart would kill them. The queue
             // waits for the restart too: a drained turn would reach the
@@ -3459,7 +3459,7 @@ extension ACPSessionRunner {
               session.pendingQueuePersistenceCount == 0,
               activePromptID == nil,
               session.transcript.streamingState == .idle,
-              session.transcript.pendingUserInputs.isEmpty,
+              !session.transcript.hasBlockingUserInput,
               let head = session.queue.first,
               head.status == .pending,
               head.lastError == nil,
@@ -3667,7 +3667,7 @@ extension ACPSessionRunner {
             && session.agentState == .ready
             && activePromptID == nil
             && session.transcript.streamingState == .idle
-            && session.transcript.pendingUserInputs.isEmpty
+            && !session.transcript.hasBlockingUserInput
             && session.queue.isEmpty
     }
 
@@ -5403,7 +5403,7 @@ extension ACPSessionRunner {
         if session.transcript.pendingPermission != nil { return "pending permission" }
         if session.transcript.pendingQuestion != nil { return "pending question" }
         if session.transcript.pendingPlan != nil { return "pending plan" }
-        if !session.transcript.pendingUserInputs.isEmpty { return "pending user input" }
+        if session.transcript.hasBlockingUserInput { return "pending user input" }
         if steerInProgress { return "steer in progress" }
         if nativeForkBarrierActive { return "native fork barrier" }
         return nil

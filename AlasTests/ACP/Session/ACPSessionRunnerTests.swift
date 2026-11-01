@@ -5842,6 +5842,35 @@ struct ACPSessionRunnerTests {
         try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
     }
 
+    /// A Codex async question leaves the idle session sendable: the next
+    /// prompt goes out at once and the question stays open beside it.
+    @Test("an optional question does not hold the queue")
+    func optionalInputDoesNotHoldQueue() async throws {
+        let (runner, mock) = try makeRunner()
+        let session = runner.session
+        session.agentState = .ready
+        let coordinator = ACPElicitationCoordinator(
+            session: session, client: mock, onInputResolved: { runner.flushQueueIfIdle() })
+        coordinator.start()
+        runner.start()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        mock.emitElicitation(id: .number(31), params: try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#).utf8)))
+        try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        #expect(session.transcript.streamingState != .awaitingInput)
+        #expect(session.transcript.pendingUserInputs.count == 1)
+
+        runner.send(text: "next", attachments: [])
+
+        try await waitUntil { mock.sent.contains { $0.method == "session/prompt" } }
+        #expect(session.transcript.pendingUserInputs.count == 1)
+    }
+
     /// Older brokers report awaiting input for a background child's request
     /// after the parent settled; only an unanswered prompt makes that a turn,
     /// unless the adapter does not settle at result (a steering turn held for

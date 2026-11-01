@@ -265,7 +265,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// The runner's policy holds the real id.
     public func blockedRequestKeys(for sessionId: ACPSession.ID) -> Set<String> {
         guard let session = sessions[sessionId] else { return [] }
-        var keys = Set(session.transcript.pendingUserInputs.map { ACPChildBlocker.requestKey($0.id) })
+        var keys = Set(session.transcript.blockingUserInputs.map { ACPChildBlocker.requestKey($0.id) })
         if let plan = session.transcript.pendingPlan {
             keys.insert(ACPChildBlocker.requestKey(plan.id))
         }

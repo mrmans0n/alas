@@ -236,13 +236,15 @@ public final class ACPElicitationCoordinator {
             cancel(request)
             return
         }
-        let wasEmpty = pendingByToken.isEmpty
+        // An optional (Codex async) question never notifies, raises a child
+        // blocker, or takes the session to awaiting input.
+        let wasEmpty = !pendingByToken.values.contains(where: \.isBlocking)
         pendingByToken[request.id] = request
         session.transcript.pendingUserInputs.append(request)
-        if let id = request.jsonRPCID, notifiedRequestIds.insert(id).inserted {
+        if request.isBlocking, let id = request.jsonRPCID, notifiedRequestIds.insert(id).inserted {
             onInputAwaiting(session, request)
         }
-        if wasEmpty, session.transcript.streamingState == .idle {
+        if request.isBlocking, wasEmpty, session.transcript.streamingState == .idle {
             session.transcript.streamingState = .awaitingInput
         }
         if case .cursor(let id, let params) = request.source,
@@ -282,7 +284,7 @@ public final class ACPElicitationCoordinator {
 
     private func presentNextPlan() {
         guard session.transcript.pendingPlan == nil,
-              pendingByToken.isEmpty,
+              !pendingByToken.values.contains(where: \.isBlocking),
               let request = pendingPlans.first
         else { return }
 
