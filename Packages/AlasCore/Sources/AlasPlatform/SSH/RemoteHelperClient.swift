@@ -920,6 +920,7 @@ public actor RemoteHelperClient {
             for await event in nextTransport.incoming {
                 await self?.handle(event, generation: transportGeneration)
             }
+            await self?.finishObservation(generation: transportGeneration)
         }
         return true
     }
@@ -1190,7 +1191,14 @@ public actor RemoteHelperClient {
         }
     }
 
-    private func handleExit(_ status: Int32) {
+    private func finishObservation(generation observedGeneration: Int) {
+        guard observedGeneration == generation, let lostTransport = transport else { return }
+        // EOF is observation loss, not evidence of a particular process exit.
+        handleExit(nil)
+        lostTransport.terminate()
+    }
+
+    private func handleExit(_ status: Int32?) {
         lastExitStatus = status
         transport = nil
         dispatchTask = nil
@@ -1223,7 +1231,7 @@ public actor RemoteHelperClient {
         pluginProcStreams.removeAll()
         earlyProcEvents.removeAll()
         detachedProcIds.removeAll()
-        if RemoteExec.isConnectionFailure(exitCode: status) {
+        if let status, RemoteExec.isConnectionFailure(exitCode: status) {
             Task { @MainActor [host] in
                 RemoteHostStatusStore.shared.reportConnectionFailure(host: host)
             }

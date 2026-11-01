@@ -7,6 +7,7 @@ import AlasCode
 
 public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
+    private let v2Replies = ACPV2StdioReplyState()
     private let v2InboundCont: AsyncStream<ACPV2InboundDelivery>.Continuation
     private let rawRPCDiagnosticsCont: AsyncStream<ACPRawRPCDelivery>.Continuation
     private let v2UpdatesCont: AsyncStream<ACPV2SessionUpdateDelivery>.Continuation
@@ -224,7 +225,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
             for await event in self.transport.incoming {
                 self.handle(event)
             }
-            if self.sessionUpdateProtocolVersion == .v2 { self.drainPending(with: ACPClientError.notRunning) }
+            self.finishObservation()
         }
     }
 
@@ -235,20 +236,15 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         case .stderr(let data):
             stderrCont.yield(data)
         case .exited:
-            drainPending(with: ACPClientError.notRunning)
-            updatesCont.finish()
-            permsCont.finish()
-            cancelRequestsCont.finish()
-            questionsCont.finish()
-            plansCont.finish()
-            elicitationsCont.finish()
-            elicitationCompletionsCont.finish()
-            filesCont.finish()
-            terminalsCont.finish()
-            stderrCont.finish()
-            authStatusCont.finish()
-            sessionListChangesCont.finish()
+            finishObservation()
         }
+    }
+
+    private func finishObservation() {
+        drainPending(with: ACPClientError.notRunning)
+        updatesCont.finish()
+        finishLegacyMethodStreams()
+        stderrCont.finish()
     }
 
     private struct AnyEnvelopeHead: Decodable {
@@ -531,7 +527,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         if let method = fields["method"] {
             let supportedID = fields["id"].map { ACPRawRPCDelivery.stdioID($0) != nil } ?? true
             if case .string = method, fields["jsonrpc"] == .string("2.0"), supportedID {
-                publishV2Inbound(data, onConsumed: onConsumed)
+                publishV2Inbound(data, requestID: fields["id"].flatMap(ACPRawRPCDelivery.stdioID), onConsumed: onConsumed)
                 return true
             }
             publishRPCDiagnostic(data, onConsumed: onConsumed)
@@ -589,13 +585,15 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         sessionListChangesCont.finish()
     }
 
-    private func publishV2Inbound(_ data: Data, onConsumed: ACPDurableConsumptionAcknowledgement?) {
+    private func publishV2Inbound(_ data: Data, requestID: JSONRPCID?, onConsumed: ACPDurableConsumptionAcknowledgement?) {
         let acknowledgement = connectionAcknowledgement(onConsumed)
         stateLock.lock()
         defer { stateLock.unlock() }
         guard !didDrainPending else { return }
-        v2InboundCont.yield(.init(frame: data, connectionID: updateConnectionID, source: .stdio,
-            durableConsumptionAcknowledgement: acknowledgement))
+        let delivery = ACPV2InboundDelivery(frame: data, connectionID: updateConnectionID, source: .stdio,
+            durableConsumptionAcknowledgement: acknowledgement)
+        if let requestID { v2Replies.register(delivery, id: requestID) }
+        v2InboundCont.yield(delivery)
     }
 
     private func rpcDelivery(_ data: Data, source: ACPRawRPCDelivery.Source,
@@ -659,6 +657,19 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
                 if stillPending { cont.resume(throwing: error) }
                 onRequestHandoff()
             }
+        }
+    }
+
+    public func respondToV2Request(_ delivery: ACPV2InboundDelivery, expectedConnectionID: UUID,
+        operationKey: ACPV2ReplyOperationKey, frame: Data) async throws -> ACPV2StdioReplyResult {
+        guard sessionUpdateProtocolVersion == .v2, let writer = transport as? any JSONRPCFrameWriting else {
+            throw ACPV2StdioReplyError.unsupported
+        }
+        guard expectedConnectionID == updateConnectionID, delivery.connectionID == updateConnectionID,
+              case .stdio = delivery.source else { throw ACPV2StdioReplyError.invalidOrigin }
+        return try await v2Replies.reply(delivery, key: operationKey, frame: frame, writer: writer) { [weak self] in
+            self?.drainPending(with: ACPClientError.notRunning)
+            self?.transport.terminate()
         }
     }
 
@@ -835,6 +846,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
     }
 
     private func respond(id: JSONRPCID, body: Data) throws {
+        guard sessionUpdateProtocolVersion == .v1 else { throw ACPV2StdioReplyError.unsupported }
         var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON]
         dict["result"] = try JSONSerialization.jsonObject(with: body)
         let payload = try JSONSerialization.data(withJSONObject: dict)
@@ -844,6 +856,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
     }
 
     private func respondFile(id: JSONRPCID, result: Result<Data, JSONRPCError>) {
+        guard sessionUpdateProtocolVersion == .v1 else { return }
         do {
             var dict: [String: Any] = ["jsonrpc": "2.0", "id": id.asJSON]
             switch result {
@@ -894,6 +907,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
     /// double-resuming in that case by only resuming if its own
     /// `pending.removeValue` still found the entry.
     private func drainPending(with error: Error) {
+        v2Replies.stop()
         stateLock.lock()
         if didDrainPending {
             stateLock.unlock()

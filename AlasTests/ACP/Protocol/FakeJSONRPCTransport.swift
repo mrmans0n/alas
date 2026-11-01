@@ -4,7 +4,7 @@ import Foundation
 /// Minimal in-process transport for `ACPStdioClient` tests.
 /// Call `send(frame:)` to inject a raw JSON frame as if the agent
 /// had written it to stdout.
-final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable {
+final class FakeJSONRPCTransport: JSONRPCStdioTransporting, JSONRPCFrameWriting, @unchecked Sendable {
     private let cont: AsyncStream<JSONRPCStdioTransport.Incoming>.Continuation
     let incoming: AsyncStream<JSONRPCStdioTransport.Incoming>
     private struct State {
@@ -14,6 +14,12 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
         var deferWriteCompletions = false
         var pendingWriteCompletions: [@Sendable () -> Void] = []
         var emitExitOnTerminate = true
+        var deferExactAuthorization = false
+        var deferExactCompletion = false
+        var exactWriteCount = 0
+        var exactOutcome = JSONRPCFrameWriteResult.written
+        var pendingExactAuthorizations: [ExactWrite] = []
+        var pendingExactCompletions: [CheckedContinuation<JSONRPCFrameWriteResult, Never>] = []
     }
     private let lock = NSLock()
     private var state = State()
@@ -27,6 +33,60 @@ final class FakeJSONRPCTransport: JSONRPCStdioTransporting, @unchecked Sendable 
         get { lock.withLock { state.deferWriteCompletions } }
         set { lock.withLock { state.deferWriteCompletions = newValue } }
     }
+    private struct ExactWrite: Sendable {
+        let data: Data
+        let authorize: @Sendable () -> Bool
+        let continuation: CheckedContinuation<JSONRPCFrameWriteResult, Never>
+    }
+    var deferExactAuthorization: Bool {
+        get { lock.withLock { state.deferExactAuthorization } }
+        set { lock.withLock { state.deferExactAuthorization = newValue } }
+    }
+    var deferExactCompletion: Bool {
+        get { lock.withLock { state.deferExactCompletion } }
+        set { lock.withLock { state.deferExactCompletion = newValue } }
+    }
+    var exactOutcome: JSONRPCFrameWriteResult {
+        get { lock.withLock { state.exactOutcome } }
+        set { lock.withLock { state.exactOutcome = newValue } }
+    }
+    var exactWriteCount: Int { lock.withLock { state.exactWriteCount } }
+    func writeFrame(_ data: Data, authorize: @escaping @Sendable () -> Bool) async -> JSONRPCFrameWriteResult {
+        await withCheckedContinuation { continuation in
+            let write = ExactWrite(data: data, authorize: authorize, continuation: continuation)
+            let held = lock.withLock {
+                state.exactWriteCount += 1
+                if state.deferExactAuthorization { state.pendingExactAuthorizations.append(write)
+                return true }
+                return false
+            }
+            if !held { performExact(write) }
+        }
+    }
+    private func performExact(_ write: ExactWrite) {
+        guard write.authorize() else { write.continuation.resume(returning: .notWritten)
+        return }
+        try? send(write.data)
+        let held = lock.withLock {
+            if state.deferExactCompletion { state.pendingExactCompletions.append(write.continuation)
+            return true }
+            return false
+        }
+        if !held { write.continuation.resume(returning: exactOutcome) }
+    }
+    func releaseExactAuthorization() {
+        let writes = lock.withLock { let writes = state.pendingExactAuthorizations
+        state.pendingExactAuthorizations.removeAll()
+        return writes }
+        for write in writes { performExact(write) }
+    }
+    func releaseExactCompletion() {
+        let continuations = lock.withLock { let values = state.pendingExactCompletions
+        state.pendingExactCompletions.removeAll()
+        return values }
+        for continuation in continuations { continuation.resume(returning: exactOutcome) }
+    }
+
     private let responseForRequest: (@Sendable (Data) -> JSONRPCStdioTransport.Incoming?)?
 
     init(responseForRequest: (@Sendable (Data) -> JSONRPCStdioTransport.Incoming?)? = nil) {
