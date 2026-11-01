@@ -64,24 +64,26 @@ pub fn parse(args: &[String], base: &std::path::Path) -> Result<Command, String>
 }
 
 /// `alas computer … [--vm macos|linux]`: `--vm` names the VM in a worktree
-/// with a macOS and a Linux VM, and goes anywhere after the action.
+/// with a macOS and a Linux VM. It goes right after the action or at the very
+/// end, so a literal `--vm` typed as text stays text.
 fn parse_computer(args: &[&str]) -> Result<Command, String> {
     const VM_USAGE: &str = "--vm must be macos or linux, given once";
+    let mut rest = args.to_vec();
     let mut vm = None;
-    let mut rest = Vec::with_capacity(args.len());
-    let mut i = 0;
-    while i < args.len() {
-        if i > 0 && args[i] == "--vm" {
-            let name = args.get(i + 1).copied().ok_or(VM_USAGE)?;
-            if vm.is_some() {
-                return Err(VM_USAGE.into());
-            }
-            vm = Some(alas_client::VmGuest::from_name(name).ok_or(VM_USAGE)?);
-            i += 2;
-        } else {
-            rest.push(args[i]);
-            i += 1;
+    let mut take = |rest: &mut Vec<&str>, at: usize| -> Result<(), String> {
+        if vm.is_some() {
+            return Err(VM_USAGE.into());
         }
+        vm = Some(alas_client::VmGuest::from_name(rest[at + 1]).ok_or(VM_USAGE)?);
+        rest.drain(at..at + 2);
+        Ok(())
+    };
+    if rest.len() >= 3 && rest[1] == "--vm" {
+        take(&mut rest, 1)?;
+    }
+    if rest.len() >= 3 && rest[rest.len() - 2] == "--vm" {
+        let at = rest.len() - 2;
+        take(&mut rest, at)?;
     }
     match parse_computer_command(&rest)? {
         Command::Computer(command, None) => Ok(Command::Computer(command, vm)),
@@ -2554,6 +2556,21 @@ mod tests {
                 Some(alas_client::VmGuest::Macos)
             )
         );
+        // A literal `--vm` stays the text it was typed as.
+        for (args, vm) in [
+            (&["computer", "type", "7", "--vm"][..], None),
+            (
+                &["computer", "type", "7", "--vm", "--vm", "linux"],
+                Some(alas_client::VmGuest::Linux),
+            ),
+        ] {
+            match p(args).unwrap() {
+                Command::Computer(ComputerCommand::Type { text, .. }, got) => {
+                    assert_eq!((text.as_str(), got), ("--vm", vm));
+                }
+                other => panic!("{other:?}"),
+            }
+        }
         for bad in [
             &["computer"][..],
             &["computer", "apps", "--vm"],
