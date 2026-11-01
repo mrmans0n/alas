@@ -312,6 +312,18 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// The user's explicit collapse choice for the background task tray; nil follows the default.
     @Tracked public var backgroundTrayExpanded: Bool?
     private var subagentOrder: [String] = []
+    /// Every delegation message seen so far, both views merged, keyed by
+    /// message id. The runs hold (and persist) the links naming them.
+    private var delegationLinks: [String: ACPDelegationLink] = [:]
+    /// The keys of `delegationLinks` in arrival order, so a child announced
+    /// after its links adopts them in the order they were sent.
+    private var delegationLinkOrder: [String] = []
+    /// True while a `session/load` replay that is NOT suppressed (nothing
+    /// was hydrated to reconcile against) flows through the live apply
+    /// paths. What it resends is still history, so the child observations
+    /// it carries must not be confirmed. Raised by the runner around each
+    /// such update.
+    var isApplyingUnsuppressedLoadReplay = false
 
     private static let metadataPreviewLimit = 4096
     private var contextRecoveryExpiryTask: Task<Void, Never>?
@@ -1031,7 +1043,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .userMessageChunk(let chunk):
             // A message between sessions is not a human turn; on the root it
             // must never claim prompt ownership (see `ACPDirectedMessage`).
-            guard chunk.directed == nil else { return [] }
+            // Only its link to the child's view is kept.
+            guard chunk.directed == nil else { return recordDelegationLink(from: chunk, at: timestamp) }
             guard !isEchoedSymbolExpansion(chunk.content) else { return [] }
             let txt = text(of: chunk.content)
             // Recorded as a notice, not a user row: an echo has nothing to merge into.
@@ -1641,7 +1654,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .thought) }
                 ?? firstIdLessMatch(of: .thought, atOrAfter: suppressedReplayInsertionCursor)
         case .userMessageChunk(let chunk):
-            guard chunk.directed == nil else { return [] }
+            guard chunk.directed == nil else { return recordDelegationLink(from: chunk) }
             dirty = []
             matchedIndex = chunk.messageId
                 .flatMap { transcript.messageIndex(messageId: $0, kind: .user) }
@@ -1671,7 +1684,12 @@ public final class ACPSession: ChangeTracking, Identifiable {
         replayCreatedMetadataTerminalIds.removeAll()
         suppressedReplayInsertionCursor = 0
         replayedContinuationEcho = nil
-        for run in subagents.values { run.beginReplayReconciliation() }
+        for run in subagents.values {
+            run.beginReplayReconciliation()
+            // Whatever the replay resends is history, and whatever an
+            // earlier connection reported is no longer confirmed.
+            run.markObservationsHistorical()
+        }
     }
 
     public func endSuppressedReplaySideEffects() {
@@ -2371,12 +2389,21 @@ public final class ACPSession: ChangeTracking, Identifiable {
         let id = spawn.subagentSessionId
         guard !id.isEmpty else { return [] }
         nextPromptActivity.send()
+        // A spawn reached here without flushing replay candidates only while
+        // `session/load` replay is suppressed: its directories are history,
+        // as are those of any other `session/load` replay.
+        let live = flushingReplayCandidates && !isApplyingUnsuppressedLoadReplay
         if let existing = subagents[id] {
             let before = descriptor(for: existing)
-            existing.merge(spawn: spawn)
+            existing.merge(spawn: spawn, live: live)
             let after = descriptor(for: existing)
-            guard before != after else { return [] }
-            return refreshSubagentRow(for: existing, at: timestamp)
+            // A directory patch is a fact about the child: its row is written
+            // again even when nothing changed, so a durable redelivery after a
+            // failed write cannot be acknowledged without persisting it.
+            let patchesDirectories = spawn.cwd != nil || spawn.clearsCwd
+                || spawn.replacesAdditionalDirectories
+            guard before != after || patchesDirectories else { return [] }
+            return persistableSubagentRow(for: existing, at: timestamp)
         }
         let run = ACPSubagentRun(
             subagentSessionId: id,
@@ -2385,8 +2412,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
             state: spawn.initialState,
             capabilities: spawn.capabilities,
             startedAt: timestamp)
+        run.merge(spawn: spawn, live: live)
         subagents[id] = run
         subagentOrder.append(id)
+        adoptDelegationLinks(for: run)
         clearRestoredContextRecoveryStatus()
         // A subagent row closes the current output run the same way a tool
         // call does, so held replay candidates must land ahead of it —
@@ -2440,8 +2469,36 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return refreshSubagentRow(for: run, at: timestamp)
     }
 
+    /// Parent-row indices a child-scoped update dirtied (observed config, delegation links); child rows are separate.
+    ///
+    /// The one place a child-addressed update's facts about the child are
+    /// recorded, live or replayed, so the caller persists the parent row
+    /// carrying them. `live` is false for anything a `session/load` replay
+    /// resends: a historical snapshot never replaces a confirmed one.
+    @discardableResult
+    public func applySubagentSessionFacts(
+        _ update: ACPSessionUpdate,
+        subagentSessionId: String,
+        live: Bool,
+        at timestamp: Date = Date()
+    ) -> Set<Int> {
+        switch update {
+        case .userMessageChunk(let chunk):
+            // Recorded even before the child is announced: registration
+            // hands it the links already naming it.
+            return recordDelegationLink(from: chunk, at: timestamp)
+        case .sessionConfigOptionsUpdate(let options):
+            guard let run = subagents[subagentSessionId] else { return [] }
+            run.observe(config: options, live: live)
+            return persistableSubagentRow(for: run, at: timestamp)
+        default:
+            return []
+        }
+    }
+
     /// Routes one child-scoped `session/update` into its child transcript.
-    /// Returns the child row indices that changed, for persistence.
+    /// Returns the child row indices that changed, for persistence. Facts
+    /// about the child itself go through `applySubagentSessionFacts`.
     @discardableResult
     public func applySubagentUpdate(
         _ update: ACPSessionUpdate,
@@ -2505,6 +2562,69 @@ public final class ACPSession: ChangeTracking, Identifiable {
         subagents[subagentSessionId]
     }
 
+    // MARK: Delegation links
+
+    /// Both views of one delegation message, as far as they have arrived.
+    public func delegationLink(messageId: String) -> ACPDelegationLink? {
+        delegationLinks[messageId]
+    }
+
+    /// Merges one view of a delegation message into its link and stores the
+    /// result on every announced child it names, so the link travels in that
+    /// child's row. Any other participant is either the root, under whatever
+    /// id it had when the message was sent (context recovery gives it a new
+    /// one), or a child not announced yet, which adopts the link on
+    /// registration. Returns the parent rows that changed.
+    ///
+    /// Both views join on `messageId` because the adapter gives them the same
+    /// one: the Claude fork reuses the sending tool use id as the message id
+    /// on the sender's and the recipient's side alike.
+    @discardableResult
+    public func recordDelegationLink(_ link: ACPDelegationLink, at timestamp: Date = Date()) -> Set<Int> {
+        var merged = link
+        if let known = delegationLinks[link.messageId] {
+            merged = known
+            merged.merge(link)
+        } else {
+            delegationLinkOrder.append(link.messageId)
+        }
+        delegationLinks[link.messageId] = merged
+        var dirty: Set<Int> = []
+        for run in announcedChildren(of: merged) {
+            run.record(merged)
+            dirty.formUnion(persistableSubagentRow(for: run, at: timestamp))
+        }
+        return dirty
+    }
+
+    private func recordDelegationLink(from chunk: ACPTextChunk, at timestamp: Date = Date()) -> Set<Int> {
+        guard let directed = chunk.directed,
+              let link = ACPDelegationLink(messageId: chunk.messageId, directed: directed)
+        else { return [] }
+        return recordDelegationLink(link, at: timestamp)
+    }
+
+    /// The announced children `link` names, each of which carries it.
+    private func announcedChildren(of link: ACPDelegationLink) -> [ACPSubagentRun] {
+        var runs: [ACPSubagentRun] = []
+        for id in [link.senderSessionId, link.recipientSessionId].compactMap({ $0 })
+        where !runs.contains(where: { $0.subagentSessionId == id }) {
+            if let run = subagents[id] { runs.append(run) }
+        }
+        return runs
+    }
+
+    /// Hands a newly announced (or restored) child every link naming it.
+    private func adoptDelegationLinks(for run: ACPSubagentRun) {
+        let id = run.subagentSessionId
+        for messageId in delegationLinkOrder {
+            guard let link = delegationLinks[messageId],
+                  link.senderSessionId == id || link.recipientSessionId == id
+            else { continue }
+            run.record(link)
+        }
+    }
+
     public var orderedSubagents: [ACPSubagentRun] {
         subagentOrder.compactMap { subagents[$0] }
     }
@@ -2544,8 +2664,30 @@ public final class ACPSession: ChangeTracking, Identifiable {
             rebuilt[descriptor.subagentSessionId] = run
             order.append(descriptor.subagentSessionId)
         }
+        // The persisted rows are authoritative for every link a child carries;
+        // only a link naming no announced child exists nowhere else.
+        let carriers = Set(subagents.keys).union(rebuilt.keys)
+        var links: [String: ACPDelegationLink] = [:]
+        var linkOrder: [String] = []
+        for messageId in delegationLinkOrder {
+            guard let link = delegationLinks[messageId],
+                  ![link.senderSessionId, link.recipientSessionId].contains(where: { $0.map(carriers.contains) ?? false })
+            else { continue }
+            links[messageId] = link
+            linkOrder.append(messageId)
+        }
         subagents = rebuilt
         subagentOrder = order
+        for run in order.compactMap({ rebuilt[$0] }) {
+            for link in run.delegationLinks {
+                if links[link.messageId] == nil { linkOrder.append(link.messageId) }
+                links[link.messageId, default: link].merge(link)
+            }
+        }
+        delegationLinks = links
+        delegationLinkOrder = linkOrder
+        // A restored row may predate a link another child's row carries.
+        for run in order.compactMap({ rebuilt[$0] }) { adoptDelegationLinks(for: run) }
     }
 
     /// Marks every still-running child as disconnected when the agent
@@ -2555,6 +2697,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @discardableResult
     public func markSubagentsDisconnected(at timestamp: Date = Date()) -> Set<Int> {
         var dirty: Set<Int> = []
+        // Every child's observations, finished ones included, came from the
+        // connection that just dropped.
+        for run in orderedSubagents { run.markObservationsHistorical() }
         for run in orderedSubagents where run.isRunning {
             nextPromptActivity.send()
             run.apply(state: .disconnected, at: timestamp)
@@ -2570,7 +2715,22 @@ public final class ACPSession: ChangeTracking, Identifiable {
             task: run.task,
             state: run.state,
             capabilities: run.capabilities,
-            lastError: run.lastError)
+            lastError: run.lastError,
+            configOptions: run.configOptions,
+            cwd: run.cwd,
+            additionalDirectories: run.additionalDirectories,
+            links: run.delegationLinks)
+    }
+
+    /// The child's parent row, refreshed, for a fact the adapter reported
+    /// about the child. Returned even when the fact changed nothing: a
+    /// durable replay re-delivers an update whose earlier row write failed,
+    /// and the row must be written again before that update is acknowledged.
+    private func persistableSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {
+        let refreshed = refreshSubagentRow(for: run, at: timestamp)
+        guard refreshed.isEmpty else { return refreshed }
+        let toolCallId = ACPSubagentRowDescriptor.toolCallId(subagentSessionId: run.subagentSessionId)
+        return transcript.toolCallIndex(toolCallId: toolCallId).map { [$0] } ?? []
     }
 
     private func refreshSubagentRow(for run: ACPSubagentRun, at timestamp: Date) -> Set<Int> {
