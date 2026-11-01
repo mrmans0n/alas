@@ -698,8 +698,10 @@ struct VirtualMachineTabView: View {
     }
 
     /// Asks the helper of a VM running here whether it is installed and
-    /// current. A freshly booted guest starts it only after logging in, so
-    /// a missing helper is asked again for a while before Update helper shows.
+    /// current. A freshly booted guest starts it only after logging in, and
+    /// a Linux one starts its computer-use driver after that, so a missing
+    /// helper, or a Linux one that can't do computer use yet, is asked again
+    /// for a while before Update helper shows.
     private func checkHelper(_ id: String?) async {
         guard let id else { return }
         let deadline = ContinuousClock.now + .seconds(120)
@@ -714,6 +716,8 @@ struct VirtualMachineTabView: View {
             guard !Task.isCancelled else { return }
             let notUpYet = switch result {
             case .failure(.helperMissing), .failure(.helperUnresponsive): true
+            // A current Linux helper that can't do computer use yet may still be starting its driver.
+            case .success where vm.guest == .linux: WorktreeVMManager.helperNeedsUpdate(result, guest: .linux)
             default: false
             }
             guard notUpYet, ContinuousClock.now < deadline else {

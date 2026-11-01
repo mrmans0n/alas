@@ -18,8 +18,10 @@ pub const PROGRAM: &str = "/usr/local/bin/cua-driver";
 const PROTOCOL_VERSION: &str = "2025-06-18";
 /// For the `initialize` handshake, separate from any call's own timeout.
 const INIT_TIMEOUT: Duration = Duration::from_secs(10);
-/// How long `available` trusts its last answer.
+/// How long `available` trusts its last answer: a working driver for a while, a missing one only
+/// briefly, since a first start or a desktop session that isn't up yet fails only for now.
 const PROBE_TTL: Duration = Duration::from_secs(30);
+const UNAVAILABLE_PROBE_TTL: Duration = Duration::from_secs(2);
 /// The driver's stderr kept in `$CUA_HOME/driver.log` per spawn.
 const LOG_LIMIT: u64 = 1024 * 1024;
 
@@ -418,11 +420,16 @@ impl CuaDriver {
         }
     }
 
-    /// Whether the driver starts and completes the MCP handshake. The answer is kept for
-    /// `PROBE_TTL`.
+    /// Whether the driver starts and completes the MCP handshake. A yes is kept for `PROBE_TTL`,
+    /// a no for `UNAVAILABLE_PROBE_TTL`.
     pub fn available(&mut self) -> bool {
         if let Some((at, available)) = self.probe
-            && at.elapsed() < PROBE_TTL
+            && at.elapsed()
+                < if available {
+                    PROBE_TTL
+                } else {
+                    UNAVAILABLE_PROBE_TTL
+                }
         {
             return available;
         }
@@ -455,7 +462,8 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::fs;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     /// A fresh directory under the system temp dir, removed when dropped.
     struct TempDir(PathBuf);
@@ -636,6 +644,47 @@ mod tests {
             driver.call("list_apps", json!({}), TIMEOUT),
             Err(CuaError::Unavailable(_))
         ));
+    }
+
+    /// A driver that failed to start, say before the desktop session was up, is tried again
+    /// soon after, not only once a working answer would expire.
+    #[test]
+    fn unavailable_answer_is_kept_only_briefly() {
+        let dir = TempDir::new();
+        let working = fake_driver(&dir, json!({"tools": {}}));
+        let installed = Arc::new(AtomicBool::new(false));
+        let mut working_config = working.config;
+        let config = {
+            let installed = Arc::clone(&installed);
+            move || {
+                if installed.load(Ordering::SeqCst) {
+                    working_config()
+                } else {
+                    CuaConfig {
+                        program: PathBuf::from("/nonexistent/cua-driver"),
+                        args: vec![],
+                        env: vec![],
+                    }
+                }
+            }
+        };
+        let mut driver = CuaDriver::new(config);
+        assert!(!driver.available());
+        installed.store(true, Ordering::SeqCst);
+        let aged = |age: u64| {
+            Some((
+                Instant::now()
+                    .checked_sub(Duration::from_secs(age))
+                    .unwrap(),
+                false,
+            ))
+        };
+
+        driver.probe = aged(1);
+        assert!(!driver.available());
+
+        driver.probe = aged(3);
+        assert!(driver.available());
     }
 
     #[test]

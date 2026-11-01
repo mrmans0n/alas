@@ -144,13 +144,20 @@ extension AppState {
             }
             if guest == .linux {
                 // A helper from before computer use only runs commands; its hello says so.
+                // A current one that can't yet may still be starting its driver, so it is asked again.
                 do {
                     let hello = try await client.hello()
-                    if let refusal = VMComputerUseRoute.linuxComputerUse(capabilities: hello.capabilities).refusal {
+                    if let refusal = await VMComputerUseRoute.linuxComputerUseRefusal(
+                        hello: hello, refresh: { try await client.status() }
+                    ) {
                         return .error(refusal)
                     }
                 } catch {
                     return .error((error as? VMGuestClient.Failure ?? .stopped).message(for: .linux))
+                }
+                // The user may have stopped the session while it waited.
+                if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
+                    return .error(ComputerUseCoordinator.stoppedMessage)
                 }
             }
             let recordID = VMIdentity.recordID(worktree: worktreeID, guest: guest)

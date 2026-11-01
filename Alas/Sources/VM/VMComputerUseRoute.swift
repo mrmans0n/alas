@@ -54,6 +54,40 @@ enum VMComputerUseRoute: Equatable {
         return capabilities.contains(VMGuestHello.computerUseCapability) ? .forward : .outdated
     }
 
+    /// How long a call waits for a Linux helper of this build's revision that can't do computer
+    /// use yet: its hello may have come before Cua Driver finished starting, or before the
+    /// desktop session it needs was up.
+    static let linuxComputerUseWait: Duration = .seconds(10)
+    static let linuxComputerUseRetryInterval: Duration = .seconds(1)
+
+    /// The refusal for a call to a Linux helper whose last hello was `hello`, or nil to forward
+    /// it. Only a helper of this build's revision that can't do computer use yet is asked again,
+    /// through `refresh`, until it can or `timeout` passes on the given clock; an ask that fails
+    /// refuses with that failure.
+    static func linuxComputerUseRefusal(
+        hello: VMGuestHello,
+        refresh: @Sendable () async throws -> VMGuestHello,
+        timeout: Duration = linuxComputerUseWait,
+        interval: Duration = linuxComputerUseRetryInterval,
+        sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        now: @Sendable () -> ContinuousClock.Instant = { .now }
+    ) async -> String? {
+        var decision = linuxComputerUse(capabilities: hello.capabilities)
+        guard decision == .outdated, hello.protocolRevision == VMGuestProtocol.revision else { return decision.refusal }
+        let deadline = now() + timeout
+        while decision == .outdated, !Task.isCancelled {
+            do {
+                decision = linuxComputerUse(capabilities: try await refresh().capabilities)
+            } catch {
+                return (error as? VMGuestClient.Failure ?? .stopped).message(for: .linux)
+            }
+            let remaining = deadline - now()
+            guard decision == .outdated, remaining > .zero else { break }
+            await sleep(min(interval, remaining))
+        }
+        return decision.refusal
+    }
+
     /// The reply to a call naming a guest the worktree has no VM of.
     static func vmMissingMessage(for guest: VMGuestOS) -> String {
         "computer_vm_missing: This worktree has no \(guest == .linux ? "Linux" : "macOS") VM. Create one from its VM tab."

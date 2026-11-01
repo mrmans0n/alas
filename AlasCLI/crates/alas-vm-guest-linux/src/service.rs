@@ -34,7 +34,8 @@ pub struct Desktop<D: Driver> {
     /// Turn and session ends not applied yet, in arrival order. Whoever takes the computer applies
     /// them first, so a command read after one never runs before it.
     ended: Mutex<Vec<(String, LifecycleEvent)>>,
-    /// The last probe's answer, for a hello that can't wait for the driver.
+    /// The last probe's answer, or yes after a call that succeeded, for a hello that can't wait
+    /// for the driver.
     last_available: AtomicBool,
 }
 
@@ -234,6 +235,13 @@ impl<D: Driver + Send + 'static> Connection<D> {
                     Some(computer.perform_with_cancel(&session, &request, cancelled))
                 }
             };
+            // The driver just answered, so a hello while the next call holds the computer says so.
+            if response
+                .as_ref()
+                .is_some_and(|response| response["ok"] == true)
+            {
+                self.desktop.last_available.store(true, Ordering::SeqCst);
+            }
             lock(&self.commands).remove(&id);
             if let Some(response) = response {
                 self.respond(id, &response);
@@ -399,6 +407,22 @@ mod tests {
         host.command(4, &apps);
 
         assert_eq!(host.response(4), expected);
+    }
+
+    #[test]
+    fn a_successful_call_counts_as_the_driver_answering() {
+        let fake = Fake::mousepad();
+        let mut host = Host::connect(&fake);
+
+        host.command(4, &request("apps", json!({})));
+        assert_eq!(host.response(4)["ok"], true);
+
+        assert!(
+            host.connection
+                .desktop
+                .last_available
+                .load(Ordering::SeqCst)
+        );
     }
 
     /// A host whose `wait` (request 1, `call_id` "c1") holds the computer until `release`.
