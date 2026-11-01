@@ -121,6 +121,9 @@ public final class ACPSessionRunner {
     /// Where the update being applied came off the stream; nil outside a buffered apply.
     private var applyingStreamIndex: Int?
     private var activePromptDelegatedSource: ACPDelegatedPromptSource?
+    /// A settling session's turn result, reported once the updates sent before it are applied (see
+    /// `emitTurnCompleted`).
+    private var turnCompletionAwaitingDrain: ACPTurnCompletion?
     /// Transcript message count when this turn's prompt was recorded. Bounds
     /// `emitTurnCompleted`'s search for the turn's own last agent message, so
     /// a turn whose output hasn't drained yet reports no text rather than the
@@ -1921,6 +1924,8 @@ public final class ACPSessionRunner {
             flushQueueWhenBoundaryReady: false,
             treatBufferedUpdatesAsPromptOwned: true
         )
+        // A turn whose boundary never comes still reports.
+        reportTurnCompletionAwaitingDrain()
         session.clearRetryStatus()
         flushStreamingPersistOnStop()
         // Teardown always shuts this runner's connection down (see
@@ -2113,8 +2118,12 @@ public final class ACPSessionRunner {
     /// `isActivePrompt` branch so a superseded prompt never reports.
     /// `usageAwaitsResult`: the prompt's result has not arrived yet (a user cancel), so a sent prompt's usage waits
     /// for it, which carries its tokens, for at most `cancelledUsageWait`; `onTurnCompleted` does not.
+    /// `reportsAtBoundary`: a completed-output boundary follows. A settling session then reports the turn once that
+    /// boundary has applied the updates sent before the result, so a child spawned during the turn already shows as
+    /// background work to whoever decides on that report.
     private func emitTurnCompleted(
-        _ result: ACPTurnCompletion.Result, promptID: Int, quota: ACPPromptQuota? = nil, usageAwaitsResult: Bool = false
+        _ result: ACPTurnCompletion.Result, promptID: Int, quota: ACPPromptQuota? = nil, usageAwaitsResult: Bool = false,
+        reportsAtBoundary: Bool = false
     ) {
         let terminalResult = promptLifecycle.finishV1(promptID, result: result)
         let result = terminalResult ?? result
@@ -2147,9 +2156,9 @@ public final class ACPSessionRunner {
         // with the queued-successor dispatch this same completion is in the
         // middle of, deadlocking
         // `userCancelDoesNotCancelQueuedSuccessorStartedByPendingBoundaryFlush`.
-        // Guaranteeing the final text needs the completion deferred into
-        // `applyPendingCompletedOutputBoundaryIfReady`, the way
-        // `NextPromptCompletedTurn` is — tracked as follow-up.
+        // A settling session's report is deferred into
+        // `applyPendingCompletedOutputBoundaryIfReady` (for its background
+        // work, not its text); a legacy one keeps reporting here.
         let lastAgentText = currentTurnLastAgentText()
         let completion = ACPTurnCompletion(
             sessionId: sessionId,
@@ -2166,7 +2175,12 @@ public final class ACPSessionRunner {
         activePromptStartedAt = nil
         activePromptDelegatedSource = nil
         activePromptTranscriptFloor = nil
-        onTurnCompleted?(completion)
+        if reportsAtBoundary, session.settlesAtResult {
+            reportTurnCompletionAwaitingDrain()
+            turnCompletionAwaitingDrain = completion
+        } else {
+            onTurnCompleted?(completion)
+        }
         // A prompt stopped or failed before it reached the agent is no turn: there is no usage to record.
         guard unreportedPrompts[promptID] != nil else { return }
         guard usageAwaitsResult else {
@@ -4818,7 +4832,8 @@ extension ACPSessionRunner {
                         }
                         self.activePromptID = nil
                         if !wasCancelled, self.session.lastError == lastErrorAtSend { self.session.lastError = nil }
-                        self.emitTurnCompleted(completionResult, promptID: promptID, quota: promptOutcome.quota)
+                        self.emitTurnCompleted(
+                            completionResult, promptID: promptID, quota: promptOutcome.quota, reportsAtBoundary: true)
                         self.deferCompletedOutputBoundaryUntilUpdatesDrain(
                             successfulTurn: completionUserMessageID.flatMap { userMessageID in
                                 guard completionResult == .completed,
@@ -5127,6 +5142,12 @@ extension ACPSessionRunner {
         applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: flushQueueWhenReady)
     }
 
+    private func reportTurnCompletionAwaitingDrain() {
+        guard let completion = turnCompletionAwaitingDrain else { return }
+        turnCompletionAwaitingDrain = nil
+        onTurnCompleted?(completion)
+    }
+
     private func applyPendingCompletedOutputBoundaryIfReady(flushQueueWhenReady: Bool) {
         guard !nativeSteeringInProgress, !detachedSteeringTurn,
               let boundary = pendingCompletedOutputBoundary,
@@ -5147,6 +5168,7 @@ extension ACPSessionRunner {
         if session.transcript.messages.count > before {
             persistFromIndex(before)
         }
+        reportTurnCompletionAwaitingDrain()
         guard activePromptID == nil else {
             if let turn = boundary.successfulTurn { nextPromptLogger.notice("prompt \(turn.promptID) dropped at boundary: another prompt is active") }
             return
@@ -6102,6 +6124,10 @@ extension ACPSessionRunner {
                 current.merge(.init(sessionUpdate: "async_task_state_update", asyncTaskId: current.asyncTaskId,
                     state: "stopped"), wakeOnCompletion: false)
                 persistIndices(session.saveBackgroundTask(current))
+                // The cycle ends here; its own stopped notice, applied later, finds it inactive and reports nothing.
+                if current.ownerSessionId == (session.remoteSessionId ?? sessionId) {
+                    noteAutonomousCycle(identity: id, wasKnown: true, wasActive: true)
+                }
             }
         } catch {
             errorMessage = "Could not stop task: \(error.localizedDescription)"
