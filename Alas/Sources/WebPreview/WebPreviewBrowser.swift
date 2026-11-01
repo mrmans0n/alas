@@ -278,6 +278,8 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
             }
         }
         if remoteHost != nil {
+            // Starts the shared path monitor, which posts `didChange`; it's lazy and nothing else touches it.
+            _ = WebPreviewLocalAddresses.shared
             installProtection()
             addressObserver = NotificationCenter.default.addObserver(
                 forName: WebPreviewLocalAddresses.didChange, object: nil, queue: .main) { [weak self] _ in
