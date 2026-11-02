@@ -605,9 +605,13 @@ struct ACPCodexHooksTests {
         }
     }
 
-    @Test(arguments: ["codex_hook_review_required", "codex_hook_changed", "future", ""])
-    func wrappedErrorsRetainExactReplayBoundary(kind: String) {
-        let error = JSONRPCError(code: -32044, message: "original", data: AnyCodable(["kind": kind]))
+    @Test(arguments: ["codex_hook_review_required", "codex_hook_changed", "future", ""], [false, true])
+    func wrappedErrorsRetainExactReplayBoundary(kind: String, decoded: Bool) throws {
+        // A raw broker projects `data` from plain values; the legacy broker
+        // decodes it from the wire, which boxes every member in `AnyCodable`.
+        let error = decoded
+            ? try JSONDecoder().decode(JSONRPCError.self, from: Data(#"{"code":-32044,"message":"original","data":{"kind":"\#(kind)"}}"#.utf8))
+            : JSONRPCError(code: -32044, message: "original", data: AnyCodable(["kind": kind]))
         let expected = ACPCodexHookReviewError(rawValue: kind)
         #expect(ACPCodexHookReviewError.classify(ACPClientError.jsonrpc(error)) == expected)
         #expect(ACPCodexHookReviewError.classify(JSONRPCError(code: 1001, message: "original", data: AnyCodable(["kind": kind, "restartable": true]))) == nil)

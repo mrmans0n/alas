@@ -188,7 +188,7 @@ public enum ACPUsageLimitDetector: Sendable {
         calendar: Calendar = .current
     ) -> ACPUsageLimit? {
         guard let rpc = jsonRPCError(error) else { return nil }
-        let data = object(rpc.data)
+        let data = AnyCodable.object(rpc.data)
         let message = strippedMessage(rpc.message)
         let agentText = turnAgentText?.trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -234,11 +234,6 @@ public enum ACPUsageLimitDetector: Sendable {
     private static func strippedMessage(_ message: String) -> String {
         let prefix = "Internal error: "
         return message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message
-    }
-
-    private static func object(_ value: AnyCodable?) -> [String: Any]? {
-        if let dict = value?.value as? [String: AnyCodable] { return dict.mapValues(\.value) }
-        return value?.value as? [String: Any]
     }
 }
 

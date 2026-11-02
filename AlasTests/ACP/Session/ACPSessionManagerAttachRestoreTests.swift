@@ -11,8 +11,10 @@ struct ACPSessionManagerAttachRestoreTests {
         let store = try ACPSessionStore(path: tmpStorePath())
         let client = ACPMockClient()
         let diagnostic = "Bun runtime must be >= 1.4.4 (found v1.4.2). Please upgrade: bun upgrade"
-        let rpc = JSONRPCError(code: -32074, message: "adapter exited before completing request",
-            data: AnyCodable(["stderr": diagnostic]))
+        // Decoded from the broker's wire shape, which boxes `data` members.
+        let rpc = try JSONDecoder().decode(JSONRPCError.self, from: JSONSerialization.data(withJSONObject: [
+            "code": -32074, "message": "adapter exited before completing request", "data": ["stderr": diagnostic]
+        ]))
         client.script(method: "initialize") { _ in
             switch wrapper {
             case "client": throw ACPClientError.jsonrpc(rpc)

@@ -132,8 +132,8 @@ public enum ACPForkPointFailure: String, Codable, Equatable, Error, Sendable {
         default: return nil
         }
         guard rpc.code == -32602,
-              let data = object(rpc.data?.value),
-              let forkPoint = object(data["forkPoint"])
+              let data = AnyCodable.object(rpc.data),
+              let forkPoint = AnyCodable.object(data["forkPoint"])
         else { return nil }
         return refusal(reason: forkPoint["reason"] as? String, hasField: forkPoint["field"] != nil)
     }
@@ -155,14 +155,5 @@ public enum ACPForkPointFailure: String, Codable, Equatable, Error, Sendable {
         case "notNegotiated": return .unsupported
         default: return hasField ? .malformed : nil
         }
-    }
-
-    private static func object(_ value: Any?) -> [String: Any]? {
-        // Decoded JSON nests `AnyCodable`, which `as? [String: Any]` would
-        // accept with its values still boxed.
-        if let value = value as? [String: AnyCodable] { return value.mapValues(\.value) }
-        if let value = value as? [String: Any] { return value }
-        if let value = value as? AnyCodable { return object(value.value) }
-        return nil
     }
 }

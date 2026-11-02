@@ -129,7 +129,7 @@ public enum ACPCodexHookReviewError: String, Sendable {
         else if let raw = error as? ACPRawRPCError { rpc = raw.rpcError }
         else { rpc = nil }
         guard let rpc, rpc.code == -32044,
-              let data = rpc.data?.value as? [String: Any], let kind = data["kind"] as? String else { return nil }
+              let data = AnyCodable.object(rpc.data), let kind = data["kind"] as? String else { return nil }
         return Self(rawValue: kind)
     }
 }
