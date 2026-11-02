@@ -183,7 +183,6 @@ public struct HostSSHSetup: Sendable {
         RemoteZmxInstaller.localArch == "aarch64" ? "arm64" : RemoteZmxInstaller.localArch
     }
 
-
     public func decision(for probe: HostSSHProbe) -> HostSSHInstall {
         HostSSHInstall.decide(probe, bundleArch: Self.bundleArch)
     }
