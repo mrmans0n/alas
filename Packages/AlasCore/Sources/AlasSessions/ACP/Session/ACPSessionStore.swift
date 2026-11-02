@@ -619,7 +619,7 @@ extension ACPSessionStore {
 
     /// A blob this build cannot read (written by a newer build, or damaged)
     /// reads as no fork point instead of failing the session load.
-    public static func decodeForkPoint(_ json: String) -> ACPSessionForkPoint? {
+    private static func decodeForkPoint(_ json: String) -> ACPSessionForkPoint? {
         try? JSONDecoder().decode(ACPSessionForkPoint.self, from: Data(json.utf8))
     }
 

@@ -109,10 +109,16 @@ struct ACPSessionForkPersistenceTests {
         #expect(try await persistence.loadFork(targetSessionID: "target")?.forkPoint == resolved)
     }
 
-    @Test("a damaged fork point blob loads as no fork point")
-    func corruptForkPointLoadsAsNil() throws {
-        #expect(ACPSessionStore.decodeForkPoint("{not json") == nil)
-        #expect(ACPSessionStore.decodeForkPoint(#"{"target":{}}"#) == nil)
+    @Test("a damaged fork point blob loads as no fork point", arguments: ["{not json", #"{"target":{}}"#])
+    func corruptForkPointLoadsAsNil(blob: String) throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let record = forkRecord(target: "target", phase: .ready, mechanism: .transcriptTransfer)
+        try store.createFork(session: targetRow(id: "target"), messages: [], record: record)
+        try store.db.exec("UPDATE session_forks SET fork_point = ?", bindings: [blob])
+
+        let loaded = try #require(try store.loadFork(targetSessionID: "target"))
+        #expect(loaded.forkPoint == nil)
+        #expect(loaded == record)
     }
 
     private func temporaryPath() -> String {
