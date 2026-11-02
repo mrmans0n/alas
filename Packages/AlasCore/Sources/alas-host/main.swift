@@ -12,7 +12,7 @@ Process.neverPromptsForGit = true
 
 let usage = """
 usage: alas-host [--wait-for-lock]
-       alas-host setup
+       alas-host setup [--check]
        alas-host pair
        alas-host install-agent | uninstall-agent
        alas-host config list | get [<key>] | set <key> <value> [--restart]
@@ -32,7 +32,8 @@ directory instead of exiting, and serves once it lets go.
 
 `alas-host setup` walks through the host's settings, projects and pairing in
 a full-screen terminal UI that opens on the current values; rerun it to change
-them later.
+them later. `setup --check` prints the warnings it would show, one per line,
+without a terminal.
 
 `alas-host pair` asks the running host for a Remote pairing code, which a
 phone, browser or Mac redeems within two minutes, and prints it, then the

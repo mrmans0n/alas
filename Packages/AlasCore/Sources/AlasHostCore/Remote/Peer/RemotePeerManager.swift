@@ -897,6 +897,13 @@ public final class RemotePeerManager {
         return true
     }
 
+    public func setSSHDestination(_ destination: String?, peerId: String) {
+        guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
+        peers[index].sshDestination = destination
+        durableStateByServerId[peers[index].serverId] = peers[index]
+        savePeers()
+    }
+
     public func forget(peerId: String) {
         guard let index = peers.firstIndex(where: { $0.id == peerId }) else { return }
         let peer = peers.remove(at: index)

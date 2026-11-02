@@ -10,6 +10,12 @@ struct RemoteServerPane: View {
     @State private var peerLink = ""
     @State private var peerError: String?
     @State private var isAddingPeer = false
+    @State private var showingHostSSHSetup = false
+    /// The peer whose host update awaits confirmation.
+    @State private var confirmingHostUpdate: RemotePeer?
+    /// Progress of a running host update or log read, shown in place of the peer's status.
+    @State private var hostActivity: [String: String] = [:]
+    @State private var hostLog: HostLog?
     /// The nearby instance selected for approval or legacy code entry.
     @State private var selectedNearbyId: String?
     @State private var selectedNearbyName = ""
@@ -262,10 +268,21 @@ struct RemoteServerPane: View {
                             }
                         }
                         ForEach(state.remotePeers.peers) { peer in
-                            SettingsRow(name: peer.name, desc: peerStatus(peer)) {
-                                AlasButton(title: "Forget", style: .subtle) {
-                                    state.remotePeers.forget(peerId: peer.id)
+                            SettingsRow(name: peer.name, desc: hostActivity[peer.id] ?? peerStatus(peer)) {
+                                HStack(spacing: 8) {
+                                    if peer.sshDestination != nil {
+                                        AlasButton(title: "Update host", style: .subtle) {
+                                            confirmingHostUpdate = peer
+                                        }
+                                        AlasButton(title: "Host log", style: .subtle) {
+                                            readHostLog(peer)
+                                        }
+                                    }
+                                    AlasButton(title: "Forget", style: .subtle) {
+                                        state.remotePeers.forget(peerId: peer.id)
+                                    }
                                 }
+                                .disabled(hostActivity[peer.id] != nil)
                             }
                         }
                         if state.config.remote.discoverable {
@@ -295,6 +312,12 @@ struct RemoteServerPane: View {
                                     addPeer()
                                 }
                                 .disabled(isAddingPeer || peerLink.trimmingCharacters(in: .whitespaces).isEmpty)
+                            }
+                        }
+                        SettingsRow(name: "Set up a host over SSH", desc: "Install alas-host on a Mac this Mac can reach with key-based SSH, start it at login, and pair with it.") {
+                            AlasButton(title: "Set up…", style: .subtle) {
+                                peerError = nil
+                                showingHostSSHSetup = true
                             }
                         }
                         if let peerError {
@@ -338,6 +361,66 @@ struct RemoteServerPane: View {
             if pairingCode != nil { pairingCode = state.remotePairing.beginPairing() }
         }
         .onDisappear { state.cancelNearbyApproval() }
+        .sheet(isPresented: $showingHostSSHSetup) {
+            HostSSHSetupSheet(
+                peers: state.remotePeers,
+                describeAddError: { describe($0, viaLink: true) },
+                onDismiss: { showingHostSSHSetup = false }
+            )
+        }
+        .sheet(item: $hostLog) { log in
+            HostLogSheet(log: log, onDismiss: { hostLog = nil })
+        }
+        .alert(
+            "Update this host?",
+            isPresented: Binding(
+                get: { confirmingHostUpdate != nil },
+                set: { if !$0 { confirmingHostUpdate = nil } }
+            ),
+            presenting: confirmingHostUpdate
+        ) { peer in
+            Button("Update") { updateHost(peer) }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Updating restarts the host and ends its running sessions.")
+        }
+    }
+
+    private func updateHost(_ peer: RemotePeer) {
+        guard let destination = peer.sshDestination else { return }
+        let setup = HostSSHSetup(destination: destination, bundleResources: HostSSHSetupSheet.bundleResources)
+        peerError = nil
+        hostActivity[peer.id] = "Connecting to \(destination)…"
+        Task { @MainActor in
+            defer { hostActivity[peer.id] = nil }
+            do {
+                let probe = try await setup.probe()
+                // Hashes the bundled host binary; keep it off the main thread.
+                let install = await Task.detached { setup.decision(for: probe) }.value
+                hostActivity[peer.id] = HostSSHSetupSheet.summary(install) + "…"
+                let host = try await setup.install(probe, progress: { _ in })
+                hostActivity[peer.id] = "Restarting the host…"
+                try await setup.start(host: host)
+            } catch {
+                peerError = "\(peer.name): " + HostSSHSetupSheet.describe(error, destination: destination)
+            }
+        }
+    }
+
+    private func readHostLog(_ peer: RemotePeer) {
+        guard let destination = peer.sshDestination else { return }
+        let setup = HostSSHSetup(destination: destination, bundleResources: HostSSHSetupSheet.bundleResources)
+        peerError = nil
+        hostActivity[peer.id] = "Reading the host log…"
+        Task { @MainActor in
+            defer { hostActivity[peer.id] = nil }
+            do {
+                let text = try await setup.log()
+                hostLog = HostLog(name: peer.name, text: text)
+            } catch {
+                peerError = "\(peer.name): " + HostSSHSetupSheet.describe(error, destination: destination)
+            }
+        }
     }
 
     @ViewBuilder
