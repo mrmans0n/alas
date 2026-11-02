@@ -91,12 +91,13 @@ final class WorktreeVMManager {
         bundle.url.appendingPathComponent("first-boot-pending")
     }
 
-    /// Whether the bundle holds a paused VM's saved state: the state file and its `state.json`.
-    /// Whether it is still valid for the disk is decided at start.
+    /// Whether the bundle holds a paused VM's saved state that is still valid for its disk: an
+    /// older build that cold-booted the VM since changed the disk, so the VM no longer resumes
+    /// where it was. A start removes such a stale state.
     nonisolated static func isPaused(_ bundle: VMBundle) -> Bool {
-        let fm = FileManager.default
-        return fm.fileExists(atPath: savedStateURL(of: bundle).path)
-            && fm.fileExists(atPath: savedStateInfoURL(of: bundle).path)
+        guard FileManager.default.fileExists(atPath: savedStateURL(of: bundle).path),
+              let info = readSavedStateInfo(of: bundle), let disk = diskModified(bundle) else { return false }
+        return VMSavedState.isValid(pausedDiskStamp: info.diskStamp, currentDiskModified: disk)
     }
 
     /// How long quitting waits for the running macOS VMs to save their state, all together.
