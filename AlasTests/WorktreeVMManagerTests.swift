@@ -1049,6 +1049,32 @@ final class WorktreeVMManagerTests {
         ) == c.runs)
     }
 
+    struct AutoVMCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        var setting: Bool? = true
+        var appleSilicon = true
+        var golden = true
+        var remote = false
+        let creates: Bool
+        var testDescription: String { name }
+    }
+
+    @Test(arguments: [
+        AutoVMCase(name: "setting on", creates: true),
+        AutoVMCase(name: "setting off", setting: false, creates: false),
+        AutoVMCase(name: "setting never chosen", setting: nil, creates: false),
+        AutoVMCase(name: "Intel host", appleSilicon: false, creates: false),
+        AutoVMCase(name: "no golden image", golden: false, creates: false),
+        AutoVMCase(name: "remote project", remote: true, creates: false),
+    ])
+    func newWorktreesGetAVMOnlyWhenTheProjectAsksAndOneCanBeCloned(_ c: AutoVMCase) {
+        var project = ProjectConfig(id: "p", name: "R", path: "/tmp/r", color: "#fff", addedAt: .distantPast)
+        project.vmForNewWorktrees = c.setting
+        #expect(WorktreeVMManager.shouldCreateVM(
+            project: project, isAppleSilicon: c.appleSilicon, goldenAvailable: c.golden, isRemote: c.remote
+        ) == c.creates)
+    }
+
     @Test(arguments: [Int32(3), nil])
     func aFailingSetupScriptLeavesNoCleanPoint(exitCode: Int32?) async throws {
         let bundle = try addRecord("/repo/a")

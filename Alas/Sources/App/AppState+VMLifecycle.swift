@@ -158,6 +158,30 @@ extension AppState {
             return (try? await client.hello()) != nil
         } && vmManager.running(vm.worktree, guest: vm.guest) != nil
     }
+
+    // MARK: - New worktrees
+
+    /// Creates the macOS VM of a worktree just created in a project that gives its new worktrees
+    /// one, without booting it; its first boot runs the setup script and takes the clean point.
+    /// Never fails the worktree: without a golden image the VM waits for the VM tab or an agent.
+    func createVMForNewWorktree(_ worktree: Worktree, projectId: String) {
+        guard let project = projects.first(where: { $0.id == projectId }) else { return }
+        #if arch(arm64)
+        let isAppleSilicon = true
+        #else
+        let isAppleSilicon = false
+        #endif
+        guard WorktreeVMManager.shouldCreateVM(
+            project: project, isAppleSilicon: isAppleSilicon,
+            goldenAvailable: vmManager.availableGolden() != nil,
+            isRemote: project.host != nil || RemotePath.isReserved(worktree.id)
+        ) else { return }
+        do {
+            try vmManager.createVM(worktreeID: worktree.id, guest: .macOS)
+        } catch {
+            vmLogger.error("Could not create the VM of a new worktree: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 }
 
 private let vmLogger = Logger(subsystem: "io.nlopez.alas", category: "vm-setup")

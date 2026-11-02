@@ -149,6 +149,8 @@ private struct ProjectDialog: View {
     @State private var repoHookReviewTask: Task<Void, Never>?
     @State private var mcpServers: [ProjectMCPServer] = []
     @State private var shepherdInstructions: String = ""
+    @State private var vmForNewWorktrees = false
+    @State private var vmGuestSetupScript: String = ""
     @State private var shepherdRequiredReviewers: [String] = []
     /// `.alas/shepherd.local.md` or `.alas/shepherd.md` when the project's
     /// main worktree has one; that file wins over these settings.
@@ -249,6 +251,7 @@ private struct ProjectDialog: View {
                             )
                         case .automation:
                             startupScriptsSection
+                            worktreeVMSection
                             shepherdSection
                         case .integrations:
                             integrationsSection
@@ -1045,6 +1048,39 @@ private struct ProjectDialog: View {
         }
     }
 
+    /// Worktree VMs run only for git projects on this Mac, and the settings
+    /// apply to worktrees created later, so they're shown when editing one.
+    private var showsWorktreeVMSection: Bool {
+        guard case .edit(let project) = mode else { return false }
+        return !project.isFolder && project.host == nil
+    }
+
+    @ViewBuilder
+    private var worktreeVMSection: some View {
+        if showsWorktreeVMSection {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Worktree VMs")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundColor(theme.color("fg"))
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Give new worktrees a macOS VM", isOn: $vmForNewWorktrees)
+                        .toggleStyle(.checkbox)
+                        .font(.system(size: 11.5))
+                    Text("Created on demand otherwise (agent's first call or the VM tab).")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-muted"))
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Guest setup script · runs once in each new VM, before its clean point")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundColor(theme.color("fg"))
+                    ProjectStartupScriptEditor(text: $vmGuestSetupScript, minHeight: 60)
+                        .accessibilityLabel("Guest setup script")
+                }
+            }
+        }
+    }
+
     /// Per-project PR shepherd rules. Shown only when editing a git project:
     /// the shepherd does not run for folders.
     @ViewBuilder
@@ -1358,6 +1394,8 @@ private struct ProjectDialog: View {
             agentSettings = project.startupScripts
             mcpServers = project.mcpServers
             shepherdInstructions = project.shepherd?.instructions ?? ""
+            vmForNewWorktrees = project.vmForNewWorktrees == true
+            vmGuestSetupScript = project.vmGuestSetupScript ?? ""
             shepherdRequiredReviewers = project.shepherd?.requiredReviewers ?? []
         }
     }
@@ -1659,6 +1697,10 @@ private struct ProjectDialog: View {
                 cloneTask = nil
             }
         case .edit(let project):
+            if showsWorktreeVMSection {
+                state.projectsManager.setVMSettings(
+                    projectId: project.id, forNewWorktrees: vmForNewWorktrees, guestSetupScript: vmGuestSetupScript)
+            }
             state.updateProject(
                 id: project.id,
                 name: name,

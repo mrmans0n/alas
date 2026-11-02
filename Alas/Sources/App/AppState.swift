@@ -4947,6 +4947,7 @@ final class AppState {
                 if launchSurface != .delegated {
                     selectWorktree(id: newWorktree.id)
                 }
+                createVMForNewWorktree(newWorktree, projectId: projectId)
                 do {
                     try await self.launchWorktreeSurface(launchSurface, worktree: newWorktree, project: project)
                 } catch {

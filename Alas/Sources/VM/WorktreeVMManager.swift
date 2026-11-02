@@ -1088,6 +1088,15 @@ final class WorktreeVMManager {
         !recordID.hasPrefix(goldenIDPrefix) && firstBootPending && !setupRunning && !setupFailed
     }
 
+    /// Whether creating a worktree also creates its macOS VM: the project turned it on, the
+    /// worktree is on this Mac, the Mac can run macOS guests, and a sealed golden image exists.
+    /// Without one, the VM is skipped silently and created on demand later.
+    nonisolated static func shouldCreateVM(
+        project: ProjectConfig, isAppleSilicon: Bool, goldenAvailable: Bool, isRemote: Bool
+    ) -> Bool {
+        project.vmForNewWorktrees == true && isAppleSilicon && goldenAvailable && !isRemote
+    }
+
     /// Starts VM `id` again after a disk operation that stopped it. `done` says what succeeded,
     /// for when it can't start.
     private func startAgain(_ id: String, done: String) async throws {

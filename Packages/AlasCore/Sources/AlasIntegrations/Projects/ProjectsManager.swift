@@ -294,6 +294,15 @@ public final class ProjectsManager {
         projects[idx].ggMode = mode
     }
 
+    /// Sets the project's worktree VM settings. Off is stored as nil, and so is
+    /// a blank guest setup script. Callers persist via `AppState.saveProjects()`.
+    public func setVMSettings(projectId: String, forNewWorktrees: Bool, guestSetupScript: String) {
+        guard let idx = projects.firstIndex(where: { $0.id == projectId }) else { return }
+        projects[idx].vmForNewWorktrees = forNewWorktrees ? true : nil
+        let blank = guestSetupScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        projects[idx].vmGuestSetupScript = blank ? nil : guestSetupScript
+    }
+
     public func ggWorktreeMode(projectId: String, worktreeId: String) -> GGWorktreeMode {
         projects.first(where: { $0.id == projectId })?.ggWorktreeModes[worktreeId] ?? .inherit
     }
