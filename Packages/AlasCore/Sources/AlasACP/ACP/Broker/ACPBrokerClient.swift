@@ -106,6 +106,11 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
     /// Explicitly pulls a bounded replay page; raw frame consumption remains caller-owned.
     public func replayRawBrokerEvents() async throws { try await rawTransport?.replay() }
 
+    public func currentRawPendingRequests() async throws -> ACPBrokerPendingView {
+        guard let rawTransport else { throw ACPClientError.notRunning }
+        return try await rawTransport.currentPendingRequests()
+    }
+
     public func respondToRawRequest(id: ACPBrokerJSONValue, result: ACPBrokerJSONValue? = nil, error: JSONRPCError? = nil) async throws {
         throw ACPBrokerRawReplyError.rejected(.unavailable)
     }

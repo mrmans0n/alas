@@ -216,7 +216,8 @@ struct WebPreviewEgressTests {
 
     /// The upstream replies and closes while the client keeps its side open;
     /// the tunnel still gives its slot back once `linger` passes.
-    @Test func aHalfClosedTunnelGivesItsSlotBack() async throws {
+    @Test(arguments: [DispatchTimeInterval.nanoseconds(0), .milliseconds(200)])
+    func aHalfClosedTunnelGivesItsSlotBack(linger: DispatchTimeInterval) async throws {
         let server = socket(AF_INET, SOCK_STREAM, 0)
         defer { Darwin.close(server) }
         var address = sockaddr_in()
@@ -237,7 +238,7 @@ struct WebPreviewEgressTests {
         }
         let lan = try Self.lanAddress()
         let proxy = WebPreviewEgressProxy(resolve: { _ in [lan] }, localAddresses: { [] }, maxTunnels: 1,
-                                          linger: .milliseconds(200), onBlocked: { _, _, _ in })
+                                          linger: linger, onBlocked: { _, _, _ in })
         defer { proxy.stop() }
         let port = try await Int(proxy.start())
         let held = try await TestClient.connect(host: "127.0.0.1", port: port)
@@ -245,11 +246,8 @@ struct WebPreviewEgressTests {
         // The upstream's end reached the client, which keeps its side open.
         try await eventually { held.received.ended }
         #expect(String(decoding: held.received.bytes, as: UTF8.self).hasSuffix("\r\n\r\nbye"))
-        let refused = try await TestClient.connect(host: "127.0.0.1", port: port)
-        try await eventually { refused.received.ended }
-        #expect(String(decoding: refused.received.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 503 "))
-        // Once the linger expires a connection is admitted: it gets past the
-        // cap to the credential check instead of a 503.
+        // Observe admission after expiry instead of racing a refusal against
+        // the linger timer. Tunnel-cap refusals have a separate gated test.
         let probe = Mutex<TestClient?>(nil)
         try await eventually {
             if let answer = probe.withLock({ $0?.received }), answer.ended {

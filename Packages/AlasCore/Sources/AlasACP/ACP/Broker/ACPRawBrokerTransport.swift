@@ -427,6 +427,31 @@ actor ACPRawBrokerTransport {
         _ = try await service.notify(request)
         try await replay()
     }
+    func currentPendingRequests() async throws -> ACPBrokerPendingView {
+        guard !terminated, !Task.isCancelled, let generation else { throw ACPClientError.notRunning }
+        var params = ACPBrokerAttachParams(brokerId: openParams.brokerId, generation: generation,
+            acknowledgedCursor: acknowledged, replayAfterCursor: replayCursor, maxReplayBytes: 1,
+            snapshotOnLastPageOnly: false)
+        params.wireContext = .rawV2
+        let page = try await service.attach(params)
+        guard !terminated, !Task.isCancelled, self.generation == generation,
+              let snapshot = page.snapshot else { throw ACPClientError.notRunning }
+        try validate(snapshot, expected: generation)
+        var keys = Set<Data>()
+        var cursors = Set<UInt64>()
+        for request in snapshot.pendingRequests {
+            guard let frame = request.rawFrame, let cursor = request.originCursor,
+                  cursor.rawValue > 0, Int64(exactly: cursor.rawValue) != nil,
+                  keys.insert(Data(request.requestId.utf8)).inserted, cursors.insert(cursor.rawValue).inserted,
+                  try ACPV2InboundDelivery.decodeHeader(from: frame.bytes).id != nil else {
+                throw ACPClientError.decoding("Conflicting raw pending identity")
+            }
+        }
+        // Do not apply replay events, consume receipts or resolve pending state.
+        return .init(connectionID: connectionID, brokerID: snapshot.metadata.brokerId,
+            generation: generation, journalTail: snapshot.journalTail, requests: snapshot.pendingRequests)
+    }
+
     func respondExact(expectedConnectionID: UUID, params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
         guard !terminated, !Task.isCancelled, let generation else { throw ACPBrokerRawReplyError.rejected(.unavailable) }
         guard expectedConnectionID == connectionID, params.wireContext == .rawV2,

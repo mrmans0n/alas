@@ -660,6 +660,13 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         }
     }
 
+    /// Historical or caller-created deliveries never populate the capture registry.
+    public func canRespondToV2Request(_ delivery: ACPV2InboundDelivery) -> Bool {
+        guard sessionUpdateProtocolVersion == .v2, transport is any JSONRPCFrameWriting,
+              delivery.connectionID == updateConnectionID, case .stdio = delivery.source else { return false }
+        return v2Replies.canReply(to: delivery)
+    }
+
     public func respondToV2Request(_ delivery: ACPV2InboundDelivery, expectedConnectionID: UUID,
         operationKey: ACPV2ReplyOperationKey, frame: Data) async throws -> ACPV2StdioReplyResult {
         guard sessionUpdateProtocolVersion == .v2, let writer = transport as? any JSONRPCFrameWriting else {
