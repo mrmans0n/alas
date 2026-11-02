@@ -241,6 +241,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// The adapter settles foreground turns at their result while background
     /// children continue. Runtime only; relearned on attach.
     @Tracked public var settlesAtResult = false
+    /// Where the adapter can cut a fork at an earlier message, from its
+    /// `forkPoint` advertisement. Runtime only; relearned on attach.
+    @Tracked public var forkPoint: ACPForkPointCapability?
     /// Whether a foreground turn is running. Installed by the session's
     /// runner; a turn that settled at its result no longer counts, even while
     /// its children still run.

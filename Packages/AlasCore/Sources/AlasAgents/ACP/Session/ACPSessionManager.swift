@@ -2145,11 +2145,17 @@ public final class ACPSessionManager: ChangeTracking {
             await awaitBackfill(id: sourceSessionID)
             await flushAllPersistence()
             let storedMessages = try await persistence.loadMessages(sessionId: sourceSessionID)
+            // Rows a transcript-transfer source inherited were never in its
+            // agent's own history.
+            let remoteHistoryStart = source.forkRecord?.mechanism == .transcriptTransfer
+                ? source.forkRecord?.inheritedMessageCount ?? 0
+                : 0
             let snapshot = try ACPSessionForkSnapshotResolver.resolve(
                 boundary: boundary,
                 liveMessages: source.transcript.messages,
                 storedMessages: storedMessages,
-                allowsUnpersistedTail: isEphemeral
+                allowsUnpersistedTail: isEphemeral,
+                remoteHistoryStart: remoteHistoryStart
             )
             let boundaryIsRemoteHead = snapshot.sourceBoundarySequence == storedMessages.last?.seq
             let sourceContextDeliveryPending = source.forkRecord?.mechanism == .transcriptTransfer
@@ -2162,13 +2168,24 @@ public final class ACPSessionManager: ChangeTracking {
                     boundaryIsRemoteHead: boundaryIsRemoteHead,
                     sourceRemoteSessionID: source.remoteSessionId,
                     forkCapability: source.sessionCapabilities?.supportsFork,
-                    forkPoint: nil,
-                    historicalTarget: nil
+                    forkPoint: source.forkPoint,
+                    historicalTarget: snapshot.forkPointTarget
                 )
+            let forkPoint: ACPSessionForkPoint? = if case .nativeAtMessage(let target) = candidate,
+                                                     let capability = source.forkPoint {
+                ACPSessionForkPoint(target: target, boundary: capability.boundary)
+            } else {
+                nil
+            }
 
             let targetID = UUID().uuidString
             let now = Int64(Date().timeIntervalSince1970)
-            let copiedMessages = try snapshot.copiedMessages(targetSessionID: targetID, createdAt: now)
+            // A native fork's history carries the agent's own message ids.
+            let copiedMessages = try snapshot.copiedMessages(
+                targetSessionID: targetID,
+                createdAt: now,
+                keepsProviderMessageIDs: candidate != .transcript
+            )
             // A same-agent fork keeps the instructions its source runs with;
             // another agent starts from its own configured instructions.
             let targetInstructions = targetAgentID == source.agentId
@@ -2212,10 +2229,11 @@ public final class ACPSessionManager: ChangeTracking {
                 sourceAgentID: source.agentId,
                 sourceBoundarySequence: snapshot.sourceBoundarySequence,
                 inheritedMessageCount: copiedMessages.count,
-                phase: candidate == .native ? .negotiatingNative : .ready,
-                mechanism: candidate == .native ? nil : .transcriptTransfer,
+                phase: candidate == .transcript ? .ready : .negotiatingNative,
+                mechanism: candidate == .transcript ? .transcriptTransfer : nil,
                 contextDeliveryPending: candidate == .transcript,
-                via: isEphemeral ? .btw : nil
+                via: isEphemeral ? .btw : nil,
+                forkPoint: forkPoint
             )
 
             try await persistence.createFork(
@@ -4723,6 +4741,28 @@ public final class ACPSessionManager: ChangeTracking {
         return true
     }
 
+    /// Durably settles a negotiating fork as a transcript import. A targeted
+    /// fork also records why it couldn't be forked natively at its message.
+    private func finalizeForkAsTranscript(
+        session: ACPSession,
+        fork: inout ACPSessionForkRecord,
+        reason: ACPForkPointFailure?
+    ) async throws {
+        var forkPoint = fork.forkPoint
+        if let reason { forkPoint?.outcome = .unmatched(reason) }
+        try await persistence.finalizeFork(
+            targetSessionID: session.id,
+            mechanism: .transcriptTransfer,
+            remoteSessionID: nil,
+            forkPoint: reason == nil ? nil : forkPoint
+        )
+        fork.phase = .ready
+        fork.mechanism = .transcriptTransfer
+        fork.contextDeliveryPending = true
+        fork.forkPoint = forkPoint
+        session.forkRecord = fork
+    }
+
     private func surfaceForkFallbackPersistenceFailure(
         _ error: any Error,
         on session: ACPSession
@@ -4823,7 +4863,14 @@ public final class ACPSessionManager: ChangeTracking {
         wireMCPServers: [ACPMCPServer]
     ) async throws -> (result: ACPSessionNewResult, createdFreshRemoteSession: Bool) {
         var fork = fork
-        let canAttemptNativeFork = initialized.sessionCapabilities.supportsFork
+        // The fork point is read only from the saved record: a durable fork
+        // key replayed with a different payload is rejected by the broker.
+        let forkPoint = fork.forkPoint
+        // An adapter that can't cut where this fork was planned (an older
+        // version, or another agent build) never sees the target.
+        let forkPointUnsupported = forkPoint.map { initialized.forkPoint?.boundary != $0.boundary } ?? false
+        let canAttemptNativeFork = !forkPointUnsupported
+            && initialized.sessionCapabilities.supportsFork
             && connection.client.providesDurableOperationKeyDeduplication
         let source = canAttemptNativeFork
             ? try await persistence.loadSession(id: fork.sourceSessionID)
@@ -4856,11 +4903,30 @@ public final class ACPSessionManager: ChangeTracking {
         if nativeForkBarrierAcquired {
             await sourceRunner?.flushPersistence()
         }
-        let sourceBoundaryMatches = if canAttemptNativeFork {
-            try await persistence.latestMessageSeq(sessionId: fork.sourceSessionID)
-                == fork.sourceBoundarySequence
+        // With the source idle and persisted: an untargeted fork needs the
+        // boundary to still be the source's head; a targeted one needs the
+        // targeted message unchanged, and later items to check the echo.
+        var laterSourceItemIDs: Set<String> = []
+        let sourceBoundaryMatches: Bool
+        if !canAttemptNativeFork {
+            sourceBoundaryMatches = false
+        } else if let forkPoint {
+            let storedSource = try await persistence.loadMessages(sessionId: fork.sourceSessionID)
+            // A row that no longer decodes can't be checked either.
+            if let later = try? ACPSessionForkSourceCheck.laterItemIDs(
+                storedMessages: storedSource,
+                boundarySequence: fork.sourceBoundarySequence,
+                target: forkPoint.target,
+                boundary: forkPoint.boundary
+            ) {
+                laterSourceItemIDs = later
+                sourceBoundaryMatches = true
+            } else {
+                sourceBoundaryMatches = false
+            }
         } else {
-            false
+            sourceBoundaryMatches = try await persistence.latestMessageSeq(sessionId: fork.sourceSessionID)
+                == fork.sourceBoundarySequence
         }
         let hasNativeForkAuthority = if hasReplayedForkCompletion {
             true
@@ -4887,6 +4953,7 @@ public final class ACPSessionManager: ChangeTracking {
                         cwd: worktreePath,
                         sessionId: sourceRemoteSessionID,
                         mcpServers: wireMCPServers,
+                        forkPoint: forkPoint?.target,
                         brokerOperationKey: Self.brokerStartupOperationKey(
                             sessionId: session.id,
                             method: "session/fork",
@@ -4904,6 +4971,7 @@ public final class ACPSessionManager: ChangeTracking {
                         return forked
                     }
                     do {
+                        // Where the fork was cut is only on the fork answer.
                         return try await connection.resumeSession(
                             cwd: worktreePath,
                             sessionId: forked.sessionId,
@@ -4913,7 +4981,7 @@ public final class ACPSessionManager: ChangeTracking {
                                 method: "session/resume",
                                 remoteSessionId: forked.sessionId
                             )
-                        )
+                        ).withForkPoint(forked.forkPoint)
                     } catch {
                         // The transcript fallback below starts another
                         // session; don't leave this fork behind.
@@ -4937,15 +5005,19 @@ public final class ACPSessionManager: ChangeTracking {
                 if let durableReplay, durableReplay.outcome.error == nil {
                     throw error
                 }
-                try await persistence.finalizeFork(
-                    targetSessionID: session.id,
-                    mechanism: .transcriptTransfer,
-                    remoteSessionID: nil
+                let fallbackError: any Error
+                if let terminalError = durableReplay?.outcome.error {
+                    fallbackError = ACPClientError.jsonrpc(terminalError)
+                } else {
+                    fallbackError = error
+                }
+                // A refused target is imported, never retried as a fork of
+                // the whole session.
+                try await finalizeForkAsTranscript(
+                    session: session,
+                    fork: &fork,
+                    reason: forkPoint == nil ? nil : ACPForkPointFailure.rejection(from: fallbackError)
                 )
-                fork.phase = .ready
-                fork.mechanism = .transcriptTransfer
-                fork.contextDeliveryPending = true
-                session.forkRecord = fork
                 connection.acknowledgeDurableSessionResponses()
                 await releaseReplayedForkCompletionForTranscriptFallback(
                     targetSessionID: session.id,
@@ -4953,12 +5025,6 @@ public final class ACPSessionManager: ChangeTracking {
                     connection: connection,
                     sessionCapabilities: initialized.sessionCapabilities
                 )
-                let fallbackError: any Error
-                if let terminalError = durableReplay?.outcome.error {
-                    fallbackError = ACPClientError.jsonrpc(terminalError)
-                } else {
-                    fallbackError = error
-                }
                 if ACPAuthFailure.message(from: fallbackError) != nil {
                     throw fallbackError
                 }
@@ -4973,11 +5039,47 @@ public final class ACPSessionManager: ChangeTracking {
                 return (fallback, true)
             }
 
+            var matchedForkPoint: ACPSessionForkPoint?
+            if var forkPoint {
+                switch ACPForkPointVerifier.verify(
+                    echo: result.forkPoint,
+                    target: forkPoint.target,
+                    boundary: forkPoint.boundary,
+                    laterSourceItemIDs: laterSourceItemIDs
+                ) {
+                case .success(let echo):
+                    forkPoint.outcome = .matched(echo)
+                    matchedForkPoint = forkPoint
+                case .failure(let reason):
+                    // A fork cut elsewhere, or not known to be cut at the
+                    // target, could hold the whole session: discard it.
+                    await closeTrackedRemoteSessionResult(
+                        result,
+                        sessionId: session.id,
+                        attempt: attempt,
+                        using: connection,
+                        sessionCapabilities: initialized.sessionCapabilities
+                    )
+                    try await finalizeForkAsTranscript(session: session, fork: &fork, reason: reason)
+                    connection.acknowledgeDurableSessionResponses()
+                    let fallback = try await startTranscriptFallbackSession(
+                        targetSessionID: session.id,
+                        sourceRemoteSessionID: sourceRemoteSessionID,
+                        attempt: attempt,
+                        connection: connection,
+                        sessionCapabilities: initialized.sessionCapabilities,
+                        wireMCPServers: wireMCPServers
+                    )
+                    return (fallback, true)
+                }
+            }
+
             do {
                 try await persistence.finalizeFork(
                     targetSessionID: session.id,
                     mechanism: .nativeACP,
-                    remoteSessionID: result.sessionId
+                    remoteSessionID: result.sessionId,
+                    forkPoint: matchedForkPoint
                 )
             } catch {
                 await closeTrackedRemoteSessionResult(
@@ -5011,6 +5113,7 @@ public final class ACPSessionManager: ChangeTracking {
             fork.phase = .ready
             fork.mechanism = .nativeACP
             fork.contextDeliveryPending = false
+            if let matchedForkPoint { fork.forkPoint = matchedForkPoint }
             session.forkRecord = fork
             session.markAsAgentForked()
             if var row = persistedRows[session.id] {
@@ -5023,15 +5126,19 @@ public final class ACPSessionManager: ChangeTracking {
             return (result, false)
         }
 
-        try await persistence.finalizeFork(
-            targetSessionID: session.id,
-            mechanism: .transcriptTransfer,
-            remoteSessionID: nil
-        )
-        fork.phase = .ready
-        fork.mechanism = .transcriptTransfer
-        fork.contextDeliveryPending = true
-        session.forkRecord = fork
+        // A targeted fork says why it wasn't forked at its message when the
+        // agent couldn't cut there or the message changed; other fallbacks
+        // (no durable connection, source runner or lease) are not about it.
+        let fallbackReason: ACPForkPointFailure? = if forkPoint == nil {
+            nil
+        } else if forkPointUnsupported {
+            .unsupported
+        } else if hasNativeForkAuthority, sourceRemoteSessionID?.isEmpty == false, !sourceBoundaryMatches {
+            .sourceChanged
+        } else {
+            nil
+        }
+        try await finalizeForkAsTranscript(session: session, fork: &fork, reason: fallbackReason)
         if let source = try await persistence.loadSession(id: fork.sourceSessionID),
            let sourceRemoteSessionID = source.remoteSessionId,
            !sourceRemoteSessionID.isEmpty {
@@ -6707,6 +6814,7 @@ extension ACPSessionManager {
         session.supportsCodexSteeringCompletion = false
         session.supportsContextBreakdown = false
         session.settlesAtResult = false
+        session.forkPoint = nil
         session.availableProviders = []
         session.agentState = .spawning
 
@@ -7060,6 +7168,7 @@ extension ACPSessionManager {
             )
             session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities
+            session.forkPoint = initialized.forkPoint
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {
                 // Keep the field set while the bounded detach is suspended:
