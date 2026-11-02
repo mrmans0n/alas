@@ -188,11 +188,8 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
         remoteHistoryStart: Int
     ) -> ACPForkPointTarget? {
         guard remoteHistoryStart >= 0, remoteHistoryStart <= boundaryIndex,
-              case let .agent(messageId?, text, _, metadata) = decoded[boundaryIndex],
-              !messageId.hasPrefix("alas-steering:"),
-              // A segment cut by a steering follow-up keeps the real id but
-              // only part of the message's text.
-              (metadata?.value as? [String: AnyCodable])?[ACPSession.steeringContinuationMetadataKey] == nil
+              case let .agent(messageId?, text, _, _) = decoded[boundaryIndex],
+              !isSteeringSegment(decoded[boundaryIndex])
         else { return nil }
 
         // The turn must be over at the boundary: the next conversation row,
@@ -206,9 +203,10 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
         if case .agent = next { return nil }
 
         // Fingerprints hash UTF-8 bytes, so compare bytes, not canonically
-        // equivalent strings.
+        // equivalent strings. Steering segments are parts of one adapter
+        // message, so they are not counted as messages of their own.
         let occurrence = decoded[remoteHistoryStart...boundaryIndex].filter { wire in
-            guard case let .agent(_, other, _, _) = wire else { return false }
+            guard case let .agent(_, other, _, _) = wire, !isSteeringSegment(wire) else { return false }
             return other.utf8.elementsEqual(text.utf8)
         }.count
         return ACPForkPointTarget(
@@ -216,6 +214,15 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
             messageFingerprint: ACPForkPointTarget.fingerprint(text),
             messageOccurrence: occurrence
         )
+    }
+
+    /// An agent row split by a steering follow-up: the continuation under an
+    /// `alas-steering:` id, or the segment before it, which keeps the real id
+    /// but only part of the message's text.
+    private static func isSteeringSegment(_ wire: ACPMessageWire) -> Bool {
+        guard case let .agent(messageId, _, _, metadata) = wire else { return false }
+        return messageId?.hasPrefix("alas-steering:") == true
+            || (metadata?.value as? [String: AnyCodable])?[ACPSession.steeringContinuationMetadataKey] != nil
     }
 
     @MainActor
@@ -242,12 +249,15 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
 /// Re-checks a fork target against the source's stored transcript right
 /// before `session/fork`.
 public enum ACPSessionForkSourceCheck: Sendable {
-    /// The agent-side ids of every item stored after the boundary, or nil when
-    /// the boundary row is gone or no longer the targeted message.
+    /// The agent-side ids of every item stored after the cut, or nil when the
+    /// boundary row is gone or no longer the targeted message. A `.turn` cut
+    /// keeps the rest of the targeted turn, so its later items start at the
+    /// next user message.
     public static func laterItemIDs(
         storedMessages: [ACPStoredMessage],
         boundarySequence: Int64,
-        target: ACPForkPointTarget
+        target: ACPForkPointTarget,
+        boundary: ACPForkPointBoundary
     ) throws -> Set<String>? {
         let decoder = JSONDecoder()
         guard let row = storedMessages.first(where: { $0.seq == boundarySequence }),
@@ -259,8 +269,12 @@ public enum ACPSessionForkSourceCheck: Sendable {
         else { return nil }
 
         var ids: Set<String> = []
-        for stored in storedMessages where stored.seq > boundarySequence {
-            switch try ACPMessageWire.decode(kind: stored.kind, payload: stored.payload, decoder: decoder) {
+        var reachedNextTurn = boundary == .message
+        for stored in storedMessages.sorted(by: { $0.seq < $1.seq }) where stored.seq > boundarySequence {
+            let wire = try ACPMessageWire.decode(kind: stored.kind, payload: stored.payload, decoder: decoder)
+            if case .user = wire { reachedNextTurn = true }
+            guard reachedNextTurn else { continue }
+            switch wire {
             case .user(let id?, _, _, _, _), .agent(let id?, _, _, _), .thought(let id?, _, _, _):
                 ids.insert(id)
             case .toolCall(let call):

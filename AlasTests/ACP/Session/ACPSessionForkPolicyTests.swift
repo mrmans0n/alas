@@ -344,16 +344,19 @@ struct ACPSessionForkPolicyTests {
     }
 
     @Test(
-        "a fork point counts equal agent text only in the history the agent holds",
-        arguments: [(0, 2), (2, 1)]
+        "a fork point counts equal agent text only in the history the agent holds, once per adapter message",
+        arguments: [
+            ([ForkRow.user("q1"), .agent("a1", "Same"), .user("q2"), .agent("a2", "Same"), .user("q3"), .agent("a3", "Other")], 3, 0, 2),
+            ([.user("q1"), .agent("a1", "Same"), .user("q2"), .agent("a2", "Same"), .user("q3"), .agent("a3", "Other")], 3, 2, 1),
+            // Steering segments are parts of one adapter message, not messages.
+            ([.user("q1"), .steeringSplitAgent("a0", "Same"), .user("s"), .agent("alas-steering:\(UUID().uuidString)", "Same"), .user("q2"), .agent("a2", "Same")], 5, 0, 1),
+        ] as [([ForkRow], Int, Int, Int)]
     )
-    func forkPointOccurrence(remoteHistoryStart: Int, occurrence: Int) throws {
-        let (live, stored) = try Self.transcript([
-            .user("q1"), .agent("a1", "Same"), .user("q2"), .agent("a2", "Same"), .user("q3"), .agent("a3", "Other"),
-        ])
+    func forkPointOccurrence(rows: [ForkRow], boundaryIndex: Int, remoteHistoryStart: Int, occurrence: Int) throws {
+        let (live, stored) = try Self.transcript(rows)
 
         let snapshot = try ACPSessionForkSnapshotResolver.resolve(
-            boundary: try Self.boundary(live, at: 3),
+            boundary: try Self.boundary(live, at: boundaryIndex),
             liveMessages: live,
             storedMessages: stored,
             remoteHistoryStart: remoteHistoryStart
@@ -367,22 +370,24 @@ struct ACPSessionForkPolicyTests {
     @Test(
         "the source check lists later item ids only while the targeted row is unchanged",
         arguments: [
-            ("advanced", "a1", "A1", Int64(1), Optional(Set(["a2", "tc9"]))),
-            ("edited text", "a1", "A1 edited", 1, nil),
-            ("changed id", "a1-new", "A1", 1, nil),
-            ("missing row", "a1", "A1", 99, nil),
-        ] as [(String, String, String, Int64, Set<String>?)]
+            ("advanced", "a1", "A1", Int64(1), ACPForkPointBoundary.message, Optional(Set(["tc1", "a2", "tc9"]))),
+            // The tool call that ends the targeted turn is part of a turn fork.
+            ("turn tool tail", "a1", "A1", 1, .turn, Set(["a2", "tc9"])),
+            ("edited text", "a1", "A1 edited", 1, .message, nil),
+            ("changed id", "a1-new", "A1", 1, .message, nil),
+            ("missing row", "a1", "A1", 99, .turn, nil),
+        ] as [(String, String, String, Int64, ACPForkPointBoundary, Set<String>?)]
     )
     func forkPointSourceCheck(
         label: String, boundaryMessageID: String, boundaryText: String,
-        boundarySequence: Int64, expected: Set<String>?
+        boundarySequence: Int64, boundary: ACPForkPointBoundary, expected: Set<String>?
     ) throws {
         let (_, stored) = try Self.transcript([
-            .user("u"), .agent(boundaryMessageID, boundaryText), .user("u2"), .agent("a2", "A2"), .tool("tc9"),
+            .user("u"), .agent(boundaryMessageID, boundaryText), .tool("tc1"), .user("u2"), .agent("a2", "A2"), .tool("tc9"),
         ])
 
         #expect(try ACPSessionForkSourceCheck.laterItemIDs(
-            storedMessages: stored, boundarySequence: boundarySequence, target: Self.forkTarget
+            storedMessages: stored, boundarySequence: boundarySequence, target: Self.forkTarget, boundary: boundary
         ) == expected)
     }
 
@@ -399,6 +404,7 @@ struct ACPSessionForkPolicyTests {
             ("codex later item", ACPForkPointEcho(boundary: .turn, messageId: "msg_1", turnId: "t1", lastItemId: "i9", matchedBy: .id), "msg_1", .turn, .mismatchedEcho),
             ("codex no turn", ACPForkPointEcho(boundary: .turn, messageId: "msg_1", lastItemId: "i1", matchedBy: .id), "msg_1", .turn, .mismatchedEcho),
             ("message for turn", ACPForkPointEcho(boundary: .message, messageId: "msg_1", matchedBy: .id), "msg_1", .turn, .mismatchedEcho),
+            ("fingerprint later segment", ACPForkPointEcho(boundary: .message, messageId: "msg_1", matchedBy: .fingerprint), "msg_1", .message, .mismatchedEcho),
         ] as [(String, ACPForkPointEcho?, String, ACPForkPointBoundary, ACPForkPointFailure?)]
     )
     func forkPointVerification(
@@ -410,7 +416,7 @@ struct ACPSessionForkPolicyTests {
         )
 
         let result = ACPForkPointVerifier.verify(
-            echo: echo, target: target, boundary: boundary, laterSourceItemIDs: ["a2", "i9"]
+            echo: echo, target: target, boundary: boundary, laterSourceItemIDs: ["a2", "i9", "msg_1:segment:3"]
         )
 
         if let failure {
