@@ -82,7 +82,7 @@ public enum ACPRequestAnswers {
     /// it is one, else the session's single pending question.
     @MainActor
     public static func pendingQuestion(in session: ACPSession) -> ACPSession.PendingQuestion? {
-        guard let head = session.transcript.pendingUserInputs.first else {
+        guard let head = session.transcript.blockingUserInputs.first else {
             return session.transcript.pendingQuestion
         }
         guard case .cursor(let id, let params) = head.source else { return nil }

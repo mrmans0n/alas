@@ -252,8 +252,8 @@ impl RuntimeState {
                 .any(|pending| pending.method == "session/prompt")
     }
 
-    fn user_request_parked(&mut self, kind: PendingClientRequestKind) {
-        if pending_kind_awaits_user(kind) && self.foreground_turn_in_flight() {
+    fn user_request_parked(&mut self, kind: PendingClientRequestKind, params: &Value) {
+        if request_awaits_user(kind, params) && self.foreground_turn_in_flight() {
             let _ = self.broker.set_turn_state(BrokerTurnState::AwaitingInput);
         }
     }
@@ -266,7 +266,10 @@ impl RuntimeState {
             || snapshot
                 .pending_requests
                 .iter()
-                .any(|request| pending_kind_awaits_user(request.kind))
+                .any(|request| {
+                    let params = request.payload.get("params").unwrap_or(&Value::Null);
+                    request_awaits_user(request.kind, params)
+                })
         {
             return;
         }
@@ -2769,10 +2772,24 @@ fn handle_adapter_client_request(runtime: &Runtime, value: Value) {
         request_id,
         id,
         kind,
-        json!({ "method": method, "params": params }),
+        json!({ "method": method, "params": params.clone() }),
     );
-    state.user_request_parked(kind);
+    state.user_request_parked(kind, &params);
     condvar.notify_all();
+}
+
+/// Whether a parked request holds the turn on the user. A Codex async
+/// question (`_meta.codex.delivery == "async"` on a form elicitation) lets the
+/// turn keep running, so it never parks the turn.
+fn request_awaits_user(kind: PendingClientRequestKind, params: &Value) -> bool {
+    pending_kind_awaits_user(kind) && !is_async_delivery(kind, params)
+}
+
+fn is_async_delivery(kind: PendingClientRequestKind, params: &Value) -> bool {
+    kind == PendingClientRequestKind::Elicitation
+        // The client decodes a missing mode as a form.
+        && params.get("mode").and_then(Value::as_str).unwrap_or("form") == "form"
+        && params.pointer("/_meta/codex/delivery").and_then(Value::as_str) == Some("async")
 }
 
 fn pending_kind_awaits_user(kind: PendingClientRequestKind) -> bool {
@@ -4358,7 +4375,7 @@ mod tests {
                 .broker
                 .add_pending_request(id, json!(id), PendingClientRequestKind::Permission, json!({}))
                 .unwrap();
-            state.user_request_parked(PendingClientRequestKind::Permission);
+            state.user_request_parked(PendingClientRequestKind::Permission, &Value::Null);
         };
         let answer = |state: &mut RuntimeState, id: &str| {
             state
@@ -4393,6 +4410,57 @@ mod tests {
         assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::AwaitingInput);
         answer(&mut state, "second");
         assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Streaming);
+    }
+
+    /// A Codex async question lets the turn keep running: it never parks the
+    /// turn, and it does not keep it parked once the blocking request beside
+    /// it is answered.
+    #[test]
+    fn async_elicitations_do_not_park_the_turn() {
+        let form = |meta: Value| json!({ "mode": "form", "message": "Q", "_meta": meta });
+        let park = |state: &mut RuntimeState, id: &str, params: Value| {
+            state
+                .broker
+                .add_pending_request(
+                    id,
+                    json!(id),
+                    PendingClientRequestKind::Elicitation,
+                    json!({ "method": "elicitation/create", "params": params.clone() }),
+                )
+                .unwrap();
+            state.user_request_parked(PendingClientRequestKind::Elicitation, &params);
+        };
+        let mut state = steering_runtime_state();
+        state.pending_methods.insert(7, PendingOperation {
+            operation_key: OperationKey::new("prompt"),
+            method: "session/prompt".to_string(),
+        });
+        state.broker.set_turn_state(BrokerTurnState::Streaming).unwrap();
+
+        park(&mut state, "async", form(json!({ "codex": { "delivery": "async" } })));
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Streaming);
+        // A missing mode is a form, as the Swift client decodes it.
+        park(
+            &mut state,
+            "async-no-mode",
+            json!({ "message": "Q", "_meta": { "codex": { "delivery": "async" } } }),
+        );
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Streaming);
+
+        park(&mut state, "blocking", form(Value::Null));
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::AwaitingInput);
+
+        state
+            .broker
+            .respond_to_pending_request("blocking", AdapterRPCOutcome {
+                raw_frame: None,
+                result: Some(json!({ "action": "cancel" })),
+                error: None,
+            })
+            .unwrap();
+        state.user_request_answered();
+        assert_eq!(state.broker.snapshot().turn_state, BrokerTurnState::Streaming);
+        assert_eq!(state.broker.snapshot().pending_requests.len(), 2);
     }
 
     #[test]

@@ -109,7 +109,7 @@ public struct NextPromptEligibilitySnapshot: Sendable {
         guard session.queue.isEmpty, session.pendingQueuePersistenceCount == 0 else { return "queue" }
         guard transcript.streamingState == .idle else { return "streaming" }
         guard transcript.pendingPermission == nil, transcript.pendingQuestion == nil,
-              transcript.pendingPlan == nil, transcript.pendingUserInputs.isEmpty,
+              transcript.pendingPlan == nil, !transcript.hasBlockingUserInput,
               transcript.urlElicitationWaits.isEmpty else { return "pending request" }
         guard session.retryStatus == nil, session.connectionRecoveryState == nil,
               session.contextRestoreWarning == nil,

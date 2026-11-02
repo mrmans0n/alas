@@ -24,28 +24,23 @@ struct ACPSessionManagerBlockerTests {
         #expect(manager.blockedRequestKeys(for: "s").isEmpty)
     }
 
-    @Test("pending questions and plans contribute their own ids")
-    func reportsQuestionAndPlanKeys() throws {
+    @Test("only a blocking question contributes its own id",
+          arguments: [ACPUserInputRequest.Delivery.blocking, .optional])
+    func reportsQuestionAndPlanKeys(delivery: ACPUserInputRequest.Delivery) throws {
         let manager = try makeManager()
         let session = manager.createSession(id: "s", agentId: "codex", autoRunDefault: false)
-        let questionId = UUID()
-        session.transcript.pendingUserInputs.append(
-            .init(
-                id: questionId,
-                source: .cursor(
-                    id: .number(5),
-                    params: ACPQuestionRequestParams(toolCallId: "tool", title: "Pick one", questions: [])
-                ),
-                title: "Pick one",
-                message: "pick one",
-                fields: [],
-                mode: .form
-            )
+        let params = try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(codexAsyncFormJSON(
+                meta: delivery == .blocking ? "null" : #"{"codex":{"delivery":"async"}}"#
+            ).utf8)
         )
+        let request = try #require(ACPUserInputRequest.elicitation(.init(id: .number(5), params: params)))
+        session.transcript.pendingUserInputs.append(request)
 
         let keys = manager.blockedRequestKeys(for: "s")
 
-        #expect(keys.contains(ACPChildBlocker.requestKey(questionId)))
+        #expect(keys.contains(ACPChildBlocker.requestKey(request.id)) == (delivery == .blocking))
         // A different request's key must not appear.
         #expect(!keys.contains(ACPChildBlocker.requestKey(UUID())))
     }

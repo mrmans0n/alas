@@ -245,6 +245,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// runner; a turn that settled at its result no longer counts, even while
     /// its children still run.
     public var foregroundTurnActive: @MainActor () -> Bool = { false }
+    /// The id of the foreground prompt the session's runner owns, or nil.
+    /// Installed by the runner; optional questions expire with the prompt
+    /// they arrived under.
+    public var activeForegroundPromptID: @MainActor () -> Int? = { nil }
 
     /// Recomputes the streaming state from what still waits on the user, once
     /// a permission, question or plan resolves. Children can ask after their
@@ -257,7 +261,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         let settled: StreamingState
         if transcript.pendingPermission != nil {
             settled = .awaitingPermission
-        } else if transcript.pendingPlan != nil || (!foreground && !transcript.pendingUserInputs.isEmpty) {
+        } else if transcript.pendingPlan != nil || (!foreground && transcript.hasBlockingUserInput) {
             settled = .awaitingInput
         } else {
             settled = foreground ? .streaming : .idle
@@ -847,6 +851,26 @@ public final class ACPSession: ChangeTracking, Identifiable {
             }
         }
         return id
+    }
+
+    /// Append the user row of an answered optional question, as the adapter
+    /// replays it. The answer is not a new prompt, so unlike
+    /// `recordUserPrompt` it never retitles the session or touches echo and
+    /// output-boundary state. Held replay candidates are materialised first
+    /// so the agent text they carry keeps its place above the answer.
+    /// Returns the row's index.
+    public func appendAnswerRow(text: String) -> Int {
+        _ = flushPendingReplayCandidates()
+        transcript.appendMessage(.user(
+            id: UUID(),
+            messageId: nil,
+            text: text,
+            attachments: [],
+            delegatedSource: nil,
+            pastedSpans: []
+        ))
+        didAppendTranscriptMessage()
+        return transcript.messages.count - 1
     }
 
     private static let steeringContinuationMetadataKey = "_alas/steeringContinuationMessageId"

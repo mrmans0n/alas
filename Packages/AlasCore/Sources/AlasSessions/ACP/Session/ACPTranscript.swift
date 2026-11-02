@@ -76,6 +76,18 @@ public final class ACPTranscript: ChangeTracking {
     @Tracked public var pendingQuestion: ACPSession.PendingQuestion? { willSet { onNextPromptActivity?() } }
     @Tracked public var pendingPlan: ACPSession.PendingPlan? { willSet { onNextPromptActivity?() } }
     @Tracked public var pendingUserInputs: [ACPUserInputRequest] = [] { willSet { onNextPromptActivity?() } }
+    /// The pending inputs the agent waits on. Every gate (queue, submit,
+    /// restart, fork, next prompt, blockers, notifications) reads these, so
+    /// an optional (Codex async) question never holds the session.
+    public var blockingUserInputs: [ACPUserInputRequest] { pendingUserInputs.filter(\.isBlocking) }
+    /// Pending questions the agent keeps working past; shown, never waited on.
+    public var optionalUserInputs: [ACPUserInputRequest] { pendingUserInputs.filter { !$0.isBlocking } }
+    public var hasBlockingUserInput: Bool { pendingUserInputs.contains(where: \.isBlocking) }
+    /// The input a single-slot surface shows: the first blocking one, else
+    /// the first optional one.
+    public var presentedUserInput: ACPUserInputRequest? {
+        pendingUserInputs.first(where: \.isBlocking) ?? pendingUserInputs.first
+    }
     @Tracked public var urlElicitationWaits: [ACPURLElicitationWait] = [] { willSet { onNextPromptActivity?() } }
     /// Items of the plan emitted for the current turn. Updated when the
     /// transcript array changes so high-frequency streaming ticks do not scan

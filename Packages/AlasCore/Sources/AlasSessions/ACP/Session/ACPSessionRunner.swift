@@ -46,6 +46,13 @@ public final class ACPSessionRunner {
     /// closure returns `nil`. Lets the agent see what the user sees.
     private let onLiveBufferRead: ((String) -> String?)?
     private let onUserCancel: (() -> Void)?
+    /// Offered each `$/cancel_request` first; true when it withdrew a form.
+    private let onCancelRequest: ((JSONRPCID) -> Bool)?
+    /// Told of a `$/cancel_request` nothing pending claimed; its request may
+    /// still arrive.
+    private let onUnclaimedCancelRequest: ((JSONRPCID) -> Void)?
+    /// Called with the id of a foreground prompt that stopped being active.
+    private let onForegroundPromptEnded: ((Int) -> Void)?
     /// Called when the runner forces transcript tail-follow before recording
     /// a user prompt, so manager-owned scroll memory stays in sync with the
     /// runtime session state.
@@ -187,7 +194,14 @@ public final class ACPSessionRunner {
     /// `streamingState`; `cancelledPromptIDs` carries explicit
     /// invalidations (steer, userCancel) so a slow `session/cancel`
     /// can't let a stale completion clobber the successor task.
-    private var activePromptID: Int? { willSet { session.nextPromptActivity.send() } }
+    private var activePromptID: Int? {
+        willSet { session.nextPromptActivity.send() }
+        // Optional questions expire with their prompt. A non-native steer
+        // clears the id mid-steer, so the hook must not settle the state.
+        didSet {
+            if let oldValue, oldValue != activePromptID { onForegroundPromptEnded?(oldValue) }
+        }
+    }
     // The current runner consumes v1. V2 ingress will use the same decision
     // model with its own acceptance and foreground-state inputs.
     private var promptLifecycle = ACPSessionLifecycle(protocolVersion: .v1)
@@ -333,6 +347,9 @@ public final class ACPSessionRunner {
     private var nativeSteeringInProgress = false
     private var nativeSteeringQueueItemID: UUID?
     private var steeringRowPersistencePending = false
+    /// Optional answers submitted while a steering row was persisting; they
+    /// are recorded once it settles, see `recordOptionalAnswer`.
+    private var deferredOptionalAnswers: [String] = []
     private var detachedSteeringTurn = false
     private var lastSteeringThreadStatus: String?
     private var steeringSawIdle = false
@@ -372,6 +389,9 @@ public final class ACPSessionRunner {
          onDirtyCheck: ((String) -> Bool)? = nil,
          onLiveBufferRead: ((String) -> String?)? = nil,
          onUserCancel: (() -> Void)? = nil,
+         onCancelRequest: ((JSONRPCID) -> Bool)? = nil,
+         onUnclaimedCancelRequest: ((JSONRPCID) -> Void)? = nil,
+         onForegroundPromptEnded: ((Int) -> Void)? = nil,
          onAuthRequired: ((ACPSessionRunner, String) async -> Void)? = nil,
          onPersist: (() -> Void)? = nil,
          onMessageActivity: (() -> Void)? = nil,
@@ -440,6 +460,9 @@ public final class ACPSessionRunner {
         self.onDirtyCheck = onDirtyCheck
         self.onLiveBufferRead = onLiveBufferRead
         self.onUserCancel = onUserCancel
+        self.onCancelRequest = onCancelRequest
+        self.onUnclaimedCancelRequest = onUnclaimedCancelRequest
+        self.onForegroundPromptEnded = onForegroundPromptEnded
         self.onResumeTranscriptTail = onResumeTranscriptTail
         self.onCheckpointCapture = onCheckpointCapture
         self.pluginContext = pluginContext
@@ -494,6 +517,7 @@ public final class ACPSessionRunner {
         )
         closeStoredSequenceGaps()
         session.foregroundTurnActive = { [weak self] in self?.foregroundTurnActive ?? false }
+        session.activeForegroundPromptID = { [weak self] in self?.activePromptID }
         backgroundWorkObservations = [
             session.$liveSubagentCount.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
             session.$backgroundTasks.signal.observe { [weak self] _ in self?.backgroundWorkChanged() },
@@ -683,8 +707,10 @@ public final class ACPSessionRunner {
             guard let self else { return }
             for await id in self.connection.client.cancelRequests {
                 guard self.isConnectionCurrent() else { continue }
+                if self.onCancelRequest?(id) == true { continue }
                 if self.policy.cancelRequest(id: id) { continue }
                 self.pendingCancelledRequestIDs.insert(id)
+                self.onUnclaimedCancelRequest?(id)
             }
         }
 
@@ -2717,7 +2743,7 @@ public final class ACPSessionRunner {
         let childIds = session.orderedSubagents.filter { $0.isRunning && $0.capabilities.supportsCancel }
             .map(\.subagentSessionId)
         let cancellingBackground = activePromptID == nil && session.transcript.streamingState == .idle
-            && session.transcript.pendingUserInputs.isEmpty && (!backgroundIds.isEmpty || !childIds.isEmpty)
+            && !session.transcript.hasBlockingUserInput && (!backgroundIds.isEmpty || !childIds.isEmpty)
         if cancellingBackground {
             guard !backgroundCancellationInProgress else { return false }
             backgroundCancellationInProgress = true
@@ -3162,7 +3188,7 @@ extension ACPSessionRunner {
             state: session.transcript.streamingState,
             queueEmpty: session.queue.isEmpty,
             blocksEmpty: blocks.isEmpty,
-            hasPendingInput: !session.transcript.pendingUserInputs.isEmpty,
+            hasPendingInput: session.transcript.hasBlockingUserInput,
             inFlightSteer: steerInProgress,
             hasActivePrompt: activePromptID != nil || detachedSteeringTurn
         )
@@ -3437,7 +3463,7 @@ extension ACPSessionRunner {
            session.agentState == .ready,
            activePromptID == nil,
            session.transcript.streamingState == .idle,
-           session.transcript.pendingUserInputs.isEmpty {
+           !session.transcript.hasBlockingUserInput {
             // A turn that settled at its result can leave children or an
             // autonomous cycle running; a restart would kill them. The queue
             // waits for the restart too: a drained turn would reach the
@@ -3459,7 +3485,7 @@ extension ACPSessionRunner {
               session.pendingQueuePersistenceCount == 0,
               activePromptID == nil,
               session.transcript.streamingState == .idle,
-              session.transcript.pendingUserInputs.isEmpty,
+              !session.transcript.hasBlockingUserInput,
               let head = session.queue.first,
               head.status == .pending,
               head.lastError == nil,
@@ -3667,7 +3693,7 @@ extension ACPSessionRunner {
             && session.agentState == .ready
             && activePromptID == nil
             && session.transcript.streamingState == .idle
-            && session.transcript.pendingUserInputs.isEmpty
+            && !session.transcript.hasBlockingUserInput
             && session.queue.isEmpty
     }
 
@@ -4030,7 +4056,6 @@ extension ACPSessionRunner {
                       self.nativeSteeringGeneration == generation
                 else { throw CancellationError() }
                 self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
-                let boundaryCrossingBefore = self.session.allowsStreamingBoundaryCrossing
                 if recordUserPrompt {
                     self.flushStreamingPersist()
                     let before = self.session.transcript.messages.count
@@ -4051,11 +4076,7 @@ extension ACPSessionRunner {
                     recordedMessageID = userMessageID
                     let recordedTitle = self.session.title
                     let userIndex = self.session.transcript.messages.count - 1
-                    var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
-                    self.session.allowsStreamingBoundaryCrossing = true
-                    let boundaryDirty = self.session.beginSteeringOutputBoundary(beforeUserMessageAt: userIndex) { text in
-                        boundaryMetadata.append((text, text.metadata))
-                    }
+                    let (boundaryDirty, rollBackBoundary) = self.beginOutputBoundary(beforeUserMessageAt: userIndex)
                     // Defer incoming mutations until commit/rollback so they
                     // cannot persist a provisional row or boundary separately.
                     self.steeringRowPersistencePending = true
@@ -4069,8 +4090,7 @@ extension ACPSessionRunner {
                                if case .user(let id, _, _, _, _, _) = $0 { return id == recordedMessageID }
                                return false
                            }) {
-                            boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
-                            self.session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
+                            rollBackBoundary()
                             self.session.transcript.messages.remove(at: index)
                             // Replay output materialized before this user row
                             // belongs to the preceding turn, even if steering
@@ -4083,15 +4103,13 @@ extension ACPSessionRunner {
                                 self.session.titleSource = titleSourceBefore
                             }
                         }
-                        self.steeringRowPersistencePending = false
-                        self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                        self.endSteeringRowPersistence()
                         recordedMessageID = nil
                         throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up; it was not sent.", data: nil))
                     }
                     recordedMessagePersisted = true
                     recoveryPersisted = true
-                    self.steeringRowPersistencePending = false
-                    self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                    self.endSteeringRowPersistence()
                     guard !self.stopped, self.isConnectionCurrent(), self.nativeSteeringGeneration == generation
                     else { throw CancellationError() }
                     if self.session.title != titleBefore { self.persistFallbackTitleIfStoredPlaceholder() }
@@ -4103,11 +4121,7 @@ extension ACPSessionRunner {
                        let index = self.session.replaceSymbolSnapshots(inUserMessage: recordedMessageID, from: symbolExpansion) {
                         self.persistIndices([index])
                     }
-                    self.session.allowsStreamingBoundaryCrossing = true
-                    var boundaryMetadata: [(text: StreamingText, metadata: AnyCodable?)] = []
-                    let dirty = self.session.beginSteeringOutputBoundary(followingUserCount: 0) { text in
-                        boundaryMetadata.append((text, text.metadata))
-                    }
+                    let (dirty, rollBackBoundary) = self.beginOutputBoundary(followingUserCount: 0)
                     self.steeringRowPersistencePending = true
                     let persisted = await withCheckedContinuation { continuation in
                         if !self.persistIndices(dirty, completion: { continuation.resume(returning: $0) }) {
@@ -4115,11 +4129,9 @@ extension ACPSessionRunner {
                         }
                     }
                     if !persisted, self.isConnectionCurrent() {
-                        boundaryMetadata.forEach { $0.text.restoreMetadata($0.metadata) }
-                        self.session.allowsStreamingBoundaryCrossing = boundaryCrossingBefore
+                        rollBackBoundary()
                     }
-                    self.steeringRowPersistencePending = false
-                    self.flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: self.stopped)
+                    self.endSteeringRowPersistence()
                     guard persisted else {
                         throw ACPClientError.jsonrpc(.init(code: -32000, message: "Could not save the follow-up boundary; it was not sent.", data: nil))
                     }
@@ -4283,6 +4295,27 @@ extension ACPSessionRunner {
                 finishPrompt(false)
             }
         }
+    }
+
+    /// Split the live output run at a user row the agent reads mid-turn, so
+    /// its later chunks land below that row. Returns the rows to persist and
+    /// an undo for when they cannot be.
+    private func beginOutputBoundary(
+        beforeUserMessageAt userIndex: Int? = nil,
+        followingUserCount: Int = 1
+    ) -> (dirty: Set<Int>, rollBack: () -> Void) {
+        let crossingBefore = session.allowsStreamingBoundaryCrossing
+        var metadata: [(text: StreamingText, metadata: AnyCodable?)] = []
+        session.allowsStreamingBoundaryCrossing = true
+        let dirty = session.beginSteeringOutputBoundary(
+            beforeUserMessageAt: userIndex, followingUserCount: followingUserCount
+        ) { text in
+            metadata.append((text, text.metadata))
+        }
+        return (dirty, { [session] in
+            metadata.forEach { $0.text.restoreMetadata($0.metadata) }
+            session.allowsStreamingBoundaryCrossing = crossingBefore
+        })
     }
 
     private func persistSteeringUserRow(from index: Int, userMessageID: UUID, boundaryDirty: Set<Int>, queueItemID: UUID) async -> Bool {
@@ -5236,6 +5269,44 @@ extension ACPSessionRunner {
         persistFromIndex(before)
     }
 
+    /// Record an answered optional question as the user row the adapter
+    /// replays for it. The agent reads the answer mid-turn, like a native
+    /// steer, so the row splits the running output the same way; it is not a
+    /// prompt, so nothing else about the turn changes.
+    ///
+    /// While a steering row is still persisting, its rollback could remove
+    /// the row under the answer, so the answer waits until it settles. At
+    /// idle there is no running output to split: opening the boundary would
+    /// reopen the late-replay guard and tag the finished turn's rows.
+    public func recordOptionalAnswer(_ text: String) {
+        guard !steeringRowPersistencePending else {
+            deferredOptionalAnswers.append(text)
+            return
+        }
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false)
+        flushStreamingPersist()
+        let before = session.transcript.messages.count
+        let index = session.appendAnswerRow(text: text)
+        var dirty: Set<Int> = []
+        // Only a live turn has a running message to split; a session parked
+        // on a permission or blocking question with no foreground turn has
+        // finished its output, like an idle one.
+        if session.foregroundTurnActive() || session.transcript.streamingState == .sending {
+            dirty = beginOutputBoundary(beforeUserMessageAt: index).dirty
+        }
+        persistIndices(dirty.union(before...index))
+    }
+
+    /// Settle a steering row write: apply the updates it held back, then
+    /// record any optional answer submitted meanwhile.
+    private func endSteeringRowPersistence() {
+        steeringRowPersistencePending = false
+        flushPendingIncomingUpdates(flushQueueWhenBoundaryReady: false, treatBufferedUpdatesAsPromptOwned: stopped)
+        let answers = deferredOptionalAnswers
+        deferredOptionalAnswers.removeAll()
+        answers.forEach(recordOptionalAnswer)
+    }
+
     /// Append a system notice and report whether it actually reached the
     /// store, unlike the fire-and-forget `appendAndPersistSystemNotice`.
     /// A caller that holds the only other durable copy — the delegated
@@ -5403,7 +5474,7 @@ extension ACPSessionRunner {
         if session.transcript.pendingPermission != nil { return "pending permission" }
         if session.transcript.pendingQuestion != nil { return "pending question" }
         if session.transcript.pendingPlan != nil { return "pending plan" }
-        if !session.transcript.pendingUserInputs.isEmpty { return "pending user input" }
+        if session.transcript.hasBlockingUserInput { return "pending user input" }
         if steerInProgress { return "steer in progress" }
         if nativeForkBarrierActive { return "native fork barrier" }
         return nil

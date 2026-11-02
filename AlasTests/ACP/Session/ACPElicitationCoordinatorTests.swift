@@ -173,26 +173,132 @@ struct ACPElicitationCoordinatorTests {
         #expect(session.transcript.pendingQuestion?.id == .number(1))
     }
 
-    @Test("awaiting input callback fires once per request id")
-    func awaitingInputCallbackFiresOncePerRequestId() async throws {
+    /// Only a blocking form notifies, takes the idle session to awaiting
+    /// input, and counts as a blocking input; a Codex async form does none.
+    @Test("awaiting input callback fires once per blocking request id",
+          arguments: [ACPUserInputRequest.Delivery.blocking, .optional])
+    func awaitingInputCallbackFiresOncePerRequestId(delivery: ACPUserInputRequest.Delivery) async throws {
+        let blocking = delivery == .blocking
         var notifications: [(ACPSession, ACPUserInputRequest)] = []
         let (coordinator, session, client) = makeCoordinator(onInputAwaiting: { session, request in
             notifications.append((session, request))
         })
         coordinator.start()
-        let params = ACPQuestionRequestParams.stub(title: "Need input")
+        let params = try decodeParams(codexAsyncFormJSON(
+            meta: blocking ? "null" : #"{"codex":{"delivery":"async"}}"#
+        ))
 
-        client.emitQuestion(id: .number(42), params: params)
-        try await waitUntil {
-            notifications.count == 1 && session.transcript.pendingUserInputs.count == 1
-        }
-
-        client.emitQuestion(id: .number(42), params: params)
+        client.emitElicitation(id: .number(42), params: params)
+        try await waitUntil { session.transcript.pendingUserInputs.count == 1 }
+        client.emitElicitation(id: .number(42), params: params)
         try await waitUntil { session.transcript.pendingUserInputs.count == 2 }
 
-        #expect(notifications.count == 1)
-        #expect(notifications[0].0.id == "local")
-        #expect(notifications[0].1.source == .cursor(id: .number(42), params: params))
+        #expect(notifications.count == (blocking ? 1 : 0))
+        #expect(notifications.first?.0.id == (blocking ? session.id : nil))
+        #expect(session.transcript.streamingState == (blocking ? .awaitingInput : .idle))
+        #expect(session.transcript.hasBlockingUserInput == blocking)
+    }
+
+    /// The adapter withdraws an optional question at turn end with
+    /// `$/cancel_request`, which can overtake the request itself. Either way
+    /// the form is never shown and is answered "Request cancelled". A pending
+    /// blocking form also releases the waiting state it took; an optional one
+    /// never touched it.
+    @Test("a withdrawn form is answered cancelled and never shown", arguments: [
+        ("afterArrival", ACPUserInputRequest.Delivery.optional),
+        ("beforeArrival", .optional),
+        ("afterArrival", .blocking),
+        ("beforeArrival", .blocking),
+    ])
+    func withdrawnElicitation(order: String, delivery: ACPUserInputRequest.Delivery) async throws {
+        var resolved = 0
+        let (coordinator, session, client) = makeCoordinator(onInputResolved: { resolved += 1 })
+        coordinator.start()
+        let params = try decodeParams(codexAsyncFormJSON(
+            meta: delivery == .blocking ? "null" : #"{"codex":{"delivery":"async"}}"#
+        ))
+        let afterArrival = order == "afterArrival"
+
+        let withdrew: Bool
+        if afterArrival {
+            client.emitElicitation(id: .number(50), params: params)
+            try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+            #expect(session.transcript.streamingState == (delivery == .blocking ? .awaitingInput : .idle))
+            withdrew = coordinator.cancelRequest(id: .number(50))
+        } else {
+            // As the runner does: an id nothing claimed is remembered.
+            withdrew = coordinator.cancelRequest(id: .number(50))
+            coordinator.rememberWithdrawn(id: .number(50))
+            client.emitElicitation(id: .number(50), params: params)
+        }
+
+        try await waitUntil { client.elicitationResponses[.number(50)] != nil }
+        guard case .failure(let error) = client.elicitationResponses[.number(50)] else {
+            Issue.record("expected a cancelled-request error")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(session.transcript.pendingUserInputs.isEmpty)
+        #expect(withdrew == afterArrival)
+        #expect(session.transcript.streamingState == .idle)
+        #expect(resolved == (afterArrival && delivery == .blocking ? 1 : 0))
+    }
+
+    /// An optional answer sent after its turn ended would reach the next one,
+    /// so the forms of an ended prompt are cancelled; blocking forms and
+    /// forms of a later prompt stay.
+    @Test("optional forms expire with the prompt they arrived under")
+    func optionalFormsExpireWithTheirPrompt() async throws {
+        let (coordinator, session, client) = makeCoordinator()
+        coordinator.start()
+        let optional = try decodeParams(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#))
+        let blocking = try decodeParams(codexAsyncFormJSON(meta: "null"))
+
+        session.activeForegroundPromptID = { 7 }
+        client.emitElicitation(id: .number(60), params: optional)
+        client.emitElicitation(id: .number(61), params: blocking)
+        try await waitUntil { session.transcript.pendingUserInputs.count == 2 }
+        session.activeForegroundPromptID = { 8 }
+        client.emitElicitation(id: .number(62), params: optional)
+        try await waitUntil { session.transcript.pendingUserInputs.count == 3 }
+        let expiring = try #require(session.transcript.pendingUserInputs.first)
+        let stateBefore = session.transcript.streamingState
+
+        coordinator.foregroundPromptEnded(7)
+
+        #expect(client.elicitationResponses[.number(60)] == .success(.cancel))
+        #expect(session.transcript.pendingUserInputs.map(\.source) == [
+            .elicitation(id: .number(61), params: blocking),
+            .elicitation(id: .number(62), params: optional),
+        ])
+        #expect(session.transcript.streamingState == stateBefore)
+        coordinator.respond(to: expiring.id, action: .submit(["question_1": .string("late")]))
+        #expect(client.elicitationResponses[.number(60)] == .success(.cancel))
+    }
+
+    /// Only a submitted optional form with an answer reports its reply for
+    /// the transcript; a blocking form's answer is part of its own turn.
+    @Test("an answered optional form reports its replay text", arguments: [
+        (ACPUserInputRequest.Delivery.optional, ACPUserInputAction.submit(["question_0": .string("Staging")]), "> Q0\n\nStaging" as String?),
+        (.optional, .submit([:]), nil),
+        (.optional, .decline, nil),
+        (.optional, .cancel, nil),
+        (.blocking, .submit(["question_0": .string("Staging")]), nil),
+    ])
+    func optionalAnswerCallback(delivery: ACPUserInputRequest.Delivery, action: ACPUserInputAction, expected: String?) async throws {
+        var answers: [String] = []
+        let (coordinator, session, client) = makeCoordinator(onOptionalAnswerSubmitted: { answers.append($0) })
+        coordinator.start()
+        client.emitElicitation(id: .number(90), params: try decodeParams(codexAsyncFormJSON(
+            meta: delivery == .blocking ? "null" : #"{"codex":{"delivery":"async"}}"#
+        )))
+        try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        let request = try #require(session.transcript.pendingUserInputs.first)
+
+        coordinator.respond(to: request.id, action: action)
+
+        #expect(client.elicitationResponses[.number(90)] != nil)
+        #expect(answers == (expected.map { [$0] } ?? []))
     }
 
     @Test("awaiting input callback fires again when a resolved request id is reused")
@@ -248,24 +354,6 @@ struct ACPElicitationCoordinatorTests {
             .cursor(id: .number(42), params: params),
             .cursor(id: .number(42), params: params)
         ])
-    }
-
-    @Test("standard elicitation notifies awaiting input")
-    func standardElicitationNotifiesAwaitingInput() async throws {
-        var notifications: [(ACPSession, ACPUserInputRequest)] = []
-        let (coordinator, session, client) = makeCoordinator(onInputAwaiting: { session, request in
-            notifications.append((session, request))
-        })
-        coordinator.start()
-        let params = try decodeParams(#"""
-        {"requestId":1,"mode":"form","message":"Name","requestedSchema":{"properties":{}}}
-        """#)
-
-        client.emitElicitation(id: .string("elicitation-1"), params: params)
-
-        try await waitUntil { notifications.count == 1 }
-        #expect(notifications[0].0.id == session.id)
-        #expect(notifications[0].1.message == "Name")
     }
 
     @Test("URL mode opens explicitly and waits for completion")
@@ -530,7 +618,8 @@ struct ACPElicitationCoordinatorTests {
         onInputAwaiting: @escaping (ACPSession, ACPUserInputRequest) -> Void = { _, _ in },
         onInputResolved: @escaping () -> Void = {},
         onPlanAwaiting: @escaping (ACPSession, ACPCursorPlanRequest) -> Void = { _, _ in },
-        onPlanRejected: @escaping (String) -> Void = { _ in }
+        onPlanRejected: @escaping (String) -> Void = { _ in },
+        onOptionalAnswerSubmitted: @escaping (String) -> Void = { _ in }
     ) -> (ACPElicitationCoordinator, ACPSession, ACPMockClient) {
         let session = ACPSession(id: "local", agentId: "codex", worktreeId: "wt", title: "Test")
         let client = ACPMockClient()
@@ -543,7 +632,8 @@ struct ACPElicitationCoordinatorTests {
                 onInputAwaiting: onInputAwaiting,
                 onInputResolved: onInputResolved,
                 onPlanAwaiting: onPlanAwaiting,
-                onPlanRejected: onPlanRejected
+                onPlanRejected: onPlanRejected,
+                onOptionalAnswerSubmitted: onOptionalAnswerSubmitted
             ),
             session,
             client
