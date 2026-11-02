@@ -77,11 +77,13 @@ struct VirtualMachineTabView: View {
     /// The worktree VM's registry id, which helper state and slots use.
     private var recordID: String { VMIdentity.recordID(worktree: worktreeID, guest: guest) }
     private var guestName: String { isLinux ? "Ubuntu" : "macOS" }
+    /// This tab's VM running here, a pause in progress included: the screen stays until it stops.
+    private var ownVM: RunningVM? { vms.runningVMs[recordID] }
 
     private var screen: VMTabScreen {
         VMTabScreen.resolve(
             guest: guest,
-            runningHere: vms.running(worktreeID, guest: guest) != nil,
+            runningHere: ownVM != nil,
             startingHere: vms.isStarting(recordID),
             slotChoice: choice?.candidates,
             runningElsewhere: elsewhere?.label ?? record.runningElsewhere,
@@ -93,7 +95,7 @@ struct VirtualMachineTabView: View {
             linuxInstallerPhase: linuxInstaller.phase,
             helper: helperUpdate(recordID),
             goldenHelper: customizedGoldenID.map(helperUpdate) ?? .none,
-            paused: record.paused
+            pausedAt: record.pausedAt
         )
     }
 
@@ -143,7 +145,7 @@ struct VirtualMachineTabView: View {
         // can change what the registry or disk say.
         .onChange(of: phaseKind) { _, _ in refresh() }
         // Starting or stopping changes the disk's size and the registry.
-        .onChange(of: vms.running(worktreeID, guest: guest) != nil) { _, _ in refresh() }
+        .onChange(of: ownVM != nil) { _, _ in refresh() }
         // A pause records the VM as paused only after it stopped.
         .onChange(of: vms.pausing.contains(recordID)) { _, _ in refresh() }
         .task(id: helperCheckTarget) { await checkHelper(helperCheckTarget) }
@@ -241,12 +243,12 @@ struct VirtualMachineTabView: View {
             VMStatusBar(tone: .off, title: "Stopped", details: ["base image being customized"] + diskDetails) {
                 overflowMenu(reveal: ownBundleURL, deletable: true)
             }
-        case .paused(let savedAt, let size):
+        case .paused(let savedAt):
             // Each minute, for "saved n min ago".
             TimelineView(.periodic(from: .now, by: 60)) { context in
                 VMStatusBar(
                     tone: .off, title: "Paused",
-                    details: VMTabScreen.pausedDetails(savedAt: savedAt, bytes: size, now: context.date)
+                    details: [VMTabScreen.pausedAge(savedAt: savedAt, now: context.date)] + diskDetails
                 ) {
                     overflowMenu(customize: canCustomize, reveal: ownBundleURL, deletable: true)
                 }
@@ -392,7 +394,7 @@ struct VirtualMachineTabView: View {
         case .running:
             let current = driver(at: Date())
             VMDisplaySurface(
-                view: state.tabs.vmView(tabID: tab.id), virtualMachine: vms.running(worktreeID, guest: guest)?.vm,
+                view: state.tabs.vmView(tabID: tab.id), virtualMachine: ownVM?.vm,
                 allowsInput: VMDriver.allowsViewInput(current),
                 onBlockedClick: { lookOnlyHint = (lookOnlyHint ?? 0) + 1 },
                 onUserInput: { [state, recordID] in state.noteVMUserInput(recordID: recordID) }
@@ -854,7 +856,7 @@ struct VirtualMachineTabView: View {
     /// `id` is a registry id: this tab's VM or a golden.
     private func stop(_ id: String) {
         let (worktree, guest) = VMIdentity.parse(recordID: id)
-        let ownVM = id == recordID && vms.running(worktree, guest: guest) != nil
+        let ownVM = id == recordID && self.ownVM != nil
         if ownVM { stopping = true }
         Task {
             await vms.stopVM(worktreeID: worktree, guest: guest)

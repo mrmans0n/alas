@@ -22,8 +22,8 @@ enum VMTabScreen: Equatable {
     case setup
     case createVM
     case stopped
-    /// The worktree's macOS VM is paused with its state saved, `size` bytes of it.
-    case paused(savedAt: Date, size: Int64)
+    /// The worktree's macOS VM is paused with its state saved.
+    case paused(savedAt: Date)
     /// The worktree's own VM is stopped while the base image is being
     /// customized, from another tab or before a relaunch.
     case stoppedWhileCustomizing
@@ -56,7 +56,7 @@ enum VMTabScreen: Equatable {
         linuxInstallerPhase: LinuxGoldenInstaller.Phase = .idle,
         helper: HelperUpdate,
         goldenHelper: HelperUpdate,
-        paused: WorktreeVMManager.PausedState? = nil
+        pausedAt: Date? = nil
     ) -> VMTabScreen {
         if guest == .linux {
             return resolveLinux(
@@ -70,7 +70,7 @@ enum VMTabScreen: Equatable {
         if let slotChoice { return .slotChoice(candidates: slotChoice) }
         if let runningElsewhere { return .runningElsewhere(label: runningElsewhere) }
         if !loaded { return .loading }
-        let pausedScreen = paused.map { VMTabScreen.paused(savedAt: $0.savedAt, size: $0.bytes) }
+        let pausedScreen = pausedAt.map { VMTabScreen.paused(savedAt: $0) }
         switch installerPhase {
         case .awaitingSetup(let build):
             if hasVM && !customizingHere { return pausedScreen ?? .stoppedWhileCustomizing }
@@ -105,16 +105,15 @@ enum VMTabScreen: Equatable {
 }
 
 extension VMTabScreen {
-    /// The Paused status bar's details: how long ago the state was saved, and its size.
-    static func pausedDetails(savedAt: Date, bytes: Int64, now: Date) -> [String] {
+    /// The Paused status bar's first detail: how long ago the state was saved.
+    static func pausedAge(savedAt: Date, now: Date) -> String {
         let minutes = max(0, Int(now.timeIntervalSince(savedAt) / 60))
-        let ago = switch minutes {
+        return switch minutes {
         case 0: "saved just now"
         case ..<60: "saved \(minutes) min ago"
         case ..<(24 * 60): "saved \(minutes / 60) h ago"
         default: "saved \(minutes / (24 * 60)) d ago"
         }
-        return [ago, ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)]
     }
 }
 

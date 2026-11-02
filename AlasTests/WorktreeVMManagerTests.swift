@@ -962,6 +962,7 @@ final class WorktreeVMManagerTests {
 
         #expect(await call.value == .ready)
         #expect(manager.running("/repo/a") == nil)
+        #expect(try record("/repo/a").paused)
         #expect(manager.running("/repo/c") != nil)
     }
 
