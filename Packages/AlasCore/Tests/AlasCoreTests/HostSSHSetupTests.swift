@@ -134,11 +134,22 @@ struct HostSSHSetupTests {
         #expect(remote.commands.withLock { $0.count } == 1)
     }
 
-    @Test func pairPollsUntilTheHostServes() async throws {
+    @Test func aFreshHostOffersTheBuiltInAgents() async throws {
+        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 0, stdout: "os=Darwin\narch=arm64\nbrew=\ncask=\nhost=\n", stderr: "") }
+
+        let agents = try await remote.setup().probe().agents
+        #expect(agents.contains { $0.id == "claude" })
+        #expect(agents == HostSSHSetup.defaultAgents)
+    }
+
+    @Test func pairPollsUntilTheHostServesBeyondLoopback() async throws {
         let remote = FakeRemote { _, index in
-            index < 2
-                ? ProcessResult(exitCode: 1, stdout: "", stderr: "no host running")
-                : ProcessResult(exitCode: 0, stdout: "123456\nhttp://a/?code=123456\n", stderr: "")
+            switch index {
+            case 0: ProcessResult(exitCode: 1, stdout: "", stderr: "no host running")
+            // Tailscale serve not up yet: only loopback is advertised.
+            case 1: ProcessResult(exitCode: 0, stdout: "123456\nhttp://127.0.0.1:8765/?code=123456\n", stderr: "")
+            default: ProcessResult(exitCode: 0, stdout: "123456\nhttp://a/?code=123456\n", stderr: "")
+            }
         }
 
         #expect(try await remote.setup().pair(host: "h") == "http://a/?code=123456")

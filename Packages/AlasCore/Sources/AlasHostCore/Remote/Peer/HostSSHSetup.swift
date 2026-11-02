@@ -2,6 +2,8 @@ import CryptoKit
 import Foundation
 import AlasFoundation
 import AlasPlatform
+import AlasFeatures
+import AlasModel
 
 public struct HostSSHAgent: Equatable, Sendable {
     public var id: String
@@ -227,7 +229,19 @@ public struct HostSSHSetup: Sendable {
 
     public func probe() async throws -> HostSSHProbe {
         let result = try await step("Connect", Self.probeScript, timeout: 30)
-        return HostSSHProbe.parse(result.stdout)
+        var probe = HostSSHProbe.parse(result.stdout)
+        // No host yet, so no `config list`: offer the built-in agents as a
+        // fresh host would start them.
+        if probe.hostPath == nil {
+            probe.agents = Self.defaultAgents
+        }
+        return probe
+    }
+
+    static var defaultAgents: [HostSSHAgent] {
+        HostSettingCatalog.all(for: .defaults)
+            .filter { $0.key.hasPrefix("agents.") && $0.key.hasSuffix(".enabled") }
+            .map { HostSSHAgent(id: String($0.key.dropFirst("agents.".count).dropLast(".enabled".count)), enabled: $0.value(in: .defaults) == "true") }
     }
 
     /// Installs or updates the host as `decision(for:)` says and returns its
@@ -343,6 +357,12 @@ public struct HostSSHSetup: Sendable {
                 guard let link = Self.pairingLink(fromPairOutput: result.stdout) else {
                     throw Failure(step: "Pair", message: Self.noLinkMessage, connectionFailed: false)
                 }
+                // Until `tailscale serve` is up the host advertises loopback only,
+                // which no other Mac can reach: keep waiting for a real address.
+                let origins = RemotePairingLink.parse(link)?.origins ?? []
+                guard origins.contains(where: { URL(string: $0).map { !RunEndpointPolicy.isLoopback($0) } ?? false }) else {
+                    throw Failure(step: "Pair", message: Self.loopbackOnlyMessage, connectionFailed: false)
+                }
                 return link
             } catch let failure as Failure where !failure.connectionFailed && failure.message != Self.noLinkMessage {
                 lastFailure = failure
@@ -352,6 +372,8 @@ public struct HostSSHSetup: Sendable {
     }
 
     private static let noLinkMessage = "This alas-host prints no pairing link. Update it and try again."
+    private static let loopbackOnlyMessage =
+        "The host is reachable only from itself. With Tailscale, check that HTTPS is on for the tailnet; otherwise choose LAN."
 
     /// `alas-host setup --check` warnings; empty when the check itself fails.
     public func check(host: String) async -> [String] {
