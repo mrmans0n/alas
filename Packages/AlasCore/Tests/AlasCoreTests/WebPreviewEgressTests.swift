@@ -76,9 +76,7 @@ struct WebPreviewEgressTests {
         ("CONNECT allowed.invalid:{port} HTTP/1.1", "407", false, "Proxy-Authorization: Basic YWxhcy1wcmV2aWV3Ondyb25n\r\n"),
     ] as [(String, String, Bool, String?)])
     func theProxyConnectsOnlyToVettedAddresses(request: String, status: String, echoes: Bool, credentials: String?) async throws {
-        let lan = try #require(RemoteNetwork.interfaces().first {
-            !$0.isLoopback && !$0.host.hasPrefix("169.254.") && WebPreviewEgressPolicy.address($0.host)?.count == 4
-        }).host
+        let lan = try Self.lanAddress()
         let echo = try await EchoServer.start(host: "0.0.0.0")
         let loopback = try await EchoServer.start()
         defer {
@@ -109,6 +107,54 @@ struct WebPreviewEgressTests {
         #expect(echo.accepted == (echoes ? 1 : 0))
         #expect(loopback.accepted == 0)
         #expect(blocked.withLock { $0.count } == (status == "403" ? 1 : 0))
+    }
+
+    /// An HTTP/1.0 server writes its head and a body larger than the socket
+    /// buffers and closes at once, so the body's last bytes arrive with its
+    /// end of stream. Reached over this Mac's LAN address, as a remote page's
+    /// host would be. Several tunnels at once, since the loss depended on
+    /// timing.
+    @Test func aClosingServersLastBytesReachTheClient() async throws {
+        let server = socket(AF_INET, SOCK_STREAM, 0)
+        defer { Darwin.close(server) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        try withUnsafeMutablePointer(to: &address) { pointer in
+            try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                try #require(bind(server, $0, length) == 0)
+                try #require(getsockname(server, $0, &length) == 0)
+            }
+        }
+        try #require(listen(server, 4) == 0)
+        let body = String(repeating: "b", count: 1_000_000)
+        let reply = "HTTP/1.0 200 OK\r\nContent-Length: \(body.utf8.count)\r\n\r\n"
+        for _ in 0..<4 {
+            Thread.detachNewThread {
+                let connection = accept(server, nil, nil)
+                var request = [UInt8](repeating: 0, count: 1024)
+                _ = read(connection, &request, request.count)
+                for part in [reply, body] {
+                    _ = part.withCString { write(connection, $0, strlen($0)) }
+                }
+                Darwin.close(connection)
+            }
+        }
+        let lan = try Self.lanAddress()
+        let proxy = WebPreviewEgressProxy(resolve: { _ in [lan] }, localAddresses: { [] }, onBlocked: { _, _, _ in })
+        defer { proxy.stop() }
+        let proxyPort = try await Int(proxy.start())
+        let request = Data("CONNECT host.invalid:\(UInt16(bigEndian: address.sin_port)) HTTP/1.1\r\n\(Self.authorization(proxy))\r\nGET / HTTP/1.0\r\n\r\n".utf8)
+        var clients: [TestClient] = []
+        for _ in 0..<4 {
+            let client = try await TestClient.connect(host: "127.0.0.1", port: proxyPort)
+            client.send(request)
+            clients.append(client)
+        }
+        let all = clients
+        try await eventually { all.allSatisfy { $0.received.ended } }
+        #expect(all.allSatisfy { String(decoding: $0.received.bytes, as: UTF8.self).hasSuffix(reply + body) })
     }
 
     @Test func theProxyFallsBackToTheNextAddressWhenAConnectFails() async throws {
@@ -207,6 +253,12 @@ struct WebPreviewEgressTests {
         try await eventually { refused.received.ended }
         #expect(String(decoding: refused.received.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 503 "))
         #expect(held.allSatisfy { $0.received.bytes.isEmpty })
+    }
+
+    private static func lanAddress() throws -> String {
+        try #require(RemoteNetwork.interfaces().first {
+            !$0.isLoopback && !$0.host.hasPrefix("169.254.") && WebPreviewEgressPolicy.address($0.host)?.count == 4
+        }).host
     }
 
     private static func authorization(_ proxy: WebPreviewEgressProxy) -> String {
