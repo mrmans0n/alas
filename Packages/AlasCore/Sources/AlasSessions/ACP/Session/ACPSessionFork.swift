@@ -66,8 +66,17 @@ public enum ACPMessageForkMenuPolicy: Sendable {
 public struct ACPSessionForkSnapshot: Equatable, Sendable {
     public let sourceBoundarySequence: Int64
     public let messages: [ACPSessionForkConversationMessage]
+    /// The boundary as a `forkPoint` target, when it is a completed agent
+    /// message the agent can cut at.
+    public let forkPointTarget: ACPForkPointTarget?
 
-    public func copiedMessages(targetSessionID: String, createdAt: Int64) throws -> [ACPStoredMessage] {
+    /// `keepsProviderMessageIDs` keeps the agent's message ids on copied agent
+    /// rows, for a native fork whose history carries the same ids.
+    public func copiedMessages(
+        targetSessionID: String,
+        createdAt: Int64,
+        keepsProviderMessageIDs: Bool = false
+    ) throws -> [ACPStoredMessage] {
         try messages.enumerated().map { index, message in
             let kind: String
             let payload: Data
@@ -84,7 +93,7 @@ public struct ACPSessionForkSnapshot: Equatable, Sendable {
             case .agent:
                 kind = "agent"
                 payload = try JSONEncoder().encode(CopiedTextPayload(
-                    messageId: nil,
+                    messageId: keepsProviderMessageIDs ? message.messageId : nil,
                     text: message.text
                 ))
             }
@@ -100,9 +109,14 @@ public struct ACPSessionForkSnapshot: Equatable, Sendable {
         }
     }
 
-    public init(sourceBoundarySequence: Int64, messages: [ACPSessionForkConversationMessage]) {
+    public init(
+        sourceBoundarySequence: Int64,
+        messages: [ACPSessionForkConversationMessage],
+        forkPointTarget: ACPForkPointTarget? = nil
+    ) {
         self.sourceBoundarySequence = sourceBoundarySequence
         self.messages = messages
+        self.forkPointTarget = forkPointTarget
     }
 }
 
@@ -112,7 +126,8 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
         boundary: ACPForkMessageBoundary,
         liveMessages: [ACPMessage],
         storedMessages: [ACPStoredMessage],
-        allowsUnpersistedTail: Bool = false
+        allowsUnpersistedTail: Bool = false,
+        remoteHistoryStart: Int = 0
     ) throws -> ACPSessionForkSnapshot {
         guard let boundaryIndex = liveMessages.firstIndex(where: { message in
             message.stableId == boundary.stableID && message.forkBoundaryKind == boundary.kind
@@ -144,8 +159,8 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
             switch wire {
             case .user(_, let text, _, _, _):
                 text.isEmpty ? nil : .init(role: .user, text: text)
-            case .agent(_, let text, _, _):
-                text.isEmpty ? nil : .init(role: .agent, text: text)
+            case .agent(let messageId, let text, _, _):
+                text.isEmpty ? nil : .init(role: .agent, text: text, messageId: messageId)
             case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid:
                 nil
             }
@@ -153,7 +168,53 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
 
         return ACPSessionForkSnapshot(
             sourceBoundarySequence: storedMessages[boundaryIndex].seq,
-            messages: conversation
+            messages: conversation,
+            // A side question's boundary may sit inside the running turn.
+            forkPointTarget: allowsUnpersistedTail ? nil : forkPointTarget(
+                decoded: decoded,
+                boundaryIndex: boundaryIndex,
+                remoteHistoryStart: remoteHistoryStart
+            )
+        )
+    }
+
+    /// The boundary as a `forkPoint` target when it is a completed agent
+    /// message the agent holds in its own history. `remoteHistoryStart` is the
+    /// first stored row the agent's session knows; rows before it were
+    /// imported as a transcript.
+    private static func forkPointTarget(
+        decoded: [ACPMessageWire],
+        boundaryIndex: Int,
+        remoteHistoryStart: Int
+    ) -> ACPForkPointTarget? {
+        guard remoteHistoryStart >= 0, remoteHistoryStart <= boundaryIndex,
+              case let .agent(messageId?, text, _, metadata) = decoded[boundaryIndex],
+              !messageId.hasPrefix("alas-steering:"),
+              // A segment cut by a steering follow-up keeps the real id but
+              // only part of the message's text.
+              (metadata?.value as? [String: AnyCodable])?[ACPSession.steeringContinuationMetadataKey] == nil
+        else { return nil }
+
+        // The turn must be over at the boundary: the next conversation row,
+        // if any, is the user's.
+        let next = decoded[(boundaryIndex + 1)...].first { wire in
+            switch wire {
+            case .user, .agent: true
+            case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid: false
+            }
+        }
+        if case .agent = next { return nil }
+
+        // Fingerprints hash UTF-8 bytes, so compare bytes, not canonically
+        // equivalent strings.
+        let occurrence = decoded[remoteHistoryStart...boundaryIndex].filter { wire in
+            guard case let .agent(_, other, _, _) = wire else { return false }
+            return other.utf8.elementsEqual(text.utf8)
+        }.count
+        return ACPForkPointTarget(
+            messageId: messageId,
+            messageFingerprint: ACPForkPointTarget.fingerprint(text),
+            messageOccurrence: occurrence
         )
     }
 
@@ -175,6 +236,40 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
         default:
             false
         }
+    }
+}
+
+/// Re-checks a fork target against the source's stored transcript right
+/// before `session/fork`.
+public enum ACPSessionForkSourceCheck: Sendable {
+    /// The agent-side ids of every item stored after the boundary, or nil when
+    /// the boundary row is gone or no longer the targeted message.
+    public static func laterItemIDs(
+        storedMessages: [ACPStoredMessage],
+        boundarySequence: Int64,
+        target: ACPForkPointTarget
+    ) throws -> Set<String>? {
+        let decoder = JSONDecoder()
+        guard let row = storedMessages.first(where: { $0.seq == boundarySequence }),
+              case let .agent(messageId, text, _, _) = try ACPMessageWire.decode(
+                  kind: row.kind, payload: row.payload, decoder: decoder
+              ),
+              messageId == target.messageId,
+              ACPForkPointTarget.fingerprint(text) == target.messageFingerprint
+        else { return nil }
+
+        var ids: Set<String> = []
+        for stored in storedMessages where stored.seq > boundarySequence {
+            switch try ACPMessageWire.decode(kind: stored.kind, payload: stored.payload, decoder: decoder) {
+            case .user(let id?, _, _, _, _), .agent(let id?, _, _, _), .thought(let id?, _, _, _):
+                ids.insert(id)
+            case .toolCall(let call):
+                ids.insert(call.toolCallId)
+            case .user, .agent, .thought, .fileEdit, .plan, .systemNotice, .visualAid:
+                break
+            }
+        }
+        return ids
     }
 }
 

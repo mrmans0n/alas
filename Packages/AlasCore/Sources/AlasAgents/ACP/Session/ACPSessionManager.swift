@@ -2161,7 +2161,9 @@ public final class ACPSessionManager: ChangeTracking {
                     targetAgentID: targetAgentID,
                     boundaryIsRemoteHead: boundaryIsRemoteHead,
                     sourceRemoteSessionID: source.remoteSessionId,
-                    forkCapability: source.sessionCapabilities?.supportsFork
+                    forkCapability: source.sessionCapabilities?.supportsFork,
+                    forkPoint: nil,
+                    historicalTarget: nil
                 )
 
             let targetID = UUID().uuidString

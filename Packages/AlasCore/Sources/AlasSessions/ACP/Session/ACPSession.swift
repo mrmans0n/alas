@@ -873,7 +873,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return transcript.messages.count - 1
     }
 
-    private static let steeringContinuationMetadataKey = "_alas/steeringContinuationMessageId"
+    nonisolated static let steeringContinuationMetadataKey = "_alas/steeringContinuationMessageId"
     private static let steeringFollowingUsersMetadataKey = "_alas/steeringFollowingUserCount"
 
     /// Split live text items at a follow-up without changing existing row IDs.

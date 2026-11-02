@@ -62,6 +62,9 @@ public enum ACPSessionForkVia: String, Equatable, Sendable {
 
 public enum ACPSessionForkCandidate: Equatable, Sendable {
     case native
+    /// A native fork cut at an earlier agent message through the agent's
+    /// `forkPoint` extension.
+    case nativeAtMessage(ACPForkPointTarget)
     case transcript
 }
 
@@ -71,15 +74,18 @@ public enum ACPSessionForkCandidatePolicy: Sendable {
         targetAgentID: String,
         boundaryIsRemoteHead: Bool,
         sourceRemoteSessionID: String?,
-        forkCapability: Bool?
+        forkCapability: Bool?,
+        forkPoint: ACPForkPointCapability?,
+        historicalTarget: ACPForkPointTarget?
     ) -> ACPSessionForkCandidate {
         guard sourceAgentID == targetAgentID,
-              boundaryIsRemoteHead,
               sourceRemoteSessionID?.isEmpty == false,
               forkCapability != false
         else { return .transcript }
 
-        return .native
+        if boundaryIsRemoteHead { return .native }
+        if forkPoint != nil, let historicalTarget { return .nativeAtMessage(historicalTarget) }
+        return .transcript
     }
 }
 
@@ -91,10 +97,53 @@ public struct ACPSessionForkConversationMessage: Equatable, Sendable {
 
     public let role: Role
     public let text: String
+    /// The agent's own id for an agent message; nil for user messages.
+    public let messageId: String?
 
-    public init(role: Role, text: String) {
+    public init(role: Role, text: String, messageId: String? = nil) {
         self.role = role
         self.text = text
+        self.messageId = messageId
+    }
+}
+
+/// Checks that the agent forked where it was asked to, from the `forkPoint`
+/// its `session/fork` result echoes.
+public enum ACPForkPointVerifier: Sendable {
+    public static func verify(
+        echo: ACPForkPointEcho?,
+        target: ACPForkPointTarget,
+        boundary: ACPForkPointBoundary,
+        laterSourceItemIDs: Set<String>
+    ) -> Result<ACPForkPointEcho, ACPForkPointFailure> {
+        guard let echo else { return .failure(.missingEcho) }
+        guard echo.boundary == boundary else { return .failure(.mismatchedEcho) }
+        let later = Set(laterSourceItemIDs.map(unsegmented))
+        switch echo.matchedBy {
+        case .id:
+            guard unsegmented(echo.messageId) == unsegmented(target.messageId) else {
+                return .failure(.mismatchedEcho)
+            }
+        case .fingerprint:
+            // A fingerprint can also match an equal message after the target.
+            guard !later.contains(unsegmented(echo.messageId)) else { return .failure(.mismatchedEcho) }
+        }
+        if boundary == .turn {
+            guard echo.turnId?.isEmpty == false,
+                  let lastItemId = echo.lastItemId, !lastItemId.isEmpty,
+                  !later.contains(unsegmented(lastItemId))
+            else { return .failure(.mismatchedEcho) }
+        }
+        return .success(echo)
+    }
+
+    /// An adapter may address part of a message as `<id>:segment:<n>`.
+    private static func unsegmented(_ id: String) -> String {
+        guard let range = id.range(of: ":segment:", options: .backwards),
+              !id[range.upperBound...].isEmpty,
+              id[range.upperBound...].allSatisfy({ $0.isASCII && $0.isNumber })
+        else { return id }
+        return String(id[..<range.lowerBound])
     }
 }
 
