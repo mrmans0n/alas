@@ -282,6 +282,8 @@ public struct ReviewRequestDiffLoader: Sendable {
     }
 
     private static func imageFailureMessage(for error: Error) -> String {
+        // A provider that knows why a side failed says so.
+        if let failure = error as? ImageDiffLoadFailure { return failure.message }
         if case ProcessError.outputTooLarge(let maxBytes) = error {
             return "Image is larger than \(ByteCountFormatter.string(fromByteCount: Int64(maxBytes), countStyle: .file))."
         }
