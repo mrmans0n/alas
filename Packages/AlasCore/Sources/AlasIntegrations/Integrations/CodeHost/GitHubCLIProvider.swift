@@ -932,6 +932,7 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
         repository: String,
         revision: String,
         path: String,
+        maxBytes: Int,
         cwd: URL
     ) async throws -> Data {
         let result = try await runner.runData(
@@ -940,10 +941,12 @@ public struct GitHubCLIProvider: CodeHostProvider, CodeHostIssueProviding, Senda
                 "api",
                 "--hostname", remote.host,
                 "--method", "GET",
-                "--header", "Accept: application/vnd.github.raw+json",
+                // Not `raw+json`: gh treats that as JSON and fails on binary bytes.
+                "--header", "Accept: application/vnd.github.raw",
                 "repos/\(repository)/contents/\(Self.encodedFilePath(path))?ref=\(revision)",
             ],
-            cwd: cwd
+            cwd: cwd,
+            maxBytes: maxBytes
         )
         guard result.exitCode == 0 else {
             throw CodeHostProviderError.commandFailed(command: "gh api contents", stderr: result.stderr)

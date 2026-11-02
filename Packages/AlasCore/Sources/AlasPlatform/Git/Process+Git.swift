@@ -19,6 +19,8 @@ public enum ProcessError: Error, Sendable {
     case launchFailed(String)
     case timedOut(executable: String, args: [String], seconds: TimeInterval)
     case nonZeroExit(Int32, String)
+    /// The child wrote more than `maxBytes` to stdout and was stopped.
+    case outputTooLarge(maxBytes: Int)
 }
 
 extension ProcessError: LocalizedError {
@@ -32,6 +34,8 @@ extension ProcessError: LocalizedError {
             stderr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                 ? "A process exited with status \(code)."
                 : stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        case .outputTooLarge(let maxBytes):
+            "A process wrote more than \(maxBytes) bytes and was stopped."
         }
     }
 
@@ -587,12 +591,15 @@ extension Process {
     }
 
     /// Internal: same shape as `run(...)` but emits stdout as `Data`.
+    /// Past `maxOutputBytes` of stdout the child is stopped while it
+    /// writes and this throws `ProcessError.outputTooLarge`.
     public static func runData(
         _ executable: String,
         args: [String],
         cwd: URL? = nil,
         env: [String: String]? = nil,
-        timeout: TimeInterval? = Process.defaultTimeout
+        timeout: TimeInterval? = Process.defaultTimeout,
+        maxOutputBytes: Int? = nil
     ) async throws -> ProcessResultData {
         try validateLaunchConfiguration(executable: executable, args: args, cwd: cwd)
 
@@ -613,6 +620,7 @@ extension Process {
 
         let outAccum = ByteAccumulatorData()
         let errAccum = ByteAccumulatorData()
+        let tooLargeFlag = TimedOutFlag()
         outPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
@@ -620,6 +628,12 @@ extension Process {
                 outAccum.markClosed()
             } else {
                 outAccum.append(data)
+                if let maxOutputBytes, outAccum.snapshot().count > maxOutputBytes {
+                    handle.readabilityHandler = nil
+                    tooLargeFlag.mark()
+                    outAccum.markClosed()
+                    terminateProcessWithEscalation(process)
+                }
             }
         }
         errPipe.fileHandleForReading.readabilityHandler = { handle in
@@ -672,6 +686,9 @@ extension Process {
 
         if timedOutFlag.value, let timeout {
             throw ProcessError.timedOut(executable: executable, args: args, seconds: timeout)
+        }
+        if tooLargeFlag.value, let maxOutputBytes {
+            throw ProcessError.outputTooLarge(maxBytes: maxOutputBytes)
         }
 
         return ProcessResultData(

@@ -16,4 +16,13 @@ struct ProcessGitEnvTests {
         #expect(env["GCM_INTERACTIVE"] == credentialManager)
         #expect(env["GIT_SSH_COMMAND"] == ssh)
     }
+
+    /// A child writing past the cap is stopped while it writes: `yes` never ends on its own.
+    @Test func runDataStopsAChildWritingPastItsCap() async {
+        await #expect {
+            _ = try await Process.runData("/usr/bin/yes", args: [], timeout: 60, maxOutputBytes: 64 * 1024)
+        } throws: { error in
+            if case ProcessError.outputTooLarge(maxBytes: 64 * 1024) = error { true } else { false }
+        }
+    }
 }
