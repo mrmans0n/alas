@@ -145,6 +145,10 @@ extension AppState {
             if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
                 return .error(ComputerUseCoordinator.stoppedMessage)
             }
+            let recordID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+            if let refusal = await joinedStartRefusal(recordID: recordID, guest: guest, sessionID: sessionID, call: .computer) {
+                return .error(refusal)
+            }
             guard let client = vmManager.guestClient(for: worktreeID, guest: guest) else {
                 return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
             }
@@ -166,7 +170,6 @@ extension AppState {
                     return .error(ComputerUseCoordinator.stoppedMessage)
                 }
             }
-            let recordID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
             // A refused call didn't drive the VM, so it is neither recorded nor told about lifecycles.
             if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
                 return .error(refusal)
@@ -250,10 +253,15 @@ extension AppState {
             if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
                 return .error(ComputerUseCoordinator.stoppedMessage)
             }
+            let recordID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+            if let refusal = await joinedStartRefusal(
+                recordID: recordID, guest: guest, sessionID: sessionID, call: .vmRun(timeoutSeconds: timeoutSeconds)
+            ) {
+                return .error(refusal)
+            }
             guard let client = vmManager.guestClient(for: worktreeID, guest: guest) else {
                 return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
             }
-            let recordID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
             if let refusal = VMTakeOvers.refusal(action: nil, driver: vmDriver(recordID: recordID)) {
                 return .error(refusal)
             }
@@ -305,6 +313,16 @@ extension AppState {
                 recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest), guest: guest, sessionID: sessionID, call: call
             ).refusal
         }
+    }
+
+    /// A VM an auto-start booted can run before its guest helper answers: a call reaching it then
+    /// (an agent's retry after `starting`) joins that start and its wait, within its own budget,
+    /// instead of failing on the helper. Nil when no start is under way, or once it is ready.
+    private func joinedStartRefusal(
+        recordID: String, guest: VMGuestOS, sessionID: String, call: VMAutoStartCall
+    ) async -> String? {
+        guard vmAutoStarter.starting.contains(recordID) else { return nil }
+        return await autoStart(recordID: recordID, guest: guest, sessionID: sessionID, call: call).refusal
     }
 
     /// Starts VM `recordID` for a call of `sessionID`, or joins its start, and waits for it.

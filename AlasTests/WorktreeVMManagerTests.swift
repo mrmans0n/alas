@@ -648,12 +648,21 @@ final class WorktreeVMManagerTests {
 
     private let clock = ManualClock()
 
-    /// An auto-starter over `manager`, whose guest helper always answers. `start` replaces the
-    /// manager's start.
+    /// Whether the guest helper of a started VM answers its hello.
+    @MainActor
+    private final class Helper {
+        var answers = true
+    }
+
+    private let helper = Helper()
+
+    /// An auto-starter over `manager`, whose guest helper answers while `helper.answers`.
+    /// `start` replaces the manager's start.
     private func makeStarter(
         _ manager: WorktreeVMManager, start: ((String, VMGuestOS) async throws -> VMStartOutcome)? = nil
     ) -> VMAutoStarter {
         let clock = clock
+        let helper = helper
         return VMAutoStarter(
             start: { worktreeID, guest in
                 if let start { return try await start(worktreeID, guest) }
@@ -662,7 +671,7 @@ final class WorktreeVMManagerTests {
             startPausing: { _ = try await manager.startVM(worktreeID: $0, pausing: $1) },
             isStarting: { manager.isStarting($0) },
             isRunning: { manager.running($0, guest: $1) != nil },
-            helperAnswers: { _, _ in true },
+            helperAnswers: { _, _ in helper.answers },
             candidateName: { "name of \($0)" },
             sleep: { await clock.sleep($0) },
             now: { clock.now() }
@@ -841,6 +850,29 @@ final class WorktreeVMManagerTests {
 
         #expect(await call.value == .ready)
         _ = try await fromTab.value
+        #expect(hypervisor.boots == 1)
+    }
+
+    /// The agent's retry after `starting` finds the VM running before its helper answers: it joins
+    /// the start's helper wait, never a helper error, and ends with it.
+    @Test(arguments: [true, false])
+    func aCallReachingAVMWhoseHelperIsStillStartingJoinsTheStart(helloArrives: Bool) async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let starter = makeStarter(manager)
+        helper.answers = false
+
+        let first = Task { await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { manager.running("/repo/a") != nil }
+        // What the guest route checks before it talks to the helper.
+        #expect(starter.starting == ["/repo/a"])
+        let retry = Task { await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { starter.waiters.count == 2 }
+        if helloArrives { helper.answers = true } else { clock.run() }
+
+        let expected: AutoStartResult = helloArrives ? .ready : .starting
+        #expect(await first.value == expected)
+        #expect(await retry.value == expected)
         #expect(hypervisor.boots == 1)
     }
 
