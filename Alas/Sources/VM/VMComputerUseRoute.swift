@@ -21,6 +21,8 @@ enum VMComputerUseRoute: Equatable {
     static let linuxVMNotRunningMessage =
         "computer_vm_stopped: This worktree's Linux VM isn't running. Start it from its Linux VM tab."
     static let vmStateUnreadableMessage = "computer_vm_stopped: Couldn't read this worktree's VM state. Try again."
+    static let vmSetupRunningMessage =
+        "computer_vm_starting: This worktree's VM is still running its setup script. Try again in a moment."
 
     static let vmMissingMessage = "computer_vm_missing: This worktree has no VM. Create one from its VM tab."
     static let vmUnsupportedMessage = "computer_vm_unsupported: \(WorktreeVMManager.unsupportedMessage)."
@@ -290,11 +292,13 @@ struct VMTakeOvers: Equatable {
     }
 
     /// The error an agent call to a VM gets from the driver gate, or nil to forward it. `action` is
-    /// nil for `vm_run`. A cancel always passes: it only stops the agent's own call.
-    static func refusal(action: ComputerUseCommand.Action?, driver: VMDriver) -> String? {
+    /// nil for `vm_run`. A cancel always passes: it only stops the agent's own call. While the VM
+    /// runs its first-boot setup (`setupRunning`), calls wait like a VM still starting; the setup
+    /// script's own run goes to the guest directly, not through this gate.
+    static func refusal(action: ComputerUseCommand.Action?, driver: VMDriver, setupRunning: Bool = false) -> String? {
         guard action != .cancel else { return nil }
         switch VMDriver.decision(for: driver) {
-        case .proceed: return nil
+        case .proceed: return setupRunning ? VMComputerUseRoute.vmSetupRunningMessage : nil
         case .userDriving: return VMAutoStartMessages.userDriving
         }
     }

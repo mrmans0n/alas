@@ -44,7 +44,10 @@ extension AppState {
             recordID: recordID, firstBootPending: vmManager.isFirstBootPending(recordID: recordID),
             setupRunning: vmSetupScriptsRunning.contains(recordID), setupFailed: vmSetupFailures[recordID] != nil
         ) else { return }
-        Task { await runVMSetup(recordID: recordID) }
+        // Claimed before the start returns, so an agent call that started the VM is refused until
+        // the setup is done rather than racing the script.
+        vmSetupScriptsRunning.insert(recordID)
+        Task { await runVMSetup(recordID: recordID, claimed: true) }
     }
 
     /// The project's guest setup script for VM `recordID`'s worktree; nil without one.
@@ -54,9 +57,10 @@ extension AppState {
 
     /// Runs the project's setup script in VM `recordID` and takes its clean point on success: on
     /// its first boot, where a script that already succeeded isn't run again, and for the tab's
-    /// "Run again" and "Run the new setup script" (`rerunScript`).
-    func runVMSetup(recordID: String, rerunScript: Bool = false) async {
-        guard vmSetupScriptsRunning.insert(recordID).inserted else { return }
+    /// "Run again" and "Run the new setup script" (`rerunScript`). `claimed` when the caller
+    /// already put it in `vmSetupScriptsRunning`.
+    func runVMSetup(recordID: String, rerunScript: Bool = false, claimed: Bool = false) async {
+        guard claimed || vmSetupScriptsRunning.insert(recordID).inserted else { return }
         defer { vmSetupScriptsRunning.remove(recordID) }
         let script = vmGuestSetupScript(recordID: recordID)
         let succeeded = !rerunScript && vmSetupScriptSucceeded[recordID] == VMCleanPoint.scriptHash(script)
