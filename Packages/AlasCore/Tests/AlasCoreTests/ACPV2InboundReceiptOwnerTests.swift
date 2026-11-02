@@ -6,6 +6,59 @@ import AlasCore
 
 @MainActor
 struct ACPV2InboundReceiptOwnerTests {
+    @Test func liveCallbacksCarryCommittedOriginalCapturesWithoutReplayingHistory() async throws {
+        let fixture = try await Fixture()
+        let stream = try await fixture.register()
+        _ = try await fixture.persistence.retainV2Inbound(fixture.delivery(Data([255])), to: stream, fence: fixture.fence)
+        var registered: ACPV2InboundLedgerStream?
+        var delivered: [UUID] = []
+        var inserted: [Bool] = []
+        let consumed = Mutex(0)
+        let first = fixture.delivery(Data("first".utf8), callback: { consumed.withLock { $0 += 1 } })
+        let second = fixture.delivery(Data("second".utf8), callback: { consumed.withLock { $0 += 1 } })
+        let owner = try fixture.owner(onStreamRegistered: { registered = $0 }, onRetained: { delivery, receipt in
+            let store = try ACPSessionStore(path: fixture.persistence.path)
+            #expect(try store.loadV2InboundLedgerPage(stream: stream).records.contains(receipt.record))
+            #expect(delivery.receiptID == receipt.record.receiptID && delivery.frame == receipt.record.frame)
+            delivered.append(delivery.receiptID)
+            inserted.append(receipt.wasInserted)
+            #expect(consumed.withLock { $0 } == (delivered.count == 1 ? 0 : 1))
+        })
+        let input = AsyncStream<ACPV2InboundDelivery>.makeStream()
+        input.continuation.yield(first)
+        input.continuation.yield(first)
+        input.continuation.yield(second)
+        input.continuation.finish()
+        #expect(owner.start(input.stream))
+        await owner.waitUntilFinished()
+        #expect(registered == stream)
+        #expect(delivered == [first.receiptID, first.receiptID, second.receiptID])
+        #expect(inserted == [true, false, true])
+        #expect(consumed.withLock { $0 } == 2)
+    }
+
+    @Test(arguments: ["registration", "retention"])
+    func reentrantCallbackStopCannotConsumeOrDeliverASuccessor(phase: String) async throws {
+        let fixture = try await Fixture()
+        let reference = OwnerReference()
+        let consumed = Mutex(0)
+        var retained = 0
+        let owner = try fixture.owner(onStreamRegistered: { _ in
+            if phase == "registration" { reference.owner?.stop() }
+        }, onRetained: { _, _ in retained += 1
+        reference.owner?.stop() })
+        reference.owner = owner
+        defer { reference.owner = nil }
+        let input = AsyncStream<ACPV2InboundDelivery>.makeStream()
+        for _ in 0..<2 { input.continuation.yield(fixture.delivery(Data(), callback: { consumed.withLock { $0 += 1 } })) }
+        input.continuation.finish()
+        #expect(owner.start(input.stream))
+        await owner.waitUntilFinished()
+        #expect(owner.status == .stopped)
+        #expect(retained == (phase == "registration" ? 0 : 1))
+        #expect(consumed.withLock { $0 } == 0)
+    }
+
     @Test(arguments: [Data(), Data([255, 0]), Data(#"{"jsonrpc":"2.0","id":-7,"method":"fs/write_text_file","params":{"n":1e999,"n":2}}"#.utf8)])
     func exactCapturesCommitInOrderWhileCopiedReceiptsConsumeOnce(bytes: Data) async throws {
         let fixture = try await Fixture()
@@ -214,9 +267,12 @@ struct ACPV2InboundReceiptOwnerTests {
 
         @MainActor
         func owner(journal: (any ACPV2InboundLedgerPersisting)? = nil,
-            isCurrent: @escaping @MainActor () -> Bool = { true }) throws -> ACPV2InboundReceiptOwner {
+            isCurrent: @escaping @MainActor () -> Bool = { true },
+            onStreamRegistered: (@MainActor (ACPV2InboundLedgerStream) throws -> Void)? = nil,
+            onRetained: (@MainActor (ACPV2InboundDelivery, ACPV2InboundLedgerReceipt) throws -> Void)? = nil) throws -> ACPV2InboundReceiptOwner {
             .init(sessionId: "local", upstreamSessionId: "upstream", attachment: try .init(stdioClient: client),
-                fence: fence, journal: journal ?? persistence, isCurrent: isCurrent)
+                fence: fence, journal: journal ?? persistence, isCurrent: isCurrent,
+                onStreamRegistered: onStreamRegistered, onRetained: onRetained)
         }
 
         func delivery(_ frame: Data, callback: ACPDurableConsumptionAcknowledgement? = nil) -> ACPV2InboundDelivery {

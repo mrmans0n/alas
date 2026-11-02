@@ -18,7 +18,7 @@ public struct ACPV2InboundDelivery: Sendable {
         public let rawValue: LSPJSONValue
     }
 
-    public let receiptID = UUID()
+    public let receiptID: UUID
     public let frame: Data
     public let connectionID: UUID
     public let source: Source
@@ -26,10 +26,24 @@ public struct ACPV2InboundDelivery: Sendable {
 
     public init(frame: Data, connectionID: UUID, source: Source,
         durableConsumptionAcknowledgement: ACPDurableConsumptionAcknowledgement? = nil) {
+        receiptID = UUID()
         self.frame = frame
         self.connectionID = connectionID
         self.source = source
         consumption = Consumption(durableConsumptionAcknowledgement)
+    }
+
+    /// Diagnostic receipt adaptation preserves evidence and consumption only.
+    /// It never registers this delivery with the stdio reply capture registry.
+    public init(stdioDiagnostic diagnostic: ACPRawRPCDelivery) throws {
+        guard diagnostic.source == .diagnostic, diagnostic.brokerProvenance == nil else {
+            throw ACPClientError.decoding("Expected a direct stdio diagnostic")
+        }
+        receiptID = diagnostic.receiptID
+        frame = diagnostic.frame
+        connectionID = diagnostic.connectionID
+        source = .stdio
+        consumption = Consumption { diagnostic.acknowledgeDurableConsumption() }
     }
 
     /// Interprets the header without granting method-specific payload validity.

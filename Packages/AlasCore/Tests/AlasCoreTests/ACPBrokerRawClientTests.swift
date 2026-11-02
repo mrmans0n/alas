@@ -106,6 +106,66 @@ struct ACPBrokerRawClientTests {
         #expect(await service.acks.isEmpty)
     }
 
+    @MainActor
+    @Test(arguments: ["inbound", "updates"])
+    func attachmentRuntimePreservesBrokerAckOrderAndOffersOnlyTheCurrentPendingCapture(blocked: String) async throws {
+        let update = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"running"}}}"#.utf8)
+        let service = RawBrokerFixture(pending: true, rawBytes: update)
+        let client = makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("runtime-broker-\(UUID()).sqlite").path)
+        var row = ACPSessionRow(id: "s", agentId: "fixture", title: "Runtime", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false)
+        row.acpBrokerId = "raw"
+        row.acpBrokerGeneration = 7
+        row.acpBrokerAcknowledgedCursor = 0
+        row.acpBrokerWireContextJSON = try ACPBrokerWireContext.rawV2.persistedJSON()
+        try await persistence.upsertSession(row)
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let fence = ACPSessionLeaseFence(sessionId: "s", ownerInstance: "A", token: "owner")
+        let inbound = try await persistence.registerV2InboundLedger(sessionId: "s", upstreamSessionId: "upstream",
+            source: .broker(id: .init(rawValue: "raw"), generation: .init(rawValue: 7)), fence: fence)
+        let pending = await service.pendingRequest()
+        let historical = ACPV2InboundDelivery(frame: try #require(pending.rawFrame).bytes, connectionID: UUID(),
+            source: .broker(provenance: .init(brokerID: .init(rawValue: "raw"), generation: .init(rawValue: 7), cursor: .init(rawValue: 1), origin: .journal), pendingRequestID: "p"))
+        let retained = try await persistence.retainV2Inbound(historical, to: inbound, fence: fence)
+        let updateStream = try await persistence.registerV2UpdateJournal(sessionId: "s", upstreamSessionId: "upstream",
+            source: .broker(id: .init(rawValue: "raw"), generation: .init(rawValue: 7)), fence: fence)
+        let inboundGate = InboundJournalGate(base: persistence, operation: .retention)
+        let updateGate = RuntimeUpdateGate(base: persistence, operation: .append)
+        var offers: [ACPV2AttachmentRuntime.Request] = []
+        let runtime = try ACPV2AttachmentRuntime(sessionId: "s", upstreamSessionId: "upstream", attachment: .init(brokerClient: client, opened: opened),
+            fence: fence, journals: .init(persistence: persistence, updates: blocked == "updates" ? updateGate : nil,
+                inbound: blocked == "inbound" ? inboundGate : nil), isCurrent: { true }, onRequest: { offers.append($0) })
+        defer { runtime.stop()
+        Task { await inboundGate.release()
+        await updateGate.release() } }
+        #expect(runtime.start())
+        if blocked == "inbound" {
+            try await eventually { await inboundGate.reached }
+            try await eventually { (try? await persistence.loadV2UpdateJournalPage(stream: updateStream).records.count) == 1 }
+            #expect(offers.isEmpty)
+            #expect(await service.acks.isEmpty)
+            await inboundGate.release()
+        } else {
+            try await eventually { await updateGate.entered }
+            try await eventually { await MainActor.run { offers.count == 1 } }
+            #expect(await service.acks.allSatisfy { $0 <= 1 })
+            await updateGate.release()
+        }
+        try await eventually { await service.acks.last == 2 }
+        try await eventually { await MainActor.run { offers.count == 1 && runtime.status == .ready } }
+        let offer = try #require(offers.first)
+        #expect(offer.record == retained.record)
+        #expect(runtime.state.lifecycle.lastForegroundCompletion == nil)
+        let answer = Data(#"{"jsonrpc":"2.0","id":"p","result":null}"#.utf8)
+        #expect(try await runtime.respond(to: offer, intentID: UUID(), attemptID: UUID(), operationKey: .init(rawValue: "answer"), frame: answer).value.fact == .broker(.written))
+        #expect(await service.exactReplies.count == 1)
+        #expect(await service.acks.last == 2)
+        runtime.stop()
+        #expect(await service.closeCount == 0)
+    }
+
     @Test func brokerExitWithoutAdapterFrameSurfacesItsRecoveryDiagnostic() async throws {
         let diagnostic = "Bun runtime is unsupported. Please upgrade: bun upgrade"
         let rpc = JSONRPCError(code: -32074, message: "adapter stdout closed before a response was observed",
