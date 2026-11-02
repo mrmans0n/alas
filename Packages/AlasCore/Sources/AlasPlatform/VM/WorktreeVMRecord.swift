@@ -80,10 +80,16 @@ public struct WorktreeVMRecord: Codable, Equatable, Sendable, Identifiable {
     /// mistaken for a later boot elsewhere. Nil in records written before it
     /// existed or rewritten by such a build.
     public var bootGeneration: Int?
+    /// The VM was paused with its machine state saved to `state.vzvmsave`. Older builds ignore it
+    /// and cold-boot, which changes the disk, so `pausedDiskStamp` tells a later build the file is stale.
+    public var paused: Bool
+    /// `disk.img`'s modification time when the state was saved (see `VMSavedState`).
+    public var pausedDiskStamp: Date?
 
     public init(
         id: String, guestOS: VMGuestOS = .macOS, goldenBuild: String, bundlePath: String,
-        createdAt: Date, lastUsedAt: Date, runOwner: VMRunOwner? = nil, bootGeneration: Int? = nil
+        createdAt: Date, lastUsedAt: Date, runOwner: VMRunOwner? = nil, bootGeneration: Int? = nil,
+        paused: Bool = false, pausedDiskStamp: Date? = nil
     ) {
         self.id = id
         self.guestOS = guestOS
@@ -93,5 +99,21 @@ public struct WorktreeVMRecord: Codable, Equatable, Sendable, Identifiable {
         self.lastUsedAt = lastUsedAt
         self.runOwner = runOwner
         self.bootGeneration = bootGeneration
+        self.paused = paused
+        self.pausedDiskStamp = pausedDiskStamp
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        guestOS = try c.decode(VMGuestOS.self, forKey: .guestOS)
+        goldenBuild = try c.decode(String.self, forKey: .goldenBuild)
+        bundlePath = try c.decode(String.self, forKey: .bundlePath)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        lastUsedAt = try c.decode(Date.self, forKey: .lastUsedAt)
+        runOwner = try c.decodeIfPresent(VMRunOwner.self, forKey: .runOwner)
+        bootGeneration = try c.decodeIfPresent(Int.self, forKey: .bootGeneration)
+        paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? false
+        pausedDiskStamp = try c.decodeIfPresent(Date.self, forKey: .pausedDiskStamp)
     }
 }
