@@ -134,6 +134,11 @@ final class WorktreeVMManager {
     @ObservationIgnored var onVMDeleted: (String) -> Void = { _ in }
     /// Clones a clean point file into the bundle; tests make it fail.
     @ObservationIgnored var cloneCleanFile: (URL, URL) throws -> Void = { try VMBundle.cloneFile($0, to: $1) }
+    /// Whether VM `id` runs its project's first-boot setup. Such a VM is never offered to pause for
+    /// a slot, and quitting stops it instead of pausing it, so its setup runs again on the next start.
+    @ObservationIgnored var isRunningSetup: (String) -> Bool = { _ in false }
+    /// Set once quitting began: no VM starts after `stopAll`.
+    @ObservationIgnored private(set) var isQuitting = false
     /// Called with a VM's registry id once it started running here, booted or restored.
     @ObservationIgnored var onVMStarted: (String) -> Void = { _ in }
     /// The guest helper and its installer, shared read-only with every macOS VM.
@@ -564,6 +569,9 @@ final class WorktreeVMManager {
         guard runningVMs[other] != nil else {
             throw VMError(message: "The VM to pause is not running in this window")
         }
+        guard !isRunningSetup(other) else {
+            throw VMError(message: "The VM to pause is running its setup script")
+        }
         if await pauseVM(recordID: other) == .notRunning, runningVMs[other] != nil {
             throw VMError(message: "The VM to pause couldn't be stopped")
         }
@@ -701,10 +709,13 @@ final class WorktreeVMManager {
 
     /// Stops every VM this process runs. Called on quit so registry owners clear. macOS VMs
     /// that can save their state pause instead, all at once, within `quitPauseBound`; one still
-    /// saving then is stopped as the others are.
+    /// saving then is stopped as the others are. No VM starts afterwards, a disk operation's
+    /// restart included.
     func stopAll() async {
+        isQuitting = true
         let ids = Array(runningVMs.keys)
-        let pausable = Set(ids.filter(canSaveState))
+        // A VM running its setup stops: restored, it would resume mid-script and never rerun it.
+        let pausable = Set(ids.filter { canSaveState($0) && !isRunningSetup($0) })
         let pauses = pausable.map { id in Task { await self.pauseVM(recordID: id) } }
         await withTaskGroup(of: Void.self) { group in
             for id in ids where !pausable.contains(id) {
@@ -914,13 +925,18 @@ final class WorktreeVMManager {
 
     /// Saves the VM's disk, and its machine state where it can save one, as its clean point,
     /// replacing any earlier one. A VM running here pauses (or, without save/restore, shuts down
-    /// cleanly) for the copy and then starts again, from the saved state where there is one.
+    /// cleanly) for the copy and then starts again, from the saved state where there is one. A
+    /// paused VM's point is its disk and saved state. Refused for a stopped VM, whose disk may not
+    /// be the state the user means to keep.
     /// `setupScriptHash` is the project's guest setup script the point was taken after.
     func takeCleanPoint(worktreeID: String, guest: VMGuestOS = .macOS, setupScriptHash: String? = nil) async throws {
         let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
         try await withDiskOperation(id) {
             let wasRunning = try await shutDownForCleanPoint(id)
             let bundle = bundle(forID: id)
+            guard wasRunning || Self.isPaused(bundle) else {
+                throw VMError(message: "Start the VM to save its clean point")
+            }
             try withDiskClaimed(id) { try writeCleanPoint(id, bundle: bundle, setupScriptHash: setupScriptHash) }
             logger.notice("Saved the clean point of VM \(id, privacy: .public)")
             if wasRunning { try await startAgain(id, done: "The clean point was saved") }
@@ -1778,6 +1794,8 @@ final class WorktreeVMManager {
             }
         }
         if let vm = runningVMs[id] { return .running(vm) }
+        // Checked after the waits: a disk operation that ends during quit doesn't start it again.
+        guard !isQuitting else { throw VMError(message: "Alas is quitting") }
         guard !starting.contains(id) else {
             throw VMError(message: "This VM is already starting")
         }
@@ -1817,7 +1835,9 @@ final class WorktreeVMManager {
             case .runningElsewhere(let label):
                 return .outcome(.runningElsewhere(label: label))
             case .needsUserChoice(let candidates):
-                return .outcome(.needsUserChoice(candidates: candidates.filter(localIDs.contains)))
+                return .outcome(.needsUserChoice(candidates: candidates.filter {
+                    localIDs.contains($0) && !isRunningSetup($0)
+                }))
             }
         }
         let bundle: VMBundle

@@ -877,20 +877,38 @@ final class WorktreeVMManagerTests {
         #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: guest) == .notRunning)
     }
 
+    /// A VM running its first-boot setup stops too: restored, it would resume mid-script, and
+    /// stopped, its setup runs again on the next start.
     @Test func quitPausesMacOSVMsAndStopsLinuxOnes() async throws {
         let macOS = try addRecord("/repo/a")
         let linux = try addRecord("linux:/repo/b")
+        let settingUp = try addRecord("/repo/c")
         let manager = makeManager()
+        manager.isRunningSetup = { $0 == "/repo/c" }
         _ = try await manager.startVM(worktreeID: "/repo/a")
         _ = try await manager.startVM(worktreeID: "/repo/b", guest: .linux)
+        _ = try await manager.startVM(worktreeID: "/repo/c")
 
         await manager.stopAll()
 
         #expect(manager.runningVMs.isEmpty)
         #expect(try registry.snapshot().allSatisfy { $0.runOwner == nil })
         #expect(isPaused(macOS))
-        #expect(!isPaused(linux))
-        #expect(!FileManager.default.fileExists(atPath: stateFile(linux).path))
+        for stopped in [linux, settingUp] {
+            #expect(!FileManager.default.fileExists(atPath: stateFile(stopped).path))
+        }
+    }
+
+    @Test func noVMStartsOnceQuitting() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+
+        await manager.stopAll()
+
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            _ = try await manager.startVM(worktreeID: "/repo/a")
+        }
+        #expect(hypervisor.boots == 0)
     }
 
     @MainActor
@@ -954,6 +972,31 @@ final class WorktreeVMManagerTests {
         #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
         #expect(manager.running("/repo/a") != nil)
         #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+    }
+
+    /// A paused VM's clean point is its disk and saved state, taken without booting it. A stopped
+    /// VM gets none.
+    @Test(arguments: [true, false])
+    func aCleanPointNeedsARunningOrPausedVM(paused: Bool) async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        if paused {
+            #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .saved)
+        } else {
+            await manager.stopVM(worktreeID: "/repo/a")
+        }
+
+        if paused {
+            try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+            #expect(try contents(cleanDirectory(bundle).appendingPathComponent("state.vzvmsave")) == "state")
+        } else {
+            await #expect(throws: WorktreeVMManager.VMError.self) {
+                try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+            }
+            #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
+        }
+        #expect(hypervisor.boots == 1)
     }
 
     /// A macOS VM whose configuration can't save state, and any Linux VM, shut down and cold-boot.
@@ -1056,17 +1099,20 @@ final class WorktreeVMManagerTests {
         let bundle = try addRecord("/repo/a")
         let manager = makeManager()
         if refusal == .runningElsewhere {
+            _ = try await manager.startVM(worktreeID: "/repo/a")
             try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+            await manager.stopVM(worktreeID: "/repo/a")
             try registry.update { $0[0].runOwner = elsewhere }
         }
         try Data("dirty".utf8).write(to: VMBundle(url: bundle).diskImage)
+        let boots = hypervisor.boots
 
         await #expect(throws: WorktreeVMManager.VMError.self) {
             try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
         }
 
         #expect(try contents(VMBundle(url: bundle).diskImage) == "dirty")
-        #expect(hypervisor.boots == 0)
+        #expect(hypervisor.boots == boots)
     }
 
     @Test(arguments: [VMGuestOS.macOS, .linux])
@@ -1145,29 +1191,6 @@ final class WorktreeVMManagerTests {
 
         #expect(outcome == .interrupted)
         #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
-    }
-
-    struct FirstBootCase: CustomTestStringConvertible, Sendable {
-        let name: String
-        var recordID = "/repo/a"
-        var pending = true
-        var running = false
-        var failed = false
-        let runs: Bool
-        var testDescription: String { name }
-    }
-
-    @Test(arguments: [
-        FirstBootCase(name: "a new VM", runs: true),
-        FirstBootCase(name: "a VM created before first boots were tracked", pending: false, runs: false),
-        FirstBootCase(name: "a golden", recordID: WorktreeVMManager.goldenIDPrefix + "25A1", runs: false),
-        FirstBootCase(name: "setup already under way", running: true, runs: false),
-        FirstBootCase(name: "a failed script awaits Run again or Skip", failed: true, runs: false),
-    ])
-    func firstBootSetupRunsOnlyForNewVMs(_ c: FirstBootCase) {
-        #expect(WorktreeVMManager.runsFirstBootSetup(
-            recordID: c.recordID, firstBootPending: c.pending, setupRunning: c.running, setupFailed: c.failed
-        ) == c.runs)
     }
 
     struct AutoVMCase: CustomTestStringConvertible, Sendable {
@@ -1332,6 +1355,22 @@ final class WorktreeVMManagerTests {
         }
         #expect(starter.slotRequests.isEmpty)
         #expect(hypervisor.boots == 2)
+    }
+
+    @Test func aVMRunningItsSetupIsNotOfferedToPause() async throws {
+        let manager = makeManager()
+        manager.isRunningSetup = { $0 == "/repo/a" }
+        try await fillBothSlots(manager)
+
+        guard case .needsUserChoice(let candidates) = try await manager.startVM(worktreeID: "/repo/c") else {
+            Issue.record("a third VM found a free slot")
+            return
+        }
+        #expect(candidates == ["/repo/b"])
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            _ = try await manager.startVM(worktreeID: "/repo/c", pausing: "/repo/a")
+        }
+        #expect(manager.running("/repo/a") != nil)
     }
 
     @Test func pausingAnotherVMStartsThisOne() async throws {

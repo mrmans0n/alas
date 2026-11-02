@@ -1918,6 +1918,7 @@ final class AppState {
             self?.forgetVMSetup(recordID: recordID)
         }
         vmManager.onVMStarted = { [weak self] recordID in self?.vmStarted(recordID: recordID) }
+        vmManager.isRunningSetup = { [weak self] recordID in self?.vmSetupScriptsRunning.contains(recordID) ?? false }
         vmManager.now = { [weak self] in self?.vmNow() ?? Date() }
         vmIdleSweeper.start(interval: vmIdleSweepInterval)
         AlasTerminationCoordinator.shared.confirm = { [weak self] in

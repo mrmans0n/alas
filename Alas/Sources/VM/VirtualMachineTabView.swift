@@ -80,6 +80,8 @@ struct VirtualMachineTabView: View {
     private var guestName: String { isLinux ? "Ubuntu" : "macOS" }
     /// This tab's VM running here, a pause in progress included: the screen stays until it stops.
     private var ownVM: RunningVM? { vms.runningVMs[recordID] }
+    /// A clean point is taken from a VM running here or a paused one, never a stopped one.
+    private var canSaveCleanPoint: Bool { ownVM != nil || record.pausedAt != nil }
 
     private var screen: VMTabScreen {
         VMTabScreen.resolve(
@@ -432,7 +434,7 @@ struct VirtualMachineTabView: View {
         }
         .disabled(busy)
         Button("Save clean point now", action: saveCleanPoint)
-            .disabled(busy)
+            .disabled(busy || !canSaveCleanPoint)
         if newSetupScript {
             Button("Run the new setup script") { runSetup() }
                 .disabled(busy || ownVM == nil)
@@ -446,7 +448,7 @@ struct VirtualMachineTabView: View {
         } actions: {
             if case .notSaved = issue {
                 AlasButton(title: "Save clean point now", compact: true, action: saveCleanPoint)
-                    .vmDisabled(busy)
+                    .vmDisabled(busy || !canSaveCleanPoint)
             }
         }
     }
@@ -459,7 +461,7 @@ struct VirtualMachineTabView: View {
             AlasButton(title: "Run again", compact: true) { runSetup() }
                 .vmDisabled(busy)
             AlasButton(title: "Skip and save clean point", compact: true, action: saveCleanPoint)
-                .vmDisabled(busy)
+                .vmDisabled(busy || !canSaveCleanPoint)
         }
     }
 
