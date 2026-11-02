@@ -61,17 +61,20 @@ struct WebPreviewEgressTests {
     /// `allowed.invalid` is this Mac's LAN address, which the injected
     /// address set leaves out so it stands in for a remote host; every other
     /// name resolves to loopback or an address the set lists, and must never
-    /// reach a server.
+    /// reach a server. Requests carry the proxy's credentials unless
+    /// `credentials` says otherwise.
     @Test(arguments: [
-        ("CONNECT allowed.invalid:{port} HTTP/1.1", "200", true),
-        ("CONNECT blocked.invalid:{port} HTTP/1.1", "403", false),
-        ("CONNECT own.invalid:{port} HTTP/1.1", "403", false),
-        ("CONNECT [::1]:{port} HTTP/1.1", "403", false),
-        ("CONNECT missing.invalid:{port} HTTP/1.1", "502", false),
-        ("GET http://allowed.invalid:{port}/ HTTP/1.1", "405", false),
-        ("CONNECT allowed.invalid HTTP/1.1", "400", false),
-    ])
-    func theProxyConnectsOnlyToVettedAddresses(request: String, status: String, echoes: Bool) async throws {
+        ("CONNECT allowed.invalid:{port} HTTP/1.1", "200", true, nil),
+        ("CONNECT blocked.invalid:{port} HTTP/1.1", "403", false, nil),
+        ("CONNECT own.invalid:{port} HTTP/1.1", "403", false, nil),
+        ("CONNECT [::1]:{port} HTTP/1.1", "403", false, nil),
+        ("CONNECT missing.invalid:{port} HTTP/1.1", "502", false, nil),
+        ("GET http://allowed.invalid:{port}/ HTTP/1.1", "405", false, nil),
+        ("CONNECT allowed.invalid HTTP/1.1", "400", false, nil),
+        ("CONNECT allowed.invalid:{port} HTTP/1.1", "407", false, ""),
+        ("CONNECT allowed.invalid:{port} HTTP/1.1", "407", false, "Proxy-Authorization: Basic YWxhcy1wcmV2aWV3Ondyb25n\r\n"),
+    ] as [(String, String, Bool, String?)])
+    func theProxyConnectsOnlyToVettedAddresses(request: String, status: String, echoes: Bool, credentials: String?) async throws {
         let lan = try #require(RemoteNetwork.interfaces().first {
             !$0.isLoopback && !$0.host.hasPrefix("169.254.") && WebPreviewEgressPolicy.address($0.host)?.count == 4
         }).host
@@ -92,7 +95,8 @@ struct WebPreviewEgressTests {
         let port = try await proxy.start()
         let client = try await TestClient.connect(host: "127.0.0.1", port: Int(port))
         let target = request.contains("blocked") || request.contains("::1") ? loopback.port : echo.port
-        client.send(Data("\(request.replacingOccurrences(of: "{port}", with: "\(target)"))\r\nHost: x\r\n\r\n".utf8))
+        let authorization = credentials ?? Self.authorization(proxy)
+        client.send(Data("\(request.replacingOccurrences(of: "{port}", with: "\(target)"))\r\nHost: x\r\n\(authorization)\r\n".utf8))
         try await eventually { String(decoding: client.received.bytes, as: UTF8.self).contains("\r\n\r\n") }
         #expect(String(decoding: client.received.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 \(status) "))
         if echoes {
@@ -119,7 +123,7 @@ struct WebPreviewEgressTests {
             }
         }
         let port = try await Int(proxy.start())
-        let request = Data("CONNECT held.invalid:443 HTTP/1.1\r\n\r\n".utf8)
+        let request = Data("CONNECT held.invalid:443 HTTP/1.1\r\n\(Self.authorization(proxy))\r\n".utf8)
         var held: [TestClient] = []
         for _ in 0..<2 {
             let client = try await TestClient.connect(host: "127.0.0.1", port: port)
@@ -132,5 +136,9 @@ struct WebPreviewEgressTests {
         try await eventually { refused.received.ended }
         #expect(String(decoding: refused.received.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 503 "))
         #expect(held.allSatisfy { $0.received.bytes.isEmpty })
+    }
+
+    private static func authorization(_ proxy: WebPreviewEgressProxy) -> String {
+        "Proxy-Authorization: Basic \(Data("\(WebPreviewEgressProxy.username):\(proxy.password)".utf8).base64EncodedString())\r\n"
     }
 }

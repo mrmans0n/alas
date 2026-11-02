@@ -339,7 +339,8 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     /// Starts the egress proxy, unless it is already listening, and points the
-    /// data store at it with failover off, so a dead proxy fails every load.
+    /// data store at it with failover off, so a dead proxy fails every load,
+    /// and with the proxy's credentials, which only this data store holds.
     private func startProxy() async -> Bool {
         if proxy?.isListening == true { return true }
         proxy?.stop()
@@ -357,6 +358,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         var configuration = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: .ipv4(.loopback), port: port))
         configuration.allowFailover = false
+        configuration.applyCredential(username: WebPreviewEgressProxy.username, password: proxy.password)
         webView.configuration.websiteDataStore.proxyConfigurations = [configuration]
         return true
     }
