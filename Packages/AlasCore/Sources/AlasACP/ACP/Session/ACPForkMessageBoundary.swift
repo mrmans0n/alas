@@ -41,8 +41,9 @@ public struct ACPSessionForkRecord: Equatable, Sendable {
     public var mechanism: ACPSessionForkMechanism?
     public var contextDeliveryPending: Bool
     public var via: ACPSessionForkVia? = nil
+    public var forkPoint: ACPSessionForkPoint? = nil
 
-    public init(targetSessionID: String, sourceSessionID: String, sourceAgentID: String, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism? = nil, contextDeliveryPending: Bool, via: ACPSessionForkVia? = nil) {
+    public init(targetSessionID: String, sourceSessionID: String, sourceAgentID: String, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism? = nil, contextDeliveryPending: Bool, via: ACPSessionForkVia? = nil, forkPoint: ACPSessionForkPoint? = nil) {
         self.targetSessionID = targetSessionID
         self.sourceSessionID = sourceSessionID
         self.sourceAgentID = sourceAgentID
@@ -52,6 +53,26 @@ public struct ACPSessionForkRecord: Equatable, Sendable {
         self.mechanism = mechanism
         self.contextDeliveryPending = contextDeliveryPending
         self.via = via
+        self.forkPoint = forkPoint
+    }
+}
+
+/// The message a fork was cut at, and what the agent said about it.
+/// `outcome` stays nil until the agent has answered.
+public struct ACPSessionForkPoint: Codable, Equatable, Sendable {
+    public enum Outcome: Codable, Equatable, Sendable {
+        case matched(ACPForkPointEcho)
+        case unmatched(ACPForkPointFailure)
+    }
+
+    public let target: ACPForkPointTarget
+    public let boundary: ACPForkPointBoundary
+    public var outcome: Outcome?
+
+    public init(target: ACPForkPointTarget, boundary: ACPForkPointBoundary, outcome: Outcome? = nil) {
+        self.target = target
+        self.boundary = boundary
+        self.outcome = outcome
     }
 }
 

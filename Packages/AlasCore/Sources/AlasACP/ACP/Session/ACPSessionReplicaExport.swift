@@ -132,8 +132,9 @@ package struct ReplicaFork: Codable {
     package let mechanism: ACPSessionForkMechanism?
     package let contextDeliveryPending: Bool
     package let via: String?
+    package let forkPoint: ACPSessionForkPoint?
 
-    public init(source: ReplicaReference, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism?, contextDeliveryPending: Bool, via: String?) {
+    public init(source: ReplicaReference, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism?, contextDeliveryPending: Bool, via: String?, forkPoint: ACPSessionForkPoint? = nil) {
         self.source = source
         self.sourceBoundarySequence = sourceBoundarySequence
         self.inheritedMessageCount = inheritedMessageCount
@@ -141,6 +142,7 @@ package struct ReplicaFork: Codable {
         self.mechanism = mechanism
         self.contextDeliveryPending = contextDeliveryPending
         self.via = via
+        self.forkPoint = forkPoint
     }
 }
 

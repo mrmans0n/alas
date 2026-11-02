@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 34
+    public static let targetSchemaVersion = 35
     public let path: String
     public let db: SQLiteDatabase
 
@@ -91,6 +91,14 @@ public final class ACPSessionStore {
         if current < 32 { try createV2SubmissionLedgerSchema() }
         if current < 33 { try createV2InboundLedgerSchema() }
         if current < 34 { try createV2ResponseLedgerSchema() }
+        if current < 35 {
+            // Nullable JSON: rows from before this column keep NULL (no
+            // recorded fork point), which is how those forks were made.
+            let columns = try db.query("PRAGMA table_info(session_forks)")
+            if !columns.contains(where: { ($0["name"] as? String) == "fork_point" }) {
+                try db.exec("ALTER TABLE session_forks ADD COLUMN fork_point TEXT")
+            }
+        }
         try recoverFromConcurrentWriters()
         if current == 0 {
             try db.exec("INSERT INTO schema_version (version) VALUES (?)", bindings: [Int64(Self.targetSchemaVersion)])
@@ -553,8 +561,8 @@ extension ACPSessionStore {
         INSERT INTO session_forks (
           target_session_id, source_session_id, source_agent_id,
           source_boundary_seq, inherited_message_count, phase,
-          mechanism, context_delivery_pending, via
-        ) VALUES (?,?,?,?,?,?,?,?,?)
+          mechanism, context_delivery_pending, via, fork_point
+        ) VALUES (?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(target_session_id) DO UPDATE SET
           source_session_id = excluded.source_session_id,
           source_agent_id = excluded.source_agent_id,
@@ -563,7 +571,8 @@ extension ACPSessionStore {
           phase = excluded.phase,
           mechanism = excluded.mechanism,
           context_delivery_pending = excluded.context_delivery_pending,
-          via = excluded.via
+          via = excluded.via,
+          fork_point = excluded.fork_point
         """, bindings: [
             record.targetSessionID,
             record.sourceSessionID,
@@ -573,7 +582,8 @@ extension ACPSessionStore {
             record.phase.rawValue,
             record.mechanism?.rawValue,
             record.contextDeliveryPending ? 1 : 0,
-            record.via?.rawValue
+            record.via?.rawValue,
+            Self.encodeForkPoint(record.forkPoint)
         ])
     }
 
@@ -595,24 +605,41 @@ extension ACPSessionStore {
             phase: phase,
             mechanism: (row["mechanism"] as? String).flatMap(ACPSessionForkMechanism.init(rawValue:)),
             contextDeliveryPending: ((row["context_delivery_pending"] as? Int64) ?? 0) != 0,
-            via: (row["via"] as? String).flatMap(ACPSessionForkVia.init(rawValue:))
+            via: (row["via"] as? String).flatMap(ACPSessionForkVia.init(rawValue:)),
+            forkPoint: (row["fork_point"] as? String).flatMap(Self.decodeForkPoint)
         )
+    }
+
+    static func encodeForkPoint(_ forkPoint: ACPSessionForkPoint?) -> String? {
+        guard let forkPoint else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return (try? encoder.encode(forkPoint)).flatMap { String(data: $0, encoding: .utf8) }
+    }
+
+    /// A blob this build cannot read (written by a newer build, or damaged)
+    /// reads as no fork point instead of failing the session load.
+    public static func decodeForkPoint(_ json: String) -> ACPSessionForkPoint? {
+        try? JSONDecoder().decode(ACPSessionForkPoint.self, from: Data(json.utf8))
     }
 
     public func finalizeFork(
         targetSessionID: String,
         mechanism: ACPSessionForkMechanism,
-        remoteSessionID: String?
+        remoteSessionID: String?,
+        forkPoint: ACPSessionForkPoint? = nil
     ) throws {
         try db.transaction {
             try db.exec("""
             UPDATE session_forks
-            SET phase = ?, mechanism = ?, context_delivery_pending = ?
+            SET phase = ?, mechanism = ?, context_delivery_pending = ?,
+                fork_point = COALESCE(?, fork_point)
             WHERE target_session_id = ?
             """, bindings: [
                 ACPSessionForkCreationPhase.ready.rawValue,
                 mechanism.rawValue,
                 mechanism == .transcriptTransfer ? 1 : 0,
+                Self.encodeForkPoint(forkPoint),
                 targetSessionID
             ])
             if let remoteSessionID {
