@@ -52,6 +52,7 @@ alas-host setup
 walks through reachability, agents, behavior, worktrees, projects and pairing in
 a full-screen terminal UI that opens on the current values. Rerun it to change
 them later. It warns about an enabled agent whose adapter it cannot find.
+`alas-host setup --check` prints those warnings, one per line, without a terminal.
 
 To script it, or change one thing:
 
