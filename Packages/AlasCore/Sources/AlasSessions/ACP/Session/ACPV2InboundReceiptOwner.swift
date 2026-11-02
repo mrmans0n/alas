@@ -91,19 +91,25 @@ public final class ACPV2InboundReceiptOwner {
     private let fence: ACPSessionLeaseFence
     private let journal: any ACPV2InboundLedgerPersisting
     private let isCurrent: @MainActor () -> Bool
+    private let onStreamRegistered: (@MainActor (ACPV2InboundLedgerStream) throws -> Void)?
+    private let onRetained: (@MainActor (ACPV2InboundDelivery, ACPV2InboundLedgerReceipt) throws -> Void)?
     private let continuation: AsyncStream<Observation>.Continuation
     private var task: Task<Void, Never>?
     private var started = false
     private var revision: UInt64 = 0
 
     public init(sessionId: String, upstreamSessionId: String, attachment: Attachment, fence: ACPSessionLeaseFence,
-        journal: any ACPV2InboundLedgerPersisting, isCurrent: @escaping @MainActor () -> Bool) {
+        journal: any ACPV2InboundLedgerPersisting, isCurrent: @escaping @MainActor () -> Bool,
+        onStreamRegistered: (@MainActor (ACPV2InboundLedgerStream) throws -> Void)? = nil,
+        onRetained: (@MainActor (ACPV2InboundDelivery, ACPV2InboundLedgerReceipt) throws -> Void)? = nil) {
         self.sessionId = sessionId
         self.upstreamSessionId = upstreamSessionId
         self.attachment = attachment
         self.fence = fence
         self.journal = journal
         self.isCurrent = isCurrent
+        self.onStreamRegistered = onStreamRegistered
+        self.onRetained = onRetained
         let updates = AsyncStream<Observation>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observations = updates.stream
         continuation = updates.continuation
@@ -163,6 +169,8 @@ public final class ACPV2InboundReceiptOwner {
             try requireCurrent()
             try validate(registered)
             stream = registered
+            try onStreamRegistered?(registered)
+            try requireCurrent()
             hasKnownMissingPrefix = (registered.initialBrokerCursor?.rawValue ?? 0) > 0
             var after: ACPV2InboundLedgerContinuation?
             repeat {
@@ -187,6 +195,8 @@ public final class ACPV2InboundReceiptOwner {
                 try requireCurrent()
                 try validate(receipt, delivery: delivery)
                 try retainObservation(receipt.record, origin: receipt.wasInserted ? .inserted : .duplicate)
+                try requireCurrent()
+                try onRetained?(delivery, receipt)
                 try requireCurrent()
                 delivery.acknowledgeDurableConsumption()
             }
