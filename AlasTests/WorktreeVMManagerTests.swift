@@ -1407,6 +1407,93 @@ final class WorktreeVMManagerTests {
         #expect(await next.value == .declined)
     }
 
+    // MARK: - Disk use
+
+    private func exists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func deletingAGoldenWithClonesIsRefused(_ guest: VMGuestOS) async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try manager.createVM(worktreeID: "/repo/a", guest: guest)
+        let golden = try #require(await manager.listBundles().first { $0.kind == .golden && $0.guest == guest })
+
+        let refusal = #expect(throws: WorktreeVMManager.VMError.self) { try manager.deleteGolden(id: golden.id) }
+        #expect(refusal?.message == "Delete its worktree VMs first")
+        #expect(exists(golden.url))
+
+        #expect(await manager.deleteVM(worktreeID: "/repo/a", guest: guest) == nil)
+        try manager.deleteGolden(id: golden.id)
+        #expect(!exists(golden.url))
+        #expect(await !manager.listBundles().contains { $0.id == golden.id })
+    }
+
+    @Test func orphanCleanupDeletesOnlyOrphans() async throws {
+        // Live: the worktree is on disk, or belongs to a project.
+        let checkout = root.appendingPathComponent("checkout", isDirectory: true)
+        try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        let onDisk = try addRecord(checkout.path)
+        let inProject = try addRecord("linux:/repo/known")
+        // The worktree is gone, but another Alas runs the VM.
+        let runningElsewhere = try addRecord("/repo/gone-elsewhere", owner: elsewhere)
+        // Orphans: the worktree is gone, or no record names the bundle.
+        let gone = try addRecord("/repo/gone")
+        let stray = root.appendingPathComponent("worktrees/stray", isDirectory: true)
+        try FileManager.default.createDirectory(at: stray, withIntermediateDirectories: true)
+        // Leftovers of an interrupted reset and clean point.
+        for bundle in [onDisk, runningElsewhere] {
+            try Data("x".utf8).write(to: bundle.appendingPathComponent("disk.img.resetting"))
+            try FileManager.default.createDirectory(
+                at: bundle.appendingPathComponent("clean.partial"), withIntermediateDirectories: true)
+        }
+        let manager = makeManager()
+        manager.worktreePath = { $0 == "/repo/known" ? URL(fileURLWithPath: "/repo/known") : nil }
+
+        let orphans = await manager.orphanBundles()
+        #expect(Set(orphans.map(\.url.lastPathComponent)) == [gone.lastPathComponent, stray.lastPathComponent])
+
+        #expect(manager.deleteOrphans(orphans) == nil)
+
+        #expect([onDisk, inProject, runningElsewhere].allSatisfy(exists))
+        #expect(![gone, stray].contains(where: exists))
+        #expect(try Set(registry.snapshot().map(\.id)) == [checkout.path, "linux:/repo/known", "/repo/gone-elsewhere"])
+        #expect(!exists(onDisk.appendingPathComponent("disk.img.resetting")))
+        #expect(!exists(onDisk.appendingPathComponent("clean.partial")))
+        #expect(exists(runningElsewhere.appendingPathComponent("disk.img.resetting")))
+        #expect(exists(runningElsewhere.appendingPathComponent("clean.partial")))
+        #expect(await manager.orphanBundles().isEmpty)
+    }
+
+    @Test func removeInstallersKeepsBundles() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        manager.worktreePath = { _ in URL(fileURLWithPath: "/repo/a") }
+        try manager.createVM(worktreeID: "/repo/a")
+        let installers = [root.appendingPathComponent("ipsw/UniversalMac.ipsw"),
+                          root.appendingPathComponent("linux-images/20261016.img")]
+        for file in installers {
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("installer".utf8).write(to: file)
+        }
+        #expect(await manager.installerBytes() > 0)
+
+        // Refused while an install holds its lock, as a download does.
+        let install = try ComputerUseDriverLock.acquire(at: root.appendingPathComponent("install.lock"), label: "test")
+        #expect(throws: WorktreeVMManager.VMError.self) { try manager.removeInstallers() }
+        #expect(installers.allSatisfy(exists))
+        install.release()
+
+        try manager.removeInstallers()
+        #expect(!installers.contains(where: exists))
+        #expect(await manager.installerBytes() == 0)
+        let bundles = await manager.listBundles()
+        #expect(bundles.count == 3)
+        #expect(bundles.allSatisfy { exists($0.url) && $0.allocatedBytes > 0 })
+    }
+
     /// A sealed macOS and Linux golden image, enough for `createVM` to clone.
     private func makeSealedGoldens() throws {
         let macOS = try makeGoldenBundle()

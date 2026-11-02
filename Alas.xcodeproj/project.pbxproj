@@ -230,6 +230,7 @@
 		1E830E480ED505750BFC8881 /* AppKitDiffRowHostingPool.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02207D1F1F421F2E19CD90D0 /* AppKitDiffRowHostingPool.swift */; };
 		1EBF9B83C26B9518AF70D2F3 /* EditorTabStateMarkdownCodableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E98FAFF3AE36A17EE6AD029C /* EditorTabStateMarkdownCodableTests.swift */; };
 		1ECA2C8485DB484C5C687F3D /* OpenCodeInstallerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 292B5DA9EC17ED07588C48FD /* OpenCodeInstallerTests.swift */; };
+		1ECC6CDFC181864BBC5A105F /* VMDiskUsage.swift in Sources */ = {isa = PBXBuildFile; fileRef = F732BEE94B710EA520D33F57 /* VMDiskUsage.swift */; };
 		1ED78A36E993D85D0DD1E3CC /* ACPSessionUsageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF05DF16587C5A48A9E04B2A /* ACPSessionUsageTests.swift */; };
 		1F29EE84D3AAA72F8421FADA /* ACPSessionSummaryPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD1CBDD0A508F1D74F2C8738 /* ACPSessionSummaryPresentation.swift */; };
 		1F3AA3B31A896A0608970906 /* AppConfigHarnessMCPTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B9261D66BAD364C3EEAB4DA /* AppConfigHarnessMCPTests.swift */; };
@@ -1323,6 +1324,7 @@
 		B6C31E7AC3CE21AFEA371389 /* cool-slate.json in Resources */ = {isa = PBXBuildFile; fileRef = 8DEB85132B767DB3B253620C /* cool-slate.json */; };
 		B6F2CB1BF88B4EF50FD9E1F7 /* SystemMenuItems.swift in Sources */ = {isa = PBXBuildFile; fileRef = 150400FC33D86F2828A33E66 /* SystemMenuItems.swift */; };
 		B7067A1BBEB1B1B5B9867BEA /* DiffPreferenceBindings.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F8435ABAF423A6F5BC28E4C /* DiffPreferenceBindings.swift */; };
+		B721EA6F597E6103DDBFF4A0 /* WorktreeVMsPane.swift in Sources */ = {isa = PBXBuildFile; fileRef = 133BF513F25A1A8F623B9B3E /* WorktreeVMsPane.swift */; };
 		B7542C247255B91CEC68004F /* ChatFontCatalog.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2AC43D07BE4012DB52A2D1B /* ChatFontCatalog.swift */; };
 		B77A3994E3D2318363D17F92 /* ACPSymbolSentPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = BAAF0101BB38BF3B793A72D4 /* ACPSymbolSentPreview.swift */; };
 		B78214694674C09800388F25 /* WebPreviewAutomationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BD7C7B5112D091262C7FB9C8 /* WebPreviewAutomationService.swift */; };
@@ -2084,6 +2086,7 @@
 		130951056B8A1BA6D77377CB /* ACPDelegatedOutcomeTextTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPDelegatedOutcomeTextTests.swift; sourceTree = "<group>"; };
 		13209F51688E694C76BD732C /* ACPSymbolReferenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSymbolReferenceTests.swift; sourceTree = "<group>"; };
 		13266EE7FC6EE1D73F363D0E /* RunScriptWritingHelpTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptWritingHelpTests.swift; sourceTree = "<group>"; };
+		133BF513F25A1A8F623B9B3E /* WorktreeVMsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorktreeVMsPane.swift; sourceTree = "<group>"; };
 		134EE8D2BC31085A504D27D8 /* InstallNudgeResolverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallNudgeResolverTests.swift; sourceTree = "<group>"; };
 		1352DFCDFF4769EAF89B75CF /* RightPaneTabTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneTabTests.swift; sourceTree = "<group>"; };
 		137E9C84D7F32E747F0AF4C0 /* GatekeeperAssessorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GatekeeperAssessorTests.swift; sourceTree = "<group>"; };
@@ -3732,6 +3735,7 @@
 		F6B9F8D6636B7CA2AABC04B4 /* Setup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Setup.swift; sourceTree = "<group>"; };
 		F6EDDD4D22267C26B496A6FF /* ACPFirstRunConnectingPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPFirstRunConnectingPolicyTests.swift; sourceTree = "<group>"; };
 		F721FB733081A583D4053DDA /* FileTypeIconView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileTypeIconView.swift; sourceTree = "<group>"; };
+		F732BEE94B710EA520D33F57 /* VMDiskUsage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMDiskUsage.swift; sourceTree = "<group>"; };
 		F748F06725644571785BF658 /* PendingStashDrop.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingStashDrop.swift; sourceTree = "<group>"; };
 		F787781F8DE2077B7B679C07 /* RepoSelectorRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepoSelectorRowView.swift; sourceTree = "<group>"; };
 		F81444DE5CCE4EA5E968828A /* OnDeviceAIPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnDeviceAIPane.swift; sourceTree = "<group>"; };
@@ -4548,6 +4552,7 @@
 				EDD659E65B7BE7A52C105821 /* VMComputerUseRoute.swift */,
 				C344B983ED8AD4748D280ABC /* VMConfigurationFactory.swift */,
 				5C2A2CE2145C46D0A3D9953C /* VMDiskSession.swift */,
+				F732BEE94B710EA520D33F57 /* VMDiskUsage.swift */,
 				F96397A9C2B512C8114AA551 /* VMDisplaySurface.swift */,
 				D9700CD6923ABFB917413DA6 /* VMFirstBootSetup.swift */,
 				6A91AD2A287FDE958C7F6E79 /* VMGuestClient.swift */,
@@ -5302,6 +5307,7 @@
 				FEB2EC20D23F9A4F50B1A6E3 /* TerminalPane.swift */,
 				AACA0D87BA93646BD5A24E91 /* WarningCharactersSheet.swift */,
 				0F68A9692F85197ED9E16262 /* WorktreesPane.swift */,
+				133BF513F25A1A8F623B9B3E /* WorktreeVMsPane.swift */,
 			);
 			path = Settings;
 			sourceTree = "<group>";
@@ -8027,6 +8033,7 @@
 				98706A863E4258672BF39950 /* VMComputerUseRoute.swift in Sources */,
 				AFAB68532EEC0EA7DEB976B6 /* VMConfigurationFactory.swift in Sources */,
 				5624DD4D16B5C0D5A8DA2D7D /* VMDiskSession.swift in Sources */,
+				1ECC6CDFC181864BBC5A105F /* VMDiskUsage.swift in Sources */,
 				1B5B738D2FA0482EFDFB3D28 /* VMDisplaySurface.swift in Sources */,
 				12FE0C703FF59CE4B154F615 /* VMFirstBootSetup.swift in Sources */,
 				0FF4CC89C0E3DB1E0EC28127 /* VMGuestClient.swift in Sources */,
@@ -8072,6 +8079,7 @@
 				3DD8B67CC98CDC509E7B9BD3 /* WorktreeUpstreamStatus.swift in Sources */,
 				943EB1606E8D0035431C785E /* WorktreeUpstreamStatusStore.swift in Sources */,
 				455127CBF640110706DD5441 /* WorktreeVMManager.swift in Sources */,
+				B721EA6F597E6103DDBFF4A0 /* WorktreeVMsPane.swift in Sources */,
 				467BA12331DB76C41313BF70 /* WorktreesPane.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

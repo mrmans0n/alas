@@ -757,17 +757,11 @@ struct VirtualMachineTabView: View {
         }
         let disk = VMBundle(url: URL(fileURLWithPath: path, isDirectory: true)).diskImage
         diskSizeLoad = Task {
-            let bytes = await Task.detached { Self.allocatedBytes(of: disk) }.value
+            let bytes = await Task.detached { VMDiskUsage.allocatedBytes(of: disk) }.value
             // A read that finishes after a newer refresh (a delete, say) is stale.
             guard !Task.isCancelled, record.bundlePath == path else { return }
             diskSize = bytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         }
-    }
-
-    private nonisolated static func allocatedBytes(of file: URL) -> Int64? {
-        var info = stat()
-        guard stat(file.path, &info) == 0 else { return nil }
-        return Int64(info.st_blocks) * 512
     }
 
     private func deleteVM() {

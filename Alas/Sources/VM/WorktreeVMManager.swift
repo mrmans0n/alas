@@ -1470,6 +1470,220 @@ final class WorktreeVMManager {
         root.appendingPathComponent("golden", isDirectory: true).appendingPathComponent(build, isDirectory: true)
     }
 
+    // MARK: - Disk use
+
+    /// Base images and worktree VMs with the disk they use, sizes read off the main actor.
+    /// Orphaned VM bundles are left out; `orphanBundles` lists them.
+    func listBundles() async -> [VMBundleSummary] {
+        await VMBundleSummary.measured(scanBundles().filter { !$0.isOrphan })
+    }
+
+    /// VM bundles under `worktrees/` no live worktree owns: no record names them, or their
+    /// record's worktree is neither on disk nor in a project. One any Alas runs never is.
+    func orphanBundles() async -> [VMBundleSummary] {
+        await VMBundleSummary.measured(scanBundles().filter(\.isOrphan))
+    }
+
+    /// Deletes `orphans` that are still orphaned, with their records, then the leftovers of
+    /// interrupted resets and clean points in VMs no Alas runs. Returns why some were left, if any.
+    @discardableResult
+    func deleteOrphans(_ orphans: [VMBundleSummary]) -> String? {
+        guard vmsExist else { return nil }
+        var reasons: [String] = []
+        // Listed a while ago: a VM started or a worktree came back since is kept.
+        let stillOrphaned = Set(scanBundles().filter(\.isOrphan).map(\.id))
+        for orphan in orphans where stillOrphaned.contains(orphan.id) {
+            if let recordID = orphan.recordID {
+                onVMDeleted(recordID)
+                if let reason = removeRecordAndBundle(recordID) { reasons.append("\(orphan.name): \(reason)") }
+                continue
+            }
+            do {
+                // Under the registry lock, so a create cloning into this folder can't race it.
+                try registry.update { records in
+                    let folder = orphan.url.lastPathComponent
+                    guard !records.contains(where: { URL(fileURLWithPath: $0.bundlePath).lastPathComponent == folder }),
+                          FileManager.default.fileExists(atPath: orphan.url.path)
+                    else { return }
+                    try FileManager.default.removeItem(at: orphan.url)
+                }
+            } catch {
+                reasons.append("\(orphan.name): \(error.localizedDescription)")
+            }
+        }
+        do {
+            try registry.update { records in
+                for record in records where !record.id.hasPrefix(Self.goldenIDPrefix) && record.runOwner == nil
+                    && !isBusyHere(record.id)
+                {
+                    for leftover in VMDiskUsage.leftovers(in: URL(fileURLWithPath: record.bundlePath)) {
+                        try FileManager.default.removeItem(at: leftover)
+                    }
+                }
+            }
+        } catch {
+            reasons.append(error.localizedDescription)
+        }
+        return reasons.isEmpty ? nil : reasons.joined(separator: "; ")
+    }
+
+    /// Deletes base image `id` (a `VMBundleSummary.id`). Refused while VMs cloned from it exist,
+    /// while it runs, and while an install or setup holds its guest's install lock.
+    func deleteGolden(id: String) throws {
+        let guest: VMGuestOS
+        let name: String
+        if id.hasPrefix(Self.goldenIDPrefix) {
+            (guest, name) = (.macOS, String(id.dropFirst(Self.goldenIDPrefix.count)))
+        } else if id.hasPrefix(VMIdentity.linuxGoldenPrefix) {
+            (guest, name) = (.linux, String(id.dropFirst(VMIdentity.linuxGoldenPrefix.count)))
+        } else {
+            throw VMError(message: "Not a base image")
+        }
+        guard !name.isEmpty, !name.contains("/"), name != ".", name != ".." else {
+            throw VMError(message: "Not a base image")
+        }
+        let url = guest == .macOS
+            ? goldenBundleURL(build: name)
+            : root.appendingPathComponent("golden-linux", isDirectory: true).appendingPathComponent(name, isDirectory: true)
+        let lock = try installLock(guest, busy: "The base image is being set up. Try again once that finishes.")
+        defer { lock.release() }
+        // Clones record the macOS build as is, the Linux serial with its prefix.
+        let cloneBuild = guest == .macOS ? name : id
+        let goldenRecord = Self.goldenIDPrefix + name
+        // Under the registry lock `createVM` re-checks the golden under, so no clone starts from
+        // a half-deleted image.
+        try registry.update { records in
+            guard !records.contains(where: { !$0.id.hasPrefix(Self.goldenIDPrefix) && $0.goldenBuild == cloneBuild })
+            else { throw VMError(message: "Delete its worktree VMs first") }
+            if guest == .macOS {
+                if isBusyHere(goldenRecord) || records.contains(where: { $0.id == goldenRecord && $0.runOwner != nil }) {
+                    throw VMError(message: "The base image is running. Shut it down first.")
+                }
+                records.removeAll { $0.id == goldenRecord }
+            }
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    /// The allocated bytes of the downloaded installers under `ipsw/` and `linux-images/`.
+    func installerBytes() async -> Int64 {
+        let directories = installerDirectories
+        return await Task.detached(priority: .utility) {
+            directories.reduce(0) { $0 + VMDiskUsage.allocatedBytes(inTree: $1) }
+        }.value
+    }
+
+    /// Deletes the downloaded installers. Refused while an install holds either install lock,
+    /// which it does from its download through its setup.
+    func removeInstallers() throws {
+        guard vmsExist else { return }
+        let busy = "An install is downloading or setting up. Try again once it finishes."
+        let macOS = try installLock(.macOS, busy: busy)
+        defer { macOS.release() }
+        let linux = try installLock(.linux, busy: busy)
+        defer { linux.release() }
+        for directory in installerDirectories where FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
+    }
+
+    private var installerDirectories: [URL] {
+        ["ipsw", "linux-images"].map { root.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    /// Takes `guest`'s install lock without waiting, as the installers do; `busy` is the
+    /// refusal while an install holds it, in this Alas or another.
+    private func installLock(_ guest: VMGuestOS, busy: String) throws -> ComputerUseDriverLock {
+        let file = guest == .macOS ? "install.lock" : "install-linux.lock"
+        do {
+            return try ComputerUseDriverLock.acquire(at: root.appendingPathComponent(file), label: ownerLabel)
+        } catch {
+            switch error {
+            case .held: throw VMError(message: busy)
+            case .unavailable(let reason): throw VMError(message: reason)
+            }
+        }
+    }
+
+    /// Whether this process runs VM `id`, boots it, pauses it, or works on its disk.
+    private func isBusyHere(_ id: String) -> Bool {
+        runningVMs[id] != nil || starting.contains(id) || pausing.contains(id)
+            || diskClaims.contains(id) || diskOperations.contains(id)
+    }
+
+    /// Every base image and worktree VM bundle on disk, without sizes. Cheap enough for the main
+    /// actor: directory listings and one registry read.
+    private func scanBundles() -> [VMBundleSummary] {
+        guard vmsExist else { return [] }
+        let records = (try? registry.snapshot()) ?? []
+        let me = VMRunOwner.current(label: ownerLabel)
+        func elsewhere(_ owner: VMRunOwner?) -> String? {
+            owner.flatMap { me.map($0.isSameProcess(as:)) == true ? nil : $0.label }
+        }
+        let vmRecords = records.filter { !$0.id.hasPrefix(Self.goldenIDPrefix) }
+        func clones(of goldenBuild: String) -> Int {
+            vmRecords.filter { $0.goldenBuild == goldenBuild }.count
+        }
+        var bundles: [VMBundleSummary] = []
+        for golden in GoldenImageInstaller.goldenBundles(root: root) {
+            let build = golden.url.lastPathComponent
+            let id = Self.goldenIDPrefix + build
+            bundles.append(VMBundleSummary(
+                id: id, kind: .golden, guest: .macOS, name: build, worktreeID: nil, url: golden.url,
+                runningHere: isBusyHere(id), runningElsewhere: elsewhere(records.first { $0.id == id }?.runOwner),
+                isOrphan: false, leftovers: [], clones: clones(of: build)))
+        }
+        for url in Self.subdirectories(of: root.appendingPathComponent("golden-linux", isDirectory: true))
+            where !url.lastPathComponent.hasSuffix(".partial")
+        {
+            bundles.append(VMBundleSummary(
+                id: VMIdentity.linuxGoldenPrefix + url.lastPathComponent, kind: .golden, guest: .linux,
+                name: url.lastPathComponent, worktreeID: nil, url: url, runningHere: false, runningElsewhere: nil,
+                isOrphan: false, leftovers: [], clones: clones(of: VMIdentity.linuxGoldenPrefix + url.lastPathComponent)))
+        }
+        let folderOf = Dictionary(
+            vmRecords.map { ($0.id, URL(fileURLWithPath: $0.bundlePath).lastPathComponent) },
+            uniquingKeysWith: { first, _ in first })
+        let recordIn = Dictionary(folderOf.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let folders = Self.subdirectories(of: root.appendingPathComponent("worktrees", isDirectory: true))
+        let orphaned = Set(VMOrphans.find(
+            bundleNames: folders.map(\.lastPathComponent), records: vmRecords,
+            worktreeExists: { FileManager.default.fileExists(atPath: $0) || worktreePath($0) != nil },
+            bundleName: { worktree, guest in
+                // A record's own bundle path wins over the name a create would give it.
+                folderOf[VMIdentity.recordID(worktree: worktree, guest: guest)]
+                    ?? Self.directoryName(forWorktree: worktree, guest: guest)
+            }))
+        for url in folders {
+            let folder = url.lastPathComponent
+            let record = recordIn[folder].flatMap { id in vmRecords.first { $0.id == id } }
+            let parsed = record.map { VMIdentity.parse(recordID: $0.id) }
+            let busyHere = record.map { isBusyHere($0.id) } ?? false
+            let live = busyHere || record?.runOwner != nil
+            bundles.append(VMBundleSummary(
+                id: "worktrees/" + folder, kind: .worktree,
+                guest: parsed?.guest ?? (folder.hasSuffix("-linux") ? .linux : .macOS), name: folder,
+                worktreeID: parsed?.worktree, url: url, runningHere: busyHere,
+                runningElsewhere: elsewhere(record?.runOwner),
+                isOrphan: orphaned.contains(folder) && !live,
+                leftovers: live || record == nil ? [] : VMDiskUsage.leftovers(in: url)))
+        }
+        return bundles
+    }
+
+    nonisolated private static func subdirectories(of directory: URL) -> [URL] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return names.sorted().compactMap { name in
+            let url = directory.appendingPathComponent(name, isDirectory: true)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue
+            else { return nil }
+            return url
+        }
+    }
+
     // MARK: - Internals
 
     /// `<root>/worktrees/<name>-<hash>[-linux]/`: a readable, filesystem-safe
