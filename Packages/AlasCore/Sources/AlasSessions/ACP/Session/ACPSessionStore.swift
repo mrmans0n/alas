@@ -98,6 +98,10 @@ public final class ACPSessionStore {
             if !columns.contains(where: { ($0["name"] as? String) == "fork_point" }) {
                 try db.exec("ALTER TABLE session_forks ADD COLUMN fork_point TEXT")
             }
+            // NULL: the agent holds all of a native fork's rows, as before.
+            if !columns.contains(where: { ($0["name"] as? String) == "native_remote_history_start" }) {
+                try db.exec("ALTER TABLE session_forks ADD COLUMN native_remote_history_start INTEGER")
+            }
         }
         try recoverFromConcurrentWriters()
         if current == 0 {
@@ -561,8 +565,9 @@ extension ACPSessionStore {
         INSERT INTO session_forks (
           target_session_id, source_session_id, source_agent_id,
           source_boundary_seq, inherited_message_count, phase,
-          mechanism, context_delivery_pending, via, fork_point
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)
+          mechanism, context_delivery_pending, via, fork_point,
+          native_remote_history_start
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(target_session_id) DO UPDATE SET
           source_session_id = excluded.source_session_id,
           source_agent_id = excluded.source_agent_id,
@@ -572,7 +577,8 @@ extension ACPSessionStore {
           mechanism = excluded.mechanism,
           context_delivery_pending = excluded.context_delivery_pending,
           via = excluded.via,
-          fork_point = excluded.fork_point
+          fork_point = excluded.fork_point,
+          native_remote_history_start = excluded.native_remote_history_start
         """, bindings: [
             record.targetSessionID,
             record.sourceSessionID,
@@ -583,7 +589,8 @@ extension ACPSessionStore {
             record.mechanism?.rawValue,
             record.contextDeliveryPending ? 1 : 0,
             record.via?.rawValue,
-            Self.encodeForkPoint(record.forkPoint)
+            Self.encodeForkPoint(record.forkPoint),
+            record.nativeRemoteHistoryStart.map { Int64($0) }
         ])
     }
 
@@ -606,7 +613,8 @@ extension ACPSessionStore {
             mechanism: (row["mechanism"] as? String).flatMap(ACPSessionForkMechanism.init(rawValue:)),
             contextDeliveryPending: ((row["context_delivery_pending"] as? Int64) ?? 0) != 0,
             via: (row["via"] as? String).flatMap(ACPSessionForkVia.init(rawValue:)),
-            forkPoint: (row["fork_point"] as? String).flatMap(Self.decodeForkPoint)
+            forkPoint: (row["fork_point"] as? String).flatMap(Self.decodeForkPoint),
+            nativeRemoteHistoryStart: (row["native_remote_history_start"] as? Int64).map(Int.init)
         )
     }
 

@@ -2145,11 +2145,9 @@ public final class ACPSessionManager: ChangeTracking {
             await awaitBackfill(id: sourceSessionID)
             await flushAllPersistence()
             let storedMessages = try await persistence.loadMessages(sessionId: sourceSessionID)
-            // Rows a transcript-transfer source inherited were never in its
-            // agent's own history.
-            let remoteHistoryStart = source.forkRecord?.mechanism == .transcriptTransfer
-                ? source.forkRecord?.inheritedMessageCount ?? 0
-                : 0
+            // Rows a source imported as a transcript, itself or through the
+            // native forks before it, were never in its agent's own history.
+            let remoteHistoryStart = source.forkRecord?.remoteHistoryStart ?? 0
             let snapshot = try ACPSessionForkSnapshotResolver.resolve(
                 boundary: boundary,
                 liveMessages: source.transcript.messages,
@@ -2233,7 +2231,13 @@ public final class ACPSessionManager: ChangeTracking {
                 mechanism: candidate == .transcript ? .transcriptTransfer : nil,
                 contextDeliveryPending: candidate == .transcript,
                 via: isEphemeral ? .btw : nil,
-                forkPoint: forkPoint
+                forkPoint: forkPoint,
+                // A native fork's agent history starts where its source's
+                // does. The rows before that start are inherited conversation
+                // rows, which the snapshot copies one for one.
+                nativeRemoteHistoryStart: candidate == .transcript || remoteHistoryStart == 0
+                    ? nil
+                    : min(remoteHistoryStart, copiedMessages.count)
             )
 
             try await persistence.createFork(

@@ -42,8 +42,12 @@ public struct ACPSessionForkRecord: Equatable, Sendable {
     public var contextDeliveryPending: Bool
     public var via: ACPSessionForkVia? = nil
     public var forkPoint: ACPSessionForkPoint? = nil
+    /// For a native fork, the first of this session's stored rows its agent's
+    /// history holds: the rows its source had itself imported as a transcript
+    /// come before it. Nil when the agent holds them all.
+    public var nativeRemoteHistoryStart: Int? = nil
 
-    public init(targetSessionID: String, sourceSessionID: String, sourceAgentID: String, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism? = nil, contextDeliveryPending: Bool, via: ACPSessionForkVia? = nil, forkPoint: ACPSessionForkPoint? = nil) {
+    public init(targetSessionID: String, sourceSessionID: String, sourceAgentID: String, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism? = nil, contextDeliveryPending: Bool, via: ACPSessionForkVia? = nil, forkPoint: ACPSessionForkPoint? = nil, nativeRemoteHistoryStart: Int? = nil) {
         self.targetSessionID = targetSessionID
         self.sourceSessionID = sourceSessionID
         self.sourceAgentID = sourceAgentID
@@ -54,6 +58,14 @@ public struct ACPSessionForkRecord: Equatable, Sendable {
         self.contextDeliveryPending = contextDeliveryPending
         self.via = via
         self.forkPoint = forkPoint
+        self.nativeRemoteHistoryStart = nativeRemoteHistoryStart
+    }
+
+    /// The first stored row of this session its agent's own history holds.
+    /// A transcript import's agent starts fresh after the imported rows, even
+    /// when the fork was planned as native.
+    public var remoteHistoryStart: Int {
+        mechanism == .transcriptTransfer ? inheritedMessageCount : nativeRemoteHistoryStart ?? 0
     }
 }
 

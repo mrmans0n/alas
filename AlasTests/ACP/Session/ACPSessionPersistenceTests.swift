@@ -321,8 +321,11 @@ struct ACPSessionPersistenceTests {
         #expect(try await reader.loadComposerDraftRecord(sessionId: target.id)?.draft == draft)
     }
 
-    @Test("replica carries the fork point of a fork whose source is known on both Macs")
-    func replicaCarriesForkPoint() async throws {
+    @Test(
+        "replica carries the fork point of a fork whose source is known on both Macs, and drops one a newer build wrote",
+        arguments: [false, true]
+    )
+    func replicaCarriesForkPoint(fromNewerBuild: Bool) async throws {
         let writer = ACPSessionPersistence(path: temporaryDatabaseURL().path)
         let reader = ACPSessionPersistence(path: temporaryDatabaseURL().path)
         var writerSource = row(id: "writer-source")
@@ -347,15 +350,28 @@ struct ACPSessionPersistenceTests {
             record: .init(
                 targetSessionID: writerFork.id, sourceSessionID: writerSource.id, sourceAgentID: writerSource.agentId,
                 sourceBoundarySequence: 0, inheritedMessageCount: 0, phase: .ready, mechanism: .nativeACP,
-                contextDeliveryPending: false, forkPoint: point
+                contextDeliveryPending: false, forkPoint: point, nativeRemoteHistoryStart: 4
             )
         )
         try await writer.enableReplicaExport(sessionId: writerFork.id, recordId: "fork-record")
         let exported = try #require(try await writer.replicaChanges(sessionId: writerFork.id, limit: 256))
-        let entries = exported.entries.map { RemoteSessionReplicaEntry(kind: $0.kind, key: $0.key, payload: $0.payload, revision: 1) }
+        let entries = exported.entries.map { entry in
+            // A failure reason this build doesn't know.
+            let payload = fromNewerBuild && entry.key == "fork"
+                ? entry.payload.map {
+                    Data(String(decoding: $0, as: UTF8.self)
+                        .replacingOccurrences(of: "sourceChanged", with: "futureReason").utf8)
+                }
+                : entry.payload
+            return RemoteSessionReplicaEntry(kind: entry.kind, key: entry.key, payload: payload, revision: 1)
+        }
         try await reader.stageReplicaPage(sessionId: readerFork.id, recordId: "fork-record", page: .init(cutoffRevision: 1, entries: entries, nextPageToken: nil))
         _ = try await reader.commitReplicaImport(importGuard: .init(sessionId: readerFork.id, expectedLocalFence: nil))
-        #expect(try await reader.loadFork(targetSessionID: readerFork.id)?.forkPoint == point)
+        let fork = try #require(try await reader.loadFork(targetSessionID: readerFork.id))
+        #expect(fork.forkPoint == (fromNewerBuild ? nil : point))
+        #expect(fork.sourceSessionID == readerSource.id)
+        #expect(fork.mechanism == .nativeACP)
+        #expect(fork.nativeRemoteHistoryStart == 4)
     }
 
     @Test("a direct turn in flight on the writer is found at launch on the Mac that takes over")

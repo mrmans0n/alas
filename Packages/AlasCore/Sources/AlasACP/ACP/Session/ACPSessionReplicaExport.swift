@@ -133,8 +133,9 @@ package struct ReplicaFork: Codable {
     package let contextDeliveryPending: Bool
     package let via: String?
     package let forkPoint: ACPSessionForkPoint?
+    package let nativeRemoteHistoryStart: Int?
 
-    public init(source: ReplicaReference, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism?, contextDeliveryPending: Bool, via: String?, forkPoint: ACPSessionForkPoint? = nil) {
+    public init(source: ReplicaReference, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism?, contextDeliveryPending: Bool, via: String?, forkPoint: ACPSessionForkPoint? = nil, nativeRemoteHistoryStart: Int? = nil) {
         self.source = source
         self.sourceBoundarySequence = sourceBoundarySequence
         self.inheritedMessageCount = inheritedMessageCount
@@ -143,6 +144,27 @@ package struct ReplicaFork: Codable {
         self.contextDeliveryPending = contextDeliveryPending
         self.via = via
         self.forkPoint = forkPoint
+        self.nativeRemoteHistoryStart = nativeRemoteHistoryStart
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case source, sourceBoundarySequence, inheritedMessageCount, phase, mechanism, contextDeliveryPending, via
+        case forkPoint, nativeRemoteHistoryStart
+    }
+
+    package init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        source = try c.decode(ReplicaReference.self, forKey: .source)
+        sourceBoundarySequence = try c.decode(Int64.self, forKey: .sourceBoundarySequence)
+        inheritedMessageCount = try c.decode(Int.self, forKey: .inheritedMessageCount)
+        phase = try c.decode(ACPSessionForkCreationPhase.self, forKey: .phase)
+        mechanism = try c.decodeIfPresent(ACPSessionForkMechanism.self, forKey: .mechanism)
+        contextDeliveryPending = try c.decode(Bool.self, forKey: .contextDeliveryPending)
+        via = try c.decodeIfPresent(String.self, forKey: .via)
+        // A fork point a newer build wrote (an outcome or boundary this build
+        // doesn't know) drops; the rest of the fork still imports.
+        forkPoint = try? c.decodeIfPresent(ACPSessionForkPoint.self, forKey: .forkPoint)
+        nativeRemoteHistoryStart = try c.decodeIfPresent(Int.self, forKey: .nativeRemoteHistoryStart)
     }
 }
 
