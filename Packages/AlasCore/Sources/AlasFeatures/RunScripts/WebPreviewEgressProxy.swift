@@ -30,6 +30,8 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         let client: NWConnection
         var upstream: NWConnection?
         var established = false
+        /// Directions whose end was passed on; both done closes the tunnel.
+        var endedDirections = 0
         var head = Data()
         var timeout: DispatchWorkItem?
 
@@ -241,23 +243,26 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     }
 
     /// Copies one direction, reading only once the last chunk was written.
-    /// When either side ends, what it sent is flushed and both close.
+    /// A side's end is passed on once what it sent is flushed; the tunnel
+    /// closes when both directions ended, so the other's last bytes survive.
     private func pump(_ id: ObjectIdentifier, from source: NWConnection, to destination: NWConnection) {
         source.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self, tunnels[id] != nil else { return }
             let ended = isComplete || error != nil
             let next: NWConnection.SendCompletion = .contentProcessed { [weak self] sendError in
-                guard let self, tunnels[id] != nil else { return }
-                if sendError != nil || ended { return close(id) }
-                pump(id, from: source, to: destination)
+                guard let self, let tunnel = tunnels[id] else { return }
+                if sendError != nil { return close(id) }
+                guard ended else { return pump(id, from: source, to: destination) }
+                tunnel.endedDirections += 1
+                if tunnel.endedDirections == 2 { close(id) }
             }
             if let data, !data.isEmpty {
-                destination.send(content: data, contentContext: ended ? .finalMessage : .defaultMessage, isComplete: ended, completion: next)
-            } else if ended {
-                destination.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: next)
-            } else {
-                pump(id, from: source, to: destination)
+                destination.send(content: data, completion: ended ? .idempotent : next)
+            } else if !ended {
+                return pump(id, from: source, to: destination)
             }
+            // Sent separately: a final message carrying data may never complete.
+            if ended { destination.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: next) }
         }
     }
 
