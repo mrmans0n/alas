@@ -254,12 +254,12 @@ struct NativePeerDocumentView: View {
             before: Self.decodedSide(before), after: Self.decodedSide(after), oldPath: oldPath, kind: kind)
     }
 
-    /// Decodes in memory: a host's LFS store is out of reach, so a pointer fails as "LFS", as local's does.
+    /// Decodes in memory: a host's LFS store is out of reach, so a pointer fails as local's does.
     static func decodedSide(_ side: NativePeerWorkspace.ImageSide) -> ImageDiffSide {
         switch side {
         case .data(let data):
             NSImage(data: data).map(GitService.imageSide(forDecodedImage:))
-                ?? .failed(ImageDiffLoadFailure(message: GitService.isLFSPointer(data) ? "LFS" : "decode"))
+                ?? .failed(GitService.isLFSPointer(data) ? .lfsPointer : .undecodable)
         case .missing: .missing
         case .failed(let message): .failed(ImageDiffLoadFailure(message: message))
         }

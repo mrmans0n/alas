@@ -199,7 +199,7 @@ struct ReviewRequestDiffLoaderTests {
             Issue.record("Expected unresolved hosted LFS data to fail.")
             return
         }
-        #expect(failure.message == "LFS")
+        #expect(failure == .lfsPointer)
     }
 
     @Test func hostedProviderFailureDoesNotExposeResponseBodyInImageMessage() async throws {

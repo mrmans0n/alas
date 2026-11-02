@@ -122,7 +122,7 @@ struct ImageDiffPairLoaderTests {
             Issue.record("Expected corrupt working-tree side to fail")
             return
         }
-        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+        #expect(failure == .undecodable)
     }
 
     @Test func corruptCommitImageIsFailedRatherThanMissing() async throws {
@@ -156,7 +156,7 @@ struct ImageDiffPairLoaderTests {
             Issue.record("Expected corrupt commit side to fail")
             return
         }
-        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+        #expect(failure == .undecodable)
     }
 
     @Test func corruptWorkingTreeImageAgainstHeadIsFailedRatherThanMissing() async throws {
@@ -179,7 +179,7 @@ struct ImageDiffPairLoaderTests {
             Issue.record("Expected corrupt working-tree side to fail")
             return
         }
-        #expect(failure == ImageDiffLoadFailure(message: "decode"))
+        #expect(failure == .undecodable)
         #expect(pair.kind == .modified)
     }
 
