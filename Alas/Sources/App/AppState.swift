@@ -7755,6 +7755,12 @@ final class AppState {
         let declined = Set(defaults.stringArray(forKey: "remote.acceleration.declinedHosts") ?? [])
             .union(defaults.stringArray(forKey: "remote.zmx.declinedHosts") ?? [])
         if !allowed.contains(host) {
+            // Never prompt under a test host: `runModal` would block the main
+            // thread for the rest of the run (see `showWarningAlert`).
+            guard !Self.isRunningUnitTests else {
+                Self.logger.error("Suppressed remote acceleration prompt under tests for \(host, privacy: .public)")
+                return
+            }
             guard !declined.contains(host), confirmRemoteAcceleration(host: host) else {
                 if !declined.contains(host) {
                     var updated = declined
