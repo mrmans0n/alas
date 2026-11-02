@@ -45,10 +45,9 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     public static let username = "alas-preview"
     public static let maxResolutions = 4
     private static let headTimeout: DispatchTimeInterval = .seconds(5)
-    /// How long a tunnel whose upstream ended waits for the client to close.
-    private static let lingerTimeout: DispatchTimeInterval = .seconds(15)
-
     private let maxTunnels: Int
+    /// How long a tunnel whose upstream ended waits for the client to close.
+    private let linger: DispatchTimeInterval
     private let resolve: Resolve
     private let localAddresses: @Sendable () -> Set<Data>
     private let onBlocked: OnBlocked
@@ -78,9 +77,10 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     /// an internal queue.
     public init(
         resolve: @escaping Resolve, localAddresses: @escaping @Sendable () -> Set<Data>,
-        maxTunnels: Int = 128, onBlocked: @escaping OnBlocked
+        maxTunnels: Int = 128, linger: DispatchTimeInterval = .seconds(15), onBlocked: @escaping OnBlocked
     ) {
         self.maxTunnels = maxTunnels
+        self.linger = linger
         self.resolve = resolve
         self.localAddresses = localAddresses
         self.onBlocked = onBlocked
@@ -265,7 +265,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     /// Copies one direction, reading only once the last chunk was written.
     /// The client ending closes the tunnel, since WebKit never half-closes.
     /// The upstream ending is passed on once what it sent is flushed, and
-    /// the tunnel then closes when the client does, or after `lingerTimeout`.
+    /// the tunnel then closes when the client does, or after `linger`.
     private func pump(_ id: ObjectIdentifier, from source: NWConnection, to destination: NWConnection) {
         source.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self, tunnels[id] != nil else { return }
@@ -275,9 +275,9 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
                 if sendError != nil { return close(id) }
                 guard ended else { return pump(id, from: source, to: destination) }
                 if source === tunnel.client { return close(id) }
-                let linger = DispatchWorkItem { [weak self] in self?.close(id) }
-                tunnel.timeout = linger
-                queue.asyncAfter(deadline: .now() + Self.lingerTimeout, execute: linger)
+                let expiry = DispatchWorkItem { [weak self] in self?.close(id) }
+                tunnel.timeout = expiry
+                queue.asyncAfter(deadline: .now() + linger, execute: expiry)
             }
             if let data, !data.isEmpty {
                 destination.send(content: data, completion: ended ? .idempotent : next)

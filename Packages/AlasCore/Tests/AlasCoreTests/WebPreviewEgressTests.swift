@@ -227,6 +227,56 @@ struct WebPreviewEgressTests {
         #expect(lookups.withLock { $0.most } == WebPreviewEgressProxy.maxResolutions)
     }
 
+    /// The upstream replies and closes while the client keeps its side open;
+    /// the tunnel still gives its slot back once `linger` passes.
+    @Test func aHalfClosedTunnelGivesItsSlotBack() async throws {
+        let server = socket(AF_INET, SOCK_STREAM, 0)
+        defer { Darwin.close(server) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        try withUnsafeMutablePointer(to: &address) { pointer in
+            try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                try #require(bind(server, $0, length) == 0)
+                try #require(getsockname(server, $0, &length) == 0)
+            }
+        }
+        try #require(listen(server, 1) == 0)
+        Thread.detachNewThread {
+            let connection = accept(server, nil, nil)
+            _ = write(connection, "bye", 3)
+            Darwin.close(connection)
+        }
+        let lan = try Self.lanAddress()
+        let proxy = WebPreviewEgressProxy(resolve: { _ in [lan] }, localAddresses: { [] }, maxTunnels: 1,
+                                          linger: .milliseconds(200), onBlocked: { _, _, _ in })
+        defer { proxy.stop() }
+        let port = try await Int(proxy.start())
+        let held = try await TestClient.connect(host: "127.0.0.1", port: port)
+        held.send(Data("CONNECT host.invalid:\(UInt16(bigEndian: address.sin_port)) HTTP/1.1\r\n\(Self.authorization(proxy))\r\n".utf8))
+        // The upstream's end reached the client, which keeps its side open.
+        try await eventually { held.received.ended }
+        #expect(String(decoding: held.received.bytes, as: UTF8.self).hasSuffix("\r\n\r\nbye"))
+        let refused = try await TestClient.connect(host: "127.0.0.1", port: port)
+        try await eventually { refused.received.ended }
+        #expect(String(decoding: refused.received.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 503 "))
+        // Once the linger expires a connection is admitted: it gets past the
+        // cap to the credential check instead of a 503.
+        let probe = Mutex<TestClient?>(nil)
+        try await eventually {
+            if let answer = probe.withLock({ $0?.received }), answer.ended {
+                if String(decoding: answer.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 407 ") { return true }
+                probe.withLock { $0 = nil }
+            }
+            guard probe.withLock({ $0 }) == nil else { return false }
+            let next = try? await TestClient.connect(host: "127.0.0.1", port: port)
+            next?.send(Data("GET / HTTP/1.1\r\n\r\n".utf8))
+            probe.withLock { $0 = next }
+            return false
+        }
+    }
+
     @Test func connectionsBeyondTheTunnelCapAreRefused() async throws {
         let lookups = Mutex<[CheckedContinuation<[String]?, Never>]>([])
         let proxy = WebPreviewEgressProxy(
