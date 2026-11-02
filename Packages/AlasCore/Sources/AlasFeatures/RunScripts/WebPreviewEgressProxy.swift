@@ -65,6 +65,15 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         var generator = SystemRandomNumberGenerator()
         return (0..<4).map { _ in String(format: "%016llx", generator.next() as UInt64) }.joined()
     }()
+    /// Where the proxy connects for a vetted address and port. Tests stand in
+    /// other endpoints; set it before `start()`.
+    var upstreamEndpoint: (Data, Int) -> NWEndpoint? = { address, port in
+        let host: NWEndpoint.Host? = address.count == 4
+            ? IPv4Address(address).map { .ipv4($0) } : IPv6Address(address).map { .ipv6($0) }
+        guard let host, let port = NWEndpoint.Port(rawValue: UInt16(port)) else { return nil }
+        return .hostPort(host: host, port: port)
+    }
+
     /// `localAddresses` is read for every CONNECT. `onBlocked` is called on
     /// an internal queue.
     public init(
@@ -220,9 +229,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     private func connect(_ id: ObjectIdentifier, to addresses: ArraySlice<Data>, port: Int, rest: Data) {
         guard let tunnel = tunnels[id] else { return }
         guard let address = addresses.first else { return respond(id, "502 Bad Gateway") }
-        let host: NWEndpoint.Host? = address.count == 4
-            ? IPv4Address(address).map { .ipv4($0) } : IPv6Address(address).map { .ipv6($0) }
-        guard let host, let endpointPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
+        guard let endpoint = upstreamEndpoint(address, port) else {
             return connect(id, to: addresses.dropFirst(), port: port, rest: rest)
         }
         let options = NWProtocolTCP.Options()
@@ -230,7 +237,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         let parameters = NWParameters(tls: nil, tcp: options)
         // The vetted address is the destination; no system proxy may stand in.
         parameters.preferNoProxies = true
-        let upstream = NWConnection(host: host, port: endpointPort, using: parameters)
+        let upstream = NWConnection(to: endpoint, using: parameters)
         tunnel.upstream = upstream
         upstream.stateUpdateHandler = { [weak self] state in
             guard let self, let tunnel = tunnels[id], tunnel.upstream === upstream else { return }

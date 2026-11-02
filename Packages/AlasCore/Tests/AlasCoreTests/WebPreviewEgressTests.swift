@@ -3,6 +3,7 @@ import Network
 import Synchronization
 import Testing
 import AlasCore
+@testable import AlasFeatures
 
 struct WebPreviewEgressTests {
     typealias Refusal = WebPreviewEgressPolicy.Refusal
@@ -108,6 +109,63 @@ struct WebPreviewEgressTests {
         #expect(echo.accepted == (echoes ? 1 : 0))
         #expect(loopback.accepted == 0)
         #expect(blocked.withLock { $0.count } == (status == "403" ? 1 : 0))
+    }
+
+    @Test func theProxyFallsBackToTheNextAddressWhenAConnectFails() async throws {
+        let echo = try await EchoServer.start()
+        defer { echo.stop() }
+        let closed = try await EchoServer.start()
+        closed.stop()
+        let proxy = WebPreviewEgressProxy(resolve: { _ in ["192.0.2.1", "192.0.2.2"] }, localAddresses: { [] }, onBlocked: { _, _, _ in })
+        let first = try #require(WebPreviewEgressPolicy.address("192.0.2.1"))
+        proxy.upstreamEndpoint = { address, _ in .hostPort(host: "127.0.0.1", port: .init(integerLiteral: UInt16(address == first ? closed.port : echo.port))) }
+        defer { proxy.stop() }
+        let client = try await TestClient.connect(host: "127.0.0.1", port: Int(proxy.start()))
+        client.send(Data("CONNECT two.invalid:80 HTTP/1.1\r\n\(Self.authorization(proxy))\r\nping".utf8))
+        try await eventually { String(decoding: client.received.bytes, as: UTF8.self).hasSuffix("\r\n\r\nping") }
+        #expect(String(decoding: client.received.bytes, as: UTF8.self).hasPrefix("HTTP/1.1 200 "))
+        #expect(echo.accepted == 1)
+    }
+
+    @Test func theProxyResolvesAtMostItsCapOfNamesAtOnce() async throws {
+        struct Lookups {
+            var waiting: [CheckedContinuation<[String]?, Never>] = []
+            var started = 0
+            var most = 0
+        }
+        let lookups = Mutex(Lookups())
+        let proxy = WebPreviewEgressProxy(
+            resolve: { _ in
+                await withCheckedContinuation { continuation in
+                    lookups.withLock {
+                        $0.waiting.append(continuation)
+                        $0.started += 1
+                        $0.most = max($0.most, $0.waiting.count)
+                    }
+                }
+            },
+            localAddresses: { [] }, onBlocked: { _, _, _ in }
+        )
+        defer { proxy.stop() }
+        let port = try await Int(proxy.start())
+        let names = WebPreviewEgressProxy.maxResolutions + 2
+        var clients: [TestClient] = []
+        for index in 0..<names {
+            let client = try await TestClient.connect(host: "127.0.0.1", port: port)
+            client.send(Data("CONNECT name\(index).invalid:443 HTTP/1.1\r\n\(Self.authorization(proxy))\r\n".utf8))
+            clients.append(client)
+        }
+        // Each finished lookup lets exactly one waiting name start.
+        for started in WebPreviewEgressProxy.maxResolutions...names {
+            try await eventually { lookups.withLock { $0.started == started } }
+            lookups.withLock { $0.waiting.removeFirst() }.resume(returning: nil)
+        }
+        for lookup in lookups.withLock({ $0.waiting }) {
+            lookup.resume(returning: nil)
+        }
+        let all = clients
+        try await eventually { all.allSatisfy { $0.received.ended } }
+        #expect(lookups.withLock { $0.most } == WebPreviewEgressProxy.maxResolutions)
     }
 
     @Test func connectionsBeyondTheTunnelCapAreRefused() async throws {

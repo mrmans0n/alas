@@ -169,6 +169,28 @@ struct WebPreviewBrowserTests {
         #expect(target.accepted == 0)
     }
 
+    @Test func aPageWhoseRulesFailToRecompileIsCleared() async throws {
+        let server = try PreviewFixtureServer()
+        defer { server.listener.cancel() }
+        try await waitUntil("Listener did not bind") { (server.listener.port?.rawValue ?? 0) > 0 }
+        let url = URL(string: "http://127.0.0.1:\(try #require(server.listener.port).rawValue)/")!
+        final class Switch { var failing = false }
+        let compile = Switch()
+        let browser = WebPreviewBrowser(ownerKey: "recompile", remoteHost: "devbox", allowedLoopback: WebPreviewLoopbackPin(url),
+                                        resolveHost: { _ in nil }, compileRules: { pin, addresses in
+            compile.failing ? nil : await WebPreviewLoopbackRules.ruleList(allowing: pin, selfAddresses: addresses)
+        })
+        defer { browser.close() }
+        browser.navigate(url)
+        try await waitUntil("Page load: error=\(String(describing: browser.error))") { browser.webView.url == url && !browser.loading }
+        compile.failing = true
+        NotificationCenter.default.post(name: WebPreviewLocalAddresses.didChange, object: nil)
+        try await waitUntil("Clear: url=\(String(describing: browser.webView.url))") {
+            browser.webView.url?.absoluteString == "about:blank" && !browser.loading
+        }
+        #expect(browser.error?.contains("could not block requests to this Mac") == true)
+    }
+
     @Test func nativeHostLookupRecognizesLocalhost() async throws {
         let addresses = try #require(await WebPreviewHostLookup.resolve("localhost"))
         #expect(!addresses.isEmpty)
