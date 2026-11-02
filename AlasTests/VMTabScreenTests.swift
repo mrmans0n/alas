@@ -124,6 +124,21 @@ struct VMTabScreenTests {
         #expect(VMTabScreen.pausedAge(savedAt: Self.savedAt, now: Self.savedAt + elapsed) == expected)
     }
 
+    static let script = "brew install jq"
+
+    /// "Run the new setup script" shows once the project's script differs from the clean point's.
+    @Test(arguments: [
+        (nil, script, false),
+        (VMCleanPoint(createdAt: savedAt, setupScriptHash: VMCleanPoint.scriptHash(script)), script, false),
+        (VMCleanPoint(createdAt: savedAt, setupScriptHash: VMCleanPoint.scriptHash(script)), "brew install yq", true),
+        (VMCleanPoint(createdAt: savedAt), script, true),
+        (VMCleanPoint(createdAt: savedAt, setupScriptHash: VMCleanPoint.scriptHash(script)), "  \n", false),
+        (VMCleanPoint(createdAt: savedAt), nil, false),
+    ] as [(VMCleanPoint?, String?, Bool)])
+    func aChangedScriptIsOffered(_ cleanPoint: VMCleanPoint?, _ projectScript: String?, _ offered: Bool) {
+        #expect(VMTabScreen.offersNewSetupScript(cleanPoint: cleanPoint, projectScript: projectScript) == offered)
+    }
+
     @Test(arguments: [
         (VMDriver.idle, VMDriverStatus(tone: .running, title: "Running", details: [], action: .takeOver)),
         (.agent(sessionID: "s1", tool: "computer_click", at: Date(timeIntervalSince1970: 100)),

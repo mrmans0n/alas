@@ -117,6 +117,22 @@ extension VMTabScreen {
     }
 }
 
+extension VMTabScreen {
+    /// Whether to offer "Run the new setup script": the project has a script, and it isn't the
+    /// one the clean point was taken after.
+    static func offersNewSetupScript(cleanPoint: VMCleanPoint?, projectScript: String?) -> Bool {
+        guard let cleanPoint, let hash = VMCleanPoint.scriptHash(projectScript) else { return false }
+        return cleanPoint.setupScriptHash != hash
+    }
+
+    /// The setup-failure callout's message; `exitCode` is nil when the script timed out or its
+    /// run failed.
+    static func setupFailureMessage(exitCode: Int32?) -> String {
+        let how = exitCode.map { "exit \($0)" } ?? "it didn't finish"
+        return "The project's setup script failed (\(how)). Its clean point is taken once it succeeds."
+    }
+}
+
 /// What a running VM tab's status bar says about who drives the VM, and its main action.
 struct VMDriverStatus: Equatable {
     enum Action: Equatable {

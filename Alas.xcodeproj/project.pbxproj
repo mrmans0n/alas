@@ -134,6 +134,7 @@
 		127F4CE18436ABCCF9D1B329 /* gruvbox-dark.json in Resources */ = {isa = PBXBuildFile; fileRef = C8B097A4436796742708916C /* gruvbox-dark.json */; };
 		128B611E5324A5621897A267 /* ACPVisibleRowsCache.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0582531788CE9D1D49769F6B /* ACPVisibleRowsCache.swift */; };
 		12FD90326DDF6E8BDF2A67B4 /* ACPComposerCodeFenceKeyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42F1A28F4C52A2FC6B0B4186 /* ACPComposerCodeFenceKeyTests.swift */; };
+		12FE0C703FF59CE4B154F615 /* VMFirstBootSetup.swift in Sources */ = {isa = PBXBuildFile; fileRef = D9700CD6923ABFB917413DA6 /* VMFirstBootSetup.swift */; };
 		133597E7D43CFE746EF4EF2B /* RepoGroupViewLayoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01675626CE431DD5867636BF /* RepoGroupViewLayoutTests.swift */; };
 		1339BE8F736D53991DDD19CD /* FileSearchBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5D68E2007F0370A6C4E7DBC7 /* FileSearchBackend.swift */; };
 		134F7DE151C7728BE1C73F31 /* AppState+PeerConsoles.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4D1566BDB099224888C7FEF3 /* AppState+PeerConsoles.swift */; };
@@ -3499,6 +3500,7 @@
 		D916D25B594AFFFFA63F46E6 /* SemanticTokensFeatureTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SemanticTokensFeatureTests.swift; sourceTree = "<group>"; };
 		D921D1C8A44F1937769CDB60 /* EditorBufferStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorBufferStore.swift; sourceTree = "<group>"; };
 		D93ED8BA7A9EE46B37ED48EC /* RunScriptMetadataTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunScriptMetadataTests.swift; sourceTree = "<group>"; };
+		D9700CD6923ABFB917413DA6 /* VMFirstBootSetup.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMFirstBootSetup.swift; sourceTree = "<group>"; };
 		D97EF761C70A3AF83C00879A /* VisualEffectView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisualEffectView.swift; sourceTree = "<group>"; };
 		D9C7B2268F3CE7A5FEDF8580 /* ProjectMCPServerEditorPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectMCPServerEditorPolicy.swift; sourceTree = "<group>"; };
 		D9CEF76FBF31C0DA4B19B692 /* AppKitDiffScroller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppKitDiffScroller.swift; sourceTree = "<group>"; };
@@ -4547,6 +4549,7 @@
 				C344B983ED8AD4748D280ABC /* VMConfigurationFactory.swift */,
 				5C2A2CE2145C46D0A3D9953C /* VMDiskSession.swift */,
 				F96397A9C2B512C8114AA551 /* VMDisplaySurface.swift */,
+				D9700CD6923ABFB917413DA6 /* VMFirstBootSetup.swift */,
 				6A91AD2A287FDE958C7F6E79 /* VMGuestClient.swift */,
 				DBF265AB1A28E9ED5920F831 /* VMGuestPatcher.swift */,
 				2F0A93B24210931575BE814B /* VMHelperUpdater.swift */,
@@ -8025,6 +8028,7 @@
 				AFAB68532EEC0EA7DEB976B6 /* VMConfigurationFactory.swift in Sources */,
 				5624DD4D16B5C0D5A8DA2D7D /* VMDiskSession.swift in Sources */,
 				1B5B738D2FA0482EFDFB3D28 /* VMDisplaySurface.swift in Sources */,
+				12FE0C703FF59CE4B154F615 /* VMFirstBootSetup.swift in Sources */,
 				0FF4CC89C0E3DB1E0EC28127 /* VMGuestClient.swift in Sources */,
 				AC3988E601103A1001CD5FAD /* VMGuestPatcher.swift in Sources */,
 				1AE53218A37CA5AA053571C6 /* VMHelperUpdater.swift in Sources */,

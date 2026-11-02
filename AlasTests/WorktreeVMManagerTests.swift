@@ -830,6 +830,173 @@ final class WorktreeVMManagerTests {
         #expect(manager.running("/repo/linux", guest: .linux) != nil)
     }
 
+    // MARK: - Clean point and resets
+
+    private func cleanDirectory(_ bundle: URL) -> URL {
+        WorktreeVMManager.cleanDirectory(of: VMBundle(url: bundle))
+    }
+
+    private func contents(_ file: URL) throws -> String {
+        try String(decoding: Data(contentsOf: file), as: UTF8.self)
+    }
+
+    @Test func cleanPointCopiesTheDiskAndStateWhenSupported() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS, setupScriptHash: "abc")
+
+        let clean = cleanDirectory(bundle)
+        #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
+        #expect(try contents(clean.appendingPathComponent("state.vzvmsave")) == "state")
+        #expect(manager.cleanPoint(recordID: "/repo/a")?.setupScriptHash == "abc")
+        #expect(!FileManager.default.fileExists(atPath: bundle.appendingPathComponent("clean.partial").path))
+        // The live VM resumed from the pause's own state, which the start consumed.
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
+        #expect(manager.running("/repo/a") != nil)
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+    }
+
+    /// A macOS VM whose configuration can't save state, and any Linux VM, shut down and cold-boot.
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func cleanPointWithoutSaveRestoreShutsDownCopiesAndBoots(guest: VMGuestOS) async throws {
+        let id = VMIdentity.recordID(worktree: "/repo/a", guest: guest)
+        let bundle = try addRecord(id)
+        if guest == .macOS { hypervisor.supportsSaveRestore = false }
+        let manager = makeManager()
+        var stops: [String] = []
+        manager.onVMStopped = { stops.append($0) }
+        _ = try await manager.startVM(worktreeID: "/repo/a", guest: guest)
+
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: guest)
+
+        let clean = cleanDirectory(bundle)
+        #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
+        #expect(!FileManager.default.fileExists(atPath: clean.appendingPathComponent("state.vzvmsave").path))
+        #expect(manager.cleanPoint(recordID: id) != nil)
+        #expect(stops == [id])
+        #expect(hypervisor.restoredFrom == [nil, nil])
+        #expect(manager.running("/repo/a", guest: guest) != nil)
+    }
+
+    @Test func resetToCleanStopsTheVMAndSwapsTheDisk() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        let disk = VMBundle(url: bundle).diskImage
+        try Data("dirty".utf8).write(to: disk)
+        let clean = cleanDirectory(bundle)
+        let cleanFiles = try FileManager.default.contentsOfDirectory(atPath: clean.path).sorted()
+        // An agent call in flight fails through the stop path, which also ends a take over.
+        var stops: [String] = []
+        manager.onVMStopped = { stops.append($0) }
+
+        try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
+
+        #expect(stops == ["/repo/a"])
+        #expect(try contents(disk) == "disk")
+        // It resumed from the clean point's state, not a cold boot.
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle), stateFile(bundle)])
+        #expect(manager.running("/repo/a") != nil)
+        #expect(try !record("/repo/a").paused)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: clean.path).sorted() == cleanFiles)
+        #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
+    }
+
+    enum ResetRefusal: CaseIterable { case noCleanPoint, runningElsewhere }
+
+    @Test(arguments: ResetRefusal.allCases)
+    func resetToCleanWithoutACleanPointIsRefused(_ refusal: ResetRefusal) async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        if refusal == .runningElsewhere {
+            try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+            try registry.update { $0[0].runOwner = elsewhere }
+        }
+        try Data("dirty".utf8).write(to: VMBundle(url: bundle).diskImage)
+
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
+        }
+
+        #expect(try contents(VMBundle(url: bundle).diskImage) == "dirty")
+        #expect(hypervisor.boots == 0)
+    }
+
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func resetFromScratchReclonesAndKeepsTheRecordGuest(guest: VMGuestOS) async throws {
+        try makeSealedGoldens()
+        let id = VMIdentity.recordID(worktree: "/repo/a", guest: guest)
+        let manager = makeManager()
+        try manager.createVM(worktreeID: "/repo/a", guest: guest)
+        _ = try await manager.startVM(worktreeID: "/repo/a", guest: guest)
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: guest)
+        let disk = VMBundle(url: URL(fileURLWithPath: try record(id).bundlePath)).diskImage
+        try Data("dirty".utf8).write(to: disk)
+
+        try await manager.resetFromScratch(worktreeID: "/repo/a", guest: guest)
+
+        #expect(try record(id).guestOS == guest)
+        #expect(try contents(VMBundle(url: URL(fileURLWithPath: record(id).bundlePath)).diskImage) == "x")
+        #expect(manager.cleanPoint(recordID: id) == nil)
+        #expect(manager.running("/repo/a", guest: guest) == nil)
+    }
+
+    /// The setup steps over a manager, whose script run answers `exitCode`.
+    @MainActor
+    private final class SetupScriptRuns {
+        var exitCode: Int32? = 0
+        var runs: [(script: String, timeout: Int, hadCleanPoint: Bool)] = []
+    }
+
+    private func makeFirstBootSetup(_ manager: WorktreeVMManager, runs: SetupScriptRuns) -> VMFirstBootSetup {
+        VMFirstBootSetup(
+            manager: manager,
+            waitForHelper: { _ in true },
+            runScript: { recordID, script, timeout in
+                runs.runs.append((script, timeout, manager.cleanPoint(recordID: recordID) != nil))
+                return VMGuestRunResult(
+                    exitCode: runs.exitCode, stdout: "", stderr: "", truncated: false, timedOut: runs.exitCode == nil)
+            }
+        )
+    }
+
+    @Test func firstBootRunsTheSetupScriptThenTakesTheCleanPoint() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        let outcome = await makeFirstBootSetup(manager, runs: runs).run(recordID: "/repo/a", script: "brew install jq")
+
+        #expect(outcome == .cleanPointTaken)
+        #expect(runs.runs.map(\.script) == ["brew install jq"])
+        #expect(runs.runs.map(\.timeout) == [600])
+        #expect(runs.runs.map(\.hadCleanPoint) == [false])
+        #expect(manager.cleanPoint(recordID: "/repo/a")?.setupScriptHash == VMCleanPoint.scriptHash("brew install jq"))
+        #expect(manager.running("/repo/a") != nil)
+    }
+
+    @Test(arguments: [Int32(3), nil])
+    func aFailingSetupScriptLeavesNoCleanPoint(exitCode: Int32?) async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        runs.exitCode = exitCode
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        let outcome = await makeFirstBootSetup(manager, runs: runs).run(recordID: "/repo/a", script: "exit 3")
+
+        #expect(outcome == .scriptFailed(exitCode: exitCode))
+        #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
+        #expect(!FileManager.default.fileExists(atPath: cleanDirectory(bundle).path))
+        // Left running, untouched, for "Run again" or "Skip and save clean point".
+        #expect(manager.running("/repo/a") != nil)
+        #expect(hypervisor.boots == 1)
+    }
+
     // MARK: - Auto-start
 
     /// The auto-start's clock: frozen, a sleep only yields, so no deadline passes until `run()`.

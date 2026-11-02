@@ -356,8 +356,12 @@ final class AppState {
     /// The last key or mouse event that reached each VM's screen, by registry id, for the idle
     /// sweep. Written at most once a second per VM.
     @ObservationIgnored var vmLastUserInput: [String: Date] = [:]
-    /// VMs running their project's first-boot setup script, by registry id; they never idle-pause.
-    @ObservationIgnored var vmSetupScriptsRunning: Set<String> = []
+    /// VMs running their project's guest setup script and taking their clean point, by registry
+    /// id; they never idle-pause. Observed so a VM tab shows it.
+    var vmSetupScriptsRunning: Set<String> = []
+    /// VMs whose project setup script failed, by registry id, with its exit code: nil when it
+    /// timed out or its run failed. Cleared once the clean point is taken.
+    var vmSetupFailures: [String: Int32?] = [:]
     /// Pauses idle macOS VMs every `vmIdleSweepInterval`.
     @ObservationIgnored private(set) lazy var vmIdleSweeper = VMIdleSweeper(
         manager: vmManager,
@@ -1903,7 +1907,12 @@ final class AppState {
             self?.projectAndWorktree(withWorktreeId: worktreeID)?.worktree.path
         }
         vmManager.onVMStopped = { [weak self] recordID in self?.vmStopped(recordID: recordID) }
-        vmManager.onVMDeleted = { [weak self] recordID in self?.vmAutoStarter.dismiss(recordID: recordID) }
+        vmManager.onVMDeleted = { [weak self] recordID in
+            self?.vmAutoStarter.dismiss(recordID: recordID)
+            // A VM created again is new: its next boot runs the setup script again.
+            self?.vmSetupFailures.removeValue(forKey: recordID)
+        }
+        vmManager.onVMStarted = { [weak self] recordID in self?.vmStarted(recordID: recordID) }
         vmManager.now = { [weak self] in self?.vmNow() ?? Date() }
         vmIdleSweeper.start(interval: vmIdleSweepInterval)
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
