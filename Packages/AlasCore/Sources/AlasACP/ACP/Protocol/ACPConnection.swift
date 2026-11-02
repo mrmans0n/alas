@@ -73,6 +73,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
     public let systemPromptAppendMaxBytes: Int?
     /// The client-neutral session index, when the agent advertised it.
     public let sessionIndex: ACPSessionIndexSupport?
+    /// Where the adapter can cut a fork, when it advertised `_meta.forkPoint`.
+    public let forkPoint: ACPForkPointCapability?
     /// The adapter's self-reported name/version, when it sent `agentInfo`.
     public let agentInfo: ACPImplementationInfo?
 
@@ -93,7 +95,8 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         settlesAtResult: Bool = false,
         supportsSystemPromptAppend: Bool = false,
         systemPromptAppendMaxBytes: Int? = nil,
-        sessionIndex: ACPSessionIndexSupport? = nil
+        sessionIndex: ACPSessionIndexSupport? = nil,
+        forkPoint: ACPForkPointCapability? = nil
     ) {
         self.promptCapabilities = promptCapabilities
         self.authMethods = authMethods
@@ -112,6 +115,7 @@ public struct ACPInitializeOutcome: Equatable, Sendable {
         self.supportsSystemPromptAppend = supportsSystemPromptAppend
         self.systemPromptAppendMaxBytes = systemPromptAppendMaxBytes
         self.sessionIndex = sessionIndex
+        self.forkPoint = forkPoint
     }
 }
 
@@ -338,7 +342,8 @@ public final class ACPConnection: @unchecked Sendable {
             asyncTasks: true,
             contextUsage: true,
             settleAtResult: true,
-            codexHooks: codexHooksReviewEnabled ? .init() : nil
+            codexHooks: codexHooksReviewEnabled ? .init() : nil,
+            forkPoint: .init()
         )
         let req = ACPRequest(method: "initialize",
                              params: ACPInitializeParams(
@@ -386,7 +391,8 @@ public final class ACPConnection: @unchecked Sendable {
             settlesAtResult: result.supportsSettleAtResult,
             supportsSystemPromptAppend: result.supportsSystemPromptAppend,
             systemPromptAppendMaxBytes: result.systemPromptAppendMaxBytes,
-            sessionIndex: result.meta?.sessionIndex?.support
+            sessionIndex: result.meta?.sessionIndex?.support,
+            forkPoint: result.meta?.forkPoint?.capability
         )
     }
 
@@ -513,12 +519,15 @@ public final class ACPConnection: @unchecked Sendable {
         cwd: String,
         sessionId: String,
         mcpServers: [ACPMCPServer],
+        forkPoint: ACPForkPointTarget? = nil,
         brokerOperationKey: String? = nil
     ) async throws -> ACPSessionNewResult {
         return try await withCodexHooksReview() {
+            var meta = requestMeta(mcpServers: mcpServers) ?? ACPSessionMeta()
+            meta.forkPoint = forkPoint
             let req = ACPRequest(
                 method: "session/fork",
-                params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: requestMeta(mcpServers: mcpServers)),
+                params: ACPSessionForkParams(cwd: cwd, sessionId: sessionId, mcpServers: mcpServers, meta: meta == ACPSessionMeta() ? nil : meta),
                 brokerOperationKey: brokerOperationKey
             )
             let resp = try await client.send(req)

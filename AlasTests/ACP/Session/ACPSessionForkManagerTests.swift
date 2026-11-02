@@ -242,6 +242,129 @@ struct ACPSessionForkManagerTests {
         #expect(restored.transcript.messages.count == 2)
     }
 
+    @Test(
+        "createFork forks natively at an earlier agent message only when the agent can cut there",
+        arguments: [
+            ("advertised, completed agent message", Optional(ACPForkPointBoundary.message), 1, true),
+            ("not advertised", nil, 1, false),
+            ("advertised, user message", .message, 2, false),
+        ] as [(String, ACPForkPointBoundary?, Int, Bool)]
+    )
+    func createForkChoosesHistoricalMechanism(
+        label: String, advertised: ACPForkPointBoundary?, boundaryIndex: Int, native: Bool
+    ) async throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        let source = manager.createSession(agentId: "claude")
+        source.remoteSessionId = "source-remote"
+        source.sessionCapabilities = .init(fork: .init())
+        source.forkPoint = advertised.map(ACPForkPointCapability.init(boundary:))
+        await manager.flushPersistence()
+        let messages: [ACPMessage] = [
+            .user(id: UUID(), text: "one", attachments: []),
+            .agent(id: UUID(), messageId: "a1", StreamingText("two")),
+            .user(id: UUID(), text: "three", attachments: []),
+            .agent(id: UUID(), messageId: "a2", StreamingText("four")),
+        ]
+        for (index, message) in messages.enumerated() {
+            source.transcript.appendMessage(message)
+            try store.appendMessage(
+                sessionId: source.id, id: "msg-\(source.id)-\(index)", kind: message.kind, seq: Int64(index),
+                payload: try ACPMessageCodec.encode(message), createdAt: Int64(index)
+            )
+        }
+        let boundary = messages[boundaryIndex]
+
+        let target = try await manager.createFork(
+            sourceSessionID: source.id,
+            boundary: .init(stableID: boundary.stableId, kind: try #require(boundary.forkBoundaryKind)),
+            targetAgentID: "claude",
+            autoRunDefault: false
+        )
+
+        let fork = try #require(try store.loadFork(targetSessionID: target.id))
+        #expect(fork.phase == (native ? .negotiatingNative : .ready))
+        #expect(fork.mechanism == (native ? nil : .transcriptTransfer))
+        #expect(fork.contextDeliveryPending == !native)
+        #expect(fork.forkPoint == (native ? ACPSessionForkPoint(
+            target: .init(messageId: "a1", messageFingerprint: ACPForkPointTarget.fingerprint("two"), messageOccurrence: 1),
+            boundary: .message
+        ) : nil))
+        #expect(target.forkRecord == fork)
+        let copiedAgentIDs = try store.loadMessages(sessionId: target.id).compactMap { row -> String?? in
+            guard case let .agent(messageId, _, _, _) = try ACPMessageWire.decode(kind: row.kind, payload: row.payload)
+            else { return nil }
+            return .some(messageId)
+        }
+        #expect(copiedAgentIDs == [native ? "a1" : nil])
+    }
+
+    @Test("a targeted fork of a native fork of an import counts occurrences from the agent's own history")
+    func remoteHistoryStartCarriesThroughNativeForks() async throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/tmp/wt", store: store)
+        func append(_ messages: [ACPMessage], to session: ACPSession) throws {
+            for message in messages {
+                let index = session.transcript.messages.count
+                session.transcript.appendMessage(message)
+                try store.appendMessage(
+                    sessionId: session.id, id: "msg-\(session.id)-\(index)", kind: message.kind, seq: Int64(index),
+                    payload: try ACPMessageCodec.encode(message), createdAt: Int64(index)
+                )
+            }
+        }
+        func forkAtRow(_ index: Int, of source: ACPSession) async throws -> ACPSession {
+            let boundary = source.transcript.messages[index]
+            return try await manager.createFork(
+                sourceSessionID: source.id,
+                boundary: .init(stableID: boundary.stableId, kind: try #require(boundary.forkBoundaryKind)),
+                targetAgentID: "codex",
+                autoRunDefault: false
+            )
+        }
+        let root = manager.createSession(agentId: "claude")
+        await manager.flushPersistence()
+        try append([
+            .user(id: UUID(), text: "q1", attachments: []),
+            .agent(id: UUID(), messageId: "r1", StreamingText("Same")),
+            .user(id: UUID(), text: "q2", attachments: []),
+            .agent(id: UUID(), messageId: "r2", StreamingText("Other")),
+        ], to: root)
+
+        // A imports the root's four rows, then talks to its own agent.
+        let imported = try await forkAtRow(3, of: root)
+        #expect(imported.forkRecord?.mechanism == .transcriptTransfer)
+        try store.clearForkContextDeliveryPending(targetSessionID: imported.id)
+        imported.forkRecord?.contextDeliveryPending = false
+        imported.remoteSessionId = "imported-remote"
+        imported.sessionCapabilities = .init(fork: .init())
+        try append([
+            .user(id: UUID(), text: "q3", attachments: []),
+            .agent(id: UUID(), messageId: "a-own", StreamingText("Same")),
+            .user(id: UUID(), text: "q4", attachments: []),
+            .agent(id: UUID(), messageId: "a-tail", StreamingText("Tail")),
+        ], to: imported)
+
+        // B forks A natively at its head, so B's agent history also starts
+        // after the four imported rows.
+        let native = try await forkAtRow(7, of: imported)
+        #expect(native.forkRecord?.phase == .negotiatingNative)
+        try store.finalizeFork(targetSessionID: native.id, mechanism: .nativeACP, remoteSessionID: "native-remote")
+        native.forkRecord?.phase = .ready
+        native.forkRecord?.mechanism = .nativeACP
+        native.remoteSessionId = "native-remote"
+        native.sessionCapabilities = .init(fork: .init())
+        native.forkPoint = .init(boundary: .message)
+
+        let targeted = try await forkAtRow(5, of: native)
+
+        // The imported "Same" is not in the agent's history: the targeted
+        // message is the first "Same" the agent holds.
+        #expect(targeted.forkRecord?.forkPoint?.target == ACPForkPointTarget(
+            messageId: "a-own", messageFingerprint: ACPForkPointTarget.fingerprint("Same"), messageOccurrence: 1
+        ))
+    }
+
     @Test("pending transcript context prevents a native child fork")
     func pendingTranscriptContextForcesTranscriptTransfer() async throws {
         let store = try ACPSessionStore(path: temporaryPath())
@@ -538,7 +661,7 @@ struct ACPSessionForkManagerTests {
         #expect(!session.canForkMessage(at: 3))
     }
 
-    @Test("createFork seeds the target's suggestions, instructions, and hooks only from a same-agent source")
+    @Test("createFork seeds the target's suggestions, instructions, and hooks only from a same-agent source, targeted forks included")
     func forkSuggestionSeeding() async throws {
         // Needs a live attach to seed the source's list; drive it through the
         // runner's own persist path instead of poking store state directly —
@@ -566,9 +689,16 @@ struct ACPSessionForkManagerTests {
         try store.setPromptSuggestions(sessionId: source.id, suggestions: suggestions)
         source.promptSuggestions = suggestions
 
+        // An earlier agent message the agent can cut at: the same-agent fork
+        // is a targeted native one and must still carry the source's setup.
+        source.remoteSessionId = "source-remote"
+        source.sessionCapabilities = .init(fork: .init())
+        source.forkPoint = .init(boundary: .message)
         let user: ACPMessage = .user(id: UUID(), text: "one", attachments: [])
-        let agent: ACPMessage = .agent(id: UUID(), StreamingText("two"))
-        for message in [user, agent] {
+        let agent: ACPMessage = .agent(id: UUID(), messageId: "a1", StreamingText("two"))
+        let laterUser: ACPMessage = .user(id: UUID(), text: "three", attachments: [])
+        let laterAgent: ACPMessage = .agent(id: UUID(), messageId: "a2", StreamingText("four"))
+        for message in [user, agent, laterUser, laterAgent] {
             let index = source.transcript.messages.count
             source.transcript.appendMessage(message)
             try store.appendMessage(
@@ -594,6 +724,8 @@ struct ACPSessionForkManagerTests {
             autoRunDefault: false
         )
 
+        #expect(sameAgent.forkRecord?.forkPoint?.target.messageId == "a1")
+        #expect(crossAgent.forkRecord?.forkPoint == nil)
         #expect(sameAgent.promptSuggestions == suggestions)
         #expect(crossAgent.promptSuggestions.isEmpty)
 

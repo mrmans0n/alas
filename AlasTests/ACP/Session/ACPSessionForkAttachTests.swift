@@ -318,9 +318,10 @@ struct ACPSessionForkAttachTests {
         #expect(target.forkRecord?.mechanism == .transcriptTransfer)
     }
 
-    @Test("negotiating native fork recovers the durable response after relaunch")
-    func negotiatingNativeForkRecoversAfterRelaunch() async throws {
-        let storeA = try seededForkStore()
+    @Test("negotiating native fork recovers the durable response after relaunch", arguments: [false, true])
+    func negotiatingNativeForkRecoversAfterRelaunch(targeted: Bool) async throws {
+        let point = targeted ? Self.targetedForkPoint(.message) : nil
+        let storeA = try seededForkStore(forkPoint: point)
         do {
             let managerA = ACPSessionManager(
                 worktreeId: "wt",
@@ -334,7 +335,7 @@ struct ACPSessionForkAttachTests {
         }
 
         let storeB = try ACPSessionStore(path: storeA.path)
-        let broker = ForkRelaunchBrokerService(forkResponseAvailable: true)
+        let broker = ForkRelaunchBrokerService(forkResponseAvailable: true, forkPoint: targeted)
         let managerB = ACPSessionManager(
             worktreeId: "wt",
             worktreePath: "/tmp/wt",
@@ -356,6 +357,11 @@ struct ACPSessionForkAttachTests {
             == ACPBrokerOperationKey(
                 rawValue: "startup:target:session/fork:source-remote"
             ))
+        // The replayed send must carry the target the first launch saved.
+        let forkParams = try #require(sent.first { $0.method == "session/fork" }?.params)
+        let sentTarget = try JSONDecoder().decode(ACPSessionForkParams.self, from: forkParams.data).meta?.forkPoint
+        #expect(sentTarget == point?.target)
+        #expect(restored.forkRecord?.forkPoint?.outcome == (targeted ? ACPSessionForkPoint.Outcome.matched(Self.claudeEcho) : nil))
 
         await managerB.detach(sessionId: restored.id)
         managerB.shutdownBackgroundTasks()
@@ -564,6 +570,165 @@ struct ACPSessionForkAttachTests {
         #expect(fork.contextDeliveryPending == true)
     }
 
+    @Test(
+        "a targeted fork cuts at the saved message and records the agent's echo",
+        arguments: [
+            // Claude answers with a bare id that is resumed; the echo comes
+            // from the fork answer.
+            ("claude", ACPForkPointBoundary.message, true),
+            ("codex", .turn, false),
+        ]
+    )
+    func targetedForkRecordsMatchedBoundary(
+        agentId: String, boundary: ACPForkPointBoundary, resumes: Bool
+    ) async throws {
+        let point = Self.targetedForkPoint(boundary)
+        let echo = boundary == .message ? Self.claudeEcho : Self.codexEcho
+        // The source's head (a2) is past the boundary (a1): a targeted fork
+        // doesn't need the boundary to be the head.
+        let store = try seededForkStore(agentId: agentId, forkPoint: point)
+        let client = durableMockClient()
+        scriptInitialize(client, supportsFork: true, supportsResume: resumes, forkPoint: boundary.rawValue)
+        scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote", echo: echo)
+        scriptSessionResult(client, method: "session/resume", sessionId: "forked-remote")
+        let manager = try await makeManagerWithAttachedSource(store: store, targetClient: client)
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        let forks = client.sent.filter { $0.method == "session/fork" }
+        #expect(forks.count == 1)
+        #expect((forks.first?.params as? ACPSessionForkParams)?.meta?.forkPoint == point.target)
+        #expect(client.sent.contains { $0.method == "session/resume" } == resumes)
+        #expect(target.remoteSessionId == "forked-remote")
+        let saved = try #require(try store.loadFork(targetSessionID: "target"))
+        #expect(saved.mechanism == .nativeACP)
+        #expect(saved.contextDeliveryPending == false)
+        #expect(saved.forkPoint == ACPSessionForkPoint(target: point.target, boundary: boundary, outcome: .matched(echo)))
+        #expect(target.forkRecord == saved)
+    }
+
+    @Test(
+        "a targeted fork the agent can't cut, or cuts elsewhere, is imported as a transcript with the reason",
+        arguments: [
+            ACPForkPointFailure.notFound, .malformed, .missingEcho, .mismatchedEcho, .unsupported, .sourceChanged,
+            .unavailable,
+        ]
+    )
+    func targetedForkFailuresImportVisibly(reason: ACPForkPointFailure) async throws {
+        let store = try seededForkStore(forkPoint: Self.targetedForkPoint(.message))
+        if reason == .sourceChanged {
+            try store.db.exec(
+                "UPDATE messages SET payload = ? WHERE session_id = 'source' AND seq = 1",
+                bindings: [try ACPMessageCodec.encode(.agent(id: UUID(), messageId: "a1", StreamingText("Edited answer")))]
+            )
+        }
+        // A connection without durable fork dedupe can't attempt a native
+        // fork at all.
+        let client = reason == .unavailable ? ACPMockClient() : durableMockClient()
+        scriptInitialize(
+            client, supportsFork: true, supportsClose: true,
+            forkPoint: reason == .unsupported ? nil : "message"
+        )
+        switch reason {
+        case .notFound, .malformed:
+            client.script(method: "session/fork") { _ in
+                throw ACPClientError.jsonrpc(.init(
+                    code: -32602,
+                    message: "Invalid params",
+                    data: AnyCodable(["forkPoint": reason == .notFound ? ["reason": "notFound"] : ["field": "messageId"]])
+                ))
+            }
+        case .missingEcho:
+            scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote")
+        default:
+            // The text matched an equal message after the target.
+            scriptSessionResult(
+                client, method: "session/fork", sessionId: "forked-remote",
+                echo: .init(boundary: .message, messageId: "a2", matchedBy: .fingerprint)
+            )
+        }
+        client.script(method: "session/close") { _ in Data("{}".utf8) }
+        scriptSessionResult(client, method: "session/new", sessionId: "new-remote")
+        let manager = try await makeManagerWithAttachedSource(store: store, targetClient: client)
+        let target = try await hydratedTarget(manager)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        let methods = client.sent.map(\.method)
+        let sendsFork = ![.unsupported, .sourceChanged, .unavailable].contains(reason)
+        let discardsFork = reason == .missingEcho || reason == .mismatchedEcho
+        #expect(methods.filter { $0 == "session/fork" }.count == (sendsFork ? 1 : 0))
+        #expect(client.sent.compactMap { ($0.params as? ACPSessionCloseParams)?.sessionId }
+            == (discardsFork ? ["forked-remote"] : []))
+        #expect(methods.last == "session/new")
+        #expect(target.remoteSessionId == "new-remote")
+        let saved = try #require(try store.loadFork(targetSessionID: "target"))
+        #expect(saved.phase == .ready)
+        #expect(saved.mechanism == .transcriptTransfer)
+        #expect(saved.contextDeliveryPending)
+        #expect(saved.forkPoint?.outcome == .unmatched(reason))
+        #expect(target.forkRecord == saved)
+    }
+
+    @Test("a restored targeted fork reattaches without replaying its inherited history")
+    func restoredTargetedForkReattaches() async throws {
+        let store = try seededForkStore(forkPoint: Self.targetedForkPoint(.message))
+        do {
+            let client = durableMockClient()
+            scriptInitialize(client, supportsFork: true, forkPoint: "message")
+            scriptSessionResult(client, method: "session/fork", sessionId: "forked-remote", echo: Self.claudeEcho)
+            let manager = try await makeManagerWithAttachedSource(store: store, targetClient: client)
+            let target = try await hydratedTarget(manager)
+            await manager.attach(to: target.id, freshlyCreated: true)
+            #expect(target.forkRecord?.mechanism == .nativeACP)
+            await manager.detach(sessionId: target.id)
+            await manager.detach(sessionId: "source")
+            manager.shutdownBackgroundTasks()
+            await manager.releaseAllOwnedLeases()
+        }
+        let saved = try #require(try store.loadFork(targetSessionID: "target"))
+        let inheritedRows = try store.messageCount(sessionId: "target")
+
+        let restoredStore = try ACPSessionStore(path: store.path)
+        let client = ACPMockClient()
+        scriptInitialize(client, supportsFork: true, loadSession: true, forkPoint: "message")
+        client.scriptAsync(method: "session/load") { _ in
+            client.emit(.init(
+                sessionId: "forked-remote",
+                update: .agentMessageChunk(.init(messageId: "a1", content: .text(Self.targetedAnswer)))
+            ))
+            return try JSONEncoder().encode(ACPSessionNewResult(
+                sessionId: "forked-remote", availableModels: [], availableModes: [],
+                currentModel: nil, currentMode: nil, promptSuggestions: []
+            ))
+        }
+        let manager = makeManager(store: restoredStore, client: client)
+        let restored = try await hydratedTarget(manager)
+
+        await manager.attach(to: restored.id, freshlyCreated: false)
+        // Updates apply in order: once this live one lands, the replayed one
+        // has been handled.
+        client.emit(.init(
+            sessionId: "forked-remote",
+            update: .agentMessageChunk(.init(messageId: "a3", content: .text("Live answer")))
+        ))
+        try await waitUntil {
+            if case .agent(_, _, let text) = restored.transcript.messages.last { text.value == "Live answer" } else { false }
+        }
+
+        #expect(client.sent.map(\.method).contains("session/load"))
+        #expect(restored.transcript.messages.count == inheritedRows + 1)
+        guard case .agent(_, "a1", let inheritedAnswer) = restored.transcript.messages[inheritedRows - 1] else {
+            Issue.record("Expected the inherited answer before the live one")
+            return
+        }
+        #expect(inheritedAnswer.value == Self.targetedAnswer)
+        #expect(restored.forkRecord == saved)
+        #expect(try restoredStore.loadFork(targetSessionID: "target") == saved)
+        await manager.detach(sessionId: restored.id)
+    }
+
     @Test("setup failure durably downgrades a negotiating fork before surfacing the error")
     func setupFailureDowngradesNegotiatingFork() async throws {
         let store = try seededForkStore()
@@ -748,10 +913,10 @@ struct ACPSessionForkAttachTests {
         #expect(fork.mechanism == .transcriptTransfer)
     }
 
-    @Test("broker replay failure keeps negotiation and reuses the durable fork key")
-    func brokerReplayFailureRetriesStableForkOperation() async throws {
-        let store = try seededForkStore()
-        let broker = ForkReplayBrokerService()
+    @Test("broker replay failure keeps negotiation and reuses the durable fork key", arguments: [false, true])
+    func brokerReplayFailureRetriesStableForkOperation(targeted: Bool) async throws {
+        let store = try seededForkStore(forkPoint: targeted ? Self.targetedForkPoint(.message) : nil)
+        let broker = ForkReplayBrokerService(forkPoint: targeted)
         let manager = try await makeManagerWithAttachedBrokerSource(
             store: store,
             targetService: broker
@@ -778,6 +943,11 @@ struct ACPSessionForkAttachTests {
         #expect(target.forkRecord?.mechanism == .nativeACP)
         #expect(target.remoteSessionId == "forked-remote")
         #expect(await broker.acknowledgedCursors == [ACPBrokerEventCursor(rawValue: 2)])
+        // The broker rejects a durable key reused with a different payload.
+        let forkParams = await broker.sentForkParams
+        #expect(forkParams.count == 2)
+        #expect(forkParams.first == forkParams.last)
+        #expect(target.forkRecord?.forkPoint?.outcome == (targeted ? ACPSessionForkPoint.Outcome.matched(Self.claudeEcho) : nil))
     }
 
     @Test("repeated startup replay failure preserves a completed native fork for retry")
@@ -904,9 +1074,12 @@ struct ACPSessionForkAttachTests {
         ACPMockClient(providesDurableOperationKeyDeduplication: true)
     }
 
+    /// A fork of a one-row source at its head, or, with `forkPoint`, a fork
+    /// of `[u, a1, u2, a2]` cut at `a1`.
     private func seededForkStore(
         sourceRemoteSessionID: String = "source-remote",
-        agentId: String = "claude"
+        agentId: String = "claude",
+        forkPoint: ACPSessionForkPoint? = nil
     ) throws -> ACPSessionStore {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
@@ -914,34 +1087,65 @@ struct ACPSessionForkAttachTests {
             remoteSessionID: sourceRemoteSessionID,
             agentId: agentId
         ))
-        try store.appendMessage(
-            sessionId: "source",
-            id: "msg-source-0",
-            kind: "user",
-            seq: 0,
-            payload: try ACPMessageCodec.encode(.user(
-                id: UUID(),
-                text: "Source prompt",
-                attachments: []
-            )),
-            createdAt: 0
-        )
+        let sourceMessages: [ACPMessage] = forkPoint == nil
+            ? [.user(id: UUID(), text: "Source prompt", attachments: [])]
+            : [
+                .user(id: UUID(), text: "Source prompt", attachments: []),
+                .agent(id: UUID(), messageId: "a1", StreamingText(Self.targetedAnswer)),
+                .user(id: UUID(), text: "Later prompt", attachments: []),
+                .agent(id: UUID(), messageId: "a2", StreamingText("Later answer")),
+            ]
+        for (index, message) in sourceMessages.enumerated() {
+            try store.appendMessage(
+                sessionId: "source",
+                id: "msg-source-\(index)",
+                kind: message.kind,
+                seq: Int64(index),
+                payload: try ACPMessageCodec.encode(message),
+                createdAt: Int64(index)
+            )
+        }
+        let inherited = forkPoint == nil ? [] : try ACPSessionForkSnapshot(
+            sourceBoundarySequence: 1,
+            messages: [
+                .init(role: .user, text: "Source prompt"),
+                .init(role: .agent, text: Self.targetedAnswer, messageId: "a1"),
+            ]
+        ).copiedMessages(targetSessionID: "target", createdAt: 0, keepsProviderMessageIDs: true)
         try store.createFork(
             session: row(id: "target", remoteSessionID: nil, agentId: agentId),
-            messages: [],
+            messages: inherited,
             record: .init(
                 targetSessionID: "target",
                 sourceSessionID: "source",
                 sourceAgentID: agentId,
-                sourceBoundarySequence: 0,
-                inheritedMessageCount: 0,
+                sourceBoundarySequence: forkPoint == nil ? 0 : 1,
+                inheritedMessageCount: inherited.count,
                 phase: .negotiatingNative,
                 mechanism: nil,
-                contextDeliveryPending: false
+                contextDeliveryPending: false,
+                forkPoint: forkPoint
             )
         )
         return store
     }
+
+    private static let targetedAnswer = "Source answer"
+
+    private static let forkTarget = ACPForkPointTarget(
+        messageId: "a1",
+        messageFingerprint: ACPForkPointTarget.fingerprint(targetedAnswer),
+        messageOccurrence: 1
+    )
+
+    private static func targetedForkPoint(_ boundary: ACPForkPointBoundary) -> ACPSessionForkPoint {
+        .init(target: forkTarget, boundary: boundary)
+    }
+
+    private static let claudeEcho = ACPForkPointEcho(boundary: .message, messageId: "a1", matchedBy: .id)
+    private static let codexEcho = ACPForkPointEcho(
+        boundary: .turn, messageId: "a1", turnId: "turn-1", lastItemId: "a1", matchedBy: .id
+    )
 
     private func row(id: String, remoteSessionID: String?, agentId: String = "claude") -> ACPSessionRow {
         ACPSessionRow(
@@ -1044,12 +1248,15 @@ struct ACPSessionForkAttachTests {
         supportsFork: Bool,
         supportsResume: Bool = false,
         supportsClose: Bool = false,
-        authMethods: [ACPInitializeResult.ACPAuthMethod] = []
+        loadSession: Bool = false,
+        authMethods: [ACPInitializeResult.ACPAuthMethod] = [],
+        forkPoint: String? = nil
     ) {
         client.script(method: "initialize") { _ in
-            try JSONEncoder().encode(ACPInitializeResult(
+            let result = try JSONEncoder().encode(ACPInitializeResult(
                 protocolVersion: 1,
                 agentCapabilities: .init(
+                    loadSession: loadSession,
                     sessionCapabilities: .init(
                         resume: supportsResume ? .init() : nil,
                         fork: supportsFork ? .init() : nil,
@@ -1058,6 +1265,10 @@ struct ACPSessionForkAttachTests {
                 ),
                 authMethods: authMethods
             ))
+            guard let forkPoint else { return result }
+            var object = try JSONSerialization.jsonObject(with: result) as! [String: Any]
+            object["_meta"] = ["forkPoint": ["version": 1, "boundary": forkPoint]]
+            return try JSONSerialization.data(withJSONObject: object)
         }
     }
 
@@ -1072,7 +1283,8 @@ struct ACPSessionForkAttachTests {
     private func scriptSessionResult(
         _ client: ACPMockClient,
         method: String,
-        sessionId: String
+        sessionId: String,
+        echo: ACPForkPointEcho? = nil
     ) {
         client.script(method: method) { _ in
             try JSONEncoder().encode(ACPSessionNewResult(
@@ -1082,7 +1294,7 @@ struct ACPSessionForkAttachTests {
                 currentModel: nil,
                 currentMode: nil,
                 promptSuggestions: []
-            ))
+            ).withForkPoint(echo))
         }
     }
 
@@ -1190,12 +1402,16 @@ private actor ForkRelaunchBrokerService: ACPBrokerServicing {
     private static let forkCompletionCursor = ACPBrokerEventCursor(rawValue: 2)
 
     let forkResponseAvailable: Bool
+    /// Advertises `forkPoint` with a `message` boundary and echoes the
+    /// targeted fork on the fork answer.
+    let forkPoint: Bool
     private(set) var sent: [ACPBrokerSendParams] = []
     private(set) var replayedForkCount = 0
     private var nextRequestID: UInt64 = 0
 
-    init(forkResponseAvailable: Bool) {
+    init(forkResponseAvailable: Bool, forkPoint: Bool = false) {
         self.forkResponseAvailable = forkResponseAvailable
+        self.forkPoint = forkPoint
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -1297,7 +1513,7 @@ private actor ForkRelaunchBrokerService: ACPBrokerServicing {
 
     private var forkOutcome: ACPBrokerRPCOutcome {
         ACPBrokerRPCOutcome(
-            result: forkResponseAvailable ? sessionResult(id: "forked-remote") : nil,
+            result: forkResponseAvailable ? forkedSessionResult(id: "forked-remote", echoesForkPoint: forkPoint) : nil,
             error: nil
         )
     }
@@ -1328,15 +1544,7 @@ private actor ForkRelaunchBrokerService: ACPBrokerServicing {
                 envKeys: [],
                 createdAtMillis: 10
             ),
-            initializeResult: .object([
-                "protocolVersion": .number(1),
-                "agentCapabilities": .object([
-                    "sessionCapabilities": .object([
-                        "fork": .object([:])
-                    ])
-                ]),
-                "authMethods": .array([])
-            ]),
+            initializeResult: forkInitializeResult(capabilities: ["fork": .object([:])], forkPoint: forkPoint),
             remoteSessionResult: nil,
             turnState: .idle,
             acknowledgedCursor: acknowledgedCursor,
@@ -1467,6 +1675,7 @@ private actor ForkPreSendFailureBrokerService: ACPBrokerServicing {
 private actor ForkReplayBrokerService: ACPBrokerServicing {
     private let forkError: JSONRPCError?
     private let failSecondStartupReplay: Bool
+    private let forkPoint: Bool
     private var attachCount = 0
     private var replayEvents: [ACPBrokerEvent] = []
     private var nextCursor: UInt64 = 2
@@ -1475,13 +1684,16 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
     private(set) var closedSessionIDs: [String] = []
     private(set) var acknowledgedCursors: [ACPBrokerEventCursor] = []
     private(set) var detachCount = 0
+    private(set) var sentForkParams: [ACPBrokerJSONValue] = []
 
     init(
         forkError: JSONRPCError? = nil,
-        failSecondStartupReplay: Bool = false
+        failSecondStartupReplay: Bool = false,
+        forkPoint: Bool = false
     ) {
         self.forkError = forkError
         self.failSecondStartupReplay = failSecondStartupReplay
+        self.forkPoint = forkPoint
     }
 
     func open(_ params: ACPBrokerOpenParams) async throws -> ACPBrokerOpenResult {
@@ -1528,7 +1740,8 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
         let error: JSONRPCError?
         switch params.method {
         case "session/fork":
-            result = forkError == nil ? forkResult : nil
+            sentForkParams.append(params.params)
+            result = forkError == nil ? forkedSessionResult(id: "forked-remote", echoesForkPoint: forkPoint) : nil
             error = forkError
         case "session/close":
             let closeParams = try JSONDecoder().decode(
@@ -1592,16 +1805,6 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
         ACPBrokerSimpleOK(ok: true)
     }
 
-    private var forkResult: ACPBrokerJSONValue {
-        .object([
-            "sessionId": .string("forked-remote"),
-            "availableModels": .array([]),
-            "availableModes": .array([]),
-            "promptSuggestions": .array([]),
-            "configOptions": .array([])
-        ])
-    }
-
     private var sessionNewResult: ACPBrokerJSONValue {
         .object([
             "sessionId": .string("new-remote"),
@@ -1628,16 +1831,10 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
                 envKeys: [],
                 createdAtMillis: 10
             ),
-            initializeResult: .object([
-                "protocolVersion": .number(1),
-                "agentCapabilities": .object([
-                    "sessionCapabilities": .object([
-                        "fork": .object([:]),
-                        "close": .object([:])
-                    ])
-                ]),
-                "authMethods": .array([])
-            ]),
+            initializeResult: forkInitializeResult(
+                capabilities: ["fork": .object([:]), "close": .object([:])],
+                forkPoint: forkPoint
+            ),
             remoteSessionResult: nil,
             turnState: .idle,
             acknowledgedCursor: acknowledgedCursor,
@@ -1656,4 +1853,38 @@ private actor ForkReplayBrokerService: ACPBrokerServicing {
             }
         )
     }
+}
+
+/// A broker's recorded `initialize` answer, advertising `forkPoint` with a
+/// `message` boundary when asked.
+private func forkInitializeResult(
+    capabilities: [String: ACPBrokerJSONValue],
+    forkPoint: Bool
+) -> ACPBrokerJSONValue {
+    var result: [String: ACPBrokerJSONValue] = [
+        "protocolVersion": .number(1),
+        "agentCapabilities": .object(["sessionCapabilities": .object(capabilities)]),
+        "authMethods": .array([])
+    ]
+    if forkPoint {
+        result["_meta"] = .object(["forkPoint": .object(["version": .number(1), "boundary": .string("message")])])
+    }
+    return .object(result)
+}
+
+/// A `session/fork` answer, echoing a cut at `a1` when asked.
+private func forkedSessionResult(id: String, echoesForkPoint: Bool) -> ACPBrokerJSONValue {
+    var result: [String: ACPBrokerJSONValue] = [
+        "sessionId": .string(id),
+        "availableModels": .array([]),
+        "availableModes": .array([]),
+        "promptSuggestions": .array([]),
+        "configOptions": .array([])
+    ]
+    if echoesForkPoint {
+        result["_meta"] = .object(["forkPoint": .object([
+            "boundary": .string("message"), "messageId": .string("a1"), "matchedBy": .string("id")
+        ])])
+    }
+    return .object(result)
 }
