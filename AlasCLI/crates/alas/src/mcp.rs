@@ -662,11 +662,14 @@ fn workspace_tool_definitions() -> Vec<Value> {
     ]
 }
 
+/// What agents need to know about a stopped or user-driven worktree VM.
+const VM_DRIVING_NOTE: &str = "A stopped VM starts by itself on the first call. `computer_vm_starting` and `computer_vm_slot_pending` mean try again shortly (an auto-started vm_run usually answers `computer_vm_starting` first). `computer_user_active` means the user took over the VM: wait for them to hand it back.";
+
 fn computer_tool_definitions() -> Vec<Value> {
-    with_vm_argument(
-        "Which of this worktree's VMs to drive, needed when it has a macOS and a Linux VM.",
-        computer_tools_without_vm(),
-    )
+    let description = format!(
+        "Which of this worktree's VMs to drive, needed when it has a macOS and a Linux VM. {VM_DRIVING_NOTE}"
+    );
+    with_vm_argument(&description, computer_tools_without_vm())
 }
 
 /// Adds the optional `vm` argument to each tool's input schema.
@@ -842,7 +845,7 @@ fn vm_tools_without_vm() -> Vec<Value> {
     vec![
         json!({
             "name": "vm_run",
-            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only); in a Linux VM, under /mnt/alas instead.",
+            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only); in a Linux VM, under /mnt/alas instead. A stopped VM starts by itself, and an auto-started run usually answers `computer_vm_starting` first. `computer_vm_starting` and `computer_vm_slot_pending` mean try again shortly; `computer_user_active` means the user took over the VM, so wait for them to hand it back.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -4441,6 +4444,28 @@ mod tests {
                 command_for_tool(name, &args, "/wt").is_err(),
                 "{name} {args}"
             );
+        }
+    }
+
+    #[test]
+    fn vm_tool_docs_say_a_stopped_vm_starts_and_when_to_retry() {
+        for tool in super::computer_tool_definitions()
+            .into_iter()
+            .chain(super::vm_tool_definitions())
+            .filter(|tool| tool["name"] != "vm_status")
+        {
+            let text = format!(
+                "{} {}",
+                tool["description"].as_str().unwrap(),
+                tool["inputSchema"]["properties"]["vm"]["description"]
+                    .as_str()
+                    .unwrap()
+            );
+            let name = tool["name"].as_str().unwrap();
+            assert!(text.contains("starts by itself"), "{name}");
+            assert!(text.contains("computer_vm_starting"), "{name}");
+            assert!(text.contains("computer_vm_slot_pending"), "{name}");
+            assert!(text.contains("computer_user_active"), "{name}");
         }
     }
 

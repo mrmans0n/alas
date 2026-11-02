@@ -307,6 +307,14 @@ private struct ACPSessionView: View {
                         ) { state.computerUse.answer(approval.id, $0) }
                         .padding(.horizontal, 12).padding(.top, 8)
                     }
+                    ForEach(state.vmSlotRequests.filter { $0.sessionID == session.id }) { request in
+                        VMSlotCard(request: request) { state.answerVMSlot(requestID: request.id, choice: $0) }
+                            .padding(.horizontal, 12).padding(.top, 8)
+                    }
+                    if state.vmAutoStarter.isWaitingOnBoot(sessionID: session.id) {
+                        VMStartingCard()
+                            .padding(.horizontal, 12).padding(.top, 8)
+                    }
                 }
                 if let err = session.lastError {
                     errorBanner(err)

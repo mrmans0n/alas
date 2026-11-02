@@ -1,4 +1,5 @@
 import AlasCore
+import Foundation
 import Testing
 @testable import Alas
 
@@ -95,5 +96,53 @@ struct VMTabScreenTests {
             goldenHelper: c.goldenHelper
         )
         #expect(screen == c.expected)
+    }
+
+    @Test(arguments: [
+        (VMDriver.idle, VMDriverStatus(tone: .running, title: "Running", details: [], action: .takeOver)),
+        (.agent(sessionID: "s1", tool: "computer_click", at: Date(timeIntervalSince1970: 100)),
+         VMDriverStatus(tone: .running, title: "Claude is driving", details: ["computer_click 12s ago"], action: .takeOver)),
+        (.agent(sessionID: "s1", tool: "vm_run", at: Date(timeIntervalSince1970: 112.9)),
+         VMDriverStatus(tone: .running, title: "Claude is driving", details: ["vm_run 0s ago"], action: .takeOver)),
+        (.user, VMDriverStatus(tone: .busy, title: "You're driving", details: ["agent calls are on hold"], action: .handBack)),
+    ])
+    func driverStatus(_ driver: VMDriver, _ expected: VMDriverStatus) {
+        #expect(VMDriverStatus.make(driver: driver, agentName: "Claude", now: Date(timeIntervalSince1970: 112.5)) == expected)
+    }
+
+    struct BadgeCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        var drivingApp: String?
+        var drivingVM = false
+        var stopped = false
+        var vmStarting = false
+        var waitingForSlot = false
+        var userDriving = false
+        let expected: ComputerUseBadge.Label?
+
+        var testDescription: String { name }
+    }
+
+    // The badge has no suite of its own; its labels follow the VM states this suite resolves.
+    @Test(arguments: [
+        BadgeCase(name: "idle session", expected: nil),
+        BadgeCase(name: "desktop driver", drivingApp: "Safari", expected: .init(text: "Using Safari", accent: true)),
+        BadgeCase(name: "VM driver", drivingVM: true, expected: .init(text: "Using the VM", accent: true)),
+        BadgeCase(name: "desktop driver wins over its VM", drivingApp: "Safari", drivingVM: true, userDriving: true,
+                  expected: .init(text: "Using Safari", accent: true)),
+        BadgeCase(name: "stopped wins", drivingVM: true, stopped: true, vmStarting: true, userDriving: true,
+                  expected: .init(text: "Computer use stopped", accent: false)),
+        BadgeCase(name: "waiting on the auto-start", vmStarting: true, expected: .init(text: "Starting the VM", accent: true)),
+        BadgeCase(name: "waiting on a slot card", vmStarting: true, waitingForSlot: true,
+                  expected: .init(text: "Waiting for a VM slot", accent: true)),
+        BadgeCase(name: "the user took its VM over", drivingVM: true, userDriving: true,
+                  expected: .init(text: "You're driving the VM", accent: false)),
+    ])
+    func badgeLabel(_ c: BadgeCase) {
+        let label = ComputerUseBadge.label(
+            drivingApp: c.drivingApp, drivingVM: c.drivingVM, stopped: c.stopped, vmStarting: c.vmStarting,
+            waitingForSlot: c.waitingForSlot, userDriving: c.userDriving
+        )
+        #expect(label == c.expected)
     }
 }

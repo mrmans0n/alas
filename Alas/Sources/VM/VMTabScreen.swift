@@ -98,3 +98,31 @@ enum VMTabScreen: Equatable {
         }
     }
 }
+
+/// What a running VM tab's status bar says about who drives the VM, and its main action.
+struct VMDriverStatus: Equatable {
+    enum Action: Equatable {
+        case takeOver
+        case handBack
+    }
+
+    let tone: VMStatusTone
+    let title: String
+    let details: [String]
+    let action: Action
+
+    /// `agentName` names the session of an `.agent` driver; `now` dates its last call.
+    static func make(driver: VMDriver, agentName: String, now: Date) -> VMDriverStatus {
+        switch driver {
+        case .idle:
+            VMDriverStatus(tone: .running, title: "Running", details: [], action: .takeOver)
+        case .agent(_, let tool, let at):
+            VMDriverStatus(
+                tone: .running, title: "\(agentName) is driving",
+                details: ["\(tool) \(max(0, Int(now.timeIntervalSince(at))))s ago"], action: .takeOver
+            )
+        case .user:
+            VMDriverStatus(tone: .busy, title: "You're driving", details: ["agent calls are on hold"], action: .handBack)
+        }
+    }
+}

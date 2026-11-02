@@ -146,6 +146,8 @@ struct ACPMCPPromptPreambleTests {
         "computer_user_active means the user is working there: wait and retry later instead of switching apps.",
         "Secure fields can't be typed into; ask the user instead.",
         "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.",
+        "A stopped VM starts by itself on the first computer_* or vm_run call",
+        "computer_vm_starting and computer_vm_slot_pending mean try again shortly",
     ]
 
     @Test("mcp mode notes the alas CLI fallback for blocked servers")

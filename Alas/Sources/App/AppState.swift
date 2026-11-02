@@ -339,6 +339,22 @@ final class AppState {
     /// Resumed VM sessions, with the registry ids of their VMs whose guest hasn't been told yet;
     /// each is told before the session's next call in it.
     @ObservationIgnored var vmPendingResumes: [String: Set<String>] = [:]
+    /// The VMs the user took over, by registry id, with the sessions each take over stopped.
+    var vmTakeOvers = VMTakeOvers()
+    /// The registry ids of the VMs the user took over; agent calls to them are refused.
+    var vmTakenOver: Set<String> { vmTakeOvers.recordIDs }
+    /// The last agent call forwarded to each VM, by registry id, for who drives it. Observed per
+    /// VM, so one VM's calls redraw only its own tab.
+    @ObservationIgnored let vmLastAgentCall = VMLastAgentCalls()
+    /// The `vm_run` commands in flight on each VM, by registry id, so a take over can cancel them:
+    /// a `run` carries no session, so no lifecycle stop reaches it.
+    @ObservationIgnored var vmRuns: [String: [UUID: Task<VMGuestRunResult, any Error>]] = [:]
+    /// A hand back's lifecycle cleanup still going out, by registry id; new calls wait for it.
+    @ObservationIgnored var vmHandingBack: [String: Task<Void, Never>] = [:]
+    /// The clock VM driving is read with; tests replace it.
+    @ObservationIgnored var vmNow: () -> Date = Date.init
+    /// Starts a stopped worktree VM for agent calls and holds its slot cards. Observable itself.
+    @ObservationIgnored private(set) lazy var vmAutoStarter = makeVMAutoStarter()
     /// The one installer; `vmManager` seals its golden image so no Alas
     /// process can boot it meanwhile.
     @ObservationIgnored private(set) lazy var goldenImageInstaller = GoldenImageInstaller(
@@ -452,6 +468,9 @@ final class AppState {
                 severity: .success,
                 worktreeID: worktreeId
             )
+        }
+        manager.onVMTabClosed = { [weak self] state in
+            self?.handBackVM(recordID: VMIdentity.recordID(worktree: state.ownerKey, guest: state.guest))
         }
         _tabs = manager
         return manager
@@ -1870,6 +1889,8 @@ final class AppState {
         vmManager.worktreePath = { [weak self] worktreeID in
             self?.projectAndWorktree(withWorktreeId: worktreeID)?.worktree.path
         }
+        vmManager.onVMStopped = { [weak self] recordID in self?.vmStopped(recordID: recordID) }
+        vmManager.onVMDeleted = { [weak self] recordID in self?.vmAutoStarter.dismiss(recordID: recordID) }
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
             await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
         }

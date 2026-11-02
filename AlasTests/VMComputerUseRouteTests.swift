@@ -98,6 +98,11 @@ struct VMComputerUseRouteTests {
     ) throws {
         let reply = VMComputerUseRoute.statusReply(route: route, helper: helper, transferHostPath: "/host/t")
         #expect(try Self.object(reply) == Self.object(expected))
+        // While the user drives the VM, the same reply says so.
+        let driven = VMComputerUseRoute.statusReply(route: route, helper: helper, transferHostPath: "/host/t", userDriving: true)
+        let expectedDriven = try #require(Self.object(expected).mutableCopy() as? NSMutableDictionary)
+        expectedDriven["user_driving"] = true
+        #expect(try Self.object(driven) == expectedDriven)
     }
 
     /// With both VMs and none named, `vm_status` lists each, macOS first, naming its guest.
@@ -215,6 +220,74 @@ struct VMComputerUseRouteTests {
         let recorded: Set<String> = ["/w", "linux:/w", "/x"]
         #expect(VMComputerUseRoute.lifecycleTargets(recorded, worktreeID: worktreeID) == expected)
         #expect(VMComputerUseRoute.lifecycleTargets(nil, worktreeID: worktreeID).isEmpty)
+    }
+
+    /// Sessions by the VMs they drove: `a` and `b` drove `/w`, `c` only `/x`.
+    private static let drove: [String: Set<String>] = ["a": ["/w"], "b": ["/w", "linux:/w"], "c": ["/x"]]
+
+    /// Take over stops each session that drove that VM, and no other VM; from then on every agent
+    /// call to it but a cancel gets the exact refusal, and `vm_status` says so.
+    @Test func takeOverStopsTheGuestAndRefusesAgentCalls() {
+        var takeOvers = VMTakeOvers()
+        // `b` was already stopped by the user: its guest has it stopped and the take over doesn't own it.
+        let stops = takeOvers.takeOver("/w", sessions: Self.drove, userStopped: ["b"])
+        #expect(stops == [VMLifecycleMessage(event: .stop, sessionID: "a")])
+        // Only the session it stopped shows the user driving, not every session that ever drove it.
+        #expect(takeOvers.holds(sessionID: "a"))
+        #expect(!takeOvers.holds(sessionID: "b"))
+        #expect(takeOvers.takeOver("/w", sessions: Self.drove, userStopped: []).isEmpty)
+
+        let driver = VMDriver.current(lastAgentCall: nil, inFlight: false, takenOver: takeOvers.isTakenOver("/w"), now: Date())
+        #expect(driver == .user)
+        let refusal = "computer_user_active: The user is driving this VM. Try again after they hand it back."
+        #expect(VMTakeOvers.refusal(action: .click, driver: driver) == refusal)
+        #expect(VMTakeOvers.refusal(action: nil, driver: driver) == refusal)
+        #expect(VMTakeOvers.refusal(action: .cancel, driver: driver) == nil)
+        #expect(VMTakeOvers.refusal(action: .click, driver: .idle) == nil)
+        #expect(!takeOvers.isTakenOver("linux:/w"))
+    }
+
+    /// A call the user took the VM over during answers `computer_user_active`, whatever the guest
+    /// said; a cancel, or a call that finished before the take over, keeps its answer.
+    @Test(arguments: [
+        (ComputerUseCommand.Action.click, true, AlasCLIResponse.error(VMAutoStartMessages.userDriving)),
+        (.type, false, .text(["done"])),
+        (.cancel, true, .text(["done"])),
+    ])
+    func callTakenOverMidwayIsRefused(action: ComputerUseCommand.Action, takenOver: Bool, expected: AlasCLIResponse) {
+        #expect(VMTakeOvers.afterCall(action: action, takenOver: takenOver, response: .text(["done"])) == expected)
+    }
+
+    /// Hand back resumes only the sessions the take over stopped, and not one the user stopped
+    /// meanwhile, then ends the turn of every session that drove the VM so its refs are cleared.
+    @Test func handBackResumesAndEndsEveryDriversTurn() {
+        var takeOvers = VMTakeOvers()
+        _ = takeOvers.takeOver("/w", sessions: Self.drove, userStopped: [])
+        _ = takeOvers.takeOver("/x", sessions: Self.drove, userStopped: [])
+        // The user stopped `b` from the badge during the take over.
+        let events = takeOvers.handBack("/w", sessions: Self.drove, userStopped: ["b"])
+        #expect(events == [
+            VMLifecycleMessage(event: .resume, sessionID: "a"),
+            VMLifecycleMessage(event: .turnEnded, sessionID: "a"),
+            VMLifecycleMessage(event: .turnEnded, sessionID: "b"),
+        ])
+        #expect(!takeOvers.isTakenOver("/w"))
+        #expect(takeOvers.isTakenOver("/x"))
+        #expect(takeOvers.handBack("/w", sessions: Self.drove, userStopped: []).isEmpty)
+        // `c` ended during the take over of `/x`: the guest keeps its stop, so it is still resumed.
+        #expect(takeOvers.handBack("/x", sessions: [:], userStopped: []) == [VMLifecycleMessage(event: .resume, sessionID: "c")])
+    }
+
+    /// A VM that stops while taken over is no longer the user's: agent calls go back to the route,
+    /// which gives today's stopped message, and a later hand back sends nothing.
+    @Test func stoppingTheVMEndsTheTakeOver() {
+        var takeOvers = VMTakeOvers()
+        _ = takeOvers.takeOver("/w", sessions: Self.drove, userStopped: [])
+        takeOvers.vmStopped("/w")
+        #expect(!takeOvers.isTakenOver("/w"))
+        let driver = VMDriver.current(lastAgentCall: nil, inFlight: false, takenOver: takeOvers.isTakenOver("/w"), now: Date())
+        #expect(VMTakeOvers.refusal(action: .click, driver: driver) == nil)
+        #expect(takeOvers.handBack("/w", sessions: Self.drove, userStopped: []).isEmpty)
     }
 
     @Test func runReplyKeepsANullExitCodeForAKilledCommand() throws {

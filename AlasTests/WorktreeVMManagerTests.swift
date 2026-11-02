@@ -1,3 +1,4 @@
+import AlasComputerUseKit
 import AlasCore
 import Foundation
 import Testing
@@ -627,6 +628,319 @@ final class WorktreeVMManagerTests {
         try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
         #expect(manager.vmKinds(forWorktree: "/repo/a") == [.macOS])
         #expect(manager.vmKinds(forWorktree: "/repo/b") == nil)
+    }
+
+    // MARK: - Auto-start
+
+    /// The auto-start's clock: frozen, a sleep only yields, so no deadline passes until `run()`.
+    @MainActor
+    private final class ManualClock {
+        private(set) var instant = ContinuousClock.now
+        private var running = false
+
+        func run() { running = true }
+        func now() -> ContinuousClock.Instant { instant }
+        func sleep(_ duration: Duration) async {
+            if running { instant += duration }
+            await Task.yield()
+        }
+    }
+
+    private let clock = ManualClock()
+
+    /// Whether the guest helper of a started VM answers its hello.
+    @MainActor
+    private final class Helper {
+        var answers = true
+    }
+
+    private let helper = Helper()
+
+    /// An auto-starter over `manager`, whose guest helper answers while `helper.answers`.
+    /// `start` replaces the manager's start.
+    private func makeStarter(
+        _ manager: WorktreeVMManager, start: ((String, VMGuestOS) async throws -> VMStartOutcome)? = nil
+    ) -> VMAutoStarter {
+        let clock = clock
+        let helper = helper
+        return VMAutoStarter(
+            start: { worktreeID, guest in
+                if let start { return try await start(worktreeID, guest) }
+                return try await manager.startVM(worktreeID: worktreeID, guest: guest)
+            },
+            startPausing: { _ = try await manager.startVM(worktreeID: $0, pausing: $1) },
+            isStarting: { manager.isStarting($0) },
+            isRunning: { manager.running($0, guest: $1) != nil },
+            helperAnswers: { _, _ in helper.answers },
+            candidateName: { "name of \($0)" },
+            sleep: { await clock.sleep($0) },
+            now: { clock.now() }
+        )
+    }
+
+    /// Polls `condition` on the real clock; the caller asserts it afterwards.
+    private func eventually(_ condition: @MainActor () -> Bool) async {
+        _ = await GuestSetupSteps.waitUntil(
+            timeout: .seconds(5), interval: .milliseconds(5),
+            sleep: { try? await Task.sleep(for: $0) }, now: { .now }, condition
+        )
+    }
+
+    /// Both macOS slots run here, so starting "/repo/c" needs the user to pause one.
+    private func fillBothSlots(_ manager: WorktreeVMManager) async throws {
+        try addRecord("/repo/a", lastUsed: 1)
+        try addRecord("/repo/b", lastUsed: 2)
+        try addRecord("/repo/c")
+        for id in ["/repo/a", "/repo/b"] {
+            _ = try await manager.startVM(worktreeID: id)
+        }
+    }
+
+    @Test func aStoppedVMStartsAndTheCallProceeds() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let starter = makeStarter(manager)
+
+        let result = await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer)
+
+        #expect(result == .ready)
+        #expect(manager.running("/repo/a") != nil)
+        #expect(starter.starting.isEmpty)
+    }
+
+    @Test func concurrentCallsShareOneStart() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let starter = makeStarter(manager)
+        hypervisor.bootGate.armed = true
+
+        let first = Task { await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer) }
+        await hypervisor.bootGate.waitUntilHeld()
+        let second = Task { await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s2", call: .computer) }
+        await eventually { starter.isWaitingOnBoot(sessionID: "s2") }
+        #expect(starter.isWaitingOnBoot(sessionID: "s1"))
+        hypervisor.bootGate.release()
+
+        #expect(await first.value == .ready)
+        #expect(await second.value == .ready)
+        #expect(hypervisor.boots == 1)
+    }
+
+    @Test func aSecondCallReusesTheSlotCard() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let first = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { starter.slotRequests.count == 1 }
+        let second = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        let other = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s2", call: .computer) }
+        await eventually { starter.waiters.count == 3 }
+        #expect(starter.slotRequests.map(\.sessionID).sorted() == ["s1", "s2"])
+        let request = try #require(starter.slotRequests.first { $0.sessionID == "s1" })
+        #expect(request.candidates.map(\.name) == ["name of /repo/a", "name of /repo/b"])
+
+        // The first answer wins and takes the other session's card with it.
+        starter.answer(requestID: request.id, choice: .decline)
+
+        for call in [first, second, other] {
+            #expect(await call.value == .declined)
+        }
+        #expect(starter.slotRequests.isEmpty)
+        #expect(hypervisor.boots == 2)
+    }
+
+    @Test func pausingAnotherVMStartsThisOne() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        let request = try #require(starter.slotRequests.first)
+        starter.answer(requestID: request.id, choice: .pause(recordID: "/repo/a"))
+
+        #expect(await call.value == .ready)
+        #expect(manager.running("/repo/a") == nil)
+        #expect(manager.running("/repo/c") != nil)
+    }
+
+    /// The VM chosen to pause stopped before the answer: the freed slot takes a plain start.
+    @Test func pausingAVMThatAlreadyStoppedStartsThisOne() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        await manager.stopVM(worktreeID: "/repo/a")
+        starter.answer(requestID: try #require(starter.slotRequests.first).id, choice: .pause(recordID: "/repo/a"))
+
+        #expect(await call.value == .ready)
+        #expect(manager.running("/repo/c") != nil)
+        #expect(manager.running("/repo/b") != nil)
+    }
+
+    @Test func aVMStartedFromItsTabWhileTheCardWaitsEndsTheWait() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        _ = try await manager.startVM(worktreeID: "/repo/c", pausing: "/repo/a")
+
+        #expect(await call.value == .ready)
+        #expect(starter.slotRequests.isEmpty)
+    }
+
+    @Test func decliningReturnsTheDeclinedMessage() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        starter.answer(requestID: try #require(starter.slotRequests.first).id, choice: .decline)
+
+        let result = await call.value
+        #expect(result.refusal == "computer_vm_stopped: The user chose not to start this worktree's VM.")
+        #expect(manager.running("/repo/c") == nil)
+    }
+
+    @Test func aSlowSlotAnswerLeavesThePendingCard() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        clock.run()
+
+        let result = await call.value
+        #expect(result == .slotPending)
+        #expect(result.refusal == VMAutoStartMessages.slotPending)
+        let request = try #require(starter.slotRequests.first)
+        // Answered after the call gave up: the VM starts for the agent's next call.
+        starter.answer(requestID: request.id, choice: .pause(recordID: "/repo/b"))
+        await eventually { manager.running("/repo/c") != nil }
+        #expect(manager.running("/repo/c") != nil)
+        #expect(manager.running("/repo/b") == nil)
+    }
+
+    /// A call answers `starting` instead of running once too little of its client's budget is
+    /// left: a computer call 35 s, a `vm_run` its own command timeout.
+    @Test(arguments: [
+        (VMAutoStartCall.computer, 85, true, 100),
+        (.computer, 86, false, 100),
+        (.vmRun(timeoutSeconds: 30), 25, true, 25),
+        (.vmRun(timeoutSeconds: 30), 26, false, 25),
+        (.vmRun(timeoutSeconds: 600), 26, false, 25),
+    ])
+    func aLateReadyCallReturnsStarting(call: VMAutoStartCall, elapsedSeconds: Int, proceeds: Bool, budgetSeconds: Int) {
+        #expect(VMAutoStartCall.proceeds(call, elapsed: .seconds(elapsedSeconds)) == proceeds)
+        #expect(call.waitBudget == .seconds(budgetSeconds))
+    }
+
+    enum StartFailure: Sendable { case throwing, noLocalCandidates }
+
+    /// A start that can't run says why: it threw, or every slot belongs to another Alas.
+    @Test(arguments: [
+        (StartFailure.throwing, "computer_vm_stopped: Couldn't start this worktree's VM: boom"),
+        (.noLocalCandidates,
+         "computer_vm_stopped: Couldn't start this worktree's VM: both VM slots are in use by another Alas."),
+    ])
+    func aStartThatCannotRunSaysWhy(stub: StartFailure, expected: String) async throws {
+        try addRecord("/repo/a")
+        let starter = makeStarter(makeManager()) { _, _ in
+            switch stub {
+            case .throwing: throw WorktreeVMManager.VMError(message: "boom")
+            case .noLocalCandidates: return .needsUserChoice(candidates: [])
+            }
+        }
+
+        let result = await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer)
+
+        #expect(result.refusal == expected)
+        #expect(starter.slotRequests.isEmpty)
+    }
+
+    @Test func aVMAlreadyBootingIsWaitedForNotStartedAgain() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let starter = makeStarter(manager)
+        hypervisor.bootGate.armed = true
+        let fromTab = Task { try await manager.startVM(worktreeID: "/repo/a") }
+        await hypervisor.bootGate.waitUntilHeld()
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { starter.isWaitingOnBoot(sessionID: "s1") }
+        hypervisor.bootGate.release()
+
+        #expect(await call.value == .ready)
+        _ = try await fromTab.value
+        #expect(hypervisor.boots == 1)
+    }
+
+    /// The agent's retry after `starting` finds the VM running before its helper answers: it joins
+    /// the start's helper wait, never a helper error, and ends with it.
+    @Test(arguments: [true, false])
+    func aCallReachingAVMWhoseHelperIsStillStartingJoinsTheStart(helloArrives: Bool) async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let starter = makeStarter(manager)
+        helper.answers = false
+
+        let first = Task { await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { manager.running("/repo/a") != nil }
+        // What the guest route checks before it talks to the helper.
+        #expect(starter.starting == ["/repo/a"])
+        let retry = Task { await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { starter.waiters.count == 2 }
+        if helloArrives { helper.answers = true } else { clock.run() }
+
+        let expected: AutoStartResult = helloArrives ? .ready : .starting
+        #expect(await first.value == expected)
+        #expect(await retry.value == expected)
+        #expect(hypervisor.boots == 1)
+    }
+
+    @Test func aSlowBootReturnsStarting() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let starter = makeStarter(manager)
+        hypervisor.bootGate.armed = true
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/a", guest: .macOS, sessionID: "s1", call: .computer) }
+        await hypervisor.bootGate.waitUntilHeld()
+        clock.run()
+
+        let result = await call.value
+        #expect(result == .starting)
+        #expect(result.refusal == VMAutoStartMessages.starting)
+        #expect(starter.starting == ["/repo/a"])
+        hypervisor.bootGate.release()
+        await eventually { starter.starting.isEmpty }
+        #expect(manager.running("/repo/a") != nil)
+    }
+
+    @Test func stoppingTheSessionDismissesItsCards() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        starter.dismiss(sessionID: "s1")
+
+        let result = await call.value
+        #expect(result.refusal == ComputerUseCoordinator.stoppedMessage)
+        #expect(starter.slotRequests.isEmpty)
+        // Nothing is left waiting on the dismissed card: the next call asks again.
+        let next = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        starter.answer(requestID: try #require(starter.slotRequests.first).id, choice: .decline)
+        #expect(await next.value == .declined)
     }
 
     /// A sealed macOS and Linux golden image, enough for `createVM` to clone.
