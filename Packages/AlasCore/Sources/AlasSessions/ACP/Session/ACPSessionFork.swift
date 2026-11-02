@@ -192,15 +192,16 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
               !isSteeringSegment(decoded[boundaryIndex])
         else { return nil }
 
-        // The turn must be over at the boundary: the next conversation row,
-        // if any, is the user's.
+        // The turn must be over at the boundary: the next conversation row is
+        // the user's. Without one the turn may still be running; a boundary at
+        // the source's head forks natively without a target anyway.
         let next = decoded[(boundaryIndex + 1)...].first { wire in
             switch wire {
             case .user, .agent: true
             case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid: false
             }
         }
-        if case .agent = next { return nil }
+        guard case .user = next else { return nil }
 
         // Fingerprints hash UTF-8 bytes, so compare bytes, not canonically
         // equivalent strings. Steering segments are parts of one adapter

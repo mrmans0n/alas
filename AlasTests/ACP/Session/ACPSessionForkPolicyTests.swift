@@ -318,6 +318,9 @@ struct ACPSessionForkPolicyTests {
             ("next turn", [ForkRow.user("u"), .agent("a1", "A1"), .user("u2"), .agent("a2", "A2")], 1, false, 0, true),
             ("tool tail", [.user("u"), .agent("a1", "A1"), .tool("tc1"), .user("u2")], 1, false, 0, true),
             ("mid turn", [.user("u"), .agent("a1", "A1"), .tool("tc1"), .agent("a2", "A2"), .user("u2")], 1, false, 0, false),
+            // With no later user row the turn may still be running.
+            ("no later user", [.user("u"), .agent("a1", "A1"), .tool("tc1")], 1, false, 0, false),
+            ("last row", [.user("u"), .agent("a1", "A1")], 1, false, 0, false),
             ("no id", [.user("u"), .agent(nil, "A1"), .user("u2")], 1, false, 0, false),
             ("steering id", [.user("u"), .agent("alas-steering:\(UUID().uuidString)", "A1"), .user("u2")], 1, false, 0, false),
             ("steering split", [.user("u"), .steeringSplitAgent("a1", "A1"), .user("u2"), .agent("a1b", "rest")], 1, false, 0, false),
@@ -349,7 +352,7 @@ struct ACPSessionForkPolicyTests {
             ([ForkRow.user("q1"), .agent("a1", "Same"), .user("q2"), .agent("a2", "Same"), .user("q3"), .agent("a3", "Other")], 3, 0, 2),
             ([.user("q1"), .agent("a1", "Same"), .user("q2"), .agent("a2", "Same"), .user("q3"), .agent("a3", "Other")], 3, 2, 1),
             // Steering segments are parts of one adapter message, not messages.
-            ([.user("q1"), .steeringSplitAgent("a0", "Same"), .user("s"), .agent("alas-steering:\(UUID().uuidString)", "Same"), .user("q2"), .agent("a2", "Same")], 5, 0, 1),
+            ([.user("q1"), .steeringSplitAgent("a0", "Same"), .user("s"), .agent("alas-steering:\(UUID().uuidString)", "Same"), .user("q2"), .agent("a2", "Same"), .user("q3")], 5, 0, 1),
         ] as [([ForkRow], Int, Int, Int)]
     )
     func forkPointOccurrence(rows: [ForkRow], boundaryIndex: Int, remoteHistoryStart: Int, occurrence: Int) throws {
