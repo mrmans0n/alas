@@ -347,6 +347,8 @@ final class AppState {
     var vmLastAgentCall: [String: (sessionID: String, tool: String, at: Date)] = [:]
     /// The clock VM driving is read with; tests replace it.
     @ObservationIgnored var vmNow: () -> Date = Date.init
+    /// Starts a stopped worktree VM for agent calls and holds its slot cards. Observable itself.
+    @ObservationIgnored private(set) lazy var vmAutoStarter = makeVMAutoStarter()
     /// The one installer; `vmManager` seals its golden image so no Alas
     /// process can boot it meanwhile.
     @ObservationIgnored private(set) lazy var goldenImageInstaller = GoldenImageInstaller(

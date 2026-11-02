@@ -354,6 +354,7 @@
 		2F1165AE6FD339D03943C182 /* ACPTranscriptRowContentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E62A0DA334B03D7D65A7D0B3 /* ACPTranscriptRowContentTests.swift */; };
 		2F492ED30DE9344F8116D387 /* RightRailSizing.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6877F0319EB6602B047BCC3F /* RightRailSizing.swift */; };
 		2F749C72F37EE233180831F0 /* RepoHookApprovalQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4F241A03D2C98CE983A436D /* RepoHookApprovalQueueTests.swift */; };
+		2F7A01D183626D8FC82BFB67 /* VMAutoStarter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 94C8B6E06B264113E7D00BF2 /* VMAutoStarter.swift */; };
 		2FAAA60EF431D109D842428F /* SelfUpdaterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBDEF50915BACBD0C3EE36AE /* SelfUpdaterTests.swift */; };
 		2FDCA875B675BEC539556D73 /* RunReportTabView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 535C9DF6C26F0FA7289D6D02 /* RunReportTabView.swift */; };
 		2FE10FC44BD9CDBD0C969374 /* MergeBulkResolvePromptEditorWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = F61EB45499D244E44EB170BC /* MergeBulkResolvePromptEditorWindow.swift */; };
@@ -1004,6 +1005,7 @@
 		89E952C361337F8D9FB279D5 /* IconSymbolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 705B34DF3EE049FA52E8ECFB /* IconSymbolTests.swift */; };
 		89F58C7178B661EAE0057622 /* ACPTerminalTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F8802F19E02CED256495755 /* ACPTerminalTests.swift */; };
 		8A0587F13E14C737218FF73A /* session-update-context-compaction-running.json in Resources */ = {isa = PBXBuildFile; fileRef = 31853A88896328990E6FDA78 /* session-update-context-compaction-running.json */; };
+		8A1186CB26D2E5172DB3BEB1 /* VMSlotCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5734014E30C7981BB7C01699 /* VMSlotCard.swift */; };
 		8A4646E61460DEFB048C1345 /* ayu-light.json in Resources */ = {isa = PBXBuildFile; fileRef = 24D0D9D1F3513DA3BAD40D14 /* ayu-light.json */; };
 		8A52379518AB7367AD57EFB7 /* CodeActionsFeature.swift in Sources */ = {isa = PBXBuildFile; fileRef = 502C287E0A6A8A511FAE6739 /* CodeActionsFeature.swift */; };
 		8A7825E8DAAF18F1A9E08F3A /* ACPToolCallGroupingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 01FFD43363429EF853D66F67 /* ACPToolCallGroupingTests.swift */; };
@@ -2588,6 +2590,7 @@
 		56C7878101DA7532B9850D13 /* ProjectIconView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectIconView.swift; sourceTree = "<group>"; };
 		56D1AC9E1E00C3C5C234382C /* TouchTargetSmokeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TouchTargetSmokeTests.swift; sourceTree = "<group>"; };
 		56E964C72322223859CC6AF8 /* ReviewFeedbackAgentSender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReviewFeedbackAgentSender.swift; sourceTree = "<group>"; };
+		5734014E30C7981BB7C01699 /* VMSlotCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMSlotCard.swift; sourceTree = "<group>"; };
 		575A2C5C173D2D9870A9C274 /* SSHConfigParserTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SSHConfigParserTests.swift; sourceTree = "<group>"; };
 		576619C2726DFDE8F627AE19 /* CommitsAheadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitsAheadTests.swift; sourceTree = "<group>"; };
 		5784049BA76B2C0FE83E259B /* ACPStackShepherdPopover.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPStackShepherdPopover.swift; sourceTree = "<group>"; };
@@ -3013,6 +3016,7 @@
 		942B0DCA09E1297D9380C58C /* AppQuitAction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppQuitAction.swift; sourceTree = "<group>"; };
 		9445B0E1BAF7BC567229B0BE /* ACPMentionSymbolPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPMentionSymbolPreview.swift; sourceTree = "<group>"; };
 		94B123596E047E4CE0FAFE3E /* AdvancedSettingsVisibility.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AdvancedSettingsVisibility.swift; sourceTree = "<group>"; };
+		94C8B6E06B264113E7D00BF2 /* VMAutoStarter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VMAutoStarter.swift; sourceTree = "<group>"; };
 		94D15758C7213FF407FD957B /* RightPaneGGLandTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RightPaneGGLandTests.swift; sourceTree = "<group>"; };
 		94E5F1EF8C0CEE1DD78AE8BC /* ACPSymbolHoverPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPSymbolHoverPreview.swift; sourceTree = "<group>"; };
 		95DA6BFFE45ED25669869C76 /* CommitMessageEditorViewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitMessageEditorViewTests.swift; sourceTree = "<group>"; };
@@ -4533,6 +4537,7 @@
 				D8B2490CC7E16F98A53A8DE3 /* ResumableDownload.swift */,
 				F4D0638B08DC886A68F75760 /* RunningVM.swift */,
 				143995043B72B58B5F32ABCE /* VirtualMachineTabView.swift */,
+				94C8B6E06B264113E7D00BF2 /* VMAutoStarter.swift */,
 				355C44C36494D5E96823EAE1 /* VMChrome.swift */,
 				EDD659E65B7BE7A52C105821 /* VMComputerUseRoute.swift */,
 				C344B983ED8AD4748D280ABC /* VMConfigurationFactory.swift */,
@@ -4541,6 +4546,7 @@
 				6A91AD2A287FDE958C7F6E79 /* VMGuestClient.swift */,
 				DBF265AB1A28E9ED5920F831 /* VMGuestPatcher.swift */,
 				2F0A93B24210931575BE814B /* VMHelperUpdater.swift */,
+				5734014E30C7981BB7C01699 /* VMSlotCard.swift */,
 				F140C7CC4EE7707DFC5557B2 /* VMTabScreen.swift */,
 				025657437F58CAE1E6E832D9 /* WorktreeVMManager.swift */,
 			);
@@ -8006,6 +8012,7 @@
 				E1EEC0425D8F30D85CDB35EE /* UpdateAvailableSheet.swift in Sources */,
 				C4466064F783E6667C5FD25D /* UpdateController.swift in Sources */,
 				B785053315764F42E3601F15 /* UpdateProgressSheet.swift in Sources */,
+				2F7A01D183626D8FC82BFB67 /* VMAutoStarter.swift in Sources */,
 				9F0B7876CCAC7225FD522B2A /* VMChrome.swift in Sources */,
 				98706A863E4258672BF39950 /* VMComputerUseRoute.swift in Sources */,
 				AFAB68532EEC0EA7DEB976B6 /* VMConfigurationFactory.swift in Sources */,
@@ -8014,6 +8021,7 @@
 				0FF4CC89C0E3DB1E0EC28127 /* VMGuestClient.swift in Sources */,
 				AC3988E601103A1001CD5FAD /* VMGuestPatcher.swift in Sources */,
 				1AE53218A37CA5AA053571C6 /* VMHelperUpdater.swift in Sources */,
+				8A1186CB26D2E5172DB3BEB1 /* VMSlotCard.swift in Sources */,
 				56DEFFA9CA11863AB0F88EFB /* VMTabScreen.swift in Sources */,
 				C245DDADA1D81810E9302134 /* VerdictSheet.swift in Sources */,
 				DAA0AFA398C02EC663708825 /* ViewDragOut.swift in Sources */,

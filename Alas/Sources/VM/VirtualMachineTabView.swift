@@ -559,19 +559,13 @@ struct VirtualMachineTabView: View {
                 EmptyView()
             } actions: {
                 ForEach(choice.candidates, id: \.self) { candidate in
-                    AlasButton(title: "Pause \(displayName(forCandidate: candidate))") {
+                    AlasButton(title: "Pause \(state.vmDisplayName(forRecordID: candidate))") {
                         start(choice.target, pausing: candidate)
                     }
                 }
                 AlasButton(title: "Cancel", style: .subtle) { self.choice = nil }
             }
         }
-    }
-
-    private func displayName(forCandidate id: String) -> String {
-        if id.hasPrefix(WorktreeVMManager.goldenIDPrefix) { return "macOS setup VM" }
-        return state.projectAndWorktree(withWorktreeId: id)?.worktree.title
-            ?? URL(fileURLWithPath: id).lastPathComponent
     }
 
     // MARK: - Actions

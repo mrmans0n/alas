@@ -121,7 +121,10 @@ extension AppState {
 
     /// Routes one call: a session whose worktree has a VM talks to its guest and never reaches
     /// the host coordinator, so no host readiness, approvals, driver lock, or overlay apply.
-    func performComputerUse(_ command: ComputerUseCommand, sessionID: String, worktreeID: String?) async -> AlasCLIResponse {
+    /// `autoStarted` is set on the pass after this call started its VM.
+    func performComputerUse(
+        _ command: ComputerUseCommand, sessionID: String, worktreeID: String?, autoStarted: Bool = false
+    ) async -> AlasCLIResponse {
         switch vmRoute(worktreeID: worktreeID, requested: command.vm) {
         case .desktop:
             return await computerUse.perform(command, sessionID: sessionID)
@@ -129,12 +132,16 @@ extension AppState {
             return .error(VMComputerUseRoute.vmAmbiguousMessage)
         case .vmMissing(let guest):
             return .error(VMComputerUseRoute.vmMissingMessage(for: guest))
-        case .vmNotRunning(_, let guest):
-            // Auto-start goes here: a VM running in no Alas is started, then the call continues
-            // through the driver gate below.
+        case .vmNotRunning(let worktreeID, let guest):
             // A VM record on Intel came with data migrated from Apple silicon; it can't run here.
             guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
-            return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
+            // A VM running in no Alas is started, then the call continues through the driver gate.
+            if let refusal = await autoStartRefusal(
+                worktreeID: worktreeID, guest: guest, sessionID: sessionID, autoStarted: autoStarted
+            ) {
+                return .error(refusal)
+            }
+            return await performComputerUse(command, sessionID: sessionID, worktreeID: worktreeID, autoStarted: true)
         case .vmStateUnreadable:
             return .error(VMComputerUseRoute.vmStateUnreadableMessage)
         case .guest(let worktreeID, let guest):
@@ -216,7 +223,8 @@ extension AppState {
     /// `vm_run`: runs a shell command in the guest of the session's worktree VM. A session the
     /// user stopped can't use it until resumed, like the computer tools.
     func performVMRun(
-        _ command: String, timeoutSeconds: Int, vm: VMGuestOS?, sessionID: String, worktreeID: String?
+        _ command: String, timeoutSeconds: Int, vm: VMGuestOS?, sessionID: String, worktreeID: String?,
+        autoStarted: Bool = false
     ) async -> AlasCLIResponse {
         guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
         switch vmRoute(worktreeID: worktreeID, requested: vm) {
@@ -226,9 +234,16 @@ extension AppState {
             return .error(VMComputerUseRoute.vmMissingMessage(for: guest))
         case .ambiguous:
             return .error(VMComputerUseRoute.vmAmbiguousMessage)
-        case .vmNotRunning(_, let guest):
-            // Auto-start goes here, as for the computer tools.
-            return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
+        case .vmNotRunning(let worktreeID, let guest):
+            if let refusal = await autoStartRefusal(
+                worktreeID: worktreeID, guest: guest, sessionID: sessionID, autoStarted: autoStarted
+            ) {
+                return .error(refusal)
+            }
+            return await performVMRun(
+                command, timeoutSeconds: timeoutSeconds, vm: guest, sessionID: sessionID, worktreeID: worktreeID,
+                autoStarted: true
+            )
         case .vmStateUnreadable:
             return .error(VMComputerUseRoute.vmStateUnreadableMessage)
         case .guest(let worktreeID, let guest):
@@ -250,6 +265,67 @@ extension AppState {
                 return .error((error as? VMGuestClient.Failure ?? .stopped).message(for: guest))
             }
         }
+    }
+
+    // MARK: - Auto-start
+
+    func makeVMAutoStarter() -> VMAutoStarter {
+        VMAutoStarter(
+            start: { [vmManager] in try await vmManager.startVM(worktreeID: $0, guest: $1) },
+            startPausing: { [vmManager] in _ = try await vmManager.startVM(worktreeID: $0, pausing: $1) },
+            helperAnswers: { [vmManager] worktreeID, guest in
+                // A VM stopped meanwhile has nothing to wait for; the call then gets the stopped error.
+                guard let client = vmManager.guestClient(for: worktreeID, guest: guest) else { return true }
+                return (try? await client.hello()) != nil
+            },
+            candidateName: { [weak self] in self?.vmDisplayName(forRecordID: $0) ?? $0 }
+        )
+    }
+
+    /// Why a call to a VM that isn't running here can't go on, or nil once this call started it.
+    /// A VM another Alas runs keeps today's error; a call whose earlier pass already started the
+    /// VM and still finds it stopped is told to try again rather than starting it twice.
+    private func autoStartRefusal(
+        worktreeID: String, guest: VMGuestOS, sessionID: String, autoStarted: Bool
+    ) async -> String? {
+        let notRunning = guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage
+        if autoStarted { return VMAutoStartMessages.starting }
+        if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
+            return ComputerUseCoordinator.stoppedMessage
+        }
+        let elsewhere = vmManager.recordStatus(worktreeID, guest: guest).runningElsewhere != nil
+        switch VMStoppedDecision.decide(runningElsewhere: elsewhere, isStatusCall: false) {
+        case .runningElsewhere, .refuse:
+            return notRunning
+        case .start:
+            return await autoStart(recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest), guest: guest, sessionID: sessionID)
+                .refusal
+        }
+    }
+
+    /// Starts VM `recordID` for a call of `sessionID`, or joins its start, and waits for it.
+    func autoStart(recordID: String, guest: VMGuestOS, sessionID: String) async -> AutoStartResult {
+        await vmAutoStarter.autoStart(
+            worktreeID: VMIdentity.parse(recordID: recordID).worktree, guest: guest, sessionID: sessionID
+        )
+    }
+
+    /// Slot cards waiting for the user's answer, at most one per (session, VM).
+    var vmSlotRequests: [VMSlotRequest] { vmAutoStarter.slotRequests }
+
+    /// The registry ids of the VMs starting for agent calls.
+    var vmStarting: Set<String> { vmAutoStarter.starting }
+
+    func answerVMSlot(requestID: UUID, choice: VMSlotChoice) {
+        vmAutoStarter.answer(requestID: requestID, choice: choice)
+    }
+
+    /// How the user knows VM `recordID`: its worktree's title.
+    func vmDisplayName(forRecordID id: String) -> String {
+        if id.hasPrefix(WorktreeVMManager.goldenIDPrefix) { return "macOS setup VM" }
+        let worktreeID = VMIdentity.parse(recordID: id).worktree
+        return projectAndWorktree(withWorktreeId: worktreeID)?.worktree.title
+            ?? URL(fileURLWithPath: worktreeID).lastPathComponent
     }
 
     /// `vm_status`: whether the session's worktree has a VM, whether it runs here, its guest
@@ -367,6 +443,8 @@ extension AppState {
 
     /// The badge's Stop: a VM session stops in its guest, the rest on the host.
     func stopComputerUse(sessionID: String) async {
+        // A session waiting on its VM's start never drove it, so this comes before the checks below.
+        vmAutoStarter.dismiss(sessionID: sessionID)
         let targets = VMComputerUseRoute.lifecycleTargets(vmComputerUseSessions[sessionID])
         guard vmDrivingSessions.contains(sessionID), !targets.isEmpty else {
             await computerUse.stop(sessionID: sessionID)
@@ -415,6 +493,7 @@ extension AppState {
     }
 
     func computerUseSessionEnded(sessionID: String, owner: SessionOwnerID) {
+        vmAutoStarter.dismiss(sessionID: sessionID)
         computerUse.sessionEnded(sessionID: sessionID)
         vmDrivingSessions.remove(sessionID)
         forwardVMLifecycle(.sessionEnded, sessionID: sessionID, owner: owner)
