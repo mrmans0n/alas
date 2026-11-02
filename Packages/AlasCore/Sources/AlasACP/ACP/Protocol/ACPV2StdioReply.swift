@@ -116,6 +116,14 @@ final class ACPV2StdioReplyState: @unchecked Sendable {
         if let wake { wake.0.resume(returning: wake.1) }
     }
 
+    func canReply(to delivery: ACPV2InboundDelivery) -> Bool {
+        lock.withLock {
+            guard !stopped, let origin = origins[delivery.receiptID],
+                  origin.connectionID == delivery.connectionID, origin.reserved == nil else { return false }
+            return current(origin)
+        }
+    }
+
     func reply(_ delivery: ACPV2InboundDelivery, key: ACPV2ReplyOperationKey, frame: Data,
         writer: any JSONRPCFrameWriting, onFailure: @escaping @Sendable () -> Void) async throws -> ACPV2StdioReplyResult {
         guard !Task.isCancelled else { throw ACPV2StdioReplyError.invalidated }

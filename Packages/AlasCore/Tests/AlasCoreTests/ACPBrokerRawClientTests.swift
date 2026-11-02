@@ -5,6 +5,107 @@ import AlasCore
 @testable import AlasACP
 
 struct ACPBrokerRawClientTests {
+    @Test func currentPendingViewRefreshesWithoutConsumingOrRevivingDetachedOrigins() async throws {
+        let service = RawBrokerFixture(pending: true)
+        let client = makeClient(service)
+        _ = try await client.start()
+        defer { Task { await client.detach() } }
+        let first = try await client.currentRawPendingRequests()
+        #expect(first.connectionID == client.updateConnectionID)
+        #expect(first.brokerID.rawValue == "raw" && first.generation.rawValue == 7)
+        #expect(first.requests.count == 1 && first.requests.first?.originCursor?.rawValue == 1)
+        await service.setPendingOverride([])
+        #expect(try await client.currentRawPendingRequests().requests.isEmpty)
+        var reused = await service.pendingRequest()
+        reused.originCursor = .init(rawValue: 2)
+        await service.setPendingOverride([reused])
+        #expect(try await client.currentRawPendingRequests().requests.first?.originCursor?.rawValue == 2)
+        await service.setPendingOverride([reused, reused])
+        await #expect(throws: (any Error).self) { try await client.currentRawPendingRequests() }
+        #expect(await service.acks.isEmpty)
+        #expect(await service.exactReplies.isEmpty)
+        await client.detach()
+        await #expect(throws: (any Error).self) { try await client.currentRawPendingRequests() }
+    }
+
+    @MainActor
+    @Test(arguments: ["match", "removed", "reused", "bytes", "session", "stale-helper", "removed-after-attempt", "transient-attach"])
+    func responseOwnerReconcilesCurrentBrokerOriginsAcrossReattachment(reason: String) async throws {
+        let service = RawBrokerFixture(pending: true)
+        let old = makeClient(service)
+        _ = try await old.start()
+        let connection = try #require(old.updateConnectionID)
+        let pending = await service.pendingRequest()
+        await old.detach()
+        let client = makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        #expect(connection != client.updateConnectionID)
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("broker-owner-\(UUID()).sqlite").path)
+        let session = reason == "session" ? "foreign" : "s"
+        try await persistence.upsertSession(.init(id: session, agentId: "fixture", title: "Saved", autoRun: false,
+            createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false))
+        _ = try await persistence.seizeLease(sessionId: session, instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let fence = ACPSessionLeaseFence(sessionId: session, ownerInstance: "A", token: "owner")
+        _ = try await persistence.updateACPBrokerState(sessionId: session,
+            state: .init(brokerId: .init(rawValue: "raw"), generation: .init(rawValue: 7), acknowledgedCursor: .init(rawValue: 0), wireContext: .rawV2), fence: fence)
+        let stream = try await persistence.registerV2InboundLedger(sessionId: session, upstreamSessionId: "upstream",
+            source: .broker(id: .init(rawValue: "raw"), generation: .init(rawValue: 7)), fence: fence)
+        let original = ACPV2InboundDelivery(frame: try #require(pending.rawFrame).bytes, connectionID: connection,
+            source: .broker(provenance: .init(brokerID: .init(rawValue: "raw"), generation: .init(rawValue: 7), cursor: .init(rawValue: 1), origin: .journal), pendingRequestID: "p"))
+        let record = try await persistence.retainV2Inbound(original, to: stream, fence: fence).record
+        let attachment = try ACPV2ResponseAttachment(brokerClient: client, opened: opened)
+        if reason == "session" {
+            #expect(throws: (any Error).self) {
+                try ACPV2ResponseOwner(stream: stream, fence: fence, attachment: attachment, journal: persistence, isCurrent: { true })
+            }
+            return
+        }
+        var changed = pending
+        if reason == "removed" { await service.setPendingOverride([]) }
+        if reason == "reused" { changed.originCursor = .init(rawValue: 2)
+        await service.setPendingOverride([changed]) }
+        if reason == "bytes" { changed.rawFrame = .init(bytes: Data(#"{"jsonrpc":"2.0","id":"p","method":"different"}"#.utf8))
+        await service.setPendingOverride([changed]) }
+        if reason == "stale-helper" { await service.rejectReplyAsStale() }
+        let journal = ResponseJournal(base: persistence, hold: reason == "removed-after-attempt" ? "attempt" : nil)
+        let owner = try ACPV2ResponseOwner(stream: stream, fence: fence, attachment: attachment, journal: journal, isCurrent: { true })
+        let answer = Data(#" {"jsonrpc":"2.0","id":"p","result":null} "#.utf8)
+        let intentID = UUID()
+        if reason == "removed-after-attempt" {
+            let sending = Task { try await owner.respond(request: record, intentID: intentID, attemptID: UUID(), operationKey: .init(rawValue: "answer"), frame: answer) }
+            defer { sending.cancel()
+            Task { await journal.release() } }
+            try await eventually { await journal.reached }
+            await service.setPendingOverride([])
+            await journal.release()
+            await #expect(throws: ACPV2ResponseOwner.Failure.unavailable) { try await sending.value }
+            #expect(await service.exactReplies.isEmpty)
+        } else if ["match", "stale-helper", "transient-attach"].contains(reason) {
+            let attemptID = UUID()
+            if reason == "transient-attach" {
+                await service.failNextAttach()
+                await #expect(throws: ACPV2ResponseOwner.Failure.observationLost) {
+                    try await owner.respond(request: record, intentID: intentID, attemptID: attemptID, operationKey: .init(rawValue: "é"), frame: answer)
+                }
+            }
+            let result = try await owner.respond(request: record, intentID: intentID, attemptID: attemptID, operationKey: .init(rawValue: "é"), frame: answer)
+            if reason != "stale-helper" { #expect(result.value.fact == .broker(.written)) }
+            else { if case .uncertain = result.value.fact {} else { Issue.record("Stale helper rejection acquired write certainty") } }
+            await #expect(throws: ACPV2ResponseOwner.Failure.conflict) {
+                try await owner.respond(request: record, intentID: intentID, attemptID: UUID(), operationKey: .init(rawValue: "e\u{301}"), frame: answer)
+            }
+            #expect(await service.exactReplies.count == 1)
+            #expect(await service.exactReplies.first?.frame.bytes == answer)
+        } else {
+            await #expect(throws: ACPV2ResponseOwner.Failure.unavailable) {
+                try await owner.respond(request: record, intentID: intentID, attemptID: UUID(), operationKey: .init(rawValue: "answer"), frame: answer)
+            }
+            #expect(await service.exactReplies.isEmpty)
+        }
+        #expect(await service.acks.isEmpty)
+    }
+
     @Test func brokerExitWithoutAdapterFrameSurfacesItsRecoveryDiagnostic() async throws {
         let diagnostic = "Bun runtime is unsupported. Please upgrade: bun upgrade"
         let rpc = JSONRPCError(code: -32074, message: "adapter stdout closed before a response was observed",
@@ -713,6 +814,8 @@ struct ACPBrokerRawClientTests {
 private actor RawBrokerFixture: ACPBrokerServicing {
     static let first = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"opaque":1e999}}"#.utf8)
     static let error = Data(#"{"jsonrpc":"2.0","id":9,"error":{"code":-32044,"message":"rejected","data":{"kind":"codex_hook_review_required","opaque":1e999}}}"#.utf8)
+    private var shouldFailAttach = false
+    func failNextAttach() { shouldFailAttach = true }
     private var shouldHoldAttach = false
     private let capturedAttach = AsyncStream<Void>.makeStream()
     private let releaseAttach = AsyncStream<Void>.makeStream()
@@ -730,12 +833,15 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     private let replyRelease = AsyncStream<Void>.makeStream()
     func holdReply() { shouldHoldReply = true }
     func releaseReply() { replyRelease.continuation.yield(()) }
+    private var staleReply = false
+    func rejectReplyAsStale() { staleReply = true }
     private var failReply = false
     private var wrongReplyProof = false
     func configureReply(fail: Bool, wrongProof: Bool) { failReply = fail
     wrongReplyProof = wrongProof }
     func respondExact(_ params: ACPBrokerRespondExactParams) async throws -> ACPBrokerRawReplyResult {
         exactReplies.append(params)
+        if staleReply { throw ACPBrokerRawReplyError.rejected(.staleOrigin) }
         if shouldHoldReply { for await _ in replyRelease.stream { break } }
         if failReply { throw ACPClientError.notRunning }
         let proof = wrongReplyProof ? ACPBrokerRespondExactParams(brokerId: params.brokerId, generation: params.generation,
@@ -749,6 +855,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     private let openGate = AsyncStream<Void>.makeStream()
     func releaseOpen() { openGate.continuation.yield(()) }
     let pending: Bool
+    private var pendingOverride: [ACPBrokerPendingRequest]?
+    func setPendingOverride(_ value: [ACPBrokerPendingRequest]) { pendingOverride = value }
     let isError: Bool
     var completionCursor: UInt64 = 3
     func preloadOutcome(_ value: ACPBrokerRPCOutcome, cursor: UInt64) { outcome = value
@@ -794,7 +902,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         metadata.wireContext = context
         var snapshot = ACPBrokerSnapshot(metadata: metadata, initializeResult: nil, remoteSessionResult: nil,
             turnState: .unknown("unknown"), acknowledgedCursor: .init(rawValue: acks.last ?? 0),
-            journalTail: .init(rawValue: outcome == nil ? 2 : completionCursor), pendingRequests: pending ? [pendingRequest()] : [], operations: [])
+            journalTail: .init(rawValue: outcome == nil ? 2 : completionCursor), pendingRequests: pendingOverride ?? (pending ? [pendingRequest()] : []), operations: [])
         if let outcome {
             var op = ACPBrokerOperationSnapshot(operationKey: lastOperationKey, adapterRequestId: .init(rawValue: 9), method: "session/prompt", terminalOutcome: outcome)
             op.completedCursor = .init(rawValue: completionCursor)
@@ -812,7 +920,9 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         #expect(params.wireContext == .rawV2 || params.wireContext == nil)
         return .init(snapshot: snapshot(), adopted: true)
     }
-    func attach(_ params: ACPBrokerAttachParams) async -> ACPBrokerAttachResult {
+    func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        if shouldFailAttach { shouldFailAttach = false
+        throw ACPClientError.notRunning }
         var events = (1...2).map { ACPBrokerEvent(cursor: .init(rawValue: UInt64($0)), kind: .rawFrame(.init(bytes: rawBytes))) }
             .filter { $0.cursor > (params.replayAfterCursor ?? params.acknowledgedCursor) }
         if pending, let index = events.firstIndex(where: { $0.cursor.rawValue == 1 }) {
