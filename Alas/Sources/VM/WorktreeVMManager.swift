@@ -127,7 +127,8 @@ final class WorktreeVMManager {
     /// The checkout directory of a worktree, shared read-only with its VM.
     /// Installed by the app; nil leaves the worktree share out.
     @ObservationIgnored var worktreePath: (String) -> URL? = { _ in nil }
-    /// Called with a VM's registry id once it stopped here, however it stopped.
+    /// Called with a VM's registry id once it stopped here, however it stopped. A clean point's
+    /// or reset's own stop counts only if the VM is still stopped when the operation ends.
     @ObservationIgnored var onVMStopped: (String) -> Void = { _ in }
     /// Called with a VM's registry id when a delete of it is accepted, before it runs.
     @ObservationIgnored var onVMDeleted: (String) -> Void = { _ in }
@@ -189,6 +190,9 @@ final class WorktreeVMManager {
     @ObservationIgnored private var pauses: [String: Task<VMPauseOutcome, Never>] = [:]
     /// VMs whose clean point is being taken or reset to; observed so a VM tab disables its actions.
     private(set) var diskOperations: Set<String> = []
+    /// VMs that stopped during their own disk operation. `onVMStopped` hears of it only if the
+    /// operation leaves them stopped: its own stop and restart end nothing, a take over included.
+    @ObservationIgnored private var stoppedForDiskOperation: Set<String> = []
     /// Starts waiting for a VM's disk operation to finish.
     @ObservationIgnored private var diskOperationWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
 
@@ -970,6 +974,7 @@ final class WorktreeVMManager {
         }
         defer {
             diskOperations.remove(id)
+            if stoppedForDiskOperation.remove(id) != nil, runningVMs[id] == nil { onVMStopped(id) }
             diskOperationWaiters.removeValue(forKey: id)?.forEach { $0.resume() }
         }
         try await body()
@@ -1939,9 +1944,9 @@ final class WorktreeVMManager {
             Task { await client.close() }
         }
         guard runningVMs.removeValue(forKey: id) != nil else { return }
-        // A pause clears the owner itself, in the write that records it paused.
+        // A pause clears the owner itself, once it recorded the saved state.
         if !pausing.contains(id) { clearOwner(id) }
-        onVMStopped(id)
+        if diskOperations.contains(id) { stoppedForDiskOperation.insert(id) } else { onVMStopped(id) }
     }
 
     private func clearOwner(_ id: String) {

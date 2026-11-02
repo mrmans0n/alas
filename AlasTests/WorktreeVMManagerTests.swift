@@ -973,7 +973,8 @@ final class WorktreeVMManagerTests {
         #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
         #expect(!FileManager.default.fileExists(atPath: clean.appendingPathComponent("state.vzvmsave").path))
         #expect(manager.cleanPoint(recordID: id) != nil)
-        #expect(stops == [id])
+        // Its own stop and restart end nothing, a take over included.
+        #expect(stops.isEmpty)
         #expect(hypervisor.restoredFrom == [nil, nil])
         #expect(manager.running("/repo/a", guest: guest) != nil)
     }
@@ -987,13 +988,13 @@ final class WorktreeVMManagerTests {
         try Data("dirty".utf8).write(to: disk)
         let clean = cleanDirectory(bundle)
         let cleanFiles = try FileManager.default.contentsOfDirectory(atPath: clean.path).sorted()
-        // An agent call in flight fails through the stop path, which also ends a take over.
+        // An agent call in flight fails as for any stop, but a take over survives the restart.
         var stops: [String] = []
         manager.onVMStopped = { stops.append($0) }
 
         try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
 
-        #expect(stops == ["/repo/a"])
+        #expect(stops.isEmpty)
         #expect(try contents(disk) == "disk")
         // It resumed from the clean point's state, not a cold boot.
         #expect(hypervisor.restoredFrom == [nil, stateFile(bundle), stateFile(bundle)])
@@ -1003,7 +1004,29 @@ final class WorktreeVMManagerTests {
         #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
     }
 
-    /// The live state goes, on disk and in the record, before the disk changes: an interrupted
+    /// A reset whose restart fails leaves the VM stopped, which ends a take over like any stop.
+    @Test func aResetLeftStoppedReportsTheStop() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        var stops: [String] = []
+        manager.onVMStopped = { stops.append($0) }
+        let (registry, elsewhere) = (registry, elsewhere)
+        // Another Alas takes the VM while its disk is swapped, so the restart can't happen.
+        manager.cloneCleanFile = { source, destination in
+            try VMBundle.cloneFile(source, to: destination)
+            try registry.update { $0[0].runOwner = elsewhere }
+        }
+
+        await #expect(throws: WorktreeVMManager.RestartFailed.self) {
+            try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
+        }
+
+        #expect(stops == ["/repo/a"])
+    }
+
+    /// The live state and its `state.json` go before the disk changes: an interrupted
     /// reset never restores the old memory onto the clean disk.
     @Test func anInterruptedResetToCleanColdBoots() async throws {
         let bundle = try addRecord("/repo/a")
