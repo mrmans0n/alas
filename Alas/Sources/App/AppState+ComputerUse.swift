@@ -305,8 +305,8 @@ extension AppState {
             return ComputerUseCoordinator.stoppedMessage
         }
         let elsewhere = vmManager.recordStatus(worktreeID, guest: guest).runningElsewhere != nil
-        switch VMStoppedDecision.decide(runningElsewhere: elsewhere, isStatusCall: false) {
-        case .runningElsewhere, .refuse:
+        switch VMStoppedDecision.decide(runningElsewhere: elsewhere) {
+        case .runningElsewhere:
             return notRunning
         case .start:
             return await autoStart(

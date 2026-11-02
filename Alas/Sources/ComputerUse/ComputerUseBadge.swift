@@ -19,11 +19,12 @@ struct ComputerUseBadge: View {
         drivingApp: String?, drivingVM: Bool, stopped: Bool, vmStarting: Bool, waitingForSlot: Bool, userDriving: Bool
     ) -> Label? {
         if stopped { return Label(text: "Computer use stopped", accent: false) }
+        // The desktop app it drives holds the user's own Mac, so it wins over any VM state.
+        if let drivingApp { return Label(text: "Using \(drivingApp)", accent: true) }
         if userDriving { return Label(text: "You're driving the VM", accent: false) }
         if waitingForSlot { return Label(text: "Waiting for a VM slot", accent: true) }
         if vmStarting { return Label(text: "Starting the VM", accent: true) }
         if drivingVM { return Label(text: "Using the VM", accent: true) }
-        if let drivingApp { return Label(text: "Using \(drivingApp)", accent: true) }
         return nil
     }
 

@@ -127,7 +127,9 @@ struct VMTabScreenTests {
     @Test(arguments: [
         BadgeCase(name: "idle session", expected: nil),
         BadgeCase(name: "desktop driver", drivingApp: "Safari", expected: .init(text: "Using Safari", accent: true)),
-        BadgeCase(name: "VM driver", drivingApp: "Safari", drivingVM: true, expected: .init(text: "Using the VM", accent: true)),
+        BadgeCase(name: "VM driver", drivingVM: true, expected: .init(text: "Using the VM", accent: true)),
+        BadgeCase(name: "desktop driver wins over its VM", drivingApp: "Safari", drivingVM: true, userDriving: true,
+                  expected: .init(text: "Using Safari", accent: true)),
         BadgeCase(name: "stopped wins", drivingVM: true, stopped: true, vmStarting: true, userDriving: true,
                   expected: .init(text: "Computer use stopped", accent: false)),
         BadgeCase(name: "waiting on the auto-start", vmStarting: true, expected: .init(text: "Starting the VM", accent: true)),

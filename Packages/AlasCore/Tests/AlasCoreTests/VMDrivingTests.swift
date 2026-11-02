@@ -39,12 +39,10 @@ struct VMDrivingTests {
     }
 
     @Test(arguments: [
-        (true, false, VMStoppedDecision.runningElsewhere),
-        (true, true, VMStoppedDecision.runningElsewhere),
-        (false, true, VMStoppedDecision.refuse),
-        (false, false, VMStoppedDecision.start),
+        (true, VMStoppedDecision.runningElsewhere),
+        (false, VMStoppedDecision.start),
     ])
-    func stoppedVMDecision(elsewhere: Bool, isStatus: Bool, expected: VMStoppedDecision) {
-        #expect(VMStoppedDecision.decide(runningElsewhere: elsewhere, isStatusCall: isStatus) == expected)
+    func stoppedVMDecision(elsewhere: Bool, expected: VMStoppedDecision) {
+        #expect(VMStoppedDecision.decide(runningElsewhere: elsewhere) == expected)
     }
 }
