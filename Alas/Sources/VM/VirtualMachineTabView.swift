@@ -34,6 +34,11 @@ struct VirtualMachineTabView: View {
     @State private var confirmingDelete = false
     /// The VM whose Update helper awaits confirmation.
     @State private var confirmingHelperUpdate: String?
+    /// Bumped when an agent call stops counting as driving, so the tab redraws then.
+    @State private var agentWindowEnds = 0
+    /// Bumped by each click on the look-only screen; the hint shows while set.
+    @State private var lookOnlyHint: Int?
+    @Environment(\.theme) private var theme
 
     private struct RunningElsewhere {
         let target: StartTarget
@@ -139,6 +144,7 @@ struct VirtualMachineTabView: View {
         // Starting or stopping changes the disk's size and the registry.
         .onChange(of: vms.running(worktreeID, guest: guest) != nil) { _, _ in refresh() }
         .task(id: helperCheckTarget) { await checkHelper(helperCheckTarget) }
+        .task(id: state.vmLastAgentCall[recordID]?.at) { await redrawWhenAgentWindowEnds() }
         .alert("Customize the base image?", isPresented: $confirmingCustomize) {
             Button("Customize", action: customizeBaseImage)
             Button("Cancel", role: .cancel) {}
@@ -200,14 +206,13 @@ struct VirtualMachineTabView: View {
     private var statusBar: some View {
         switch screen {
         case .running(let canUpdateHelper):
-            VMStatusBar(
-                tone: stopping ? .busy : .running,
-                title: stopping ? "Stopping" : "Running",
-                details: (canUpdateHelper ? ["helper needs an update"] : []) + diskDetails
-            ) {
-                ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(recordID) }
-                    .vmDisabled(stopping)
-                overflowMenu(updateHelper: canUpdateHelper ? recordID : nil, reveal: ownBundleURL, deletable: true)
+            if case .agent = driver(at: Date()) {
+                // Each second, for "n s ago".
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    runningStatusBar(at: context.date, canUpdateHelper: canUpdateHelper)
+                }
+            } else {
+                runningStatusBar(at: Date(), canUpdateHelper: canUpdateHelper)
             }
         case .starting:
             VMStatusBar(tone: .busy, title: "Starting")
@@ -312,6 +317,31 @@ struct VirtualMachineTabView: View {
         "\(Int((min(max(fraction, 0), 1) * 100).rounded()))%"
     }
 
+    private func runningStatusBar(at date: Date, canUpdateHelper: Bool) -> some View {
+        let current = driver(at: date)
+        let status = VMDriverStatus.make(driver: current, agentName: agentName(current), now: date)
+        let helperNote = canUpdateHelper ? ["helper needs an update"] : []
+        return VMStatusBar(
+            tone: stopping ? .busy : status.tone,
+            title: stopping ? "Stopping" : status.title,
+            details: current == .idle || stopping ? helperNote + diskDetails : status.details + helperNote
+        ) {
+            if !stopping {
+                switch status.action {
+                case .takeOver:
+                    AlasButton(title: "Take over", compact: true, action: takeOver)
+                case .handBack:
+                    AlasButton(title: "Hand back", style: .primary, compact: true) {
+                        state.handBackVM(recordID: recordID)
+                    }
+                }
+            }
+            ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(recordID) }
+                .vmDisabled(stopping)
+            overflowMenu(updateHelper: canUpdateHelper ? recordID : nil, reveal: ownBundleURL, deletable: true)
+        }
+    }
+
     /// The ⋯ menu of rare actions; nothing when none applies. `deletable`
     /// offers deleting this worktree's own VM.
     @ViewBuilder
@@ -345,8 +375,37 @@ struct VirtualMachineTabView: View {
     private var content: some View {
         switch screen {
         case .running:
+            let current = driver(at: Date())
             VMDisplaySurface(
-                view: state.tabs.vmView(tabID: tab.id), virtualMachine: vms.running(worktreeID, guest: guest)?.vm)
+                view: state.tabs.vmView(tabID: tab.id), virtualMachine: vms.running(worktreeID, guest: guest)?.vm,
+                allowsInput: VMDriver.allowsViewInput(current),
+                onBlockedClick: { lookOnlyHint = (lookOnlyHint ?? 0) + 1 }
+            )
+            .overlay {
+                if current == .user {
+                    Rectangle()
+                        .strokeBorder(theme.color("accent"), lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                if lookOnlyHint != nil, !VMDriver.allowsViewInput(current) {
+                    Text("Take over to use the VM")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Capsule().fill(Color.black.opacity(0.75)))
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+            }
+            .animation(.easeOut(duration: 0.15), value: lookOnlyHint == nil)
+            .task(id: lookOnlyHint) {
+                guard lookOnlyHint != nil else { return }
+                try? await Task.sleep(for: .seconds(2))
+                if !Task.isCancelled { lookOnlyHint = nil }
+            }
         case .starting:
             VMEmptyStateCard(
                 icon: "desktopcomputer", title: "Starting the VM", subtitle: "\(guestName) is booting.", busy: true
@@ -727,6 +786,42 @@ struct VirtualMachineTabView: View {
         Task {
             await vms.updateHelper(id)
             refresh()
+        }
+    }
+
+    // MARK: - Driving
+
+    /// Who drives this tab's VM at `date`. Reads `agentWindowEnds` so the tab redraws when an
+    /// agent call stops counting.
+    private func driver(at date: Date) -> VMDriver {
+        _ = agentWindowEnds
+        return VMDriver.current(
+            lastAgentCall: state.vmLastAgentCall[recordID], takenOver: state.vmTakenOver.contains(recordID), now: date
+        )
+    }
+
+    private func agentName(_ driver: VMDriver) -> String {
+        guard case .agent(let sessionID, _, _) = driver else { return "" }
+        return state.computerUseAgentName(sessionID)
+    }
+
+    /// Sleeps until the last agent call stops counting as driving, then redraws the tab.
+    private func redrawWhenAgentWindowEnds() async {
+        guard let at = state.vmLastAgentCall[recordID]?.at else { return }
+        let remaining = at.addingTimeInterval(VMDriver.agentWindow).timeIntervalSinceNow
+        guard remaining > 0 else { return }
+        try? await Task.sleep(for: .seconds(remaining))
+        guard !Task.isCancelled else { return }
+        agentWindowEnds += 1
+    }
+
+    /// The user takes the VM over and gets its keyboard.
+    private func takeOver() {
+        lookOnlyHint = nil
+        let view = state.tabs.vmView(tabID: tab.id)
+        Task {
+            await state.takeOverVM(recordID: recordID)
+            view.window?.makeFirstResponder(view)
         }
     }
 

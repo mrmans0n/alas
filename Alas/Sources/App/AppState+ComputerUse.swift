@@ -74,10 +74,7 @@ extension AppState {
     func startComputerUseStatusItem() {
         let item = ComputerUseStatusItem(
             coordinator: computerUse,
-            agentName: { [weak self] id in
-                guard let self, let session = self.session(for: id) else { return "An agent" }
-                return self.agent(id: session.agentId)?.displayName ?? session.agentId
-            },
+            agentName: { [weak self] in self?.computerUseAgentName($0) ?? "An agent" },
             showSession: { [weak self] in self?.showComputerUseSession($0) },
             stopShortcutWarning: { [weak self] in self?.computerUseStopHotKey?.unavailableReason },
             retryStopShortcut: { [weak self] in self?.computerUseStopHotKey?.retryIfTaken() },
@@ -402,6 +399,17 @@ extension AppState {
         )
     }
 
+    /// Whether the user took over a VM this session drove.
+    func isUserDrivingVM(ofSession sessionID: String) -> Bool {
+        !(vmComputerUseSessions[sessionID] ?? []).isDisjoint(with: vmTakenOver)
+    }
+
+    /// The display name of the agent behind `sessionID`.
+    func computerUseAgentName(_ sessionID: String) -> String {
+        guard let session = session(for: sessionID) else { return "An agent" }
+        return agent(id: session.agentId)?.displayName ?? session.agentId
+    }
+
     /// The user takes VM `recordID` over: agent calls to it are refused from now on, and its guest
     /// stops each session driving it, which cancels their calls in flight. Other VMs those
     /// sessions drive are untouched.
@@ -522,5 +530,33 @@ extension AppState {
         case .workspaceCheckout:
             activateHarnessSession(owner: owner, sessionId: sessionID)
         }
+    }
+}
+
+/// The last agent call forwarded to each VM, by registry id. Each VM's entry is observed on its
+/// own: a view reading one VM's call redraws only when that VM is called.
+@MainActor
+final class VMLastAgentCalls {
+    typealias Call = (sessionID: String, tool: String, at: Date)
+
+    @MainActor
+    @Observable
+    fileprivate final class Entry {
+        var call: Call?
+    }
+
+    /// Never removed, so a view that read an entry before its first call still sees it change.
+    private var entries: [String: Entry] = [:]
+
+    subscript(recordID: String) -> Call? {
+        get { entry(recordID).call }
+        set { entry(recordID).call = newValue }
+    }
+
+    private func entry(_ recordID: String) -> Entry {
+        if let entry = entries[recordID] { return entry }
+        let entry = Entry()
+        entries[recordID] = entry
+        return entry
     }
 }

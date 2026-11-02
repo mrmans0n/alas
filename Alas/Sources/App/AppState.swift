@@ -343,8 +343,9 @@ final class AppState {
     var vmTakeOvers = VMTakeOvers()
     /// The registry ids of the VMs the user took over; agent calls to them are refused.
     var vmTakenOver: Set<String> { vmTakeOvers.recordIDs }
-    /// The last agent call forwarded to each VM, by registry id, for who drives it.
-    var vmLastAgentCall: [String: (sessionID: String, tool: String, at: Date)] = [:]
+    /// The last agent call forwarded to each VM, by registry id, for who drives it. Observed per
+    /// VM, so one VM's calls redraw only its own tab.
+    @ObservationIgnored let vmLastAgentCall = VMLastAgentCalls()
     /// The clock VM driving is read with; tests replace it.
     @ObservationIgnored var vmNow: () -> Date = Date.init
     /// Starts a stopped worktree VM for agent calls and holds its slot cards. Observable itself.
