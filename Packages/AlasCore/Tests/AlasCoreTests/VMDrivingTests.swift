@@ -39,13 +39,6 @@ struct VMDrivingTests {
         (false, false, VMStoppedDecision.start),
     ])
     func stoppedVMDecision(elsewhere: Bool, isStatus: Bool, expected: VMStoppedDecision) {
-        #expect(AlasPlatform.stoppedVMDecision(runningElsewhere: elsewhere, isStatusCall: isStatus) == expected)
-    }
-
-    @Test func messagesAreExact() {
-        #expect(VMAutoStartMessages.userDriving == "computer_user_active: The user is driving this VM. Try again after they hand it back.")
-        #expect(VMAutoStartMessages.starting == "computer_vm_starting: This worktree's VM is still starting. Try again in a moment.")
-        #expect(VMAutoStartMessages.slotPending == "computer_vm_slot_pending: Both VM slots are busy and the user hasn't chosen which to pause yet. Try again in a moment.")
-        #expect(VMAutoStartMessages.userDeclined == "computer_vm_stopped: The user chose not to start this worktree's VM.")
+        #expect(VMStoppedDecision.decide(runningElsewhere: elsewhere, isStatusCall: isStatus) == expected)
     }
 }

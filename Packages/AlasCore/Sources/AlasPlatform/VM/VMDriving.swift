@@ -37,12 +37,12 @@ public enum VMStoppedDecision: Equatable, Sendable {
     case start
     case runningElsewhere
     case refuse
-}
 
-/// What an agent call does when its VM is not running here.
-public func stoppedVMDecision(runningElsewhere: Bool, isStatusCall: Bool) -> VMStoppedDecision {
-    if runningElsewhere { return .runningElsewhere }
-    return isStatusCall ? .refuse : .start
+    /// What an agent call does when its VM is not running here.
+    public static func decide(runningElsewhere: Bool, isStatusCall: Bool) -> VMStoppedDecision {
+        if runningElsewhere { return .runningElsewhere }
+        return isStatusCall ? .refuse : .start
+    }
 }
 
 public enum VMAutoStartMessages {
