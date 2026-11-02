@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SettingsSection: String, CaseIterable, Identifiable {
-    case agents, appearance, changes, chat, code, computerUse, worktreeVMs, general, onDeviceAI, remote, shortcuts, spaces, terminal, worktrees, plugins, debug
+    case agents, appearance, changes, chat, code, computerUse, general, onDeviceAI, remote, shortcuts, spaces, terminal, worktrees, plugins, debug
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -13,7 +13,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .chat:       return "Chat"
         case .code:       return "Code"
         case .computerUse: return "Computer Use"
-        case .worktreeVMs: return "Worktree VMs"
         case .general:    return "General"
         case .onDeviceAI: return "On-device AI"
         case .remote:     return "Remote"
@@ -33,7 +32,6 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         case .chat:       return "message"
         case .code:       return "code"
         case .computerUse: return "cursorarrow.rays"
-        case .worktreeVMs: return "desktopcomputer"
         case .general:    return "gear"
         case .onDeviceAI: return "cpu"
         case .remote:     return "iphone.gen3"
@@ -44,13 +42,9 @@ enum SettingsSection: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Worktree VMs need Apple silicon, so an Intel Mac doesn't list them.
-    static func visibleSections(
-        showsDebug: Bool, supportsVMs: Bool = WorktreeVMManager.isSupported
-    ) -> [SettingsSection] {
+    static func visibleSections(showsDebug: Bool) -> [SettingsSection] {
         SettingsSection.allCases
             .filter { showsDebug || $0 != .debug }
-            .filter { supportsVMs || $0 != .worktreeVMs }
             .sorted(by: {
                 if $0 == .general { return true }
                 if $1 == .general { return false }

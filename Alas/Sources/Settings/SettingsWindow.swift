@@ -41,7 +41,6 @@ struct SettingsWindow: View {
                     case .chat:       ChatPane(state: state)
                     case .code:       CodePane(state: state)
                     case .computerUse: ComputerUsePane(state: state)
-                    case .worktreeVMs: WorktreeVMsPane(state: state)
                     case .shortcuts:  ShortcutsPane(state: state)
                     case .spaces:     SpacesPane(state: state)
                     case .terminal:   TerminalPane(state: state)

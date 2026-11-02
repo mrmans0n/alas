@@ -1,9 +1,9 @@
 import AlasCore
 import SwiftUI
 
-/// Settings › Worktree VMs: the disk base images, worktree VMs, orphaned VMs and downloaded
-/// installers use, with Delete, Clean up and Remove.
-struct WorktreeVMsPane: View {
+/// Settings › Worktrees › Virtual Machines: the disk base images, worktree VMs, orphaned VMs
+/// and downloaded installers use, with Delete, Clean up and Remove.
+struct WorktreeVMsSection: View {
     @Bindable var state: AppState
     @ObservedObject private var installer: GoldenImageInstaller
     @ObservedObject private var linuxInstaller: LinuxGoldenInstaller
@@ -29,44 +29,34 @@ struct WorktreeVMsPane: View {
     private var vms: WorktreeVMManager { state.vmManager }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Worktree VMs").font(.system(size: 18, weight: .semibold))
-                Text("Base images and the VMs cloned from them, with the disk they use.")
-                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                    .padding(.bottom, 12)
-
-                SettingsGroup(title: "Disk use") {
-                    if let errorMessage {
-                        Text(errorMessage)
-                            .font(.system(size: 12)).foregroundColor(theme.color("warn"))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.bottom, 10)
-                    }
-                    if let loadError {
-                        Text("Couldn't read the VM registry: \(Self.sentence(loadError))")
-                            .font(.system(size: 12.5)).foregroundColor(theme.color("warn"))
-                            .fixedSize(horizontal: false, vertical: true)
-                            .padding(.vertical, 10)
-                    } else if !loaded {
-                        Spinner().frame(width: 16, height: 16).padding(.vertical, 10)
-                    } else if bundles.isEmpty && !showsCleanUp {
-                        Text("No base images or VMs yet.")
-                            .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
-                            .padding(.vertical, 10)
-                    }
-                    ForEach(bundles) { bundle in
-                        bundleRow(bundle)
-                    }
-                    if showsCleanUp { cleanUpRow }
-                    if installerBytes > 0 { installersRow }
-                    Text("Clones share blocks with their base image, so these sizes can add up to more than the disk used.")
-                        .font(.system(size: 11.5)).foregroundColor(theme.color("fg-dim"))
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 12)
-                }
+        SettingsGroup(title: "Virtual Machines") {
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(.system(size: 12)).foregroundColor(theme.color("warn"))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 10)
             }
-            .padding(.horizontal, 32).padding(.vertical, 24)
+            if let loadError {
+                Text("Couldn't read the VM registry: \(Self.sentence(loadError))")
+                    .font(.system(size: 12.5)).foregroundColor(theme.color("warn"))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.vertical, 10)
+            } else if !loaded {
+                Spinner().frame(width: 16, height: 16).padding(.vertical, 10)
+            } else if bundles.isEmpty && !showsCleanUp {
+                Text("No base images or VMs yet.")
+                    .font(.system(size: 12.5)).foregroundColor(theme.color("fg-dim"))
+                    .padding(.vertical, 10)
+            }
+            ForEach(bundles) { bundle in
+                bundleRow(bundle)
+            }
+            if showsCleanUp { cleanUpRow }
+            if installerBytes > 0 { installersRow }
+            Text("Clones share blocks with their base image, so these sizes can add up to more than the disk used.")
+                .font(.system(size: 11.5)).foregroundColor(theme.color("fg-dim"))
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.top, 12)
         }
         .task { await refresh() }
         .alert("Delete this base image?", isPresented: present($confirmingGolden), presenting: confirmingGolden) { golden in
