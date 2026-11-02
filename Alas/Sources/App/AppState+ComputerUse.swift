@@ -189,6 +189,9 @@ extension AppState {
                 }
                 if await client.lifecycle(.resume, sessionID: sessionID) { resumeTold(sessionID, recordID) }
             }
+            // Connects before the last check: a take over during the handshake can't stop a guest
+            // that isn't connected yet, so the call itself must not go out after it.
+            _ = try? await client.hello()
             // Nothing goes to a VM the user took over since the gate.
             if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
                 return .error(refusal)
