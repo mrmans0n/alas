@@ -1418,7 +1418,7 @@ final class WorktreeVMManagerTests {
         try makeSealedGoldens()
         let manager = makeManager()
         try manager.createVM(worktreeID: "/repo/a", guest: guest)
-        let golden = try #require(await manager.listBundles().first { $0.kind == .golden && $0.guest == guest })
+        let golden = try #require(await manager.diskUse().bundles.first { $0.kind == .golden && $0.guest == guest })
 
         let refusal = #expect(throws: WorktreeVMManager.VMError.self) { try manager.deleteGolden(id: golden.id) }
         #expect(refusal?.message == "Delete its worktree VMs first")
@@ -1427,7 +1427,7 @@ final class WorktreeVMManagerTests {
         #expect(await manager.deleteVM(worktreeID: "/repo/a", guest: guest) == nil)
         try manager.deleteGolden(id: golden.id)
         #expect(!exists(golden.url))
-        #expect(await !manager.listBundles().contains { $0.id == golden.id })
+        #expect(try await !manager.diskUse().bundles.contains { $0.id == golden.id })
     }
 
     @Test func orphanCleanupDeletesOnlyOrphans() async throws {
@@ -1442,6 +1442,14 @@ final class WorktreeVMManagerTests {
         let gone = try addRecord("/repo/gone")
         let stray = root.appendingPathComponent("worktrees/stray", isDirectory: true)
         try FileManager.default.createDirectory(at: stray, withIntermediateDirectories: true)
+        // Only a record this build can't decode names it: a newer Alas's VM, maybe running.
+        let newer = root.appendingPathComponent("worktrees/newer", isDirectory: true)
+        try FileManager.default.createDirectory(at: newer, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("registry.json")
+        var elements = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [Any] ?? []
+        elements.append(["id": "/repo/newer", "guestOS": "plan9", "goldenBuild": "x", "bundlePath": newer.path,
+                         "createdAt": 0, "lastUsedAt": 0])
+        try JSONSerialization.data(withJSONObject: elements).write(to: file)
         // Leftovers of an interrupted reset and clean point.
         for bundle in [onDisk, runningElsewhere] {
             try Data("x".utf8).write(to: bundle.appendingPathComponent("disk.img.resetting"))
@@ -1451,19 +1459,19 @@ final class WorktreeVMManagerTests {
         let manager = makeManager()
         manager.worktreePath = { $0 == "/repo/known" ? URL(fileURLWithPath: "/repo/known") : nil }
 
-        let orphans = await manager.orphanBundles()
+        let orphans = try await manager.diskUse().orphans
         #expect(Set(orphans.map(\.url.lastPathComponent)) == [gone.lastPathComponent, stray.lastPathComponent])
 
-        #expect(manager.deleteOrphans(orphans) == nil)
+        #expect(manager.deleteOrphans(orphans.map(\.id) + ["worktrees/newer"]) == nil)
 
-        #expect([onDisk, inProject, runningElsewhere].allSatisfy(exists))
+        #expect([onDisk, inProject, runningElsewhere, newer].allSatisfy(exists))
         #expect(![gone, stray].contains(where: exists))
         #expect(try Set(registry.snapshot().map(\.id)) == [checkout.path, "linux:/repo/known", "/repo/gone-elsewhere"])
         #expect(!exists(onDisk.appendingPathComponent("disk.img.resetting")))
         #expect(!exists(onDisk.appendingPathComponent("clean.partial")))
         #expect(exists(runningElsewhere.appendingPathComponent("disk.img.resetting")))
         #expect(exists(runningElsewhere.appendingPathComponent("clean.partial")))
-        #expect(await manager.orphanBundles().isEmpty)
+        #expect(try await manager.diskUse().orphans.isEmpty)
     }
 
     @Test func removeInstallersKeepsBundles() async throws {
@@ -1489,7 +1497,7 @@ final class WorktreeVMManagerTests {
         try manager.removeInstallers()
         #expect(!installers.contains(where: exists))
         #expect(await manager.installerBytes() == 0)
-        let bundles = await manager.listBundles()
+        let bundles = try await manager.diskUse().bundles
         #expect(bundles.count == 3)
         #expect(bundles.allSatisfy { exists($0.url) && $0.allocatedBytes > 0 })
     }

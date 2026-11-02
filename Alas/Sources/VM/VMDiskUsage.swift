@@ -32,6 +32,12 @@ enum VMDiskUsage {
     }
 }
 
+/// What Settings › Worktree VMs lists: base images and VMs, and the orphaned VM bundles.
+struct VMDiskUse: Sendable {
+    var bundles: [VMBundleSummary] = []
+    var orphans: [VMBundleSummary] = []
+}
+
 /// A base image or worktree VM bundle, as Settings › Worktree VMs lists it.
 struct VMBundleSummary: Identifiable, Equatable, Sendable {
     enum Kind: Sendable { case golden, worktree }
@@ -51,6 +57,8 @@ struct VMBundleSummary: Identifiable, Equatable, Sendable {
     let runningElsewhere: String?
     /// A VM bundle no live worktree owns (see `VMOrphans`).
     let isOrphan: Bool
+    /// A VM bundle only a record this build can't decode names: another Alas version's, left alone.
+    var fromOtherBuild = false
     /// Stale leftovers Clean up removes; empty while the VM runs anywhere.
     let leftovers: [URL]
     /// For a base image, how many VMs were cloned from it; it can't be deleted while any exist.

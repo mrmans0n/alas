@@ -1472,37 +1472,48 @@ final class WorktreeVMManager {
 
     // MARK: - Disk use
 
-    /// Base images and worktree VMs with the disk they use, sizes read off the main actor.
-    /// Orphaned VM bundles are left out; `orphanBundles` lists them.
-    func listBundles() async -> [VMBundleSummary] {
-        await VMBundleSummary.measured(scanBundles().filter { !$0.isOrphan })
+    /// Base images and worktree VMs with the disk they use, and apart from them the orphaned VM
+    /// bundles: those under `worktrees/` no live worktree owns, because no record names them or
+    /// their record's worktree is neither on disk nor in a project. One any Alas runs, or one a
+    /// record this build can't decode names, never is. One scan; sizes are read off the main
+    /// actor. Throws when the registry can't be read, rather than taking every VM for an orphan.
+    func diskUse() async throws -> VMDiskUse {
+        let scanned = try scanBundles()
+        async let bundles = VMBundleSummary.measured(scanned.filter { !$0.isOrphan })
+        async let orphans = VMBundleSummary.measured(scanned.filter(\.isOrphan))
+        return await VMDiskUse(bundles: bundles, orphans: orphans)
     }
 
-    /// VM bundles under `worktrees/` no live worktree owns: no record names them, or their
-    /// record's worktree is neither on disk nor in a project. One any Alas runs never is.
-    func orphanBundles() async -> [VMBundleSummary] {
-        await VMBundleSummary.measured(scanBundles().filter(\.isOrphan))
-    }
-
-    /// Deletes `orphans` that are still orphaned, with their records, then the leftovers of
-    /// interrupted resets and clean points in VMs no Alas runs. Returns why some were left, if any.
+    /// Deletes the orphans among `ids` (`VMBundleSummary.id`s) that a fresh scan still finds
+    /// orphaned, with their records, then the leftovers of interrupted resets and clean points in
+    /// VMs no Alas runs. Returns why some were left, if any.
     @discardableResult
-    func deleteOrphans(_ orphans: [VMBundleSummary]) -> String? {
+    func deleteOrphans(_ ids: [String]) -> String? {
         guard vmsExist else { return nil }
+        // Listed a while ago: a VM started or a worktree came back since is kept, and what is
+        // deleted is what the registry says now.
+        let orphans: [VMBundleSummary]
+        do {
+            orphans = try scanBundles().filter { $0.isOrphan && ids.contains($0.id) }
+        } catch {
+            return "the VM registry couldn't be read (\(error.localizedDescription))"
+        }
         var reasons: [String] = []
-        // Listed a while ago: a VM started or a worktree came back since is kept.
-        let stillOrphaned = Set(scanBundles().filter(\.isOrphan).map(\.id))
-        for orphan in orphans where stillOrphaned.contains(orphan.id) {
+        for orphan in orphans {
             if let recordID = orphan.recordID {
-                onVMDeleted(recordID)
-                if let reason = removeRecordAndBundle(recordID) { reasons.append("\(orphan.name): \(reason)") }
+                if let reason = removeRecordAndBundle(recordID) {
+                    reasons.append("\(orphan.name): \(reason)")
+                } else {
+                    onVMDeleted(recordID)
+                }
                 continue
             }
             do {
                 // Under the registry lock, so a create cloning into this folder can't race it.
-                try registry.update { records in
+                try registry.updateSeeingForeignBundles { records, foreign in
                     let folder = orphan.url.lastPathComponent
-                    guard !records.contains(where: { URL(fileURLWithPath: $0.bundlePath).lastPathComponent == folder }),
+                    let named = records.map(\.bundlePath) + foreign
+                    guard !named.contains(where: { URL(fileURLWithPath: $0).lastPathComponent == folder }),
                           FileManager.default.fileExists(atPath: orphan.url.path)
                     else { return }
                     try FileManager.default.removeItem(at: orphan.url)
@@ -1517,7 +1528,12 @@ final class WorktreeVMManager {
                     && !isBusyHere(record.id)
                 {
                     for leftover in VMDiskUsage.leftovers(in: URL(fileURLWithPath: record.bundlePath)) {
-                        try FileManager.default.removeItem(at: leftover)
+                        do {
+                            try FileManager.default.removeItem(at: leftover)
+                        } catch {
+                            logger.error("Removing \(leftover.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                            reasons.append("\(leftover.lastPathComponent): \(error.localizedDescription)")
+                        }
                     }
                 }
             }
@@ -1615,9 +1631,11 @@ final class WorktreeVMManager {
 
     /// Every base image and worktree VM bundle on disk, without sizes. Cheap enough for the main
     /// actor: directory listings and one registry read.
-    private func scanBundles() -> [VMBundleSummary] {
+    private func scanBundles() throws -> [VMBundleSummary] {
         guard vmsExist else { return [] }
-        let records = (try? registry.snapshot()) ?? []
+        // Read without writing, so fields only a newer build knows survive.
+        let (records, foreignBundlePaths) = try registry.read()
+        let foreignFolders = Set(foreignBundlePaths.map { URL(fileURLWithPath: $0).lastPathComponent })
         let me = VMRunOwner.current(label: ownerLabel)
         func elsewhere(_ owner: VMRunOwner?) -> String? {
             owner.flatMap { me.map($0.isSameProcess(as:)) == true ? nil : $0.label }
@@ -1649,7 +1667,7 @@ final class WorktreeVMManager {
         let recordIn = Dictionary(folderOf.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
         let folders = Self.subdirectories(of: root.appendingPathComponent("worktrees", isDirectory: true))
         let orphaned = Set(VMOrphans.find(
-            bundleNames: folders.map(\.lastPathComponent), records: vmRecords,
+            bundleNames: folders.map(\.lastPathComponent).filter { !foreignFolders.contains($0) }, records: vmRecords,
             worktreeExists: { FileManager.default.fileExists(atPath: $0) || worktreePath($0) != nil },
             bundleName: { worktree, guest in
                 // A record's own bundle path wins over the name a create would give it.
@@ -1661,13 +1679,15 @@ final class WorktreeVMManager {
             let record = recordIn[folder].flatMap { id in vmRecords.first { $0.id == id } }
             let parsed = record.map { VMIdentity.parse(recordID: $0.id) }
             let busyHere = record.map { isBusyHere($0.id) } ?? false
-            let live = busyHere || record?.runOwner != nil
+            // A record this build can't decode may belong to a VM a newer Alas runs.
+            let fromOtherBuild = record == nil && foreignFolders.contains(folder)
+            let live = busyHere || record?.runOwner != nil || fromOtherBuild
             bundles.append(VMBundleSummary(
                 id: "worktrees/" + folder, kind: .worktree,
                 guest: parsed?.guest ?? (folder.hasSuffix("-linux") ? .linux : .macOS), name: folder,
                 worktreeID: parsed?.worktree, url: url, runningHere: busyHere,
                 runningElsewhere: elsewhere(record?.runOwner),
-                isOrphan: orphaned.contains(folder) && !live,
+                isOrphan: orphaned.contains(folder) && !live, fromOtherBuild: fromOtherBuild,
                 leftovers: live || record == nil ? [] : VMDiskUsage.leftovers(in: url)))
         }
         return bundles

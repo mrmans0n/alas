@@ -12,6 +12,8 @@ struct WorktreeVMsPane: View {
     @State private var orphans: [VMBundleSummary] = []
     @State private var installerBytes: Int64 = 0
     @State private var loaded = false
+    /// Why the VM registry couldn't be read; the lists are hidden meanwhile.
+    @State private var loadError: String?
     @State private var errorMessage: String?
     @State private var confirmingGolden: VMBundleSummary?
     @State private var confirmingVM: VMBundleSummary?
@@ -41,7 +43,12 @@ struct WorktreeVMsPane: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .padding(.bottom, 10)
                     }
-                    if !loaded {
+                    if let loadError {
+                        Text("Couldn't read the VM registry: \(Self.sentence(loadError))")
+                            .font(.system(size: 12.5)).foregroundColor(theme.color("warn"))
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.vertical, 10)
+                    } else if !loaded {
                         Spinner().frame(width: 16, height: 16).padding(.vertical, 10)
                     } else if bundles.isEmpty && !showsCleanUp {
                         Text("No base images or VMs yet.")
@@ -53,7 +60,7 @@ struct WorktreeVMsPane: View {
                     }
                     if showsCleanUp { cleanUpRow }
                     if installerBytes > 0 { installersRow }
-                    Text("Sizes are disk actually used (APFS clones share blocks with the base image).")
+                    Text("Clones share blocks with their base image, so these sizes can add up to more than the disk used.")
                         .font(.system(size: 11.5)).foregroundColor(theme.color("fg-dim"))
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.top, 12)
@@ -93,12 +100,11 @@ struct WorktreeVMsPane: View {
     @ViewBuilder
     private func bundleRow(_ bundle: VMBundleSummary) -> some View {
         let elsewhere = bundle.runningElsewhere != nil
-        diskRow(
-            title: title(of: bundle) + (elsewhere ? " (running in another Alas)" : ""),
-            bytes: bundle.allocatedBytes
-        ) {
+        let note = elsewhere ? " (running in another Alas)" : bundle.fromOtherBuild ? " (another Alas version's)" : ""
+        diskRow(title: title(of: bundle) + note, bytes: bundle.allocatedBytes) {
             AlasButton(title: "Delete", compact: true) { askToDelete(bundle) }
-                .vmDisabled(elsewhere || bundle.runningHere || (bundle.kind == .golden && installBusy(bundle.guest)))
+                .vmDisabled(elsewhere || bundle.fromOtherBuild || bundle.runningHere
+                    || (bundle.kind == .golden && installBusy(bundle.guest)))
         }
     }
 
@@ -199,10 +205,14 @@ struct WorktreeVMsPane: View {
     // MARK: - Actions
 
     private func refresh() async {
-        async let listed = vms.listBundles()
-        async let orphaned = vms.orphanBundles()
         async let installers = vms.installerBytes()
-        (bundles, orphans, installerBytes) = await (listed, orphaned, installers)
+        do {
+            let use = try await vms.diskUse()
+            (bundles, orphans, loadError) = (use.bundles, use.orphans, nil)
+        } catch {
+            (bundles, orphans, loadError) = ([], [], error.localizedDescription)
+        }
+        installerBytes = await installers
         loaded = true
     }
 
@@ -241,7 +251,7 @@ struct WorktreeVMsPane: View {
 
     private func cleanUp() {
         errorMessage = nil
-        if let reason = vms.deleteOrphans(orphans) {
+        if let reason = vms.deleteOrphans(orphans.map(\.id)) {
             errorMessage = "Some VMs couldn't be cleaned up: \(Self.sentence(reason))"
         }
         Task { await refresh() }
