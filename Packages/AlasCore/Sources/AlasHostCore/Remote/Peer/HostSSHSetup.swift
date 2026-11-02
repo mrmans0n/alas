@@ -1,4 +1,3 @@
-import CryptoKit
 import Foundation
 import AlasFoundation
 import AlasPlatform
@@ -23,7 +22,6 @@ public struct HostSSHProbe: Equatable, Sendable {
     /// The installed cask that ships `alas-host`: "alas-host" or "alas".
     public var cask: String?
     public var hostPath: String?
-    public var hostSHA256: String?
     /// From the existing host's `config list`.
     public var reachability: String?
     public var agents: [HostSSHAgent]
@@ -34,7 +32,6 @@ public struct HostSSHProbe: Equatable, Sendable {
         brew: String? = nil,
         cask: String? = nil,
         hostPath: String? = nil,
-        hostSHA256: String? = nil,
         reachability: String? = nil,
         agents: [HostSSHAgent] = []
     ) {
@@ -43,7 +40,6 @@ public struct HostSSHProbe: Equatable, Sendable {
         self.brew = brew
         self.cask = cask
         self.hostPath = hostPath
-        self.hostSHA256 = hostSHA256
         self.reachability = reachability
         self.agents = agents
     }
@@ -82,7 +78,6 @@ public struct HostSSHProbe: Equatable, Sendable {
         probe.brew = nonEmpty("brew")
         probe.cask = nonEmpty("cask")
         probe.hostPath = nonEmpty("host")
-        probe.hostSHA256 = nonEmpty("sha")
         return probe
     }
 }
@@ -92,12 +87,12 @@ public enum HostSSHInstall: Equatable, Sendable {
     case brewInstall
     /// The remote's own Alas.app host: used as is, not ours to replace.
     case existing(path: String)
-    /// Copy this app's host files into `~/.alas/host`.
+    /// Copy this app's host files into `~/.alas/host`, every time: the web
+    /// client, zmx and the CLI change without the host binary changing.
     case copy
-    case upToDate(path: String)
     case unsupported(String)
 
-    public static func decide(_ probe: HostSSHProbe, bundleArch: String, bundleSHA256: String?) -> HostSSHInstall {
+    public static func decide(_ probe: HostSSHProbe, bundleArch: String) -> HostSSHInstall {
         if probe.os != "Darwin" {
             return .unsupported("alas-host runs on macOS only.")
         }
@@ -111,9 +106,6 @@ public enum HostSSHInstall: Equatable, Sendable {
             return .existing(path: path)
         }
         if probe.arch == bundleArch {
-            if let path = probe.hostPath, let sha = probe.hostSHA256, sha == bundleSHA256 {
-                return .upToDate(path: path)
-            }
             return .copy
         }
         return .unsupported(
@@ -191,15 +183,9 @@ public struct HostSSHSetup: Sendable {
         RemoteZmxInstaller.localArch == "aarch64" ? "arm64" : RemoteZmxInstaller.localArch
     }
 
-    var bundleHost: URL { bundleResources.appendingPathComponent("alas-host/alas-host") }
-
-    public var bundleSHA256: String? {
-        guard let data = try? Data(contentsOf: bundleHost) else { return nil }
-        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-    }
 
     public func decision(for probe: HostSSHProbe) -> HostSSHInstall {
-        HostSSHInstall.decide(probe, bundleArch: Self.bundleArch, bundleSHA256: bundleSHA256)
+        HostSSHInstall.decide(probe, bundleArch: Self.bundleArch)
     }
 
     /// Prints the host executable: on PATH (brew), else the copied or app one.
@@ -221,7 +207,6 @@ public struct HostSSHSetup: Sendable {
     \(locateHost)
     echo "host=$h"
     if [ -n "$h" ]; then
-    echo "sha=$(shasum -a 256 "$h" | cut -d ' ' -f 1)"
     echo "\(HostSSHProbe.configMarker)"
     "$h" config list 2>/dev/null
     fi
@@ -250,7 +235,7 @@ public struct HostSSHSetup: Sendable {
         switch decision(for: probe) {
         case .unsupported(let reason):
             throw Failure(step: "Install", message: reason, connectionFailed: false)
-        case .existing(let path), .upToDate(let path):
+        case .existing(let path):
             return path
         case .brewUpgrade(let cask):
             progress("Updating alas-host with Homebrew")
@@ -335,6 +320,9 @@ public struct HostSSHSetup: Sendable {
 
     /// Installs and (re)starts the launchd agent that runs the host.
     public func start(host: String) async throws {
+        // A host started in a terminal holds the profile, so the agent's host
+        // would wait behind it and `pair` would reach the old one.
+        _ = try await step("Start", Self.foregroundHostCheck, timeout: 30)
         do {
             _ = try await step("Start", "\(SSHCommand.shellQuote(host)) install-agent", timeout: 60)
         } catch let failure as Failure where !failure.connectionFailed {
@@ -346,6 +334,14 @@ public struct HostSSHSetup: Sendable {
             )
         }
     }
+
+    /// Succeeds on `ps -axo ppid=,comm=` lines with an alas-host not run by launchd.
+    static let foregroundHostFilter = "awk '$1 != 1 && /\\/alas-host$/ { f = 1 } END { exit !f }'"
+
+    static let foregroundHostCheck = """
+    if ps -axo ppid=,comm= | \(foregroundHostFilter); then \
+    echo "alas-host is running in a terminal on the host Mac. Stop it (Ctrl-C there) and try again." >&2; exit 1; fi
+    """
 
     /// Asks the freshly started host for a pairing link, retrying each second
     /// for 30 s while it comes up.

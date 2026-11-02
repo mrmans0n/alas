@@ -203,7 +203,6 @@ struct HostSSHSetupSheet: View {
         case .brewInstall: "Installs alas-host with Homebrew"
         case .existing: "Uses the alas-host inside Alas.app on that Mac"
         case .copy: "Copies alas-host from this app"
-        case .upToDate: "alas-host is already up to date"
         case .unsupported(let reason): reason
         }
     }

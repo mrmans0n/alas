@@ -39,7 +39,6 @@ struct HostSSHSetupTests {
         brew=/opt/homebrew/bin/brew
         cask=alas-host
         host=/opt/homebrew/bin/alas-host
-        sha=abc123
         --config--
         # Host
         host.reachability = tailscale
@@ -55,7 +54,6 @@ struct HostSSHSetupTests {
             brew: "/opt/homebrew/bin/brew",
             cask: "alas-host",
             hostPath: "/opt/homebrew/bin/alas-host",
-            hostSHA256: "abc123",
             reachability: "tailscale",
             agents: [HostSSHAgent(id: "claude", enabled: true), HostSSHAgent(id: "codex", enabled: false)]
         ))
@@ -68,13 +66,13 @@ struct HostSSHSetupTests {
         (HostSSHProbe(os: "Linux", arch: "x86_64"), "unsupported"),
         (HostSSHProbe(os: "Darwin", arch: "arm64", brew: "/opt/homebrew/bin/brew", cask: "alas"), "brewUpgrade(alas)"),
         (HostSSHProbe(os: "Darwin", arch: "arm64", brew: "/opt/homebrew/bin/brew"), "brewInstall"),
-        (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: appHost, hostSHA256: "other"), "existing"),
-        (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: copiedHost, hostSHA256: "bundle"), "upToDate"),
-        (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: copiedHost, hostSHA256: "old"), "copy"),
+        (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: appHost), "existing"),
+        // The web client, zmx and CLI change without the host binary: always copied.
+        (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: copiedHost), "copy"),
         (HostSSHProbe(os: "Darwin", arch: "x86_64"), "unsupported Homebrew"),
     ])
     func installDecision(probe: HostSSHProbe, expected: String) {
-        let decision = HostSSHInstall.decide(probe, bundleArch: "arm64", bundleSHA256: "bundle")
+        let decision = HostSSHInstall.decide(probe, bundleArch: "arm64")
         switch (decision, expected) {
         case (.unsupported, "unsupported"), (.brewInstall, "brewInstall"), (.copy, "copy"):
             break
@@ -82,11 +80,25 @@ struct HostSSHSetupTests {
             #expect(reason.contains("Homebrew"))
         case let (.brewUpgrade(cask), "brewUpgrade(alas)"):
             #expect(cask == "alas")
-        case let (.existing(path), "existing"), let (.upToDate(path), "upToDate"):
+        case let (.existing(path), "existing"):
             #expect(path == probe.hostPath)
         default:
             Issue.record("expected \(expected), got \(decision)")
         }
+    }
+
+    @Test(arguments: [
+        ("  812 /opt/homebrew/bin/alas-host\n", true),
+        ("    1 /Users/me/.alas/host/alas-host/alas-host\n", false),
+        ("  812 /bin/zsh\n  900 /usr/bin/not-alas-host-helper\n", false),
+    ])
+    func aHostRunInATerminalIsFound(psOutput: String, found: Bool) async throws {
+        let result = try await Process.run(
+            "/bin/sh",
+            args: ["-c", "printf %s \(SSHCommand.shellQuote(psOutput)) | \(HostSSHSetup.foregroundHostFilter)"],
+            timeout: 10
+        )
+        #expect((result.exitCode == 0) == found)
     }
 
     @Test func pairingLinkIsTheSecondLine() {
