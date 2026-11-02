@@ -178,12 +178,17 @@ struct SSHIntegrationTests {
         #expect(RemoteSaveGate.decision(originalMtime: mtime, remoteMtime: mtime) == .proceed)
         _ = try await RemoteFileAccess.write(host: "localhost", path: file.path, content: "two\n")
         let updated = try await RemoteFileAccess.read(host: "localhost", path: file.path)
-        guard case let .file(updatedData, updatedMtime) = updated else {
+        guard case let .file(updatedData, _) = updated else {
             Issue.record("expected updated file")
             return
         }
         #expect(String(data: updatedData, encoding: .utf8) == "two\n")
-        #expect(RemoteSaveGate.decision(originalMtime: mtime, remoteMtime: updatedMtime) == .conflict)
+        // A save based on the first read is stale. Within one mtime second the
+        // gate falls back to comparing content, so assert the refusal itself.
+        await #expect(throws: RemoteFileAccessError.saveConflict(.changed)) {
+            try await RemoteFileAccess.write(
+                host: "localhost", path: file.path, content: "three\n", expectedMtime: mtime, expectedContent: "one\n")
+        }
         let mode = try FileManager.default.attributesOfItem(atPath: file.path)[.posixPermissions] as? NSNumber
         #expect(mode?.intValue == 0o755)
     }
