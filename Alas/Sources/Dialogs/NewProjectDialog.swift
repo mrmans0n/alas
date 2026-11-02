@@ -1071,11 +1071,14 @@ private struct ProjectDialog: View {
                         .foregroundColor(theme.color("fg-muted"))
                 }
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Guest setup script · runs once in each new VM, before its clean point")
+                    Text("Guest setup script · runs in each new VM, before its clean point")
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundColor(theme.color("fg"))
                     ProjectStartupScriptEditor(text: $vmGuestSetupScript, minHeight: 60)
                         .accessibilityLabel("Guest setup script")
+                    Text("Runs in zsh on macOS and bash on Linux. Keep it safe to run more than once.")
+                        .font(.system(size: 11))
+                        .foregroundColor(theme.color("fg-muted"))
                 }
             }
         }
