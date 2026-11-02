@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import Network
+import Synchronization
 import Testing
 import WebKit
 @testable import Alas
@@ -45,6 +46,9 @@ struct WebPreviewBrowserTests {
         #expect(resolved == allowed)
     }
 
+    /// This Mac's addresses in the rule tests.
+    private static let selfAddresses = Set(["192.168.1.143", "fd7a:115c:a1e0::d614"].compactMap(WebPreviewEgressPolicy.address))
+
     /// URLs are in the canonical form WebKit matches rules against.
     @Test(arguments: [
         ("http://127.0.0.1:3000/", nil, true),
@@ -62,6 +66,19 @@ struct WebPreviewBrowserTests {
         ("https://127.0.0.1.example.com/", nil, false),
         ("https://example.com/?next=http://127.0.0.1:3000/", nil, false),
         ("http://192.0.2.1:3000/", nil, false),
+        ("http://169.254.10.10/", nil, true),
+        ("http://[::ffff:a9fe:a0a]:3000/", nil, true),
+        ("http://192.168.1.143:3000/", nil, true),
+        ("wss://192.168.1.143/", nil, true),
+        ("http://[::ffff:c0a8:18f]:3000/", nil, true),
+        ("http://[fd7a:115c:a1e0::d614]:3000/", nil, true),
+        ("http://100.100.100.100/", nil, true),
+        ("http://[::ffff:6464:6464]/", nil, true),
+        ("https://[fd7a:115c:a1e0::53]/", nil, true),
+        ("http://100.100.100.10/", nil, false),
+        ("http://192.168.1.14:3000/", nil, false),
+        ("http://192.168.1.143.nip.io/", nil, false),
+        ("http://[fd7a:115c:a1e0::d61]/", nil, false),
         ("http://127.0.0.1:51234/app.js", "http://127.0.0.1:51234", false),
         ("ws://127.0.0.1:51234/hmr", "http://127.0.0.1:51234", false),
         ("http://127.0.0.1:5123/", "http://127.0.0.1:51234", true),
@@ -74,7 +91,7 @@ struct WebPreviewBrowserTests {
     func loopbackRulesBlockEveryLoopbackRequestButThePin(url: String, forward: String?, blocked: Bool) throws {
         let pin = forward.flatMap { WebPreviewLoopbackPin(URL(string: $0)!) }
         let rules = try #require(try JSONSerialization.jsonObject(
-            with: Data(WebPreviewLoopbackRules.json(allowing: pin).utf8)) as? [[String: [String: String]]])
+            with: Data(WebPreviewLoopbackRules.json(allowing: pin, selfAddresses: Self.selfAddresses).utf8)) as? [[String: [String: String]]])
         func matches(_ action: String) throws -> Bool {
             try rules.filter { $0["action"]?["type"] == action }.contains { rule in
                 let filter = try NSRegularExpression(pattern: #require(rule["trigger"]?["url-filter"]), options: .caseInsensitive)
@@ -90,7 +107,7 @@ struct WebPreviewBrowserTests {
     @Test(arguments: [nil, "http://[::1]:443"] as [String?])
     func loopbackRulesCompileInWebKit(forward: String?) async {
         let pin = forward.flatMap { WebPreviewLoopbackPin(URL(string: $0)!) }
-        #expect(await WebPreviewLoopbackRules.ruleList(allowing: pin) != nil)
+        #expect(await WebPreviewLoopbackRules.ruleList(allowing: pin, selfAddresses: Self.selfAddresses) != nil)
     }
 
     @Test func browserStorageIsPrivateAndNotShared() {
@@ -102,11 +119,14 @@ struct WebPreviewBrowserTests {
 
     @Test func remoteAliasesRejectAnyResolvedLoopbackAddress() async {
         let url = URL(string: "https://preview.example.test")!
-        for addresses in [["127.0.0.1"], ["::1"], ["::ffff:127.0.0.1"], ["192.0.2.1", "127.0.0.2"], []] {
+        for addresses in [["127.0.0.1"], ["::1"], ["::ffff:127.0.0.1"], ["192.0.2.1", "127.0.0.2"], ["169.254.1.1"], ["fe80::1"], []] {
             #expect(!(await WebPreviewNavigation.allowsResolved(url, remoteHost: "devbox", resolveHost: { _ in addresses })))
         }
         #expect(!(await WebPreviewNavigation.allowsResolved(url, remoteHost: "devbox", resolveHost: { _ in nil })))
         #expect(await WebPreviewNavigation.allowsResolved(url, remoteHost: "devbox", resolveHost: { _ in ["192.0.2.1"] }))
+        // This Mac's own LAN or tailnet address is refused like loopback.
+        #expect(!(await WebPreviewNavigation.allowsResolved(url, remoteHost: "devbox", localAddresses: Self.selfAddresses,
+                                                            resolveHost: { _ in ["192.168.1.143"] })))
         #expect(await WebPreviewNavigation.allowsResolved(url, remoteHost: nil, resolveHost: { _ in
             Issue.record("Local previews should not perform remote DNS validation")
             return nil
@@ -121,6 +141,32 @@ struct WebPreviewBrowserTests {
         #expect(browser.error?.contains("Navigation blocked") == true)
         #expect(!browser.loading)
         #expect(browser.capture == nil)
+    }
+
+    /// Pins that WebKit honours the remote browser's egress proxy: a page
+    /// on the pinned forward fetches a name that resolves to loopback, and
+    /// the request never reaches this Mac.
+    @Test func aRemotePagesRequestToANameForThisMacIsBlocked() async throws {
+        let target = try PreviewFixtureServer()
+        defer { target.listener.cancel() }
+        try await waitUntil("Target listener did not bind") { (target.listener.port?.rawValue ?? 0) > 0 }
+        let targetPort = try #require(target.listener.port).rawValue
+        let origin = try PreviewFixtureServer(body: "<script>fetch('http://rebind.invalid:\(targetPort)/', {mode: 'no-cors'})"
+            + ".then(() => console.error('reached'), () => console.error('refused'))</script>")
+        defer { origin.listener.cancel() }
+        try await waitUntil("Origin listener did not bind") { (origin.listener.port?.rawValue ?? 0) > 0 }
+        let originPort = try #require(origin.listener.port).rawValue
+        let url = URL(string: "http://127.0.0.1:\(originPort)/")!
+        let browser = WebPreviewBrowser(ownerKey: "rebind", remoteHost: "devbox", allowedLoopback: WebPreviewLoopbackPin(url),
+                                        resolveHost: { $0 == "rebind.invalid" ? ["127.0.0.1"] : nil })
+        defer { browser.close() }
+        browser.navigate(url)
+        try await waitUntil("Fetch: error=\(String(describing: browser.error)), console=\(browser.consoleErrors)") {
+            browser.consoleErrors.contains("refused") || browser.consoleErrors.contains("reached")
+        }
+        #expect(browser.consoleErrors.contains("Blocked request to rebind.invalid:\(targetPort): resolves to this Mac"))
+        #expect(browser.consoleErrors.contains("refused"))
+        #expect(target.accepted == 0)
     }
 
     @Test func nativeHostLookupRecognizesLocalhost() async throws {
@@ -276,17 +322,21 @@ private enum PreviewFixtureError: Error { case timeout(String) }
 
 private final class PreviewFixtureServer: @unchecked Sendable {
     let listener: NWListener
+    private let acceptedCount = Mutex(0)
+    var accepted: Int { acceptedCount.withLock { $0 } }
 
-    init() throws {
+    init(body: String = PreviewFixtureServer.capturePage) throws {
         listener = try NWListener(using: .tcp, on: .any)
-        listener.newConnectionHandler = { connection in
+        listener.newConnectionHandler = { [weak self] connection in
+            self?.acceptedCount.withLock { $0 += 1 }
             connection.start(queue: .global())
             connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { _, _, _, _ in
-                let body = #"<html><body style="margin:0;background:white"><button id="checkout" style="position:absolute;left:20px;top:20px;width:200px;height:100px;background:rgb(230,20,20);border:0;color:white;white-space:nowrap">Checkout</button><script>console.error('fixture error')</script></body></html>"#
                 let response = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
                 connection.send(content: Data(response.utf8), completion: .contentProcessed { _ in connection.cancel() })
             }
         }
         listener.start(queue: .global())
     }
+
+    static let capturePage = #"<html><body style="margin:0;background:white"><button id="checkout" style="position:absolute;left:20px;top:20px;width:200px;height:100px;background:rgb(230,20,20);border:0;color:white;white-space:nowrap">Checkout</button><script>console.error('fixture error')</script></body></html>"#
 }

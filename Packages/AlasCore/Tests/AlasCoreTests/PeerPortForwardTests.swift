@@ -302,9 +302,9 @@ private final class EventLog: Sendable {
     }
 }
 
-/// A loopback TCP echo server that reads only once its previous echo was
+/// A TCP echo server, on loopback unless told otherwise, that reads only once its previous echo was
 /// written, so it stops reading when its peer stops reading.
-private final class EchoServer: Sendable {
+final class EchoServer: Sendable {
     private let listener: NWListener
     private let acceptedCount = Mutex(0)
     private let receivedCount = Mutex(0)
@@ -315,14 +315,14 @@ private final class EchoServer: Sendable {
     var received: Int { receivedCount.withLock { $0 } }
     var port: Int { Int(listener.port?.rawValue ?? 0) }
 
-    private init() throws {
+    private init(host: NWEndpoint.Host) throws {
         let parameters = NWParameters.tcp
-        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1", port: .any)
+        parameters.requiredLocalEndpoint = .hostPort(host: host, port: .any)
         listener = try NWListener(using: parameters)
     }
 
-    static func start() async throws -> EchoServer {
-        let server = try EchoServer()
+    static func start(host: NWEndpoint.Host = "127.0.0.1") async throws -> EchoServer {
+        let server = try EchoServer(host: host)
         server.listener.newConnectionHandler = { [weak server] connection in
             guard let server else { return connection.cancel() }
             server.acceptedCount.withLock { $0 += 1 }
@@ -349,7 +349,7 @@ private final class EchoServer: Sendable {
 }
 
 /// A loopback TCP client.
-private final class TestClient: Sendable {
+final class TestClient: Sendable {
     private let connection: NWConnection
     private let state = Mutex((bytes: Data(), ended: false))
 
