@@ -1751,6 +1751,7 @@
 		F045A621577AB5EEBE1A5E38 /* EditorCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90E9DAE6A3C83B64305D5805 /* EditorCommands.swift */; };
 		F049CEA88BF52C7C98F2D6F8 /* session-update-compaction-update.json in Resources */ = {isa = PBXBuildFile; fileRef = 2C0350206BA233AD3B54B3C7 /* session-update-compaction-update.json */; };
 		F078F588859E4B2E906D704A /* AlasToggle.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1841997CCBDB9611576B930C /* AlasToggle.swift */; };
+		F08002E723C383BC664B93B9 /* HostSSHSetupSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7A394CCC8D8A4FFB78EAF8BB /* HostSSHSetupSheet.swift */; };
 		F09324E122712405CCB0389A /* RunScriptStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F15CFDEF63A656129A3EFEEB /* RunScriptStoreTests.swift */; };
 		F093A2BAF2E268AC652A5D5F /* RightPaneState+Operations.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0872CF2F45D311E2BAF4D5E /* RightPaneState+Operations.swift */; };
 		F0CE5BA507DB87CA65578957 /* ReviewRequestChipModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A967ED4EC4D4616424B2E17C /* ReviewRequestChipModelTests.swift */; };
@@ -2843,6 +2844,7 @@
 		79F544A8DC56D0D4166E0A4F /* CommitContextBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitContextBuilderTests.swift; sourceTree = "<group>"; };
 		7A240CD3EF074300828A1214 /* CommitReviewLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CommitReviewLoader.swift; sourceTree = "<group>"; };
 		7A2B4B719D9F4EAAE84B14D1 /* ProjectAvatarPresetProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProjectAvatarPresetProvider.swift; sourceTree = "<group>"; };
+		7A394CCC8D8A4FFB78EAF8BB /* HostSSHSetupSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HostSSHSetupSheet.swift; sourceTree = "<group>"; };
 		7AC12F3686BFA7E2DE0B1E71 /* AppRelaunch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppRelaunch.swift; sourceTree = "<group>"; };
 		7B5260A5CDFBC249F1C17D2C /* CheckpointRestorePreviewTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CheckpointRestorePreviewTests.swift; sourceTree = "<group>"; };
 		7BA6DF8E37E9B38C627B030A /* ACPTranscriptRowHostingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ACPTranscriptRowHostingView.swift; sourceTree = "<group>"; };
@@ -4830,6 +4832,7 @@
 		36EBAD798ECDCED2A7761133 /* Settings */ = {
 			isa = PBXGroup;
 			children = (
+				7A394CCC8D8A4FFB78EAF8BB /* HostSSHSetupSheet.swift */,
 				C9126D442E8CDB093FA36BA5 /* RemoteServerPane.swift */,
 			);
 			path = Settings;
@@ -7722,6 +7725,7 @@
 				18FEAA97EA576EC5276D2B28 /* HarnessPill.swift in Sources */,
 				9AB589065CDDE7B2CD11F685 /* HelperCodeRequirement.swift in Sources */,
 				387EF12B6875648E422956F7 /* Highlighted.swift in Sources */,
+				F08002E723C383BC664B93B9 /* HostSSHSetupSheet.swift in Sources */,
 				724AA327E178DE232513AD2A /* HostWorkspaceEditFileAccess.swift in Sources */,
 				AD311BBE11A5A2751EA0907C /* HoverFeature.swift in Sources */,
 				E83BA776F26C011D034CAE18 /* HoverHighlightFeature.swift in Sources */,
