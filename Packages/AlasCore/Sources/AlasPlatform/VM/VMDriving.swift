@@ -6,14 +6,16 @@ public enum VMDriver: Equatable, Sendable {
     case agent(sessionID: String, tool: String, at: Date)
     case user
 
-    /// An agent call counts as driving for this long.
+    /// An agent call counts as driving while it runs and for this long after.
     public static let agentWindow: TimeInterval = 30
 
+    /// `inFlight` is whether an agent call to the VM is still running; `lastAgentCall` is when the
+    /// last one began, or ended once it has.
     public static func current(
-        lastAgentCall: (sessionID: String, tool: String, at: Date)?, takenOver: Bool, now: Date
+        lastAgentCall: (sessionID: String, tool: String, at: Date)?, inFlight: Bool, takenOver: Bool, now: Date
     ) -> VMDriver {
         if takenOver { return .user }
-        guard let call = lastAgentCall, now.timeIntervalSince(call.at) < agentWindow else { return .idle }
+        guard let call = lastAgentCall, inFlight || now.timeIntervalSince(call.at) < agentWindow else { return .idle }
         return .agent(sessionID: call.sessionID, tool: call.tool, at: call.at)
     }
 

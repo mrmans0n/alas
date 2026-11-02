@@ -172,8 +172,10 @@ extension AppState {
                 return .error(refusal)
             }
             if command.action != .cancel {
-                vmLastAgentCall[recordID] = (sessionID, "computer_\(command.action.rawValue)", vmNow())
+                vmLastAgentCall.begin(recordID, (sessionID, "computer_\(command.action.rawValue)", vmNow()))
             }
+            // The VM shows the agent driving for the whole call, and the window after it ends.
+            defer { if command.action != .cancel { vmLastAgentCall.end(recordID, at: vmNow()) } }
             vmComputerUseSessions[sessionID, default: []].insert(recordID)
             if vmPendingResumes[sessionID]?.contains(recordID) == true {
                 // Connects first, so the resume goes out ahead of the call on the same connection.
@@ -255,7 +257,8 @@ extension AppState {
             if let refusal = VMTakeOvers.refusal(action: nil, driver: vmDriver(recordID: recordID)) {
                 return .error(refusal)
             }
-            vmLastAgentCall[recordID] = (sessionID, "vm_run", vmNow())
+            vmLastAgentCall.begin(recordID, (sessionID, "vm_run", vmNow()))
+            defer { vmLastAgentCall.end(recordID, at: vmNow()) }
             // Awaited in the request's own task, so a client disconnect cancels the guest call.
             do {
                 return .text([VMComputerUseRoute.runReply(try await client.run(command, timeoutSeconds: timeoutSeconds))])
@@ -395,7 +398,8 @@ extension AppState {
     /// Who drives VM `recordID` (`VMIdentity.recordID`) now.
     func vmDriver(recordID: String) -> VMDriver {
         VMDriver.current(
-            lastAgentCall: vmLastAgentCall[recordID], takenOver: vmTakenOver.contains(recordID), now: vmNow()
+            lastAgentCall: vmLastAgentCall[recordID], inFlight: vmLastAgentCall.isInFlight(recordID),
+            takenOver: vmTakenOver.contains(recordID), now: vmNow()
         )
     }
 
@@ -531,8 +535,8 @@ extension AppState {
     }
 }
 
-/// The last agent call forwarded to each VM, by registry id. Each VM's entry is observed on its
-/// own: a view reading one VM's call redraws only when that VM is called.
+/// The last agent call forwarded to each VM, by registry id, and how many still run. Each VM's
+/// entry is observed on its own: a view reading one VM's call redraws only when that VM is called.
 @MainActor
 final class VMLastAgentCalls {
     typealias Call = (sessionID: String, tool: String, at: Date)
@@ -541,6 +545,7 @@ final class VMLastAgentCalls {
     @Observable
     fileprivate final class Entry {
         var call: Call?
+        var inFlight = 0
     }
 
     /// Never removed, so a view that read an entry before its first call still sees it change.
@@ -549,6 +554,24 @@ final class VMLastAgentCalls {
     subscript(recordID: String) -> Call? {
         get { entry(recordID).call }
         set { entry(recordID).call = newValue }
+    }
+
+    /// Whether an agent call to VM `recordID` is still running.
+    func isInFlight(_ recordID: String) -> Bool { entry(recordID).inFlight > 0 }
+
+    /// An agent call to VM `recordID` begins; it drives the VM until `end` and the window after.
+    func begin(_ recordID: String, _ call: Call) {
+        let entry = entry(recordID)
+        entry.call = call
+        entry.inFlight += 1
+    }
+
+    /// The call `begin` started ended at `at`: the driving window counts from here. A call
+    /// cleared meanwhile (take over, hand back, VM stopped) stays cleared.
+    func end(_ recordID: String, at: Date) {
+        let entry = entry(recordID)
+        entry.inFlight -= 1
+        entry.call?.at = at
     }
 
     private func entry(_ recordID: String) -> Entry {

@@ -237,7 +237,7 @@ struct VMComputerUseRouteTests {
         #expect(!takeOvers.holds(sessionID: "b"))
         #expect(takeOvers.takeOver("/w", sessions: Self.drove, userStopped: []).isEmpty)
 
-        let driver = VMDriver.current(lastAgentCall: nil, takenOver: takeOvers.isTakenOver("/w"), now: Date())
+        let driver = VMDriver.current(lastAgentCall: nil, inFlight: false, takenOver: takeOvers.isTakenOver("/w"), now: Date())
         #expect(driver == .user)
         let refusal = "computer_user_active: The user is driving this VM. Try again after they hand it back."
         #expect(VMTakeOvers.refusal(action: .click, driver: driver) == refusal)
@@ -285,7 +285,7 @@ struct VMComputerUseRouteTests {
         _ = takeOvers.takeOver("/w", sessions: Self.drove, userStopped: [])
         takeOvers.vmStopped("/w")
         #expect(!takeOvers.isTakenOver("/w"))
-        let driver = VMDriver.current(lastAgentCall: nil, takenOver: takeOvers.isTakenOver("/w"), now: Date())
+        let driver = VMDriver.current(lastAgentCall: nil, inFlight: false, takenOver: takeOvers.isTakenOver("/w"), now: Date())
         #expect(VMTakeOvers.refusal(action: .click, driver: driver) == nil)
         #expect(takeOvers.handBack("/w", sessions: Self.drove, userStopped: []).isEmpty)
     }

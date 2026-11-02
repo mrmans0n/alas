@@ -796,7 +796,8 @@ struct VirtualMachineTabView: View {
     private func driver(at date: Date) -> VMDriver {
         _ = agentWindowEnds
         return VMDriver.current(
-            lastAgentCall: state.vmLastAgentCall[recordID], takenOver: state.vmTakenOver.contains(recordID), now: date
+            lastAgentCall: state.vmLastAgentCall[recordID], inFlight: state.vmLastAgentCall.isInFlight(recordID),
+            takenOver: state.vmTakenOver.contains(recordID), now: date
         )
     }
 

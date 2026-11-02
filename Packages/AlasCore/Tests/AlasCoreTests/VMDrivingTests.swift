@@ -11,15 +11,21 @@ struct VMDrivingTests {
     }
 
     @Test(arguments: [
-        (nil as TimeInterval?, false, VMDriver.idle),
-        (10 as TimeInterval?, false, VMDriver.agent(sessionID: "s1", tool: "computer_click", at: now.addingTimeInterval(-10))),
-        (29 as TimeInterval?, false, VMDriver.agent(sessionID: "s1", tool: "computer_click", at: now.addingTimeInterval(-29))),
-        (31 as TimeInterval?, false, VMDriver.idle),
-        (5 as TimeInterval?, true, VMDriver.user),
+        (nil as TimeInterval?, false, false, VMDriver.idle),
+        (10 as TimeInterval?, false, false, VMDriver.agent(sessionID: "s1", tool: "computer_click", at: now.addingTimeInterval(-10))),
+        (29 as TimeInterval?, false, false, VMDriver.agent(sessionID: "s1", tool: "computer_click", at: now.addingTimeInterval(-29))),
+        (31 as TimeInterval?, false, false, VMDriver.idle),
+        // A call still running drives however long ago it began.
+        (31 as TimeInterval?, true, false, VMDriver.agent(sessionID: "s1", tool: "computer_click", at: now.addingTimeInterval(-31))),
+        // Handed back or stopped mid-call: the call no longer counts.
+        (nil as TimeInterval?, true, false, VMDriver.idle),
+        (5 as TimeInterval?, false, true, VMDriver.user),
     ])
-    func driverFollowsTakeOverAndTheLastAgentCall(secondsAgo: TimeInterval?, takenOver: Bool, expected: VMDriver) {
+    func driverFollowsTakeOverAndTheLastAgentCall(
+        secondsAgo: TimeInterval?, inFlight: Bool, takenOver: Bool, expected: VMDriver
+    ) {
         let last = secondsAgo.map { Self.call(secondsAgo: $0) }
-        #expect(VMDriver.current(lastAgentCall: last, takenOver: takenOver, now: Self.now) == expected)
+        #expect(VMDriver.current(lastAgentCall: last, inFlight: inFlight, takenOver: takenOver, now: Self.now) == expected)
     }
 
     @Test(arguments: [
