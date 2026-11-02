@@ -373,6 +373,8 @@ struct HostSessionsTests {
         let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
         let manager = try #require(fixture.core.sessionManagers.values.first)
         try await eventually { await manager.liveSession(for: id)?.agentState == .ready }
+        // The gateway refuses a non-writer's prompt at once, with no reason.
+        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
         fixture.agent.script(method: "session/prompt") { _ in throw JSONRPCError(code: -32603, message: "boom", data: nil) }
         let sent = Mutex<[RemoteServerMessage]>([])
         let gateway = RemoteSessionGateway(host: fixture.host) { message in sent.withLock { $0.append(message) } }
