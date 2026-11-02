@@ -21,7 +21,7 @@ struct ACPSessionStoreSchemaTests {
         for table in ["acp_v2_response_observations", "acp_v2_response_attempts", "acp_v2_response_intents"] { try store.db.exec("DROP TABLE IF EXISTS \(table)") }
         try store.db.exec("UPDATE schema_version SET version = 33")
         let reopened = try ACPSessionStore(path: store.path)
-        #expect(try reopened.currentSchemaVersion() == 34)
+        #expect(try reopened.currentSchemaVersion() == ACPSessionStore.targetSchemaVersion)
         #expect(try reopened.loadSession(id: "response") == saved)
         #expect(try reopened.loadV2InboundLedgerPage(stream: stream).records == [record.record])
         for table in ["acp_v2_response_intents", "acp_v2_response_attempts", "acp_v2_response_observations"] { #expect(try reopened.db.query("SELECT id FROM \(table)").isEmpty) }

@@ -7,7 +7,7 @@ import AlasCode
 import AlasACP
 
 public final class ACPSessionStore {
-    public static let targetSchemaVersion = 35
+    public static let targetSchemaVersion = 36
     public let path: String
     public let db: SQLiteDatabase
 
@@ -98,7 +98,10 @@ public final class ACPSessionStore {
             if !columns.contains(where: { ($0["name"] as? String) == "fork_point" }) {
                 try db.exec("ALTER TABLE session_forks ADD COLUMN fork_point TEXT")
             }
+        }
+        if current < 36 {
             // NULL: the agent holds all of a native fork's rows, as before.
+            let columns = try db.query("PRAGMA table_info(session_forks)")
             if !columns.contains(where: { ($0["name"] as? String) == "native_remote_history_start" }) {
                 try db.exec("ALTER TABLE session_forks ADD COLUMN native_remote_history_start INTEGER")
             }
