@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import AlasCode
 import AlasFoundation
 import AlasPlatform
 
@@ -124,24 +125,43 @@ public enum ACPForkPointFailure: String, Codable, Equatable, Error, Sendable {
         case ACPClientError.jsonrpc(let e): rpc = e
         case RemoteHelperClientError.jsonrpc(let e): rpc = e
         case let e as JSONRPCError: rpc = e
+        // A raw response's projected error keeps only `data.kind`; the
+        // refusal is read from the adapter's frame it retains.
+        case let e as ACPBrokerRawRPCError where e.rpcError != nil: return rejection(fromFrame: e.frame.bytes)
+        case let e as ACPRawRPCError where e.rpcError != nil: return rejection(fromFrame: e.delivery.frame)
         default: return nil
         }
         guard rpc.code == -32602,
               let data = object(rpc.data?.value),
               let forkPoint = object(data["forkPoint"])
         else { return nil }
-        switch forkPoint["reason"] as? String {
+        return refusal(reason: forkPoint["reason"] as? String, hasField: forkPoint["field"] != nil)
+    }
+
+    private static func rejection(fromFrame frame: Data) -> ACPForkPointFailure? {
+        guard case .object(let response)? = try? LSPJSONValue.decode(from: frame),
+              case .object(let error)? = response["error"],
+              let code = error["code"], ACPWireInteger.decode(code, as: Int.self) == -32602,
+              case .object(let data)? = error["data"],
+              case .object(let forkPoint)? = data["forkPoint"]
+        else { return nil }
+        let reason: String? = if case .string(let reason)? = forkPoint["reason"] { reason } else { nil }
+        return refusal(reason: reason, hasField: forkPoint["field"] != nil)
+    }
+
+    private static func refusal(reason: String?, hasField: Bool) -> ACPForkPointFailure? {
+        switch reason {
         case "notFound": return .notFound
         case "notNegotiated": return .unsupported
-        default: break
+        default: return hasField ? .malformed : nil
         }
-        if forkPoint["field"] != nil { return .malformed }
-        return nil
     }
 
     private static func object(_ value: Any?) -> [String: Any]? {
-        if let value = value as? [String: Any] { return value }
+        // Decoded JSON nests `AnyCodable`, which `as? [String: Any]` would
+        // accept with its values still boxed.
         if let value = value as? [String: AnyCodable] { return value.mapValues(\.value) }
+        if let value = value as? [String: Any] { return value }
         if let value = value as? AnyCodable { return object(value.value) }
         return nil
     }

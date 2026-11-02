@@ -289,6 +289,11 @@ struct ACPConnectionTests {
         (RemoteHelperClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))), .notFound),
         // Codex refuses a target from a client that didn't declare the extension.
         (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["reason": "notNegotiated"]]))), .unsupported),
+        // A raw stdio error projects `data` to its `kind`; the refusal is in the frame.
+        (ACPRawRPCError(delivery: ACPRawRPCDelivery(
+            frame: Data(#"{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"m","data":{"forkPoint":{"reason":"notFound"}}}}"#.utf8),
+            connectionID: UUID(), source: .stdio(requestID: .number(1), method: "session/fork")),
+            rpcError: .init(code: -32602, message: "m", data: nil)), .notFound),
         (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["other": "x"]))), nil),
         (ACPClientError.jsonrpc(.init(code: -32603, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))), nil),
         (CancellationError(), nil),

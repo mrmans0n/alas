@@ -226,6 +226,27 @@ struct ACPBrokerRawClientTests {
         await client.detach()
     }
 
+    @Test("an adapter's fork point refusal survives the broker", arguments: [
+        (#"{"reason":"notFound","messageId":"msg_bogus"}"#, ACPForkPointFailure.notFound),
+        (#"{"reason":"notNegotiated"}"#, .unsupported),
+        (#"{"field":"messageId"}"#, .malformed),
+    ], [ACPBrokerWireContext.legacyV1, .rawV2])
+    func forkPointRejection(refusal: (forkPoint: String, expected: ACPForkPointFailure), context: ACPBrokerWireContext) async throws {
+        let (forkPoint, expected) = refusal
+        let frame = Data((#"{"jsonrpc":"2.0","id":9,"error":{"code":-32602,"message":"Invalid params","data":{"forkPoint":"#
+            + forkPoint + "}}}").utf8)
+        let service = RawBrokerFixture(context: context, adapterError: frame)
+        let client = makeClient(service, context: context)
+        _ = try await client.start()
+        do {
+            _ = try await client.send(ACPRequest(method: "session/fork", brokerOperationKey: "key"))
+            Issue.record("Expected the refusal")
+        } catch {
+            #expect(ACPForkPointFailure.rejection(from: error) == expected)
+        }
+        await client.detach()
+    }
+
     @Test func validatedInitialStateExportsContextWithoutConsumingEvidence() async throws {
         let service = RawBrokerFixture()
         let captured = NSLockState<ACPBrokerDurableState?>(nil)
@@ -750,6 +771,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     func releaseOpen() { openGate.continuation.yield(()) }
     let pending: Bool
     let isError: Bool
+    let adapterError: Data?
     var completionCursor: UInt64 = 3
     func preloadOutcome(_ value: ACPBrokerRPCOutcome, cursor: UInt64) { outcome = value
     completionCursor = cursor }
@@ -759,8 +781,9 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     let context: ACPBrokerWireContext
     var acks: [UInt64] = []
     var closeCount = 0
-    init(context: ACPBrokerWireContext = .rawV2, isError: Bool = false, pending: Bool = false, cached: Bool = false, delayOpen: Bool = false, rawBytes: Data = RawBrokerFixture.first, replaceHookDuringSend: Bool = false, acceptedMessageID: String? = nil) {
+    init(context: ACPBrokerWireContext = .rawV2, isError: Bool = false, pending: Bool = false, cached: Bool = false, delayOpen: Bool = false, rawBytes: Data = RawBrokerFixture.first, replaceHookDuringSend: Bool = false, acceptedMessageID: String? = nil, adapterError: Data? = nil) {
         self.acceptedMessageID = acceptedMessageID
+        self.adapterError = adapterError
         self.context = context
         self.isError = isError
         self.pending = pending
@@ -802,6 +825,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
                 turnState: .unknown("unknown"), acknowledgedCursor: snapshot.acknowledgedCursor,
                 journalTail: snapshot.journalTail, pendingRequests: snapshot.pendingRequests, operations: [op])
         }
+        // A legacy broker without todo history is an old build to restart.
+        if context == .legacyV1 { snapshot.cursorTodosByToolCallId = [:] }
         if cached { snapshot.initializeRawResponse = .init(bytes: isError ? Self.error : Data(#"{"jsonrpc":"2.0","id":42,"result":{"n":1e999}}"#.utf8)) }
         return snapshot
     }
@@ -841,6 +866,15 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         value.rawFrame = .init(bytes: isError ? Self.error : Data(#"{"jsonrpc":"2.0","id":9,"result":null}"#.utf8))
         if let acceptedMessageID {
             value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"messageId\":\"\(acceptedMessageID)\"}}".utf8))
+        }
+        if let adapterError {
+            // The legacy helper forwards the adapter's whole error; the raw
+            // helper projects `data` to its `kind` and keeps the frame.
+            struct Envelope: Decodable { let error: JSONRPCError }
+            let error = try JSONDecoder().decode(Envelope.self, from: adapterError).error
+            value = ACPBrokerRPCOutcome(result: nil, error: context == .rawV2
+                ? JSONRPCError(code: error.code, message: error.message, data: nil) : error)
+            value.rawFrame = .init(bytes: adapterError)
         }
         outcome = value
         if replaceHookDuringSend {
