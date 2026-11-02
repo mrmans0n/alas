@@ -278,6 +278,14 @@ struct VMTakeOvers: Equatable {
         paused[recordID] = nil
     }
 
+    /// What the agent gets for a call its VM answered: a call the user took the VM over during was
+    /// stopped by the guest, so the agent is told why instead. A cancel keeps its answer.
+    static func afterCall(
+        action: ComputerUseCommand.Action, takenOver: Bool, response: AlasCLIResponse
+    ) -> AlasCLIResponse {
+        action != .cancel && takenOver ? .error(VMAutoStartMessages.userDriving) : response
+    }
+
     /// The error an agent call to a VM gets from the driver gate, or nil to forward it. `action` is
     /// nil for `vm_run`. A cancel always passes: it only stops the agent's own call.
     static func refusal(action: ComputerUseCommand.Action?, driver: VMDriver) -> String? {

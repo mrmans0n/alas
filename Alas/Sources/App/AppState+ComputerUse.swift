@@ -174,15 +174,24 @@ extension AppState {
             if vmPendingResumes[sessionID]?.contains(recordID) == true {
                 // Connects first, so the resume goes out ahead of the call on the same connection.
                 _ = try? await client.hello()
+                // The user may have taken the VM over while it connected; a resume would undo the stop.
+                if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
+                    return .error(refusal)
+                }
                 if await client.lifecycle(.resume, sessionID: sessionID) { resumeTold(sessionID, recordID) }
+            }
+            // Nothing goes to a VM the user took over since the gate.
+            if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
+                return .error(refusal)
             }
             // Awaited in the request's own task, so a client disconnect cancels it and the
             // client tells the guest to cancel the call.
-            let response = await client.perform(command, sessionID: sessionID, guest: guest)
-            // Taken over mid-call: the guest stopped it, and the agent is told why.
-            if command.action != .cancel, vmTakenOver.contains(recordID) {
-                return .error(VMAutoStartMessages.userDriving)
-            }
+            let performed = await client.perform(command, sessionID: sessionID, guest: guest)
+            let response = VMTakeOvers.afterCall(
+                action: command.action, takenOver: vmTakenOver.contains(recordID), response: performed
+            )
+            // Taken over mid-call: the badge must not show the agent driving.
+            if response != performed { return response }
             // The badge shows a session using its VM only once the guest has done something for
             // it, and not again for a session the user stopped during the call.
             let failed = if case .error = response { true } else { false }
