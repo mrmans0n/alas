@@ -65,6 +65,8 @@ final class WorktreeVMManager {
     /// The checkout directory of a worktree, shared read-only with its VM.
     /// Installed by the app; nil leaves the worktree share out.
     @ObservationIgnored var worktreePath: (String) -> URL? = { _ in nil }
+    /// Called with a VM's registry id once it stopped here, however it stopped.
+    @ObservationIgnored var onVMStopped: (String) -> Void = { _ in }
     /// The guest helper and its installer, shared read-only with every macOS VM.
     @ObservationIgnored private let helperDirectory: URL?
     /// The Linux guest helper, shared read-only with every Linux VM.
@@ -1094,6 +1096,7 @@ final class WorktreeVMManager {
         }
         guard runningVMs.removeValue(forKey: id) != nil else { return }
         clearOwner(id)
+        onVMStopped(id)
     }
 
     private func clearOwner(_ id: String) {

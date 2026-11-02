@@ -130,6 +130,8 @@ extension AppState {
         case .vmMissing(let guest):
             return .error(VMComputerUseRoute.vmMissingMessage(for: guest))
         case .vmNotRunning(_, let guest):
+            // Auto-start goes here: a VM running in no Alas is started, then the call continues
+            // through the driver gate below.
             // A VM record on Intel came with data migrated from Apple silicon; it can't run here.
             guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
             return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
@@ -161,6 +163,13 @@ extension AppState {
                 }
             }
             let recordID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+            // A refused call didn't drive the VM, so it is neither recorded nor told about lifecycles.
+            if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
+                return .error(refusal)
+            }
+            if command.action != .cancel {
+                vmLastAgentCall[recordID] = (sessionID, "computer_\(command.action.rawValue)", vmNow())
+            }
             vmComputerUseSessions[sessionID, default: []].insert(recordID)
             if vmPendingResumes[sessionID]?.contains(recordID) == true {
                 // Connects first, so the resume goes out ahead of the call on the same connection.
@@ -170,6 +179,10 @@ extension AppState {
             // Awaited in the request's own task, so a client disconnect cancels it and the
             // client tells the guest to cancel the call.
             let response = await client.perform(command, sessionID: sessionID, guest: guest)
+            // Taken over mid-call: the guest stopped it, and the agent is told why.
+            if command.action != .cancel, vmTakenOver.contains(recordID) {
+                return .error(VMAutoStartMessages.userDriving)
+            }
             // The badge shows a session using its VM only once the guest has done something for
             // it, and not again for a session the user stopped during the call.
             let failed = if case .error = response { true } else { false }
@@ -205,6 +218,7 @@ extension AppState {
         case .ambiguous:
             return .error(VMComputerUseRoute.vmAmbiguousMessage)
         case .vmNotRunning(_, let guest):
+            // Auto-start goes here, as for the computer tools.
             return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
         case .vmStateUnreadable:
             return .error(VMComputerUseRoute.vmStateUnreadableMessage)
@@ -215,6 +229,11 @@ extension AppState {
             guard let client = vmManager.guestClient(for: worktreeID, guest: guest) else {
                 return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
             }
+            let recordID = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+            if let refusal = VMTakeOvers.refusal(action: nil, driver: vmDriver(recordID: recordID)) {
+                return .error(refusal)
+            }
+            vmLastAgentCall[recordID] = (sessionID, "vm_run", vmNow())
             // Awaited in the request's own task, so a client disconnect cancels the guest call.
             do {
                 return .text([VMComputerUseRoute.runReply(try await client.run(command, timeoutSeconds: timeoutSeconds))])
@@ -238,10 +257,17 @@ extension AppState {
                 let route = vmRoute(worktreeID: worktreeID, requested: guest)
                 vms.append((guest, route, await vmHelperStatus(route), vmTransferHostPath(route)))
             }
-            return .text([VMComputerUseRoute.statusReply(vms: vms)])
+            let driven = Set([VMGuestOS.macOS, .linux].filter { guest in
+                worktreeID.map { vmTakenOver.contains(VMIdentity.recordID(worktree: $0, guest: guest)) } ?? false
+            })
+            return .text([VMComputerUseRoute.statusReply(vms: vms, userDriving: driven)])
         case let route:
+            let userDriving = if case .guest(let id, let guest) = route {
+                vmTakenOver.contains(VMIdentity.recordID(worktree: id, guest: guest))
+            } else { false }
             return .text([VMComputerUseRoute.statusReply(
-                route: route, helper: await vmHelperStatus(route), transferHostPath: vmTransferHostPath(route)
+                route: route, helper: await vmHelperStatus(route), transferHostPath: vmTransferHostPath(route),
+                userDriving: userDriving
             )])
         }
     }
@@ -276,6 +302,55 @@ extension AppState {
         case .desktop, .vmStateUnreadable, .vmMissing, .ambiguous:
             return ""
         }
+    }
+
+    // MARK: - Take over
+
+    /// Who drives VM `recordID` (`VMIdentity.recordID`) now.
+    func vmDriver(recordID: String) -> VMDriver {
+        VMDriver.current(
+            lastAgentCall: vmLastAgentCall[recordID], takenOver: vmTakenOver.contains(recordID), now: vmNow()
+        )
+    }
+
+    /// The user takes VM `recordID` over: agent calls to it are refused from now on, and its guest
+    /// stops each session driving it, which cancels their calls in flight. Other VMs those
+    /// sessions drive are untouched.
+    func takeOverVM(recordID: String) async {
+        guard !vmTakenOver.contains(recordID) else { return }
+        let stops = vmTakeOvers.takeOver(recordID, sessions: vmComputerUseSessions, userStopped: vmStoppedSessions)
+        vmLastAgentCall[recordID] = nil
+        let client = vmManager.existingGuestClient(for: recordID)
+        for stop in stops {
+            await client?.lifecycle(stop.event, sessionID: stop.sessionID)
+        }
+    }
+
+    /// The user hands VM `recordID` back: its guest resumes the sessions the take over stopped,
+    /// then ends every driver's turn, and the VM is idle. A resume the guest can't get now goes
+    /// out before that session's next call in it.
+    func handBackVM(recordID: String) {
+        // Closing a VM tab hands back too; a VM the user never took over is left as it is.
+        guard vmTakenOver.contains(recordID) else { return }
+        let events = vmTakeOvers.handBack(recordID, sessions: vmComputerUseSessions, userStopped: vmStoppedSessions)
+        vmLastAgentCall[recordID] = nil
+        for message in events where message.event == .resume {
+            vmPendingResumes[message.sessionID, default: []].insert(recordID)
+        }
+        let client = vmManager.existingGuestClient(for: recordID)
+        // One task, so each session's resume reaches the guest before its turnEnded.
+        Task {
+            for message in events {
+                let sent = await client?.lifecycle(message.event, sessionID: message.sessionID) ?? false
+                if message.event == .resume, sent { resumeTold(message.sessionID, recordID) }
+            }
+        }
+    }
+
+    /// VM `recordID` stopped here: whoever drove it, it is idle now.
+    func vmStopped(recordID: String) {
+        vmTakeOvers.vmStopped(recordID)
+        vmLastAgentCall[recordID] = nil
     }
 
     /// Whether the badge shows a session as driving its VM.

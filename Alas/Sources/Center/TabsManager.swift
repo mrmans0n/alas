@@ -86,6 +86,8 @@ final class TabsManager {
     private var commitPublishSessions: [TabID: CommitPublishSession] = [:]
     @ObservationIgnored var onCommitPublishCompletion: ((String, TabID) -> Void)?
     @ObservationIgnored var onCreatedReview: ((String, ReviewPRTabState) -> Void)?
+    /// A VM tab closed; there is one per worktree VM, so its VM has no tab left.
+    @ObservationIgnored var onVMTabClosed: ((VirtualMachineTabState) -> Void)?
     /// In-memory only: diffs handed from a commit tab to the review session
     /// tab that replaced it. Consumed on the review tab's first load.
     @ObservationIgnored private var reviewSessionSeeds: [ReviewSessionID: ReviewSessionSeed] = [:]
@@ -2286,6 +2288,7 @@ final class TabsManager {
                 clearWebPreviewBrowser(ownerKey: state.ownerKey)
             case .virtualMachine(let state):
                 clearVMView(tabID: state.id)
+                onVMTabClosed?(state)
             default:
                 continue
             }

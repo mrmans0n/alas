@@ -339,6 +339,14 @@ final class AppState {
     /// Resumed VM sessions, with the registry ids of their VMs whose guest hasn't been told yet;
     /// each is told before the session's next call in it.
     @ObservationIgnored var vmPendingResumes: [String: Set<String>] = [:]
+    /// The VMs the user took over, by registry id, with the sessions each take over stopped.
+    var vmTakeOvers = VMTakeOvers()
+    /// The registry ids of the VMs the user took over; agent calls to them are refused.
+    var vmTakenOver: Set<String> { vmTakeOvers.recordIDs }
+    /// The last agent call forwarded to each VM, by registry id, for who drives it.
+    var vmLastAgentCall: [String: (sessionID: String, tool: String, at: Date)] = [:]
+    /// The clock VM driving is read with; tests replace it.
+    @ObservationIgnored var vmNow: () -> Date = Date.init
     /// The one installer; `vmManager` seals its golden image so no Alas
     /// process can boot it meanwhile.
     @ObservationIgnored private(set) lazy var goldenImageInstaller = GoldenImageInstaller(
@@ -452,6 +460,9 @@ final class AppState {
                 severity: .success,
                 worktreeID: worktreeId
             )
+        }
+        manager.onVMTabClosed = { [weak self] state in
+            self?.handBackVM(recordID: VMIdentity.recordID(worktree: state.ownerKey, guest: state.guest))
         }
         _tabs = manager
         return manager
@@ -1870,6 +1881,7 @@ final class AppState {
         vmManager.worktreePath = { [weak self] worktreeID in
             self?.projectAndWorktree(withWorktreeId: worktreeID)?.worktree.path
         }
+        vmManager.onVMStopped = { [weak self] recordID in self?.vmStopped(recordID: recordID) }
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
             await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
         }

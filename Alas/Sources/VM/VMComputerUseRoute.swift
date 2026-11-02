@@ -137,18 +137,23 @@ enum VMComputerUseRoute: Equatable {
 
     /// The `vm_status` reply for this route. `helper`, the guest's hello or why it failed, is used
     /// only when the VM runs here; the transfer paths are given only when a VM is known to exist.
+    /// `"user_driving": true` is added while the user has taken the VM over.
     static func statusReply(
-        route: VMComputerUseRoute, helper: Result<VMGuestHello, VMGuestClient.Failure>?, transferHostPath: String
+        route: VMComputerUseRoute, helper: Result<VMGuestHello, VMGuestClient.Failure>?, transferHostPath: String,
+        userDriving: Bool = false
     ) -> String {
-        jsonLine(statusObject(route: route, helper: helper, transferHostPath: transferHostPath))
+        var object = statusObject(route: route, helper: helper, transferHostPath: transferHostPath)
+        if userDriving { object["user_driving"] = true }
+        return jsonLine(object)
     }
 
     /// The `vm_status` reply for a worktree with both VMs and no `vm` named: one status per VM,
-    /// in the given order, each naming its guest.
-    static func statusReply(vms: [VMStatusEntry]) -> String {
+    /// in the given order, each naming its guest. `userDriving` holds the guests the user took over.
+    static func statusReply(vms: [VMStatusEntry], userDriving: Set<VMGuestOS> = []) -> String {
         jsonLine(["vms": vms.map { vm in
             var object = statusObject(route: vm.route, helper: vm.helper, transferHostPath: vm.transferHostPath)
             object["vm"] = vm.guest.wireName
+            if userDriving.contains(vm.guest) { object["user_driving"] = true }
             return object
         }])
     }
@@ -217,5 +222,69 @@ enum VMComputerUseRoute: Equatable {
     private static func jsonLine(_ object: [String: Any]) -> String {
         let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)
         return String(decoding: data, as: UTF8.self)
+    }
+}
+
+/// One lifecycle event for one session, sent to a VM's guest.
+struct VMLifecycleMessage: Equatable {
+    let event: VMGuestLifecycleEvent
+    let sessionID: String
+}
+
+/// The worktree VMs, by registry id (`VMIdentity.recordID`), the user took over, each with the
+/// sessions its take over stopped in the guest. In memory only.
+struct VMTakeOvers: Equatable {
+    private var paused: [String: Set<String>] = [:]
+
+    var recordIDs: Set<String> { Set(paused.keys) }
+
+    func isTakenOver(_ recordID: String) -> Bool { paused[recordID] != nil }
+
+    /// The sessions that made a call in VM `recordID`, from the session → VMs map, sorted.
+    static func drivers(of recordID: String, in sessions: [String: Set<String>]) -> [String] {
+        sessions.filter { $0.value.contains(recordID) }.keys.sorted()
+    }
+
+    /// Marks `recordID` taken over and returns the `stop` each of its drivers gets. A session the
+    /// user already stopped stays theirs: it gets nothing, and hand back won't resume it. Nothing
+    /// when it is already taken over.
+    mutating func takeOver(
+        _ recordID: String, sessions: [String: Set<String>], userStopped: Set<String>
+    ) -> [VMLifecycleMessage] {
+        guard !isTakenOver(recordID) else { return [] }
+        let stopped = Self.drivers(of: recordID, in: sessions).filter { !userStopped.contains($0) }
+        paused[recordID] = Set(stopped)
+        return stopped.map { VMLifecycleMessage(event: .stop, sessionID: $0) }
+    }
+
+    /// Ends the take over of `recordID` and returns, per session, a `resume` for one the take over
+    /// stopped and the user didn't stop meanwhile, then a `turnEnded` for one that still drives it,
+    /// so the guest drops its refs. A stopped session that ended meanwhile is still resumed: the
+    /// guest keeps a stop past a session's end. Nothing when it isn't taken over.
+    mutating func handBack(
+        _ recordID: String, sessions: [String: Set<String>], userStopped: Set<String>
+    ) -> [VMLifecycleMessage] {
+        guard let stopped = paused.removeValue(forKey: recordID) else { return [] }
+        let drivers = Set(Self.drivers(of: recordID, in: sessions))
+        return drivers.union(stopped).sorted().flatMap { sessionID in
+            let resume = stopped.contains(sessionID) && !userStopped.contains(sessionID)
+            return (resume ? [VMLifecycleMessage(event: .resume, sessionID: sessionID)] : [])
+                + (drivers.contains(sessionID) ? [VMLifecycleMessage(event: .turnEnded, sessionID: sessionID)] : [])
+        }
+    }
+
+    /// The VM stopped: its guest and the sessions in it are gone, so the take over just ends.
+    mutating func vmStopped(_ recordID: String) {
+        paused[recordID] = nil
+    }
+
+    /// The error an agent call to a VM gets from the driver gate, or nil to forward it. `action` is
+    /// nil for `vm_run`. A cancel always passes: it only stops the agent's own call.
+    static func refusal(action: ComputerUseCommand.Action?, driver: VMDriver) -> String? {
+        guard action != .cancel else { return nil }
+        switch VMDriver.decision(for: driver) {
+        case .proceed: return nil
+        case .userDriving: return VMAutoStartMessages.userDriving
+        }
     }
 }
