@@ -664,7 +664,9 @@ fn stdio_visual_only_forwards_html_bytes_and_returns_the_visual_id_without_hello
     );
     let requests = fake.requests.lock().unwrap().clone();
     assert!(
-        requests.iter().all(|request| request["kind"] != json!("mcp_hello")),
+        requests
+            .iter()
+            .all(|request| request["kind"] != json!("mcp_hello")),
         "{requests:?}"
     );
     let [request] = requests.as_slice() else {
@@ -700,7 +702,10 @@ fn http_requested_port_bind_failure_exits_without_port_line() {
         .unwrap();
 
     assert!(!output.status.success(), "{output:?}");
-    assert!(!String::from_utf8_lossy(&output.stdout).contains("PORT"), "{output:?}");
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("PORT"),
+        "{output:?}"
+    );
     assert!(!output.stderr.is_empty(), "{output:?}");
 }
 
@@ -732,7 +737,8 @@ fn http_hello_fires_on_first_authenticated_request_and_every_initialize() {
 
     // A reconnecting harness re-initializes against the reused process and
     // must announce again: the app clears its registration per attach.
-    let initialize = json!({ "jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {} });
+    let initialize =
+        json!({ "jsonrpc": "2.0", "id": "init", "method": "initialize", "params": {} });
     let response = http_post(mcp.port, token, initialize);
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     assert_eq!(wait_for_hellos(&fake, 2), 2);

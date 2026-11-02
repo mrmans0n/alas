@@ -254,6 +254,8 @@ public enum ACPMCPPromptPreamble: Sendable {
                     + "vm_status tells whether it runs and where to put builds (copy to transfer_host_path on the Mac, "
                     + "find them at transfer_guest_path in the VM); vm_run runs a shell command in the VM, "
                     + "for example to open a built app. "
+                    + "A stopped VM starts by itself on the first computer_* or vm_run call (an auto-started vm_run usually answers computer_vm_starting first); "
+                    + "computer_vm_starting and computer_vm_slot_pending mean try again shortly, and in a VM computer_user_active means the user took it over: wait for them to hand it back. "
                     + "A worktree may have a macOS and a Linux VM: then pass vm: \"macos\" or \"linux\" to these tools. "
                     + "In a Linux VM, roles are AT-SPI names, computer_open_app takes a .desktop id as bundle_id, and keys use ctrl.")
             }
