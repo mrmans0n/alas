@@ -231,6 +231,8 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     private var consoleHandler: PreviewConsoleHandler?
     private var urlObservation: NSKeyValueObservation?
     private let resolveHost: WebPreviewNavigation.HostResolver
+    typealias RuleCompiler = @MainActor (WebPreviewLoopbackPin?, Set<Data>) async -> WKContentRuleList?
+    private let compileRules: RuleCompiler
     /// Remote owners load nothing until the loopback rules are installed and
     /// the egress proxy is listening.
     private var protection: Protection
@@ -246,8 +248,10 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     var automationDocumentGeneration: Int { navigationGeneration }
 
     init(ownerKey: String, remoteHost: String?, allowedLoopback: WebPreviewLoopbackPin? = nil,
-         resolveHost: @escaping WebPreviewNavigation.HostResolver = { await WebPreviewHostLookup.resolve($0) }) {
+         resolveHost: @escaping WebPreviewNavigation.HostResolver = { await WebPreviewHostLookup.resolve($0) },
+         compileRules: @escaping RuleCompiler = { await WebPreviewLoopbackRules.ruleList(allowing: $0, selfAddresses: $1) }) {
         self.ownerKey = ownerKey
+        self.compileRules = compileRules
         self.remoteHost = remoteHost
         self.allowedLoopback = allowedLoopback
         self.resolveHost = resolveHost
@@ -325,7 +329,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     private func installRules() async -> Bool {
         while true {
             let addresses = WebPreviewLocalAddresses.read()
-            guard let list = await WebPreviewLoopbackRules.ruleList(allowing: allowedLoopback, selfAddresses: addresses),
+            guard let list = await compileRules(allowedLoopback, addresses),
                   !isClosed else { return false }
             // The addresses changed while compiling; compile for the new ones.
             guard addresses == WebPreviewLocalAddresses.read() else { continue }
@@ -339,7 +343,8 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
     }
 
     /// Starts the egress proxy, unless it is already listening, and points the
-    /// data store at it with failover off, so a dead proxy fails every load.
+    /// data store at it with failover off, so a dead proxy fails every load,
+    /// and with the proxy's credentials, which only this data store holds.
     private func startProxy() async -> Bool {
         if proxy?.isListening == true { return true }
         proxy?.stop()
@@ -357,6 +362,7 @@ final class WebPreviewBrowser: NSObject, WKNavigationDelegate, WKUIDelegate {
         }
         var configuration = ProxyConfiguration(httpCONNECTProxy: .hostPort(host: .ipv4(.loopback), port: port))
         configuration.allowFailover = false
+        configuration.applyCredential(username: WebPreviewEgressProxy.username, password: proxy.password)
         webView.configuration.websiteDataStore.proxyConfigurations = [configuration]
         return true
     }

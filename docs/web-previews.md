@@ -61,7 +61,10 @@ scripts, styles, frames, WebSockets, workers, and redirects.
   this Mac`, which `preview_console` and captures include. The proxy is set
   with failover off: if it stops, requests fail rather than going direct. Each
   proxy keeps at most 128 connections open, answering `503` beyond, and looks
-  up at most 4 names at once; further requests wait their turn.
+  up at most 4 names at once; further requests wait their turn. It answers
+  `407` to any request without its random per-preview password, which only
+  that preview's WebKit data store is given, so other processes on this Mac
+  cannot tunnel through it.
 - **IP literals** for loopback and this Mac's own addresses never reach a
   proxy, because WebKit connects to them directly. A WebKit content rule list
   blocks them by URL: `localhost`, `*.localhost`, `127.0.0.0/8`, `0.0.0.0`,
@@ -93,10 +96,13 @@ usually one of them. Known gaps:
   the rules are recompiled, typically within tens of milliseconds. Names are
   refused immediately.
 - WebKit may still look up names for DNS prefetch; that opens no connection.
-- Other processes on this Mac can send `CONNECT` to a running remote
-  preview's proxy and reach LAN hosts under Alas's Local Network permission.
-  Web pages cannot, since browsers forbid `CONNECT`, and nothing can reach this
-  Mac's own services through it. Alas accepts this risk.
+- The proxy listens on TCP, since WebKit ignores a Unix socket proxy endpoint
+  and connects directly. The password keeps other processes out unless they
+  can read Alas's memory.
+- A local process can still fill the proxy's 128-connection cap without the
+  password by reopening idle connections, which are dropped after 5 seconds,
+  so the preview's requests get `503`. That denies service; it reaches
+  nothing.
 
 ## MCP and CLI automation
 
