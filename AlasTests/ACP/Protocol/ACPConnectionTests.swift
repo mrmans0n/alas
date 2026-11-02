@@ -32,9 +32,10 @@ struct ACPConnectionTests {
             let meta = try #require(capabilities["_meta"] as? [String: Any])
             #expect((meta["goal"] as? [String: Any])?.isEmpty == true)
             #expect(meta["async-tasks"] as? Bool == true)
-            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex"])
+            #expect(Set(meta.keys) == ["goal", "async-tasks", "terminal-auth", "parameterizedModelPicker", "opencode/child-session-updates", "contextUsage", "settleAtResult", "sessionIndex", "forkPoint"])
             // The client-neutral session index opt-in, never the AIR declaration.
             #expect(meta["sessionIndex"] as? [String: Int] == ["version": 1])
+            #expect(meta["forkPoint"] as? [String: Int] == ["version": 1])
             #expect(meta["settleAtResult"] as? Bool == true)
             #expect(meta["jetbrains"] == nil)
             #expect(meta["terminal_output_delta"] == nil)
@@ -230,6 +231,74 @@ struct ACPConnectionTests {
             Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
         }
         #expect(try await ACPConnection(client: mock).initialize().sessionIndex == expected)
+    }
+
+    @Test("fork points need version 1 and a known boundary", arguments: [
+        (#"{"forkPoint":{"version":1,"boundary":"message"}}"#, ACPForkPointBoundary.message),
+        (#"{"forkPoint":{"version":1,"boundary":"turn"}}"#, .turn),
+        (#"{"forkPoint":{"version":2,"boundary":"message"}}"#, nil),
+        (#"{"forkPoint":{"version":1,"boundary":"thread"}}"#, nil),
+        (#"{"forkPoint":true}"#, nil),
+        (#"{"jetbrains":{"air":{"version":1,"capabilities":["forkPoint"]}}}"#, nil),
+        ("{}", nil),
+    ] as [(String, ACPForkPointBoundary?)])
+    func forkPointNegotiation(metadata: String, expected: ACPForkPointBoundary?) async throws {
+        let mock = ACPMockClient()
+        mock.script(method: "initialize") { _ in
+            Data("{\"protocolVersion\":1,\"_meta\":\(metadata)}".utf8)
+        }
+        #expect(try await ACPConnection(client: mock).initialize().forkPoint?.boundary == expected)
+    }
+
+    @Test("session/fork carries the fork target and decodes the adapter's echo", arguments: [true, false])
+    func forkSessionForkPoint(withTarget: Bool) async throws {
+        let fingerprint = ACPForkPointTarget.fingerprint("hello")
+        let mock = ACPMockClient()
+        mock.script(method: "session/fork") { request in
+            let params = try #require(request.params)
+            let json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(params)) as? [String: Any])
+            let meta = json["_meta"] as? [String: Any]
+            if withTarget {
+                let target = try #require(meta?["forkPoint"] as? [String: Any])
+                #expect(target["messageId"] as? String == "msg_1")
+                #expect(target["messageFingerprint"] as? String == fingerprint)
+                #expect(target["messageOccurrence"] as? Int == 2)
+                #expect(target.count == 3)
+            } else {
+                #expect(meta?["forkPoint"] == nil)
+            }
+            return Data(#"{"sessionId":"f","_meta":{"forkPoint":{"boundary":"turn","messageId":"i1","turnId":"t1","lastItemId":"i2","matchedBy":"fingerprint"}}}"#.utf8)
+        }
+        let target = withTarget
+            ? ACPForkPointTarget(messageId: "msg_1", messageFingerprint: fingerprint, messageOccurrence: 2)
+            : nil
+        let result = try await ACPConnection(client: mock).forkSession(
+            cwd: "/p", sessionId: "s", mcpServers: [], forkPoint: target)
+        let echo = ACPForkPointEcho(
+            boundary: .turn, messageId: "i1", turnId: "t1", lastItemId: "i2", matchedBy: .fingerprint)
+        #expect(result.forkPoint == echo)
+        #expect(result.withSessionId("x").forkPoint == echo)
+        #expect(result.withForkPoint(nil).forkPoint == nil)
+        let reencoded = try JSONDecoder().decode(ACPSessionNewResult.self, from: JSONEncoder().encode(result))
+        #expect(reencoded.forkPoint == echo)
+    }
+
+    @Test("only the adapter's own -32602 refusal maps to a fork point failure", arguments: [
+        (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))) as any Error, ACPForkPointFailure.notFound),
+        (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["field": "messageId"]]))), .malformed),
+        (RemoteHelperClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))), .notFound),
+        (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["other": "x"]))), nil),
+        (ACPClientError.jsonrpc(.init(code: -32603, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))), nil),
+        (CancellationError(), nil),
+    ] as [(any Error, ACPForkPointFailure?)])
+    func forkPointRejection(error: any Error, expected: ACPForkPointFailure?) {
+        #expect(ACPForkPointFailure.rejection(from: error) == expected)
+    }
+
+    @Test("a fork fingerprint is the SHA-256 of the exact UTF-8 text")
+    func forkPointFingerprint() {
+        #expect(ACPForkPointTarget.fingerprint("abc") == "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        #expect(ACPForkPointTarget.fingerprint("\u{e9}") != ACPForkPointTarget.fingerprint("e\u{301}"))
     }
 
     @Test("only a session index adapter's unknown-session error counts as deleted", arguments: [

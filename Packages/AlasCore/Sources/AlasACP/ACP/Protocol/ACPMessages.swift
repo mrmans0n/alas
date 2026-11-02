@@ -275,6 +275,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let codexHooks: ACPCodexHooksDeclaration?
     /// Asks our Claude and Codex adapter forks for the client-neutral session index.
     public let sessionIndex: ACPSessionIndexDeclaration
+    /// Asks our Claude and Codex adapter forks to fork at a historical message.
+    public let forkPoint: ACPForkPointDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -285,7 +287,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         contextUsage: Bool = false,
         settleAtResult: Bool = false,
         sessionIndex: ACPSessionIndexDeclaration = .init(),
-        codexHooks: ACPCodexHooksDeclaration? = nil
+        codexHooks: ACPCodexHooksDeclaration? = nil,
+        forkPoint: ACPForkPointDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -296,10 +299,11 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.settleAtResult = settleAtResult
         self.sessionIndex = sessionIndex
         self.codexHooks = codexHooks
+        self.forkPoint = forkPoint
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case contextUsage, settleAtResult, sessionIndex, codexHooks
+        case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -319,6 +323,7 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         settleAtResult = try c.decodeIfPresent(Bool.self, forKey: .settleAtResult) ?? false
         codexHooks = try? c.decodeIfPresent(ACPCodexHooksDeclaration.self, forKey: .codexHooks)
         sessionIndex = (try? c.decodeIfPresent(ACPSessionIndexDeclaration.self, forKey: .sessionIndex)) ?? .init()
+        forkPoint = (try? c.decodeIfPresent(ACPForkPointDeclaration.self, forKey: .forkPoint)) ?? .init()
     }
 }
 
@@ -406,9 +411,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         /// Client-neutral session index (our Claude and Codex adapter forks).
         public let sessionIndex: ACPSessionIndexCapability?
         public let codexHooks: ACPCodexHooksCapability?
+        /// Fork at a historical message (our Claude and Codex adapter forks).
+        public let forkPoint: ACPForkPointAdvertisement?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks
+            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint
             case asyncTasks = "async-tasks"
         }
 
@@ -422,6 +429,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             systemPrompt = try? c.decodeIfPresent(SystemPromptCapability.self, forKey: .systemPrompt)
             sessionIndex = try? c.decodeIfPresent(ACPSessionIndexCapability.self, forKey: .sessionIndex)
             codexHooks = try? c.decodeIfPresent(ACPCodexHooksCapability.self, forKey: .codexHooks)
+            forkPoint = try? c.decodeIfPresent(ACPForkPointAdvertisement.self, forKey: .forkPoint)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {
@@ -798,6 +806,8 @@ public struct ACPSessionMeta: Codable, Equatable, Sendable {
     public var mcpStartupAwaitTimeoutMs: Int? = nil
     public var systemPrompt: SystemPrompt? = nil
     public var codexHooks: ACPCodexHookReviewMetadata? = nil
+    /// Read by our adapter forks on `session/fork`; see `ACPForkPointTarget`.
+    public var forkPoint: ACPForkPointTarget? = nil
 
     public init(
         claudeCode: ClaudeCode? = nil,
@@ -913,10 +923,17 @@ public struct ACPSessionNewResult: Codable, Equatable, Sendable {
     public let currentMode: String?
     public let promptSuggestions: [ACPPromptSuggestion]
     public let configOptions: [ACPConfigOption]
+    /// Where `session/fork` cut, when the adapter echoed `_meta.forkPoint`.
+    public let forkPoint: ACPForkPointEcho?
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case sessionId, availableModels, availableModes, currentModel, currentMode, promptSuggestions, configOptions
         case models, modes
+        case meta = "_meta"
+    }
+
+    private enum MetaKeys: String, CodingKey {
+        case forkPoint
     }
 
     // We only ever receive this type — encoding is not used in production.
@@ -931,6 +948,10 @@ public struct ACPSessionNewResult: Codable, Equatable, Sendable {
         try c.encodeIfPresent(currentMode, forKey: .currentMode)
         try c.encode(promptSuggestions, forKey: .promptSuggestions)
         try c.encode(configOptions, forKey: .configOptions)
+        if let forkPoint {
+            var meta = c.nestedContainer(keyedBy: MetaKeys.self, forKey: .meta)
+            try meta.encode(forkPoint, forKey: .forkPoint)
+        }
     }
 
     public init(
@@ -940,7 +961,8 @@ public struct ACPSessionNewResult: Codable, Equatable, Sendable {
         currentModel: String?,
         currentMode: String?,
         promptSuggestions: [ACPPromptSuggestion],
-        configOptions: [ACPConfigOption] = []
+        configOptions: [ACPConfigOption] = [],
+        forkPoint: ACPForkPointEcho? = nil
     ) {
         self.sessionId = sessionId
         self.availableModels = availableModels
@@ -949,11 +971,14 @@ public struct ACPSessionNewResult: Codable, Equatable, Sendable {
         self.currentMode = currentMode
         self.promptSuggestions = promptSuggestions
         self.configOptions = configOptions
+        self.forkPoint = forkPoint
     }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         sessionId = (try? c.decode(String.self, forKey: .sessionId)) ?? ""
+        forkPoint = (try? c.nestedContainer(keyedBy: MetaKeys.self, forKey: .meta))
+            .flatMap { try? $0.decodeIfPresent(ACPForkPointEcho.self, forKey: .forkPoint) }
 
         // ACP v1 nests these as `models: { availableModels, currentModelId }`
         // and `modes: { availableModes, currentModeId }`. Older drafts used
@@ -991,7 +1016,21 @@ public struct ACPSessionNewResult: Codable, Equatable, Sendable {
             currentModel: currentModel,
             currentMode: currentMode,
             promptSuggestions: promptSuggestions,
-            configOptions: configOptions
+            configOptions: configOptions,
+            forkPoint: forkPoint
+        )
+    }
+
+    public func withForkPoint(_ echo: ACPForkPointEcho?) -> ACPSessionNewResult {
+        ACPSessionNewResult(
+            sessionId: sessionId,
+            availableModels: availableModels,
+            availableModes: availableModes,
+            currentModel: currentModel,
+            currentMode: currentMode,
+            promptSuggestions: promptSuggestions,
+            configOptions: configOptions,
+            forkPoint: echo
         )
     }
 }
