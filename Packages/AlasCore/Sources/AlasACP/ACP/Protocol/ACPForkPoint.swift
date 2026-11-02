@@ -110,10 +110,14 @@ public enum ACPForkPointFailure: String, Codable, Equatable, Error, Sendable {
     case sourceChanged
     case missingEcho
     case mismatchedEcho
+    /// The fork couldn't be attempted or settled natively for a reason that
+    /// isn't about the message: the connection, the source, or a failure.
+    case unavailable
 
     /// The adapter's own refusal of a fork target: `-32602` with
-    /// `data.forkPoint`, `reason: notFound` for a message it cannot locate and
-    /// `field` for a malformed target. Any other error is not a refusal.
+    /// `data.forkPoint`, `reason: notFound` for a message it cannot locate,
+    /// `reason: notNegotiated` when it doesn't take targets from this client,
+    /// and `field` for a malformed target. Any other error is not a refusal.
     public static func rejection(from error: any Error) -> ACPForkPointFailure? {
         let rpc: JSONRPCError
         switch error {
@@ -126,7 +130,11 @@ public enum ACPForkPointFailure: String, Codable, Equatable, Error, Sendable {
               let data = object(rpc.data?.value),
               let forkPoint = object(data["forkPoint"])
         else { return nil }
-        if forkPoint["reason"] as? String == "notFound" { return .notFound }
+        switch forkPoint["reason"] as? String {
+        case "notFound": return .notFound
+        case "notNegotiated": return .unsupported
+        default: break
+        }
         if forkPoint["field"] != nil { return .malformed }
         return nil
     }

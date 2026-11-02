@@ -4729,36 +4729,29 @@ public final class ACPSessionManager: ChangeTracking {
     private func downgradeNegotiatingForkToTranscript(session: ACPSession) async throws -> Bool {
         guard var fork = session.forkRecord, fork.phase == .negotiatingNative else { return false }
         do {
-            try await persistence.finalizeFork(
-                targetSessionID: session.id,
-                mechanism: .transcriptTransfer,
-                remoteSessionID: nil
-            )
+            try await finalizeForkAsTranscript(session: session, fork: &fork, reason: nil)
         } catch {
             persistenceError = error.localizedDescription
             throw ACPForkFallbackPersistenceError(underlying: error)
         }
-        fork.phase = .ready
-        fork.mechanism = .transcriptTransfer
-        fork.contextDeliveryPending = true
-        session.forkRecord = fork
         return true
     }
 
     /// Durably settles a negotiating fork as a transcript import. A targeted
-    /// fork also records why it couldn't be forked natively at its message.
+    /// fork always records why it wasn't forked natively at its message:
+    /// `reason`, or `.unavailable` when the fallback wasn't about the message.
     private func finalizeForkAsTranscript(
         session: ACPSession,
         fork: inout ACPSessionForkRecord,
         reason: ACPForkPointFailure?
     ) async throws {
         var forkPoint = fork.forkPoint
-        if let reason { forkPoint?.outcome = .unmatched(reason) }
+        forkPoint?.outcome = .unmatched(reason ?? .unavailable)
         try await persistence.finalizeFork(
             targetSessionID: session.id,
             mechanism: .transcriptTransfer,
             remoteSessionID: nil,
-            forkPoint: reason == nil ? nil : forkPoint
+            forkPoint: forkPoint
         )
         fork.phase = .ready
         fork.mechanism = .transcriptTransfer
@@ -5020,7 +5013,7 @@ public final class ACPSessionManager: ChangeTracking {
                 try await finalizeForkAsTranscript(
                     session: session,
                     fork: &fork,
-                    reason: forkPoint == nil ? nil : ACPForkPointFailure.rejection(from: fallbackError)
+                    reason: ACPForkPointFailure.rejection(from: fallbackError)
                 )
                 connection.acknowledgeDurableSessionResponses()
                 await releaseReplayedForkCompletionForTranscriptFallback(
@@ -5093,24 +5086,11 @@ public final class ACPSessionManager: ChangeTracking {
                     using: connection,
                     sessionCapabilities: initialized.sessionCapabilities
                 )
-                let transcriptFinalized: Bool
                 do {
-                    try await persistence.finalizeFork(
-                        targetSessionID: session.id,
-                        mechanism: .transcriptTransfer,
-                        remoteSessionID: nil
-                    )
-                    transcriptFinalized = true
+                    try await finalizeForkAsTranscript(session: session, fork: &fork, reason: nil)
+                    connection.acknowledgeDurableSessionResponses()
                 } catch {
                     persistenceError = error.localizedDescription
-                    transcriptFinalized = false
-                }
-                if transcriptFinalized {
-                    fork.phase = .ready
-                    fork.mechanism = .transcriptTransfer
-                    fork.contextDeliveryPending = true
-                    session.forkRecord = fork
-                    connection.acknowledgeDurableSessionResponses()
                 }
                 throw error
             }
@@ -5130,12 +5110,10 @@ public final class ACPSessionManager: ChangeTracking {
             return (result, false)
         }
 
-        // A targeted fork says why it wasn't forked at its message when the
-        // agent couldn't cut there or the message changed; other fallbacks
-        // (no durable connection, source runner or lease) are not about it.
-        let fallbackReason: ACPForkPointFailure? = if forkPoint == nil {
-            nil
-        } else if forkPointUnsupported {
+        // A targeted fork says why it wasn't forked at its message: the agent
+        // couldn't cut there or the message changed; any other fallback (no
+        // durable connection, source runner or lease) saves `.unavailable`.
+        let fallbackReason: ACPForkPointFailure? = if forkPointUnsupported {
             .unsupported
         } else if hasNativeForkAuthority, sourceRemoteSessionID?.isEmpty == false, !sourceBoundaryMatches {
             .sourceChanged

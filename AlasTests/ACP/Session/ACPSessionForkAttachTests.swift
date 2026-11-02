@@ -612,6 +612,7 @@ struct ACPSessionForkAttachTests {
         "a targeted fork the agent can't cut, or cuts elsewhere, is imported as a transcript with the reason",
         arguments: [
             ACPForkPointFailure.notFound, .malformed, .missingEcho, .mismatchedEcho, .unsupported, .sourceChanged,
+            .unavailable,
         ]
     )
     func targetedForkFailuresImportVisibly(reason: ACPForkPointFailure) async throws {
@@ -622,7 +623,9 @@ struct ACPSessionForkAttachTests {
                 bindings: [try ACPMessageCodec.encode(.agent(id: UUID(), messageId: "a1", StreamingText("Edited answer")))]
             )
         }
-        let client = durableMockClient()
+        // A connection without durable fork dedupe can't attempt a native
+        // fork at all.
+        let client = reason == .unavailable ? ACPMockClient() : durableMockClient()
         scriptInitialize(
             client, supportsFork: true, supportsClose: true,
             forkPoint: reason == .unsupported ? nil : "message"
@@ -653,7 +656,7 @@ struct ACPSessionForkAttachTests {
         await manager.attach(to: target.id, freshlyCreated: true)
 
         let methods = client.sent.map(\.method)
-        let sendsFork = reason != .unsupported && reason != .sourceChanged
+        let sendsFork = ![.unsupported, .sourceChanged, .unavailable].contains(reason)
         let discardsFork = reason == .missingEcho || reason == .mismatchedEcho
         #expect(methods.filter { $0 == "session/fork" }.count == (sendsFork ? 1 : 0))
         #expect(client.sent.compactMap { ($0.params as? ACPSessionCloseParams)?.sessionId }

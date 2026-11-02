@@ -52,6 +52,8 @@ struct ACPSessionForkPresentation: Equatable {
             "The source chat changed this message before the fork started, so the conversation was imported instead of forked natively."
         case .missingEcho, .mismatchedEcho:
             "\(agent) forked at a different point, so that fork was discarded and the conversation was imported instead."
+        case .unavailable:
+            "\(agent) couldn't fork at this message right now, so the conversation was imported instead."
         }
     }
 

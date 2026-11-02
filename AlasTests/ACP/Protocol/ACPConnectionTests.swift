@@ -287,6 +287,8 @@ struct ACPConnectionTests {
         (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))) as any Error, ACPForkPointFailure.notFound),
         (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["field": "messageId"]]))), .malformed),
         (RemoteHelperClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))), .notFound),
+        // Codex refuses a target from a client that didn't declare the extension.
+        (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["forkPoint": ["reason": "notNegotiated"]]))), .unsupported),
         (ACPClientError.jsonrpc(.init(code: -32602, message: "m", data: AnyCodable(["other": "x"]))), nil),
         (ACPClientError.jsonrpc(.init(code: -32603, message: "m", data: AnyCodable(["forkPoint": ["reason": "notFound"]]))), nil),
         (CancellationError(), nil),

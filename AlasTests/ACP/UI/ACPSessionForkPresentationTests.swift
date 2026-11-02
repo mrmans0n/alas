@@ -45,6 +45,9 @@ struct ACPSessionForkPresentationTests {
                 boundaryText: "  \n\nFirst   line of a very long answer that keeps going past the limit\nsecond",
                 title: "Forked from Claude after “First line of a very long answer that keeps goin…”",
                 notice: nil),
+        CopyRow(name: "matched message, blank preview", mechanism: .nativeACP, via: nil,
+                forkPoint: forkPoint(.message, echo(.message)), boundaryText: "  \n ",
+                title: "Forked from Claude after this message", notice: nil),
         CopyRow(name: "matched turn", mechanism: .nativeACP, via: nil,
                 forkPoint: forkPoint(.turn, echo(.turn)), boundaryText: "ignored",
                 title: "Forked from Claude after this turn", notice: nil),
@@ -55,7 +58,11 @@ struct ACPSessionForkPresentationTests {
         CopyRow(name: "unmatched mismatchedEcho", mechanism: .transcriptTransfer, via: nil,
                 forkPoint: forkPoint(.message, .unmatched(.mismatchedEcho)), boundaryText: nil,
                 title: "Conversation imported from Claude",
-                notice: "Claude forked at a different point, so that fork was discarded and the conversation was imported instead. " + importedNotice)
+                notice: "Claude forked at a different point, so that fork was discarded and the conversation was imported instead. " + importedNotice),
+        CopyRow(name: "unmatched unavailable", mechanism: .transcriptTransfer, via: nil,
+                forkPoint: forkPoint(.message, .unmatched(.unavailable)), boundaryText: nil,
+                title: "Conversation imported from Claude",
+                notice: "Claude couldn't fork at this message right now, so the conversation was imported instead. " + importedNotice),
     ])
     func dividerCopy(row: CopyRow) {
         let presentation = ACPSessionForkPresentation(
