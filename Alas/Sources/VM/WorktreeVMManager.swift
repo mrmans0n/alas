@@ -15,6 +15,17 @@ enum VMStartOutcome {
     case needsUserChoice(candidates: [String])
 }
 
+/// How `pauseVM` left a VM.
+enum VMPauseOutcome: Equatable {
+    /// Its machine state was saved and it stopped; the next start restores it.
+    case saved
+    /// It stopped without a saved state: it can't save one (Linux, a golden, or a configuration
+    /// without save/restore support), or saving failed. The next start cold-boots.
+    case stopped
+    /// Nothing changed: it wasn't running here, was still booting, or couldn't be stopped.
+    case notRunning
+}
+
 /// Owns the VMs this process runs, one per worktree, plus the golden VM while
 /// its setup is pending. Slots are accounted across processes through the
 /// shared `WorktreeVMRegistry`.
@@ -39,9 +50,38 @@ final class WorktreeVMManager {
         var runningElsewhere: String?
         /// Where its bundle is, when it has one.
         var bundlePath: String?
+        /// Set while the VM is paused with a saved state.
+        var paused: PausedState?
     }
 
-    typealias StartVM = (_ worktreeID: String, _ bundle: VMBundle, _ shares: [VMShare]) async throws -> RunningVM
+    /// Boots VM `worktreeID`, or restores it from `restoringFrom` and resumes it. A restore that
+    /// failed with the machine stopped throws `RestoreFailed`, so the caller can cold-boot instead.
+    typealias StartVM = (
+        _ worktreeID: String, _ bundle: VMBundle, _ shares: [VMShare], _ restoringFrom: URL?
+    ) async throws -> RunningVM
+
+    /// Restoring a saved machine state failed, and the machine it was restored into is stopped.
+    struct RestoreFailed: Error {
+        let underlying: Error
+    }
+
+    /// Where a paused VM's bundle keeps its saved machine state.
+    nonisolated static func savedStateURL(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent("state.vzvmsave")
+    }
+
+    /// A paused VM's saved state, for its tab.
+    struct PausedState: Equatable, Sendable {
+        var savedAt: Date
+        /// The state file's allocated size.
+        var bytes: Int64
+    }
+
+    /// How long quitting waits for the running macOS VMs to save their state, all together.
+    /// Those still saving then are stopped as before.
+    @ObservationIgnored var quitPauseBound: Duration = .seconds(20)
+    /// The clock `runningSince` is read with; tests replace it.
+    @ObservationIgnored var now: () -> Date = Date.init
 
     /// Registry ids at or under this prefix are golden VMs, not worktrees.
     nonisolated static let goldenIDPrefix = "golden:"
@@ -116,6 +156,15 @@ final class WorktreeVMManager {
 
     private enum PendingAction { case stop, delete }
 
+    /// Whether each VM running here can save its machine state, by registry id, as checked
+    /// when it booted.
+    @ObservationIgnored private var saveRestoreSupport: [String: Bool] = [:]
+    /// When each VM running here started, by registry id, on `now`'s clock.
+    @ObservationIgnored private var startedAt: [String: Date] = [:]
+    /// VMs whose state is being saved; observed so a VM tab shows the pause.
+    private(set) var pausing: Set<String> = []
+    @ObservationIgnored private var pauses: [String: Task<VMPauseOutcome, Never>] = [:]
+
     init(
         registry: WorktreeVMRegistry = WorktreeVMRegistry(),
         root: URL = Paths.vmsRoot,
@@ -150,12 +199,16 @@ final class WorktreeVMManager {
             ?? "Alas"
     }
 
-    /// Boots VM `worktreeID` (a registry record id), configured for the guest its id names.
-    static func bootVirtualMachine(worktreeID: String, bundle: VMBundle, shares: [VMShare]) async throws -> RunningVM {
+    /// Boots VM `worktreeID` (a registry record id), configured for the guest its id names, or
+    /// restores it from `restoringFrom` and resumes it.
+    static func bootVirtualMachine(
+        worktreeID: String, bundle: VMBundle, shares: [VMShare], restoringFrom state: URL?
+    ) async throws -> RunningVM {
+        let guest = VMIdentity.parse(recordID: worktreeID).guest
         let resources = VMConfigurationFactory.defaultResources(
             hostCPUs: ProcessInfo.processInfo.processorCount,
             hostMemory: ProcessInfo.processInfo.physicalMemory)
-        let configuration = switch VMIdentity.parse(recordID: worktreeID).guest {
+        let configuration = switch guest {
         case .macOS:
             try VMConfigurationFactory.macOS(
                 bundle: bundle, cpuCount: resources.cpus, memoryBytes: resources.memory, display: .default,
@@ -165,18 +218,38 @@ final class WorktreeVMManager {
                 bundle: LinuxVMBundle(url: bundle.url), cpuCount: resources.cpus, memoryBytes: resources.memory,
                 display: .default, shares: shares, seedISO: nil)
         }
-        // Diagnostic for suspend and resume, which a later plan builds on:
-        // whether this configuration, shares included, supports save/restore.
+        // Whether this configuration, shares included, supports save/restore, which pausing
+        // needs. Linux guests never save state.
+        var supportsSaveRestore = false
         #if arch(arm64)
         do {
             try configuration.validateSaveRestoreSupport()
+            supportsSaveRestore = guest == .macOS
             vmLogger.notice("VM \(worktreeID, privacy: .public) supports save/restore with \(shares.count) shares")
         } catch {
             vmLogger.notice("VM \(worktreeID, privacy: .public) does not support save/restore with \(shares.count) shares: \(String(describing: error), privacy: .public)")
         }
         #endif
-        let vm = RunningVM(worktreeID: worktreeID, machine: VirtualizationMachine(configuration: configuration))
-        try await vm.start()
+        let machine = VirtualizationMachine(configuration: configuration)
+        let vm = RunningVM(worktreeID: worktreeID, machine: machine, supportsSaveRestore: supportsSaveRestore)
+        guard let state else {
+            try await vm.start()
+            return vm
+        }
+        do {
+            try await vm.restoreState(from: state)
+            try await vm.resume()
+        } catch {
+            // A restored machine left paused would share the disk with the cold boot that follows.
+            if machine.state != .stopped, machine.state != .error {
+                do {
+                    try await machine.stop()
+                } catch {
+                    throw VMError(message: "The VM couldn't be resumed or stopped: \(error.localizedDescription)")
+                }
+            }
+            throw RestoreFailed(underlying: error)
+        }
         return vm
     }
 
@@ -280,7 +353,20 @@ final class WorktreeVMManager {
         let elsewhere = record.runOwner.flatMap { owner in
             me.map(owner.isSameProcess(as:)) == true ? nil : owner.label
         }
-        return RecordStatus(hasVM: true, runningElsewhere: elsewhere, bundlePath: record.bundlePath)
+        let paused = record.paused
+            ? Self.pausedState(at: Self.savedStateURL(of: VMBundle(url: URL(fileURLWithPath: record.bundlePath))))
+            : nil
+        return RecordStatus(hasVM: true, runningElsewhere: elsewhere, bundlePath: record.bundlePath, paused: paused)
+    }
+
+    /// When the state file was saved and its allocated size; nil when there is none. Read with
+    /// `stat`, which never answers from a cache.
+    private static func pausedState(at file: URL) -> PausedState? {
+        var info = stat()
+        guard stat(file.path, &info) == 0 else { return nil }
+        let savedAt = Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+            + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
+        return PausedState(savedAt: savedAt, bytes: Int64(info.st_blocks) * 512)
     }
 
     /// True the first time it is asked for `build`, so the golden VM boots by
@@ -296,6 +382,16 @@ final class WorktreeVMManager {
 
     func isStarting(_ id: String) -> Bool {
         starting.contains(id)
+    }
+
+    /// Whether VM `recordID`, running here, can save its machine state.
+    func supportsSaveRestore(recordID: String) -> Bool {
+        saveRestoreSupport[recordID] ?? false
+    }
+
+    /// When VM `recordID` started running here; nil when it doesn't run here.
+    func runningSince(_ recordID: String) -> Date? {
+        startedAt[recordID]
     }
 
     func runningGolden() -> RunningVM? {
@@ -462,8 +558,14 @@ final class WorktreeVMManager {
     }
 
     /// Throws when the VM is still running afterwards; it then stays tracked
-    /// and keeps its slot.
+    /// and keeps its slot. A pause in progress finishes first: stopping a machine mid-save
+    /// would leave a partial state file.
     private func stop(_ id: String, force: Bool) async throws {
+        if let pause = pauses[id] { _ = await pause.value }
+        try await stopNow(id, force: force)
+    }
+
+    private func stopNow(_ id: String, force: Bool) async throws {
         if starting.contains(id) {
             if pendingAfterBoot[id] == nil { pendingAfterBoot[id] = .stop }
             return
@@ -555,12 +657,184 @@ final class WorktreeVMManager {
         return nil
     }
 
-    /// Stops every VM this process runs. Called on quit so registry owners clear.
+    /// Stops every VM this process runs. Called on quit so registry owners clear. macOS VMs
+    /// that can save their state pause instead, all at once, within `quitPauseBound`; one still
+    /// saving then is stopped as the others are.
     func stopAll() async {
+        let ids = Array(runningVMs.keys)
+        let pausable = Set(ids.filter(canSaveState))
+        let pauses = pausable.map { id in Task { await self.pauseVM(recordID: id) } }
         await withTaskGroup(of: Void.self) { group in
-            for id in runningVMs.keys {
+            for id in ids where !pausable.contains(id) {
                 group.addTask { await self.stopRecorded(id) }
             }
+            group.addTask { await self.waitForQuitPauses(pauses, ids: pausable) }
+        }
+    }
+
+    private func waitForQuitPauses(_ pauses: [Task<VMPauseOutcome, Never>], ids: Set<String>) async {
+        guard !pauses.isEmpty else { return }
+        let (done, signal) = AsyncStream<Void>.makeStream()
+        let all = Task {
+            for pause in pauses { _ = await pause.value }
+            signal.yield()
+        }
+        let bound = quitPauseBound
+        let timer = Task {
+            try? await Task.sleep(for: bound)
+            signal.yield()
+        }
+        for await _ in done { break }
+        signal.finish()
+        timer.cancel()
+        all.cancel()
+        let late = ids.filter { runningVMs[$0] != nil }
+        guard !late.isEmpty else { return }
+        logger.error("Saving the state of VMs \(late.sorted(), privacy: .public) took too long; stopping them")
+        await withTaskGroup(of: Void.self) { group in
+            for id in late {
+                group.addTask {
+                    do {
+                        try await self.stopNow(id, force: false)
+                    } catch {
+                        self.logger.error("Stopping VM \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Pause
+
+    /// Whether VM `id`, running here, pauses by saving its state: a worktree's macOS VM whose
+    /// configuration supports it. A golden never does: sealing it needs a clean shutdown.
+    private func canSaveState(_ id: String) -> Bool {
+        VMIdentity.parse(recordID: id).guest == .macOS && !id.hasPrefix(Self.goldenIDPrefix)
+            && supportsSaveRestore(recordID: id)
+    }
+
+    /// Pauses the worktree's VM to free its slot: saves its machine state and stops it, so the
+    /// next start resumes where it was. A VM that can't save its state stops instead.
+    func pauseVM(worktreeID: String, guest: VMGuestOS = .macOS) async -> VMPauseOutcome {
+        await pauseVM(recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest))
+    }
+
+    private func pauseVM(recordID id: String) async -> VMPauseOutcome {
+        if let pause = pauses[id] { return await pause.value }
+        guard runningVMs[id] != nil, !starting.contains(id) else { return .notRunning }
+        let pause = Task { await self.pauseNow(id) }
+        pauses[id] = pause
+        pausing.insert(id)
+        let outcome = await pause.value
+        pauses[id] = nil
+        pausing.remove(id)
+        return outcome
+    }
+
+    private func pauseNow(_ id: String) async -> VMPauseOutcome {
+        guard let vm = runningVMs[id] else { return .notRunning }
+        guard canSaveState(id) else { return await stopInsteadOfPausing(id) }
+        let bundle = bundle(forID: id)
+        let state = Self.savedStateURL(of: bundle)
+        do {
+            try await vm.pause()
+            try await vm.saveState(to: state)
+        } catch {
+            logger.error("Saving the state of VM \(id, privacy: .public) failed, stopping it: \(String(describing: error), privacy: .public)")
+            Self.removeSavedState(state)
+            // Running again, the guest can shut down cleanly.
+            if vm.state == .paused { try? await vm.resume() }
+            return await stopInsteadOfPausing(id)
+        }
+        do {
+            try await vm.forceStop()
+        } catch {
+            logger.error("Stopping VM \(id, privacy: .public) after saving its state failed: \(String(describing: error), privacy: .public)")
+            Self.removeSavedState(state)
+            try? await vm.resume()
+            return .notRunning
+        }
+        // `onStopped` normally untracks it already.
+        didStop(id)
+        guard let stamp = Self.diskStamp(of: bundle) else {
+            logger.error("Couldn't read VM \(id, privacy: .public)'s disk; discarding its saved state")
+            Self.removeSavedState(state)
+            return .stopped
+        }
+        do {
+            try registry.update { records in
+                guard let index = records.firstIndex(where: { $0.id == id }) else {
+                    throw VMError(message: "The VM has no record")
+                }
+                records[index].paused = true
+                records[index].pausedDiskStamp = stamp
+            }
+        } catch {
+            logger.error("Recording VM \(id, privacy: .public) as paused failed: \(String(describing: error), privacy: .public)")
+            Self.removeSavedState(state)
+            return .stopped
+        }
+        logger.notice("Paused VM \(id, privacy: .public) with its state saved")
+        return .saved
+    }
+
+    private func stopInsteadOfPausing(_ id: String) async -> VMPauseOutcome {
+        do {
+            try await stopNow(id, force: false)
+        } catch {
+            logger.error("Stopping VM \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            return .notRunning
+        }
+        return .stopped
+    }
+
+    /// `disk.img`'s modification time, read with `attributesOfItem`, which never answers from a
+    /// cache, plus 1 ms so the registry's floating-point round trip can't make it look older.
+    nonisolated private static func diskStamp(of bundle: VMBundle) -> Date? {
+        diskModified(bundle).map { $0.addingTimeInterval(0.001) }
+    }
+
+    nonisolated private static func diskModified(_ bundle: VMBundle) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: bundle.diskImage.path))?[.modificationDate] as? Date
+    }
+
+    nonisolated private static func removeSavedState(_ state: URL) {
+        guard FileManager.default.fileExists(atPath: state.path) else { return }
+        do {
+            try FileManager.default.removeItem(at: state)
+        } catch {
+            Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
+                .error("Removing saved VM state \(state.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+        }
+    }
+
+    /// The state file a start restores from: only a paused macOS VM's, saved with the disk as it
+    /// is now. Any other is stale and removed. Called under the registry lock.
+    nonisolated private static func restorableState(_ record: WorktreeVMRecord, bundle: VMBundle) -> URL? {
+        let state = savedStateURL(of: bundle)
+        guard FileManager.default.fileExists(atPath: state.path) else { return nil }
+        if record.paused, record.guestOS == .macOS, let disk = diskModified(bundle),
+           VMSavedState.isValid(pausedDiskStamp: record.pausedDiskStamp, currentDiskModified: disk)
+        {
+            return state
+        }
+        Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
+            .notice("Discarding stale saved state of VM \(record.id, privacy: .public)")
+        removeSavedState(state)
+        return nil
+    }
+
+    /// A started VM no longer has a saved state: a later crash must not restore it.
+    private func consumeSavedState(_ id: String, bundle: VMBundle) {
+        Self.removeSavedState(Self.savedStateURL(of: bundle))
+        do {
+            try registry.update { records in
+                guard let index = records.firstIndex(where: { $0.id == id }), records[index].paused else { return }
+                records[index].paused = false
+                records[index].pausedDiskStamp = nil
+            }
+        } catch {
+            logger.error("Clearing VM \(id, privacy: .public)'s paused state failed: \(String(describing: error), privacy: .public)")
         }
     }
 
@@ -951,7 +1225,9 @@ final class WorktreeVMManager {
     }
 
     private enum Admission {
-        case boot(VMBundle, generation: Int)
+        /// `restoringFrom` is a saved state still valid for the disk; `wasPaused` whether the
+        /// record or the bundle had one at all.
+        case boot(VMBundle, generation: Int, restoringFrom: URL?, wasPaused: Bool)
         case outcome(VMStartOutcome)
     }
 
@@ -961,6 +1237,8 @@ final class WorktreeVMManager {
     private func startRecorded(
         id: String, ensureRecord: ((inout [WorktreeVMRecord]) throws -> Void)?
     ) async throws -> VMStartOutcome {
+        // A VM being paused starts again once its state is saved, from that state.
+        if let pause = pauses[id] { _ = await pause.value }
         if let vm = runningVMs[id] { return .running(vm) }
         guard !starting.contains(id) else {
             throw VMError(message: "This VM is already starting")
@@ -989,7 +1267,12 @@ final class WorktreeVMManager {
                 records[index].lastUsedAt = Date()
                 let generation = (records[index].bootGeneration ?? 0) + 1
                 records[index].bootGeneration = generation
-                return .boot(VMBundle(url: URL(fileURLWithPath: records[index].bundlePath)), generation: generation)
+                let bundle = VMBundle(url: URL(fileURLWithPath: records[index].bundlePath))
+                let wasPaused = records[index].paused
+                    || FileManager.default.fileExists(atPath: Self.savedStateURL(of: bundle).path)
+                return .boot(
+                    bundle, generation: generation, restoringFrom: Self.restorableState(records[index], bundle: bundle),
+                    wasPaused: wasPaused)
             case .alreadyRunningHere:
                 throw VMError(message: "This VM is already starting")
             case .runningElsewhere(let label):
@@ -1000,9 +1283,12 @@ final class WorktreeVMManager {
         }
         let bundle: VMBundle
         let generation: Int
+        let restoringFrom: URL?
+        let wasPaused: Bool
         switch admission {
         case .outcome(let outcome): return outcome
-        case .boot(let booting, let bootGeneration): (bundle, generation) = (booting, bootGeneration)
+        case .boot(let booting, let bootGeneration, let state, let paused):
+            (bundle, generation, restoringFrom, wasPaused) = (booting, bootGeneration, state, paused)
         }
 
         // `id` stays in `starting` until the VM is tracked or fully cleaned
@@ -1014,7 +1300,7 @@ final class WorktreeVMManager {
         cleanlyShutDown.removeValue(forKey: id)
         let booted: Result<RunningVM, Error>
         do {
-            booted = .success(try await start(id, bundle, try shares(forRecord: id)))
+            booted = .success(try await bootOrRestore(id, bundle: bundle, restoringFrom: restoringFrom))
         } catch {
             booted = .failure(error)
         }
@@ -1060,7 +1346,24 @@ final class WorktreeVMManager {
             throw VMError(message: "The VM was \(abort) while it was starting")
         }
         track(vm, id: id, generation: generation)
+        if wasPaused { consumeSavedState(id, bundle: bundle) }
         return .running(vm)
+    }
+
+    /// Restores the VM from its saved state when it has one; a restore that fails is logged,
+    /// never surfaced, and the VM cold-boots instead.
+    private func bootOrRestore(_ id: String, bundle: VMBundle, restoringFrom state: URL?) async throws -> RunningVM {
+        let shares = try shares(forRecord: id)
+        guard let state else { return try await start(id, bundle, shares, nil) }
+        do {
+            let vm = try await start(id, bundle, shares, state)
+            logger.notice("Resumed VM \(id, privacy: .public) from its saved state")
+            return vm
+        } catch let failure as RestoreFailed {
+            logger.error("Restoring VM \(id, privacy: .public) failed, cold-booting it: \(String(describing: failure.underlying), privacy: .public)")
+            Self.removeSavedState(state)
+            return try await start(id, bundle, shares, nil)
+        }
     }
 
     private func track(_ vm: RunningVM, id: String, generation: Int) {
@@ -1077,6 +1380,8 @@ final class WorktreeVMManager {
             self?.didStop(id)
         }
         runningVMs[id] = vm
+        saveRestoreSupport[id] = vm.supportsSaveRestore
+        startedAt[id] = now()
     }
 
     /// Whether the record still exists with this process as owner. A registry
@@ -1094,6 +1399,8 @@ final class WorktreeVMManager {
 
     private func didStop(_ id: String) {
         helpersNeedingUpdate.remove(id)
+        saveRestoreSupport.removeValue(forKey: id)
+        startedAt.removeValue(forKey: id)
         if let client = guestClients.removeValue(forKey: id) {
             Task { await client.close() }
         }

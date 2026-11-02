@@ -92,7 +92,8 @@ struct VirtualMachineTabView: View {
             installerPhase: installer.phase,
             linuxInstallerPhase: linuxInstaller.phase,
             helper: helperUpdate(recordID),
-            goldenHelper: customizedGoldenID.map(helperUpdate) ?? .none
+            goldenHelper: customizedGoldenID.map(helperUpdate) ?? .none,
+            paused: record.paused
         )
     }
 
@@ -143,6 +144,8 @@ struct VirtualMachineTabView: View {
         .onChange(of: phaseKind) { _, _ in refresh() }
         // Starting or stopping changes the disk's size and the registry.
         .onChange(of: vms.running(worktreeID, guest: guest) != nil) { _, _ in refresh() }
+        // A pause records the VM as paused only after it stopped.
+        .onChange(of: vms.pausing.contains(recordID)) { _, _ in refresh() }
         .task(id: helperCheckTarget) { await checkHelper(helperCheckTarget) }
         .task(id: state.vmLastAgentCall[recordID]?.at) { await redrawWhenAgentWindowEnds() }
         .alert("Customize the base image?", isPresented: $confirmingCustomize) {
@@ -238,6 +241,16 @@ struct VirtualMachineTabView: View {
             VMStatusBar(tone: .off, title: "Stopped", details: ["base image being customized"] + diskDetails) {
                 overflowMenu(reveal: ownBundleURL, deletable: true)
             }
+        case .paused(let savedAt, let size):
+            // Each minute, for "saved n min ago".
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                VMStatusBar(
+                    tone: .off, title: "Paused",
+                    details: VMTabScreen.pausedDetails(savedAt: savedAt, bytes: size, now: context.date)
+                ) {
+                    overflowMenu(customize: canCustomize, reveal: ownBundleURL, deletable: true)
+                }
+            }
         }
     }
 
@@ -321,12 +334,14 @@ struct VirtualMachineTabView: View {
         let current = driver(at: date)
         let status = VMDriverStatus.make(driver: current, agentName: agentName(current), now: date)
         let helperNote = canUpdateHelper ? ["helper needs an update"] : []
+        let pausing = vms.pausing.contains(recordID)
+        let busy = stopping || pausing
         return VMStatusBar(
-            tone: stopping ? .busy : status.tone,
-            title: stopping ? "Stopping" : status.title,
-            details: current == .idle || stopping ? helperNote + diskDetails : status.details + helperNote
+            tone: busy ? .busy : status.tone,
+            title: pausing ? "Pausing" : stopping ? "Stopping" : status.title,
+            details: current == .idle || busy ? helperNote + diskDetails : status.details + helperNote
         ) {
-            if !stopping {
+            if !busy {
                 switch status.action {
                 case .takeOver:
                     AlasButton(title: "Take over", compact: true, action: takeOver)
@@ -337,7 +352,7 @@ struct VirtualMachineTabView: View {
                 }
             }
             ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(recordID) }
-                .vmDisabled(stopping)
+                .vmDisabled(busy)
             overflowMenu(updateHelper: canUpdateHelper ? recordID : nil, reveal: ownBundleURL, deletable: true)
         }
     }
@@ -379,7 +394,8 @@ struct VirtualMachineTabView: View {
             VMDisplaySurface(
                 view: state.tabs.vmView(tabID: tab.id), virtualMachine: vms.running(worktreeID, guest: guest)?.vm,
                 allowsInput: VMDriver.allowsViewInput(current),
-                onBlockedClick: { lookOnlyHint = (lookOnlyHint ?? 0) + 1 }
+                onBlockedClick: { lookOnlyHint = (lookOnlyHint ?? 0) + 1 },
+                onUserInput: { [state, recordID] in state.noteVMUserInput(recordID: recordID) }
             )
             .overlay {
                 if current == .user {
@@ -460,6 +476,15 @@ struct VirtualMachineTabView: View {
                 EmptyView()
             } actions: {
                 AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.worktree(worktreeID, guest)) }
+            }
+        case .paused:
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "This worktree's VM is paused",
+                subtitle: "Paused after 15 minutes idle to free its slot. It resumes where it was, in seconds, when you or an agent use it."
+            ) {
+                EmptyView()
+            } actions: {
+                AlasButton(title: "Resume", icon: "play.fill", style: .primary) { start(.worktree(worktreeID, guest)) }
             }
         case .stoppedWhileCustomizing:
             VMEmptyStateCard(

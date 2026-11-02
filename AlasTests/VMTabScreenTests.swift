@@ -19,10 +19,14 @@ struct VMTabScreenTests {
         var linuxPhase: LinuxGoldenInstaller.Phase = .idle
         var helper: VMTabScreen.HelperUpdate = .none
         var goldenHelper: VMTabScreen.HelperUpdate = .none
+        var paused: WorktreeVMManager.PausedState?
         let expected: VMTabScreen
 
         var testDescription: String { name }
     }
+
+    static let savedAt = Date(timeIntervalSince1970: 1_000_000)
+    static let saved = WorktreeVMManager.PausedState(savedAt: savedAt, bytes: 4096)
 
     static let cases: [Case] = [
         Case(name: "running here wins over everything", runningHere: true, startingHere: true,
@@ -59,6 +63,14 @@ struct VMTabScreenTests {
              expected: .updatingHelper),
         Case(name: "another tab's golden helper update leaves the own VM stopped", hasVM: true,
              phase: .awaitingSetup(build: "25A1"), goldenHelper: .updating, expected: .stoppedWhileCustomizing),
+        Case(name: "a paused VM shows paused", hasVM: true, paused: saved, expected: .paused(savedAt: savedAt, size: 4096)),
+        Case(name: "a paused VM stays paused while a golden is customized from another tab", hasVM: true,
+             phase: .awaitingSetup(build: "25A1"), paused: saved, expected: .paused(savedAt: savedAt, size: 4096)),
+        Case(name: "a paused VM resuming shows starting", startingHere: true, hasVM: true, paused: saved,
+             expected: .starting),
+        Case(name: "a VM running here wins over a paused record", runningHere: true, hasVM: true, paused: saved,
+             expected: .running(updateHelper: false)),
+        Case(name: "Linux, never paused", guest: .linux, hasVM: true, paused: saved, expected: .stopped),
         Case(name: "Linux, no image yet", guest: .linux, expected: .setup),
         Case(name: "Linux, image downloading", guest: .linux, goldenAvailable: true,
              linuxPhase: .downloading(0.3), expected: .setup),
@@ -93,9 +105,26 @@ struct VMTabScreenTests {
             installerPhase: c.phase,
             linuxInstallerPhase: c.linuxPhase,
             helper: c.helper,
-            goldenHelper: c.goldenHelper
+            goldenHelper: c.goldenHelper,
+            paused: c.paused
         )
         #expect(screen == c.expected)
+    }
+
+    static let pausedAges: [(TimeInterval, String)] = [
+        (0, "saved just now"),
+        (59, "saved just now"),
+        (60, "saved 1 min ago"),
+        (3599, "saved 59 min ago"),
+        (3600, "saved 1 h ago"),
+        (176_400, "saved 2 d ago"),
+    ]
+
+    @Test(arguments: pausedAges)
+    func pausedStatusSaysWhenItWasSaved(_ elapsed: TimeInterval, _ expected: String) {
+        let details = VMTabScreen.pausedDetails(savedAt: Self.savedAt, bytes: 2_000_000_000, now: Self.savedAt + elapsed)
+        #expect(details.first == expected)
+        #expect(details.count == 2)
     }
 
     @Test(arguments: [

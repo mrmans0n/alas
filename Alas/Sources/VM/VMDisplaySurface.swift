@@ -10,11 +10,14 @@ import Virtualization
 /// While `allowsInput` is false the screen is look-only: a shield above the
 /// view swallows the mouse, the view gives up the keyboard, and a click calls
 /// `onBlockedClick`.
+///
+/// `onUserInput` hears, at most once a second, that a key or mouse event reached the guest.
 struct VMDisplaySurface: NSViewRepresentable {
     let view: VZVirtualMachineView
     let virtualMachine: VZVirtualMachine?
     var allowsInput = true
     var onBlockedClick: () -> Void = {}
+    var onUserInput: (() -> Void)?
 
     func makeCoordinator() -> VMInputShield { VMInputShield() }
 
@@ -44,6 +47,7 @@ struct VMDisplaySurface: NSViewRepresentable {
     }
 
     static func dismantleNSView(_ nsView: NSView, coordinator: VMInputShield) {
+        coordinator.stopWatchingInput()
         nsView.subviews.forEach { $0.removeFromSuperview() }
     }
 
@@ -79,6 +83,7 @@ struct VMDisplaySurface: NSViewRepresentable {
             ])
         }
         shield.onClick = onBlockedClick
+        shield.watchInput(onUserInput)
         shield.isHidden = allowsInput
         // Tracking areas reach the view under the shield, so the guest pointer would follow a
         // hover; VZ may add them back on layout, so they go on every update.
@@ -111,6 +116,43 @@ final class VMInputShield: NSView {
     var trackingRemoved = false
     /// The VM view under the shield.
     weak var screen: NSView?
+    private var onUserInput: (() -> Void)?
+    private var inputMonitor: Any?
+    private var lastInputNote = Date.distantPast
+
+    /// Watches this window's events for those that reach the guest, while `onUserInput` is set.
+    func watchInput(_ onUserInput: (() -> Void)?) {
+        self.onUserInput = onUserInput
+        guard onUserInput != nil else { return stopWatchingInput() }
+        guard inputMonitor == nil else { return }
+        inputMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .leftMouseDragged, .scrollWheel]
+        ) { [weak self] event in
+            // Local monitors run on the main thread.
+            MainActor.assumeIsolated { self?.noteIfItReachesTheGuest(event) }
+            return event
+        }
+    }
+
+    func stopWatchingInput() {
+        if let inputMonitor { NSEvent.removeMonitor(inputMonitor) }
+        inputMonitor = nil
+    }
+
+    private func noteIfItReachesTheGuest(_ event: NSEvent) {
+        // Look-only: the shield swallows it.
+        guard isHidden, let onUserInput, let screen, let window = screen.window, event.window === window else { return }
+        let now = Date()
+        guard now.timeIntervalSince(lastInputNote) >= 1 else { return }
+        let reaches = if event.type == .keyDown {
+            window.firstResponder === screen
+        } else {
+            screen.bounds.contains(screen.convert(event.locationInWindow, from: nil))
+        }
+        guard reaches else { return }
+        lastInputNote = now
+        onUserInput()
+    }
 
     func removeScreenTracking() {
         guard let screen else { return }

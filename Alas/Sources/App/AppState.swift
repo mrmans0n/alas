@@ -353,6 +353,19 @@ final class AppState {
     @ObservationIgnored var vmHandingBack: [String: Task<Void, Never>] = [:]
     /// The clock VM driving is read with; tests replace it.
     @ObservationIgnored var vmNow: () -> Date = Date.init
+    /// The last key or mouse event that reached each VM's screen, by registry id, for the idle
+    /// sweep. Written at most once a second per VM.
+    @ObservationIgnored var vmLastUserInput: [String: Date] = [:]
+    /// VMs running their project's first-boot setup script, by registry id; they never idle-pause.
+    @ObservationIgnored var vmSetupScriptsRunning: Set<String> = []
+    /// Pauses idle macOS VMs every `vmIdleSweepInterval`.
+    @ObservationIgnored private(set) lazy var vmIdleSweeper = VMIdleSweeper(
+        manager: vmManager,
+        // Without AppState nothing is known about the VM's use: never call it idle.
+        activity: { [weak self] in self?.vmActivity(recordID: $0) ?? VMIdleSweeper.Activity(takenOver: true) },
+        now: { [weak self] in self?.vmNow() ?? Date() }
+    )
+    @ObservationIgnored var vmIdleSweepInterval: Duration = .seconds(60)
     /// Starts a stopped worktree VM for agent calls and holds its slot cards. Observable itself.
     @ObservationIgnored private(set) lazy var vmAutoStarter = makeVMAutoStarter()
     /// The one installer; `vmManager` seals its golden image so no Alas
@@ -1891,6 +1904,8 @@ final class AppState {
         }
         vmManager.onVMStopped = { [weak self] recordID in self?.vmStopped(recordID: recordID) }
         vmManager.onVMDeleted = { [weak self] recordID in self?.vmAutoStarter.dismiss(recordID: recordID) }
+        vmManager.now = { [weak self] in self?.vmNow() ?? Date() }
+        vmIdleSweeper.start(interval: vmIdleSweepInterval)
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
             await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
         }
@@ -1906,7 +1921,8 @@ final class AppState {
             await self?.flushAllACPComposerDrafts()
             await PluginStorage.flushAll()
             await self?.awaitSessionSummaryCleanup()
-            // Clears this process from the VM registry so its slots free up.
+            // Clears this process from the VM registry so its slots free up; macOS VMs pause.
+            self?.vmIdleSweeper.stop()
             await self?.vmManager.stopAll()
         }
         Task.detached {

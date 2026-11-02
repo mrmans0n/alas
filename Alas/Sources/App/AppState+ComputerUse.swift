@@ -496,6 +496,7 @@ extension AppState {
     func vmStopped(recordID: String) {
         vmTakeOvers.vmStopped(recordID)
         vmLastAgentCall[recordID] = nil
+        vmLastUserInput[recordID] = nil
     }
 
     /// Whether the badge shows a session as driving its VM.
