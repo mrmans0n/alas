@@ -765,6 +765,35 @@ final class WorktreeVMManagerTests {
         #expect(manager.running("/repo/c") != nil)
     }
 
+    /// The VM chosen to pause stopped before the answer: the freed slot takes a plain start.
+    @Test func pausingAVMThatAlreadyStoppedStartsThisOne() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        await manager.stopVM(worktreeID: "/repo/a")
+        starter.answer(requestID: try #require(starter.slotRequests.first).id, choice: .pause(recordID: "/repo/a"))
+
+        #expect(await call.value == .ready)
+        #expect(manager.running("/repo/c") != nil)
+        #expect(manager.running("/repo/b") != nil)
+    }
+
+    @Test func aVMStartedFromItsTabWhileTheCardWaitsEndsTheWait() async throws {
+        let manager = makeManager()
+        try await fillBothSlots(manager)
+        let starter = makeStarter(manager)
+
+        let call = Task { await starter.autoStart(worktreeID: "/repo/c", guest: .macOS, sessionID: "s1", call: .computer) }
+        await eventually { !starter.slotRequests.isEmpty }
+        _ = try await manager.startVM(worktreeID: "/repo/c", pausing: "/repo/a")
+
+        #expect(await call.value == .ready)
+        #expect(starter.slotRequests.isEmpty)
+    }
+
     @Test func decliningReturnsTheDeclinedMessage() async throws {
         let manager = makeManager()
         try await fillBothSlots(manager)

@@ -53,7 +53,8 @@ enum VMAutoStartCall: Equatable {
     static func proceeds(_ call: VMAutoStartCall, elapsed: Duration) -> Bool {
         switch call {
         case .computer: elapsed <= .seconds(85)
-        case .vmRun(let timeoutSeconds): .seconds(timeoutSeconds) + .seconds(25) - elapsed >= .seconds(timeoutSeconds)
+        // Its client's budget is the timeout + 30 s: ready by 25 s, the whole timeout still fits.
+        case .vmRun: elapsed <= .seconds(25)
         }
     }
 }
@@ -96,6 +97,15 @@ final class VMAutoStarter {
         let recordID: String
     }
 
+    /// How a start's wait for its slot card ended.
+    private enum SlotOutcome {
+        case answered(VMSlotChoice)
+        /// The sessions with a card stopped or ended, or the VM was deleted.
+        case dismissed
+        /// The VM started another way while the card waited.
+        case startedElsewhere
+    }
+
     /// The longest a call waits for the start.
     nonisolated static let defaultTimeout: Duration = .seconds(100)
     /// How long a start waits for the helper of a booted VM, as the VM tab's check does.
@@ -111,7 +121,7 @@ final class VMAutoStarter {
     var starting: Set<String> { Set(phases.filter { $0.value == .booting }.keys) }
 
     @ObservationIgnored private var starts: [String: Task<AutoStartResult, Never>] = [:]
-    @ObservationIgnored private var slotAnswers: [String: CheckedContinuation<VMSlotChoice?, Never>] = [:]
+    @ObservationIgnored private var slotAnswers: [String: CheckedContinuation<SlotOutcome, Never>] = [:]
     /// What each waiting call ends with, once it is settled.
     @ObservationIgnored private var settled: [UUID: AutoStartResult] = [:]
 
@@ -188,7 +198,7 @@ final class VMAutoStarter {
         slotRequests.removeAll { $0.recordID == request.recordID }
         // Booting from here on, so a call joining before the start resumes gets no dead card.
         if case .pause = choice { phases[request.recordID] = .booting }
-        slotAnswers.removeValue(forKey: request.recordID)?.resume(returning: choice)
+        slotAnswers.removeValue(forKey: request.recordID)?.resume(returning: .answered(choice))
     }
 
     /// The session was stopped or ended: its cards go away and its waiting calls end stopped.
@@ -200,7 +210,7 @@ final class VMAutoStarter {
         let records = Set(slotRequests.filter { $0.sessionID == sessionID }.map(\.recordID))
         slotRequests.removeAll { $0.sessionID == sessionID }
         for recordID in records where !slotRequests.contains(where: { $0.recordID == recordID }) {
-            slotAnswers.removeValue(forKey: recordID)?.resume(returning: nil)
+            slotAnswers.removeValue(forKey: recordID)?.resume(returning: .dismissed)
         }
     }
 
@@ -211,7 +221,7 @@ final class VMAutoStarter {
             settled[id] = .failed("it was deleted.")
         }
         slotRequests.removeAll { $0.recordID == recordID }
-        slotAnswers.removeValue(forKey: recordID)?.resume(returning: nil)
+        slotAnswers.removeValue(forKey: recordID)?.resume(returning: .dismissed)
     }
 
     private func begin(worktreeID: String, guest: VMGuestOS, recordID: String) {
@@ -228,29 +238,8 @@ final class VMAutoStarter {
             // Started from its tab, or by a helper update: that boot is the one to wait for.
             if isStarting(recordID) {
                 await waitForBoot(recordID)
-            } else {
-                switch try await start(worktreeID, guest) {
-                case .running:
-                    break
-                case .runningElsewhere(let label):
-                    return .failed("it is running in \(label).")
-                case .needsUserChoice(let candidates):
-                    // No VM of this process to pause: the tab says the same.
-                    guard !candidates.isEmpty else { return .failed("both VM slots are in use by another Alas.") }
-                    phases[recordID] = .slotPending(candidates: candidates)
-                    let choice = await withCheckedContinuation { (continuation: CheckedContinuation<VMSlotChoice?, Never>) in
-                        slotAnswers[recordID] = continuation
-                        raiseSlotRequests(recordID)
-                    }
-                    guard case .pause(let other) = choice else { return .declined }
-                    phases[recordID] = .booting
-                    // The user may have started it from its tab while the card waited.
-                    if isStarting(recordID) {
-                        await waitForBoot(recordID)
-                    } else if !isRunning(worktreeID, guest) {
-                        try await startPausing(worktreeID, other)
-                    }
-                }
+            } else if let result = try await startOrAsk(worktreeID: worktreeID, guest: guest, recordID: recordID) {
+                return result
             }
         } catch {
             return .failed(error.localizedDescription)
@@ -260,6 +249,66 @@ final class VMAutoStarter {
             timeout: Self.helperTimeout, interval: .seconds(1), sleep: sleep, now: now
         ) { await self.helperAnswers(worktreeID, guest) }
         return .ready
+    }
+
+    /// Starts the VM, asking which VM to pause when both slots are taken. Nil once it booted here,
+    /// whoever started it; otherwise how the start ended.
+    private func startOrAsk(worktreeID: String, guest: VMGuestOS, recordID: String) async throws -> AutoStartResult? {
+        switch try await start(worktreeID, guest) {
+        case .running:
+            return nil
+        case .runningElsewhere(let label):
+            return .failed("it is running in \(label).")
+        case .needsUserChoice(let candidates):
+            // No VM of this process to pause: the tab says the same.
+            guard !candidates.isEmpty else { return .failed("both VM slots are in use by another Alas.") }
+            // Every call gave up while the start ran: nobody would see a card, so the next call asks.
+            guard waiters.values.contains(where: { $0.recordID == recordID }) else { return .slotPending }
+            phases[recordID] = .slotPending(candidates: candidates)
+            let outcome = await withCheckedContinuation { (continuation: CheckedContinuation<SlotOutcome, Never>) in
+                slotAnswers[recordID] = continuation
+                raiseSlotRequests(recordID)
+                watchForAnotherStart(worktreeID: worktreeID, guest: guest, recordID: recordID)
+            }
+            switch outcome {
+            case .dismissed, .answered(.decline):
+                return .declined
+            case .startedElsewhere:
+                phases[recordID] = .booting
+            case .answered(.pause(let other)):
+                phases[recordID] = .booting
+                // The user may have started it from its tab meanwhile, and the VM to pause may
+                // have stopped: then a plain start has a free slot.
+                if isStarting(recordID) || isRunning(worktreeID, guest) { break }
+                let paused = VMIdentity.parse(recordID: other)
+                if isRunning(paused.worktree, paused.guest) {
+                    try await startPausing(worktreeID, other)
+                } else {
+                    switch try await start(worktreeID, guest) {
+                    case .running: break
+                    case .runningElsewhere(let label): return .failed("it is running in \(label).")
+                    case .needsUserChoice: return .failed("both VM slots are in use.")
+                    }
+                }
+            }
+            if isStarting(recordID) { await waitForBoot(recordID) }
+            return nil
+        }
+    }
+
+    /// While the card waits, the user may start the VM another way, from its tab: the start then
+    /// goes on without an answer and the cards go away.
+    private func watchForAnotherStart(worktreeID: String, guest: VMGuestOS, recordID: String) {
+        Task {
+            // Polled on the injected clock until the card is answered or dismissed, with no deadline:
+            // a card left up after its calls gave up still goes away once the VM starts.
+            while slotAnswers[recordID] != nil, !isRunning(worktreeID, guest), !isStarting(recordID) {
+                await sleep(pollInterval)
+            }
+            guard let continuation = slotAnswers.removeValue(forKey: recordID) else { return }
+            slotRequests.removeAll { $0.recordID == recordID }
+            continuation.resume(returning: .startedElsewhere)
+        }
     }
 
     /// Until a boot here that something else began returns, however it ends.
