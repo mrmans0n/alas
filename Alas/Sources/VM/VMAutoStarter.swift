@@ -42,16 +42,17 @@ enum VMAutoStartCall: Equatable {
     var waitBudget: Duration {
         switch self {
         case .computer: VMAutoStarter.defaultTimeout
-        case .vmRun(let timeoutSeconds): min(VMAutoStarter.defaultTimeout, .seconds(timeoutSeconds) + .seconds(25))
+        // Past 25 s a ready VM could no longer fit the command in its client's budget.
+        case .vmRun: .seconds(25)
         }
     }
 
     /// Whether a call whose VM became ready `elapsed` after the call began still runs. Otherwise
     /// it answers `starting`, so the agent retries rather than its client timing out mid-call: a
-    /// computer call needs 30 s of its budget left, a `vm_run` its whole command timeout.
+    /// computer call needs 35 s of its budget left, a `vm_run` its whole command timeout.
     static func proceeds(_ call: VMAutoStartCall, elapsed: Duration) -> Bool {
         switch call {
-        case .computer: elapsed <= .seconds(90)
+        case .computer: elapsed <= .seconds(85)
         case .vmRun(let timeoutSeconds): .seconds(timeoutSeconds) + .seconds(25) - elapsed >= .seconds(timeoutSeconds)
         }
     }

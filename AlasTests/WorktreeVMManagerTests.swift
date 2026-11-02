@@ -791,14 +791,13 @@ final class WorktreeVMManagerTests {
     }
 
     /// A call answers `starting` instead of running once too little of its client's budget is
-    /// left: a computer call 30 s, a `vm_run` its own command timeout.
+    /// left: a computer call 35 s, a `vm_run` its own command timeout.
     @Test(arguments: [
-        (VMAutoStartCall.computer, 10, true, 100),
-        (.computer, 91, false, 100),
-        (.vmRun(timeoutSeconds: 30), 25, true, 55),
-        (.vmRun(timeoutSeconds: 30), 26, false, 55),
-        (.vmRun(timeoutSeconds: 5), 20, true, 30),
-        (.vmRun(timeoutSeconds: 600), 26, false, 100),
+        (VMAutoStartCall.computer, 85, true, 100),
+        (.computer, 86, false, 100),
+        (.vmRun(timeoutSeconds: 30), 25, true, 25),
+        (.vmRun(timeoutSeconds: 30), 26, false, 25),
+        (.vmRun(timeoutSeconds: 600), 26, false, 25),
     ])
     func aLateReadyCallReturnsStarting(call: VMAutoStartCall, elapsedSeconds: Int, proceeds: Bool, budgetSeconds: Int) {
         #expect(VMAutoStartCall.proceeds(call, elapsed: .seconds(elapsedSeconds)) == proceeds)
