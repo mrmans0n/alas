@@ -247,25 +247,4 @@ import Testing
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: parent.path)
         #expect(try FileManager.default.contentsOfDirectory(atPath: parent.path).isEmpty)
     }
-
-    @Test func lifecycleStateDefaultsOffForOlderRecordsAndRoundTrips() throws {
-        let (registry, dir) = tempRegistry()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let old = #"[{"id":"A","guestOS":"macOS","goldenBuild":"b1","bundlePath":"/v/A","createdAt":0,"lastUsedAt":0}]"#
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try Data(old.utf8).write(to: dir.appendingPathComponent("registry.json"))
-        let loaded = try #require(try registry.snapshot().first)
-        #expect(!loaded.paused && loaded.pausedDiskStamp == nil)
-        // A VM already in use never runs the first-boot setup.
-        #expect(!loaded.firstBootPending)
-
-        let stamp = Date(timeIntervalSince1970: 777)
-        try registry.update {
-            $0[0].paused = true
-            $0[0].pausedDiskStamp = stamp
-            $0[0].firstBootPending = true
-        }
-        let back = try #require(try registry.snapshot().first)
-        #expect(back.paused && back.pausedDiskStamp == stamp && back.firstBootPending)
-    }
 }

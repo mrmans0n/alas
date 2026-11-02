@@ -21,6 +21,17 @@ public enum VMIdlePolicy {
 
 /// Whether a saved machine state may be restored.
 public enum VMSavedState {
+    /// `state.json`, written beside `state.vzvmsave` once the state is saved: the disk it belongs
+    /// to. It lives in the VM's bundle, not the registry, which older builds rewrite without it.
+    public struct Info: Codable, Equatable, Sendable {
+        /// `disk.img`'s modification time when the state was saved.
+        public var diskStamp: Date
+
+        public init(diskStamp: Date) {
+            self.diskStamp = diskStamp
+        }
+    }
+
     /// A state file is valid only for the disk it was saved with: any later change to `disk.img`
     /// (for example a cold boot by an older build) makes it stale.
     public static func isValid(pausedDiskStamp: Date?, currentDiskModified: Date) -> Bool {

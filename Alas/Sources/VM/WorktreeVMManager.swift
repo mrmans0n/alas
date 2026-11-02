@@ -78,6 +78,27 @@ final class WorktreeVMManager {
         bundle.url.appendingPathComponent("state.vzvmsave")
     }
 
+    /// `state.json` beside the saved state: the disk it was saved with (`VMSavedState.Info`). A
+    /// state restores only with it. Kept in the bundle, not the registry, which older builds
+    /// rewrite with the fields they know.
+    nonisolated static func savedStateInfoURL(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent("state.json")
+    }
+
+    /// An empty file in a new VM's bundle until its clean point is taken: each start until then
+    /// runs the project's guest setup script first. VMs created before it existed have none.
+    nonisolated static func firstBootMarker(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent("first-boot-pending")
+    }
+
+    /// Whether the bundle holds a paused VM's saved state: the state file and its `state.json`.
+    /// Whether it is still valid for the disk is decided at start.
+    nonisolated static func isPaused(_ bundle: VMBundle) -> Bool {
+        let fm = FileManager.default
+        return fm.fileExists(atPath: savedStateURL(of: bundle).path)
+            && fm.fileExists(atPath: savedStateInfoURL(of: bundle).path)
+    }
+
     /// How long quitting waits for the running macOS VMs to save their state, all together.
     /// Those still saving then are stopped as before.
     @ObservationIgnored var quitPauseBound: Duration = .seconds(20)
@@ -366,12 +387,11 @@ final class WorktreeVMManager {
         let elsewhere = record.runOwner.flatMap { owner in
             me.map(owner.isSameProcess(as:)) == true ? nil : owner.label
         }
-        let pausedAt = record.paused
-            ? Self.savedAt(Self.savedStateURL(of: VMBundle(url: URL(fileURLWithPath: record.bundlePath))))
-            : nil
+        let bundle = VMBundle(url: URL(fileURLWithPath: record.bundlePath))
+        let pausedAt = record.guestOS == .macOS && Self.isPaused(bundle) ? Self.savedAt(Self.savedStateURL(of: bundle)) : nil
         return RecordStatus(
             hasVM: true, runningElsewhere: elsewhere, bundlePath: record.bundlePath, pausedAt: pausedAt,
-            cleanPoint: Self.readCleanPoint(of: VMBundle(url: URL(fileURLWithPath: record.bundlePath))))
+            cleanPoint: Self.readCleanPoint(of: bundle))
     }
 
     /// When the state file was saved; nil when there is none. Read with `stat`, which never
@@ -471,10 +491,11 @@ final class WorktreeVMManager {
             {
                 throw VMError(message: "The golden image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
             }
+            try Self.markFirstBootPending(bundle)
             let now = Date()
             records.append(WorktreeVMRecord(
                 id: worktreeID, goldenBuild: golden.url.lastPathComponent, bundlePath: bundle.url.path,
-                createdAt: now, lastUsedAt: now, firstBootPending: true))
+                createdAt: now, lastUsedAt: now))
         }
     }
 
@@ -508,10 +529,11 @@ final class WorktreeVMManager {
             {
                 throw VMError(message: "The Ubuntu image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
             }
+            try Self.markFirstBootPending(VMBundle(url: bundle.url))
             let now = Date()
             records.append(WorktreeVMRecord(
                 id: id, guestOS: .linux, goldenBuild: VMIdentity.linuxGoldenPrefix + golden.url.lastPathComponent,
-                bundlePath: bundle.url.path, createdAt: now, lastUsedAt: now, firstBootPending: true))
+                bundlePath: bundle.url.path, createdAt: now, lastUsedAt: now))
         }
         #else
         throw VMError(message: Self.unsupportedMessage)
@@ -760,7 +782,7 @@ final class WorktreeVMManager {
             try await vm.saveState(to: state)
         } catch {
             logger.error("Saving the state of VM \(id, privacy: .public) failed, stopping it: \(String(describing: error), privacy: .public)")
-            Self.removeSavedState(state)
+            Self.removeSavedState(of: bundle)
             // Running again, the guest can shut down cleanly.
             if vm.state == .paused { try? await vm.resume() }
             return await stopInsteadOfPausing(id)
@@ -769,33 +791,26 @@ final class WorktreeVMManager {
             try await vm.forceStop()
         } catch {
             logger.error("Stopping VM \(id, privacy: .public) after saving its state failed: \(String(describing: error), privacy: .public)")
-            Self.removeSavedState(state)
+            Self.removeSavedState(of: bundle)
             try? await vm.resume()
             return .notRunning
         }
-        // `onStopped` normally untracks it already. The owner stays until `paused` is written
-        // with it, so no other Alas boots the VM cold in between.
+        // `onStopped` normally untracks it already. The owner stays until `state.json` is
+        // written, so no other Alas boots the VM cold, or discards the state, in between.
         didStop(id)
         guard let stamp = Self.diskStamp(of: bundle) else {
             logger.error("Couldn't read VM \(id, privacy: .public)'s disk; discarding its saved state")
-            Self.removeSavedState(state)
+            Self.removeSavedState(of: bundle)
             return .stopped
         }
-        let me = VMRunOwner.current(label: ownerLabel)
         do {
-            try registry.update { records in
-                guard let index = records.firstIndex(where: { $0.id == id }) else {
-                    throw VMError(message: "The VM has no record")
-                }
-                records[index].paused = true
-                records[index].pausedDiskStamp = stamp
-                if let me, records[index].runOwner?.isSameProcess(as: me) == true { records[index].runOwner = nil }
-            }
+            try Self.writeSavedStateInfo(VMSavedState.Info(diskStamp: stamp), of: bundle)
         } catch {
             logger.error("Recording VM \(id, privacy: .public) as paused failed: \(String(describing: error), privacy: .public)")
-            Self.removeSavedState(state)
+            Self.removeSavedState(of: bundle)
             return .stopped
         }
+        clearOwner(id)
         logger.notice("Paused VM \(id, privacy: .public) with its state saved")
         return .saved
     }
@@ -820,44 +835,49 @@ final class WorktreeVMManager {
         (try? FileManager.default.attributesOfItem(atPath: bundle.diskImage.path))?[.modificationDate] as? Date
     }
 
-    nonisolated private static func removeSavedState(_ state: URL) {
-        guard FileManager.default.fileExists(atPath: state.path) else { return }
-        do {
-            try FileManager.default.removeItem(at: state)
-        } catch {
-            Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
-                .error("Removing saved VM state \(state.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+    /// Removes the saved state and its `state.json`, the info first so a state left behind is
+    /// never restored.
+    nonisolated private static func removeSavedState(of bundle: VMBundle) {
+        for file in [savedStateInfoURL(of: bundle), savedStateURL(of: bundle)]
+            where FileManager.default.fileExists(atPath: file.path)
+        {
+            do {
+                try FileManager.default.removeItem(at: file)
+            } catch {
+                Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
+                    .error("Removing saved VM state \(file.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            }
         }
     }
 
-    /// The state file a start restores from: only a paused macOS VM's, saved with the disk as it
-    /// is now. Any other is stale and removed. Called under the registry lock.
-    nonisolated private static func restorableState(_ record: WorktreeVMRecord, bundle: VMBundle) -> URL? {
+    nonisolated private static func writeSavedStateInfo(_ info: VMSavedState.Info, of bundle: VMBundle) throws {
+        try JSONEncoder().encode(info).write(to: savedStateInfoURL(of: bundle), options: .atomic)
+    }
+
+    nonisolated private static func readSavedStateInfo(of bundle: VMBundle) -> VMSavedState.Info? {
+        guard let data = try? Data(contentsOf: savedStateInfoURL(of: bundle)) else { return nil }
+        return try? JSONDecoder().decode(VMSavedState.Info.self, from: data)
+    }
+
+    /// The state file a start restores from: only a macOS VM's, with a `state.json` saying it
+    /// was saved with the disk as it is now. Any other is stale and removed. Called while no Alas
+    /// runs the VM: under the registry lock that admits its start, or with its disk claimed.
+    nonisolated private static func restorableState(_ id: String, bundle: VMBundle) -> URL? {
         let state = savedStateURL(of: bundle)
-        guard FileManager.default.fileExists(atPath: state.path) else { return nil }
-        if record.paused, record.guestOS == .macOS, let disk = diskModified(bundle),
-           VMSavedState.isValid(pausedDiskStamp: record.pausedDiskStamp, currentDiskModified: disk)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: state.path) || fm.fileExists(atPath: savedStateInfoURL(of: bundle).path) else {
+            return nil
+        }
+        if VMIdentity.parse(recordID: id).guest == .macOS, fm.fileExists(atPath: state.path),
+           let info = readSavedStateInfo(of: bundle), let disk = diskModified(bundle),
+           VMSavedState.isValid(pausedDiskStamp: info.diskStamp, currentDiskModified: disk)
         {
             return state
         }
         Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
-            .notice("Discarding stale saved state of VM \(record.id, privacy: .public)")
-        removeSavedState(state)
+            .notice("Discarding stale saved state of VM \(id, privacy: .public)")
+        removeSavedState(of: bundle)
         return nil
-    }
-
-    /// A started VM no longer has a saved state: a later crash must not restore it.
-    private func consumeSavedState(_ id: String, bundle: VMBundle) {
-        Self.removeSavedState(Self.savedStateURL(of: bundle))
-        do {
-            try registry.update { records in
-                guard let index = records.firstIndex(where: { $0.id == id }), records[index].paused else { return }
-                records[index].paused = false
-                records[index].pausedDiskStamp = nil
-            }
-        } catch {
-            logger.error("Clearing VM \(id, privacy: .public)'s paused state failed: \(String(describing: error), privacy: .public)")
-        }
     }
 
     // MARK: - Clean point
@@ -996,27 +1016,32 @@ final class WorktreeVMManager {
             try VMBundle.cloneFile(bundle.diskImage, to: partial.appendingPathComponent("disk.img"))
             // Cloned, not moved: the live VM restores from it. Only a state still valid for this
             // disk: another Alas may have restored the VM since the pause.
-            if let record = try registry.snapshot().first(where: { $0.id == id }),
-               let state = Self.restorableState(record, bundle: bundle)
-            {
+            if let state = Self.restorableState(id, bundle: bundle) {
                 try VMBundle.cloneFile(state, to: partial.appendingPathComponent(state.lastPathComponent))
             }
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(VMCleanPoint(createdAt: Date(), setupScriptHash: setupScriptHash))
                 .write(to: Self.cleanPointFile(in: partial))
-            // The new VM's first boot is over with the clean point, in the same registry write.
-            try registry.update { records in
-                guard let index = records.firstIndex(where: { $0.id == id }) else {
-                    throw VMError(message: "The VM has no record")
-                }
-                try Self.moveDirectory(partial, into: Self.cleanDirectory(of: bundle))
-                records[index].firstBootPending = false
-            }
+            try Self.moveDirectory(partial, into: Self.cleanDirectory(of: bundle))
         } catch {
             try? fm.removeItem(at: partial)
             throw error
         }
+        // The new VM's first boot is over with its clean point. Left behind, the marker only
+        // makes the next start take the clean point again.
+        let marker = Self.firstBootMarker(of: bundle)
+        if fm.fileExists(atPath: marker.path) {
+            do {
+                try fm.removeItem(at: marker)
+            } catch {
+                logger.error("Removing VM \(id, privacy: .public)'s first boot marker failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    nonisolated private static func markFirstBootPending(_ bundle: VMBundle) throws {
+        try Data().write(to: firstBootMarker(of: bundle))
     }
 
     /// Renames `source` to `destination` in one step, swapping out an existing one, which is then
@@ -1038,10 +1063,11 @@ final class WorktreeVMManager {
     private func restoreCleanPoint(_ id: String, bundle: VMBundle) throws {
         let clean = Self.cleanDirectory(of: bundle)
         let state = Self.savedStateURL(of: bundle)
-        // The live state goes first, recorded as gone before the disk changes: an interruption
+        // The live state goes first, its `state.json` before the disk changes: an interruption
         // past this point must cold-boot, never restore the old memory onto the clean disk.
-        try recordPaused(id, stamp: nil)
-        Self.removeSavedState(state)
+        let info = Self.savedStateInfoURL(of: bundle)
+        if FileManager.default.fileExists(atPath: info.path) { try FileManager.default.removeItem(at: info) }
+        Self.removeSavedState(of: bundle)
         let staged = bundle.url.appendingPathComponent("disk.img.resetting")
         try? FileManager.default.removeItem(at: staged)
         try cloneCleanFile(clean.appendingPathComponent("disk.img"), staged)
@@ -1056,27 +1082,16 @@ final class WorktreeVMManager {
         try cloneCleanFile(cleanState, state)
         // Read after the swap: restore accepts the state only for the disk as it is now.
         guard let stamp = Self.diskStamp(of: bundle) else {
-            Self.removeSavedState(state)
+            Self.removeSavedState(of: bundle)
             return
         }
-        try recordPaused(id, stamp: stamp)
+        try Self.writeSavedStateInfo(VMSavedState.Info(diskStamp: stamp), of: bundle)
     }
 
-    /// Records VM `id` as paused with a state saved for the disk at `stamp`, or as not paused.
-    private func recordPaused(_ id: String, stamp: Date?) throws {
-        try registry.update { records in
-            guard let index = records.firstIndex(where: { $0.id == id }) else {
-                throw VMError(message: "The VM has no record")
-            }
-            records[index].paused = stamp != nil
-            records[index].pausedDiskStamp = stamp
-        }
-    }
-
-    /// Whether VM `recordID`'s record awaits its first boot's setup and clean point.
+    /// Whether VM `recordID` awaits its first boot's setup and clean point.
     func isFirstBootPending(recordID: String) -> Bool {
-        guard vmsExist else { return false }
-        return (try? registry.snapshot())?.first { $0.id == recordID }?.firstBootPending ?? false
+        guard vmsExist, !recordID.hasPrefix(Self.goldenIDPrefix) else { return false }
+        return FileManager.default.fileExists(atPath: Self.firstBootMarker(of: bundle(forID: recordID)).path)
     }
 
     /// Whether a VM that just started here runs the first-boot setup: a worktree VM (not a golden)
@@ -1193,7 +1208,8 @@ final class WorktreeVMManager {
         if id.hasPrefix(Self.goldenIDPrefix) {
             return VMBundle(url: goldenBundleURL(build: String(id.dropFirst(Self.goldenIDPrefix.count))))
         }
-        let recorded = (try? registry.snapshot())?.first { $0.id == id }?.bundlePath
+        // A lockless read: a write here would drop the fields of records only newer builds know.
+        let recorded = (try? registry.read())?.records.first { $0.id == id }?.bundlePath
         let (worktree, guest) = VMIdentity.parse(recordID: id)
         return VMBundle(url: recorded.map { URL(fileURLWithPath: $0) }
             ?? Self.bundleURL(forWorktree: worktree, guest: guest, root: root))
@@ -1732,7 +1748,7 @@ final class WorktreeVMManager {
 
     private enum Admission {
         /// `restoringFrom` is a saved state still valid for the disk; `wasPaused` whether the
-        /// record or the bundle had one at all.
+        /// bundle had one at all.
         case boot(VMBundle, generation: Int, restoringFrom: URL?, wasPaused: Bool)
         case outcome(VMStartOutcome)
     }
@@ -1780,10 +1796,11 @@ final class WorktreeVMManager {
                 let generation = (records[index].bootGeneration ?? 0) + 1
                 records[index].bootGeneration = generation
                 let bundle = VMBundle(url: URL(fileURLWithPath: records[index].bundlePath))
-                let wasPaused = records[index].paused
-                    || FileManager.default.fileExists(atPath: Self.savedStateURL(of: bundle).path)
+                let fm = FileManager.default
+                let wasPaused = fm.fileExists(atPath: Self.savedStateURL(of: bundle).path)
+                    || fm.fileExists(atPath: Self.savedStateInfoURL(of: bundle).path)
                 return .boot(
-                    bundle, generation: generation, restoringFrom: Self.restorableState(records[index], bundle: bundle),
+                    bundle, generation: generation, restoringFrom: Self.restorableState(id, bundle: bundle),
                     wasPaused: wasPaused)
             case .alreadyRunningHere:
                 throw VMError(message: "This VM is already starting")
@@ -1858,7 +1875,8 @@ final class WorktreeVMManager {
             throw VMError(message: "The VM was \(abort) while it was starting")
         }
         track(vm, id: id, generation: generation)
-        if wasPaused { consumeSavedState(id, bundle: bundle) }
+        // A started VM no longer has a saved state: a later crash must not restore it.
+        if wasPaused { Self.removeSavedState(of: bundle) }
         onVMStarted(id)
         return .running(vm)
     }
@@ -1874,7 +1892,7 @@ final class WorktreeVMManager {
             return vm
         } catch let failure as RestoreFailed {
             logger.error("Restoring VM \(id, privacy: .public) failed, cold-booting it: \(String(describing: failure.underlying), privacy: .public)")
-            Self.removeSavedState(state)
+            Self.removeSavedState(of: bundle)
             return try await start(id, bundle, shares, nil)
         }
     }
