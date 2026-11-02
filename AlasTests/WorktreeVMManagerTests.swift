@@ -31,6 +31,7 @@ final class WorktreeVMManagerTests {
         func resume() async throws { state = .running }
         /// Writes the state file; a failing save leaves a partial one behind.
         func saveMachineState(to url: URL) async throws {
+            await hypervisor.saveGate.passIfArmed()
             try Data("partial".utf8).write(to: url)
             if hypervisor.saveFails { throw HypervisorFailure() }
             try Data("state".utf8).write(to: url)
@@ -98,6 +99,7 @@ final class WorktreeVMManagerTests {
         var restoreFails = false
         let bootGate = Gate()
         let stopGate = Gate()
+        let saveGate = Gate()
         private(set) var boots = 0
         /// The state file each boot restored from; nil for a cold boot.
         private(set) var restoredFrom: [URL?] = []
@@ -778,6 +780,84 @@ final class WorktreeVMManagerTests {
         #expect(hypervisor.restoredFrom == [nil, nil])
         #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
         #expect(!FileManager.default.fileExists(atPath: info.path))
+    }
+
+    @Test func aStartDuringAPauseWaitsAndRestores() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        hypervisor.saveGate.armed = true
+        let pause = Task { await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) }
+        await hypervisor.saveGate.waitUntilHeld()
+
+        let start = Task { try await manager.startVM(worktreeID: "/repo/a") }
+        await Task.yield()
+        hypervisor.saveGate.release()
+
+        #expect(await pause.value == .saved)
+        guard case .running(let vm) = try await start.value else {
+            Issue.record("the start did not run the VM")
+            return
+        }
+        #expect(manager.running("/repo/a") === vm)
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
+        #expect(!isPaused(bundle))
+    }
+
+    /// A start that waits on a pause, with a reset behind it on the same pause, waits for the
+    /// reset too, and then runs the VM the reset started on the clean disk.
+    @Test func aStartWaitingOnAPauseWaitsForAResetBehindIt() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        try Data("dirty".utf8).write(to: VMBundle(url: bundle).diskImage)
+        hypervisor.saveGate.armed = true
+        let pause = Task { await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) }
+        await hypervisor.saveGate.waitUntilHeld()
+
+        let start = Task { try await manager.startVM(worktreeID: "/repo/a") }
+        await Task.yield()
+        let reset = Task { try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS) }
+        await Task.yield()
+        // The reset's restart is held mid-boot, so the start wakes while the VM is down.
+        hypervisor.bootGate.armed = true
+        hypervisor.saveGate.release()
+        await hypervisor.bootGate.waitUntilHeld()
+        hypervisor.bootGate.release()
+
+        #expect(await pause.value == .saved)
+        try await reset.value
+        guard case .running(let vm) = try await start.value else {
+            Issue.record("the start did not run the VM")
+            return
+        }
+        #expect(manager.running("/repo/a") === vm)
+        // The first boot, the clean point's restart, the reset's restart: nothing else booted.
+        #expect(hypervisor.boots == 3)
+        #expect(try contents(VMBundle(url: bundle).diskImage) == "disk")
+    }
+
+    @Test func aStartDuringACleanPointWaitsForItsRestart() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        hypervisor.saveGate.armed = true
+        let cleanPoint = Task { try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS) }
+        await hypervisor.saveGate.waitUntilHeld()
+
+        let start = Task { try await manager.startVM(worktreeID: "/repo/a") }
+        await Task.yield()
+        hypervisor.saveGate.release()
+
+        try await cleanPoint.value
+        guard case .running(let vm) = try await start.value else {
+            Issue.record("the start did not run the VM")
+            return
+        }
+        #expect(manager.running("/repo/a") === vm)
+        #expect(hypervisor.boots == 2)
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
     }
 
     /// A macOS VM whose configuration can't save state, and any Linux VM, stop instead.

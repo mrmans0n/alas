@@ -761,15 +761,18 @@ final class WorktreeVMManager {
     private func pauseVM(recordID id: String) async -> VMPauseOutcome {
         if let pause = pauses[id] { return await pause.value }
         guard runningVMs[id] != nil, !starting.contains(id) else { return .notRunning }
-        let pause = Task { await self.pauseNow(id) }
-        pauses[id] = pause
         pausing.insert(id)
-        let outcome = await pause.value
-        pauses[id] = nil
-        pausing.remove(id)
-        // `didStop` left the owner to the pause; a saved pause cleared it with `paused`.
-        if outcome != .saved, runningVMs[id] == nil { clearOwner(id) }
-        return outcome
+        // Cleans up inside the task, so whoever awaits it resumes with the pause already over.
+        let pause = Task {
+            let outcome = await self.pauseNow(id)
+            self.pauses[id] = nil
+            self.pausing.remove(id)
+            // `didStop` left the owner to the pause; a saved pause cleared it after `state.json`.
+            if outcome != .saved, self.runningVMs[id] == nil { self.clearOwner(id) }
+            return outcome
+        }
+        pauses[id] = pause
+        return await pause.value
     }
 
     private func pauseNow(_ id: String) async -> VMPauseOutcome {
@@ -1759,14 +1762,16 @@ final class WorktreeVMManager {
     private func startRecorded(
         id: String, ensureRecord: ((inout [WorktreeVMRecord]) throws -> Void)?, insideDiskOperation: Bool = false
     ) async throws -> VMStartOutcome {
-        // A clean point or reset in progress starts the VM itself when it is done.
-        if !insideDiskOperation {
-            while diskOperations.contains(id) {
+        // A clean point or reset in progress starts the VM itself when it is done, and a VM being
+        // paused starts again once its state is saved, from that state. Both are checked again
+        // after every wait: a disk operation may begin while a pause runs, and the other way round.
+        while (!insideDiskOperation && diskOperations.contains(id)) || pauses[id] != nil {
+            if let pause = pauses[id] {
+                _ = await pause.value
+            } else {
                 await withCheckedContinuation { diskOperationWaiters[id, default: []].append($0) }
             }
         }
-        // A VM being paused starts again once its state is saved, from that state.
-        if let pause = pauses[id] { _ = await pause.value }
         if let vm = runningVMs[id] { return .running(vm) }
         guard !starting.contains(id) else {
             throw VMError(message: "This VM is already starting")
