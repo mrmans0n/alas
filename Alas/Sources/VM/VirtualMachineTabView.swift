@@ -138,6 +138,9 @@ struct VirtualMachineTabView: View {
             if case .running = screen, let failure = state.vmSetupFailures[recordID] {
                 setupFailureCallout(exitCode: failure)
             }
+            if let issue = state.vmCleanPointIssues[recordID] {
+                cleanPointIssueCallout(issue)
+            }
             VStack(spacing: 0) { content }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -433,6 +436,18 @@ struct VirtualMachineTabView: View {
         if newSetupScript {
             Button("Run the new setup script") { runSetup() }
                 .disabled(busy || ownVM == nil)
+        }
+    }
+
+    private func cleanPointIssueCallout(_ issue: VMCleanPointIssue) -> some View {
+        let busy = state.vmSetupScriptsRunning.contains(recordID) || vms.diskOperations.contains(recordID)
+        return VMCallout(message: issue.message, onDismiss: { state.vmCleanPointIssues[recordID] = nil }) {
+            EmptyView()
+        } actions: {
+            if case .notSaved = issue {
+                AlasButton(title: "Save clean point now", compact: true, action: saveCleanPoint)
+                    .vmDisabled(busy)
+            }
         }
     }
 
@@ -770,7 +785,7 @@ struct VirtualMachineTabView: View {
     private func runSetup() {
         errorMessage = nil
         Task {
-            await state.runVMSetup(recordID: recordID)
+            await state.runVMSetup(recordID: recordID, rerunScript: true)
             refresh()
         }
     }

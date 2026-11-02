@@ -905,6 +905,29 @@ final class WorktreeVMManagerTests {
         #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
     }
 
+    /// The live state goes, on disk and in the record, before the disk changes: an interrupted
+    /// reset never restores the old memory onto the clean disk.
+    @Test func anInterruptedResetToCleanColdBoots() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .saved)
+        manager.cloneCleanFile = { source, destination in
+            guard source.lastPathComponent != "state.vzvmsave" else { throw HypervisorFailure() }
+            try VMBundle.cloneFile(source, to: destination)
+        }
+
+        await #expect(throws: HypervisorFailure.self) {
+            try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
+        }
+
+        #expect(try !record("/repo/a").paused)
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        #expect(hypervisor.restoredFrom.last == .some(nil))
+    }
+
     enum ResetRefusal: CaseIterable { case noCleanPoint, runningElsewhere }
 
     @Test(arguments: ResetRefusal.allCases)
@@ -941,6 +964,7 @@ final class WorktreeVMManagerTests {
         #expect(try record(id).guestOS == guest)
         #expect(try contents(VMBundle(url: URL(fileURLWithPath: record(id).bundlePath)).diskImage) == "x")
         #expect(manager.cleanPoint(recordID: id) == nil)
+        #expect(manager.isFirstBootPending(recordID: id))
         #expect(manager.running("/repo/a", guest: guest) == nil)
     }
 
@@ -948,6 +972,8 @@ final class WorktreeVMManagerTests {
     @MainActor
     private final class SetupScriptRuns {
         var exitCode: Int32? = 0
+        /// The VM stops mid-script, which cuts the run short.
+        var stopsVM = false
         var runs: [(script: String, timeout: Int, hadCleanPoint: Bool)] = []
     }
 
@@ -957,26 +983,70 @@ final class WorktreeVMManagerTests {
             waitForHelper: { _ in true },
             runScript: { recordID, script, timeout in
                 runs.runs.append((script, timeout, manager.cleanPoint(recordID: recordID) != nil))
+                if runs.stopsVM {
+                    await manager.stopVM(worktreeID: recordID)
+                    throw VMGuestClient.Failure.stopped
+                }
                 return VMGuestRunResult(
                     exitCode: runs.exitCode, stdout: "", stderr: "", truncated: false, timedOut: runs.exitCode == nil)
             }
         )
     }
 
-    @Test func firstBootRunsTheSetupScriptThenTakesTheCleanPoint() async throws {
+    /// A script that already succeeded, before a clean point that failed, isn't run again.
+    @Test(arguments: [false, true])
+    func firstBootRunsTheSetupScriptThenTakesTheCleanPoint(scriptSucceeded: Bool) async throws {
         try addRecord("/repo/a")
+        try registry.update { $0[0].firstBootPending = true }
         let manager = makeManager()
         let runs = SetupScriptRuns()
         _ = try await manager.startVM(worktreeID: "/repo/a")
 
-        let outcome = await makeFirstBootSetup(manager, runs: runs).run(recordID: "/repo/a", script: "brew install jq")
+        let outcome = await makeFirstBootSetup(manager, runs: runs)
+            .run(recordID: "/repo/a", script: "brew install jq", scriptSucceeded: scriptSucceeded)
 
         #expect(outcome == .cleanPointTaken)
-        #expect(runs.runs.map(\.script) == ["brew install jq"])
-        #expect(runs.runs.map(\.timeout) == [600])
-        #expect(runs.runs.map(\.hadCleanPoint) == [false])
+        #expect(runs.runs.map(\.script) == (scriptSucceeded ? [] : ["brew install jq"]))
+        #expect(runs.runs.allSatisfy { $0.timeout == 600 && !$0.hadCleanPoint })
         #expect(manager.cleanPoint(recordID: "/repo/a")?.setupScriptHash == VMCleanPoint.scriptHash("brew install jq"))
+        #expect(!manager.isFirstBootPending(recordID: "/repo/a"))
         #expect(manager.running("/repo/a") != nil)
+    }
+
+    @Test func aStopMidScriptIsNotAFailure() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        runs.stopsVM = true
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        let outcome = await makeFirstBootSetup(manager, runs: runs).run(recordID: "/repo/a", script: "sleep 60")
+
+        #expect(outcome == .interrupted)
+        #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
+    }
+
+    struct FirstBootCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        var recordID = "/repo/a"
+        var pending = true
+        var running = false
+        var failed = false
+        let runs: Bool
+        var testDescription: String { name }
+    }
+
+    @Test(arguments: [
+        FirstBootCase(name: "a new VM", runs: true),
+        FirstBootCase(name: "a VM created before first boots were tracked", pending: false, runs: false),
+        FirstBootCase(name: "a golden", recordID: WorktreeVMManager.goldenIDPrefix + "25A1", runs: false),
+        FirstBootCase(name: "setup already under way", running: true, runs: false),
+        FirstBootCase(name: "a failed script awaits Run again or Skip", failed: true, runs: false),
+    ])
+    func firstBootSetupRunsOnlyForNewVMs(_ c: FirstBootCase) {
+        #expect(WorktreeVMManager.runsFirstBootSetup(
+            recordID: c.recordID, firstBootPending: c.pending, setupRunning: c.running, setupFailed: c.failed
+        ) == c.runs)
     }
 
     @Test(arguments: [Int32(3), nil])

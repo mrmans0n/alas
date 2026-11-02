@@ -85,11 +85,15 @@ public struct WorktreeVMRecord: Codable, Equatable, Sendable, Identifiable {
     public var paused: Bool
     /// `disk.img`'s modification time when the state was saved (see `VMSavedState`).
     public var pausedDiskStamp: Date?
+    /// A new VM that hasn't had its clean point yet: its next start runs the project's guest
+    /// setup script, then takes one. False for records written before it existed, so VMs already
+    /// in use never run it.
+    public var firstBootPending: Bool
 
     public init(
         id: String, guestOS: VMGuestOS = .macOS, goldenBuild: String, bundlePath: String,
         createdAt: Date, lastUsedAt: Date, runOwner: VMRunOwner? = nil, bootGeneration: Int? = nil,
-        paused: Bool = false, pausedDiskStamp: Date? = nil
+        paused: Bool = false, pausedDiskStamp: Date? = nil, firstBootPending: Bool = false
     ) {
         self.id = id
         self.guestOS = guestOS
@@ -101,6 +105,7 @@ public struct WorktreeVMRecord: Codable, Equatable, Sendable, Identifiable {
         self.bootGeneration = bootGeneration
         self.paused = paused
         self.pausedDiskStamp = pausedDiskStamp
+        self.firstBootPending = firstBootPending
     }
 
     public init(from decoder: Decoder) throws {
@@ -115,5 +120,6 @@ public struct WorktreeVMRecord: Codable, Equatable, Sendable, Identifiable {
         bootGeneration = try c.decodeIfPresent(Int.self, forKey: .bootGeneration)
         paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? false
         pausedDiskStamp = try c.decodeIfPresent(Date.self, forKey: .pausedDiskStamp)
+        firstBootPending = try c.decodeIfPresent(Bool.self, forKey: .firstBootPending) ?? false
     }
 }

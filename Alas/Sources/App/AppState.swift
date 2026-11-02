@@ -362,6 +362,11 @@ final class AppState {
     /// VMs whose project setup script failed, by registry id, with its exit code: nil when it
     /// timed out or its run failed. Cleared once the clean point is taken.
     var vmSetupFailures: [String: Int32?] = [:]
+    /// VMs whose setup script succeeded but whose clean point wasn't taken, by registry id, with
+    /// the script's hash, so the next start goes straight to the clean point.
+    @ObservationIgnored var vmSetupScriptSucceeded: [String: String?] = [:]
+    /// Why a VM's clean point wasn't taken, or its VM didn't start again after it, by registry id.
+    var vmCleanPointIssues: [String: VMCleanPointIssue] = [:]
     /// Pauses idle macOS VMs every `vmIdleSweepInterval`.
     @ObservationIgnored private(set) lazy var vmIdleSweeper = VMIdleSweeper(
         manager: vmManager,
@@ -1910,7 +1915,7 @@ final class AppState {
         vmManager.onVMDeleted = { [weak self] recordID in
             self?.vmAutoStarter.dismiss(recordID: recordID)
             // A VM created again is new: its next boot runs the setup script again.
-            self?.vmSetupFailures.removeValue(forKey: recordID)
+            self?.forgetVMSetup(recordID: recordID)
         }
         vmManager.onVMStarted = { [weak self] recordID in self?.vmStarted(recordID: recordID) }
         vmManager.now = { [weak self] in self?.vmNow() ?? Date() }

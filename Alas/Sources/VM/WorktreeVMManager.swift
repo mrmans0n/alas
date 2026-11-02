@@ -62,6 +62,12 @@ final class WorktreeVMManager {
         _ worktreeID: String, _ bundle: VMBundle, _ shares: [VMShare], _ restoringFrom: URL?
     ) async throws -> RunningVM
 
+    /// A disk operation succeeded, but the VM couldn't start again afterwards.
+    struct RestartFailed: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
     /// Restoring a saved machine state failed, and the machine it was restored into is stopped.
     struct RestoreFailed: Error {
         let underlying: Error
@@ -104,6 +110,8 @@ final class WorktreeVMManager {
     @ObservationIgnored var onVMStopped: (String) -> Void = { _ in }
     /// Called with a VM's registry id when a delete of it is accepted, before it runs.
     @ObservationIgnored var onVMDeleted: (String) -> Void = { _ in }
+    /// Clones a clean point file into the bundle; tests make it fail.
+    @ObservationIgnored var cloneCleanFile: (URL, URL) throws -> Void = { try VMBundle.cloneFile($0, to: $1) }
     /// Called with a VM's registry id once it started running here, booted or restored.
     @ObservationIgnored var onVMStarted: (String) -> Void = { _ in }
     /// The guest helper and its installer, shared read-only with every macOS VM.
@@ -466,7 +474,7 @@ final class WorktreeVMManager {
             let now = Date()
             records.append(WorktreeVMRecord(
                 id: worktreeID, goldenBuild: golden.url.lastPathComponent, bundlePath: bundle.url.path,
-                createdAt: now, lastUsedAt: now))
+                createdAt: now, lastUsedAt: now, firstBootPending: true))
         }
     }
 
@@ -503,7 +511,7 @@ final class WorktreeVMManager {
             let now = Date()
             records.append(WorktreeVMRecord(
                 id: id, guestOS: .linux, goldenBuild: VMIdentity.linuxGoldenPrefix + golden.url.lastPathComponent,
-                bundlePath: bundle.url.path, createdAt: now, lastUsedAt: now))
+                bundlePath: bundle.url.path, createdAt: now, lastUsedAt: now, firstBootPending: true))
         }
         #else
         throw VMError(message: Self.unsupportedMessage)
@@ -997,7 +1005,14 @@ final class WorktreeVMManager {
             encoder.dateEncodingStrategy = .iso8601
             try encoder.encode(VMCleanPoint(createdAt: Date(), setupScriptHash: setupScriptHash))
                 .write(to: Self.cleanPointFile(in: partial))
-            try Self.moveDirectory(partial, into: Self.cleanDirectory(of: bundle))
+            // The new VM's first boot is over with the clean point, in the same registry write.
+            try registry.update { records in
+                guard let index = records.firstIndex(where: { $0.id == id }) else {
+                    throw VMError(message: "The VM has no record")
+                }
+                try Self.moveDirectory(partial, into: Self.cleanDirectory(of: bundle))
+                records[index].firstBootPending = false
+            }
         } catch {
             try? fm.removeItem(at: partial)
             throw error
@@ -1022,28 +1037,33 @@ final class WorktreeVMManager {
     /// claimed.
     private func restoreCleanPoint(_ id: String, bundle: VMBundle) throws {
         let clean = Self.cleanDirectory(of: bundle)
+        let state = Self.savedStateURL(of: bundle)
+        // The live state goes first, recorded as gone before the disk changes: an interruption
+        // past this point must cold-boot, never restore the old memory onto the clean disk.
+        try recordPaused(id, stamp: nil)
+        Self.removeSavedState(state)
         let staged = bundle.url.appendingPathComponent("disk.img.resetting")
         try? FileManager.default.removeItem(at: staged)
-        try VMBundle.cloneFile(clean.appendingPathComponent("disk.img"), to: staged)
+        try cloneCleanFile(clean.appendingPathComponent("disk.img"), staged)
         guard rename(staged.path, bundle.diskImage.path) == 0 else {
             let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
             try? FileManager.default.removeItem(at: staged)
             throw error
         }
-        let state = Self.savedStateURL(of: bundle)
-        Self.removeSavedState(state)
         let cleanState = clean.appendingPathComponent(state.lastPathComponent)
-        var restorable = false
-        if VMIdentity.parse(recordID: id).guest == .macOS, FileManager.default.fileExists(atPath: cleanState.path) {
-            do {
-                try VMBundle.cloneFile(cleanState, to: state)
-                restorable = true
-            } catch {
-                logger.error("Copying VM \(id, privacy: .public)'s clean state failed; it cold-boots: \(String(describing: error), privacy: .public)")
-            }
-        }
+        guard VMIdentity.parse(recordID: id).guest == .macOS, FileManager.default.fileExists(atPath: cleanState.path)
+        else { return }
+        try cloneCleanFile(cleanState, state)
         // Read after the swap: restore accepts the state only for the disk as it is now.
-        let stamp = restorable ? Self.diskStamp(of: bundle) : nil
+        guard let stamp = Self.diskStamp(of: bundle) else {
+            Self.removeSavedState(state)
+            return
+        }
+        try recordPaused(id, stamp: stamp)
+    }
+
+    /// Records VM `id` as paused with a state saved for the disk at `stamp`, or as not paused.
+    private func recordPaused(_ id: String, stamp: Date?) throws {
         try registry.update { records in
             guard let index = records.firstIndex(where: { $0.id == id }) else {
                 throw VMError(message: "The VM has no record")
@@ -1053,6 +1073,21 @@ final class WorktreeVMManager {
         }
     }
 
+    /// Whether VM `recordID`'s record awaits its first boot's setup and clean point.
+    func isFirstBootPending(recordID: String) -> Bool {
+        guard vmsExist else { return false }
+        return (try? registry.snapshot())?.first { $0.id == recordID }?.firstBootPending ?? false
+    }
+
+    /// Whether a VM that just started here runs the first-boot setup: a worktree VM (not a golden)
+    /// created new and without its clean point yet, not already being set up, and without a
+    /// failed script awaiting "Run again" or "Skip".
+    nonisolated static func runsFirstBootSetup(
+        recordID: String, firstBootPending: Bool, setupRunning: Bool, setupFailed: Bool
+    ) -> Bool {
+        !recordID.hasPrefix(goldenIDPrefix) && firstBootPending && !setupRunning && !setupFailed
+    }
+
     /// Starts VM `id` again after a disk operation that stopped it. `done` says what succeeded,
     /// for when it can't start.
     private func startAgain(_ id: String, done: String) async throws {
@@ -1060,9 +1095,9 @@ final class WorktreeVMManager {
         case .running:
             return
         case .runningElsewhere(let label):
-            throw VMError(message: "\(done), but the VM is now running in \(label)")
+            throw RestartFailed(message: "\(done), but the VM is now running in \(label).")
         case .needsUserChoice:
-            throw VMError(message: "\(done), but no VM slot is free to start it again")
+            throw RestartFailed(message: "\(done), but no VM slot is free to start it again.")
         }
     }
 

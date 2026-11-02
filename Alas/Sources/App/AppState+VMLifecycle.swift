@@ -37,13 +37,13 @@ extension AppState {
 
     // MARK: - First boot
 
-    /// A VM started here. Its first boot (no clean point yet, and no setup failure to retry by
-    /// hand) runs the project's guest setup script, then takes its clean point. An auto-started
-    /// VM gets it too.
+    /// A VM started here. A new VM's first boot runs the project's guest setup script, then takes
+    /// its clean point. An auto-started VM gets it too.
     func vmStarted(recordID: String) {
-        guard !recordID.hasPrefix(WorktreeVMManager.goldenIDPrefix), !vmSetupScriptsRunning.contains(recordID),
-              vmSetupFailures[recordID] == nil, vmManager.cleanPoint(recordID: recordID) == nil
-        else { return }
+        guard WorktreeVMManager.runsFirstBootSetup(
+            recordID: recordID, firstBootPending: vmManager.isFirstBootPending(recordID: recordID),
+            setupRunning: vmSetupScriptsRunning.contains(recordID), setupFailed: vmSetupFailures[recordID] != nil
+        ) else { return }
         Task { await runVMSetup(recordID: recordID) }
     }
 
@@ -53,33 +53,64 @@ extension AppState {
     }
 
     /// Runs the project's setup script in VM `recordID` and takes its clean point on success: on
-    /// its first boot, and for the tab's "Run again" and "Run the new setup script".
-    func runVMSetup(recordID: String) async {
+    /// its first boot, where a script that already succeeded isn't run again, and for the tab's
+    /// "Run again" and "Run the new setup script" (`rerunScript`).
+    func runVMSetup(recordID: String, rerunScript: Bool = false) async {
         guard vmSetupScriptsRunning.insert(recordID).inserted else { return }
         defer { vmSetupScriptsRunning.remove(recordID) }
-        let outcome = await makeVMFirstBootSetup().run(recordID: recordID, script: vmGuestSetupScript(recordID: recordID))
+        let script = vmGuestSetupScript(recordID: recordID)
+        let succeeded = !rerunScript && vmSetupScriptSucceeded[recordID] == VMCleanPoint.scriptHash(script)
+        vmCleanPointIssues.removeValue(forKey: recordID)
+        let outcome = await makeVMFirstBootSetup().run(recordID: recordID, script: script, scriptSucceeded: succeeded)
         switch outcome {
         case .cleanPointTaken:
-            vmSetupFailures.removeValue(forKey: recordID)
+            vmCleanPointTaken(recordID: recordID)
+        case .notRestarted(let message):
+            vmCleanPointTaken(recordID: recordID)
+            vmCleanPointIssues[recordID] = .notRestarted(message)
         case .scriptFailed(let exitCode):
             // `updateValue`: assigning a nil code through the subscript would remove the entry.
             vmSetupFailures.updateValue(exitCode, forKey: recordID)
-        case .helperUnavailable:
-            // Stopped before its helper answered: the next start is a first boot again.
+        case .interrupted:
+            // Stopped or taken over: the next start is a first boot again.
             break
         case .cleanPointFailed(let message):
             vmLogger.error("Taking the clean point of VM \(recordID, privacy: .public) failed: \(message, privacy: .public)")
+            // The next start goes straight to the clean point.
+            vmSetupFailures.removeValue(forKey: recordID)
+            vmSetupScriptSucceeded.updateValue(VMCleanPoint.scriptHash(script), forKey: recordID)
+            vmCleanPointIssues[recordID] = .notSaved(message)
         }
     }
 
     /// The tab's "Save clean point now" and "Skip and save clean point": takes the clean point
-    /// without running the script. `setupScriptHash` is the script the VM was last set up with.
+    /// without running the script, after the script that last succeeded in the VM, if any.
+    /// `setupScriptHash` is the clean point's otherwise.
     func saveVMCleanPoint(recordID: String, setupScriptHash: String?) async throws {
         guard vmSetupScriptsRunning.insert(recordID).inserted else { return }
         defer { vmSetupScriptsRunning.remove(recordID) }
         let vm = VMIdentity.parse(recordID: recordID)
-        try await vmManager.takeCleanPoint(worktreeID: vm.worktree, guest: vm.guest, setupScriptHash: setupScriptHash)
+        vmCleanPointIssues.removeValue(forKey: recordID)
+        let hash = vmSetupScriptSucceeded[recordID] ?? setupScriptHash
+        do {
+            try await vmManager.takeCleanPoint(worktreeID: vm.worktree, guest: vm.guest, setupScriptHash: hash)
+        } catch let error as WorktreeVMManager.RestartFailed {
+            vmCleanPointTaken(recordID: recordID)
+            vmCleanPointIssues[recordID] = .notRestarted(error.message)
+            return
+        }
+        vmCleanPointTaken(recordID: recordID)
+    }
+
+    private func vmCleanPointTaken(recordID: String) {
         vmSetupFailures.removeValue(forKey: recordID)
+        vmSetupScriptSucceeded.removeValue(forKey: recordID)
+    }
+
+    /// Forgets VM `recordID`'s setup state when it is deleted: a VM created again is new.
+    func forgetVMSetup(recordID: String) {
+        vmCleanPointTaken(recordID: recordID)
+        vmCleanPointIssues.removeValue(forKey: recordID)
     }
 
     private func makeVMFirstBootSetup() -> VMFirstBootSetup {
@@ -87,13 +118,33 @@ extension AppState {
             manager: vmManager,
             waitForHelper: { [weak self] recordID in await self?.waitForVMHelper(recordID: recordID) ?? false },
             runScript: { [weak self] recordID, script, timeout in
-                let vm = VMIdentity.parse(recordID: recordID)
-                guard let client = self?.vmManager.guestClient(for: vm.worktree, guest: vm.guest) else {
-                    throw VMGuestClient.Failure.stopped
-                }
-                return try await client.run(script, timeoutSeconds: timeout)
+                guard let self else { throw VMGuestClient.Failure.stopped }
+                return try await runVMSetupScript(script, recordID: recordID, timeoutSeconds: timeout)
             }
         )
+    }
+
+    /// Runs the setup script like `vm_run` does a command: registered in `vmRuns`, so a take over
+    /// cancels it, and then it counts as interrupted rather than failed.
+    private func runVMSetupScript(_ script: String, recordID: String, timeoutSeconds: Int) async throws -> VMGuestRunResult {
+        let vm = VMIdentity.parse(recordID: recordID)
+        guard !vmTakenOver.contains(recordID) else { throw VMFirstBootSetup.TakenOver() }
+        guard let client = vmManager.guestClient(for: vm.worktree, guest: vm.guest) else {
+            throw VMGuestClient.Failure.stopped
+        }
+        let token = UUID()
+        let run = Task { try await client.run(script, timeoutSeconds: timeoutSeconds) }
+        vmRuns[recordID, default: [:]][token] = run
+        defer { vmRuns[recordID]?[token] = nil }
+        let result: Result<VMGuestRunResult, any Error>
+        do {
+            result = .success(try await run.value)
+        } catch {
+            result = .failure(error)
+        }
+        // A take over cancels the run, and the guest may still answer with its result.
+        if vmTakenOver.contains(recordID) { throw VMFirstBootSetup.TakenOver() }
+        return try result.get()
     }
 
     /// Waits for a freshly booted guest's helper, which starts only after its user logs in.
