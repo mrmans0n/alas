@@ -35,8 +35,6 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         let client: NWConnection
         var upstream: NWConnection?
         var established = false
-        /// Directions whose end was passed on; both done closes the tunnel.
-        var endedDirections = 0
         var head = Data()
         var timeout: DispatchWorkItem?
 
@@ -47,6 +45,8 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     public static let username = "alas-preview"
     public static let maxResolutions = 4
     private static let headTimeout: DispatchTimeInterval = .seconds(5)
+    /// How long a tunnel whose upstream ended waits for the client to close.
+    private static let lingerTimeout: DispatchTimeInterval = .seconds(15)
 
     private let maxTunnels: Int
     private let resolve: Resolve
@@ -263,8 +263,9 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     }
 
     /// Copies one direction, reading only once the last chunk was written.
-    /// A side's end is passed on once what it sent is flushed; the tunnel
-    /// closes when both directions ended, so the other's last bytes survive.
+    /// The client ending closes the tunnel, since WebKit never half-closes.
+    /// The upstream ending is passed on once what it sent is flushed, and
+    /// the tunnel then closes when the client does, or after `lingerTimeout`.
     private func pump(_ id: ObjectIdentifier, from source: NWConnection, to destination: NWConnection) {
         source.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self, tunnels[id] != nil else { return }
@@ -273,8 +274,10 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
                 guard let self, let tunnel = tunnels[id] else { return }
                 if sendError != nil { return close(id) }
                 guard ended else { return pump(id, from: source, to: destination) }
-                tunnel.endedDirections += 1
-                if tunnel.endedDirections == 2 { close(id) }
+                if source === tunnel.client { return close(id) }
+                let linger = DispatchWorkItem { [weak self] in self?.close(id) }
+                tunnel.timeout = linger
+                queue.asyncAfter(deadline: .now() + Self.lingerTimeout, execute: linger)
             }
             if let data, !data.isEmpty {
                 destination.send(content: data, completion: ended ? .idempotent : next)
@@ -314,7 +317,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         for line in text.split(separator: "\r\n").dropFirst() {
             guard let colon = line.firstIndex(of: ":"),
                   line[..<colon].lowercased() == "proxy-authorization" else { continue }
-            let value = line[line.index(after: colon)...].split(separator: " ")
+            let value = line[line.index(after: colon)...].split(whereSeparator: \.isWhitespace)
             guard value.count == 2, value[0].lowercased() == "basic",
                   let presented = Data(base64Encoded: String(value[1])).map(Array.init),
                   presented.count == expected.count else { return false }

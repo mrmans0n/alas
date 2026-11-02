@@ -114,11 +114,24 @@ struct WebPreviewEgressTests {
     @Test func theProxyFallsBackToTheNextAddressWhenAConnectFails() async throws {
         let echo = try await EchoServer.start()
         defer { echo.stop() }
-        let closed = try await EchoServer.start()
-        closed.stop()
+        // Bound but never listening, so a connect to it is refused.
+        let refusing = socket(AF_INET, SOCK_STREAM, 0)
+        defer { Darwin.close(refusing) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        try withUnsafeMutablePointer(to: &address) { pointer in
+            try pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                try #require(bind(refusing, $0, length) == 0)
+                try #require(getsockname(refusing, $0, &length) == 0)
+            }
+        }
+        let refusedPort = Int(UInt16(bigEndian: address.sin_port))
         let proxy = WebPreviewEgressProxy(resolve: { _ in ["192.0.2.1", "192.0.2.2"] }, localAddresses: { [] }, onBlocked: { _, _, _ in })
         let first = try #require(WebPreviewEgressPolicy.address("192.0.2.1"))
-        proxy.upstreamEndpoint = { address, _ in .hostPort(host: "127.0.0.1", port: .init(integerLiteral: UInt16(address == first ? closed.port : echo.port))) }
+        proxy.upstreamEndpoint = { address, _ in .hostPort(host: "127.0.0.1", port: .init(integerLiteral: UInt16(address == first ? refusedPort : echo.port))) }
         defer { proxy.stop() }
         let client = try await TestClient.connect(host: "127.0.0.1", port: Int(proxy.start()))
         client.send(Data("CONNECT two.invalid:80 HTTP/1.1\r\n\(Self.authorization(proxy))\r\nping".utf8))

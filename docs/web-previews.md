@@ -95,6 +95,10 @@ usually one of them. Known gaps:
 - The proxy listens on TCP, since WebKit ignores a Unix socket proxy endpoint
   and connects directly. The password keeps other processes out unless they
   can read Alas's memory.
+- A local process can still fill the proxy's 128-connection cap without the
+  password by reopening idle connections, which are dropped after 5 seconds,
+  so the preview's requests get `503`. That denies service; it reaches
+  nothing.
 
 ## MCP and CLI automation
 
