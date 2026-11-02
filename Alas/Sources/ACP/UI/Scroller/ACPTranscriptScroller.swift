@@ -1309,7 +1309,11 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 ))
             }
 
-            if let request = transcript.pendingUserInputs.first {
+            // The agent waits on one blocking question at a time; optional
+            // ones stack, each in its own row, so a new one never replaces a
+            // form the user is typing into.
+            let presentedInputs = Array(transcript.blockingUserInputs.prefix(1)) + transcript.optionalUserInputs
+            for request in presentedInputs {
                 specs.append(ACPTranscriptRowSpec(
                     id: "__pending_user_input_\(request.id)",
                     equalityToken: token(request.id, host: host),

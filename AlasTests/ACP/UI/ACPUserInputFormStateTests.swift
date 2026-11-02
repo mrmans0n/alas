@@ -84,6 +84,29 @@ struct ACPUserInputFormStateTests {
         #expect(state.submittedContent() == [:])
     }
 
+    @Test("an optional form has an answer only when Codex would get one", arguments: [
+        (nil, nil, false),
+        ("Prod", nil, true),
+        (nil, "mine", true),
+        ("None of the above", nil, false),
+        ("None of the above", "mine", true),
+        (nil, "   ", false),
+    ] as [(String?, String?, Bool)])
+    func optionalFormHasAnswer(choice: String?, note: String?, expected: Bool) throws {
+        let request = try formRequest(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#))
+        let state = ACPUserInputFormState(request: request)
+        if let choice {
+            state.toggle(choice, for: try #require(request.fields.first { $0.key == "question_0" }))
+        }
+        if let note {
+            state.textValues["question_0_note"] = note
+            state.markTouched("question_0_note")
+        }
+
+        #expect(state.hasOptionalAnswer == expected)
+        #expect(!state.attemptedSubmit)
+    }
+
     @Test("unknown required fields cannot be submitted")
     func unknownRequiredField() throws {
         let request = try formRequest(#"""

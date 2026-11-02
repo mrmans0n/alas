@@ -265,7 +265,7 @@ public final class ACPSessionManager: ChangeTracking {
     /// The runner's policy holds the real id.
     public func blockedRequestKeys(for sessionId: ACPSession.ID) -> Set<String> {
         guard let session = sessions[sessionId] else { return [] }
-        var keys = Set(session.transcript.pendingUserInputs.map { ACPChildBlocker.requestKey($0.id) })
+        var keys = Set(session.transcript.blockingUserInputs.map { ACPChildBlocker.requestKey($0.id) })
         if let plan = session.transcript.pendingPlan {
             keys.insert(ACPChildBlocker.requestKey(plan.id))
         }
@@ -6983,6 +6983,9 @@ extension ACPSessionManager {
                     session.composerDraft.appending(.init(segments: [.text(reason)])),
                     for: session
                 )
+            },
+            onOptionalAnswerSubmitted: { [weak self] in
+                self?.runners[sessionId]?.recordOptionalAnswer($0)
             }
         )
         elicitationCoordinators[sessionId] = elicitationCoordinator
@@ -7447,6 +7450,15 @@ extension ACPSessionManager {
                                           onLiveBufferRead: onLiveBufferRead,
                                           onUserCancel: { [weak elicitationCoordinator] in
                                               elicitationCoordinator?.cancelPendingInputs()
+                                          },
+                                          onCancelRequest: { [weak elicitationCoordinator] id in
+                                              elicitationCoordinator?.cancelRequest(id: id) ?? false
+                                          },
+                                          onUnclaimedCancelRequest: { [weak elicitationCoordinator] id in
+                                              elicitationCoordinator?.rememberWithdrawn(id: id)
+                                          },
+                                          onForegroundPromptEnded: { [weak elicitationCoordinator] promptID in
+                                              elicitationCoordinator?.foregroundPromptEnded(promptID)
                                           },
                                           onAuthRequired: { [weak self] runner, _ in
                                               await self?.handleAuthRequiredRunner(

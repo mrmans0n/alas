@@ -82,6 +82,17 @@ public struct ACPElicitationRequestParams: Codable, Equatable, Sendable {
     public var hasExactlyOneScope: Bool {
         (sessionId != nil) != (requestId != nil)
     }
+
+    /// codex-acp marks questions that never block its turn with
+    /// `_meta.codex.delivery == "async"`. Only forms can be optional.
+    public var isAsyncDelivery: Bool {
+        guard mode == "form",
+              let root = meta?.value as? [String: AnyCodable],
+              let codex = root["codex"]?.value as? [String: AnyCodable],
+              let delivery = codex["delivery"]?.value as? String
+        else { return false }
+        return delivery == "async"
+    }
 }
 
 public struct ACPElicitationSchema: Codable, Equatable, Sendable {
@@ -177,16 +188,34 @@ public struct ACPElicitationPropertySchema: Codable, Equatable, Sendable {
         try raw.encode(to: encoder)
     }
 
-    /// codex-acp >= 1.12 (#299) marks `request_user_input` fields that
-    /// should be masked with `_meta.codex.isSecret`. `raw` already captures
-    /// the full per-property JSON, so no dedicated CodingKey is needed.
-    public var isSecret: Bool {
+    /// The `_meta.codex` object codex-acp attaches to each property. `raw`
+    /// already captures the full per-property JSON, so no dedicated CodingKey
+    /// is needed.
+    private var codexMeta: [String: AnyCodable]? {
         guard let root = raw.value as? [String: AnyCodable],
-              let meta = root["_meta"]?.value as? [String: AnyCodable],
-              let codex = meta["codex"]?.value as? [String: AnyCodable],
-              let flag = codex["isSecret"]?.value as? Bool
-        else { return false }
-        return flag
+              let meta = root["_meta"]?.value as? [String: AnyCodable]
+        else { return nil }
+        return meta["codex"]?.value as? [String: AnyCodable]
+    }
+
+    /// codex-acp >= 1.12 (#299) marks `request_user_input` fields that
+    /// should be masked with `_meta.codex.isSecret`.
+    public var isSecret: Bool {
+        codexMeta?["isSecret"]?.value as? Bool ?? false
+    }
+
+    /// `_meta.codex.isOther` sits on the question property (not on its
+    /// "None of the above" option) and means the user may type an own answer.
+    public var acceptsOwnAnswer: Bool {
+        codexMeta?["isOther"]?.value as? Bool ?? false
+    }
+
+    /// The question a note field belongs to, from `_meta.codex.questionId`.
+    /// Note ids can gain a numeric suffix on collision, so never derive this
+    /// from the field key.
+    public var noteQuestionId: String? {
+        guard codexMeta?["role"]?.value as? String == "user_note" else { return nil }
+        return codexMeta?["questionId"]?.value as? String
     }
 }
 

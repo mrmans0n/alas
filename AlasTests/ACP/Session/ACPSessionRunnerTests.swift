@@ -3652,6 +3652,27 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.transcript.pendingPermission != nil)
     }
 
+    @Test("$/cancel_request withdraws a pending optional form")
+    func cancelRequestWithdrawsForm() async throws {
+        let (runner, mock, coordinator) = try makeRunnerWithQuestions()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        mock.emitElicitation(id: .number(50), params: try codexAsyncForm())
+        try await waitUntil { !runner.session.transcript.pendingUserInputs.isEmpty }
+
+        mock.emitCancelRequest(id: .number(50))
+
+        try await waitUntil { mock.elicitationResponses[.number(50)] != nil }
+        guard case .failure(let error) = mock.elicitationResponses[.number(50)] else {
+            Issue.record("expected a cancelled-request error")
+            return
+        }
+        #expect(error.code == -32800)
+        #expect(runner.session.transcript.pendingUserInputs.isEmpty)
+    }
+
     @Test("a $/cancel_request that lands before dequeue still materializes a canceled row with its facts")
     func earlyCancelStillPersistsPermissionFacts() async throws {
         let (runner, mock) = try makeRunner()
@@ -4600,6 +4621,9 @@ struct ACPSessionRunnerTests {
 
     private func makeRunner(
         onUserCancel: (() -> Void)? = nil,
+        onCancelRequest: ((JSONRPCID) -> Bool)? = nil,
+        onUnclaimedCancelRequest: ((JSONRPCID) -> Void)? = nil,
+        onForegroundPromptEnded: ((Int) -> Void)? = nil,
         onCheckpointCapture: (@MainActor (_ prompt: String, _ hasAttachments: Bool) async -> CheckpointID?)? = nil,
         session suppliedSession: ACPSession? = nil,
         isConnectionCurrent: @escaping () -> Bool = { true },
@@ -4629,6 +4653,9 @@ struct ACPSessionRunnerTests {
             sessionId: "s",
             worktreePath: FileManager.default.temporaryDirectory.path,
             onUserCancel: onUserCancel,
+            onCancelRequest: onCancelRequest,
+            onUnclaimedCancelRequest: onUnclaimedCancelRequest,
+            onForegroundPromptEnded: onForegroundPromptEnded,
             onSuccessfulTurn: onSuccessfulTurn,
             onTurnCompleted: onTurnCompleted,
             onTurnUsage: onTurnUsage,
@@ -5840,6 +5867,206 @@ struct ACPSessionRunnerTests {
 
         #expect(session.transcript.streamingState == .idle)
         try await waitUntil { mock.sent.filter { $0.method == "session/prompt" }.count == 2 }
+    }
+
+    /// A Codex async question leaves the idle session sendable: the next
+    /// prompt goes out at once and the question stays open beside it.
+    @Test("an optional question does not hold the queue")
+    func optionalInputDoesNotHoldQueue() async throws {
+        let (runner, mock) = try makeRunner()
+        let session = runner.session
+        session.agentState = .ready
+        let coordinator = ACPElicitationCoordinator(
+            session: session, client: mock, onInputResolved: { runner.flushQueueIfIdle() })
+        coordinator.start()
+        runner.start()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        mock.script(method: "session/prompt") { _ in Data(#"{"stopReason":"end_turn"}"#.utf8) }
+        mock.emitElicitation(id: .number(31), params: try codexAsyncForm())
+        try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        #expect(session.transcript.streamingState == .idle)
+        #expect(session.transcript.pendingUserInputs.count == 1)
+
+        runner.send(text: "next", attachments: [])
+
+        try await waitUntil { mock.sent.contains { $0.method == "session/prompt" } }
+        #expect(session.transcript.pendingUserInputs.count == 1)
+    }
+
+    /// An optional answer sent after its turn would land in the next one, so
+    /// the form goes with the turn it was asked in.
+    @Test("an optional form expires with its turn")
+    func optionalFormExpiresWithItsTurn() async throws {
+        let (runner, mock, coordinator) = try makeRunnerWithQuestions()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        let session = runner.session
+        let form = try codexAsyncForm()
+        let turnCanEnd = AsyncGate()
+        mock.scriptAsync(method: "session/prompt") { _ in
+            mock.emitElicitation(id: .number(70), params: form)
+            await turnCanEnd.wait()
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        runner.send(text: "go", attachments: [])
+        try await waitUntil { !session.transcript.pendingUserInputs.isEmpty }
+        let request = try #require(session.transcript.pendingUserInputs.first)
+
+        await turnCanEnd.open()
+
+        try await waitUntil { mock.elicitationResponses[.number(70)] != nil }
+        #expect(mock.elicitationResponses[.number(70)] == .success(.cancel))
+        #expect(session.transcript.pendingUserInputs.isEmpty)
+        coordinator.respond(to: request.id, action: .submit(["question_1": .string("late")]))
+        #expect(mock.elicitationResponses[.number(70)] == .success(.cancel))
+    }
+
+    /// A native steer keeps the turn, so its form stays. The fallback ends
+    /// the turn and expires the form while the redirect is still in flight,
+    /// without dropping the session to idle in between.
+    @Test("an optional form follows its turn across a steer", arguments: [true, false])
+    func optionalFormAcrossSteer(native: Bool) async throws {
+        let (runner, mock, coordinator) = try makeRunnerWithQuestions()
+        defer {
+            coordinator.stop()
+            runner.stop()
+        }
+        let session = runner.session
+        session.supportsSteering = native
+        let form = try codexAsyncForm()
+        let first = AsyncGate()
+        let second = AsyncGate()
+        var entered = 0
+        mock.scriptAsync(method: "session/prompt") { _ in
+            let call = await MainActor.run {
+                entered += 1
+                return entered
+            }
+            if call == 1 { mock.emitElicitation(id: .number(80), params: form) }
+            await (call == 1 ? first : second).wait()
+            return Data(#"{"stopReason":"end_turn"}"#.utf8)
+        }
+        mock.script(method: "_session/steering") { _ in Data(#"{"outcome":"injected"}"#.utf8) }
+        runner.send(text: "go", attachments: [])
+        try await waitUntil {
+            !session.transcript.pendingUserInputs.isEmpty && session.transcript.streamingState == .streaming
+        }
+
+        runner.steer(blocks: [.text("instead")])
+
+        if native {
+            try await waitUntil { mock.sent.contains { $0.method == "_session/steering" } }
+            #expect(mock.elicitationResponses[.number(80)] == nil)
+            #expect(session.transcript.pendingUserInputs.count == 1)
+        } else {
+            #expect(mock.elicitationResponses[.number(80)] == .success(.cancel))
+            #expect(session.transcript.pendingUserInputs.isEmpty)
+            #expect(session.transcript.streamingState != .idle)
+        }
+        await first.open()
+        await second.open()
+    }
+
+    /// An answered optional question is recorded the way the adapter replays
+    /// it: a user row that is not a new prompt, so the title stays. During a
+    /// turn it splits the agent's running message like a native steer; at
+    /// idle there is nothing to split, so a restored session's late-replay
+    /// guard stays closed and the finished turn's rows stay untouched. A
+    /// session parked on a blocking wait with no foreground turn is not live.
+    @Test("an optional answer row splits only a running agent message", arguments: [
+        ACPSession.StreamingState.streaming, .idle, .awaitingInput,
+    ])
+    func optionalAnswerRowSplitsStream(state: ACPSession.StreamingState) async throws {
+        let streaming = state == .streaming
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("rn-\(UUID()).sqlite")
+        let store = try ACPSessionStore(path: url.path)
+        try store.upsertSession(.init(id: "s", agentId: "claude", title: "t",
+            currentModel: nil, currentMode: nil, autoRun: false,
+            createdAt: 0, updatedAt: 0, lastOpenedAt: 0, archived: false))
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let runner = ACPSessionRunner(
+            session: session,
+            connection: ACPConnection(client: ACPMockClient()),
+            store: store,
+            sessionId: "s",
+            worktreePath: FileManager.default.temporaryDirectory.path
+        )
+        _ = session.recordUserPrompt(text: "go", attachments: [])
+        runner.persistFromIndex(0)
+        // A prompt would claim a placeholder title; the answer must not.
+        session.titleSource = .placeholder
+        let title = session.title
+        session.transcript.streamingState = .streaming
+        func chunk(_ text: String) {
+            runner.applyIncomingUpdateForTesting(.init(sessionId: "s", update: .agentMessageChunk(.init(
+                messageId: "m1", content: .text(text)))))
+        }
+
+        chunk("Before")
+        if streaming {
+            session.foregroundTurnActive = { true }
+        } else {
+            // The turn ended (or parked with no foreground turn), and a
+            // restored session's replay closed the guard.
+            session.transcript.streamingState = state
+            session.allowsStreamingBoundaryCrossing = false
+        }
+        runner.recordOptionalAnswer("> Q\n\nA")
+        if streaming { chunk(" after") }
+
+        func timeline(_ messages: [ACPMessage]) -> [String] {
+            messages.compactMap {
+                switch $0 {
+                case .user(_, _, let text, _, _, _): "user:\(text)"
+                case .agent(_, _, let text): "agent:\(text.value)"
+                default: nil
+                }
+            }
+        }
+        let expected = ["user:go", "agent:Before", "user:> Q\n\nA"] + (streaming ? ["agent: after"] : [])
+        #expect(timeline(session.transcript.messages) == expected)
+        #expect(session.title == title)
+        #expect(session.allowsStreamingBoundaryCrossing == streaming)
+        await runner.flushPersistence()
+        let restored = try store.loadMessages(sessionId: "s").map {
+            try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload)
+        }
+        #expect(timeline(restored) == expected)
+        if !streaming {
+            let finished = restored.compactMap { message -> StreamingText? in
+                if case .agent(_, _, let text) = message { return text }
+                return nil
+            }
+            #expect(finished.count == 1)
+            #expect(finished.allSatisfy { $0.metadata == nil })
+        }
+    }
+
+    /// A started runner with a started question coordinator wired the way
+    /// the manager wires them.
+    private func makeRunnerWithQuestions() throws -> (ACPSessionRunner, ACPMockClient, ACPElicitationCoordinator) {
+        var coordinator: ACPElicitationCoordinator?
+        let (runner, mock) = try makeRunner(
+            onCancelRequest: { coordinator?.cancelRequest(id: $0) ?? false },
+            onUnclaimedCancelRequest: { coordinator?.rememberWithdrawn(id: $0) },
+            onForegroundPromptEnded: { coordinator?.foregroundPromptEnded($0) })
+        runner.session.agentState = .ready
+        let wired = ACPElicitationCoordinator(session: runner.session, client: mock)
+        coordinator = wired
+        wired.start()
+        runner.start()
+        return (runner, mock, wired)
+    }
+
+    private func codexAsyncForm() throws -> ACPElicitationRequestParams {
+        try JSONDecoder().decode(
+            ACPElicitationRequestParams.self,
+            from: Data(codexAsyncFormJSON(meta: #"{"codex":{"delivery":"async"}}"#).utf8))
     }
 
     /// Older brokers report awaiting input for a background child's request

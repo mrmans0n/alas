@@ -12,6 +12,11 @@ import Synchronization
 /// IP literals for loopback and this Mac's own addresses around any proxy;
 /// the preview's content rules block those.
 ///
+/// Every CONNECT must carry `username` and this proxy's random `password` as
+/// Basic proxy credentials, so other processes on this Mac cannot tunnel
+/// through it. Without them it answers `407`, which WebKit retries with the
+/// credentials its proxy configuration was given.
+///
 /// It holds at most `maxTunnels` connections, answering `503` beyond, and
 /// resolves at most `maxResolutions` names at once; further CONNECTs wait
 /// their turn, in order.
@@ -37,10 +42,12 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     }
 
     static let headLimit = 8 * 1024
+    public static let username = "alas-preview"
     public static let maxResolutions = 4
     private static let headTimeout: DispatchTimeInterval = .seconds(5)
-
     private let maxTunnels: Int
+    /// How long a tunnel whose upstream ended waits for the client to close.
+    private let linger: DispatchTimeInterval
     private let resolve: Resolve
     private let localAddresses: @Sendable () -> Set<Data>
     private let onBlocked: OnBlocked
@@ -52,14 +59,28 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     /// CONNECTs waiting for a resolution slot, in arrival order.
     private var awaitingResolution: [() -> Void] = []
     private let listening = Mutex(false)
+    /// The secret every CONNECT must present, random per proxy.
+    public let password: String = {
+        var generator = SystemRandomNumberGenerator()
+        return (0..<4).map { _ in String(format: "%016llx", generator.next() as UInt64) }.joined()
+    }()
+    /// Where the proxy connects for a vetted address and port. Tests stand in
+    /// other endpoints; set it before `start()`.
+    var upstreamEndpoint: (Data, Int) -> NWEndpoint? = { address, port in
+        let host: NWEndpoint.Host? = address.count == 4
+            ? IPv4Address(address).map { .ipv4($0) } : IPv6Address(address).map { .ipv6($0) }
+        guard let host, let port = NWEndpoint.Port(rawValue: UInt16(port)) else { return nil }
+        return .hostPort(host: host, port: port)
+    }
 
     /// `localAddresses` is read for every CONNECT. `onBlocked` is called on
     /// an internal queue.
     public init(
         resolve: @escaping Resolve, localAddresses: @escaping @Sendable () -> Set<Data>,
-        maxTunnels: Int = 128, onBlocked: @escaping OnBlocked
+        maxTunnels: Int = 128, linger: DispatchTimeInterval = .seconds(15), onBlocked: @escaping OnBlocked
     ) {
         self.maxTunnels = maxTunnels
+        self.linger = linger
         self.resolve = resolve
         self.localAddresses = localAddresses
         self.onBlocked = onBlocked
@@ -160,6 +181,9 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     }
 
     private func route(_ id: ObjectIdentifier, head: Data, rest: Data) {
+        guard Self.presents(head, credentials: Data("\(Self.username):\(password)".utf8)) else {
+            return respond(id, "407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"Alas web preview\"")
+        }
         let target: (host: String, port: Int)
         switch Self.connectTarget(head) {
         case .failure(let status): return respond(id, status.rawValue)
@@ -205,9 +229,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     private func connect(_ id: ObjectIdentifier, to addresses: ArraySlice<Data>, port: Int, rest: Data) {
         guard let tunnel = tunnels[id] else { return }
         guard let address = addresses.first else { return respond(id, "502 Bad Gateway") }
-        let host: NWEndpoint.Host? = address.count == 4
-            ? IPv4Address(address).map { .ipv4($0) } : IPv6Address(address).map { .ipv6($0) }
-        guard let host, let endpointPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
+        guard let endpoint = upstreamEndpoint(address, port) else {
             return connect(id, to: addresses.dropFirst(), port: port, rest: rest)
         }
         let options = NWProtocolTCP.Options()
@@ -215,7 +237,7 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
         let parameters = NWParameters(tls: nil, tcp: options)
         // The vetted address is the destination; no system proxy may stand in.
         parameters.preferNoProxies = true
-        let upstream = NWConnection(host: host, port: endpointPort, using: parameters)
+        let upstream = NWConnection(to: endpoint, using: parameters)
         tunnel.upstream = upstream
         upstream.stateUpdateHandler = { [weak self] state in
             guard let self, let tunnel = tunnels[id], tunnel.upstream === upstream else { return }
@@ -241,23 +263,29 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     }
 
     /// Copies one direction, reading only once the last chunk was written.
-    /// When either side ends, what it sent is flushed and both close.
+    /// The client ending closes the tunnel, since WebKit never half-closes.
+    /// The upstream ending is passed on once what it sent is flushed, and
+    /// the tunnel then closes when the client does, or after `linger`.
     private func pump(_ id: ObjectIdentifier, from source: NWConnection, to destination: NWConnection) {
         source.receive(minimumIncompleteLength: 1, maximumLength: 64 * 1024) { [weak self] data, _, isComplete, error in
             guard let self, tunnels[id] != nil else { return }
             let ended = isComplete || error != nil
             let next: NWConnection.SendCompletion = .contentProcessed { [weak self] sendError in
-                guard let self, tunnels[id] != nil else { return }
-                if sendError != nil || ended { return close(id) }
-                pump(id, from: source, to: destination)
+                guard let self, let tunnel = tunnels[id] else { return }
+                if sendError != nil { return close(id) }
+                guard ended else { return pump(id, from: source, to: destination) }
+                if source === tunnel.client { return close(id) }
+                let expiry = DispatchWorkItem { [weak self] in self?.close(id) }
+                tunnel.timeout = expiry
+                queue.asyncAfter(deadline: .now() + linger, execute: expiry)
             }
             if let data, !data.isEmpty {
-                destination.send(content: data, contentContext: ended ? .finalMessage : .defaultMessage, isComplete: ended, completion: next)
-            } else if ended {
-                destination.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: next)
-            } else {
-                pump(id, from: source, to: destination)
+                destination.send(content: data, completion: ended ? .idempotent : next)
+            } else if !ended {
+                return pump(id, from: source, to: destination)
             }
+            // Sent separately: a final message carrying data may never complete.
+            if ended { destination.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: next) }
         }
     }
 
@@ -279,6 +307,23 @@ public final class WebPreviewEgressProxy: @unchecked Sendable {
     enum Status: String, Error {
         case badRequest = "400 Bad Request"
         case methodNotAllowed = "405 Method Not Allowed"
+    }
+
+    /// Whether a request head carries `Proxy-Authorization: Basic` with
+    /// exactly these credentials, compared in constant time.
+    static func presents(_ head: Data, credentials: Data) -> Bool {
+        guard let text = String(data: head, encoding: .utf8) else { return false }
+        let expected = Array(credentials)
+        for line in text.split(separator: "\r\n").dropFirst() {
+            guard let colon = line.firstIndex(of: ":"),
+                  line[..<colon].lowercased() == "proxy-authorization" else { continue }
+            let value = line[line.index(after: colon)...].split(whereSeparator: \.isWhitespace)
+            guard value.count == 2, value[0].lowercased() == "basic",
+                  let presented = Data(base64Encoded: String(value[1])).map(Array.init),
+                  presented.count == expected.count else { return false }
+            return zip(presented, expected).reduce(0) { $0 | ($1.0 ^ $1.1) } == 0
+        }
+        return false
     }
 
     /// The host and port of a `CONNECT host:port HTTP/1.x` request head.

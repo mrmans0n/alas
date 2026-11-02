@@ -96,7 +96,52 @@ struct ACPElicitationTests {
         #expect(json["content"] == nil)
     }
 
+    @Test("Codex async delivery classifies the form", arguments: [
+        (#"{"codex":{"delivery":"async"}}"#, ACPUserInputRequest.Delivery.optional),
+        (#"{"codex":{"autoResolutionMs":1}}"#, .blocking),
+        ("null", .blocking),
+    ])
+    func codexAsyncDeliveryClassifiesTheForm(meta: String, expected: ACPUserInputRequest.Delivery) throws {
+        let params = try decode(codexAsyncFormJSON(meta: meta))
+        let request = try #require(ACPUserInputRequest.elicitation(.init(id: .number(1), params: params)))
+        #expect(request.delivery == expected)
+        #expect(request.isBlocking == (expected == .blocking))
+        #expect(params.isAsyncDelivery == (expected == .optional))
+    }
+
+    @Test("an async delivery marker on a URL request stays blocking")
+    func asyncURLRequestStaysBlocking() throws {
+        let params = try decode(#"""
+        {"requestId":"setup","mode":"url","message":"Sign in","elicitationId":"auth","url":"https://example.com/connect","_meta":{"codex":{"delivery":"async"}}}
+        """#)
+        #expect(!params.isAsyncDelivery)
+        let request = try #require(ACPUserInputRequest.elicitation(.init(id: .number(1), params: params)))
+        #expect(request.isBlocking)
+    }
+
     private func decode(_ json: String) throws -> ACPElicitationRequestParams {
         try JSONDecoder().decode(ACPElicitationRequestParams.self, from: Data(json.utf8))
     }
+}
+
+/// The adapter's `AsyncQuestionClient` payload: a choice question with an own-answer
+/// note, then a free-text question, with no `required` list.
+func codexAsyncFormJSON(meta: String, noteId: String = "question_0_note", extraProperties: String = "") -> String {
+    #"""
+    {
+      "sessionId":"s1","mode":"form",
+      "message":"Codex keeps working while you answer. An answer sent after it finishes is not delivered.",
+      "requestedSchema":{"type":"object","properties":{
+        "question_0":{"title":"Q0","description":"","_meta":{"codex":{"isOther":true,"isSecret":false}},
+          "type":"string","oneOf":[
+            {"const":"Staging","title":"Staging"},
+            {"const":"Prod","title":"Prod"},
+            {"const":"None of the above","title":"None of the above","description":"Provide a different answer in the note field."}]},
+        "\#(noteId)":{"type":"string","title":"Additional answer or note",
+          "_meta":{"codex":{"questionId":"question_0","role":"user_note","isSecret":false}}},
+        "question_1":{"title":"Q1","_meta":{"codex":{"isOther":false,"isSecret":false}},"type":"string"}\#(extraProperties)
+      }},
+      "_meta":\#(meta)
+    }
+    """#
 }
