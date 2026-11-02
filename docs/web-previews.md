@@ -83,10 +83,14 @@ Other hosts on the LAN or tailnet stay reachable, since the remote host is
 usually one of them. Known gaps:
 
 - WebRTC and other UDP traffic do not use the proxy.
-- HTTP/3 (QUIC) cannot run through an HTTP CONNECT tunnel. In testing, a site
-  that advertises HTTP/3 loaded over HTTP/2 through the proxy and failed when
-  the proxy refused it, so no direct QUIC connection was seen. That is
-  WebKit's current behaviour, not a guarantee, and Alas has no public API to
+- HTTP/3 (QUIC) cannot run through an HTTP CONNECT tunnel, and WebKit does
+  not try it around the proxy. On macOS 27.0.1, a web view loading
+  `cloudflare-quic.com` used HTTP/3 with no proxy and a persistent data store.
+  With the proxy set, the same store used HTTP/2 through the proxy even though
+  it had cached the site's HTTP/3 `Alt-Svc` entry. When the proxy refused
+  every connection, every load failed. Remote previews use a non-persistent
+  data store, which did not use HTTP/3 even without a proxy. This is WebKit's
+  current behaviour, not a documented guarantee, and there is no public API to
   turn HTTP/3 off.
 - After this Mac gets a new address, a literal URL for it is reachable until
   the rules are recompiled, typically within tens of milliseconds. Names are

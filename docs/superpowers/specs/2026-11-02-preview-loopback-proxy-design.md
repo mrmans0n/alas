@@ -255,10 +255,14 @@ The test policy applies, so these are few and sharp.
   service through it is not possible, and a UDP service would have to speak
   STUN/DTLS, so the risk is low. There is no public API to turn RTC off in
   `WKWebView`.
-- **HTTP/3 (QUIC).** It cannot ride an HTTP CONNECT tunnel. It is unverified
-  whether WebKit then falls back to TCP through the proxy or connects
-  directly. A remote server's `Alt-Svc` could only point at its own name.
-  Probe this during implementation by serving `Alt-Svc: h3`.
+- **HTTP/3 (QUIC).** It cannot ride an HTTP CONNECT tunnel. Probed on macOS
+  27.0.1 against `cloudflare-quic.com`, which advertises `h3`. The site's
+  `/cdn-cgi/trace` reports the protocol the server saw. With a persistent
+  store and no proxy, every load was `http/3`. With the proxy, the same store
+  loaded over `http/2` through it, despite a cached `h3` `Alt-Svc` entry. With
+  the proxy refusing every connection, every load failed with no QUIC
+  fallback. A non-persistent store, which previews use, was `http/2` even
+  without a proxy. So WebKit does not bypass the proxy over QUIC today.
 - **The window after an address change.** A literal URL for a brand-new own
   address is reachable until the rule list is recompiled. Names are not
   affected.
@@ -314,4 +318,4 @@ The test policy applies, so these are few and sharp.
    agents, but it reveals that the destination resolves to this Mac.
 4. **Should HTTP/3 be disabled for remote previews** if the probe shows it
    bypasses the proxy? That would need private API, which is off the table, so
-   the alternative is to accept and document it.
+   the alternative is to accept and document it. Resolved: the probe showed no bypass.
