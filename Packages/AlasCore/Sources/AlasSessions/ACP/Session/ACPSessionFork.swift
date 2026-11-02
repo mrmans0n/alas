@@ -160,7 +160,12 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
             case .user(_, let text, _, _, _):
                 text.isEmpty ? nil : .init(role: .user, text: text)
             case .agent(let messageId, let text, _, _):
-                text.isEmpty ? nil : .init(role: .agent, text: text, messageId: messageId)
+                // A steering segment holds only part of its adapter message,
+                // and a copy drops the marker that says so: keep no id that a
+                // later fork could target.
+                text.isEmpty ? nil : .init(
+                    role: .agent, text: text, messageId: isSteeringSegment(wire) ? nil : messageId
+                )
             case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid:
                 nil
             }
