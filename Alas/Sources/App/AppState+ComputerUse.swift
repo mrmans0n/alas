@@ -265,6 +265,9 @@ extension AppState {
             guard let client = vmManager.guestClient(for: worktreeID, guest: guest) else {
                 return .error(guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage)
             }
+            // Connects before the take-over check: a `run` carries no session, so no stop can
+            // reach it, and it must not go out once the user took over during the handshake.
+            _ = try? await client.hello()
             if let refusal = VMTakeOvers.refusal(action: nil, driver: vmDriver(recordID: recordID)) {
                 return .error(refusal)
             }
