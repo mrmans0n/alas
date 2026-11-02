@@ -41,7 +41,8 @@ enum VMTabScreen: Equatable {
     /// A Linux tab follows `linuxInstallerPhase` alone: its image has no
     /// setup by hand and no customizing, and it takes no macOS VM slot. Its
     /// helper update keeps the VM running, so it shows only while it runs.
-    /// A paused VM shows paused wherever it would show stopped; Linux VMs never pause.
+    /// A paused VM shows paused wherever it would show stopped, except while the base image is
+    /// customized; Linux VMs never pause.
     static func resolve(
         guest: VMGuestOS = .macOS,
         runningHere: Bool,
@@ -73,7 +74,7 @@ enum VMTabScreen: Equatable {
         let pausedScreen = pausedAt.map { VMTabScreen.paused(savedAt: $0) }
         switch installerPhase {
         case .awaitingSetup(let build):
-            if hasVM && !customizingHere { return pausedScreen ?? .stoppedWhileCustomizing }
+            if hasVM && !customizingHere { return .stoppedWhileCustomizing }
             if goldenHelper == .updating { return .updatingHelper }
             return .goldenSetup(build: build, updateHelper: goldenHelper == .available)
         case _ where hasVM: return pausedScreen ?? .stopped
