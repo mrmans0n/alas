@@ -232,6 +232,9 @@ struct VMComputerUseRouteTests {
         // `b` was already stopped by the user: its guest has it stopped and the take over doesn't own it.
         let stops = takeOvers.takeOver("/w", sessions: Self.drove, userStopped: ["b"])
         #expect(stops == [VMLifecycleMessage(event: .stop, sessionID: "a")])
+        // Only the session it stopped shows the user driving, not every session that ever drove it.
+        #expect(takeOvers.holds(sessionID: "a"))
+        #expect(!takeOvers.holds(sessionID: "b"))
         #expect(takeOvers.takeOver("/w", sessions: Self.drove, userStopped: []).isEmpty)
 
         let driver = VMDriver.current(lastAgentCall: nil, takenOver: takeOvers.isTakenOver("/w"), now: Date())

@@ -399,10 +399,8 @@ extension AppState {
         )
     }
 
-    /// Whether the user took over a VM this session drove.
-    func isUserDrivingVM(ofSession sessionID: String) -> Bool {
-        !(vmComputerUseSessions[sessionID] ?? []).isDisjoint(with: vmTakenOver)
-    }
+    /// Whether the user took over a VM this session was driving, which stopped it there.
+    func isUserDrivingVM(ofSession sessionID: String) -> Bool { vmTakeOvers.holds(sessionID: sessionID) }
 
     /// The display name of the agent behind `sessionID`.
     func computerUseAgentName(_ sessionID: String) -> String {

@@ -240,6 +240,9 @@ struct VMTakeOvers: Equatable {
 
     func isTakenOver(_ recordID: String) -> Bool { paused[recordID] != nil }
 
+    /// Whether a take over still holds `sessionID` stopped.
+    func holds(sessionID: String) -> Bool { paused.values.contains { $0.contains(sessionID) } }
+
     /// The sessions that made a call in VM `recordID`, from the session → VMs map, sorted.
     static func drivers(of recordID: String, in sessions: [String: Set<String>]) -> [String] {
         sessions.filter { $0.value.contains(recordID) }.keys.sorted()

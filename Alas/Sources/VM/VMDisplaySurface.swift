@@ -24,9 +24,14 @@ struct VMDisplaySurface: NSViewRepresentable {
         attach(container, shield: context.coordinator, mayStealFromOtherContainer: true)
         // Keyboard input goes to the guest once the screen is shown.
         DispatchQueue.main.async { [weak container, weak shield = context.coordinator, view] in
-            guard let container, let shield, shield.isHidden, view.superview === container,
+            guard let container, let shield, view.superview === container,
                   container.window?.firstResponder !== view
             else { return }
+            // Look-only: the guest gets the keyboard once input comes back.
+            guard shield.isHidden else {
+                shield.tookKeyboard = true
+                return
+            }
             container.window?.makeFirstResponder(view)
         }
         return container
@@ -50,7 +55,8 @@ struct VMDisplaySurface: NSViewRepresentable {
             if view.superview != nil && !mayStealFromOtherContainer { return }
             view.removeFromSuperview()
             view.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(view)
+            // Below a shield already in place, which must stay on top.
+            container.addSubview(view, positioned: .below, relativeTo: shield.superview === container ? shield : nil)
             NSLayoutConstraint.activate([
                 view.topAnchor.constraint(equalTo: container.topAnchor),
                 view.bottomAnchor.constraint(equalTo: container.bottomAnchor),
@@ -74,6 +80,15 @@ struct VMDisplaySurface: NSViewRepresentable {
         }
         shield.onClick = onBlockedClick
         shield.isHidden = allowsInput
+        // Tracking areas reach the view under the shield, so the guest pointer would follow a
+        // hover; VZ may add them back on layout, so they go on every update.
+        shield.screen = view
+        if !allowsInput {
+            shield.removeScreenTracking()
+        } else if shield.trackingRemoved {
+            view.updateTrackingAreas()
+        }
+        shield.trackingRemoved = !allowsInput
         guard let window = container.window else { return }
         if !allowsInput, window.firstResponder === view {
             window.makeFirstResponder(nil)
@@ -92,6 +107,21 @@ final class VMInputShield: NSView {
     var onClick: () -> Void = {}
     /// The screen gave up the keyboard on going look-only, so it takes it back after.
     var tookKeyboard = false
+    /// The screen's tracking areas were removed while look-only.
+    var trackingRemoved = false
+    /// The VM view under the shield.
+    weak var screen: NSView?
+
+    func removeScreenTracking() {
+        guard let screen else { return }
+        screen.trackingAreas.forEach(screen.removeTrackingArea)
+    }
+
+    // A resize lets VZ add its tracking areas back; the shield is laid out with it.
+    override func layout() {
+        super.layout()
+        if !isHidden { removeScreenTracking() }
+    }
 
     override var acceptsFirstResponder: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
