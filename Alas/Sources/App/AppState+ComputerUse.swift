@@ -273,10 +273,17 @@ extension AppState {
             }
             vmLastAgentCall.begin(recordID, (sessionID, "vm_run", vmNow()))
             defer { vmLastAgentCall.end(recordID, at: vmNow()) }
-            // Awaited in the request's own task, so a client disconnect cancels the guest call.
+            // A client disconnect or a take over cancels the run; the client then tells the guest
+            // to cancel it, which ends the command's process group.
+            let token = UUID()
+            let run = Task { try await client.run(command, timeoutSeconds: timeoutSeconds) }
+            vmRuns[recordID, default: [:]][token] = run
+            defer { vmRuns[recordID]?[token] = nil }
             do {
-                return .text([VMComputerUseRoute.runReply(try await client.run(command, timeoutSeconds: timeoutSeconds))])
+                let result = try await withTaskCancellationHandler { try await run.value } onCancel: { run.cancel() }
+                return .text([VMComputerUseRoute.runReply(result)])
             } catch {
+                if vmTakenOver.contains(recordID) { return .error(VMAutoStartMessages.userDriving) }
                 return .error((error as? VMGuestClient.Failure ?? .stopped).message(for: guest))
             }
         }
@@ -443,6 +450,8 @@ extension AppState {
         guard !vmTakenOver.contains(recordID) else { return }
         let stops = vmTakeOvers.takeOver(recordID, sessions: vmComputerUseSessions, userStopped: vmStoppedSessions)
         vmLastAgentCall[recordID] = nil
+        // A `run` carries no session, so the stops below can't reach it.
+        for run in (vmRuns[recordID] ?? [:]).values { run.cancel() }
         let client = vmManager.existingGuestClient(for: recordID)
         for stop in stops {
             await client?.lifecycle(stop.event, sessionID: stop.sessionID)
