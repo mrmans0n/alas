@@ -94,27 +94,54 @@ struct HostSSHSetupTests {
         #expect(HostSSHSetup.pairingLink(fromPairOutput: "123456\n") == nil)
     }
 
-    @Test func configureQuotesProjectPathsAndSetsOnlyChangedKeys() async throws {
+    @Test func configureSetsEveryOptionAndAddsMissingProjects() async throws {
         let remote = FakeRemote()
-        let probe = HostSSHProbe(
-            os: "Darwin",
-            arch: "arm64",
-            reachability: "lan",
-            agents: [HostSSHAgent(id: "claude", enabled: true), HostSSHAgent(id: "codex", enabled: true)]
-        )
-        let options = HostSSHSetupOptions(
-            reachability: "tailscale",
-            agents: ["claude": true, "codex": false],
-            projects: ["~/code/it's here", "  "]
-        )
+        let options = HostSSHSetupOptions(reachability: "tailscale", agents: ["codex": false, "claude": true], projects: ["/srv/repo", "  "])
 
-        try await remote.setup().configure(host: "/opt/homebrew/bin/alas-host", probe: probe, options: options)
+        try await remote.setup().configure(host: "/opt/homebrew/bin/alas-host", options: options)
 
+        let host = "'/opt/homebrew/bin/alas-host'"
         #expect(remote.commands.withLock { $0 } == [
-            "'/opt/homebrew/bin/alas-host' config set 'host.reachability' 'tailscale'",
-            "'/opt/homebrew/bin/alas-host' config set 'agents.codex.enabled' 'false'",
-            "'/opt/homebrew/bin/alas-host' project add '~/code/it'\\''s here'",
+            "\(host) config set 'host.reachability' 'tailscale'",
+            "\(host) config set 'agents.claude.enabled' 'true'",
+            "\(host) config set 'agents.codex.enabled' 'false'",
+            "p='/srv/repo'; \(host) project list | awk -v p=\"  $p\" 'substr($0, length($0) - length(p) + 1) == p { f = 1 } END { exit !f }' || \(host) project add \"$p\"",
         ])
+    }
+
+    @Test(arguments: [
+        ("/srv/it's here/", "'/srv/it'\\''s here'"),
+        ("~/code/x", "\"$HOME\"/'code/x'"),
+        ("code/x", "\"$HOME\"/'code/x'"),
+        ("~", "\"$HOME\""),
+    ])
+    func remotePathsResolveAgainstTheRemoteHome(path: String, word: String) {
+        #expect(HostSSHSetup.remotePath(path) == word)
+    }
+
+    /// The project step's shell runs for real: a listed path is not added again.
+    @Test func aListedProjectIsNotAddedAgain() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fake = dir.appendingPathComponent("alas-host")
+        try """
+        #!/bin/sh
+        case "$1 $2" in
+        "project list") printf 'id1  repo  /srv/repo\n' ;;
+        "project add") echo "$3" >> "\(dir.path)/added" ;;
+        esac
+        """.write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        let setup = HostSSHSetup(
+            destination: "me@mini",
+            bundleResources: dir,
+            run: { command, _ in try await Process.run("/bin/sh", args: ["-c", command], timeout: 10) }
+        )
+
+        try await setup.configure(host: fake.path, options: HostSSHSetupOptions(reachability: "lan", agents: [:], projects: ["/srv/repo", "/srv/repo2"]))
+
+        #expect(try String(contentsOf: dir.appendingPathComponent("added"), encoding: .utf8) == "/srv/repo2\n")
     }
 
     @Test(arguments: [(Int32(1), false), (Int32(255), true)])
@@ -129,7 +156,7 @@ struct HostSSHSetupTests {
             message: "refused: the app has the profile open",
             connectionFailed: connectionFailed
         )) {
-            try await remote.setup().configure(host: "h", probe: HostSSHProbe(os: "Darwin", arch: "arm64"), options: options)
+            try await remote.setup().configure(host: "h", options: options)
         }
         #expect(remote.commands.withLock { $0.count } == 1)
     }

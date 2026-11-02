@@ -308,22 +308,25 @@ public struct HostSSHSetup: Sendable {
         return result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Sets each changed setting and adds each project. Stops at the first refusal.
-    public func configure(host: String, probe: HostSSHProbe, options: HostSSHSetupOptions) async throws {
+    /// Sets every option and adds each project not already there, so a retry
+    /// after a partial failure converges. Stops at the first refusal.
+    public func configure(host: String, options: HostSSHSetupOptions) async throws {
         let alasHost = SSHCommand.shellQuote(host)
         var commands: [String] = []
         let set = { (key: String, value: String) in
             commands.append("\(alasHost) config set \(SSHCommand.shellQuote(key)) \(SSHCommand.shellQuote(value))")
         }
-        if options.reachability != probe.reachability {
-            set("host.reachability", options.reachability)
-        }
-        let current = Dictionary(probe.agents.map { ($0.id, $0.enabled) }, uniquingKeysWith: { $1 })
-        for (id, enabled) in options.agents.sorted(by: { $0.key < $1.key }) where current[id] != enabled {
+        set("host.reachability", options.reachability)
+        for (id, enabled) in options.agents.sorted(by: { $0.key < $1.key }) {
             set("agents.\(id).enabled", String(enabled))
         }
         for path in options.projects.map({ $0.trimmingCharacters(in: .whitespaces) }) where !path.isEmpty {
-            commands.append("\(alasHost) project add \(SSHCommand.shellQuote(path))")
+            // `project list` prints `<id>  <name>  <path>`; skip a path it already has.
+            commands.append(
+                "p=\(Self.remotePath(path)); \(alasHost) project list | "
+                    + "awk -v p=\"  $p\" 'substr($0, length($0) - length(p) + 1) == p { f = 1 } END { exit !f }' || "
+                    + "\(alasHost) project add \"$p\""
+            )
         }
         for command in commands {
             _ = try await step("Configure", command, timeout: 30)
@@ -374,6 +377,16 @@ public struct HostSSHSetup: Sendable {
     private static let noLinkMessage = "This alas-host prints no pairing link. Update it and try again."
     private static let loopbackOnlyMessage =
         "The host is reachable only from itself. With Tailscale, check that HTTPS is on for the tailnet; otherwise choose LAN."
+
+    /// A remote path as a shell word: `~/x` and relative paths resolve
+    /// against the remote home, without a trailing slash.
+    static func remotePath(_ path: String) -> String {
+        var path = path
+        while path.count > 1, path.hasSuffix("/") { path.removeLast() }
+        if path == "~" { return "\"$HOME\"" }
+        if path.hasPrefix("~/") { path.removeFirst(2) } else if path.hasPrefix("/") { return SSHCommand.shellQuote(path) }
+        return "\"$HOME\"/" + SSHCommand.shellQuote(path)
+    }
 
     /// `alas-host setup --check` warnings; empty when the check itself fails.
     public func check(host: String) async -> [String] {

@@ -169,7 +169,7 @@ struct HostSSHSetupSheet: View {
             do {
                 let host = try await setup.install(probe, progress: { _ in })
                 steps.append("Configuring the host")
-                try await setup.configure(host: host, probe: probe, options: options)
+                try await setup.configure(host: host, options: options)
                 steps.append("Starting the host")
                 try await setup.start(host: host)
                 steps.append("Pairing")
