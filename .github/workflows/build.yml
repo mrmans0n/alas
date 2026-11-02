@@ -464,6 +464,9 @@ jobs:
       - name: Discover and assign Swift tests
         id: swift-inventory
         timeout-minutes: 3
+        # Discovery must see SSHIntegrationTests enabled, as the shards do.
+        env:
+          TEST_RUNNER_ALAS_SSH_INTEGRATION: "1"
         run: python3 scripts/ci_swift_tests.py plan --shard-count 4
 
       - name: Package compiled Swift test products
