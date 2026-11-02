@@ -29,6 +29,27 @@ ships it. The two casks link the same command, so install one or the other. Outs
 Homebrew, the binary is inside the app at
 `Alas.app/Contents/Resources/alas-host/alas-host`.
 
+### Set up from another Mac
+
+Alas can do all of the above, plus [Configure](#configure),
+[Start at login](#start-at-login) and [Pair a Mac](#pair-a-mac), over SSH. In
+Settings › Remote › Peers, choose **Set up a host over SSH** and enter an SSH
+destination such as `me@mini.local`. Alas connects in batch mode, so key login
+must work without a password: if it can't connect, run `ssh <destination>` once
+in Terminal to trust the host key.
+
+Alas installs the host with Homebrew when the host Mac has it (updating an
+installed `alas-host` or `alas` cask), uses the host inside an installed
+`Alas.app`, or otherwise copies its own host files into `~/.alas/host` when both
+Macs share an architecture. You then pick the reachability, the agents to
+enable and the projects to add, and Alas starts the host at login, pairs with
+it, and lists anything `alas-host setup --check` warns about. The host Mac needs
+a user logged in, since launchd runs the host in that user's session.
+
+A peer set up this way shows **Update host**, which reinstalls and restarts the
+host (ending its running sessions), and **Host log**, which shows the end of its
+log.
+
 ## Run
 
 ```bash
