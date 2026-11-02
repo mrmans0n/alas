@@ -92,10 +92,11 @@ impl ToolScope {
                 -32602,
                 format!("tool unavailable in Workspace Checkout context: {name}"),
             ),
-            ToolScope::Headless => (-32602, format!("Not available on a headless host: {name}")),
-            ToolScope::All | ToolScope::Visual | ToolScope::Remote => {
-                (-32602, format!("unknown tool: {name}"))
-            }
+            ToolScope::Headless => (
+                -32602,
+                format!("Not available on a headless host: {name}"),
+            ),
+            ToolScope::All | ToolScope::Visual | ToolScope::Remote => (-32602, format!("unknown tool: {name}")),
         }
     }
 }
@@ -844,7 +845,7 @@ fn vm_tools_without_vm() -> Vec<Value> {
     vec![
         json!({
             "name": "vm_run",
-            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only); in a Linux VM, under /mnt/alas instead. A stopped VM starts by itself: an auto-started run usually answers `computer_vm_starting` first, so retry shortly. `computer_vm_starting` and `computer_vm_slot_pending` mean try again shortly; `computer_user_active` means the user took over the VM, so wait for them to hand it back.",
+            "description": "Run a shell command inside this worktree's VM, as the logged-in user. Built apps are in /Volumes/My Shared Files/transfer and the worktree is at /Volumes/My Shared Files/worktree (read-only); in a Linux VM, under /mnt/alas instead. A stopped VM starts by itself, and an auto-started run usually answers `computer_vm_starting` first. `computer_vm_starting` and `computer_vm_slot_pending` mean try again shortly; `computer_user_active` means the user took over the VM, so wait for them to hand it back.",
             "annotations": { "readOnlyHint": false, "destructiveHint": true },
             "inputSchema": {
                 "type": "object",
@@ -1840,9 +1841,7 @@ const VISUAL_OPTION_LABEL_MAX_CHARS: usize = 200;
 fn visual_show_command(args: &Value) -> Result<Command, String> {
     let title = required_string(args, "title")?;
     if title.chars().count() > VISUAL_TITLE_MAX_CHARS {
-        return Err(format!(
-            "title must be at most {VISUAL_TITLE_MAX_CHARS} characters"
-        ));
+        return Err(format!("title must be at most {VISUAL_TITLE_MAX_CHARS} characters"));
     }
     // Exact: the HTML reaches the page byte for byte.
     let html = required_exact_string(args, "html")?;
@@ -1850,9 +1849,7 @@ fn visual_show_command(args: &Value) -> Result<Command, String> {
         return Err("html must be non-empty".into());
     }
     if html.len() > VISUAL_HTML_MAX_BYTES {
-        return Err(format!(
-            "html must be at most {VISUAL_HTML_MAX_BYTES} bytes"
-        ));
+        return Err(format!("html must be at most {VISUAL_HTML_MAX_BYTES} bytes"));
     }
     let question = match args.get("question") {
         None | Some(Value::Null) => None,
@@ -1864,21 +1861,14 @@ fn visual_show_command(args: &Value) -> Result<Command, String> {
         Some(Value::String(value)) if value == "embedded" || value == "card" => Some(value.clone()),
         Some(_) => return Err("presentation must be \"embedded\" or \"card\"".into()),
     };
-    Ok(Command::VisualShow {
-        title,
-        html,
-        question,
-        presentation,
-    })
+    Ok(Command::VisualShow { title, html, question, presentation })
 }
 
 fn visual_question(value: &Value) -> Result<VisualQuestion, String> {
-    let prompt =
-        required_string(value, "prompt").map_err(|_| "question.prompt is required".to_string())?;
+    let prompt = required_string(value, "prompt")
+        .map_err(|_| "question.prompt is required".to_string())?;
     if prompt.chars().count() > VISUAL_PROMPT_MAX_CHARS {
-        return Err(format!(
-            "question.prompt must be at most {VISUAL_PROMPT_MAX_CHARS} characters"
-        ));
+        return Err(format!("question.prompt must be at most {VISUAL_PROMPT_MAX_CHARS} characters"));
     }
     let raw_options = value
         .get("options")
@@ -1892,9 +1882,7 @@ fn visual_question(value: &Value) -> Result<VisualQuestion, String> {
     for option in raw_options {
         let id = option.get("id").and_then(Value::as_str).unwrap_or_default();
         let valid_id = (1..=VISUAL_OPTION_ID_MAX_CHARS).contains(&id.chars().count())
-            && id
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+            && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
         if !valid_id {
             return Err(format!(
                 "question option id '{id}' must be 1 to {VISUAL_OPTION_ID_MAX_CHARS} characters of A-Z, a-z, 0-9, '-' or '_'"
@@ -1903,31 +1891,20 @@ fn visual_question(value: &Value) -> Result<VisualQuestion, String> {
         if !seen.insert(id.to_string()) {
             return Err(format!("question option id '{id}' is duplicated"));
         }
-        let label = option
-            .get("label")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .unwrap_or_default();
+        let label = option.get("label").and_then(Value::as_str).map(str::trim).unwrap_or_default();
         if !(1..=VISUAL_OPTION_LABEL_MAX_CHARS).contains(&label.chars().count()) {
             return Err(format!(
                 "question option '{id}' label must be 1 to {VISUAL_OPTION_LABEL_MAX_CHARS} characters"
             ));
         }
-        options.push(VisualOption {
-            id: id.into(),
-            label: label.into(),
-        });
+        options.push(VisualOption { id: id.into(), label: label.into() });
     }
     let allow_multiple = match value.get("allow_multiple") {
         None | Some(Value::Null) => false,
         Some(Value::Bool(flag)) => *flag,
         Some(_) => return Err("question.allow_multiple must be a boolean".into()),
     };
-    Ok(VisualQuestion {
-        prompt,
-        options,
-        allow_multiple,
-    })
+    Ok(VisualQuestion { prompt, options, allow_multiple })
 }
 
 fn required_exact_string(args: &Value, key: &str) -> Result<String, String> {
@@ -2325,12 +2302,9 @@ fn visual_show_result(lines: Option<&[String]>) -> Value {
     let reply = lines
         .and_then(|lines| lines.first())
         .and_then(|line| serde_json::from_str::<Value>(line).ok());
-    let visual_id = reply.as_ref().and_then(|reply| {
-        reply
-            .get("visual_id")
-            .and_then(Value::as_str)
-            .map(String::from)
-    });
+    let visual_id = reply
+        .as_ref()
+        .and_then(|reply| reply.get("visual_id").and_then(Value::as_str).map(String::from));
     let embedded = reply
         .as_ref()
         .and_then(|reply| reply.get("presentation").and_then(Value::as_str))
@@ -2421,9 +2395,7 @@ fn transport_error_result(command: &Command, err: &TransportError) -> Value {
     // its push and PR/MRs may still land; never report that as a failure.
     if let Some(tool) = publish_tool(command).filter(|_| matches!(err, TransportError::Io)) {
         return text_result(
-            format!(
-                "Alas did not reply before the {tool} deadline; the push and PR/MR(s) may still complete. Call pr_status before retrying."
-            ),
+            format!("Alas did not reply before the {tool} deadline; the push and PR/MR(s) may still complete. Call pr_status before retrying."),
             true,
         );
     }
@@ -3259,8 +3231,7 @@ mod tests {
         build_http_response, cancellation_command_for_message, command_for_tool, dispatch,
         env_from, handle_line, handle_line_with_parent, http_response, initialize_result,
         parse_http_request, register_pending_call, runs_on_worker, session_wait_timed_out,
-        tool_definitions, tool_definitions_for_session, tool_result, tools_call_command,
-        transport_error_result,
+        tool_definitions, tool_definitions_for_session, tool_result, tools_call_command, transport_error_result,
     };
     use alas_client::{Command, Response, TransportError, VisualOption, VisualQuestion};
     use serde_json::{Value, json};
@@ -3382,13 +3353,9 @@ mod tests {
             "workspace_focus",
         ] {
             assert!(!names.contains(&hidden), "{hidden}");
-            let reply = handle_line_with_parent(
-                &call(hidden, json!({})),
-                "/wt",
-                None,
-                scope,
-                |_| unreachable!(),
-            )
+            let reply = handle_line_with_parent(&call(hidden, json!({})), "/wt", None, scope, |_| {
+                unreachable!()
+            })
             .unwrap();
             assert_eq!(
                 reply["error"]["message"],
@@ -3420,10 +3387,7 @@ mod tests {
             review_tools(tool_definitions_for_session(ToolScope::All, false))
         );
         for parent in [None, Some("p")] {
-            let text = initialize_result(parent, scope)["instructions"]
-                .as_str()
-                .unwrap()
-                .to_string();
+            let text = initialize_result(parent, scope)["instructions"].as_str().unwrap().to_string();
             for banned in ["open files", "preview", "workspace_", "workspace UI"] {
                 assert!(!text.contains(banned), "{parent:?}: {banned}");
             }
@@ -3541,33 +3505,16 @@ mod tests {
                 question: Some(VisualQuestion {
                     prompt: "Which?".into(),
                     options: vec![
-                        VisualOption {
-                            id: "a".into(),
-                            label: "One".into()
-                        },
-                        VisualOption {
-                            id: "b".into(),
-                            label: "Two".into()
-                        },
+                        VisualOption { id: "a".into(), label: "One".into() },
+                        VisualOption { id: "b".into(), label: "Two".into() },
                     ],
                     allow_multiple: true,
                 }),
                 presentation: Some("card".into()),
             }
         );
-        let omitted = command_for_tool(
-            "visual_show",
-            &json!({ "title": "T", "html": "<p>" }),
-            "/wt",
-        )
-        .unwrap();
-        assert!(matches!(
-            omitted,
-            Command::VisualShow {
-                presentation: None,
-                ..
-            }
-        ));
+        let omitted = command_for_tool("visual_show", &json!({ "title": "T", "html": "<p>" }), "/wt").unwrap();
+        assert!(matches!(omitted, Command::VisualShow { presentation: None, .. }));
     }
 
     #[test]
@@ -3588,13 +3535,9 @@ mod tests {
             json!({ "title": "T", "html": "<p>", "presentation": 3 }),
         ];
         for args in cases {
-            let err = command_for_tool("visual_show", &args, "/wt")
-                .expect_err(&format!("accepted {args}"));
+            let err = command_for_tool("visual_show", &args, "/wt").expect_err(&format!("accepted {args}"));
             if args.get("presentation").is_some() {
-                assert!(
-                    err.contains("presentation must be \"embedded\" or \"card\""),
-                    "{err}"
-                );
+                assert!(err.contains("presentation must be \"embedded\" or \"card\""), "{err}");
             }
         }
     }
@@ -3617,12 +3560,7 @@ mod tests {
             };
             let result = tool_result(
                 &cmd,
-                Response {
-                    ok: true,
-                    lines: Some(vec![line.into()]),
-                    error: None,
-                    exit_code: None,
-                },
+                Response { ok: true, lines: Some(vec![line.into()]), error: None, exit_code: None },
             );
             assert_eq!(result["isError"], json!(false));
             assert_eq!(result["content"][0]["text"], json!(expected), "{line}");
@@ -3941,28 +3879,16 @@ mod tests {
         assert!(text(&create, TransportError::Io).contains("Call pr_status before retrying"));
         assert!(text(&Command::StackShip, TransportError::Io).contains("stack_ship deadline"));
         // Nothing was sent, or the call is read-only: a plain failure.
-        assert_eq!(
-            text(&create, TransportError::Connect),
-            "could not reach Alas"
-        );
-        assert_eq!(
-            text(&Command::StackShip, TransportError::Connect),
-            "could not reach Alas"
-        );
-        assert_eq!(
-            text(&Command::PrStatus, TransportError::Io),
-            "could not reach Alas"
-        );
+        assert_eq!(text(&create, TransportError::Connect), "could not reach Alas");
+        assert_eq!(text(&Command::StackShip, TransportError::Connect), "could not reach Alas");
+        assert_eq!(text(&Command::PrStatus, TransportError::Io), "could not reach Alas");
     }
 
     #[test]
     fn relay_modes_list_and_accept_only_their_tools() {
         for (relay, allowed) in [
             (RelayScope::Visual, &["visual_show"][..]),
-            (
-                RelayScope::Remote,
-                &["pr_create", "pr_status", "visual_show"][..],
-            ),
+            (RelayScope::Remote, &["pr_create", "pr_status", "visual_show"][..]),
         ] {
             // Workspace and delegated restrictions must not widen a relay mode.
             let env = McpEnv {
@@ -4009,24 +3935,13 @@ mod tests {
             names.extend(["resolve".to_string(), "workspace_create".to_string()]);
             for name in names {
                 let line = call(&name, json!({}));
-                let reply = handle_line_with_parent(
-                    &line,
-                    "/wt",
-                    Some("parent"),
-                    scope,
-                    |_| unreachable!(),
-                )
-                .unwrap();
+                let reply =
+                    handle_line_with_parent(&line, "/wt", Some("parent"), scope, |_| unreachable!())
+                        .unwrap();
                 assert_eq!(reply["error"]["code"], json!(-32602), "{relay:?} {name}");
-                assert_eq!(
-                    reply["error"]["message"],
-                    json!(format!("unknown tool: {name}"))
-                );
+                assert_eq!(reply["error"]["message"], json!(format!("unknown tool: {name}")));
                 let msg: Value = serde_json::from_str(&line).unwrap();
-                assert!(
-                    tools_call_command(&msg, "/wt", scope).is_err(),
-                    "{relay:?} {name}"
-                );
+                assert!(tools_call_command(&msg, "/wt", scope).is_err(), "{relay:?} {name}");
             }
         }
     }
@@ -4139,10 +4054,7 @@ mod tests {
         let checkout = tool_names(None, ToolScope::Workspace);
         for tool in ["pr_create", "pr_status", "stack_ship"] {
             assert!(child.iter().any(|name| name == tool), "child lacks {tool}");
-            assert!(
-                !checkout.iter().any(|name| name == tool),
-                "checkout exposes {tool}"
-            );
+            assert!(!checkout.iter().any(|name| name == tool), "checkout exposes {tool}");
         }
 
         let reply = handle_line_with_parent(

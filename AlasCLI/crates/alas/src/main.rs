@@ -1,7 +1,7 @@
-mod mcp;
 mod parse;
+mod mcp;
 
-use alas_client::{DispatchError, TransportError, dispatch, logical_base, resolve_target};
+use alas_client::{dispatch, logical_base, resolve_target, DispatchError, TransportError};
 use parse::{is_ao, parse};
 use std::process::ExitCode;
 
@@ -41,10 +41,7 @@ fn main() -> ExitCode {
                 }
                 ExitCode::SUCCESS
             } else {
-                eprintln!(
-                    "alas: {}",
-                    resp.error.unwrap_or_else(|| "request failed".into())
-                );
+                eprintln!("alas: {}", resp.error.unwrap_or_else(|| "request failed".into()));
                 ExitCode::from(resp.exit_code.unwrap_or(1))
             }
         }
@@ -181,8 +178,7 @@ mod tests {
 
     #[test]
     fn describe_keeps_generic_message_for_connect_and_io_failures() {
-        let (connect_msg, connect_code) =
-            describe(&DispatchError::Transport(TransportError::Connect));
+        let (connect_msg, connect_code) = describe(&DispatchError::Transport(TransportError::Connect));
         assert_eq!(connect_msg, "could not reach Alas");
         assert_eq!(connect_code, 1);
 
