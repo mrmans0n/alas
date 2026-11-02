@@ -1218,6 +1218,13 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             28 + ACPMessageGutterLayout.laneWidth
         }
 
+        private static func lastAgentText(in messages: ArraySlice<ACPMessage>) -> String? {
+            for message in messages.reversed() {
+                if case .agent(_, _, let buffer) = message { return buffer.value }
+            }
+            return nil
+        }
+
         /// Beyond `fork` (and theme/contentMaxWidth folded by
         /// `token(_:host:)`), the fork divider's build closure also derives
         /// `sourceAgentName` by CALLING `host.agentDisplayName(fork
@@ -1233,6 +1240,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
         private struct ForkDividerTokenInputs: Equatable {
             let fork: ACPSessionForkRecord
             let sourceAgentDisplayName: String
+            let boundaryText: String?
         }
 
         /// Verbatim port of the fork divider inserted right after the fork
@@ -1241,12 +1249,16 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             host: ACPTranscriptScroller,
             fork: ACPSessionForkRecord
         ) -> ACPTranscriptRowSpec {
-            ACPTranscriptRowSpec(
+            let boundaryText = fork.forkPoint == nil ? nil : lastAgentText(
+                in: host.transcript.messages.prefix(fork.inheritedMessageCount)
+            )
+            return ACPTranscriptRowSpec(
                 id: "__fork_divider__",
                 equalityToken: token(
                     ForkDividerTokenInputs(
                         fork: fork,
-                        sourceAgentDisplayName: host.agentDisplayName(fork.sourceAgentID)
+                        sourceAgentDisplayName: host.agentDisplayName(fork.sourceAgentID),
+                        boundaryText: boundaryText
                     ),
                     host: host
                 ),
@@ -1258,7 +1270,9 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                                     presentation: .init(
                                         sourceAgentName: host.agentDisplayName(fork.sourceAgentID),
                                         mechanism: mechanism,
-                                        via: fork.via
+                                        via: fork.via,
+                                        forkPoint: fork.forkPoint,
+                                        boundaryText: boundaryText
                                     ),
                                     onOpenSource: { host.onOpenForkSource(fork.sourceSessionID) }
                                 )
