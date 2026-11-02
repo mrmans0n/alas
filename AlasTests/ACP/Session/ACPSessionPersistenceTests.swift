@@ -28,6 +28,54 @@ private final class SQLiteWriteLock: Sendable {
 @MainActor
 @Suite("ACP session persistence")
 struct ACPSessionPersistenceTests {
+    @Test func concurrentResponseRegistrationsCommitOnceAndRemainUncertain() async throws {
+        let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
+        try await persistence.upsertSession(row(id: "response"))
+        let lease = try await persistence.seizeLease(sessionId: "response", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let owner = fence(for: lease)
+        let connection = UUID()
+        let stream = try await persistence.registerV2InboundLedger(sessionId: "response", upstreamSessionId: "u", source: .stdio(connectionID: connection), fence: owner)
+        let request = try await persistence.retainV2Inbound(.init(frame: Data(#"{"jsonrpc":"2.0","id":7,"method":"m"}"#.utf8), connectionID: connection, source: .stdio), to: stream, fence: owner).record
+        let intentID = UUID()
+        let frame = Data(#"{"jsonrpc":"2.0","id":7,"result":null}"#.utf8)
+        let intents = try await withThrowingTaskGroup(of: ACPV2ResponseLedgerReceipt<ACPV2ResponseIntent>.self) { group in
+            for _ in 0..<12 { group.addTask { try await persistence.registerV2ResponseIntent(id: intentID, request: request, in: stream, frame: frame, fence: owner) } }
+            var values: [ACPV2ResponseLedgerReceipt<ACPV2ResponseIntent>] = []
+            for try await value in group { values.append(value) }
+            return values
+        }
+        #expect(intents.filter(\.wasInserted).count == 1)
+        let intent = try #require(intents.first).value
+        let attemptID = UUID()
+        let attempts = try await withThrowingTaskGroup(of: ACPV2ResponseLedgerReceipt<ACPV2ResponseAttempt>.self) { group in
+            for _ in 0..<12 { group.addTask { try await persistence.registerV2ResponseAttempt(id: attemptID, for: intent, operationKey: .init(rawValue: "answer"), fence: owner) } }
+            var values: [ACPV2ResponseLedgerReceipt<ACPV2ResponseAttempt>] = []
+            for try await value in group { values.append(value) }
+            return values
+        }
+        #expect(attempts.filter(\.wasInserted).count == 1)
+        let attempt = try #require(attempts.first).value
+        let observationID = UUID()
+        let observations = try await withThrowingTaskGroup(of: ACPV2ResponseLedgerReceipt<ACPV2ResponseObservation>.self) { group in
+            for _ in 0..<12 { group.addTask { try await persistence.retainV2ResponseObservation(id: observationID, for: attempt, evidence: .uncertain(message: "lost"), fence: owner) } }
+            var values: [ACPV2ResponseLedgerReceipt<ACPV2ResponseObservation>] = []
+            for try await value in group { values.append(value) }
+            return values
+        }
+        #expect(observations.filter(\.wasInserted).count == 1)
+        #expect(observations.allSatisfy { $0.value.sequence == 1 })
+        #expect(try await persistence.loadV2ResponseAttempt(id: attempt.id)?.recovery == .uncertain)
+        _ = try await persistence.seizeLease(sessionId: "response", instanceId: "B", pid: 2, now: 2, leaseToken: "new")
+        await #expect(throws: ACPV2ResponseLedgerError.staleLease) {
+            try await persistence.retainV2ResponseObservation(id: observationID, for: attempt, evidence: .uncertain(message: "lost"), fence: owner)
+        }
+        let reopened = ACPSessionPersistence(path: persistence.path)
+        #expect(try await reopened.loadV2ResponseIntent(id: intent.id) == intent)
+        #expect(try await reopened.loadV2ResponseIntentPage(stream: stream).records == [intent])
+        #expect(try await reopened.loadV2ResponseAttemptPage(intentID: intent.id).records.first?.attempt == attempt)
+        #expect(try await reopened.loadV2ResponseObservationPage(attemptID: attempt.id).records.count == 1)
+    }
+
     @Test func concurrentInboundCopiesCommitOneReceiptWithoutTransportAuthority() async throws {
         let persistence = ACPSessionPersistence(path: temporaryDatabaseURL().path)
         try await persistence.upsertSession(row(id: "inbound"))
