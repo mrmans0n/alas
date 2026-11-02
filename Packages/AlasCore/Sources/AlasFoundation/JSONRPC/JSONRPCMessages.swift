@@ -201,6 +201,16 @@ public struct AnyCodable: Codable, Equatable, Hashable, @unchecked Sendable {
         try c.encode(canonicalValue)
     }
 
+    /// The JSON object `value` holds, with its members unboxed one level.
+    /// Decoded JSON nests `AnyCodable`, which `as? [String: Any]` accepts
+    /// with the members still boxed, so `object["key"] as? String` misses.
+    public static func object(_ value: Any?) -> [String: Any]? {
+        if let value = value as? [String: AnyCodable] { return value.mapValues(\.value) }
+        if let value = value as? [String: Any] { return value }
+        if let value = value as? AnyCodable { return object(value.value) }
+        return nil
+    }
+
     public static func == (lhs: AnyCodable, rhs: AnyCodable) -> Bool {
         lhs.canonicalValue == rhs.canonicalValue
     }

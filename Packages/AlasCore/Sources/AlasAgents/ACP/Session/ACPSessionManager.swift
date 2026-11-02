@@ -8763,7 +8763,7 @@ extension ACPSessionManager {
             else if let replay = surfacedError as? ACPBrokerDurableCompletionReplayError { rpc = replay.outcome.error }
             else { rpc = nil }
             let brokerStderr = rpc?.code == -32074
-                ? (rpc?.data?.value as? [String: Any])?["stderr"] as? String
+                ? AnyCodable.object(rpc?.data)?["stderr"] as? String
                 : nil
             let tail = brokerStderr?.trimmingCharacters(in: .whitespacesAndNewlines) ?? stderrBuffer.tail()
             let authReason = ACPAuthFailure.message(from: surfacedError)
