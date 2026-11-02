@@ -94,7 +94,10 @@ public struct ACPSessionForkSnapshot: Equatable, Sendable {
                 kind = "agent"
                 payload = try JSONEncoder().encode(CopiedTextPayload(
                     messageId: keepsProviderMessageIDs ? message.messageId : nil,
-                    text: message.text
+                    text: message.text,
+                    metadata: message.isSteeringSegment
+                        ? [ACPSessionForkConversationMessage.copiedSteeringSegmentMetadataKey: true]
+                        : nil
                 ))
             }
 
@@ -160,11 +163,13 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
             case .user(_, let text, _, _, _):
                 text.isEmpty ? nil : .init(role: .user, text: text)
             case .agent(let messageId, let text, _, _):
-                // A steering segment holds only part of its adapter message,
-                // and a copy drops the marker that says so: keep no id that a
-                // later fork could target.
+                // A steering segment holds only part of its adapter message:
+                // keep no id that a later fork could target.
                 text.isEmpty ? nil : .init(
-                    role: .agent, text: text, messageId: isSteeringSegment(wire) ? nil : messageId
+                    role: .agent,
+                    text: text,
+                    messageId: isSteeringSegment(wire) ? nil : messageId,
+                    isSteeringSegment: isSteeringSegment(wire)
                 )
             case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid:
                 nil
@@ -224,11 +229,13 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
 
     /// An agent row split by a steering follow-up: the continuation under an
     /// `alas-steering:` id, or the segment before it, which keeps the real id
-    /// but only part of the message's text.
+    /// but only part of the message's text; or either one copied by a fork.
     private static func isSteeringSegment(_ wire: ACPMessageWire) -> Bool {
         guard case let .agent(messageId, _, _, metadata) = wire else { return false }
+        let keys = metadata?.value as? [String: AnyCodable]
         return messageId?.hasPrefix("alas-steering:") == true
-            || (metadata?.value as? [String: AnyCodable])?[ACPSession.steeringContinuationMetadataKey] != nil
+            || keys?[ACPSession.steeringContinuationMetadataKey] != nil
+            || keys?[ACPSessionForkConversationMessage.copiedSteeringSegmentMetadataKey] != nil
     }
 
     @MainActor

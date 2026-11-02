@@ -370,25 +370,26 @@ struct ACPSessionForkPolicyTests {
         ))
     }
 
-    @Test("a copied steering segment keeps no provider id a later fork could target")
-    func copiedSteeringSegmentsDropProviderIDs() throws {
+    @Test("a fork of a copied steering split neither targets nor counts its segments")
+    func copiedSteeringSegmentsStayPartial() throws {
         let (live, stored) = try Self.transcript([
-            .user("q1"), .steeringSplitAgent("a1", "Part"), .user("s"),
-            .agent("alas-steering:\(UUID().uuidString)", "Rest"), .user("q2"), .agent("a2", "Whole"),
+            .user("q1"), .steeringSplitAgent("a1", "Same"), .user("s"),
+            .agent("alas-steering:\(UUID().uuidString)", "Same"), .user("q2"), .agent("a2", "Same"), .user("q3"),
         ])
-        let snapshot = try ACPSessionForkSnapshotResolver.resolve(
-            boundary: try Self.boundary(live, at: 5), liveMessages: live, storedMessages: stored
-        )
+        let copied = try ACPSessionForkSnapshotResolver.resolve(
+            boundary: try Self.boundary(live, at: 6), liveMessages: live, storedMessages: stored
+        ).copiedMessages(targetSessionID: "copy", createdAt: 10, keepsProviderMessageIDs: true)
+        let copiedLive = try copied.map { try ACPMessageCodec.decode(kind: $0.kind, payload: $0.payload) }
 
-        let copied = try snapshot.copiedMessages(targetSessionID: "target", createdAt: 10, keepsProviderMessageIDs: true)
-        let agentIDs = try copied.filter { $0.kind == "agent" }.map { row -> String? in
-            guard case .agent(let messageId, _, _, _) = try ACPMessageWire.decode(kind: row.kind, payload: row.payload) else {
-                return "not an agent row"
-            }
-            return messageId
+        let targets = try [1, 3, 5].map { index in
+            try ACPSessionForkSnapshotResolver.resolve(
+                boundary: try Self.boundary(copiedLive, at: index), liveMessages: copiedLive, storedMessages: copied
+            ).forkPointTarget
         }
 
-        #expect(agentIDs == [nil, nil, "a2"])
+        #expect(targets == [nil, nil, ACPForkPointTarget(
+            messageId: "a2", messageFingerprint: ACPForkPointTarget.fingerprint("Same"), messageOccurrence: 1
+        )])
     }
 
     @Test(

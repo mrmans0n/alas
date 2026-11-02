@@ -132,11 +132,18 @@ public struct ACPSessionForkConversationMessage: Equatable, Sendable {
     public let text: String
     /// The agent's own id for an agent message; nil for user messages.
     public let messageId: String?
+    /// Part of an agent message split by a steering follow-up.
+    public let isSteeringSegment: Bool
 
-    public init(role: Role, text: String, messageId: String? = nil) {
+    /// Marks a copied steering segment, so a later fork of the copy neither
+    /// targets nor counts it as a whole agent message.
+    public static let copiedSteeringSegmentMetadataKey = "_alas/forkCopiedSteeringSegment"
+
+    public init(role: Role, text: String, messageId: String? = nil, isSteeringSegment: Bool = false) {
         self.role = role
         self.text = text
         self.messageId = messageId
+        self.isSteeringSegment = isSteeringSegment
     }
 }
 
@@ -188,10 +195,12 @@ public enum ACPSessionForkSnapshotError: Error, Equatable, Sendable {
 package struct CopiedTextPayload: Codable {
     let messageId: String?
     let text: String
+    let metadata: [String: Bool]?
 
-    public init(messageId: String?, text: String) {
+    public init(messageId: String?, text: String, metadata: [String: Bool]? = nil) {
         self.messageId = messageId
         self.text = text
+        self.metadata = metadata
     }
 }
 
