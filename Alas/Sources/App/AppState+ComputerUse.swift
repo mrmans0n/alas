@@ -137,7 +137,7 @@ extension AppState {
             guard WorktreeVMManager.isSupported else { return .error(VMComputerUseRoute.vmUnsupportedMessage) }
             // A VM running in no Alas is started, then the call continues through the driver gate.
             if let refusal = await autoStartRefusal(
-                worktreeID: worktreeID, guest: guest, sessionID: sessionID, autoStarted: autoStarted
+                worktreeID: worktreeID, guest: guest, sessionID: sessionID, call: .computer, autoStarted: autoStarted
             ) {
                 return .error(refusal)
             }
@@ -236,7 +236,8 @@ extension AppState {
             return .error(VMComputerUseRoute.vmAmbiguousMessage)
         case .vmNotRunning(let worktreeID, let guest):
             if let refusal = await autoStartRefusal(
-                worktreeID: worktreeID, guest: guest, sessionID: sessionID, autoStarted: autoStarted
+                worktreeID: worktreeID, guest: guest, sessionID: sessionID,
+                call: .vmRun(timeoutSeconds: timeoutSeconds), autoStarted: autoStarted
             ) {
                 return .error(refusal)
             }
@@ -273,6 +274,8 @@ extension AppState {
         VMAutoStarter(
             start: { [vmManager] in try await vmManager.startVM(worktreeID: $0, guest: $1) },
             startPausing: { [vmManager] in _ = try await vmManager.startVM(worktreeID: $0, pausing: $1) },
+            isStarting: { [vmManager] in vmManager.isStarting($0) },
+            isRunning: { [vmManager] in vmManager.running($0, guest: $1) != nil },
             helperAnswers: { [vmManager] worktreeID, guest in
                 // A VM stopped meanwhile has nothing to wait for; the call then gets the stopped error.
                 guard let client = vmManager.guestClient(for: worktreeID, guest: guest) else { return true }
@@ -283,13 +286,13 @@ extension AppState {
     }
 
     /// Why a call to a VM that isn't running here can't go on, or nil once this call started it.
-    /// A VM another Alas runs keeps today's error; a call whose earlier pass already started the
-    /// VM and still finds it stopped is told to try again rather than starting it twice.
+    /// A VM another Alas runs keeps today's error, and so does one that stopped again while this
+    /// call started it: a second start isn't tried.
     private func autoStartRefusal(
-        worktreeID: String, guest: VMGuestOS, sessionID: String, autoStarted: Bool
+        worktreeID: String, guest: VMGuestOS, sessionID: String, call: VMAutoStartCall, autoStarted: Bool
     ) async -> String? {
         let notRunning = guest == .linux ? VMComputerUseRoute.linuxVMNotRunningMessage : VMComputerUseRoute.vmNotRunningMessage
-        if autoStarted { return VMAutoStartMessages.starting }
+        if autoStarted { return notRunning }
         if vmStoppedSessions.contains(sessionID) || computerUse.isStopped(sessionID: sessionID) {
             return ComputerUseCoordinator.stoppedMessage
         }
@@ -298,15 +301,16 @@ extension AppState {
         case .runningElsewhere, .refuse:
             return notRunning
         case .start:
-            return await autoStart(recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest), guest: guest, sessionID: sessionID)
-                .refusal
+            return await autoStart(
+                recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest), guest: guest, sessionID: sessionID, call: call
+            ).refusal
         }
     }
 
     /// Starts VM `recordID` for a call of `sessionID`, or joins its start, and waits for it.
-    func autoStart(recordID: String, guest: VMGuestOS, sessionID: String) async -> AutoStartResult {
+    func autoStart(recordID: String, guest: VMGuestOS, sessionID: String, call: VMAutoStartCall) async -> AutoStartResult {
         await vmAutoStarter.autoStart(
-            worktreeID: VMIdentity.parse(recordID: recordID).worktree, guest: guest, sessionID: sessionID
+            worktreeID: VMIdentity.parse(recordID: recordID).worktree, guest: guest, sessionID: sessionID, call: call
         )
     }
 

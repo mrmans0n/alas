@@ -67,6 +67,8 @@ final class WorktreeVMManager {
     @ObservationIgnored var worktreePath: (String) -> URL? = { _ in nil }
     /// Called with a VM's registry id once it stopped here, however it stopped.
     @ObservationIgnored var onVMStopped: (String) -> Void = { _ in }
+    /// Called with a VM's registry id when a delete of it is accepted, before it runs.
+    @ObservationIgnored var onVMDeleted: (String) -> Void = { _ in }
     /// The guest helper and its installer, shared read-only with every macOS VM.
     @ObservationIgnored private let helperDirectory: URL?
     /// The Linux guest helper, shared read-only with every Linux VM.
@@ -495,6 +497,7 @@ final class WorktreeVMManager {
             logger.error("Not deleting VM \(worktreeID, privacy: .public): its disk is attached for an update")
             return "its disk is attached for an update; try again once that finishes"
         }
+        onVMDeleted(worktreeID)
         if starting.contains(worktreeID) {
             pendingAfterBoot[worktreeID] = .delete
             return nil

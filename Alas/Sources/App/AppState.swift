@@ -1884,6 +1884,7 @@ final class AppState {
             self?.projectAndWorktree(withWorktreeId: worktreeID)?.worktree.path
         }
         vmManager.onVMStopped = { [weak self] recordID in self?.vmStopped(recordID: recordID) }
+        vmManager.onVMDeleted = { [weak self] recordID in self?.vmAutoStarter.dismiss(recordID: recordID) }
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
             await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
         }
