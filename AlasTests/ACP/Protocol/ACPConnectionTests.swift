@@ -265,7 +265,7 @@ struct ACPConnectionTests {
                 #expect(target["messageOccurrence"] as? Int == 2)
                 #expect(target.count == 3)
             } else {
-                #expect(meta?["forkPoint"] == nil)
+                #expect(json["_meta"] == nil)
             }
             return Data(#"{"sessionId":"f","_meta":{"forkPoint":{"boundary":"turn","messageId":"i1","turnId":"t1","lastItemId":"i2","matchedBy":"fingerprint"}}}"#.utf8)
         }
