@@ -170,6 +170,8 @@ extension AppState {
                     return .error(ComputerUseCoordinator.stoppedMessage)
                 }
             }
+            // A hand back's resume and turnEnded go out before any new call to the VM.
+            await vmHandingBack[recordID]?.value
             // A refused call didn't drive the VM, so it is neither recorded nor told about lifecycles.
             if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
                 return .error(refusal)
@@ -268,6 +270,7 @@ extension AppState {
             // Connects before the take-over check: a `run` carries no session, so no stop can
             // reach it, and it must not go out once the user took over during the handshake.
             _ = try? await client.hello()
+            await vmHandingBack[recordID]?.value
             if let refusal = VMTakeOvers.refusal(action: nil, driver: vmDriver(recordID: recordID)) {
                 return .error(refusal)
             }
@@ -281,6 +284,8 @@ extension AppState {
             defer { vmRuns[recordID]?[token] = nil }
             do {
                 let result = try await withTaskCancellationHandler { try await run.value } onCancel: { run.cancel() }
+                // A take over cancels the run, and the guest still answers with its result.
+                if vmTakenOver.contains(recordID) { return .error(VMAutoStartMessages.userDriving) }
                 return .text([VMComputerUseRoute.runReply(result)])
             } catch {
                 if vmTakenOver.contains(recordID) { return .error(VMAutoStartMessages.userDriving) }
@@ -470,12 +475,20 @@ extension AppState {
             vmPendingResumes[message.sessionID, default: []].insert(recordID)
         }
         let client = vmManager.existingGuestClient(for: recordID)
-        // One task, so each session's resume reaches the guest before its turnEnded.
-        Task {
+        // One task, so each session's resume reaches the guest before its turnEnded. New calls to
+        // the VM wait for it, so a late turnEnded can't clear what they just read.
+        let previous = vmHandingBack[recordID]
+        let cleanup = Task {
+            await previous?.value
             for message in events {
                 let sent = await client?.lifecycle(message.event, sessionID: message.sessionID) ?? false
                 if message.event == .resume, sent { resumeTold(message.sessionID, recordID) }
             }
+        }
+        vmHandingBack[recordID] = cleanup
+        Task {
+            await cleanup.value
+            if vmHandingBack[recordID] == cleanup { vmHandingBack[recordID] = nil }
         }
     }
 

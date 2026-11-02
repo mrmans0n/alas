@@ -349,6 +349,8 @@ final class AppState {
     /// The `vm_run` commands in flight on each VM, by registry id, so a take over can cancel them:
     /// a `run` carries no session, so no lifecycle stop reaches it.
     @ObservationIgnored var vmRuns: [String: [UUID: Task<VMGuestRunResult, any Error>]] = [:]
+    /// A hand back's lifecycle cleanup still going out, by registry id; new calls wait for it.
+    @ObservationIgnored var vmHandingBack: [String: Task<Void, Never>] = [:]
     /// The clock VM driving is read with; tests replace it.
     @ObservationIgnored var vmNow: () -> Date = Date.init
     /// Starts a stopped worktree VM for agent calls and holds its slot cards. Observable itself.
