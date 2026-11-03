@@ -40,14 +40,17 @@ extension AppState {
     /// A VM started here. A new VM's first boot runs the project's guest setup script, then takes
     /// its clean point. An auto-started VM gets it too.
     func vmStarted(recordID: String) {
+        // The VM started again after all: a failed restart is no longer news.
+        if case .notRestarted = vmCleanPointIssues[recordID] { vmCleanPointIssues[recordID] = nil }
         guard WorktreeVMManager.runsFirstBootSetup(
             recordID: recordID, firstBootPending: vmManager.isFirstBootPending(recordID: recordID),
             setupRunning: vmSetupScriptsRunning.contains(recordID), setupFailed: vmSetupFailures[recordID] != nil
         ) else { return }
         // Claimed before the start returns, so an agent call that started the VM is refused until
         // the setup is done rather than racing the script.
-        vmSetupScriptsRunning.insert(recordID)
-        Task { await runVMSetup(recordID: recordID, claimed: true) }
+        let run = UUID()
+        vmSetupRuns[recordID] = run
+        Task { await runVMSetup(recordID: recordID, claimed: run) }
     }
 
     /// The project's guest setup script for VM `recordID`'s worktree; nil without one.
@@ -57,15 +60,17 @@ extension AppState {
 
     /// Runs the project's setup script in VM `recordID` and takes its clean point on success: on
     /// its first boot, where a script that already succeeded isn't run again, and for the tab's
-    /// "Run again" and "Run the new setup script" (`rerunScript`). `claimed` when the caller
-    /// already put it in `vmSetupScriptsRunning`.
-    func runVMSetup(recordID: String, rerunScript: Bool = false, claimed: Bool = false) async {
-        guard claimed || vmSetupScriptsRunning.insert(recordID).inserted else { return }
-        defer { vmSetupScriptsRunning.remove(recordID) }
+    /// "Run again" and "Run the new setup script" (`rerunScript`). `claimed` is the run the caller
+    /// already put in `vmSetupRuns`.
+    func runVMSetup(recordID: String, rerunScript: Bool = false, claimed: UUID? = nil) async {
+        guard let run = claimed ?? beginVMSetupRun(recordID) else { return }
+        defer { endVMSetupRun(recordID, run) }
         let script = vmGuestSetupScript(recordID: recordID)
         let succeeded = !rerunScript && vmSetupScriptSucceeded[recordID] == VMCleanPoint.scriptHash(script)
         vmCleanPointIssues.removeValue(forKey: recordID)
         let outcome = await makeVMFirstBootSetup().run(recordID: recordID, script: script, scriptSucceeded: succeeded)
+        // The VM stopped during the run, and maybe started again with a run of its own.
+        guard vmSetupRuns[recordID] == run else { return }
         switch outcome {
         case .cleanPointTaken:
             vmCleanPointTaken(recordID: recordID)
@@ -91,8 +96,8 @@ extension AppState {
     /// without running the script, after the script that last succeeded in the VM, if any.
     /// `setupScriptHash` is the clean point's otherwise.
     func saveVMCleanPoint(recordID: String, setupScriptHash: String?) async throws {
-        guard vmSetupScriptsRunning.insert(recordID).inserted else { return }
-        defer { vmSetupScriptsRunning.remove(recordID) }
+        guard let run = beginVMSetupRun(recordID) else { return }
+        defer { endVMSetupRun(recordID, run) }
         let vm = VMIdentity.parse(recordID: recordID)
         vmCleanPointIssues.removeValue(forKey: recordID)
         let hash = vmSetupScriptSucceeded[recordID] ?? setupScriptHash
@@ -104,6 +109,19 @@ extension AppState {
             return
         }
         vmCleanPointTaken(recordID: recordID)
+    }
+
+    /// Starts a setup run for VM `recordID`; nil while one is going.
+    private func beginVMSetupRun(_ recordID: String) -> UUID? {
+        guard vmSetupRuns[recordID] == nil else { return nil }
+        let run = UUID()
+        vmSetupRuns[recordID] = run
+        return run
+    }
+
+    /// Ends setup run `run`, unless a stop already released it for a later one.
+    private func endVMSetupRun(_ recordID: String, _ run: UUID) {
+        if vmSetupRuns[recordID] == run { vmSetupRuns[recordID] = nil }
     }
 
     private func vmCleanPointTaken(recordID: String) {

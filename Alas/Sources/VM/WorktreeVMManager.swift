@@ -1140,7 +1140,16 @@ final class WorktreeVMManager {
     /// Starts VM `id` again after a disk operation that stopped it. `done` says what succeeded,
     /// for when it can't start.
     private func startAgain(_ id: String, done: String) async throws {
-        switch try await startRecorded(id: id, ensureRecord: nil, insideDiskOperation: true) {
+        let outcome: VMStartOutcome
+        do {
+            outcome = try await startRecorded(id: id, ensureRecord: nil, insideDiskOperation: true)
+        } catch let error as RestartFailed {
+            throw error
+        } catch {
+            // What the disk operation did still holds: only the start failed.
+            throw RestartFailed(message: "\(done), but the VM couldn't start again: \(error.localizedDescription)")
+        }
+        switch outcome {
         case .running:
             return
         case .runningElsewhere(let label):

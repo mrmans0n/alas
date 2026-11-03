@@ -356,9 +356,12 @@ final class AppState {
     /// The last key or mouse event that reached each VM's screen, by registry id, for the idle
     /// sweep. Written at most once a second per VM.
     @ObservationIgnored var vmLastUserInput: [String: Date] = [:]
-    /// VMs running their project's guest setup script and taking their clean point, by registry
-    /// id; they never idle-pause. Observed so a VM tab shows it.
-    var vmSetupScriptsRunning: Set<String> = []
+    /// The setup run (its project's guest setup script, then its clean point) each VM is in, by
+    /// registry id. A stop releases it, so a run that outlives its VM publishes nothing into the
+    /// VM started after it. Observed so a VM tab shows it.
+    var vmSetupRuns: [String: UUID] = [:]
+    /// VMs in a setup run; they never idle-pause.
+    var vmSetupScriptsRunning: Set<String> { Set(vmSetupRuns.keys) }
     /// VMs whose project setup script failed, by registry id, with its exit code: nil when it
     /// timed out or its run failed. Cleared once the clean point is taken.
     var vmSetupFailures: [String: Int32?] = [:]

@@ -501,6 +501,8 @@ extension AppState {
 
     /// VM `recordID` stopped here: whoever drove it, it is idle now.
     func vmStopped(recordID: String) {
+        // A setup run that outlives its VM publishes nothing; the next start gets its own.
+        vmSetupRuns[recordID] = nil
         vmTakeOvers.vmStopped(recordID)
         vmLastAgentCall[recordID] = nil
         vmLastUserInput[recordID] = nil

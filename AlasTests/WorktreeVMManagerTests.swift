@@ -97,6 +97,8 @@ final class WorktreeVMManagerTests {
         var supportsSaveRestore = true
         var saveFails = false
         var restoreFails = false
+        /// Boots from this count on throw, like a configuration that no longer validates.
+        var bootsFailFrom: Int?
         let bootGate = Gate()
         let stopGate = Gate()
         let saveGate = Gate()
@@ -107,6 +109,7 @@ final class WorktreeVMManagerTests {
         func boot(_ worktreeID: String, restoringFrom state: URL? = nil) async throws -> RunningVM {
             boots += 1
             await bootGate.passIfArmed()
+            if let bootsFailFrom, boots >= bootsFailFrom { throw HypervisorFailure() }
             let vm = RunningVM(
                 worktreeID: worktreeID,
                 machine: FakeMachine(hypervisor: self, stopFails: stopFails, guestStopError: guestStopError),
@@ -972,6 +975,21 @@ final class WorktreeVMManagerTests {
         #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
         #expect(manager.running("/repo/a") != nil)
         #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+    }
+
+    /// A boot that throws after the clean point is written is a failed restart, not a failed
+    /// clean point: the clean point stays.
+    @Test func aRestartThatThrowsAfterTheCleanPointIsAFailedRestart() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        hypervisor.bootsFailFrom = 2
+
+        await #expect(throws: WorktreeVMManager.RestartFailed.self) {
+            try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        }
+        #expect(FileManager.default.fileExists(atPath: cleanDirectory(bundle).appendingPathComponent("disk.img").path))
+        #expect(manager.cleanPoint(recordID: "/repo/a") != nil)
     }
 
     /// A paused VM's clean point is its disk and saved state, taken without booting it. A stopped
