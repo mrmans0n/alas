@@ -523,6 +523,29 @@ public final class ACPBrokerClient: ACPRequestHandoffPreparing, ACPV2PromptSendi
         } onCancel: { gate.invalidate() }
     }
 
+    public func claimV2Bootstrap(opened: ACPBrokerOpenResult) async throws -> ACPV2BootstrapClaim {
+        guard let raw = rawTransport else { throw ACPV2BootstrapClaimError.unavailable }
+        return try await raw.claimBootstrap(opened: opened)
+    }
+
+    public func sendV2Bootstrap(_ value: ACPV2BootstrapRequest, claim: ACPV2BootstrapClaim,
+        operationKey: String?, authorize: @escaping @Sendable () -> Bool) async throws -> ACPResponse {
+        guard let raw = rawTransport, let operationKey, !operationKey.isEmpty else { throw ACPV2BootstrapClaimError.unavailable }
+        let request = value.request(operationKey: operationKey)
+        return try await raw.send(method: request.method, params: ACPBrokerJSONValue(encodable: request.params), operationKey: operationKey,
+            bootstrapClaim: claim, before: { _ in
+                try Task.checkCancellation()
+                try claim.check()
+                guard authorize() else { throw ACPV2BootstrapClaimError.invalidated }
+                try claim.check()
+            }, handoff: {
+                try Task.checkCancellation()
+                try claim.check()
+                guard authorize() else { throw ACPV2BootstrapClaimError.invalidated }
+                try claim.check()
+            })
+    }
+
     public func send(_ request: ACPRequest) async throws -> ACPResponse {
         try await send(request, onRequestHandoff: {})
     }

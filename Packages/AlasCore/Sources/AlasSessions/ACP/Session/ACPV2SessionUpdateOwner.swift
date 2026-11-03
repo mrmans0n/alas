@@ -147,6 +147,16 @@ public final class ACPV2SessionUpdateOwner {
         observationContinuation = updates.continuation
     }
 
+    /// A fresh-session default precedes ingress and cannot overwrite an event.
+    public func establishFreshSessionDefault() throws {
+        guard !started, status == .idle else { throw Failure.invalidAttachment }
+        let event = try ACPV2SessionUpdateEnvelope(rawValue: .object([
+            "sessionId": .string(state.context.sessionID),
+            "update": .object(["sessionUpdate": .string("state_update"), "state": .string("idle")]),
+        ]))
+        _ = try state.apply(event, source: .setupDefault, context: state.context)
+    }
+
     @discardableResult
     public func start(_ deliveries: AsyncStream<ACPV2SessionUpdateDelivery>) -> Bool {
         guard !started, status != .stopped else { return false }

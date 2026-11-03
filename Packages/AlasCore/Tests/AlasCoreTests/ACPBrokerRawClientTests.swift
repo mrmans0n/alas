@@ -166,6 +166,91 @@ struct ACPBrokerRawClientTests {
         #expect(await service.closeCount == 0)
     }
 
+    @Test(arguments: ["fresh", "adopted", "cached", "prior", "forged", "invalidated-at-handoff"])
+    func freshBootstrapRequiresTheConcreteClientsUnusedNewSupervisor(reason: String) async throws {
+        let service = RawBrokerFixture(cached: reason == "cached")
+        await service.setFreshBootstrap(reason != "adopted")
+        let client = makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        if reason == "prior" { _ = try await client.send(.init(method: "initialize", brokerOperationKey: "prior")) }
+        let supplied = reason == "forged" ? ACPBrokerOpenResult(snapshot: opened.snapshot, adopted: true) : opened
+        if reason == "fresh" || reason == "invalidated-at-handoff" {
+            let claim = try await client.claimV2Bootstrap(opened: supplied)
+            await #expect(throws: (any Error).self) { try await client.claimV2Bootstrap(opened: supplied) }
+            #expect(opened.snapshot.journalTail.rawValue > 0)
+            if reason == "invalidated-at-handoff" {
+                let checks = Mutex(0)
+                await #expect(throws: (any Error).self) {
+                    try await client.sendV2Bootstrap(.initialize(.init(info: .init(name: "alas", version: "test"))), claim: claim,
+                        operationKey: "initialize", authorize: {
+                            let count = checks.withLock { $0 += 1
+                            return $0 }
+                            if count == 2 { claim.invalidate() }
+                            return true
+                        })
+                }
+            }
+        } else { await #expect(throws: (any Error).self) { try await client.claimV2Bootstrap(opened: supplied) } }
+        #expect(await service.sentRequests.count == (reason == "prior" ? 1 : 0))
+    }
+
+    @MainActor
+    @Test func freshBrokerBootstrapInstallsQueuedTrafficWithoutCrossingItsAckPrefix() async throws {
+        let bytes = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"running"}}}"#.utf8)
+        let service = RawBrokerFixture(pending: true, rawBytes: bytes)
+        await service.setFreshBootstrap(true)
+        let client = makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("bootstrap-broker-\(UUID()).sqlite").path)
+        var row = ACPSessionRow(id: "s", agentId: "fixture", title: "Bootstrap", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false)
+        row.acpBrokerId = "raw"
+        row.acpBrokerGeneration = 7
+        row.acpBrokerAcknowledgedCursor = 0
+        row.acpBrokerWireContextJSON = try ACPBrokerWireContext.rawV2.persistedJSON()
+        try await persistence.upsertSession(row)
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let fence = ACPSessionLeaseFence(sessionId: "s", ownerInstance: "A", token: "owner")
+        let updates = RuntimeUpdateGate(base: persistence, operation: .append)
+        var offers: [ACPV2AttachmentRuntime.Request] = []
+        let bootstrap = try await ACPV2SessionBootstrap(attachment: .init(brokerClient: client, opened: opened), fence: fence,
+            persistence: persistence, deadline: .now.advanced(by: .seconds(60)), journals: .init(persistence: persistence, updates: updates),
+            isCurrent: { true }, onRequest: { offers.append($0) })
+        defer { bootstrap.stop()
+        Task { await updates.release() } }
+        _ = try await bootstrap.initialize(operationKey: "initialize")
+        #expect(await service.acks.isEmpty)
+        let installed = try await bootstrap.createSession(.init(cwd: "/w", mcpServers: []), operationKey: "new")
+        try await eventually { await updates.entered }
+        try await eventually { await MainActor.run { offers.count == 1 } }
+        #expect(await service.acks.allSatisfy { $0 <= 1 })
+        #expect(try await persistence.loadSession(id: "s")?.remoteSessionId == "upstream")
+        await updates.release()
+        try await client.replayRawBrokerEvents()
+        try await eventually { await service.acks.last == 4 }
+        #expect(installed.runtime.state.lifecycle.lastForegroundCompletion == nil)
+        #expect(try await installed.runtime.respond(to: #require(offers.first), intentID: UUID(), attemptID: UUID(), operationKey: .init(rawValue: "answer"), frame: Data(#"{"jsonrpc":"2.0","id":"p","result":null}"#.utf8)).value.fact == .broker(.written))
+        #expect(await service.sentRequests.map(\.operationKey.rawValue) == ["initialize", "new"])
+        #expect(await service.closeCount == 0)
+    }
+
+    @MainActor
+    @Test func bootstrapRejectsADifferentLocalSessionBeforeSendingInitialize() async throws {
+        let service = RawBrokerFixture()
+        await service.setFreshBootstrap(true)
+        let client = makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        let persistence = try await ACPV2SessionBootstrapTests.persistence()
+        let attachment = try await ACPV2SessionBootstrap.Attachment(brokerClient: client, opened: opened)
+        #expect(throws: (any Error).self) {
+            try ACPV2SessionBootstrap(attachment: attachment, fence: ACPV2SessionBootstrapTests.fence,
+                persistence: persistence, deadline: .now.advanced(by: .seconds(60)), isCurrent: { true }, onRequest: { _ in })
+        }
+        #expect(await service.sentRequests.isEmpty)
+    }
+
     @Test func brokerExitWithoutAdapterFrameSurfacesItsRecoveryDiagnostic() async throws {
         let diagnostic = "Bun runtime is unsupported. Please upgrade: bun upgrade"
         let rpc = JSONRPCError(code: -32074, message: "adapter stdout closed before a response was observed",
@@ -872,6 +957,8 @@ struct ACPBrokerRawClientTests {
 }
 
 private actor RawBrokerFixture: ACPBrokerServicing {
+    private var freshBootstrap = false
+    func setFreshBootstrap(_ value: Bool) { freshBootstrap = value }
     static let first = Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"opaque":1e999}}"#.utf8)
     static let error = Data(#"{"jsonrpc":"2.0","id":9,"error":{"code":-32044,"message":"rejected","data":{"kind":"codex_hook_review_required","opaque":1e999}}}"#.utf8)
     private var shouldFailAttach = false
@@ -978,7 +1065,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         if delayOpen { var gate = openGate.stream.makeAsyncIterator()
         _ = await gate.next() }
         #expect(params.wireContext == .rawV2 || params.wireContext == nil)
-        return .init(snapshot: snapshot(), adopted: true)
+        return .init(snapshot: snapshot(), adopted: !freshBootstrap)
     }
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
         if shouldFailAttach { shouldFailAttach = false
@@ -1011,6 +1098,11 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         value.rawFrame = .init(bytes: isError ? Self.error : Data(#"{"jsonrpc":"2.0","id":9,"result":null}"#.utf8))
         if let acceptedMessageID {
             value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{\"messageId\":\"\(acceptedMessageID)\"}}".utf8))
+        }
+        if freshBootstrap {
+            if outcome != nil { completionCursor += 1 }
+            let result = params.method == "initialize" ? #"{"protocolVersion":2,"info":{"name":"fixture","version":"1"},"capabilities":{"session":{}}}"# : #"{"sessionId":"upstream"}"#
+            value.rawFrame = .init(bytes: Data("{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":\(result)}".utf8))
         }
         outcome = value
         if replaceHookDuringSend {
