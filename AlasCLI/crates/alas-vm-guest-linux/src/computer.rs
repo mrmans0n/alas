@@ -103,6 +103,7 @@ mod message {
     pub const UNAVAILABLE: &str = "computer_unavailable: Cua Driver isn't running in this VM.";
     /// Linux only: appended to a foreground failure while the screen locker shows.
     pub const SCREEN_LOCKED: &str = "The Linux VM's screen is locked.";
+    pub const REF_TYPING_CUT_SHORT: &str = "In this Linux VM, text beyond ASCII typed into a ref can be cut short: fix the field, then click it and type the rest without a ref.";
     pub const FOREGROUND_UNAVAILABLE: &str =
         "The window couldn't be brought to the front, so no input was sent.";
 
@@ -686,6 +687,11 @@ impl<D: Driver> Computer<D> {
             .or(params.name.as_ref())
             .cloned()
             .unwrap_or_default();
+        // A running app is opened already: launching again hands it to D-Bus activation, which
+        // opens a new document in it and, with no new window, fails.
+        if let Some(open) = self.running_app(call, &target)? {
+            return Ok(open);
+        }
         let launched = self.cua(
             call,
             "launch_app",
@@ -737,6 +743,27 @@ impl<D: Driver> Computer<D> {
             "version": 1,
             "app": app.json(),
             "windows": windows.iter().map(Window::entry).collect::<Vec<_>>(),
+        }))
+    }
+
+    /// `open_app`'s answer for a running app named `target` (name or bundle id) with a window.
+    fn running_app(&mut self, call: &Call, target: &str) -> Result<Option<Value>, String> {
+        let listed = self.list_apps(call)?;
+        let matches = |app: &Value, key: &str| {
+            str_field(app, key).is_some_and(|value| value.eq_ignore_ascii_case(target))
+        };
+        let found = listed["apps"].as_array().into_iter().flatten().find(|app| {
+            (matches(app, "bundle_id") || matches(app, "name"))
+                && app["windows"]
+                    .as_array()
+                    .is_some_and(|windows| !windows.is_empty())
+        });
+        Ok(found.map(|app| {
+            let mut identity = app.clone();
+            let object = identity.as_object_mut().expect("an app is an object");
+            let windows = object.remove("windows").unwrap_or_default();
+            object.remove("approval");
+            json!({"version": 1, "app": identity, "windows": windows})
         }))
     }
 
@@ -947,6 +974,7 @@ impl<D: Driver> Computer<D> {
                         (at, kind, "ax")
                     }
                 };
+
                 // Chunks keep each call short, and a stop takes effect between them.
                 for (index, chunk) in type_chunks(&text).enumerate() {
                     if index > 0 {
@@ -959,7 +987,13 @@ impl<D: Driver> Computer<D> {
                     if params.reference.is_none() {
                         args = foreground(args);
                     }
-                    self.cua(call, "type_text", args, timeout, kind)?;
+                    let typed = self.cua(call, "type_text", args, timeout, kind)?;
+                    if let Some(readback) = cut_short(&typed, chunk) {
+                        return Err(message::action_failed(&format!(
+                            "Only part of the text reached the field, which now reads \"{readback}\". {}",
+                            message::REF_TYPING_CUT_SHORT
+                        )));
+                    }
                 }
                 Ok(delivery)
             }
@@ -1084,7 +1118,9 @@ impl<D: Driver> Computer<D> {
             .ok_or_else(|| message::stale(reference, window_id))
     }
 
-    /// The window's latest screenshot, if the window hasn't moved or resized since.
+    /// The window's latest screenshot, if the window hasn't moved or resized since. Cua keeps one
+    /// capture per window and every `get_window_state` replaces it, reads included, so the pixels
+    /// are tied to a capture taken now; one whose frame or size differs means the window changed.
     fn shot(&mut self, call: &Call, window: &Window) -> Result<Shot, String> {
         let shot = self
             .session(&call.session)
@@ -1095,7 +1131,17 @@ impl<D: Driver> Computer<D> {
         if shot.window_bounds != window.bounds {
             return Err(message::screenshot_moved(window.id));
         }
-        Ok(shot)
+        let (now, _, _) = self.capture(call, window, false)?;
+        if now.window_bounds != shot.window_bounds
+            || now.width != shot.width
+            || now.height != shot.height
+        {
+            return Err(message::screenshot_moved(window.id));
+        }
+        Ok(Shot {
+            capture_id: now.capture_id,
+            ..shot
+        })
     }
 
     /// x/y in pixels of the window's latest screenshot, passed on unchanged.
@@ -1407,6 +1453,19 @@ fn named_key(name: &str) -> Option<&'static str> {
         "f12" => "F12",
         _ => return None,
     })
+}
+
+/// What the field reads after Cua's targeted insert of `chunk` beyond ASCII left only part of it:
+/// GTK takes the length Cua passes, a character count, as bytes. Cua says so only in its text.
+fn cut_short<'a>(typed: &'a CuaResult, chunk: &str) -> Option<&'a str> {
+    const BEFORE: &str = "The element reads back '";
+    const AFTER: &str = "', which does not contain the typed text";
+    if chunk.is_ascii() {
+        return None;
+    }
+    let start = typed.text.find(BEFORE)? + BEFORE.len();
+    let end = start + typed.text[start..].rfind(AFTER)?;
+    Some(&typed.text[start..end])
 }
 
 /// Cua's `scroll.amount` is 1…50 steps: a larger delta goes as several scrolls.
@@ -1851,11 +1910,19 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn xy_click_passes_pixels_and_capture_id_in_foreground() {
+    fn xy_click_passes_pixels_and_a_fresh_capture_id_in_foreground() {
+        // Any read replaces Cua's capture, so the click goes with one taken just before it.
+        let fresh = fixture_with("gws_screenshot", |result| {
+            result["structuredContent"]["capture_id"] = json!("capture_fresh");
+        });
         let fake = Fake::mousepad();
         fake.script(
             "get_window_state",
-            vec![fixture("gws_screenshot"), fixture("gws_elements_query")],
+            vec![
+                fixture("gws_screenshot"),
+                fresh,
+                fixture("gws_elements_query"),
+            ],
         );
         fake.script("click", vec![fixture("click_xy_fg")]);
         let mut computer = new_computer(&fake);
@@ -1873,7 +1940,7 @@ pub(crate) mod tests {
             fake.calls("click"),
             vec![json!({
                 "pid": PID, "window_id": WINDOW, "x": 200.0, "y": 150.0,
-                "capture_id": "capture_313c65c3bd684ff3a36a01314d81d37b_0000000000000000",
+                "capture_id": "capture_fresh",
                 "button": "right", "count": 2, "delivery_mode": "foreground",
             })]
         );
@@ -1895,6 +1962,22 @@ pub(crate) mod tests {
                 result["structuredContent"]["windows"][0]["bounds"]["width"] = json!(800);
             })],
         );
+        assert_eq!(error(&computer.perform(SESSION, &click)), moved);
+        assert!(fake.calls("click").is_empty());
+
+        // The capture taken for the click shows another frame.
+        let fake = Fake::mousepad();
+        fake.script(
+            "get_window_state",
+            vec![
+                fixture("gws_screenshot"),
+                fixture_with("gws_screenshot", |result| {
+                    result["structuredContent"]["window_bounds"]["width"] = json!(800);
+                }),
+            ],
+        );
+        let mut computer = new_computer(&fake);
+        screenshot(&mut computer);
         assert_eq!(error(&computer.perform(SESSION, &click)), moved);
         assert!(fake.calls("click").is_empty());
 
@@ -1960,7 +2043,11 @@ pub(crate) mod tests {
         let fake = Fake::mousepad();
         fake.script(
             "get_window_state",
-            vec![fixture("gws_screenshot"), fixture("gws_elements_query")],
+            vec![
+                fixture("gws_screenshot"),
+                fixture("gws_screenshot"),
+                fixture("gws_elements_query"),
+            ],
         );
         fake.script("scroll", vec![fixture("scroll_fg")]);
         let mut computer = new_computer(&fake);
@@ -2022,6 +2109,52 @@ pub(crate) mod tests {
         assert_eq!(inputs, ["hotkey", "type_text"]);
         assert_eq!(fake.calls("hotkey"), vec![select_all]);
         assert_eq!(fake.calls("type_text"), vec![typed]);
+    }
+
+    /// GTK cuts Cua's targeted insert of text beyond ASCII short; the field's readback shows it.
+    #[test]
+    fn ref_typing_cut_short_is_an_error() {
+        for (text, readback, cut) in [
+            ("héllo ✓ from Alas", "héllo ✓ from A", true),
+            ("hello", "hel", false),
+            ("héllo", "héllo", false),
+        ] {
+            let fake = Fake::mousepad();
+            fake.script("get_window_state", vec![fixture("gws_elements")]);
+            let confirmed = readback.contains(text);
+            fake.script(
+                "type_text",
+                vec![fixture_with("type_fg", |result| {
+                    if !confirmed {
+                        let said = format!("The element reads back '{readback}', which does not contain the typed text; confirm with get_window_state.");
+                        let content = result["content"].as_array_mut().unwrap();
+                        content.push(json!({"type": "text", "text": said}));
+                    }
+                })],
+            );
+            let mut computer = new_computer(&fake);
+            inspect(&mut computer, None);
+
+            let response = computer.perform(
+                SESSION,
+                &request(
+                    "type",
+                    json!({"window_id": WINDOW, "ref": "e7", "text": text}),
+                ),
+            );
+
+            if cut {
+                assert_eq!(
+                    error(&response),
+                    format!(
+                        "computer_action_failed: Only part of the text reached the field, which now reads \"{readback}\". {}",
+                        message::REF_TYPING_CUT_SHORT
+                    )
+                );
+            } else {
+                assert_eq!(payload(&response)["delivery"], "ax", "{text}");
+            }
+        }
     }
 
     /// Long text goes in calls of at most 256 characters, never splitting an accent from its
@@ -2129,46 +2262,57 @@ pub(crate) mod tests {
         );
     }
 
+    /// A new app's window is waited for; a running app's windows come back without a launch,
+    /// which would open a new document in it.
     #[test]
-    fn open_app_waits_for_a_window() {
-        let fake = Fake::mousepad();
-        fake.script("launch_app", vec![fixture("launch_app_mousepad")]);
-        fake.script(
-            "list_windows",
-            vec![
-                fixture_with("list_windows_mousepad", |result| {
-                    result["structuredContent"]["windows"] = json!([]);
-                }),
-                fixture("list_windows_mousepad"),
-            ],
-        );
-        let mut computer = new_computer(&fake);
-
-        let opened = payload(&computer.perform(
-            SESSION,
-            &request("open_app", json!({"bundle_id": "org.xfce.mousepad"})),
-        ));
-
-        assert_eq!(
-            fake.calls("launch_app"),
-            vec![json!({"name": "org.xfce.mousepad"})]
-        );
-        assert_eq!(
-            fake.calls("list_windows"),
-            vec![json!({"pid": PID}), json!({"pid": PID})]
-        );
-        assert_eq!(
-            opened,
-            json!({
-                "version": 1,
-                "app": mousepad_app(),
-                "windows": [{
-                    "window_id": WINDOW,
-                    "frame": {"x": 736.0, "y": 780.0, "width": 640.0, "height": 480.0},
-                    "title": "Untitled 1 - Mousepad",
-                }],
+    fn open_app_returns_the_apps_windows() {
+        let no_windows = || {
+            fixture_with("list_windows_mousepad", |result| {
+                result["structuredContent"]["windows"] = json!([]);
             })
-        );
+        };
+        for (running, params) in [
+            (false, json!({"bundle_id": "org.xfce.mousepad"})),
+            (true, json!({"name": "mousepad"})),
+        ] {
+            let fake = Fake::mousepad();
+            fake.script("launch_app", vec![fixture("launch_app_mousepad")]);
+            if !running {
+                fake.script(
+                    "list_windows",
+                    vec![no_windows(), no_windows(), fixture("list_windows_mousepad")],
+                );
+            }
+            let mut computer = new_computer(&fake);
+
+            let opened = payload(&computer.perform(SESSION, &request("open_app", params)));
+
+            if running {
+                assert!(fake.calls("launch_app").is_empty());
+            } else {
+                assert_eq!(
+                    fake.calls("launch_app"),
+                    vec![json!({"name": "org.xfce.mousepad"})]
+                );
+                assert_eq!(
+                    fake.calls("list_windows")[1..],
+                    [json!({"pid": PID}), json!({"pid": PID})]
+                );
+            }
+            assert_eq!(
+                opened,
+                json!({
+                    "version": 1,
+                    "app": mousepad_app(),
+                    "windows": [{
+                        "window_id": WINDOW,
+                        "frame": {"x": 736.0, "y": 780.0, "width": 640.0, "height": 480.0},
+                        "title": "Untitled 1 - Mousepad",
+                    }],
+                }),
+                "running: {running}"
+            );
+        }
     }
 
     #[test]
@@ -2254,14 +2398,16 @@ pub(crate) mod tests {
             ("drag", json!({"ref": "e1", "to_x": 300, "to_y": 20})),
         ] {
             let fake = Fake::mousepad();
-            fake.script(
-                "get_window_state",
-                vec![
-                    fixture("gws_screenshot"),
-                    fixture("gws_elements"),
-                    fixture("gws_elements_query"),
-                ],
-            );
+            let mut reads = vec![fixture("gws_screenshot"), fixture("gws_elements")];
+            // Pixels go with a capture taken just before the input, one per end of a drag.
+            let captures = match action {
+                "drag" => 2,
+                _ if params.get("x").is_some() => 1,
+                _ => 0,
+            };
+            reads.extend((0..captures).map(|_| fixture("gws_screenshot")));
+            reads.push(fixture("gws_elements_query"));
+            fake.script("get_window_state", reads);
             for (tool, answer) in [
                 ("click", "click_element"),
                 ("type_text", "type_fg"),
