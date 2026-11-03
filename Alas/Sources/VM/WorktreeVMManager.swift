@@ -1163,9 +1163,12 @@ final class WorktreeVMManager {
 
     /// Records what the guest helper of a VM running here answered: missing
     /// or unresponsive, or of another protocol revision, offers an update.
-    func noteHelperCheck(_ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>) {
+    func noteHelperCheck(
+        _ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>, linuxHelperDiffers: Bool = false
+    ) {
         guard runningVMs[id] != nil else { return }
-        if Self.helperNeedsUpdate(result, guest: VMIdentity.parse(recordID: id).guest) {
+        let guest = VMIdentity.parse(recordID: id).guest
+        if Self.helperNeedsUpdate(result, guest: guest, linuxHelperDiffers: linuxHelperDiffers) {
             helpersNeedingUpdate.insert(id)
         } else {
             helpersNeedingUpdate.remove(id)
@@ -1174,20 +1177,29 @@ final class WorktreeVMManager {
 
     /// Whether a helper check result calls for Update helper. A stopped VM
     /// or a cancelled check says nothing about the helper. A Linux helper is
-    /// updated through itself, so only one that answers and can't do
-    /// computer use yet calls for it.
+    /// updated through itself, so only one that answers calls for it: when
+    /// it isn't the helper this build shares (`linuxHelperDiffers`), or
+    /// can't do computer use yet.
     nonisolated static func helperNeedsUpdate(
-        _ result: Result<VMGuestHello, VMGuestClient.Failure>, guest: VMGuestOS = .macOS
+        _ result: Result<VMGuestHello, VMGuestClient.Failure>, guest: VMGuestOS = .macOS,
+        linuxHelperDiffers: Bool = false
     ) -> Bool {
         if guest == .linux {
             guard case .success(let hello) = result, hello.protocolRevision == VMGuestProtocol.revision else { return false }
-            return VMComputerUseRoute.linuxComputerUse(capabilities: hello.capabilities) == .outdated
+            return linuxHelperDiffers || VMComputerUseRoute.linuxComputerUse(capabilities: hello.capabilities) == .outdated
         }
         return switch result {
         case .success(let hello): hello.protocolRevision != VMGuestProtocol.revision
         case .failure(.helperMissing), .failure(.helperUnresponsive), .failure(.outdated): true
         case .failure: false
         }
+    }
+
+    /// Whether the Linux helper behind `client` isn't the one this build shares. Only a check that
+    /// ran and found them different says so.
+    func linuxHelperDiffers(_ client: VMGuestClient) async -> Bool {
+        let result = try? await client.run(LinuxGuestSetup.helperDiffersCommand, timeoutSeconds: 10)
+        return result?.exitCode == 1
     }
 
     func dismissHelperUpdateFailure(_ id: String) {

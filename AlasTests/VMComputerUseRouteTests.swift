@@ -139,19 +139,23 @@ struct VMComputerUseRouteTests {
     }
 
     /// Update helper shows for a Linux helper only when it answers at this build's revision and
-    /// can't do computer use; a macOS helper is updated when it is missing or of another revision.
+    /// either isn't the helper this build shares or can't do computer use; a macOS helper is
+    /// updated when it is missing or of another revision.
     @Test(arguments: [
-        ("Linux, only runs commands", .linux, .success(linuxHello(["run"])), true),
-        ("Linux, does computer use", .linux, .success(linuxHello(["run", "computer_use"])), false),
-        ("Linux, another revision", .linux, .success(linuxHello(["run"], revision: VMGuestProtocol.revision - 1)), false),
-        ("Linux, helper missing", .linux, .failure(.helperMissing), false),
+        ("Linux, only runs commands", .linux, .success(linuxHello(["run"])), false, true),
+        ("Linux, does computer use", .linux, .success(linuxHello(["run", "computer_use"])), false, false),
+        ("Linux, another build's helper", .linux, .success(linuxHello(["run", "computer_use"])), true, true),
+        ("Linux, another revision", .linux, .success(linuxHello(["run"], revision: VMGuestProtocol.revision - 1)), true, false),
+        ("Linux, helper missing", .linux, .failure(.helperMissing), false, false),
         ("macOS, another revision", .macOS,
          .success(VMGuestHello(guestVersion: "1", accessibility: true, screenRecording: true,
-                               protocolRevision: VMGuestProtocol.revision - 1)), true),
-        ("macOS, helper missing", .macOS, .failure(.helperMissing), true),
-    ] as [(String, VMGuestOS, Result<VMGuestHello, VMGuestClient.Failure>, Bool)])
-    func helperNeedsUpdate(_ name: String, guest: VMGuestOS, result: Result<VMGuestHello, VMGuestClient.Failure>, expected: Bool) {
-        #expect(WorktreeVMManager.helperNeedsUpdate(result, guest: guest) == expected, "\(name)")
+                               protocolRevision: VMGuestProtocol.revision - 1)), false, true),
+        ("macOS, helper missing", .macOS, .failure(.helperMissing), false, true),
+    ] as [(String, VMGuestOS, Result<VMGuestHello, VMGuestClient.Failure>, Bool, Bool)])
+    func helperNeedsUpdate(
+        _ name: String, guest: VMGuestOS, result: Result<VMGuestHello, VMGuestClient.Failure>, differs: Bool, expected: Bool
+    ) {
+        #expect(WorktreeVMManager.helperNeedsUpdate(result, guest: guest, linuxHelperDiffers: differs) == expected, "\(name)")
     }
 
     /// A fake clock that only moves when slept on, and the hellos a helper answers in turn.

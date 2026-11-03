@@ -905,7 +905,8 @@ struct VirtualMachineTabView: View {
     /// current. A freshly booted guest starts it only after logging in, and
     /// a Linux one starts its computer-use driver after that, so a missing
     /// helper, or a Linux one that can't do computer use yet, is asked again
-    /// for a while before Update helper shows.
+    /// for a while before Update helper shows. A Linux helper that isn't the
+    /// one this build shares is out of date at once.
     private func checkHelper(_ id: String?) async {
         guard let id else { return }
         let deadline = ContinuousClock.now + .seconds(120)
@@ -918,14 +919,19 @@ struct VirtualMachineTabView: View {
                 result = .failure(error as? VMGuestClient.Failure ?? .stopped)
             }
             guard !Task.isCancelled else { return }
+            var differs = false
+            if vm.guest == .linux, case .success(let hello) = result, hello.protocolRevision == VMGuestProtocol.revision {
+                differs = await vms.linuxHelperDiffers(client)
+                guard !Task.isCancelled else { return }
+            }
             let notUpYet = switch result {
             case .failure(.helperMissing), .failure(.helperUnresponsive): true
-            // A current Linux helper that can't do computer use yet may still be starting its driver.
-            case .success where vm.guest == .linux: WorktreeVMManager.helperNeedsUpdate(result, guest: .linux)
+            // This build's Linux helper that can't do computer use yet may still be starting its driver.
+            case .success where vm.guest == .linux: !differs && WorktreeVMManager.helperNeedsUpdate(result, guest: .linux)
             default: false
             }
             guard notUpYet, ContinuousClock.now < deadline else {
-                vms.noteHelperCheck(id, result)
+                vms.noteHelperCheck(id, result, linuxHelperDiffers: differs)
                 return
             }
             try? await Task.sleep(for: .seconds(10))
