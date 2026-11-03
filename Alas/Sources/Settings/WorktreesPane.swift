@@ -82,6 +82,10 @@ struct WorktreesPane: View {
                     }
                 }
 
+                if WorktreeVMManager.isSupported {
+                    WorktreeVMsSection(state: state)
+                }
+
                 if hasAnyArchived {
                     SettingsGroup(title: "Archived worktrees") {
                         HStack(alignment: .top, spacing: SettingsRowLayout.columnSpacing) {

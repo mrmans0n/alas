@@ -205,6 +205,10 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
     /// Project-level PR shepherd rules. A `.alas/shepherd.local.md` or
     /// `.alas/shepherd.md` file in the worktree overrides them completely.
     public var shepherd: ProjectShepherdSettings?
+    /// When true, creating a worktree here also creates its macOS VM. Nil means off.
+    public var vmForNewWorktrees: Bool?
+    /// Shell script run in a new worktree VM's guest before its clean point is taken.
+    public var vmGuestSetupScript: String?
 
     public enum CodingKeys: String, CodingKey, Sendable {
         case id, name, path, color, icon, addedAt, hiddenWorktreePaths, worktreeOrder,
@@ -212,7 +216,7 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
              mcpServers, worktreeOpenAfterCreate, worktreeDefaultLauncherMode, worktreeLaunchPreference, worktreeBranchTemplate, host, kind, ggMode,
              ggWorktreeModes, issueAttachments, pendingAutoBranchNames, fileBookmarks,
              repoMCPTrust, disabledRepoMCPServers, approvedRepoHookHashes, pendingLegacyWorktreeIDs,
-             shepherd
+             shepherd, vmForNewWorktrees, vmGuestSetupScript
     }
 
     public init(
@@ -313,6 +317,8 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         approvedRepoHookHashes = (try? c.decode([String].self, forKey: .approvedRepoHookHashes)) ?? []
         legacyWorktreeIDs = (try? c.decode([String: String].self, forKey: .pendingLegacyWorktreeIDs)) ?? [:]
         shepherd = try? c.decodeIfPresent(ProjectShepherdSettings.self, forKey: .shepherd)
+        vmForNewWorktrees = try? c.decodeIfPresent(Bool.self, forKey: .vmForNewWorktrees)
+        vmGuestSetupScript = try? c.decodeIfPresent(String.self, forKey: .vmGuestSetupScript)
         if let host {
             if RemotePath.isValidHost(host) {
                 virtualizeLegacyRemotePaths(host: host)
@@ -442,6 +448,8 @@ public struct ProjectConfig: Codable, Equatable, Identifiable, Sendable {
         if let shepherd, !shepherd.isEmpty {
             try c.encode(shepherd, forKey: .shepherd)
         }
+        try c.encodeIfPresent(vmForNewWorktrees, forKey: .vmForNewWorktrees)
+        try c.encodeIfPresent(vmGuestSetupScript, forKey: .vmGuestSetupScript)
     }
 
     public var effectiveWorktreeLaunchPreference: CreationLaunchPreference {

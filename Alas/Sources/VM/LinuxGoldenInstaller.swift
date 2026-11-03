@@ -95,6 +95,15 @@ final class LinuxGoldenInstaller: ObservableObject {
         phase = Self.availableGolden(root: root).map { .sealed(serial: $0.url.lastPathComponent) } ?? .idle
     }
 
+    /// Re-reads whether a sealed image is on disk, which Settings may have deleted. Leaves a
+    /// setup in progress, and a failure while no image is there, alone.
+    func reloadFromDisk() {
+        guard setupTask == nil else { return }
+        let onDisk = Self.availableGolden(root: root).map { Phase.sealed(serial: $0.url.lastPathComponent) } ?? .idle
+        if case .failed = phase, onDisk == .idle { return }
+        if onDisk != phase { phase = onDisk }
+    }
+
     private nonisolated static func goldenRoot(in root: URL) -> URL {
         root.appendingPathComponent("golden-linux", isDirectory: true)
     }

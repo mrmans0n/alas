@@ -173,7 +173,7 @@ extension AppState {
             // A hand back's resume and turnEnded go out before any new call to the VM.
             await vmHandingBack[recordID]?.value
             // A refused call didn't drive the VM, so it is neither recorded nor told about lifecycles.
-            if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
+            if let refusal = vmCallRefusal(action: command.action, recordID: recordID) {
                 return .error(refusal)
             }
             if command.action != .cancel {
@@ -186,7 +186,7 @@ extension AppState {
                 // Connects first, so the resume goes out ahead of the call on the same connection.
                 _ = try? await client.hello()
                 // The user may have taken the VM over while it connected; a resume would undo the stop.
-                if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
+                if let refusal = vmCallRefusal(action: command.action, recordID: recordID) {
                     return .error(refusal)
                 }
                 if await client.lifecycle(.resume, sessionID: sessionID) { resumeTold(sessionID, recordID) }
@@ -195,7 +195,7 @@ extension AppState {
             // that isn't connected yet, so the call itself must not go out after it.
             _ = try? await client.hello()
             // Nothing goes to a VM the user took over since the gate.
-            if let refusal = VMTakeOvers.refusal(action: command.action, driver: vmDriver(recordID: recordID)) {
+            if let refusal = vmCallRefusal(action: command.action, recordID: recordID) {
                 return .error(refusal)
             }
             // Awaited in the request's own task, so a client disconnect cancels it and the
@@ -214,6 +214,13 @@ extension AppState {
             }
             return response
         }
+    }
+
+    /// The driver gate of an agent call to VM `recordID`: refused while the user drives it or its
+    /// first-boot setup runs.
+    private func vmCallRefusal(action: ComputerUseCommand.Action?, recordID: String) -> String? {
+        VMTakeOvers.refusal(
+            action: action, driver: vmDriver(recordID: recordID), setupRunning: vmSetupScriptsRunning.contains(recordID))
     }
 
     /// The route a VM tool call takes: a running VM of the named guest answers without touching
@@ -271,7 +278,7 @@ extension AppState {
             // reach it, and it must not go out once the user took over during the handshake.
             _ = try? await client.hello()
             await vmHandingBack[recordID]?.value
-            if let refusal = VMTakeOvers.refusal(action: nil, driver: vmDriver(recordID: recordID)) {
+            if let refusal = vmCallRefusal(action: nil, recordID: recordID) {
                 return .error(refusal)
             }
             vmLastAgentCall.begin(recordID, (sessionID, "vm_run", vmNow()))
@@ -494,8 +501,11 @@ extension AppState {
 
     /// VM `recordID` stopped here: whoever drove it, it is idle now.
     func vmStopped(recordID: String) {
+        // A setup run that outlives its VM publishes nothing; the next start gets its own.
+        vmSetupRuns[recordID] = nil
         vmTakeOvers.vmStopped(recordID)
         vmLastAgentCall[recordID] = nil
+        vmLastUserInput[recordID] = nil
     }
 
     /// Whether the badge shows a session as driving its VM.

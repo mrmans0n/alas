@@ -27,6 +27,21 @@ final class WorktreeVMManagerTests {
             self.guestStopError = guestStopError
         }
         func start() async throws { state = .running }
+        func pause() async throws { state = .paused }
+        func resume() async throws { state = .running }
+        /// Writes the state file; a failing save leaves a partial one behind.
+        func saveMachineState(to url: URL) async throws {
+            await hypervisor.saveGate.passIfArmed()
+            try Data("partial".utf8).write(to: url)
+            if hypervisor.saveFails { throw HypervisorFailure() }
+            try Data("state".utf8).write(to: url)
+        }
+        func restoreMachineState(from url: URL) async throws {
+            guard !hypervisor.restoreFails else {
+                throw WorktreeVMManager.RestoreFailed(underlying: HypervisorFailure())
+            }
+            state = .paused
+        }
         func requestStop() throws {
             stopRequests += 1
             if stopFails { throw StopRefused() }
@@ -73,20 +88,39 @@ final class WorktreeVMManagerTests {
     /// Boots fake machines. `bootGate` holds the next boot and `stopGate` the
     /// next forced stop while armed. With `guestStopError` set, a stop request
     /// ends with that hypervisor error instead of a clean guest shutdown.
+    /// Every machine reports `supportsSaveRestore`, Linux ones too, so the
+    /// manager's own guest check is what keeps Linux from saving state.
     @MainActor
     private final class FakeHypervisor {
         var stopFails = false
         var guestStopError: Error?
+        var supportsSaveRestore = true
+        var saveFails = false
+        var restoreFails = false
+        /// Boots from this count on throw, like a configuration that no longer validates.
+        var bootsFailFrom: Int?
         let bootGate = Gate()
         let stopGate = Gate()
+        let saveGate = Gate()
         private(set) var boots = 0
+        /// The state file each boot restored from; nil for a cold boot.
+        private(set) var restoredFrom: [URL?] = []
 
-        func boot(_ worktreeID: String) async throws -> RunningVM {
+        func boot(_ worktreeID: String, restoringFrom state: URL? = nil) async throws -> RunningVM {
             boots += 1
             await bootGate.passIfArmed()
-            let vm = RunningVM(worktreeID: worktreeID, machine: FakeMachine(
-                hypervisor: self, stopFails: stopFails, guestStopError: guestStopError))
-            try await vm.start()
+            if let bootsFailFrom, boots >= bootsFailFrom { throw HypervisorFailure() }
+            let vm = RunningVM(
+                worktreeID: worktreeID,
+                machine: FakeMachine(hypervisor: self, stopFails: stopFails, guestStopError: guestStopError),
+                supportsSaveRestore: supportsSaveRestore)
+            if let state {
+                try await vm.restoreState(from: state)
+                try await vm.resume()
+            } else {
+                try await vm.start()
+            }
+            restoredFrom.append(state)
             return vm
         }
 
@@ -121,18 +155,21 @@ final class WorktreeVMManagerTests {
         return WorktreeVMManager(
             registry: registry, root: root, helperDirectory: helperDirectory,
             linuxHelperDirectory: linuxHelperDirectory
-        ) { worktreeID, _, _ in
-            try await hypervisor.boot(worktreeID)
+        ) { worktreeID, _, _, state in
+            try await hypervisor.boot(worktreeID, restoringFrom: state)
         }
     }
 
+    /// A VM record with a bundle holding a disk image. `id` is a registry id: a Linux one
+    /// (`linux:…`) gets a Linux record.
     @discardableResult
     private func addRecord(_ id: String, owner: VMRunOwner? = nil, lastUsed: TimeInterval = 0) throws -> URL {
         let bundle = root.appendingPathComponent("worktrees/\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        try Data("disk".utf8).write(to: VMBundle(url: bundle).diskImage)
         try registry.update { records in
             records.append(WorktreeVMRecord(
-                id: id, goldenBuild: "25A1", bundlePath: bundle.path,
+                id: id, guestOS: VMIdentity.parse(recordID: id).guest, goldenBuild: "25A1", bundlePath: bundle.path,
                 createdAt: Date(timeIntervalSince1970: 0), lastUsedAt: Date(timeIntervalSince1970: lastUsed),
                 runOwner: owner))
         }
@@ -630,6 +667,625 @@ final class WorktreeVMManagerTests {
         #expect(manager.vmKinds(forWorktree: "/repo/b") == nil)
     }
 
+    // MARK: - Pause and restore
+
+    private func record(_ id: String) throws -> WorktreeVMRecord {
+        try #require(try registry.snapshot().first { $0.id == id })
+    }
+
+    private func stateFile(_ bundle: URL) -> URL {
+        WorktreeVMManager.savedStateURL(of: VMBundle(url: bundle))
+    }
+
+    private func isPaused(_ bundle: URL) -> Bool {
+        WorktreeVMManager.isPaused(VMBundle(url: bundle))
+    }
+
+    private func bundle(_ id: String) throws -> URL {
+        URL(fileURLWithPath: try record(id).bundlePath)
+    }
+
+    @Test func pausingSavesStateAndFreesTheSlot() async throws {
+        let bundle = try addRecord("/repo/a", lastUsed: 1)
+        try addRecord("/repo/b", lastUsed: 2)
+        try addRecord("/repo/c")
+        let manager = makeManager()
+        for id in ["/repo/a", "/repo/b"] {
+            _ = try await manager.startVM(worktreeID: id)
+        }
+
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .saved)
+
+        #expect(isPaused(bundle))
+        #expect(try record("/repo/a").runOwner == nil)
+        #expect(manager.running("/repo/a") == nil)
+        #expect(FileManager.default.fileExists(atPath: stateFile(bundle).path))
+        guard case .running = try await manager.startVM(worktreeID: "/repo/c") else {
+            Issue.record("the paused VM still holds its slot")
+            return
+        }
+    }
+
+    @Test func startingAPausedVMRestoresAndConsumesTheState() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .saved)
+
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
+        #expect(manager.running("/repo/a") != nil)
+        #expect(!isPaused(bundle))
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+    }
+
+    @Test func aFailedSaveLeavesNoStateFile() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        hypervisor.saveFails = true
+
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .stopped)
+
+        #expect(manager.running("/repo/a") == nil)
+        #expect(!isPaused(bundle))
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        #expect(hypervisor.restoredFrom == [nil, nil])
+    }
+
+    @Test func aRestoreFailureColdBoots() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .saved)
+        hypervisor.restoreFails = true
+
+        guard case .running = try await manager.startVM(worktreeID: "/repo/a") else {
+            Issue.record("the VM did not cold boot")
+            return
+        }
+
+        // The failed restore never returned a machine; the cold boot did.
+        #expect(hypervisor.boots == 3)
+        #expect(hypervisor.restoredFrom == [nil, nil])
+        #expect(!isPaused(bundle))
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+    }
+
+    enum StaleState: CaseIterable {
+        /// An older build cold-booted the VM since, which wrote its disk.
+        case diskChanged
+        /// The state has no `state.json` saying which disk it belongs to.
+        case noInfo
+    }
+
+    @Test(arguments: StaleState.allCases)
+    func aStaleStateFileIsDiscarded(_ stale: StaleState) async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .saved)
+        let info = WorktreeVMManager.savedStateInfoURL(of: VMBundle(url: bundle))
+        switch stale {
+        case .diskChanged:
+            let stamp = try JSONDecoder().decode(VMSavedState.Info.self, from: Data(contentsOf: info)).diskStamp
+            try FileManager.default.setAttributes(
+                [.modificationDate: stamp.addingTimeInterval(60)], ofItemAtPath: VMBundle(url: bundle).diskImage.path)
+        case .noInfo:
+            try FileManager.default.removeItem(at: info)
+        }
+
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        #expect(hypervisor.boots == 2)
+        #expect(hypervisor.restoredFrom == [nil, nil])
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+        #expect(!FileManager.default.fileExists(atPath: info.path))
+    }
+
+    @Test func aStartDuringAPauseWaitsAndRestores() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        hypervisor.saveGate.armed = true
+        let pause = Task { await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) }
+        await hypervisor.saveGate.waitUntilHeld()
+
+        let start = Task { try await manager.startVM(worktreeID: "/repo/a") }
+        await Task.yield()
+        hypervisor.saveGate.release()
+
+        #expect(await pause.value == .saved)
+        guard case .running(let vm) = try await start.value else {
+            Issue.record("the start did not run the VM")
+            return
+        }
+        #expect(manager.running("/repo/a") === vm)
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
+        #expect(!isPaused(bundle))
+    }
+
+    /// A start that waits on a pause, with a reset behind it on the same pause, waits for the
+    /// reset too, and then runs the VM the reset started on the clean disk.
+    @Test func aStartWaitingOnAPauseWaitsForAResetBehindIt() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        try Data("dirty".utf8).write(to: VMBundle(url: bundle).diskImage)
+        hypervisor.saveGate.armed = true
+        let pause = Task { await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) }
+        await hypervisor.saveGate.waitUntilHeld()
+
+        let start = Task { try await manager.startVM(worktreeID: "/repo/a") }
+        await Task.yield()
+        let reset = Task { try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS) }
+        await Task.yield()
+        // The reset's restart is held mid-boot, so the start wakes while the VM is down.
+        hypervisor.bootGate.armed = true
+        hypervisor.saveGate.release()
+        await hypervisor.bootGate.waitUntilHeld()
+        hypervisor.bootGate.release()
+
+        #expect(await pause.value == .saved)
+        try await reset.value
+        guard case .running(let vm) = try await start.value else {
+            Issue.record("the start did not run the VM")
+            return
+        }
+        #expect(manager.running("/repo/a") === vm)
+        // The first boot, the clean point's restart, the reset's restart: nothing else booted.
+        #expect(hypervisor.boots == 3)
+        #expect(try contents(VMBundle(url: bundle).diskImage) == "disk")
+    }
+
+    @Test func aStartDuringACleanPointWaitsForItsRestart() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        hypervisor.saveGate.armed = true
+        let cleanPoint = Task { try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS) }
+        await hypervisor.saveGate.waitUntilHeld()
+
+        let start = Task { try await manager.startVM(worktreeID: "/repo/a") }
+        await Task.yield()
+        hypervisor.saveGate.release()
+
+        try await cleanPoint.value
+        guard case .running(let vm) = try await start.value else {
+            Issue.record("the start did not run the VM")
+            return
+        }
+        #expect(manager.running("/repo/a") === vm)
+        #expect(hypervisor.boots == 2)
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
+    }
+
+    /// A macOS VM whose configuration can't save state, and any Linux VM, stop instead.
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func withoutSaveRestorePauseStops(guest: VMGuestOS) async throws {
+        let id = VMIdentity.recordID(worktree: "/repo/a", guest: guest)
+        let bundle = try addRecord(id)
+        if guest == .macOS { hypervisor.supportsSaveRestore = false }
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a", guest: guest)
+
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: guest) == .stopped)
+
+        #expect(manager.running("/repo/a", guest: guest) == nil)
+        #expect(!isPaused(bundle))
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: guest) == .notRunning)
+    }
+
+    /// A VM running its first-boot setup stops too: restored, it would resume mid-script, and
+    /// stopped, its setup runs again on the next start.
+    @Test func quitPausesMacOSVMsAndStopsLinuxOnes() async throws {
+        let macOS = try addRecord("/repo/a")
+        let linux = try addRecord("linux:/repo/b")
+        let settingUp = try addRecord("/repo/c")
+        let manager = makeManager()
+        manager.isRunningSetup = { $0 == "/repo/c" }
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        _ = try await manager.startVM(worktreeID: "/repo/b", guest: .linux)
+        _ = try await manager.startVM(worktreeID: "/repo/c")
+
+        await manager.stopAll()
+
+        #expect(manager.runningVMs.isEmpty)
+        #expect(try registry.snapshot().allSatisfy { $0.runOwner == nil })
+        #expect(isPaused(macOS))
+        for stopped in [linux, settingUp] {
+            #expect(!FileManager.default.fileExists(atPath: stateFile(stopped).path))
+        }
+    }
+
+    @Test func noVMStartsOnceQuitting() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+
+        await manager.stopAll()
+
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            _ = try await manager.startVM(worktreeID: "/repo/a")
+        }
+        #expect(hypervisor.boots == 0)
+    }
+
+    @MainActor
+    private final class SweepClock {
+        var now = Date(timeIntervalSince1970: 1_000_000)
+    }
+
+    @Test func idleSweepPausesOnlyIdleMacOSVMs() async throws {
+        for id in ["/repo/idle", "/repo/typing", "linux:/repo/linux"] {
+            try addRecord(id)
+        }
+        let clock = SweepClock()
+        let manager = makeManager()
+        manager.now = { clock.now }
+        _ = try await manager.startVM(worktreeID: "/repo/idle")
+        _ = try await manager.startVM(worktreeID: "/repo/typing")
+        _ = try await manager.startVM(worktreeID: "/repo/linux", guest: .linux)
+        let sweeper = VMIdleSweeper(
+            manager: manager,
+            activity: { id in
+                VMIdleSweeper.Activity(lastUserInput: id == "/repo/typing" ? clock.now : nil)
+            },
+            now: { clock.now }
+        )
+
+        clock.now += 14 * 60
+        await sweeper.runIdleSweep()
+        #expect(manager.runningVMs.count == 3)
+
+        clock.now += 2 * 60
+        await sweeper.runIdleSweep()
+        #expect(manager.running("/repo/idle") == nil)
+        #expect(try isPaused(bundle("/repo/idle")))
+        #expect(manager.running("/repo/typing") != nil)
+        #expect(manager.running("/repo/linux", guest: .linux) != nil)
+    }
+
+    // MARK: - Clean point and resets
+
+    private func cleanDirectory(_ bundle: URL) -> URL {
+        WorktreeVMManager.cleanDirectory(of: VMBundle(url: bundle))
+    }
+
+    private func contents(_ file: URL) throws -> String {
+        try String(decoding: Data(contentsOf: file), as: UTF8.self)
+    }
+
+    @Test func cleanPointCopiesTheDiskAndStateWhenSupported() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS, setupScriptHash: "abc")
+
+        let clean = cleanDirectory(bundle)
+        #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
+        #expect(try contents(clean.appendingPathComponent("state.vzvmsave")) == "state")
+        #expect(manager.cleanPoint(recordID: "/repo/a")?.setupScriptHash == "abc")
+        #expect(!FileManager.default.fileExists(atPath: bundle.appendingPathComponent("clean.partial").path))
+        // The live VM resumed from the pause's own state, which the start consumed.
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle)])
+        #expect(manager.running("/repo/a") != nil)
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+    }
+
+    /// A boot that throws after the clean point is written is a failed restart, not a failed
+    /// clean point: the clean point stays.
+    @Test func aRestartThatThrowsAfterTheCleanPointIsAFailedRestart() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        hypervisor.bootsFailFrom = 2
+
+        await #expect(throws: WorktreeVMManager.RestartFailed.self) {
+            try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        }
+        #expect(FileManager.default.fileExists(atPath: cleanDirectory(bundle).appendingPathComponent("disk.img").path))
+        #expect(manager.cleanPoint(recordID: "/repo/a") != nil)
+    }
+
+    /// A paused VM's clean point is its disk and saved state, taken without booting it. A stopped
+    /// VM gets none.
+    @Test(arguments: [true, false])
+    func aCleanPointNeedsARunningOrPausedVM(paused: Bool) async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        if paused {
+            #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .saved)
+        } else {
+            await manager.stopVM(worktreeID: "/repo/a")
+        }
+
+        if paused {
+            try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+            #expect(try contents(cleanDirectory(bundle).appendingPathComponent("state.vzvmsave")) == "state")
+        } else {
+            await #expect(throws: WorktreeVMManager.VMError.self) {
+                try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+            }
+            #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
+        }
+        #expect(hypervisor.boots == 1)
+    }
+
+    /// A macOS VM whose configuration can't save state, and any Linux VM, shut down and cold-boot.
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func cleanPointWithoutSaveRestoreShutsDownCopiesAndBoots(guest: VMGuestOS) async throws {
+        let id = VMIdentity.recordID(worktree: "/repo/a", guest: guest)
+        let bundle = try addRecord(id)
+        if guest == .macOS { hypervisor.supportsSaveRestore = false }
+        let manager = makeManager()
+        var stops: [String] = []
+        manager.onVMStopped = { stops.append($0) }
+        _ = try await manager.startVM(worktreeID: "/repo/a", guest: guest)
+
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: guest)
+
+        let clean = cleanDirectory(bundle)
+        #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
+        #expect(!FileManager.default.fileExists(atPath: clean.appendingPathComponent("state.vzvmsave").path))
+        #expect(manager.cleanPoint(recordID: id) != nil)
+        // Its own stop and restart end nothing, a take over included.
+        #expect(stops.isEmpty)
+        #expect(hypervisor.restoredFrom == [nil, nil])
+        #expect(manager.running("/repo/a", guest: guest) != nil)
+    }
+
+    @Test func resetToCleanStopsTheVMAndSwapsTheDisk() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        let disk = VMBundle(url: bundle).diskImage
+        try Data("dirty".utf8).write(to: disk)
+        let clean = cleanDirectory(bundle)
+        let cleanFiles = try FileManager.default.contentsOfDirectory(atPath: clean.path).sorted()
+        // An agent call in flight fails as for any stop, but a take over survives the restart.
+        var stops: [String] = []
+        manager.onVMStopped = { stops.append($0) }
+
+        try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
+
+        #expect(stops.isEmpty)
+        #expect(try contents(disk) == "disk")
+        // It resumed from the clean point's state, not a cold boot.
+        #expect(hypervisor.restoredFrom == [nil, stateFile(bundle), stateFile(bundle)])
+        #expect(manager.running("/repo/a") != nil)
+        #expect(!isPaused(bundle))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: clean.path).sorted() == cleanFiles)
+        #expect(try contents(clean.appendingPathComponent("disk.img")) == "disk")
+    }
+
+    /// A reset whose restart fails leaves the VM stopped, which ends a take over like any stop.
+    @Test func aResetLeftStoppedReportsTheStop() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        var stops: [String] = []
+        manager.onVMStopped = { stops.append($0) }
+        let (registry, elsewhere) = (registry, elsewhere)
+        // Another Alas takes the VM while its disk is swapped, so the restart can't happen.
+        manager.cloneCleanFile = { source, destination in
+            try VMBundle.cloneFile(source, to: destination)
+            try registry.update { $0[0].runOwner = elsewhere }
+        }
+
+        await #expect(throws: WorktreeVMManager.RestartFailed.self) {
+            try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
+        }
+
+        #expect(stops == ["/repo/a"])
+    }
+
+    /// The live state and its `state.json` go before the disk changes: an interrupted
+    /// reset never restores the old memory onto the clean disk.
+    @Test func anInterruptedResetToCleanColdBoots() async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+        #expect(await manager.pauseVM(worktreeID: "/repo/a", guest: .macOS) == .saved)
+        manager.cloneCleanFile = { source, destination in
+            guard source.lastPathComponent != "state.vzvmsave" else { throw HypervisorFailure() }
+            try VMBundle.cloneFile(source, to: destination)
+        }
+
+        await #expect(throws: HypervisorFailure.self) {
+            try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
+        }
+
+        #expect(!isPaused(bundle))
+        #expect(!FileManager.default.fileExists(atPath: stateFile(bundle).path))
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        #expect(hypervisor.restoredFrom.last == .some(nil))
+    }
+
+    enum ResetRefusal: CaseIterable { case noCleanPoint, runningElsewhere }
+
+    @Test(arguments: ResetRefusal.allCases)
+    func resetToCleanWithoutACleanPointIsRefused(_ refusal: ResetRefusal) async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        if refusal == .runningElsewhere {
+            _ = try await manager.startVM(worktreeID: "/repo/a")
+            try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: .macOS)
+            await manager.stopVM(worktreeID: "/repo/a")
+            try registry.update { $0[0].runOwner = elsewhere }
+        }
+        try Data("dirty".utf8).write(to: VMBundle(url: bundle).diskImage)
+        let boots = hypervisor.boots
+
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            try await manager.resetToClean(worktreeID: "/repo/a", guest: .macOS)
+        }
+
+        #expect(try contents(VMBundle(url: bundle).diskImage) == "dirty")
+        #expect(hypervisor.boots == boots)
+    }
+
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func resetFromScratchReclonesAndKeepsTheRecordGuest(guest: VMGuestOS) async throws {
+        try makeSealedGoldens()
+        let id = VMIdentity.recordID(worktree: "/repo/a", guest: guest)
+        let manager = makeManager()
+        try manager.createVM(worktreeID: "/repo/a", guest: guest)
+        _ = try await manager.startVM(worktreeID: "/repo/a", guest: guest)
+        try await manager.takeCleanPoint(worktreeID: "/repo/a", guest: guest)
+        let disk = VMBundle(url: URL(fileURLWithPath: try record(id).bundlePath)).diskImage
+        try Data("dirty".utf8).write(to: disk)
+
+        try await manager.resetFromScratch(worktreeID: "/repo/a", guest: guest)
+
+        #expect(try record(id).guestOS == guest)
+        #expect(try contents(VMBundle(url: URL(fileURLWithPath: record(id).bundlePath)).diskImage) == "x")
+        #expect(manager.cleanPoint(recordID: id) == nil)
+        #expect(manager.isFirstBootPending(recordID: id))
+        #expect(manager.running("/repo/a", guest: guest) == nil)
+    }
+
+    /// The setup steps over a manager, whose script run answers `exitCode`.
+    @MainActor
+    private final class SetupScriptRuns {
+        var exitCode: Int32? = 0
+        /// The VM stops mid-script, which cuts the run short.
+        var stopsVM = false
+        var runs: [(script: String, timeout: Int, hadCleanPoint: Bool)] = []
+    }
+
+    private func makeFirstBootSetup(_ manager: WorktreeVMManager, runs: SetupScriptRuns) -> VMFirstBootSetup {
+        VMFirstBootSetup(
+            manager: manager,
+            waitForHelper: { _ in true },
+            runScript: { recordID, script, timeout in
+                runs.runs.append((script, timeout, manager.cleanPoint(recordID: recordID) != nil))
+                if runs.stopsVM {
+                    await manager.stopVM(worktreeID: recordID)
+                    throw VMGuestClient.Failure.stopped
+                }
+                return VMGuestRunResult(
+                    exitCode: runs.exitCode, stdout: "", stderr: "", truncated: false, timedOut: runs.exitCode == nil)
+            }
+        )
+    }
+
+    /// A script that already succeeded, before a clean point that failed, isn't run again.
+    @Test(arguments: [false, true])
+    func firstBootRunsTheSetupScriptThenTakesTheCleanPoint(scriptSucceeded: Bool) async throws {
+        let bundle = try addRecord("/repo/a")
+        try Data().write(to: WorktreeVMManager.firstBootMarker(of: VMBundle(url: bundle)))
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        let outcome = await makeFirstBootSetup(manager, runs: runs)
+            .run(recordID: "/repo/a", script: "brew install jq", scriptSucceeded: scriptSucceeded)
+
+        #expect(outcome == .cleanPointTaken)
+        #expect(runs.runs.map(\.script) == (scriptSucceeded ? [] : ["brew install jq"]))
+        #expect(runs.runs.allSatisfy { $0.timeout == 600 && !$0.hadCleanPoint })
+        #expect(manager.cleanPoint(recordID: "/repo/a")?.setupScriptHash == VMCleanPoint.scriptHash("brew install jq"))
+        #expect(!manager.isFirstBootPending(recordID: "/repo/a"))
+        #expect(manager.running("/repo/a") != nil)
+    }
+
+    @Test func aStopMidScriptIsNotAFailure() async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        runs.stopsVM = true
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        let outcome = await makeFirstBootSetup(manager, runs: runs).run(recordID: "/repo/a", script: "sleep 60")
+
+        #expect(outcome == .interrupted)
+        #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
+    }
+
+    /// A run that lost the VM's setup to a later start, after waiting for the helper or during
+    /// its script, neither runs the script nor takes a clean point in the VM started after it.
+    @Test(arguments: [false, true])
+    func aSupersededRunLeavesTheVMAlone(duringScript: Bool) async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        var current = true
+        var setup = makeFirstBootSetup(manager, runs: runs)
+        setup.isCurrent = { current }
+        if !duringScript { current = false }
+        let script = setup.runScript
+        if duringScript {
+            setup = VMFirstBootSetup(
+                manager: manager, waitForHelper: setup.waitForHelper,
+                runScript: { recordID, text, timeout in
+                    defer { current = false }
+                    return try await script(recordID, text, timeout)
+                },
+                isCurrent: { current }
+            )
+        }
+
+        let outcome = await setup.run(recordID: "/repo/a", script: "brew install jq")
+
+        #expect(outcome == .interrupted)
+        #expect(runs.runs.count == (duringScript ? 1 : 0))
+        #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
+    }
+
+    struct AutoVMCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        var setting: Bool? = true
+        var appleSilicon = true
+        var golden = true
+        var remote = false
+        let creates: Bool
+        var testDescription: String { name }
+    }
+
+    @Test(arguments: [
+        AutoVMCase(name: "setting on", creates: true),
+        AutoVMCase(name: "setting off", setting: false, creates: false),
+        AutoVMCase(name: "setting never chosen", setting: nil, creates: false),
+        AutoVMCase(name: "Intel host", appleSilicon: false, creates: false),
+        AutoVMCase(name: "no golden image", golden: false, creates: false),
+        AutoVMCase(name: "remote project", remote: true, creates: false),
+    ])
+    func newWorktreesGetAVMOnlyWhenTheProjectAsksAndOneCanBeCloned(_ c: AutoVMCase) {
+        var project = ProjectConfig(id: "p", name: "R", path: "/tmp/r", color: "#fff", addedAt: .distantPast)
+        project.vmForNewWorktrees = c.setting
+        #expect(WorktreeVMManager.shouldCreateVM(
+            project: project, isAppleSilicon: c.appleSilicon, goldenAvailable: c.golden, isRemote: c.remote
+        ) == c.creates)
+    }
+
+    @Test(arguments: [Int32(3), nil])
+    func aFailingSetupScriptLeavesNoCleanPoint(exitCode: Int32?) async throws {
+        let bundle = try addRecord("/repo/a")
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        runs.exitCode = exitCode
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+
+        let outcome = await makeFirstBootSetup(manager, runs: runs).run(recordID: "/repo/a", script: "exit 3")
+
+        #expect(outcome == .scriptFailed(exitCode: exitCode))
+        #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
+        #expect(!FileManager.default.fileExists(atPath: cleanDirectory(bundle).path))
+        // Left running, untouched, for "Run again" or "Skip and save clean point".
+        #expect(manager.running("/repo/a") != nil)
+        #expect(hypervisor.boots == 1)
+    }
+
     // MARK: - Auto-start
 
     /// The auto-start's clock: frozen, a sleep only yields, so no deadline passes until `run()`.
@@ -750,6 +1406,22 @@ final class WorktreeVMManagerTests {
         #expect(hypervisor.boots == 2)
     }
 
+    @Test func aVMRunningItsSetupIsNotOfferedToPause() async throws {
+        let manager = makeManager()
+        manager.isRunningSetup = { $0 == "/repo/a" }
+        try await fillBothSlots(manager)
+
+        guard case .needsUserChoice(let candidates) = try await manager.startVM(worktreeID: "/repo/c") else {
+            Issue.record("a third VM found a free slot")
+            return
+        }
+        #expect(candidates == ["/repo/b"])
+        await #expect(throws: WorktreeVMManager.VMError.self) {
+            _ = try await manager.startVM(worktreeID: "/repo/c", pausing: "/repo/a")
+        }
+        #expect(manager.running("/repo/a") != nil)
+    }
+
     @Test func pausingAnotherVMStartsThisOne() async throws {
         let manager = makeManager()
         try await fillBothSlots(manager)
@@ -762,6 +1434,7 @@ final class WorktreeVMManagerTests {
 
         #expect(await call.value == .ready)
         #expect(manager.running("/repo/a") == nil)
+        #expect(try isPaused(bundle("/repo/a")))
         #expect(manager.running("/repo/c") != nil)
     }
 
@@ -941,6 +1614,101 @@ final class WorktreeVMManagerTests {
         await eventually { !starter.slotRequests.isEmpty }
         starter.answer(requestID: try #require(starter.slotRequests.first).id, choice: .decline)
         #expect(await next.value == .declined)
+    }
+
+    // MARK: - Disk use
+
+    private func exists(_ url: URL) -> Bool {
+        FileManager.default.fileExists(atPath: url.path)
+    }
+
+    @Test(arguments: [VMGuestOS.macOS, .linux])
+    func deletingAGoldenWithClonesIsRefused(_ guest: VMGuestOS) async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        try manager.createVM(worktreeID: "/repo/a", guest: guest)
+        let golden = try #require(await manager.diskUse().bundles.first { $0.kind == .golden && $0.guest == guest })
+
+        let refusal = #expect(throws: WorktreeVMManager.VMError.self) { try manager.deleteGolden(id: golden.id) }
+        #expect(refusal?.message == "Delete its worktree VMs first")
+        #expect(exists(golden.url))
+
+        #expect(await manager.deleteVM(worktreeID: "/repo/a", guest: guest) == nil)
+        try manager.deleteGolden(id: golden.id)
+        #expect(!exists(golden.url))
+        #expect(try await !manager.diskUse().bundles.contains { $0.id == golden.id })
+    }
+
+    @Test func orphanCleanupDeletesOnlyOrphans() async throws {
+        // Live: the worktree is on disk, or belongs to a project.
+        let checkout = root.appendingPathComponent("checkout", isDirectory: true)
+        try FileManager.default.createDirectory(at: checkout, withIntermediateDirectories: true)
+        let onDisk = try addRecord(checkout.path)
+        let inProject = try addRecord("linux:/repo/known")
+        // The worktree is gone, but another Alas runs the VM.
+        let runningElsewhere = try addRecord("/repo/gone-elsewhere", owner: elsewhere)
+        // Orphans: the worktree is gone, or no record names the bundle.
+        let gone = try addRecord("/repo/gone")
+        let stray = root.appendingPathComponent("worktrees/stray", isDirectory: true)
+        try FileManager.default.createDirectory(at: stray, withIntermediateDirectories: true)
+        // Only a record this build can't decode names it: a newer Alas's VM, maybe running.
+        let newer = root.appendingPathComponent("worktrees/newer", isDirectory: true)
+        try FileManager.default.createDirectory(at: newer, withIntermediateDirectories: true)
+        let file = root.appendingPathComponent("registry.json")
+        var elements = try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [Any] ?? []
+        elements.append(["id": "/repo/newer", "guestOS": "plan9", "goldenBuild": "x", "bundlePath": newer.path,
+                         "createdAt": 0, "lastUsedAt": 0])
+        try JSONSerialization.data(withJSONObject: elements).write(to: file)
+        // Leftovers of an interrupted reset and clean point.
+        for bundle in [onDisk, runningElsewhere] {
+            try Data("x".utf8).write(to: bundle.appendingPathComponent("disk.img.resetting"))
+            try FileManager.default.createDirectory(
+                at: bundle.appendingPathComponent("clean.partial"), withIntermediateDirectories: true)
+        }
+        let manager = makeManager()
+        manager.worktreePath = { $0 == "/repo/known" ? URL(fileURLWithPath: "/repo/known") : nil }
+
+        let orphans = try await manager.diskUse().orphans
+        #expect(Set(orphans.map(\.url.lastPathComponent)) == [gone.lastPathComponent, stray.lastPathComponent])
+
+        #expect(manager.deleteOrphans(orphans.map(\.id) + ["worktrees/newer"]) == nil)
+
+        #expect([onDisk, inProject, runningElsewhere, newer].allSatisfy(exists))
+        #expect(![gone, stray].contains(where: exists))
+        #expect(try Set(registry.snapshot().map(\.id)) == [checkout.path, "linux:/repo/known", "/repo/gone-elsewhere"])
+        #expect(!exists(onDisk.appendingPathComponent("disk.img.resetting")))
+        #expect(!exists(onDisk.appendingPathComponent("clean.partial")))
+        #expect(exists(runningElsewhere.appendingPathComponent("disk.img.resetting")))
+        #expect(exists(runningElsewhere.appendingPathComponent("clean.partial")))
+        #expect(try await manager.diskUse().orphans.isEmpty)
+    }
+
+    @Test func removeInstallersKeepsBundles() async throws {
+        try makeSealedGoldens()
+        let manager = makeManager()
+        manager.worktreePath = { _ in URL(fileURLWithPath: "/repo/a") }
+        try manager.createVM(worktreeID: "/repo/a")
+        let installers = [root.appendingPathComponent("ipsw/UniversalMac.ipsw"),
+                          root.appendingPathComponent("linux-images/20261016.img")]
+        for file in installers {
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data("installer".utf8).write(to: file)
+        }
+        #expect(await manager.installerBytes() > 0)
+
+        // Refused while an install holds its lock, as a download does.
+        let install = try ComputerUseDriverLock.acquire(at: root.appendingPathComponent("install.lock"), label: "test")
+        #expect(throws: WorktreeVMManager.VMError.self) { try manager.removeInstallers() }
+        #expect(installers.allSatisfy(exists))
+        install.release()
+
+        try manager.removeInstallers()
+        #expect(!installers.contains(where: exists))
+        #expect(await manager.installerBytes() == 0)
+        let bundles = try await manager.diskUse().bundles
+        #expect(bundles.count == 3)
+        #expect(bundles.allSatisfy { exists($0.url) && $0.allocatedBytes > 0 })
     }
 
     /// A sealed macOS and Linux golden image, enough for `createVM` to clone.

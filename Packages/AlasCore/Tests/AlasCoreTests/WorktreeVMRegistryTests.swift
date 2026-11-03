@@ -33,17 +33,26 @@ import Testing
         #expect(records.first { $0.id == "B" }?.runOwner == Self.me)
     }
 
-    @Test func recordIDsLeaveTheFileUntouched() throws {
+    @Test func readsLeaveTheFileUntouched() throws {
         let (writer, dir) = tempRegistry()
         defer { try? FileManager.default.removeItem(at: dir) }
         try writer.update { $0 = [Self.record("A", owner: Self.other)] }
         let url = dir.appendingPathComponent("registry.json")
+        // A newer build's record, whose fields this build would drop on a write.
+        var elements = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [Any] ?? []
+        elements.append(["id": "L", "guestOS": "plan9", "goldenBuild": "x", "bundlePath": "/vms/L",
+                         "createdAt": 0, "lastUsedAt": 0, "future": true])
+        try JSONSerialization.data(withJSONObject: elements).write(to: url)
         let past = Date(timeIntervalSince1970: 5_000)
         try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: url.path)
         let before = try Data(contentsOf: url)
 
         let reader = WorktreeVMRegistry(fileURL: url, isAlive: { _ in false })
-        #expect(try reader.recordIDs() == ["A"])
+        #expect(try reader.recordIDs() == ["A", "L"])
+        let (records, foreign) = try reader.read()
+        #expect(records.map(\.id) == ["A"])
+        #expect(records.first?.runOwner == nil)
+        #expect(foreign == ["/vms/L"])
         #expect(try Data(contentsOf: url) == before)
         let modified = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
         #expect(modified == past)
