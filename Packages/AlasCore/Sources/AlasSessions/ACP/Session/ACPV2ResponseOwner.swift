@@ -51,7 +51,9 @@ public final class ACPV2ResponseOwner {
             catch { try requireCurrent()
             return .observationLost }
             try requireCurrent()
-            guard !page.containsOversizedRecord, page.records.count <= 128, page.isAtEnd == (page.next == nil),
+            // The store returns a fully decoded oversized singleton so callers
+            // can advance past it. It is not evidence of observation loss.
+            guard (!page.containsOversizedRecord || page.records.count == 1), page.records.count <= 128, page.isAtEnd == (page.next == nil),
                   page.next == nil || page.next != after else { return .observationLost }
             for intent in page.records {
                 guard intent.stream == stream else { return .observationLost }
