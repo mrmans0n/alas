@@ -32,13 +32,15 @@ struct HostSSHSetupTests {
         }
     }
 
-    @Test func probeParsesItsScriptOutput() {
+    @Test func anExistingHostKeepsItsConfiguredAgents() async throws {
         let output = """
         os=Darwin
         arch=arm64
         brew=/opt/homebrew/bin/brew
         cask=alas-host
         host=/opt/homebrew/bin/alas-host
+        __ALAS_AGENT_PROBE_AVAILABLE__ 1
+        __ALAS_AGENT_PROBE_AVAILABLE__ 7
         --config--
         # Host
         host.reachability = tailscale
@@ -47,8 +49,9 @@ struct HostSSHSetupTests {
         agents.claude.enabled = true
         agents.codex.enabled = false
         """
+        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 0, stdout: output, stderr: "") }
 
-        #expect(HostSSHProbe.parse(output) == HostSSHProbe(
+        #expect(try await remote.setup().probe() == HostSSHProbe(
             os: "Darwin",
             arch: "arm64",
             brew: "/opt/homebrew/bin/brew",
@@ -173,12 +176,18 @@ struct HostSSHSetupTests {
         #expect(remote.commands.withLock { $0.count } == 1)
     }
 
-    @Test func aFreshHostOffersTheBuiltInAgents() async throws {
-        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 0, stdout: "os=Darwin\narch=arm64\nbrew=\ncask=\nhost=\n", stderr: "") }
+    @Test(arguments: [
+        ("", [String]()),
+        ("__ALAS_AGENT_PROBE_AVAILABLE__ 1\n__ALAS_AGENT_PROBE_AVAILABLE__ 7\n", ["codex", "antigravity"]),
+    ])
+    func aFreshHostEnablesOnlyDetectedAgents(detectionOutput: String, enabled: [String]) async throws {
+        let remote = FakeRemote { _, _ in
+            ProcessResult(exitCode: 0, stdout: "os=Darwin\narch=arm64\nbrew=\ncask=\nhost=\n" + detectionOutput, stderr: "")
+        }
 
         let agents = try await remote.setup().probe().agents
-        #expect(agents.contains { $0.id == "claude" })
-        #expect(agents == HostSSHSetup.defaultAgents)
+        #expect(agents.map(\.id) == ["claude", "codex", "cursor-agent", "pi", "omp", "opencode", "gemini", "antigravity", "copilot"])
+        #expect(Set(agents.filter(\.enabled).map(\.id)) == Set(enabled))
     }
 
     @Test func pairPollsUntilTheHostServesBeyondLoopback() async throws {

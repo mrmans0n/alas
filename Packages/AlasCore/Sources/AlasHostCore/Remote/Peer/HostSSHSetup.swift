@@ -3,6 +3,7 @@ import AlasFoundation
 import AlasPlatform
 import AlasFeatures
 import AlasModel
+import AlasAgentKit
 
 public struct HostSSHAgent: Equatable, Sendable {
     public var id: String
@@ -205,6 +206,7 @@ public struct HostSSHSetup: Sendable {
     echo "cask=$c"
     \(locateHost)
     echo "host=$h"
+    \(RemoteAgentProbe.command(agents: AgentBuiltins.catalog, workingDirectory: "."))
     if [ -n "$h" ]; then
     echo "\(HostSSHProbe.configMarker)"
     "$h" config list 2>/dev/null
@@ -214,18 +216,13 @@ public struct HostSSHSetup: Sendable {
     public func probe() async throws -> HostSSHProbe {
         let result = try await step("Connect", Self.probeScript, timeout: 30)
         var probe = HostSSHProbe.parse(result.stdout)
-        // No host yet, so no `config list`: offer the built-in agents as a
-        // fresh host would start them.
+        // Keep an existing host's choices; on a fresh host, only preselect
+        // built-in agents whose executables were found by the SSH probe.
         if probe.hostPath == nil {
-            probe.agents = Self.defaultAgents
+            let available = RemoteAgentProbe.availableAgentIDs(stdout: result.stdout, agents: AgentBuiltins.catalog)
+            probe.agents = AgentBuiltins.catalog.map { HostSSHAgent(id: $0.id, enabled: available.contains($0.id)) }
         }
         return probe
-    }
-
-    static var defaultAgents: [HostSSHAgent] {
-        HostSettingCatalog.all(for: .defaults)
-            .filter { $0.key.hasPrefix("agents.") && $0.key.hasSuffix(".enabled") }
-            .map { HostSSHAgent(id: String($0.key.dropFirst("agents.".count).dropLast(".enabled".count)), enabled: $0.value(in: .defaults) == "true") }
     }
 
     /// Installs or updates the host as `decision(for:)` says and returns its
