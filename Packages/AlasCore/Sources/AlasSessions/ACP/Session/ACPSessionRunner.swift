@@ -2391,14 +2391,14 @@ public final class ACPSessionRunner {
             sentBeforeResult: { [weak self] in logged(self) }))
     }
 
-    /// Tail of the last agent message this turn produced, or nil. Only rows at
-    /// or after `activePromptTranscriptFloor` belong to the turn.
+    /// Tail of the last agent message, or plan, this turn produced, or nil.
+    /// Only rows at or after `activePromptTranscriptFloor` belong to the turn.
     private func currentTurnLastAgentText() -> String? {
         let floor = min(activePromptTranscriptFloor ?? 0, session.transcript.messages.count)
         return session.transcript.messages[floor...].reversed().lazy
             .compactMap { message -> String? in
-                guard case .agent(_, _, let text) = message else { return nil }
-                let tail = ACPDelegatedOutcomeText.tail(text.value, limit: ACPTurnCompletion.lastAgentTextLimit)
+                guard let text = ACPSessionTranscriptReader.agentText(message) else { return nil }
+                let tail = ACPDelegatedOutcomeText.tail(text, limit: ACPTurnCompletion.lastAgentTextLimit)
                 return tail.isEmpty ? nil : tail
             }
             .first
