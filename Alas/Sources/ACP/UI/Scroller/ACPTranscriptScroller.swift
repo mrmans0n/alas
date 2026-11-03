@@ -1302,7 +1302,10 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                     equalityToken: token(pendingPermission, host: host),
                     build: {
                         wrapRow(host: host) {
-                            ACPPermissionPrompt(session: session, policy: policy, scopeKey: host.scopeKey)
+                            ACPPermissionPrompt(
+                                session: session, policy: policy, scopeKey: host.scopeKey,
+                                worktreeRoot: host.trustedImageRoot?.path
+                            )
                         }
                     }
                 ))

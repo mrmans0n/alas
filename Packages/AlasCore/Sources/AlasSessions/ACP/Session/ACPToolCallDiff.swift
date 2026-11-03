@@ -99,6 +99,17 @@ public struct ACPToolCallDiff: Codable, Equatable, Hashable, Sendable {
         return String(String.UnicodeScalarView(scalars[lineStart..<end]))
     }
 
+    /// What an approval card previews: the request's own patches (Claude
+    /// sends them on the request) when it carries any, else the diffs already
+    /// on the call's row (Codex sends the patch on the started call and an
+    /// empty request).
+    public static func permissionPreview(
+        request: ACPPermissionToolCall, existingRow: ACPMessage.ToolCall?
+    ) -> [ACPToolCallDiff] {
+        let own = diffs(in: request.content ?? [], source: .permissionRequest)
+        return own.isEmpty ? existingRow?.diffs ?? [] : own
+    }
+
     /// The patch's hunks for display; nil when invalid.
     public func parsed() -> GitFilePatch? {
         guard let patch, case .success(let file) = GitPatchParser.parse(patch, path: path) else { return nil }

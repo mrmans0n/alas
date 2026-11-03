@@ -370,6 +370,93 @@ struct ACPToolCallPresentationTests {
         #expect(ACPToolCallPresentation.target(for: toolCall, label: label) == expected)
     }
 
+    struct DiffSectionCase: CustomTestStringConvertible, Sendable {
+        let name: String
+        let diff: ACPToolCallDiff
+        let status: String
+        let label: ACPToolCallDiffSection.Label
+        let path: String
+        var renamedFrom: String? = nil
+        let available: Bool
+        let added: Int
+        let removed: Int
+        var testDescription: String { name }
+    }
+
+    nonisolated static func diffSectionPatch(_ lines: String...) -> String {
+        lines.joined(separator: "\n") + "\n"
+    }
+
+    nonisolated static let editPatch = diffSectionPatch(
+        "diff --git a/repo/src/a.swift b/repo/src/a.swift",
+        "--- a/repo/src/a.swift",
+        "+++ b/repo/src/a.swift",
+        "@@ -1 +1 @@",
+        "-a",
+        "+b"
+    )
+
+    nonisolated static func sectionDiff(
+        _ source: ACPToolCallDiff.Source, path: String = "/repo/src/a.swift", text: String = editPatch,
+        version: Int = 1
+    ) -> ACPToolCallDiff {
+        ACPToolCallDiff.make(
+            path: path, payload: .init(version: version, format: "git_patch", text: text), source: source)
+    }
+
+    nonisolated static let diffSectionCases: [DiffSectionCase] = [
+        .init(name: "written", diff: sectionDiff(.toolCall), status: "completed",
+              label: .written, path: "src/a.swift", available: true, added: 1, removed: 1),
+        .init(name: "started call", diff: sectionDiff(.toolCall), status: "in_progress",
+              label: .proposed, path: "src/a.swift", available: true, added: 1, removed: 1),
+        .init(name: "failed call", diff: sectionDiff(.toolCall), status: "failed",
+              label: .proposed, path: "src/a.swift", available: true, added: 1, removed: 1),
+        .init(name: "approval preview", diff: sectionDiff(.permissionRequest), status: "completed",
+              label: .proposed, path: "src/a.swift", available: true, added: 1, removed: 1),
+        .init(name: "invalid", diff: sectionDiff(.toolCall, version: 2), status: "completed",
+              label: .written, path: "src/a.swift", available: false, added: 0, removed: 0),
+        .init(name: "renamed",
+              diff: sectionDiff(.toolCall, path: "/repo/src/new.txt", text: diffSectionPatch(
+                  "diff --git a/repo/src/old.txt b/repo/src/new.txt",
+                  "similarity index 50%",
+                  "rename from repo/src/old.txt",
+                  "rename to repo/src/new.txt",
+                  "index 1234567..89abcde 100644",
+                  "--- a/repo/src/old.txt",
+                  "+++ b/repo/src/new.txt",
+                  "@@ -1 +1 @@",
+                  "-a",
+                  "+b"
+              )),
+              status: "completed", label: .written, path: "src/new.txt", renamedFrom: "src/old.txt",
+              available: true, added: 1, removed: 1),
+        .init(name: "outside the worktree",
+              diff: sectionDiff(.toolCall, path: "/repo2/a.swift",
+                                text: editPatch.replacingOccurrences(of: "repo/src/a.swift", with: "repo2/a.swift")),
+              status: "completed", label: .written, path: "/repo2/a.swift", available: true, added: 1, removed: 1),
+    ]
+
+    @Test("a diff section is Written only for a completed tool-call patch, and an invalid one is unavailable",
+          arguments: diffSectionCases)
+    func diffSectionLabels(_ row: DiffSectionCase) throws {
+        let sections = ACPToolCallPresentation.diffSections([row.diff], status: row.status, worktreeRoot: "/repo")
+        let section = try #require(sections.first)
+        #expect(sections.count == 1)
+        #expect(section.id == 0)
+        #expect(section.label == row.label)
+        #expect(section.path == row.path)
+        #expect(section.renamedFrom == row.renamedFrom)
+        #expect(section.added == row.added && section.removed == row.removed)
+        if row.available {
+            let parsed = try #require(row.diff.parsed())
+            #expect(section.body == .hunks(parsed.diff))
+            #expect(section.change == parsed.change)
+        } else {
+            #expect(section.body == .unavailable)
+            #expect(section.change == nil)
+        }
+    }
+
     private func toolCall(
         title: String,
         kind: String? = nil,
