@@ -770,15 +770,16 @@ struct ACPSubagentSessionTests {
         #expect(plan.map(\.content) == ["step one"])
     }
 
-    @Test("replaying a plan closes the open identified prompt run so a later reuse of its id starts a new bubble")
-    func replayedPlanClosesOpenIdentifiedPromptRun() {
+    @Test("replaying a plan closes the open identified prompt run so a later reuse of its id starts a new bubble",
+          arguments: [false, true])
+    func replayedPlanClosesOpenIdentifiedPromptRun(markdown: Bool) {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
         // Two turns already persisted correctly, reusing the same
         // `messageId` — prompt, plan, second prompt.
         run.restore(
             messages: [
                 .user(id: UUID(), messageId: "p1", text: "first task", attachments: []),
-                .plan(id: UUID(), [.init(content: "step one", status: "pending")]),
+                Self.replayPlanRow(markdown: markdown),
                 .user(id: UUID(), messageId: "p1", text: "second task", attachments: [])
             ],
             createdAts: [Date(), Date(), Date()])
@@ -786,7 +787,7 @@ struct ACPSubagentSessionTests {
         // `session/load` resends chronologically: the first prompt, its
         // plan, then the second prompt (reusing "p1").
         run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("first task"))))
-        run.applyReplayed(.plan([.init(content: "step one", priority: nil, status: "pending")]))
+        run.applyReplayed(Self.replayPlanUpdate(markdown: markdown))
         run.applyReplayed(.userMessageChunk(.init(messageId: "p1", content: .text("second task"))))
 
         // Before the fix, the plan replay left `openIdentifiedUserRun`
@@ -795,7 +796,6 @@ struct ACPSubagentSessionTests {
         // reconciling row 2 — losing "second task" as its own row.
         #expect(run.messages.count == 3)
         guard case .user(_, _, let first, _, _, _) = run.messages[0],
-              case .plan = run.messages[1],
               case .user(_, _, let second, _, _, _) = run.messages[2] else {
             Issue.record("expected the plan to close the first prompt so the second stays separate")
             return
@@ -804,30 +804,39 @@ struct ACPSubagentSessionTests {
         #expect(second == "second task")
     }
 
-    @Test("replaying a plan closes an open id-less prompt run too")
-    func replayedPlanClosesOpenIdLessPromptRun() {
+    @Test("replaying a plan closes an open id-less prompt run too", arguments: [false, true])
+    func replayedPlanClosesOpenIdLessPromptRun(markdown: Bool) {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
         run.restore(
             messages: [
                 .user(id: UUID(), text: "first task", attachments: []),
-                .plan(id: UUID(), [.init(content: "step one", status: "pending")]),
+                Self.replayPlanRow(markdown: markdown),
                 .user(id: UUID(), text: "second task", attachments: [])
             ],
             createdAts: [Date(), Date(), Date()])
 
         run.applyReplayed(.userMessageChunk(.init(content: .text("first task"))))
-        run.applyReplayed(.plan([.init(content: "step one", priority: nil, status: "pending")]))
+        run.applyReplayed(Self.replayPlanUpdate(markdown: markdown))
         run.applyReplayed(.userMessageChunk(.init(content: .text("second task"))))
 
         #expect(run.messages.count == 3)
         guard case .user(_, nil, let first, _, _, _) = run.messages[0],
-              case .plan = run.messages[1],
               case .user(_, nil, let second, _, _, _) = run.messages[2] else {
             Issue.record("expected the plan to close the first id-less prompt so the second stays separate")
             return
         }
         #expect(first == "first task")
         #expect(second == "second task")
+    }
+
+    /// A checklist or a Markdown plan between two persisted prompts.
+    private static func replayPlanRow(markdown: Bool) -> ACPMessage {
+        markdown ? .planDocument(id: UUID(), .markdown("m", "# Plan"))
+            : .plan(id: UUID(), [.init(content: "step one", status: "pending")])
+    }
+
+    private static func replayPlanUpdate(markdown: Bool) -> ACPSessionUpdate {
+        markdown ? .markdownPlan("m", "# Plan") : .plan([.init(content: "step one", priority: nil, status: "pending")])
     }
 
     @Test("replay of a reused prompt id matches the turn at the replay cursor, not the newest one")

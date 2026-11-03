@@ -507,6 +507,10 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
             return applyReplayedPlan(entries, at: timestamp)
         case .planUpdate(let plan):
             if case .items(let entries) = plan.content { return applyReplayedPlan(entries, at: timestamp) }
+            guard ACPSession.isPlanContentUpdate(update) else { return [] }
+            // A plan row closes the prompt run before it, as in `applyReplayedPlan`.
+            legacyOpenUserRun = nil
+            openIdentifiedUserRun = nil
             // Like the parent's replay: a plan document is rewritten by id
             // wherever it is, and a miss adds nothing (sessions saved before
             // `plan` was declared hold the agent's message fallback instead).
