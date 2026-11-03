@@ -270,6 +270,19 @@ struct DiffParserTests {
             added: 1, removed: 1, hunkCount: 1
         ),
         ExactPatchCase(
+            name: "codexBackslashName",
+            patch: patch(
+                #"diff --git "a/repo/a\\b.txt" "b/repo/a\\b.txt""#,
+                #"--- "a/repo/a\\b.txt""#,
+                #"+++ "b/repo/a\\b.txt""#,
+                "@@ -1 +1 @@",
+                "-a",
+                "+b"
+            ),
+            path: #"/repo/a\b.txt"#, change: .modified,
+            oldPath: #"repo/a\b.txt"#, newPath: #"repo/a\b.txt"#, added: 1, removed: 1, hunkCount: 1
+        ),
+        ExactPatchCase(
             name: "added",
             patch: patch(
                 "diff --git a/repo/new.txt b/repo/new.txt",
@@ -485,6 +498,14 @@ struct DiffParserTests {
         RejectedPatchCase(
             name: "unterminatedQuote",
             patch: patch("diff --git a/repo/a.txt b/repo/a.txt", #"--- "a/repo/a.txt"#, "+++ b/repo/a.txt", "@@ -1 +1 @@", "-a", "+b"),
+            path: "/repo/a.txt", failure: .malformedPath
+        ),
+        RejectedPatchCase(
+            name: "renameFromBrokenQuote",
+            patch: patch(
+                "diff --git a/repo/x b/repo/a.txt", #"rename from "repo/x"#, "rename to repo/a.txt",
+                "--- a/repo/x", "+++ b/repo/a.txt", "@@ -1 +1 @@", "-a", "+b"
+            ),
             path: "/repo/a.txt", failure: .malformedPath
         ),
         RejectedPatchCase(

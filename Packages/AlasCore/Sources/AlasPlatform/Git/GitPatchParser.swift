@@ -131,7 +131,12 @@ public enum GitPatchParser {
             : isRename ? .renamed
             : .modified
 
-        guard (newPath ?? oldPath) == gitPath(path) else { throw .pathMismatch }
+        // Codex turns backslashes into slashes only for Windows drive paths, so a POSIX name
+        // containing a backslash arrives with it intact.
+        let patchPath = newPath ?? oldPath
+        guard patchPath == gitPath(path) || patchPath == String(path.drop { $0 == "/" }) else {
+            throw .pathMismatch
+        }
         guard index < lines.count else { throw .noHunks }
 
         let hunks = try parseHunks(lines, from: index)
