@@ -83,7 +83,10 @@ public struct ACPPlanReviewPresentation: Equatable, Sendable {
     /// The Codex plan review tool call id prefix.
     public static let codexToolCallIdPrefix = "plan-review:"
 
-    /// Nil unless params.toolCall.isPlanReview.
+    /// Nil unless params.toolCall.isPlanReview, and nil for a bare
+    /// `switch_mode` request with no plan text, no `plan-review:` tool call
+    /// id and no well-formed plan file payload, such as EnterPlanMode: it
+    /// still always asks, on the normal permission card.
     public static func make(
         params: ACPPermissionRequestParams, planFileNegotiated: Bool,
         fileRead: ACPPlanFileReadResult?, binding: ACPPlanReviewBinding?,
@@ -91,6 +94,10 @@ public struct ACPPlanReviewPresentation: Equatable, Sendable {
     ) -> ACPPlanReviewPresentation? {
         guard params.toolCall.isPlanReview else { return nil }
         let text = planText(params)
+        let hasText = !(text?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+        guard hasText || params.toolCall.toolCallId.hasPrefix(codexToolCallIdPrefix)
+            || ACPPlanFilePayload.from(metadata: params.toolCall.metadata)?.isWellFormed == true
+        else { return nil }
         let digest = text.map(sha256Hex)
         var source = Source.inline
         // The file is only ever offered when it names the exact plan text
@@ -118,7 +125,8 @@ public struct ACPPlanReviewPresentation: Equatable, Sendable {
         )
     }
 
-    /// Shown in place of the plan when the review carried no text.
+    /// Shown in place of the plan when a review, by its tool call id or plan
+    /// file payload, carried no text.
     public static let noPlanTextNotice = "No plan text was provided"
     /// Shown under the options while approval is withheld.
     public static let staleNotice = "This plan changed after the review was requested."

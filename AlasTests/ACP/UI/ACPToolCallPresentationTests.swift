@@ -618,17 +618,30 @@ struct ACPToolCallPresentationTests {
         #expect(presentation?.disablesOption(kind: "reject_once") == false)
     }
 
-    @Test("a plan review without plan text stays approvable and says so")
-    func planReviewWithoutPlanText() throws {
+    /// A review by its tool call id or plan file payload says it has no plan text; a bare `switch_mode` request
+    /// without any of the three (EnterPlanMode) is not a plan review card at all.
+    @Test("a plan review without plan text stays approvable and says so; EnterPlanMode keeps the normal card",
+          arguments: [
+              ("plan-review:item_1", nil, true),
+              ("toolu_1", claudeReview().toolCall.metadata, true),
+              ("toolu_1", nil, false),
+          ] as [(String, AnyCodable?, Bool)])
+    func planReviewWithoutPlanText(toolCallId: String, metadata: AnyCodable?, isReviewCard: Bool) throws {
         let params = ACPPermissionRequestParams(
             sessionId: "s",
-            toolCall: .init(toolCallId: "plan-review:item_1", title: "Implement this plan?", kind: "switch_mode"),
+            toolCall: .init(toolCallId: toolCallId, title: "Implement this plan?", kind: "switch_mode", metadata: metadata),
             options: Self.codexReview().options)
+        #expect(params.toolCall.isPlanReview)
         let binding = ACPPlanReviewBinding(
             requestID: .number(1), params: params, planFileNegotiated: false, planRevisions: [:], contextResetCount: 0)
-        let presentation = try #require(ACPPlanReviewPresentation.make(
+        let made = ACPPlanReviewPresentation.make(
             params: params, planFileNegotiated: false, fileRead: nil, binding: binding,
-            planRevisions: [:], contextResetCount: 0, foregroundTurnActive: true))
+            planRevisions: [:], contextResetCount: 0, foregroundTurnActive: true)
+        guard isReviewCard else {
+            #expect(made == nil)
+            return
+        }
+        let presentation = try #require(made)
         #expect(presentation.digest == nil)
         #expect(presentation.hasPlanText == false)
         #expect(presentation.isStale == false)
