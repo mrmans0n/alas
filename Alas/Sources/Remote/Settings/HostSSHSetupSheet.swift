@@ -103,15 +103,31 @@ struct HostSSHSetupSheet: View {
                 AlasButton(title: "Done", style: .primary, action: onDismiss)
             }
         case .failed(let message, let back):
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundColor(theme.color("warn"))
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
+            failureMessage(message)
             buttons {
+                AlasButton(title: "Copy", style: .subtle) { Clipboard.copy(message) }
                 AlasButton(title: "Back", style: .subtle) { phase = back }
             }
         }
+    }
+
+    /// A failing step can return pages of remote stderr (a Homebrew stack
+    /// trace): short messages size to fit, long ones scroll inside a bounded box.
+    private func failureMessage(_ message: String) -> some View {
+        let text = Text(message)
+            .font(.system(size: 11.5, design: .monospaced))
+            .foregroundColor(theme.color("warn"))
+            .textSelection(.enabled)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(8)
+        return ViewThatFits(in: .vertical) {
+            text.fixedSize(horizontal: false, vertical: true)
+            ScrollView { text }
+        }
+        .frame(maxHeight: 320)
+        .background(theme.color("bg-0"))
+        .overlay(RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(theme.color("line"), lineWidth: 0.5))
     }
 
     private func dimText(_ text: String) -> some View {
