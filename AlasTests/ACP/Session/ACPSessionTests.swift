@@ -1684,6 +1684,49 @@ struct ACPSessionTests {
         #expect(session.transcript.messages.planDocuments == expected, "\(name)")
     }
 
+    nonisolated private static let planFileSha = String(repeating: "ab", count: 32)
+
+    nonisolated private static func planFileMeta(planId: String = "plan-mode:toolu_1", sha256: String = planFileSha,
+                                     path: String? = "/Users/u/.claude/plans/a.md") -> AnyCodable {
+        var payload: [String: AnyCodable] = [
+            "version": AnyCodable(1), "planId": AnyCodable(planId), "sha256": AnyCodable(sha256),
+        ]
+        if let path { payload["path"] = AnyCodable(path) }
+        return AnyCodable(["planFile": AnyCodable(payload)])
+    }
+
+    @Test("an approved plan carries its plan file only when planFile was negotiated",
+          arguments: [(negotiated: true, attached: true), (negotiated: false, attached: false)])
+    func approvedPlanAttachesPlanFile(negotiated: Bool, attached: Bool) {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        if negotiated { session.planFile = .init() }
+        session.apply(.userMessageChunk(.text("Plan it")))
+        session.apply(.toolCall(.init(
+            toolCallId: "toolu_1", title: "Ready to code?", kind: "switch_mode", status: "pending",
+            metadata: Self.planFileMeta())))
+        session.apply(.markdownPlan("plan-mode:toolu_1", "# Plan"))
+
+        let document = session.transcript.messages.planDocuments.first
+        #expect(document?.kind == .markdown)
+        #expect(document?.markdown == "# Plan")
+        #expect(document?.file == (attached
+            ? ACPPlanFileReference(path: "/Users/u/.claude/plans/a.md", sha256: Self.planFileSha) : nil))
+    }
+
+    @Test("planFile payloads are well formed only with a plan-mode id, a full digest and an absolute path",
+          arguments: [
+              (Self.planFileMeta(), true as Bool?),
+              (Self.planFileMeta(path: nil), true),
+              (Self.planFileMeta(planId: "plan-mode"), false),
+              (Self.planFileMeta(sha256: "abcd"), false),
+              (Self.planFileMeta(sha256: String(repeating: "AB", count: 32)), false),
+              (Self.planFileMeta(path: "plans/a.md"), false),
+              (AnyCodable(["planFile": AnyCodable("x")]), nil),
+          ] as [(AnyCodable, Bool?)])
+    func planFilePayloadShapes(metadata: AnyCodable, wellFormed: Bool?) {
+        #expect(ACPPlanFilePayload.from(metadata: metadata)?.isWellFormed == wellFormed)
+    }
+
     @Test("plan_removed hides the plan's row, a later snapshot shows it again, and both bump its revision")
     func planRemovedHides() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

@@ -286,6 +286,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
     public let forkPoint: ACPForkPointDeclaration
     /// Asks our Claude and Codex adapter forks for exact git patches on edits.
     public let diffPatch: ACPDiffPatchDeclaration
+    /// Asks our Claude adapter fork for the approved plan's file and digest.
+    public let planFile: ACPPlanFileDeclaration
 
     public init(
         terminalAuth: Bool,
@@ -298,7 +300,8 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         sessionIndex: ACPSessionIndexDeclaration = .init(),
         codexHooks: ACPCodexHooksDeclaration? = nil,
         forkPoint: ACPForkPointDeclaration = .init(),
-        diffPatch: ACPDiffPatchDeclaration = .init()
+        diffPatch: ACPDiffPatchDeclaration = .init(),
+        planFile: ACPPlanFileDeclaration = .init()
     ) {
         self.terminalAuth = terminalAuth
         self.parameterizedModelPicker = parameterizedModelPicker
@@ -311,10 +314,11 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         self.codexHooks = codexHooks
         self.forkPoint = forkPoint
         self.diffPatch = diffPatch
+        self.planFile = planFile
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch
+        case contextUsage, settleAtResult, sessionIndex, codexHooks, forkPoint, diffPatch, planFile
         case terminalAuth = "terminal-auth"
         case parameterizedModelPicker
         case openCodeChildSessionUpdates = "opencode/child-session-updates"
@@ -336,6 +340,7 @@ public struct ACPClientCapabilitiesMeta: Codable, Equatable, Sendable {
         sessionIndex = (try? c.decodeIfPresent(ACPSessionIndexDeclaration.self, forKey: .sessionIndex)) ?? .init()
         forkPoint = (try? c.decodeIfPresent(ACPForkPointDeclaration.self, forKey: .forkPoint)) ?? .init()
         diffPatch = (try? c.decodeIfPresent(ACPDiffPatchDeclaration.self, forKey: .diffPatch)) ?? .init()
+        planFile = (try? c.decodeIfPresent(ACPPlanFileDeclaration.self, forKey: .planFile)) ?? .init()
     }
 }
 
@@ -427,9 +432,11 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
         public let forkPoint: ACPForkPointAdvertisement?
         /// Exact git patches on edits (our Claude and Codex adapter forks).
         public let diffPatch: ACPDiffPatchAdvertisement?
+        /// The approved plan's file and digest (our Claude adapter fork).
+        public let planFile: ACPPlanFileAdvertisement?
 
         public enum CodingKeys: String, CodingKey, Sendable {
-            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch
+            case goal, steering, contextUsage, settleAtResult, systemPrompt, sessionIndex, codexHooks, forkPoint, diffPatch, planFile
             case asyncTasks = "async-tasks"
         }
 
@@ -445,6 +452,7 @@ public struct ACPInitializeResult: Codable, Equatable, Sendable {
             codexHooks = try? c.decodeIfPresent(ACPCodexHooksCapability.self, forKey: .codexHooks)
             forkPoint = try? c.decodeIfPresent(ACPForkPointAdvertisement.self, forKey: .forkPoint)
             diffPatch = try? c.decodeIfPresent(ACPDiffPatchAdvertisement.self, forKey: .diffPatch)
+            planFile = try? c.decodeIfPresent(ACPPlanFileAdvertisement.self, forKey: .planFile)
         }
 
         public struct SystemPromptCapability: Codable, Equatable, Sendable {

@@ -291,6 +291,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Whether the adapter attaches exact git patches to edits, from its
     /// `diffPatch` advertisement. Runtime only; relearned on attach.
     @Tracked public var diffPatch: ACPDiffPatchCapability?
+    /// Whether the adapter names the approved plan's file, from its
+    /// `planFile` advertisement. Runtime only; relearned on attach.
+    @Tracked public var planFile: ACPPlanFileCapability?
     /// Whether a foreground turn is running. Installed by the session's
     /// runner; a turn that settled at its result no longer counts, even while
     /// its children still run.
@@ -1314,9 +1317,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
             } else {
                 nil
             }
-            guard let document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content) else {
+            guard var document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content) else {
                 return []
             }
+            attachPlanFile(to: &document)
             clearRestoredContextRecoveryStatus()
             switch placement {
             case .replace(let i):
@@ -1870,8 +1874,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
             // message fallback instead of a row, so a miss adds nothing.
             guard let i = planDocumentIndex(planId: plan.planId, replayingAt: suppressedReplayInsertionCursor),
                   case .planDocument(_, let current) = transcript.messages[i],
-                  let document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content)
+                  var document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content)
             else { return [] }
+            attachPlanFile(to: &document)
             matchedIndex = i
             dirty = replacePlanDocument(at: i, with: document)
         case .planRemoved(let planId):
@@ -4456,6 +4461,23 @@ public final class ACPSession: ChangeTracking, Identifiable {
         guard case .planUpdate(let plan) = update else { return false }
         if case .unknown = plan.content { return false }
         return true
+    }
+
+    /// With `planFile` negotiated, an approved plan (`plan-mode:<toolUseId>`)
+    /// gets the file its ExitPlanMode tool call named, when that call's
+    /// payload is well formed, carries the same plan id and has a path.
+    private func attachPlanFile(to document: inout ACPPlanDocument) {
+        guard planFile != nil, document.kind == .markdown,
+              document.planId.hasPrefix(ACPPlanFilePayload.planIdPrefix) else { return }
+        let toolCallId = String(document.planId.dropFirst(ACPPlanFilePayload.planIdPrefix.count))
+        for message in transcript.messages.reversed() {
+            guard case .toolCall(let row) = message, row.toolCallId == toolCallId else { continue }
+            if let payload = ACPPlanFilePayload.from(metadata: row.metadata), payload.isWellFormed,
+               payload.planId == document.planId, let path = payload.path, let sha256 = payload.sha256 {
+                document.file = ACPPlanFileReference(path: path, sha256: sha256)
+            }
+            return
+        }
     }
 
     /// The newest `.planDocument` row for `planId`, at any position. When

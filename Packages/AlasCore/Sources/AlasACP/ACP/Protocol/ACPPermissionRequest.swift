@@ -252,5 +252,6 @@ extension ACPPermissionToolCall {
     /// ExitPlanMode or a Codex plan review: never remembered, never auto-answered.
     public var isPlanReview: Bool {
         kind == "switch_mode" || toolCallId.hasPrefix("plan-review:")
+            || ACPPlanFilePayload.from(metadata: metadata) != nil
     }
 }
