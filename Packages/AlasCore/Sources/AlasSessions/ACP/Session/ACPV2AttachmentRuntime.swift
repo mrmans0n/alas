@@ -83,6 +83,7 @@ public final class ACPV2AttachmentRuntime {
     private let journals: Journals
     private let isCurrent: @MainActor () -> Bool
     private let onRequest: @MainActor (Request) -> Void
+    private let onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)?
     private var active = true
     private var started = false
     private var ownersStarted = false
@@ -96,7 +97,8 @@ public final class ACPV2AttachmentRuntime {
     private lazy var updateOwner = ACPV2SessionUpdateOwner(sessionId: sessionId, upstreamSessionId: upstreamSessionId,
         attachment: attachment.updates, fence: fence, journal: journals.updates,
         submissions: .init(sender: attachment.sender, journal: journals.submissions),
-        isCurrent: { [weak self] in self?.current() == true })
+        isCurrent: { [weak self] in self?.current() == true },
+        onCanonicalChange: { [weak self] publication in try self?.canonicalChanged(publication) })
     private lazy var inboundOwner = ACPV2InboundReceiptOwner(sessionId: sessionId, upstreamSessionId: upstreamSessionId,
         attachment: attachment.inbound, fence: fence, journal: journals.inbound,
         isCurrent: { [weak self] in self?.current() == true },
@@ -104,7 +106,8 @@ public final class ACPV2AttachmentRuntime {
         onRetained: { [weak self] delivery, receipt in try self?.retained(delivery, receipt: receipt) })
 
     public init(sessionId: String, upstreamSessionId: String, attachment: Attachment, fence: ACPSessionLeaseFence,
-        journals: Journals, isCurrent: @escaping @MainActor () -> Bool, onRequest: @escaping @MainActor (Request) -> Void) throws {
+        journals: Journals, isCurrent: @escaping @MainActor () -> Bool, onRequest: @escaping @MainActor (Request) -> Void,
+        onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil) throws {
         guard !sessionId.isEmpty, !upstreamSessionId.isEmpty, sessionId.utf8.elementsEqual(fence.sessionId.utf8),
               attachment.localSessionId.map({ $0.utf8.elementsEqual(sessionId.utf8) }) ?? true else { throw Failure.invalidAttachment }
         self.sessionId = sessionId
@@ -114,6 +117,7 @@ public final class ACPV2AttachmentRuntime {
         self.journals = journals
         self.isCurrent = isCurrent
         self.onRequest = onRequest
+        self.onCanonicalChange = onCanonicalChange
         let stream = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observations = stream.stream
         continuation = stream.continuation
@@ -204,6 +208,23 @@ public final class ACPV2AttachmentRuntime {
             intentID: intentID, attemptID: attemptID, operationKey: operationKey, frame: frame)
         try requireReady()
         return result
+    }
+
+    private func canonicalChanged(_ publication: ACPV2SessionUpdateOwner.CanonicalPublication) throws {
+        // Terminal display withdrawal must reach the installation even after
+        // runtime authority is gone. It never authorizes a command or ACK.
+        if case .observationLost = publication.change {
+            try onCanonicalChange?(publication)
+            return
+        }
+        guard current() else { throw Failure.invalidated }
+        do { try onCanonicalChange?(publication) }
+        catch {
+            finish(.blocked(.updates(.projection(message: String(describing: error)))))
+            throw error
+        }
+        guard current() else { finish(.blocked(.ownershipLost))
+        throw Failure.invalidated }
     }
 
     private func current() -> Bool {

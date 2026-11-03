@@ -275,6 +275,7 @@ public final class ACPSessionRunner {
     /// than the narrow, single-batch hazard this flag exists to close.
     private var lastQueuedPersistenceSucceeded = true
     private var pendingQueueForceSendsAfterPersistence: [UUID] = []
+    private let projectionEpoch = UUID()
     private var stopped = false
     private var pendingCompletedOutputBoundary: (updateCount: Int, successfulTurn: NextPromptCompletedTurn?)?
     private var turnPublicationGeneration = 0
@@ -633,6 +634,7 @@ public final class ACPSessionRunner {
     private var backgroundCancellationInProgress = false
 
     public func start() {
+        guard session.reserveLegacyProjection(epoch: projectionEpoch) else { return }
         session.clearRetryStatus()
         updatesTask = Task { [weak self] in
             guard let self else { return }
@@ -1943,6 +1945,7 @@ public final class ACPSessionRunner {
     }
 
     public func stop() {
+        defer { session.releaseLegacyProjection(epoch: projectionEpoch) }
         stopped = true
         unsuppressedLoadReplayTarget = nil
         session.pendingQueuePersistenceCount -= deferredQueueAcknowledgements.count

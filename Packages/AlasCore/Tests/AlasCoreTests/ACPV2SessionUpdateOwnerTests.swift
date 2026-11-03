@@ -5,6 +5,62 @@ import AlasCore
 
 @MainActor
 struct ACPV2SessionUpdateOwnerTests {
+    @Test func canonicalCallbacksObserveCommittedChangesInOrder() async throws {
+        let fixture = try await Fixture()
+        let stream = try await fixture.register()
+        var revisions: [UInt64] = []
+        var completions: [Int] = []
+        let owner = try fixture.owner(onCanonicalChange: { publication in
+            revisions.append(publication.revision)
+            if case .update(let application) = publication.change {
+                let store = try ACPSessionStore(path: fixture.persistence.path)
+                #expect(try store.loadV2UpdateJournalPage(stream: stream).records.count >= application.ordinal)
+                for effect in application.effects {
+                    if case .lifecycle(.foregroundEnded(let end)) = effect { completions.append(end.generation) }
+                }
+            }
+        })
+        let deliveries = AsyncStream<ACPV2SessionUpdateDelivery>.makeStream()
+        try owner.establishFreshSessionDefault()
+        for _ in 0..<3 {
+            deliveries.continuation.yield(fixture.delivery(Self.running))
+            deliveries.continuation.yield(fixture.delivery(Self.idle))
+        }
+        deliveries.continuation.finish()
+        _ = owner.start(deliveries.stream)
+        await owner.waitUntilFinished()
+        #expect(completions == [1, 2, 3])
+        #expect(revisions == Array(1...8).map(UInt64.init))
+    }
+
+    @Test(arguments: ["stop", "throw", "ownership"])
+    func canonicalCallbackLossPreventsConsumption(loss: String) async throws {
+        let fixture = try await Fixture()
+        let reference = CanonicalOwnerReference()
+        let consumed = Mutex(0)
+        var current = true
+        let owner = try fixture.owner(isCurrent: { current }, onCanonicalChange: { publication in
+            guard case .update = publication.change else { return }
+            switch loss {
+            case "stop": reference.owner?.stop()
+            case "ownership": current = false
+            default: throw CanonicalCallbackError.injected
+            }
+        })
+        reference.owner = owner
+        defer { reference.owner = nil }
+        let deliveries = AsyncStream<ACPV2SessionUpdateDelivery>.makeStream()
+        for _ in 0..<2 { deliveries.continuation.yield(fixture.delivery(Self.chunk, ack: { consumed.withLock { $0 += 1 } })) }
+        deliveries.continuation.finish()
+        _ = owner.start(deliveries.stream)
+        await owner.waitUntilFinished()
+        #expect(consumed.withLock { $0 } == 0)
+        #expect(owner.lastAppliedOrdinal == 1)
+        if loss == "stop" { #expect(owner.status == .stopped) }
+        if loss == "throw" { guard case .blocked(.projection) = owner.status else { Issue.record("Missing projection failure")
+        return } }
+    }
+
     @Test func separateEqualChunksApplyInOrderWhileCopiedReceiptsApplyOnce() async throws {
         let fixture = try await Fixture()
         let owner = try fixture.owner()
@@ -662,10 +718,11 @@ struct ACPV2SessionUpdateOwnerTests {
         @MainActor
         func owner(tail: UInt64 = 4, journal: (any ACPV2UpdateJournalPersisting)? = nil,
             submissions: ACPV2SessionUpdateOwner.SubmissionCapability? = nil,
-            isCurrent: @escaping @MainActor () -> Bool = { true }) throws -> ACPV2SessionUpdateOwner {
+            isCurrent: @escaping @MainActor () -> Bool = { true },
+            onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil) throws -> ACPV2SessionUpdateOwner {
             let attachment = try broker ? ACPV2SessionUpdateOwner.Attachment(brokerConnectionID: connectionID, opened: opened(tail: tail)) : ACPV2SessionUpdateOwner.Attachment(freshStdioConnectionID: connectionID)
             return ACPV2SessionUpdateOwner(sessionId: "local", upstreamSessionId: "upstream", attachment: attachment,
-                fence: fence, journal: journal ?? persistence, submissions: submissions, isCurrent: isCurrent)
+                fence: fence, journal: journal ?? persistence, submissions: submissions, isCurrent: isCurrent, onCanonicalChange: onCanonicalChange)
         }
 
         func delivery(_ update: String, cursor: UInt64 = 5, origin: ACPBrokerFrameProvenance.Origin = .journal,
@@ -821,3 +878,6 @@ private actor SubmissionJournalGate: ACPV2SubmissionPersisting {
         return page
     }
 }
+
+@MainActor private final class CanonicalOwnerReference { var owner: ACPV2SessionUpdateOwner? }
+private enum CanonicalCallbackError: Error { case injected }

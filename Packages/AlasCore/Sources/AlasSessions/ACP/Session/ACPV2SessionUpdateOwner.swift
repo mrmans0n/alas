@@ -77,6 +77,7 @@ public final class ACPV2SessionUpdateOwner {
         case invalidAttachment
         case submission(SubmissionFailure)
         case ownershipLost
+        case projection(message: String)
         case deliveryMismatch
         case ordinalGap(expected: Int64, received: Int64)
         case journal(Operation, ACPV2UpdateJournalError)
@@ -95,6 +96,21 @@ public final class ACPV2SessionUpdateOwner {
         public let source: ACPSessionLifecycle.StateSource
         public let disposition: ACPV2SessionState.Reduction.Disposition
         public let effects: [ACPV2SessionState.Effect]
+    }
+
+    /// Reliable synchronous canonical changes, separate from coalescible status.
+    public struct CanonicalPublication: Sendable {
+        public enum SubmissionSource: Sendable { case registration, snapshot, live, localUncertainty }
+        public enum Change: Sendable {
+            case update(Application)
+            case submission(SubmissionApplication, source: SubmissionSource)
+            case setupDefault(ACPV2SessionState.Reduction)
+            case observationLost([ACPV2SessionState.Effect])
+        }
+        public let revision: UInt64
+        public let context: ACPV2SessionState.Context
+        public let change: Change
+        public let state: ACPV2SessionState
     }
 
     public struct Observation: Equatable, Sendable {
@@ -130,17 +146,24 @@ public final class ACPV2SessionUpdateOwner {
     private var task: Task<Void, Never>?
     private var started = false
     private var revision: UInt64 = 0
+    private var canonicalRevision: UInt64 = 0
+    private var deliveringCanonical = false
+    private var pendingLoss: [ACPV2SessionState.Effect]?
+    private var didLoseObservation = false
+    private let onCanonicalChange: (@MainActor (CanonicalPublication) throws -> Void)?
 
     public init(sessionId: String, upstreamSessionId: String, attachment: Attachment,
         fence: ACPSessionLeaseFence, journal: any ACPV2UpdateJournalPersisting,
         submissions: SubmissionCapability? = nil,
-        isCurrent: @escaping @MainActor () -> Bool) {
+        isCurrent: @escaping @MainActor () -> Bool,
+        onCanonicalChange: (@MainActor (CanonicalPublication) throws -> Void)? = nil) {
         self.sessionId = sessionId
         self.attachment = attachment
         self.fence = fence
         self.submissions = submissions
         self.journal = journal
         self.isCurrent = isCurrent
+        self.onCanonicalChange = onCanonicalChange
         state = ACPV2SessionState(context: .init(sessionID: upstreamSessionId, connectionID: attachment.connectionID))
         let updates = AsyncStream<Observation>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observations = updates.stream
@@ -154,7 +177,8 @@ public final class ACPV2SessionUpdateOwner {
             "sessionId": .string(state.context.sessionID),
             "update": .object(["sessionUpdate": .string("state_update"), "state": .string("idle")]),
         ]))
-        _ = try state.apply(event, source: .setupDefault, context: state.context)
+        let result = try state.apply(event, source: .setupDefault, context: state.context)
+        try canonical(.setupDefault(result))
     }
 
     @discardableResult
@@ -171,6 +195,7 @@ public final class ACPV2SessionUpdateOwner {
         status = .stopped
         task?.cancel()
         invalidateSubmissions()
+        loseCanonicalObservation()
         publish()
         observationContinuation.finish()
     }
@@ -180,7 +205,7 @@ public final class ACPV2SessionUpdateOwner {
     private func requireCurrent() throws {
         guard !Task.isCancelled, status != .stopped else { throw Failure.ownershipLost }
         if case .blocked = status { throw Failure.ownershipLost }
-        guard isCurrent() else {
+        guard isCurrent(), status != .stopped, !Task.isCancelled else {
             block(.ownershipLost)
             throw Failure.ownershipLost
         }
@@ -235,9 +260,9 @@ public final class ACPV2SessionUpdateOwner {
                 delivery.acknowledgeDurableConsumption()
             }
             try requireCurrent()
-            _ = state.loseObservation(context: state.context)
             status = .observationLost
             invalidateSubmissions()
+            loseCanonicalObservation(updatingState: true)
             publish()
         } catch {
             guard status != .stopped else { return }
@@ -272,7 +297,9 @@ public final class ACPV2SessionUpdateOwner {
         let result = try next.apply(event, source: source, context: state.context)
         state = next
         lastAppliedOrdinal = record.ordinal
-        latestApplication = Application(ordinal: record.ordinal, source: source, disposition: result.disposition, effects: result.effects)
+        let application = Application(ordinal: record.ordinal, source: source, disposition: result.disposition, effects: result.effects)
+        latestApplication = application
+        try canonical(.update(application))
         publish()
     }
 
@@ -351,7 +378,7 @@ public final class ACPV2SessionUpdateOwner {
             try await capability.journal.retainV2SubmissionOutcome(delivery, for: registration, fence: self.fence)
         }
         try requireSubmissionCurrent(id: id, gate: gate)
-        try applySubmission(receipt.record)
+        try applySubmission(receipt.record, source: .live)
         try requireSubmissionCurrent(id: id, gate: gate)
         delivery.acknowledgeDurableConsumption()
         return receipt.record
@@ -377,7 +404,9 @@ public final class ACPV2SessionUpdateOwner {
         guard reduction.disposition == .registered || reduction.disposition == .unchanged else { throw terminalSubmissionFailure(.conflict) }
         submissionRegistrations[id] = registration
         state = next
-        latestSubmission = .init(record: .init(registration: registration, outcome: nil), effects: reduction.effects)
+        let application = SubmissionApplication(record: .init(registration: registration, outcome: nil), effects: reduction.effects)
+        latestSubmission = application
+        try canonical(.submission(application, source: .registration))
         publish()
     }
 
@@ -391,12 +420,12 @@ public final class ACPV2SessionUpdateOwner {
                     source: self.submissionSource, after: after, maxRecords: 128, maxBytes: 1_048_576)
             }
             try requireCurrent()
-            for record in page.records { try applySubmission(record) }
+            for record in page.records { try applySubmission(record, source: .snapshot) }
             after = page.next
         } while after != nil
     }
 
-    private func applySubmission(_ record: ACPV2SubmissionRecord) throws {
+    private func applySubmission(_ record: ACPV2SubmissionRecord, source: CanonicalPublication.SubmissionSource) throws {
         try requireCurrent()
         let registration = record.registration
         guard registration.sessionId == sessionId, registration.upstreamSessionId == state.context.sessionID,
@@ -414,7 +443,9 @@ public final class ACPV2SessionUpdateOwner {
             effects += next.markSubmissionUncertain(requestID: registration.sequence, context: next.context).effects
         }
         state = next
-        latestSubmission = .init(record: record, effects: effects)
+        let application = SubmissionApplication(record: record, effects: effects)
+        latestSubmission = application
+        try canonical(.submission(application, source: source))
         publish()
         if record.recovery == .uninterpretable { throw terminalSubmissionFailure(.uninterpretable) }
     }
@@ -423,7 +454,10 @@ public final class ACPV2SessionUpdateOwner {
         guard status == .live, isCurrent(), let registration = submissionRegistrations[id] else { return }
         let reduction = state.markSubmissionUncertain(requestID: registration.sequence, context: state.context)
         guard !reduction.effects.isEmpty else { return }
-        latestSubmission = .init(record: .init(registration: registration, outcome: nil), effects: reduction.effects)
+        let application = SubmissionApplication(record: .init(registration: registration, outcome: nil), effects: reduction.effects)
+        latestSubmission = application
+        do { try canonical(.submission(application, source: .localUncertainty)) }
+        catch { return } // canonical() has already withdrawn authority.
         publish()
     }
 
@@ -444,6 +478,7 @@ public final class ACPV2SessionUpdateOwner {
         guard status != .stopped else { return }
         if case .blocked = status { return }
         let ownedLiveState = status == .live && isCurrent()
+        guard status != .stopped else { return }
         status = .blocked(failure)
         invalidateSubmissions()
         task?.cancel()
@@ -455,6 +490,7 @@ public final class ACPV2SessionUpdateOwner {
                 }
             }
         }
+        loseCanonicalObservation()
         publish()
         observationContinuation.finish()
     }
@@ -469,6 +505,38 @@ public final class ACPV2SessionUpdateOwner {
         do { return try await body() }
         catch let error as ACPV2UpdateJournalError { throw Failure.journal(operation, error) }
         catch { throw Failure.persistence(operation, message: error.localizedDescription) }
+    }
+
+    private func loseCanonicalObservation(updatingState: Bool = false) {
+        guard !didLoseObservation else { return }
+        didLoseObservation = true
+        // Intentional stop retains last-known canonical evidence. The terminal
+        // publication withdraws observation without rewriting that history.
+        var withdrawn = state
+        let effects = withdrawn.loseObservation(context: state.context)
+        if updatingState { state = withdrawn }
+        if deliveringCanonical { pendingLoss = effects }
+        else { try? canonical(.observationLost(effects), terminal: true) }
+    }
+
+    private func canonical(_ change: CanonicalPublication.Change, terminal: Bool = false) throws {
+        deliveringCanonical = true
+        defer {
+            deliveringCanonical = false
+            if let loss = pendingLoss {
+                pendingLoss = nil
+                try? canonical(.observationLost(loss), terminal: true)
+            }
+        }
+        canonicalRevision += 1
+        do {
+            try onCanonicalChange?(.init(revision: canonicalRevision, context: state.context, change: change, state: state))
+        } catch {
+            let failure = Failure.projection(message: String(describing: error))
+            block(failure)
+            throw failure
+        }
+        if !terminal { try requireCurrent() }
     }
 
     private func publish() {
