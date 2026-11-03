@@ -359,12 +359,38 @@ struct ACPPermissionPolicyTests {
 
         #expect(await !policy.userDecided(
             scopeKey: "tool:Implement this plan?", optionId: "implement_plan", decision: .allow, persistScope: nil))
+        #expect(await !policy.userDecided(
+            scopeKey: "tool:Implement this plan?", optionId: "unoffered", decision: .allow, persistScope: nil))
         #expect(session.transcript.pendingPermission != nil)
         #expect(policy.pendingPermissionRequestID == .number(1))
 
         #expect(await policy.userDecided(
             scopeKey: "tool:Implement this plan?", optionId: "revise_plan", decision: .deny, persistScope: nil))
         #expect(await decision.outcome == .selected(optionId: "revise_plan"))
+    }
+
+    @Test("a plan that changes while the answer is being authorized cancels an approval but not a rejection",
+          arguments: [
+              (optionId: "implement_plan", decision: ACPPermissionDecision.allow, delivered: false),
+              (optionId: "revise_plan", decision: .deny, delivered: true),
+          ])
+    func reviewGoingStaleDuringAuthorization(optionId: String, decision: ACPPermissionDecision,
+                                             delivered: Bool) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        let params = ACPToolCallPresentationTests.codexReview()
+        async let outcome = policy.evaluate(
+            scopeKey: "tool:Implement this plan?", options: params.options, params: params, requestID: .number(1))
+        await waitForPendingPermission(session)
+
+        let answered = await policy.userDecided(
+            scopeKey: "tool:Implement this plan?", optionId: optionId, decision: decision, persistScope: nil,
+            stillAuthorized: {
+                session.apply(.markdownPlan("item_1", "# Revised"))
+                return true
+            })
+        #expect(answered == delivered)
+        #expect(await outcome.outcome == (delivered ? .selected(optionId: optionId) : .cancelled))
     }
 
     @Test("a plan review approval must name the plan text the review parked with, unless it names none",

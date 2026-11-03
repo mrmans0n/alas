@@ -207,7 +207,8 @@ public final class ACPPermissionPolicy {
     ///
     /// `planDigest` is the digest of the plan text a plan review's approver
     /// was shown. An approval `refusesApproval` refuses returns false and
-    /// leaves the request parked.
+    /// leaves the request parked. An approval whose review goes stale while
+    /// `stillAuthorized` is awaited cancels the request instead.
     @discardableResult
     public func userDecided(
         scopeKey: String,
@@ -217,10 +218,15 @@ public final class ACPPermissionPolicy {
         planDigest: String? = nil,
         stillAuthorized: (@MainActor () async -> Bool)? = nil
     ) async -> Bool {
-        if let option = parkedOptions.first(where: { $0.optionId == optionId }),
-           refusesApproval(optionKind: option.kind, planDigest: planDigest) {
+        // An option the request did not offer is judged by its decision, so
+        // it never slips past the check.
+        let optionKind = parkedOptions.first(where: { $0.optionId == optionId })?.kind
+            ?? (decision == .allow ? "allow_once" : "reject_once")
+        if refusesApproval(optionKind: optionKind, planDigest: planDigest) {
             return false
         }
+        // Kept past the clear below, to check again after the await.
+        let approvedBinding = optionKind.hasPrefix("allow") ? planReviewBinding : nil
         let wasPending = pendingContinuation != nil || session.transcript.pendingPermission != nil
         let cont = pendingContinuation
         pendingContinuation = nil
@@ -233,6 +239,13 @@ public final class ACPPermissionPolicy {
         // answer must not claim a turn that is no longer running.
         if wasPending { session.settleWaitingState() }
         if let stillAuthorized, await !stillAuthorized() {
+            cont?.resume(returning: .init(outcome: .cancelled))
+            return false
+        }
+        // The plan or context may have changed while this awaited; the
+        // request is no longer parked, so a stale approval cancels it.
+        if let approvedBinding,
+           approvedBinding.isStale(planRevisions: session.planRevisions, contextResetCount: session.contextResetCount) {
             cont?.resume(returning: .init(outcome: .cancelled))
             return false
         }
