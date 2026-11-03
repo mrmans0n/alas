@@ -177,7 +177,9 @@ public final class ACPV2RequestDecisionCoordinator {
         let peers = entries.values.filter {
             $0 !== entry && !$0.finished && !$0.withdrawn && Self.idKey($0.handle.request.header.id) == Self.idKey(typed.header.id)
         }
-        if !peers.isEmpty {
+        // Stdio's capture registry owns ID occupancy through physical handoff.
+        // A completed write can release the ID before its observation COMMIT.
+        if case .broker = event.currentSource, !peers.isEmpty {
             entry.withdrawn = true
             for peer in peers { peer.withdrawn = true
             onEvent(.withdrawn(peer.handle)) }
@@ -197,6 +199,16 @@ public final class ACPV2RequestDecisionCoordinator {
                 entry.availability = availability
                 guard availability == .available else {
                     entry.withdrawn = true
+                    if case .stdio = entry.source, availability == .unavailable {
+                        // An actual overlapping stdio capture makes the registry
+                        // ambiguous. Withdraw older affordances without replacing
+                        // any immutable response already selected for them.
+                        for peer in self.entries.values where peer.handle.record.ordinal < entry.handle.record.ordinal && !peer.finished && !peer.withdrawn && Self.idKey(peer.handle.request.header.id) == Self.idKey(typed.header.id) {
+                            peer.withdrawn = true
+                            self.onEvent(.withdrawn(peer.handle))
+                            try self.requireCurrent()
+                        }
+                    }
                     self.onEvent(.unavailable(entry.handle.record, availability))
                     return
                 }
@@ -267,11 +279,19 @@ public final class ACPV2RequestDecisionCoordinator {
     private func cancel(_ requestID: JSONRPCID, event: ACPV2AttachmentRuntime.InboundEvent) {
         guard let key = Self.idKey(requestID) else { return }
         if case .broker = event.currentSource { qualifiedCancellations.append((key, event.currentSource)) }
-        let matches = entries.values.filter { entry in
-            guard !entry.finished, Self.idKey(entry.handle.request.header.id) == key else { return false }
-            switch (event.currentSource, entry.source) {
-            case (.stdio, .stdio): return event.record.ordinal > entry.handle.record.ordinal
-            default: return Self.follows(event.currentSource, entry.source)
+        let matches: [Entry]
+        if case .stdio = event.currentSource {
+            // Bind cancellation to the latest capture already received, never
+            // an older response whose observation save is still pending. If
+            // captures actually overlap, registry inspection denies dispatch.
+            let latest = entries.values.filter { entry in
+                guard case .stdio = entry.source else { return false }
+                return Self.idKey(entry.handle.request.header.id) == key && entry.handle.record.ordinal < event.record.ordinal
+            }.max { $0.handle.record.ordinal < $1.handle.record.ordinal }
+            matches = latest.flatMap { $0.finished ? nil : $0 }.map { [$0] } ?? []
+        } else {
+            matches = entries.values.filter { entry in
+                !entry.finished && Self.idKey(entry.handle.request.header.id) == key && Self.follows(event.currentSource, entry.source)
             }
         }
         guard matches.count == 1, let entry = matches.first else {
