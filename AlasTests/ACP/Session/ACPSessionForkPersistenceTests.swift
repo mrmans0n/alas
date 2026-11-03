@@ -78,6 +78,49 @@ struct ACPSessionForkPersistenceTests {
         #expect(try await persistence.loadFork(targetSessionID: "target")?.contextDeliveryPending == false)
     }
 
+    @Test("fork point and its outcome persist, and a later finalize without one keeps it",
+          arguments: [
+              ACPSessionForkPoint.Outcome.matched(.init(boundary: .message, messageId: "m1", matchedBy: .id)),
+              .unmatched(.notFound)
+          ])
+    func forkPointRoundTrip(outcome: ACPSessionForkPoint.Outcome) async throws {
+        let persistence = ACPSessionPersistence(path: temporaryPath())
+        let point = ACPSessionForkPoint(
+            target: .init(messageId: "m1", messageFingerprint: "sha256:abc", messageOccurrence: 2),
+            boundary: .message
+        )
+        var initial = forkRecord(target: "target", phase: .negotiatingNative, mechanism: nil)
+        initial.forkPoint = point
+        try await persistence.createFork(session: targetRow(id: "target"), messages: [], record: initial)
+        #expect(try await persistence.loadFork(targetSessionID: "target")?.forkPoint?.target == point.target)
+
+        var resolved = point
+        resolved.outcome = outcome
+        try await persistence.finalizeFork(
+            targetSessionID: "target", mechanism: .transcriptTransfer, remoteSessionID: nil, forkPoint: resolved
+        )
+        let hydrated = try await persistence.hydrate(sessionId: "target")
+        #expect(hydrated.forkRecord?.forkPoint?.outcome == outcome)
+        #expect(hydrated.forkRecord?.contextDeliveryPending == true)
+
+        try await persistence.finalizeFork(
+            targetSessionID: "target", mechanism: .transcriptTransfer, remoteSessionID: nil, forkPoint: nil
+        )
+        #expect(try await persistence.loadFork(targetSessionID: "target")?.forkPoint == resolved)
+    }
+
+    @Test("a damaged fork point blob loads as no fork point", arguments: ["{not json", #"{"target":{}}"#])
+    func corruptForkPointLoadsAsNil(blob: String) throws {
+        let store = try ACPSessionStore(path: temporaryPath())
+        let record = forkRecord(target: "target", phase: .ready, mechanism: .transcriptTransfer)
+        try store.createFork(session: targetRow(id: "target"), messages: [], record: record)
+        try store.db.exec("UPDATE session_forks SET fork_point = ?", bindings: [blob])
+
+        let loaded = try #require(try store.loadFork(targetSessionID: "target"))
+        #expect(loaded.forkPoint == nil)
+        #expect(loaded == record)
+    }
+
     private func temporaryPath() -> String {
         FileManager.default.temporaryDirectory
             .appendingPathComponent("acp-fork-\(UUID()).sqlite").path

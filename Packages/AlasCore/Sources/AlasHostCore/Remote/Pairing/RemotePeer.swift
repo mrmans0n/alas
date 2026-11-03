@@ -27,6 +27,8 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// forgetting the peer can revoke its inbound token too.
     public var localDeviceId: String?
     public var addedAt: Date
+    /// The `ssh` destination this host was set up through, when it was.
+    public var sshDestination: String?
 
     /// Whether this record is bound to key material at all.
     ///
@@ -38,7 +40,7 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
     /// real session data over it. Re-pairing is what upgrades it.
     public var isVerified: Bool { publicKey?.isEmpty == false }
 
-    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date) {
+    public init(id: String, serverId: String, name: String, origins: [String], lastOrigin: String? = nil, token: String, publicKey: String? = nil, protocolVersion: Int? = nil, localDeviceId: String? = nil, addedAt: Date, sshDestination: String? = nil) {
         self.id = id
         self.serverId = serverId
         self.name = name
@@ -49,6 +51,7 @@ public struct RemotePeer: Codable, Equatable, Identifiable, Sendable {
         self.protocolVersion = protocolVersion
         self.localDeviceId = localDeviceId
         self.addedAt = addedAt
+        self.sshDestination = sshDestination
     }
 }
 

@@ -75,6 +75,19 @@ enum HostSetup {
         }
     }
 
+    /// `alas-host setup --check`: one warning per line, nothing when all is
+    /// well. Needs no terminal and no lock.
+    static func check() async throws {
+        let config = HostCommands.readConfig()
+        var lines = await missingAdapterCommands(config).sorted { $0.key < $1.key }
+            .map { "Agent \($0.key): \($0.value) not found on the host's PATH" }
+        let executable = Bundle.main.executableURL
+        if HostShellLaunch.zmxBinary(executable: executable) == nil { lines.append("zmx not found: peers can't open terminals here") }
+        if HostShellLaunch.cliBinary(executable: executable) == nil { lines.append("alas CLI not found: agents get no alas tools") }
+        if let notice = await codeHostSignInNotice(try await HostCommands.listProjects()) { lines.append(notice) }
+        lines.forEach { print($0) }
+    }
+
     /// The adapter command of each agent whose command is not found the way
     /// the host launches it: the login shell's PATH, then this process's,
     /// plus the well-known directories.

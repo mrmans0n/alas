@@ -1,0 +1,204 @@
+import Foundation
+import Synchronization
+import Testing
+@testable import AlasHostCore
+import AlasPlatform
+
+struct HostSSHSetupTests {
+    /// Records every remote command and answers each with `reply`.
+    final class FakeRemote: Sendable {
+        let commands = Mutex<[String]>([])
+        let sleeps = Mutex<[Duration]>([])
+        let reply: @Sendable (String, Int) -> ProcessResult
+
+        init(reply: @escaping @Sendable (String, Int) -> ProcessResult = { _, _ in ProcessResult(exitCode: 0, stdout: "", stderr: "") }) {
+            self.reply = reply
+        }
+
+        func setup() -> HostSSHSetup {
+            HostSSHSetup(
+                destination: "me@mini",
+                bundleResources: URL(fileURLWithPath: "/nonexistent"),
+                run: { command, _ in
+                    let index = self.commands.withLock {
+                        $0.append(command)
+                        return $0.count - 1
+                    }
+                    return self.reply(command, index)
+                },
+                upload: { _, _ in ProcessResult(exitCode: 0, stdout: "", stderr: "") },
+                sleep: { duration in self.sleeps.withLock { $0.append(duration) } }
+            )
+        }
+    }
+
+    @Test func probeParsesItsScriptOutput() {
+        let output = """
+        os=Darwin
+        arch=arm64
+        brew=/opt/homebrew/bin/brew
+        cask=alas-host
+        host=/opt/homebrew/bin/alas-host
+        --config--
+        # Host
+        host.reachability = tailscale
+
+        # Agents
+        agents.claude.enabled = true
+        agents.codex.enabled = false
+        """
+
+        #expect(HostSSHProbe.parse(output) == HostSSHProbe(
+            os: "Darwin",
+            arch: "arm64",
+            brew: "/opt/homebrew/bin/brew",
+            cask: "alas-host",
+            hostPath: "/opt/homebrew/bin/alas-host",
+            reachability: "tailscale",
+            agents: [HostSSHAgent(id: "claude", enabled: true), HostSSHAgent(id: "codex", enabled: false)]
+        ))
+    }
+
+    static let appHost = "/Applications/Alas.app/Contents/Resources/alas-host/alas-host"
+    static let copiedHost = "/Users/me/.alas/host/alas-host/alas-host"
+
+    @Test(arguments: [
+        (HostSSHProbe(os: "Linux", arch: "x86_64"), "unsupported"),
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: "/opt/homebrew/bin/brew", cask: "alas"), "brewUpgrade(alas)"),
+        (HostSSHProbe(os: "Darwin", arch: "arm64", brew: "/opt/homebrew/bin/brew"), "brewInstall"),
+        (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: appHost), "existing"),
+        // The web client, zmx and CLI change without the host binary: always copied.
+        (HostSSHProbe(os: "Darwin", arch: "arm64", hostPath: copiedHost), "copy"),
+        (HostSSHProbe(os: "Darwin", arch: "x86_64"), "unsupported Homebrew"),
+    ])
+    func installDecision(probe: HostSSHProbe, expected: String) {
+        let decision = HostSSHInstall.decide(probe, bundleArch: "arm64")
+        switch (decision, expected) {
+        case (.unsupported, "unsupported"), (.brewInstall, "brewInstall"), (.copy, "copy"):
+            break
+        case let (.unsupported(reason), "unsupported Homebrew"):
+            #expect(reason.contains("Homebrew"))
+        case let (.brewUpgrade(cask), "brewUpgrade(alas)"):
+            #expect(cask == "alas")
+        case let (.existing(path), "existing"):
+            #expect(path == probe.hostPath)
+        default:
+            Issue.record("expected \(expected), got \(decision)")
+        }
+    }
+
+    @Test(arguments: [
+        ("  812 /opt/homebrew/bin/alas-host\n", true),
+        ("    1 /Users/me/.alas/host/alas-host/alas-host\n", false),
+        ("  812 /bin/zsh\n  900 /usr/bin/not-alas-host-helper\n", false),
+    ])
+    func aHostRunInATerminalIsFound(psOutput: String, found: Bool) async throws {
+        let result = try await Process.run(
+            "/bin/sh",
+            args: ["-c", "printf %s \(SSHCommand.shellQuote(psOutput)) | \(HostSSHSetup.foregroundHostFilter)"],
+            timeout: 10
+        )
+        #expect((result.exitCode == 0) == found)
+    }
+
+    @Test func pairingLinkIsTheSecondLine() {
+        #expect(HostSSHSetup.pairingLink(fromPairOutput: "123456\nhttp://a/?code=123456\n") == "http://a/?code=123456")
+        #expect(HostSSHSetup.pairingLink(fromPairOutput: "123456\n") == nil)
+    }
+
+    @Test func configureSetsEveryOptionAndAddsMissingProjects() async throws {
+        let remote = FakeRemote()
+        let options = HostSSHSetupOptions(reachability: "tailscale", agents: ["codex": false, "claude": true], projects: ["/srv/repo", "  "])
+
+        try await remote.setup().configure(host: "/opt/homebrew/bin/alas-host", options: options)
+
+        let host = "'/opt/homebrew/bin/alas-host'"
+        #expect(remote.commands.withLock { $0 } == [
+            "\(host) config set 'host.reachability' 'tailscale'",
+            "\(host) config set 'agents.claude.enabled' 'true'",
+            "\(host) config set 'agents.codex.enabled' 'false'",
+            "p='/srv/repo'; \(host) project list | awk -v p=\"  $p\" 'substr($0, length($0) - length(p) + 1) == p { f = 1 } END { exit !f }' || \(host) project add \"$p\"",
+        ])
+    }
+
+    @Test(arguments: [
+        ("/srv/it's here/", "'/srv/it'\\''s here'"),
+        ("~/code/x", "\"$HOME\"/'code/x'"),
+        ("code/x", "\"$HOME\"/'code/x'"),
+        ("~", "\"$HOME\""),
+    ])
+    func remotePathsResolveAgainstTheRemoteHome(path: String, word: String) {
+        #expect(HostSSHSetup.remotePath(path) == word)
+    }
+
+    /// The project step's shell runs for real: a listed path is not added again.
+    @Test func aListedProjectIsNotAddedAgain() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fake = dir.appendingPathComponent("alas-host")
+        try """
+        #!/bin/sh
+        case "$1 $2" in
+        "project list") printf 'id1  repo  /srv/repo\n' ;;
+        "project add") echo "$3" >> "\(dir.path)/added" ;;
+        esac
+        """.write(to: fake, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        let setup = HostSSHSetup(
+            destination: "me@mini",
+            bundleResources: dir,
+            run: { command, _ in try await Process.run("/bin/sh", args: ["-c", command], timeout: 10) }
+        )
+
+        try await setup.configure(host: fake.path, options: HostSSHSetupOptions(reachability: "lan", agents: [:], projects: ["/srv/repo", "/srv/repo2"]))
+
+        #expect(try String(contentsOf: dir.appendingPathComponent("added"), encoding: .utf8) == "/srv/repo2\n")
+    }
+
+    @Test(arguments: [(Int32(1), false), (Int32(255), true)])
+    func aFailingStepStopsWithItsStderr(exitCode: Int32, connectionFailed: Bool) async {
+        let remote = FakeRemote { _, _ in
+            ProcessResult(exitCode: exitCode, stdout: "", stderr: "refused: the app has the profile open\n")
+        }
+        let options = HostSSHSetupOptions(reachability: "tailscale", agents: [:], projects: ["/p"])
+
+        await #expect(throws: HostSSHSetup.Failure(
+            step: "Configure",
+            message: "refused: the app has the profile open",
+            connectionFailed: connectionFailed
+        )) {
+            try await remote.setup().configure(host: "h", options: options)
+        }
+        #expect(remote.commands.withLock { $0.count } == 1)
+    }
+
+    @Test func aFreshHostOffersTheBuiltInAgents() async throws {
+        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 0, stdout: "os=Darwin\narch=arm64\nbrew=\ncask=\nhost=\n", stderr: "") }
+
+        let agents = try await remote.setup().probe().agents
+        #expect(agents.contains { $0.id == "claude" })
+        #expect(agents == HostSSHSetup.defaultAgents)
+    }
+
+    @Test func pairPollsUntilTheHostServesBeyondLoopback() async throws {
+        let remote = FakeRemote { _, index in
+            switch index {
+            case 0: ProcessResult(exitCode: 1, stdout: "", stderr: "no host running")
+            // Tailscale serve not up yet: only loopback is advertised.
+            case 1: ProcessResult(exitCode: 0, stdout: "123456\nhttp://127.0.0.1:8765/?code=123456\n", stderr: "")
+            default: ProcessResult(exitCode: 0, stdout: "123456\nhttp://a/?code=123456\n", stderr: "")
+            }
+        }
+
+        #expect(try await remote.setup().pair(host: "h") == "http://a/?code=123456")
+        #expect(remote.sleeps.withLock { $0 } == [.seconds(1), .seconds(1)])
+    }
+
+    @Test func pairGivesUpAfterTheDeadline() async {
+        let remote = FakeRemote { _, _ in ProcessResult(exitCode: 1, stdout: "", stderr: "no host running") }
+
+        await #expect(throws: HostSSHSetup.Failure.self) { try await remote.setup().pair(host: "h") }
+        #expect(remote.sleeps.withLock { $0.count } == 30)
+    }
+}

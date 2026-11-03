@@ -41,8 +41,13 @@ public struct ACPSessionForkRecord: Equatable, Sendable {
     public var mechanism: ACPSessionForkMechanism?
     public var contextDeliveryPending: Bool
     public var via: ACPSessionForkVia? = nil
+    public var forkPoint: ACPSessionForkPoint? = nil
+    /// For a native fork, the first of this session's stored rows its agent's
+    /// history holds: the rows its source had itself imported as a transcript
+    /// come before it. Nil when the agent holds them all.
+    public var nativeRemoteHistoryStart: Int? = nil
 
-    public init(targetSessionID: String, sourceSessionID: String, sourceAgentID: String, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism? = nil, contextDeliveryPending: Bool, via: ACPSessionForkVia? = nil) {
+    public init(targetSessionID: String, sourceSessionID: String, sourceAgentID: String, sourceBoundarySequence: Int64, inheritedMessageCount: Int, phase: ACPSessionForkCreationPhase, mechanism: ACPSessionForkMechanism? = nil, contextDeliveryPending: Bool, via: ACPSessionForkVia? = nil, forkPoint: ACPSessionForkPoint? = nil, nativeRemoteHistoryStart: Int? = nil) {
         self.targetSessionID = targetSessionID
         self.sourceSessionID = sourceSessionID
         self.sourceAgentID = sourceAgentID
@@ -52,6 +57,34 @@ public struct ACPSessionForkRecord: Equatable, Sendable {
         self.mechanism = mechanism
         self.contextDeliveryPending = contextDeliveryPending
         self.via = via
+        self.forkPoint = forkPoint
+        self.nativeRemoteHistoryStart = nativeRemoteHistoryStart
+    }
+
+    /// The first stored row of this session its agent's own history holds.
+    /// A transcript import's agent starts fresh after the imported rows, even
+    /// when the fork was planned as native.
+    public var remoteHistoryStart: Int {
+        mechanism == .transcriptTransfer ? inheritedMessageCount : nativeRemoteHistoryStart ?? 0
+    }
+}
+
+/// The message a fork was cut at, and what the agent said about it.
+/// `outcome` stays nil until the agent has answered.
+public struct ACPSessionForkPoint: Codable, Equatable, Sendable {
+    public enum Outcome: Codable, Equatable, Sendable {
+        case matched(ACPForkPointEcho)
+        case unmatched(ACPForkPointFailure)
+    }
+
+    public let target: ACPForkPointTarget
+    public let boundary: ACPForkPointBoundary
+    public var outcome: Outcome?
+
+    public init(target: ACPForkPointTarget, boundary: ACPForkPointBoundary, outcome: Outcome? = nil) {
+        self.target = target
+        self.boundary = boundary
+        self.outcome = outcome
     }
 }
 
@@ -62,6 +95,9 @@ public enum ACPSessionForkVia: String, Equatable, Sendable {
 
 public enum ACPSessionForkCandidate: Equatable, Sendable {
     case native
+    /// A native fork cut at an earlier agent message through the agent's
+    /// `forkPoint` extension.
+    case nativeAtMessage(ACPForkPointTarget)
     case transcript
 }
 
@@ -71,15 +107,18 @@ public enum ACPSessionForkCandidatePolicy: Sendable {
         targetAgentID: String,
         boundaryIsRemoteHead: Bool,
         sourceRemoteSessionID: String?,
-        forkCapability: Bool?
+        forkCapability: Bool?,
+        forkPoint: ACPForkPointCapability?,
+        historicalTarget: ACPForkPointTarget?
     ) -> ACPSessionForkCandidate {
         guard sourceAgentID == targetAgentID,
-              boundaryIsRemoteHead,
               sourceRemoteSessionID?.isEmpty == false,
               forkCapability != false
         else { return .transcript }
 
-        return .native
+        if boundaryIsRemoteHead { return .native }
+        if forkPoint != nil, let historicalTarget { return .nativeAtMessage(historicalTarget) }
+        return .transcript
     }
 }
 
@@ -91,10 +130,60 @@ public struct ACPSessionForkConversationMessage: Equatable, Sendable {
 
     public let role: Role
     public let text: String
+    /// The agent's own id for an agent message; nil for user messages.
+    public let messageId: String?
+    /// Part of an agent message split by a steering follow-up.
+    public let isSteeringSegment: Bool
 
-    public init(role: Role, text: String) {
+    /// Marks a copied steering segment, so a later fork of the copy neither
+    /// targets nor counts it as a whole agent message.
+    public static let copiedSteeringSegmentMetadataKey = "_alas/forkCopiedSteeringSegment"
+
+    public init(role: Role, text: String, messageId: String? = nil, isSteeringSegment: Bool = false) {
         self.role = role
         self.text = text
+        self.messageId = messageId
+        self.isSteeringSegment = isSteeringSegment
+    }
+}
+
+/// Checks that the agent forked where it was asked to, from the `forkPoint`
+/// its `session/fork` result echoes.
+public enum ACPForkPointVerifier: Sendable {
+    public static func verify(
+        echo: ACPForkPointEcho?,
+        target: ACPForkPointTarget,
+        boundary: ACPForkPointBoundary,
+        laterSourceItemIDs: Set<String>
+    ) -> Result<ACPForkPointEcho, ACPForkPointFailure> {
+        guard let echo else { return .failure(.missingEcho) }
+        guard echo.boundary == boundary else { return .failure(.mismatchedEcho) }
+        let later = Set(laterSourceItemIDs.map(unsegmented))
+        switch echo.matchedBy {
+        case .id:
+            guard unsegmented(echo.messageId) == unsegmented(target.messageId) else {
+                return .failure(.mismatchedEcho)
+            }
+        case .fingerprint:
+            // A fingerprint can also match an equal message after the target.
+            guard !later.contains(unsegmented(echo.messageId)) else { return .failure(.mismatchedEcho) }
+        }
+        if boundary == .turn {
+            guard echo.turnId?.isEmpty == false,
+                  let lastItemId = echo.lastItemId, !lastItemId.isEmpty,
+                  !later.contains(unsegmented(lastItemId))
+            else { return .failure(.mismatchedEcho) }
+        }
+        return .success(echo)
+    }
+
+    /// An adapter may address part of a message as `<id>:segment:<n>`.
+    private static func unsegmented(_ id: String) -> String {
+        guard let range = id.range(of: ":segment:", options: .backwards),
+              !id[range.upperBound...].isEmpty,
+              id[range.upperBound...].allSatisfy({ $0.isASCII && $0.isNumber })
+        else { return id }
+        return String(id[..<range.lowerBound])
     }
 }
 
@@ -106,10 +195,12 @@ public enum ACPSessionForkSnapshotError: Error, Equatable, Sendable {
 package struct CopiedTextPayload: Codable {
     let messageId: String?
     let text: String
+    let metadata: [String: Bool]?
 
-    public init(messageId: String?, text: String) {
+    public init(messageId: String?, text: String, metadata: [String: Bool]? = nil) {
         self.messageId = messageId
         self.text = text
+        self.metadata = metadata
     }
 }
 

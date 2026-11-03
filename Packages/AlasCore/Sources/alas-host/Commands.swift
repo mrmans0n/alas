@@ -161,6 +161,8 @@ enum HostCommands {
             try restart()
         case ("setup", nil, 0):
             try await HostSetup.run()
+        case ("setup", "--check", 1):
+            try await HostSetup.check()
         default:
             throw HostCommandError("unknown command \(([command] + arguments).joined(separator: " "))\n\(usage)")
         }

@@ -119,12 +119,14 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
     public func finalizeFork(
         targetSessionID: String,
         mechanism: ACPSessionForkMechanism,
-        remoteSessionID: String?
+        remoteSessionID: String?,
+        forkPoint: ACPSessionForkPoint? = nil
     ) throws {
         try openedStore().finalizeFork(
             targetSessionID: targetSessionID,
             mechanism: mechanism,
-            remoteSessionID: remoteSessionID
+            remoteSessionID: remoteSessionID,
+            forkPoint: forkPoint
         )
     }
 
