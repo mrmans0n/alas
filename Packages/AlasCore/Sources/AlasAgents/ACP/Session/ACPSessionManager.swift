@@ -6797,6 +6797,7 @@ extension ACPSessionManager {
         session.supportsContextBreakdown = false
         session.settlesAtResult = false
         session.forkPoint = nil
+        session.diffPatch = nil
         session.availableProviders = []
         session.agentState = .spawning
 
@@ -7151,6 +7152,7 @@ extension ACPSessionManager {
             session.backgroundTaskStopSupported = initialized.supportsAsyncTasks
             session.sessionCapabilities = initialized.sessionCapabilities
             session.forkPoint = initialized.forkPoint
+            session.diffPatch = initialized.diffPatch
             session.authMethods = initialized.authMethods
             if let retiringConnection = attempt.retiringConnection {
                 // Keep the field set while the bounded detach is suspended:

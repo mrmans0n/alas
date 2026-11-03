@@ -244,6 +244,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Where the adapter can cut a fork at an earlier message, from its
     /// `forkPoint` advertisement. Runtime only; relearned on attach.
     @Tracked public var forkPoint: ACPForkPointCapability?
+    /// Whether the adapter attaches exact git patches to edits, from its
+    /// `diffPatch` advertisement. Runtime only; relearned on attach.
+    @Tracked public var diffPatch: ACPDiffPatchCapability?
     /// Whether a foreground turn is running. Installed by the session's
     /// runner; a turn that settled at its result no longer counts, even while
     /// its children still run.
