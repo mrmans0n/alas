@@ -998,7 +998,15 @@ private struct ACPSessionView: View {
                         ownerKey: resolvedOwner.storageKey, sessionId: sessionId, visualId: visual.id,
                         title: visual.title)
                 )
-            })
+            }),
+            onOpenPlanFile: { path in
+                // Read-only Markdown preview; a remote worktree's file opens
+                // through its virtual path (a local path is unchanged).
+                state.tabs.openExternalEditor(
+                    worktreeId: worktree.id,
+                    absoluteURL: URL(fileURLWithPath: RemotePath.virtualizing(path, like: worktree.path.path)),
+                    revealLine: nil, revealCharacter: nil, editable: false)
+            }
         )
     }
 

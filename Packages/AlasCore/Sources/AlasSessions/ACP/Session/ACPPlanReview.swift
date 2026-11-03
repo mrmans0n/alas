@@ -118,6 +118,42 @@ public struct ACPPlanReviewPresentation: Equatable, Sendable {
         )
     }
 
+    /// Shown in place of the plan when the review carried no text.
+    public static let noPlanTextNotice = "No plan text was provided"
+    /// Shown under the options while approval is withheld.
+    public static let staleNotice = "This plan changed after the review was requested."
+
+    /// Whether there is plan text to show. Without it the review stays
+    /// approvable and says so.
+    public var hasPlanText: Bool {
+        !(planText?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    /// The plan file line, or nil when the review approves inline text only.
+    public var fileLabel: String? {
+        guard case .file(_, let state) = source else { return nil }
+        return switch state {
+        case .checking: "Checking plan file…"
+        case .current: "Plan file"
+        case .changed: "Plan file changed since review"
+        case .missing: "Plan file missing"
+        case .unavailable: "Plan file unavailable"
+        }
+    }
+
+    /// The plan file's path when it can be opened.
+    public var openableFilePath: String? {
+        guard canOpenFile, case .file(let path, _) = source else { return nil }
+        return path
+    }
+
+    /// Whether the card disables an option of `kind`. A stale review
+    /// withholds approval only; rejecting always stays possible, and the
+    /// offered options never change.
+    public func disablesOption(kind: String) -> Bool {
+        isStale && kind.hasPrefix("allow")
+    }
+
     /// Lowercase SHA-256 hex of the text's UTF-8 bytes.
     public static func sha256Hex(_ text: String) -> String {
         SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined()

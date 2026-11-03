@@ -62,6 +62,35 @@ public struct ACPPlanDocument: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+extension ACPPlanDocument {
+    /// What a plan document row shows.
+    public struct Display: Equatable, Sendable {
+        /// The Markdown body; nil for a file plan.
+        public let markdown: String?
+        /// Whether the row has a "Plan file" line.
+        public let showsFile: Bool
+        /// The file's path on the session's host, and the open action's
+        /// target; nil when unknown (a peer's copy carries no path).
+        public let filePath: String?
+
+        public init(markdown: String?, showsFile: Bool, filePath: String?) {
+            self.markdown = markdown
+            self.showsFile = showsFile
+            self.filePath = filePath
+        }
+    }
+
+    /// Nil when the row shows nothing: removed by `plan_removed`, or with
+    /// neither text nor a file.
+    public var display: Display? {
+        guard !hidden else { return nil }
+        let text = kind == .markdown ? markdown.flatMap { $0.isEmpty ? nil : $0 } : nil
+        let showsFile = kind == .file || file != nil
+        guard text != nil || showsFile else { return nil }
+        return Display(markdown: text, showsFile: showsFile, filePath: file?.path)
+    }
+}
+
 /// Where a Markdown or file `plan_update` lands in a transcript.
 public enum ACPPlanDocumentPlacement: Equatable, Sendable {
     case replace(Int)

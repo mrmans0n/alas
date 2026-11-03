@@ -52,9 +52,7 @@ struct ACPPermissionCardContent: Equatable {
             summary: summary,
             reason: presentation?.description,
             defaultToNo: presentation?.defaultToNo ?? false,
-            options: params.options.map {
-                Option(optionId: $0.optionId, name: $0.name, kind: $0.kind, description: $0.presentationDescription)
-            },
+            options: Self.options(of: params),
             diffSections: ACPToolCallPresentation.diffSections(
                 ACPToolCallDiff.permissionPreview(request: params.toolCall, existingRow: existingToolCall),
                 status: "pending",
@@ -103,6 +101,13 @@ struct ACPPermissionCardContent: Equatable {
         self.diffSections = diffSections
     }
 
+    /// The request's options, as offered.
+    static func options(of params: ACPPermissionRequestParams) -> [Option] {
+        params.options.map {
+            Option(optionId: $0.optionId, name: $0.name, kind: $0.kind, description: nonEmpty($0.presentationDescription))
+        }
+    }
+
     private static func nonEmpty(_ value: String?) -> String? {
         guard let value, !value.isEmpty else { return nil }
         return value
@@ -117,18 +122,50 @@ struct ACPPermissionPrompt: View {
     let policy: ACPPermissionPolicy
     let scopeKey: String
     var worktreeRoot: String? = nil
+    /// Opens the plan review's file by its path on the session's host. Nil
+    /// hides the action.
+    var onOpenPlanFile: ((String) -> Void)? = nil
     @State private var contentCache = ACPPermissionCardContentCache()
 
     var body: some View {
         if let pending = session.transcript.pendingPermission {
-            let existing = session.toolCall(
-                id: pending.params.toolCall.toolCallId, sessionId: pending.params.sessionId)
-            ACPPermissionCard(
-                content: contentCache.content(
-                    params: pending.params, existingToolCall: existing, worktreeRoot: worktreeRoot)
-            ) { option in
-                handle(option: option, scopeKey: scopeKey)
+            // The parked params and the policy's binding belong together:
+            // the policy binds the request it parks as `pendingPermission`.
+            if let review = ACPPlanReviewPresentation.make(
+                params: pending.params, planFileNegotiated: session.planFile != nil,
+                fileRead: session.planReviewFiles[pending.params.toolCall.toolCallId],
+                binding: policy.planReviewBinding, planRevisions: session.planRevisions,
+                contextResetCount: session.contextResetCount,
+                foregroundTurnActive: session.foregroundTurnActive()) {
+                ACPPlanReviewCard(
+                    review: review,
+                    options: ACPPermissionCardContent.options(of: pending.params),
+                    defaultToNo: ACPPermissionPresentation(metadata: pending.params.metadata)?.defaultToNo ?? false,
+                    onOpenFile: onOpenPlanFile
+                ) { option in
+                    choose(option: option, planDigest: review.digest)
+                }
+            } else {
+                let existing = session.toolCall(
+                    id: pending.params.toolCall.toolCallId, sessionId: pending.params.sessionId)
+                ACPPermissionCard(
+                    content: contentCache.content(
+                        params: pending.params, existingToolCall: existing, worktreeRoot: worktreeRoot)
+                ) { option in
+                    handle(option: option, scopeKey: scopeKey)
+                }
             }
+        }
+    }
+
+    /// A plan review is never remembered, and its approval names the plan
+    /// text the card showed.
+    private func choose(option: ACPPermissionCardContent.Option, planDigest: String?) {
+        let decision: ACPPermissionDecision = option.kind.hasPrefix("allow") ? .allow : .deny
+        Task {
+            await policy.userDecided(
+                scopeKey: scopeKey, optionId: option.optionId, decision: decision,
+                persistScope: nil, planDigest: planDigest)
         }
     }
 
@@ -344,42 +381,44 @@ struct ACPPermissionCard: View {
     }
 
     private func optionButton(_ option: ACPPermissionCardContent.Option) -> some View {
-        Button {
-            onChoose(option)
-        } label: {
+        ACPPermissionOptionButton(option: option, defaultToNo: content.defaultToNo) { onChoose(option) }
+    }
+}
+
+/// One permission option as a button, styled by its kind.
+struct ACPPermissionOptionButton: View {
+    let option: ACPPermissionCardContent.Option
+    let defaultToNo: Bool
+    let action: () -> Void
+    @Environment(\.theme) private var theme
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: glyph(for: option))
+                Image(systemName: glyph)
                     .font(.system(size: 10))
                 Text(option.name)
                     .font(.system(size: 11.5, weight: .medium))
             }
             .padding(.horizontal, 10)
             .frame(height: 26)
-            .background(background(for: option))
-            .foregroundStyle(foreground(for: option))
+            .background(isDefaultStyled ? theme.color("accent") : theme.color("bg-3"))
+            .foregroundStyle(isDefaultStyled ? theme.color("bg-0") : theme.color("fg"))
             .clipShape(RoundedRectangle(cornerRadius: 6))
             .overlay(
                 RoundedRectangle(cornerRadius: 6)
-                    .strokeBorder(border(for: option), lineWidth: 0.5)
+                    .strokeBorder(isDefaultStyled ? theme.color("accent") : theme.color("line"), lineWidth: 0.5)
             )
+            .opacity(isEnabled ? 1 : 0.45)
         }
         .buttonStyle(.plain)
-        .keyboardShortcut(isDefaultAction(option) ? .defaultAction : nil)
+        .keyboardShortcut(isDefaultAction ? .defaultAction : nil)
     }
 
-    // MARK: - per-option styling
-
-    private func isPrimary(_ option: ACPPermissionCardContent.Option) -> Bool {
-        option.kind == "allow_once" || option.kind == "allow_always"
-    }
-
-    private func isDestructive(_ option: ACPPermissionCardContent.Option) -> Bool {
-        option.kind == "reject_once" || option.kind == "reject_always"
-    }
-
-    private func glyph(for option: ACPPermissionCardContent.Option) -> String {
-        if isDestructive(option) { return "xmark" }
-        if isPrimary(option) { return "checkmark" }
+    private var glyph: String {
+        if option.kind == "reject_once" || option.kind == "reject_always" { return "xmark" }
+        if option.kind == "allow_once" || option.kind == "allow_always" { return "checkmark" }
         return "circle"
     }
 
@@ -387,30 +426,107 @@ struct ACPPermissionCard: View {
     /// key. Normally the once-only allow option; when the adapter set
     /// `_meta.permission.defaultToNo`, the once-only reject option takes
     /// its place instead.
-    private func isDefaultStyled(_ option: ACPPermissionCardContent.Option) -> Bool {
-        content.defaultToNo ? option.kind == "reject_once" : option.kind == "allow_once"
+    private var isDefaultStyled: Bool {
+        defaultToNo ? option.kind == "reject_once" : option.kind == "allow_once"
     }
 
     /// Only bind the return key when the adapter explicitly asked for
     /// `defaultToNo` — untagged adapters keep the earlier behavior (no
     /// keyboard shortcut at all) per the #1365 acceptance criteria.
-    private func isDefaultAction(_ option: ACPPermissionCardContent.Option) -> Bool {
-        content.defaultToNo && isDefaultStyled(option)
+    private var isDefaultAction: Bool {
+        defaultToNo && isDefaultStyled
+    }
+}
+
+/// A plan review: the plan under review, its file's state, and the
+/// request's options. Laid out like `ACPPlanApprovalPrompt`. Every label and
+/// enablement comes from `ACPPlanReviewPresentation`; the options are the
+/// request's own.
+struct ACPPlanReviewCard: View {
+    let review: ACPPlanReviewPresentation
+    let options: [ACPPermissionCardContent.Option]
+    let defaultToNo: Bool
+    let onOpenFile: ((String) -> Void)?
+    let onChoose: (ACPPermissionCardContent.Option) -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            VStack(alignment: .leading, spacing: 12) {
+                planBody
+                if let label = review.fileLabel {
+                    ACPPlanFileLine(label: label, path: nil, onOpen: openAction)
+                }
+            }
+            .padding(12)
+            VStack(alignment: .trailing, spacing: 6) {
+                HStack(spacing: 10) {
+                    Spacer()
+                    ForEach(options) { option in
+                        ACPPermissionOptionButton(option: option, defaultToNo: defaultToNo) { onChoose(option) }
+                            .disabled(review.disablesOption(kind: option.kind))
+                    }
+                }
+                if review.isStale {
+                    Text(ACPPlanReviewPresentation.staleNotice)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(theme.color("fg-faint"))
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(12)
+            .background(theme.color("bg-0").opacity(0.45))
+        }
+        .background(theme.color("bg-1").opacity(0.96))
+        .clipShape(.rect(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("accent").opacity(0.55), lineWidth: 1)
+        )
     }
 
-    private func background(for option: ACPPermissionCardContent.Option) -> Color {
-        if isDefaultStyled(option) { return theme.color("accent") }
-        return theme.color("bg-3")
+    private var header: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "checklist")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(theme.color("accent"))
+                .frame(width: 18, height: 18)
+            Text("Plan review")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(theme.color("accent"))
+            if review.isOutOfTurn {
+                Text("· Not in a turn")
+                    .font(.system(size: 11))
+                    .foregroundStyle(theme.color("fg-faint"))
+            }
+            Spacer(minLength: 8)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(theme.color("accent").opacity(0.08))
     }
 
-    private func foreground(for option: ACPPermissionCardContent.Option) -> Color {
-        if isDefaultStyled(option) { return theme.color("bg-0") }
-        return theme.color("fg")
+    @ViewBuilder
+    private var planBody: some View {
+        if review.hasPlanText, let text = review.planText {
+            // Plain while it fits, so a short plan stays compact; a
+            // ScrollView would take the whole cap.
+            ViewThatFits(in: .vertical) {
+                ACPMarkdownText(raw: text, typography: .default)
+                ScrollView { ACPMarkdownText(raw: text, typography: .default) }
+            }
+            .frame(maxHeight: 360)
+        } else {
+            Text(ACPPlanReviewPresentation.noPlanTextNotice)
+                .font(.system(size: 12))
+                .foregroundStyle(theme.color("fg-muted"))
+        }
     }
 
-    private func border(for option: ACPPermissionCardContent.Option) -> Color {
-        if isDefaultStyled(option) { return theme.color("accent") }
-        return theme.color("line")
+    private var openAction: (() -> Void)? {
+        guard let onOpenFile, let path = review.openableFilePath else { return nil }
+        return { onOpenFile(path) }
     }
 }
 

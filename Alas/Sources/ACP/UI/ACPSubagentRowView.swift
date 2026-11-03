@@ -303,9 +303,11 @@ private struct ACPSubagentMessageRow: View {
             ACPFileEditCard(edit: edit, onOpenDiff: nil)
         case .plan(_, let items):
             ACPPlanChecklist(items: items, isTurnActive: isTurnActive)
-        case .planDocument:
-            // Never a checklist; shown by the plan document card once it exists.
-            EmptyView()
+        case .planDocument(_, let document):
+            // Never a checklist. The child's file is not opened from here.
+            if let display = document.display {
+                ACPPlanDocumentCard(display: display, typography: typography)
+            }
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         case .visualAid(let visual):

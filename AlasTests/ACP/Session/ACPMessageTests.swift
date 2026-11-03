@@ -561,6 +561,24 @@ struct ACPMessageTests {
     }
 }
 
+extension ACPMessageTests {
+    @Test("a plan document row shows its Markdown and its file, and nothing once hidden", arguments: [
+        (ACPPlanDocument.markdownFixture, ACPPlanDocument.Display(markdown: "# Plan", showsFile: false, filePath: nil)),
+        (.fileFixture, .init(markdown: nil, showsFile: true, filePath: "/p.md")),
+        (ACPPlanDocument(planId: "plan-mode:t", kind: .markdown, markdown: "# A", file: .init(path: "/a.md", sha256: "s")),
+         .init(markdown: "# A", showsFile: true, filePath: "/a.md")),
+        // A peer's file plan arrives without its host path.
+        (ACPPlanDocument(planId: "p", kind: .file, markdown: nil, file: nil),
+         .init(markdown: nil, showsFile: true, filePath: nil)),
+        (.hiddenFixture, nil),
+        (.markdown("p", ""), nil),
+    ] as [(ACPPlanDocument, ACPPlanDocument.Display?)])
+    func display(document: ACPPlanDocument, expected: ACPPlanDocument.Display?) {
+        #expect(document.display == expected)
+        #expect(ACPTranscriptVisibleRow.isHidden(.planDocument(id: UUID(), document)) == (expected == nil))
+    }
+}
+
 extension ACPPlanDocument {
     static let markdownFixture = ACPPlanDocument(planId: "item_1", kind: .markdown, markdown: "# Plan", file: nil, hidden: false)
     static let fileFixture = ACPPlanDocument(

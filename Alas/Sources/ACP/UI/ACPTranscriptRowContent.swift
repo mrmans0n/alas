@@ -93,6 +93,9 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// must see the store's change.
     var isExpanded: Bool = false
     var onExpandedChange: ((Bool) -> Void)?
+    /// Opens a plan document's file, by its path on the session's host. Not
+    /// compared, like the other callbacks.
+    var onOpenPlanFile: (String) -> Void = { _ in }
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         guard lhs.messagePhase == rhs.messagePhase, lhs.isExpanded == rhs.isExpanded else { return false }
@@ -359,9 +362,17 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             }
         case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: onOpenDiff)
-        case .plan, .planDocument:
-            // Plan documents get their card in a later change.
+        case .plan:
+            // The toolbar pill shows checklists.
             EmptyView()
+        case .planDocument(_, let document):
+            if let display = document.display {
+                ACPPlanDocumentCard(
+                    display: display,
+                    cache: ACPTranscriptRenderCaches.of(transcript).cache(forMessage: stableId),
+                    typography: typography,
+                    onOpenFile: onOpenPlanFile)
+            }
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         case .visualAid(let visual):
@@ -390,5 +401,90 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             targetCount: forkTargets.count
         ) else { return nil }
         return ACPForkMessageBoundary(stableID: stableId, kind: kind)
+    }
+}
+
+/// A Markdown or file-backed plan in a transcript: the plan's text, its file
+/// line, and an open action when the host can open the file.
+struct ACPPlanDocumentCard: View {
+    let display: ACPPlanDocument.Display
+    var cache: ACPMarkdownBlockCache? = nil
+    let typography: ACPChatTypography
+    /// Nil hides the open action (a child or a peer transcript).
+    var onOpenFile: ((String) -> Void)? = nil
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(theme.color("accent"))
+                    .frame(width: 18, height: 18)
+                Text("Plan")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(theme.color("accent"))
+                Spacer(minLength: 8)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(theme.color("accent").opacity(0.08))
+            VStack(alignment: .leading, spacing: 10) {
+                if let markdown = display.markdown {
+                    ACPMarkdownText(raw: markdown, cache: cache, typography: typography)
+                }
+                if display.showsFile {
+                    ACPPlanFileLine(label: "Plan file", path: display.filePath, onOpen: openAction)
+                }
+            }
+            .padding(12)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(theme.color("bg-1").opacity(0.96))
+        .clipShape(.rect(cornerRadius: 8))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(theme.color("line"), lineWidth: 1)
+        )
+    }
+
+    private var openAction: (() -> Void)? {
+        guard let onOpenFile, let path = display.filePath else { return nil }
+        return { onOpenFile(path) }
+    }
+}
+
+/// A plan file's label, its path, and an "Open plan file" button when
+/// `onOpen` is non-nil. Shared by the plan document card and the plan review.
+struct ACPPlanFileLine: View {
+    let label: String
+    let path: String?
+    let onOpen: (() -> Void)?
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "doc")
+                .font(.system(size: 10.5))
+                .foregroundStyle(theme.color("fg-muted"))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(theme.color("fg-muted"))
+                if let path {
+                    Text(path)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(theme.color("fg-faint"))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .textSelection(.enabled)
+                }
+            }
+            Spacer(minLength: 8)
+            if let onOpen {
+                Button("Open plan file", action: onOpen)
+                    .controlSize(.small)
+            }
+        }
     }
 }

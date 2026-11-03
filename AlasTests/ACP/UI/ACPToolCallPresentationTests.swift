@@ -512,6 +512,7 @@ struct ACPToolCallPresentationTests {
         var source: ACPPlanReviewPresentation.Source?
         var canOpen = false
         var planId: String?
+        var fileLabel: String?
         var testDescription: String { name }
     }
 
@@ -556,15 +557,20 @@ struct ACPToolCallPresentationTests {
     @Test("a plan review shows its inline plan and the negotiated file's state", arguments: [
         PlanReviewCase(name: "codex", params: codexReview(), source: .inline, planId: "item_1"),
         PlanReviewCase(name: "claudeCurrent", params: claudeReview(), read: fileRead(planReviewDigest),
-                       source: .file(path: planReviewPath, state: .current), canOpen: true, planId: "plan-mode:toolu_1"),
+                       source: .file(path: planReviewPath, state: .current), canOpen: true, planId: "plan-mode:toolu_1",
+                       fileLabel: "Plan file"),
         PlanReviewCase(name: "claudeChanged", params: claudeReview(), read: fileRead(otherDigest),
-                       source: .file(path: planReviewPath, state: .changed), canOpen: true, planId: "plan-mode:toolu_1"),
+                       source: .file(path: planReviewPath, state: .changed), canOpen: true, planId: "plan-mode:toolu_1",
+                       fileLabel: "Plan file changed since review"),
         PlanReviewCase(name: "claudeMissing", params: claudeReview(), read: .missing,
-                       source: .file(path: planReviewPath, state: .missing), planId: "plan-mode:toolu_1"),
+                       source: .file(path: planReviewPath, state: .missing), planId: "plan-mode:toolu_1",
+                       fileLabel: "Plan file missing"),
         PlanReviewCase(name: "claudeSymlink", params: claudeReview(), read: .notRegularFile,
-                       source: .file(path: planReviewPath, state: .unavailable), planId: "plan-mode:toolu_1"),
+                       source: .file(path: planReviewPath, state: .unavailable), planId: "plan-mode:toolu_1",
+                       fileLabel: "Plan file unavailable"),
         PlanReviewCase(name: "claudeChecking", params: claudeReview(), read: nil,
-                       source: .file(path: planReviewPath, state: .checking), planId: "plan-mode:toolu_1"),
+                       source: .file(path: planReviewPath, state: .checking), planId: "plan-mode:toolu_1",
+                       fileLabel: "Checking plan file…"),
         PlanReviewCase(name: "digestMismatch", params: claudeReview(sha256: otherDigest), read: fileRead(otherDigest),
                        source: .inline, planId: "plan-mode:toolu_1"),
         PlanReviewCase(name: "notNegotiated", params: claudeReview(), negotiated: false, read: fileRead(planReviewDigest),
@@ -585,6 +591,8 @@ struct ACPToolCallPresentationTests {
         #expect(presentation?.planText == Self.planReviewText)
         #expect(presentation?.digest == Self.planReviewDigest)
         #expect(presentation?.isStale == false)
+        #expect(presentation?.fileLabel == row.fileLabel)
+        #expect(presentation?.hasPlanText == true)
     }
 
     @Test("a plan review is out of turn without a foreground turn and stale once its plan or context changed",
@@ -604,6 +612,27 @@ struct ACPToolCallPresentationTests {
             planRevisions: revisions, contextResetCount: resets, foregroundTurnActive: foreground)
         #expect(presentation?.isOutOfTurn == outOfTurn)
         #expect(presentation?.isStale == stale)
+        // Only approval is withheld: the request's options stay as offered.
+        #expect(presentation?.disablesOption(kind: "allow_once") == stale)
+        #expect(presentation?.disablesOption(kind: "allow_always") == stale)
+        #expect(presentation?.disablesOption(kind: "reject_once") == false)
+    }
+
+    @Test("a plan review without plan text stays approvable and says so")
+    func planReviewWithoutPlanText() throws {
+        let params = ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: .init(toolCallId: "plan-review:item_1", title: "Implement this plan?", kind: "switch_mode"),
+            options: Self.codexReview().options)
+        let binding = ACPPlanReviewBinding(
+            requestID: .number(1), params: params, planFileNegotiated: false, planRevisions: [:], contextResetCount: 0)
+        let presentation = try #require(ACPPlanReviewPresentation.make(
+            params: params, planFileNegotiated: false, fileRead: nil, binding: binding,
+            planRevisions: [:], contextResetCount: 0, foregroundTurnActive: true))
+        #expect(presentation.digest == nil)
+        #expect(presentation.hasPlanText == false)
+        #expect(presentation.isStale == false)
+        #expect(presentation.disablesOption(kind: "allow_once") == false)
     }
 
     private func writePNG(width: Int, height: Int, to url: URL) throws {
