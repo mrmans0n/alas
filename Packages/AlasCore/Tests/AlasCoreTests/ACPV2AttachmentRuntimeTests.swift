@@ -185,19 +185,25 @@ struct ACPV2AttachmentRuntimeTests {
         return } }
     }
 
-    @Test func everyCommittedRequestIsOfferedWithItsOriginalCaptureAcrossABurst() async throws {
+    @Test(.timeLimit(.minutes(1))) func everyCommittedRequestIsOfferedWithItsOriginalCaptureAcrossABurst() async throws {
         let fixture = try await RuntimeFixture()
-        let runtime = try fixture.runtime()
-        defer { runtime.stop()
+        let retained = AsyncStream<ACPV2AttachmentRuntime.InboundEvent>.makeStream()
+        let runtime = try fixture.runtime(onInbound: { retained.continuation.yield($0) })
+        defer { retained.continuation.finish()
+        runtime.stop()
         fixture.transport.terminate() }
         #expect(runtime.start())
         #expect(!runtime.start())
         for id in 1...12 { fixture.request(id: id) }
         fixture.transport.emit(Data(#"{"jsonrpc":"2.0","method":"peer/notice"}"#.utf8))
         fixture.transport.emit(Data([255, 0]))
-        try await eventually { await MainActor.run { fixture.offers.count == 12 && runtime.status == .ready } }
+        var incoming = retained.stream.makeAsyncIterator()
+        for _ in 0..<14 { _ = try #require(await incoming.next()) }
+        if runtime.status != .ready { for await status in runtime.observations { if status == .ready { break } } }
+        try #require(runtime.status == .ready)
+        #expect(fixture.offers.count == 12)
         let stream = try #require(runtime.inboundStream)
-        try await eventually { (try? await fixture.persistence.loadV2InboundLedgerPage(stream: stream).records.count) == 14 }
+        #expect(try await fixture.persistence.loadV2InboundLedgerPage(stream: stream).records.count == 14)
         #expect(fixture.offers.map { $0.record.ordinal }.count == Set(fixture.offers.map { $0.record.ordinal }).count)
         let offer = try #require(fixture.offers.first)
         #expect(try await fixture.persistence.loadV2InboundLedgerPage(stream: stream).records.contains(offer.record))

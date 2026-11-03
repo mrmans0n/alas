@@ -247,7 +247,7 @@ struct ACPCodexHooksTests {
         await manager.detach(sessionId: session.id)
     }
 
-    @Test(arguments: [false, true])
+    @Test(.timeLimit(.minutes(1)), arguments: [false, true])
     @MainActor func attachmentReplacementRetiresVisibleReview(restart: Bool) async throws {
         let path = FileManager.default.temporaryDirectory.appendingPathComponent("hook-replace-\(UUID()).sqlite")
         defer { try? FileManager.default.removeItem(at: path) }
@@ -258,6 +258,10 @@ struct ACPCodexHooksTests {
             mock.script(method: "session/new") { _ in Data(#"{"sessionId":"remote"}"#.utf8) }
             mock.script(method: "session/prompt") { _ in Data("{}".utf8) }
         }
+        let prompted = AsyncStream<Void>.makeStream()
+        mocks[1].script(method: "session/prompt") { _ in prompted.continuation.yield(())
+        return Data("{}".utf8) }
+        defer { prompted.continuation.finish() }
         var created = 0
         let manager = ACPSessionManager(worktreeId: "wt", worktreePath: "/p", persistence: ACPSessionPersistence(path: path.path), setupEvaluator: { _ in .ready }, connectionFactory: { _, _, _ in
             let client = mocks[min(created, 1)]
@@ -268,18 +272,40 @@ struct ACPCodexHooksTests {
         let session = manager.createSession(agentId: "codex", autoRunDefault: false)
         session.enqueue(blocks: [.text("preserved draft")])
         let queued = session.queue
+        let ready = AsyncStream<ACPCodexHooksReviewCoordinator>.makeStream()
+        let emptyQueue = AsyncStream<Void>.makeStream()
+        var presentationChanges: [ChangeSubscription] = []
+        let reviewChanges = session.$codexHooksReview.signal.observe { review in
+            guard let review else { return }
+            presentationChanges.append(review.$presentation.signal.observe { presentation in
+                if presentation?.isBusy == false { ready.continuation.yield(review) }
+            })
+        }
+        let queueChanges = session.$queue.signal.observe { if $0.isEmpty { emptyQueue.continuation.yield(()) } }
+        defer { reviewChanges.cancel()
+        presentationChanges.forEach { $0.cancel() }
+        queueChanges.cancel()
+        ready.continuation.finish()
+        emptyQueue.continuation.finish() }
+        var reviews = ready.stream.makeAsyncIterator()
         let attach = Task { await manager.attach(to: session.id, freshlyCreated: true) }
-        try await eventually { await session.codexHooksReview?.presentation?.isBusy == false }
-        let old = try #require(session.codexHooksReview)
+        defer { attach.cancel() }
+        let old = try #require(await reviews.next())
+        try #require(session.codexHooksReview === old && old.presentation?.isBusy == false)
         if restart {
             let replacement = Task { await manager.restartConnection(to: session.id) }
-            try await eventually { await MainActor.run { session.codexHooksReview !== old && session.codexHooksReview?.presentation?.isBusy == false } }
+            defer { replacement.cancel() }
+            let current = try #require(await reviews.next())
+            try #require(current !== old && session.codexHooksReview === current && current.presentation?.isBusy == false)
             #expect(old.continueWithoutTrusting() == nil)
             #expect(session.queue == queued)
-            let current = try #require(session.codexHooksReview)
             current.continueWithoutTrusting()
             await replacement.value
-            try await eventually { await session.queue.isEmpty }
+            var emptied = emptyQueue.stream.makeAsyncIterator()
+            _ = try #require(await emptied.next())
+            var dispatched = prompted.stream.makeAsyncIterator()
+            _ = try #require(await dispatched.next())
+            #expect(session.queue.isEmpty)
             #expect(mocks[1].sent.filter { $0.method == "session/prompt" }.count == 1)
         }
         await manager.detach(sessionId: session.id)

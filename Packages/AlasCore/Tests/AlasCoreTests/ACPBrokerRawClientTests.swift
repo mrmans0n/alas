@@ -85,7 +85,7 @@ struct ACPBrokerRawClientTests {
         } else if ["match", "stale-helper", "transient-attach"].contains(reason) {
             let attemptID = UUID()
             if reason == "transient-attach" {
-                await service.failNextAttach()
+                await service.failNextPendingInspection()
                 await #expect(throws: ACPV2ResponseOwner.Failure.observationLost) {
                     try await owner.respond(request: record, intentID: intentID, attemptID: attemptID, operationKey: .init(rawValue: "é"), frame: answer)
                 }
@@ -1124,6 +1124,8 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     static let error = Data(#"{"jsonrpc":"2.0","id":9,"error":{"code":-32044,"message":"rejected","data":{"kind":"codex_hook_review_required","opaque":1e999}}}"#.utf8)
     private var shouldFailAttach = false
     func failNextAttach() { shouldFailAttach = true }
+    private var shouldFailPendingInspection = false
+    func failNextPendingInspection() { shouldFailPendingInspection = true }
     private var shouldHoldAttach = false
     private let capturedAttach = AsyncStream<Void>.makeStream()
     private let releaseAttach = AsyncStream<Void>.makeStream()
@@ -1243,6 +1245,12 @@ private actor RawBrokerFixture: ACPBrokerServicing {
         return .init(snapshot: snapshot(), adopted: !freshBootstrap)
     }
     func attach(_ params: ACPBrokerAttachParams) async throws -> ACPBrokerAttachResult {
+        // Pending-view inspection uses a one-byte replay budget. Keep this
+        // fault separate from the client's concurrently running replay loop.
+        if shouldFailPendingInspection, params.maxReplayBytes == 1 {
+            shouldFailPendingInspection = false
+            throw ACPClientError.notRunning
+        }
         if shouldFailAttach { shouldFailAttach = false
         throw ACPClientError.notRunning }
         var events = (1...2).map { ACPBrokerEvent(cursor: .init(rawValue: UInt64($0)), kind: .rawFrame(.init(bytes: rawBytes))) }
