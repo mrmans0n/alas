@@ -32,6 +32,30 @@ public final class WorktreeVMRegistry: @unchecked Sendable {
         }
     }
 
+    /// Like `update`, with the bundle paths of the records this build cannot decode, which `body`
+    /// sees nowhere else: their bundles belong to another (newer) build's VMs.
+    public func updateSeeingForeignBundles<T>(
+        _ body: (inout [WorktreeVMRecord], _ foreignBundlePaths: Set<String>) throws -> T
+    ) throws -> T {
+        try withLock { records, foreign in try body(&records, Self.bundlePaths(of: foreign)) }
+    }
+
+    /// The records and the bundle paths of those this build cannot decode, read without taking
+    /// the lock or writing, so fields only a newer build knows are never dropped. Owners whose
+    /// process died are cleared in the result only. An unparseable file throws.
+    public func read() throws -> (records: [WorktreeVMRecord], foreignBundlePaths: Set<String>) {
+        var (records, foreign) = try load(quarantining: false)
+        for index in records.indices {
+            if let owner = records[index].runOwner, !isAlive(owner) { records[index].runOwner = nil }
+        }
+        return (records, Self.bundlePaths(of: foreign))
+    }
+
+    /// Alias stubs have an empty bundle path, so they name none.
+    private static func bundlePaths(of foreign: [Any]) -> Set<String> {
+        Set(foreign.compactMap { ($0 as? [String: Any])?["bundlePath"] as? String }.filter { !$0.isEmpty })
+    }
+
     /// Keeps a stub record with `worktree`'s plain id while it has a Linux VM and no macOS VM, so
     /// builds that predate Linux guests (and see neither id they know) still count it as having a
     /// VM. The stub's guest OS no build decodes, so every build preserves it verbatim.

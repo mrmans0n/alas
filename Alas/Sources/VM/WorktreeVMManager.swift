@@ -15,6 +15,17 @@ enum VMStartOutcome {
     case needsUserChoice(candidates: [String])
 }
 
+/// How `pauseVM` left a VM.
+enum VMPauseOutcome: Equatable {
+    /// Its machine state was saved and it stopped; the next start restores it.
+    case saved
+    /// It stopped without a saved state: it can't save one (Linux, a golden, or a configuration
+    /// without save/restore support), or saving failed. The next start cold-boots.
+    case stopped
+    /// Nothing changed: it wasn't running here, was still booting, or couldn't be stopped.
+    case notRunning
+}
+
 /// Owns the VMs this process runs, one per worktree, plus the golden VM while
 /// its setup is pending. Slots are accounted across processes through the
 /// shared `WorktreeVMRegistry`.
@@ -39,9 +50,61 @@ final class WorktreeVMManager {
         var runningElsewhere: String?
         /// Where its bundle is, when it has one.
         var bundlePath: String?
+        /// When the VM was paused with its state saved; nil unless it is paused.
+        var pausedAt: Date?
+        /// The clean point Reset to clean goes back to; nil until one is taken.
+        var cleanPoint: VMCleanPoint?
     }
 
-    typealias StartVM = (_ worktreeID: String, _ bundle: VMBundle, _ shares: [VMShare]) async throws -> RunningVM
+    /// Boots VM `worktreeID`, or restores it from `restoringFrom` and resumes it. A restore that
+    /// failed with the machine stopped throws `RestoreFailed`, so the caller can cold-boot instead.
+    typealias StartVM = (
+        _ worktreeID: String, _ bundle: VMBundle, _ shares: [VMShare], _ restoringFrom: URL?
+    ) async throws -> RunningVM
+
+    /// A disk operation succeeded, but the VM couldn't start again afterwards.
+    struct RestartFailed: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// Restoring a saved machine state failed, and the machine it was restored into is stopped.
+    struct RestoreFailed: Error {
+        let underlying: Error
+    }
+
+    /// Where a paused VM's bundle keeps its saved machine state.
+    nonisolated static func savedStateURL(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent("state.vzvmsave")
+    }
+
+    /// `state.json` beside the saved state: the disk it was saved with (`VMSavedState.Info`). A
+    /// state restores only with it. Kept in the bundle, not the registry, which older builds
+    /// rewrite with the fields they know.
+    nonisolated static func savedStateInfoURL(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent("state.json")
+    }
+
+    /// An empty file in a new VM's bundle until its clean point is taken: each start until then
+    /// runs the project's guest setup script first. VMs created before it existed have none.
+    nonisolated static func firstBootMarker(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent("first-boot-pending")
+    }
+
+    /// Whether the bundle holds a paused VM's saved state that is still valid for its disk: an
+    /// older build that cold-booted the VM since changed the disk, so the VM no longer resumes
+    /// where it was. A start removes such a stale state.
+    nonisolated static func isPaused(_ bundle: VMBundle) -> Bool {
+        guard FileManager.default.fileExists(atPath: savedStateURL(of: bundle).path),
+              let info = readSavedStateInfo(of: bundle), let disk = diskModified(bundle) else { return false }
+        return VMSavedState.isValid(pausedDiskStamp: info.diskStamp, currentDiskModified: disk)
+    }
+
+    /// How long quitting waits for the running macOS VMs to save their state, all together.
+    /// Those still saving then are stopped as before.
+    @ObservationIgnored var quitPauseBound: Duration = .seconds(20)
+    /// The clock `runningSince` is read with; tests replace it.
+    @ObservationIgnored var now: () -> Date = Date.init
 
     /// Registry ids at or under this prefix are golden VMs, not worktrees.
     nonisolated static let goldenIDPrefix = "golden:"
@@ -65,10 +128,20 @@ final class WorktreeVMManager {
     /// The checkout directory of a worktree, shared read-only with its VM.
     /// Installed by the app; nil leaves the worktree share out.
     @ObservationIgnored var worktreePath: (String) -> URL? = { _ in nil }
-    /// Called with a VM's registry id once it stopped here, however it stopped.
+    /// Called with a VM's registry id once it stopped here, however it stopped. A clean point's
+    /// or reset's own stop counts only if the VM is still stopped when the operation ends.
     @ObservationIgnored var onVMStopped: (String) -> Void = { _ in }
     /// Called with a VM's registry id when a delete of it is accepted, before it runs.
     @ObservationIgnored var onVMDeleted: (String) -> Void = { _ in }
+    /// Clones a clean point file into the bundle; tests make it fail.
+    @ObservationIgnored var cloneCleanFile: (URL, URL) throws -> Void = { try VMBundle.cloneFile($0, to: $1) }
+    /// Whether VM `id` runs its project's first-boot setup. Such a VM is never offered to pause for
+    /// a slot, and quitting stops it instead of pausing it, so its setup runs again on the next start.
+    @ObservationIgnored var isRunningSetup: (String) -> Bool = { _ in false }
+    /// Set once quitting began: no VM starts after `stopAll`.
+    @ObservationIgnored private(set) var isQuitting = false
+    /// Called with a VM's registry id once it started running here, booted or restored.
+    @ObservationIgnored var onVMStarted: (String) -> Void = { _ in }
     /// The guest helper and its installer, shared read-only with every macOS VM.
     @ObservationIgnored private let helperDirectory: URL?
     /// The Linux guest helper, shared read-only with every Linux VM.
@@ -116,6 +189,19 @@ final class WorktreeVMManager {
 
     private enum PendingAction { case stop, delete }
 
+    /// When each VM running here started, by registry id, on `now`'s clock.
+    @ObservationIgnored private var startedAt: [String: Date] = [:]
+    /// VMs whose state is being saved; observed so a VM tab shows the pause.
+    private(set) var pausing: Set<String> = []
+    @ObservationIgnored private var pauses: [String: Task<VMPauseOutcome, Never>] = [:]
+    /// VMs whose clean point is being taken or reset to; observed so a VM tab disables its actions.
+    private(set) var diskOperations: Set<String> = []
+    /// VMs that stopped during their own disk operation. `onVMStopped` hears of it only if the
+    /// operation leaves them stopped: its own stop and restart end nothing, a take over included.
+    @ObservationIgnored private var stoppedForDiskOperation: Set<String> = []
+    /// Starts waiting for a VM's disk operation to finish.
+    @ObservationIgnored private var diskOperationWaiters: [String: [CheckedContinuation<Void, Never>]] = [:]
+
     init(
         registry: WorktreeVMRegistry = WorktreeVMRegistry(),
         root: URL = Paths.vmsRoot,
@@ -150,12 +236,16 @@ final class WorktreeVMManager {
             ?? "Alas"
     }
 
-    /// Boots VM `worktreeID` (a registry record id), configured for the guest its id names.
-    static func bootVirtualMachine(worktreeID: String, bundle: VMBundle, shares: [VMShare]) async throws -> RunningVM {
+    /// Boots VM `worktreeID` (a registry record id), configured for the guest its id names, or
+    /// restores it from `restoringFrom` and resumes it.
+    static func bootVirtualMachine(
+        worktreeID: String, bundle: VMBundle, shares: [VMShare], restoringFrom state: URL?
+    ) async throws -> RunningVM {
+        let guest = VMIdentity.parse(recordID: worktreeID).guest
         let resources = VMConfigurationFactory.defaultResources(
             hostCPUs: ProcessInfo.processInfo.processorCount,
             hostMemory: ProcessInfo.processInfo.physicalMemory)
-        let configuration = switch VMIdentity.parse(recordID: worktreeID).guest {
+        let configuration = switch guest {
         case .macOS:
             try VMConfigurationFactory.macOS(
                 bundle: bundle, cpuCount: resources.cpus, memoryBytes: resources.memory, display: .default,
@@ -165,18 +255,42 @@ final class WorktreeVMManager {
                 bundle: LinuxVMBundle(url: bundle.url), cpuCount: resources.cpus, memoryBytes: resources.memory,
                 display: .default, shares: shares, seedISO: nil)
         }
-        // Diagnostic for suspend and resume, which a later plan builds on:
-        // whether this configuration, shares included, supports save/restore.
+        // Whether this configuration, shares included, supports save/restore, which pausing
+        // needs. Linux guests never save state.
+        var supportsSaveRestore = false
         #if arch(arm64)
         do {
             try configuration.validateSaveRestoreSupport()
+            supportsSaveRestore = guest == .macOS
             vmLogger.notice("VM \(worktreeID, privacy: .public) supports save/restore with \(shares.count) shares")
         } catch {
             vmLogger.notice("VM \(worktreeID, privacy: .public) does not support save/restore with \(shares.count) shares: \(String(describing: error), privacy: .public)")
         }
         #endif
-        let vm = RunningVM(worktreeID: worktreeID, machine: VirtualizationMachine(configuration: configuration))
-        try await vm.start()
+        let machine = VirtualizationMachine(configuration: configuration)
+        let vm = RunningVM(worktreeID: worktreeID, machine: machine, supportsSaveRestore: supportsSaveRestore)
+        guard let state else {
+            try await vm.start()
+            return vm
+        }
+        // The configuration changed since the save (a share went away, say): cold-boot.
+        guard supportsSaveRestore else {
+            throw RestoreFailed(underlying: VMError(message: "This configuration doesn't support save/restore"))
+        }
+        do {
+            try await vm.restoreState(from: state)
+            try await vm.resume()
+        } catch {
+            // A restored machine left paused would share the disk with the cold boot that follows.
+            if machine.state != .stopped, machine.state != .error {
+                do {
+                    try await machine.stop()
+                } catch {
+                    throw VMError(message: "The VM couldn't be resumed or stopped: \(error.localizedDescription)")
+                }
+            }
+            throw RestoreFailed(underlying: error)
+        }
         return vm
     }
 
@@ -246,8 +360,11 @@ final class WorktreeVMManager {
     /// deletion do not create the VM directory for users who never use VMs.
     private var vmsExist: Bool { FileManager.default.fileExists(atPath: root.path) }
 
+    /// The VM running here; nil while it is being paused, so an agent call waits for the pause
+    /// through a start, which then restores it. Its tab reads `runningVMs` to keep the screen.
     func running(_ worktreeID: String, guest: VMGuestOS = .macOS) -> RunningVM? {
-        runningVMs[VMIdentity.recordID(worktree: worktreeID, guest: guest)]
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        return pausing.contains(id) ? nil : runningVMs[id]
     }
 
     /// The guest client already made for a VM this process runs, without creating one.
@@ -280,7 +397,20 @@ final class WorktreeVMManager {
         let elsewhere = record.runOwner.flatMap { owner in
             me.map(owner.isSameProcess(as:)) == true ? nil : owner.label
         }
-        return RecordStatus(hasVM: true, runningElsewhere: elsewhere, bundlePath: record.bundlePath)
+        let bundle = VMBundle(url: URL(fileURLWithPath: record.bundlePath))
+        let pausedAt = record.guestOS == .macOS && Self.isPaused(bundle) ? Self.savedAt(Self.savedStateURL(of: bundle)) : nil
+        return RecordStatus(
+            hasVM: true, runningElsewhere: elsewhere, bundlePath: record.bundlePath, pausedAt: pausedAt,
+            cleanPoint: Self.readCleanPoint(of: bundle))
+    }
+
+    /// When the state file was saved; nil when there is none. Read with `stat`, which never
+    /// answers from a cache.
+    private static func savedAt(_ file: URL) -> Date? {
+        var info = stat()
+        guard stat(file.path, &info) == 0 else { return nil }
+        return Date(timeIntervalSince1970: TimeInterval(info.st_mtimespec.tv_sec)
+            + TimeInterval(info.st_mtimespec.tv_nsec) / 1_000_000_000)
     }
 
     /// True the first time it is asked for `build`, so the golden VM boots by
@@ -296,6 +426,16 @@ final class WorktreeVMManager {
 
     func isStarting(_ id: String) -> Bool {
         starting.contains(id)
+    }
+
+    /// Whether VM `recordID`, running here, can save its machine state.
+    func supportsSaveRestore(recordID: String) -> Bool {
+        runningVMs[recordID]?.supportsSaveRestore ?? false
+    }
+
+    /// When VM `recordID` started running here; nil when it doesn't run here.
+    func runningSince(_ recordID: String) -> Date? {
+        startedAt[recordID]
     }
 
     func runningGolden() -> RunningVM? {
@@ -361,6 +501,7 @@ final class WorktreeVMManager {
             {
                 throw VMError(message: "The golden image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
             }
+            try Self.markFirstBootPending(bundle)
             let now = Date()
             records.append(WorktreeVMRecord(
                 id: worktreeID, goldenBuild: golden.url.lastPathComponent, bundlePath: bundle.url.path,
@@ -398,6 +539,7 @@ final class WorktreeVMManager {
             {
                 throw VMError(message: "The Ubuntu image and worktree VMs must be on the same APFS volume (\(error.localizedDescription))")
             }
+            try Self.markFirstBootPending(VMBundle(url: bundle.url))
             let now = Date()
             records.append(WorktreeVMRecord(
                 id: id, guestOS: .linux, goldenBuild: VMIdentity.linuxGoldenPrefix + golden.url.lastPathComponent,
@@ -423,12 +565,17 @@ final class WorktreeVMManager {
         try await turnOffLeftoverSSH(id: id)
     }
 
-    /// Stops `other` (which must run in this process) and starts `worktreeID`.
+    /// Pauses `other` (which must run in this process) and starts `worktreeID`.
     func startVM(worktreeID: String, pausing other: String) async throws -> RunningVM {
         guard runningVMs[other] != nil else {
             throw VMError(message: "The VM to pause is not running in this window")
         }
-        try await stop(other, force: false)
+        guard !isRunningSetup(other) else {
+            throw VMError(message: "The VM to pause is running its setup script")
+        }
+        if await pauseVM(recordID: other) == .notRunning, runningVMs[other] != nil {
+            throw VMError(message: "The VM to pause couldn't be stopped")
+        }
         switch try await startVM(worktreeID: worktreeID) {
         case .running(let vm):
             return vm
@@ -462,8 +609,14 @@ final class WorktreeVMManager {
     }
 
     /// Throws when the VM is still running afterwards; it then stays tracked
-    /// and keeps its slot.
+    /// and keeps its slot. A pause in progress finishes first: stopping a machine mid-save
+    /// would leave a partial state file.
     private func stop(_ id: String, force: Bool) async throws {
+        if let pause = pauses[id] { _ = await pause.value }
+        try await stopNow(id, force: force)
+    }
+
+    private func stopNow(_ id: String, force: Bool) async throws {
         if starting.contains(id) {
             if pendingAfterBoot[id] == nil { pendingAfterBoot[id] = .stop }
             return
@@ -555,12 +708,454 @@ final class WorktreeVMManager {
         return nil
     }
 
-    /// Stops every VM this process runs. Called on quit so registry owners clear.
+    /// Stops every VM this process runs. Called on quit so registry owners clear. macOS VMs
+    /// that can save their state pause instead, all at once, within `quitPauseBound`; one still
+    /// saving then is stopped as the others are. No VM starts afterwards, a disk operation's
+    /// restart included.
     func stopAll() async {
+        isQuitting = true
+        let ids = Array(runningVMs.keys)
+        // A VM running its setup stops: restored, it would resume mid-script and never rerun it.
+        let pausable = Set(ids.filter { canSaveState($0) && !isRunningSetup($0) })
+        let pauses = pausable.map { id in Task { await self.pauseVM(recordID: id) } }
         await withTaskGroup(of: Void.self) { group in
-            for id in runningVMs.keys {
+            for id in ids where !pausable.contains(id) {
                 group.addTask { await self.stopRecorded(id) }
             }
+            group.addTask { await self.waitForQuitPauses(pauses, ids: pausable) }
+        }
+    }
+
+    private func waitForQuitPauses(_ pauses: [Task<VMPauseOutcome, Never>], ids: Set<String>) async {
+        guard !pauses.isEmpty else { return }
+        let (done, signal) = AsyncStream<Void>.makeStream()
+        let all = Task {
+            for pause in pauses { _ = await pause.value }
+            signal.yield()
+        }
+        let bound = quitPauseBound
+        let timer = Task {
+            try? await Task.sleep(for: bound)
+            signal.yield()
+        }
+        for await _ in done { break }
+        signal.finish()
+        timer.cancel()
+        all.cancel()
+        let late = ids.filter { runningVMs[$0] != nil }
+        guard !late.isEmpty else { return }
+        logger.error("Saving the state of VMs \(late.sorted(), privacy: .public) took too long; stopping them")
+        await withTaskGroup(of: Void.self) { group in
+            for id in late {
+                group.addTask {
+                    do {
+                        // Out of time: power it off rather than wait for the guest too.
+                        try await self.stopNow(id, force: true)
+                    } catch {
+                        self.logger.error("Stopping VM \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Pause
+
+    /// Whether VM `id`, running here, pauses by saving its state: a worktree's macOS VM whose
+    /// configuration supports it. A golden never does: sealing it needs a clean shutdown.
+    private func canSaveState(_ id: String) -> Bool {
+        VMIdentity.parse(recordID: id).guest == .macOS && !id.hasPrefix(Self.goldenIDPrefix)
+            && supportsSaveRestore(recordID: id)
+    }
+
+    /// Pauses the worktree's VM to free its slot: saves its machine state and stops it, so the
+    /// next start resumes where it was. A VM that can't save its state stops instead.
+    func pauseVM(worktreeID: String, guest: VMGuestOS = .macOS) async -> VMPauseOutcome {
+        await pauseVM(recordID: VMIdentity.recordID(worktree: worktreeID, guest: guest))
+    }
+
+    private func pauseVM(recordID id: String) async -> VMPauseOutcome {
+        if let pause = pauses[id] { return await pause.value }
+        guard runningVMs[id] != nil, !starting.contains(id) else { return .notRunning }
+        pausing.insert(id)
+        // Cleans up inside the task, so whoever awaits it resumes with the pause already over.
+        let pause = Task {
+            let outcome = await self.pauseNow(id)
+            self.pauses[id] = nil
+            self.pausing.remove(id)
+            // `didStop` left the owner to the pause; a saved pause cleared it after `state.json`.
+            if outcome != .saved, self.runningVMs[id] == nil { self.clearOwner(id) }
+            return outcome
+        }
+        pauses[id] = pause
+        return await pause.value
+    }
+
+    private func pauseNow(_ id: String) async -> VMPauseOutcome {
+        guard let vm = runningVMs[id] else { return .notRunning }
+        guard canSaveState(id) else { return await stopInsteadOfPausing(id) }
+        let bundle = bundle(forID: id)
+        let state = Self.savedStateURL(of: bundle)
+        do {
+            try await vm.pause()
+            try await vm.saveState(to: state)
+        } catch {
+            logger.error("Saving the state of VM \(id, privacy: .public) failed, stopping it: \(String(describing: error), privacy: .public)")
+            Self.removeSavedState(of: bundle)
+            // Running again, the guest can shut down cleanly.
+            if vm.state == .paused { try? await vm.resume() }
+            return await stopInsteadOfPausing(id)
+        }
+        do {
+            try await vm.forceStop()
+        } catch {
+            logger.error("Stopping VM \(id, privacy: .public) after saving its state failed: \(String(describing: error), privacy: .public)")
+            Self.removeSavedState(of: bundle)
+            try? await vm.resume()
+            return .notRunning
+        }
+        // `onStopped` normally untracks it already. The owner stays until `state.json` is
+        // written, so no other Alas boots the VM cold, or discards the state, in between.
+        didStop(id)
+        guard let stamp = Self.diskStamp(of: bundle) else {
+            logger.error("Couldn't read VM \(id, privacy: .public)'s disk; discarding its saved state")
+            Self.removeSavedState(of: bundle)
+            return .stopped
+        }
+        do {
+            try Self.writeSavedStateInfo(VMSavedState.Info(diskStamp: stamp), of: bundle)
+        } catch {
+            logger.error("Recording VM \(id, privacy: .public) as paused failed: \(String(describing: error), privacy: .public)")
+            Self.removeSavedState(of: bundle)
+            return .stopped
+        }
+        clearOwner(id)
+        logger.notice("Paused VM \(id, privacy: .public) with its state saved")
+        return .saved
+    }
+
+    private func stopInsteadOfPausing(_ id: String) async -> VMPauseOutcome {
+        do {
+            try await stopNow(id, force: false)
+        } catch {
+            logger.error("Stopping VM \(id, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            return .notRunning
+        }
+        return .stopped
+    }
+
+    /// `disk.img`'s modification time, read with `attributesOfItem`, which never answers from a
+    /// cache, plus 1 ms so the registry's floating-point round trip can't make it look older.
+    nonisolated private static func diskStamp(of bundle: VMBundle) -> Date? {
+        diskModified(bundle).map { $0.addingTimeInterval(0.001) }
+    }
+
+    nonisolated private static func diskModified(_ bundle: VMBundle) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: bundle.diskImage.path))?[.modificationDate] as? Date
+    }
+
+    /// Removes the saved state and its `state.json`, the info first so a state left behind is
+    /// never restored.
+    nonisolated private static func removeSavedState(of bundle: VMBundle) {
+        for file in [savedStateInfoURL(of: bundle), savedStateURL(of: bundle)]
+            where FileManager.default.fileExists(atPath: file.path)
+        {
+            do {
+                try FileManager.default.removeItem(at: file)
+            } catch {
+                Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
+                    .error("Removing saved VM state \(file.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    nonisolated private static func writeSavedStateInfo(_ info: VMSavedState.Info, of bundle: VMBundle) throws {
+        try JSONEncoder().encode(info).write(to: savedStateInfoURL(of: bundle), options: .atomic)
+    }
+
+    nonisolated private static func readSavedStateInfo(of bundle: VMBundle) -> VMSavedState.Info? {
+        guard let data = try? Data(contentsOf: savedStateInfoURL(of: bundle)) else { return nil }
+        return try? JSONDecoder().decode(VMSavedState.Info.self, from: data)
+    }
+
+    /// The state file a start restores from: only a macOS VM's, with a `state.json` saying it
+    /// was saved with the disk as it is now. Any other is stale and removed. Called while no Alas
+    /// runs the VM: under the registry lock that admits its start, or with its disk claimed.
+    nonisolated private static func restorableState(_ id: String, bundle: VMBundle) -> URL? {
+        let state = savedStateURL(of: bundle)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: state.path) || fm.fileExists(atPath: savedStateInfoURL(of: bundle).path) else {
+            return nil
+        }
+        if VMIdentity.parse(recordID: id).guest == .macOS, fm.fileExists(atPath: state.path),
+           let info = readSavedStateInfo(of: bundle), let disk = diskModified(bundle),
+           VMSavedState.isValid(pausedDiskStamp: info.diskStamp, currentDiskModified: disk)
+        {
+            return state
+        }
+        Logger(subsystem: "io.nlopez.alas", category: "worktree-vm-manager")
+            .notice("Discarding stale saved state of VM \(id, privacy: .public)")
+        removeSavedState(of: bundle)
+        return nil
+    }
+
+    // MARK: - Clean point
+
+    /// `<bundle>/clean/`: the clean point's `disk.img`, its `state.vzvmsave` when the VM could
+    /// save one, and `clean.json`.
+    nonisolated static func cleanDirectory(of bundle: VMBundle) -> URL {
+        bundle.url.appendingPathComponent("clean", isDirectory: true)
+    }
+
+    nonisolated private static func cleanPointFile(in directory: URL) -> URL {
+        directory.appendingPathComponent("clean.json")
+    }
+
+    nonisolated private static func readCleanPoint(of bundle: VMBundle) -> VMCleanPoint? {
+        guard let data = try? Data(contentsOf: cleanPointFile(in: cleanDirectory(of: bundle))) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(VMCleanPoint.self, from: data)
+    }
+
+    /// The clean point of VM `recordID`; nil until one is taken.
+    func cleanPoint(recordID: String) -> VMCleanPoint? {
+        guard vmsExist, !recordID.hasPrefix(Self.goldenIDPrefix) else { return nil }
+        return Self.readCleanPoint(of: bundle(forID: recordID))
+    }
+
+    /// Saves the VM's disk, and its machine state where it can save one, as its clean point,
+    /// replacing any earlier one. A VM running here pauses (or, without save/restore, shuts down
+    /// cleanly) for the copy and then starts again, from the saved state where there is one. A
+    /// paused VM's point is its disk and saved state. Refused for a stopped VM, whose disk may not
+    /// be the state the user means to keep.
+    /// `setupScriptHash` is the project's guest setup script the point was taken after.
+    func takeCleanPoint(worktreeID: String, guest: VMGuestOS = .macOS, setupScriptHash: String? = nil) async throws {
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        try await withDiskOperation(id) {
+            let wasRunning = try await shutDownForCleanPoint(id)
+            let bundle = bundle(forID: id)
+            guard wasRunning || Self.isPaused(bundle) else {
+                throw VMError(message: "Start the VM to save its clean point")
+            }
+            try withDiskClaimed(id) { try writeCleanPoint(id, bundle: bundle, setupScriptHash: setupScriptHash) }
+            logger.notice("Saved the clean point of VM \(id, privacy: .public)")
+            if wasRunning { try await startAgain(id, done: "The clean point was saved") }
+        }
+    }
+
+    /// Powers the VM off, swaps its disk for the clean point's, and starts it, from the clean
+    /// point's saved state when it has one. Refused while it has no clean point.
+    func resetToClean(worktreeID: String, guest: VMGuestOS = .macOS) async throws {
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        try await withDiskOperation(id) {
+            let bundle = bundle(forID: id)
+            guard Self.readCleanPoint(of: bundle) != nil else {
+                throw VMError(message: "This VM has no clean point yet")
+            }
+            // Its disk is replaced anyway. A call in flight fails as for any stop.
+            try await stop(id, force: true)
+            try withDiskClaimed(id) { try restoreCleanPoint(id, bundle: bundle) }
+            logger.notice("Reset VM \(id, privacy: .public) to its clean point")
+            try await startAgain(id, done: "The VM was reset to its clean point")
+        }
+    }
+
+    /// Deletes the VM and clones it again from the base image, as a new VM: its next boot is a
+    /// first boot. Does not start it.
+    func resetFromScratch(worktreeID: String, guest: VMGuestOS = .macOS) async throws {
+        let id = VMIdentity.recordID(worktree: worktreeID, guest: guest)
+        try await withDiskOperation(id) {
+            // Checked first: without a base image the VM would be deleted and not cloned again.
+            let golden: Bool = switch guest {
+            case .macOS: availableGolden() != nil
+            case .linux: LinuxGoldenInstaller.availableGolden(root: root) != nil
+            }
+            guard golden else {
+                throw VMError(message: "The \(guest == .linux ? "Ubuntu" : "base") image isn't available to clone the VM from")
+            }
+            if let reason = await deleteVM(worktreeID: worktreeID, guest: guest) {
+                throw VMError(message: "Couldn't delete the VM: \(reason)")
+            }
+            try createVM(worktreeID: worktreeID, guest: guest)
+            logger.notice("Reset VM \(id, privacy: .public) from scratch")
+        }
+    }
+
+    /// Runs `body` as the only clean point or reset of VM `id`; other starts wait for it.
+    private func withDiskOperation(_ id: String, _ body: () async throws -> Void) async throws {
+        guard !id.hasPrefix(Self.goldenIDPrefix) else { throw VMError(message: "A base image has no clean point") }
+        guard !starting.contains(id) else { throw VMError(message: "The VM is starting. Try again once it runs.") }
+        guard diskOperations.insert(id).inserted else {
+            throw VMError(message: "The VM is already being reset or saved")
+        }
+        defer {
+            diskOperations.remove(id)
+            if stoppedForDiskOperation.remove(id) != nil, runningVMs[id] == nil { onVMStopped(id) }
+            diskOperationWaiters.removeValue(forKey: id)?.forEach { $0.resume() }
+        }
+        try await body()
+    }
+
+    /// Stops VM `id` for a clean point: pauses it where it can save its state, else shuts its
+    /// guest down cleanly. A forced power-off would leave a disk unfit for a clean point. Returns
+    /// whether it was running here.
+    private func shutDownForCleanPoint(_ id: String) async throws -> Bool {
+        if let pause = pauses[id] { _ = await pause.value }
+        guard let vm = runningVMs[id] else { return false }
+        if canSaveState(id) {
+            // A failed save still shut the guest down: the point is then the disk alone. Not when
+            // that shutdown had to force it off.
+            let outcome = await pauseVM(recordID: id)
+            guard outcome != .notRunning else {
+                throw VMError(message: "The VM couldn't be paused to save its clean point")
+            }
+            guard outcome == .saved || !vm.wasForcedOff else {
+                throw VMError(message: "The VM didn't shut down, so no clean point was saved. Try again.")
+            }
+            return true
+        }
+        guard await vm.stopGracefully(requestingShutdown: guestPoweroff(id)) else {
+            throw VMError(message: "The VM didn't shut down, so no clean point was saved. Try again.")
+        }
+        didStop(id)
+        return true
+    }
+
+    /// Runs `body` with VM `id`'s disk claimed, so no Alas process boots it meanwhile. Refused
+    /// while any Alas runs it.
+    private func withDiskClaimed(_ id: String, _ body: () throws -> Void) throws {
+        try claimDisk(id: id)
+        defer { releaseDisk(id: id) }
+        try body()
+    }
+
+    /// Writes `clean.partial/` and renames it into place, so a failure never leaves a partial
+    /// `clean/`. Called with the disk claimed.
+    private func writeCleanPoint(_ id: String, bundle: VMBundle, setupScriptHash: String?) throws {
+        let fm = FileManager.default
+        let partial = bundle.url.appendingPathComponent("clean.partial", isDirectory: true)
+        try? fm.removeItem(at: partial)
+        do {
+            try fm.createDirectory(at: partial, withIntermediateDirectories: false)
+            try VMBundle.cloneFile(bundle.diskImage, to: partial.appendingPathComponent("disk.img"))
+            // Cloned, not moved: the live VM restores from it. Only a state still valid for this
+            // disk: another Alas may have restored the VM since the pause.
+            if let state = Self.restorableState(id, bundle: bundle) {
+                try VMBundle.cloneFile(state, to: partial.appendingPathComponent(state.lastPathComponent))
+            }
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            try encoder.encode(VMCleanPoint(createdAt: Date(), setupScriptHash: setupScriptHash))
+                .write(to: Self.cleanPointFile(in: partial))
+            try Self.moveDirectory(partial, into: Self.cleanDirectory(of: bundle))
+        } catch {
+            try? fm.removeItem(at: partial)
+            throw error
+        }
+        // The new VM's first boot is over with its clean point. Left behind, the marker only
+        // makes the next start take the clean point again.
+        let marker = Self.firstBootMarker(of: bundle)
+        if fm.fileExists(atPath: marker.path) {
+            do {
+                try fm.removeItem(at: marker)
+            } catch {
+                logger.error("Removing VM \(id, privacy: .public)'s first boot marker failed: \(String(describing: error), privacy: .public)")
+            }
+        }
+    }
+
+    nonisolated private static func markFirstBootPending(_ bundle: VMBundle) throws {
+        try Data().write(to: firstBootMarker(of: bundle))
+    }
+
+    /// Renames `source` to `destination` in one step, swapping out an existing one, which is then
+    /// removed.
+    nonisolated private static func moveDirectory(_ source: URL, into destination: URL) throws {
+        guard FileManager.default.fileExists(atPath: destination.path) else {
+            return try FileManager.default.moveItem(at: source, to: destination)
+        }
+        guard renamex_np(source.path, destination.path, UInt32(RENAME_SWAP)) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        // `source` now holds the old one.
+        try? FileManager.default.removeItem(at: source)
+    }
+
+    /// Replaces the stopped VM's disk with a clone of the clean point's, and its saved state with
+    /// the clean point's, recorded as paused so the next start restores it. Called with the disk
+    /// claimed.
+    private func restoreCleanPoint(_ id: String, bundle: VMBundle) throws {
+        let clean = Self.cleanDirectory(of: bundle)
+        let state = Self.savedStateURL(of: bundle)
+        // The live state goes first, its `state.json` before the disk changes: an interruption
+        // past this point must cold-boot, never restore the old memory onto the clean disk.
+        let info = Self.savedStateInfoURL(of: bundle)
+        if FileManager.default.fileExists(atPath: info.path) { try FileManager.default.removeItem(at: info) }
+        Self.removeSavedState(of: bundle)
+        let staged = bundle.url.appendingPathComponent("disk.img.resetting")
+        try? FileManager.default.removeItem(at: staged)
+        try cloneCleanFile(clean.appendingPathComponent("disk.img"), staged)
+        guard rename(staged.path, bundle.diskImage.path) == 0 else {
+            let error = POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            try? FileManager.default.removeItem(at: staged)
+            throw error
+        }
+        let cleanState = clean.appendingPathComponent(state.lastPathComponent)
+        guard VMIdentity.parse(recordID: id).guest == .macOS, FileManager.default.fileExists(atPath: cleanState.path)
+        else { return }
+        try cloneCleanFile(cleanState, state)
+        // Read after the swap: restore accepts the state only for the disk as it is now.
+        guard let stamp = Self.diskStamp(of: bundle) else {
+            Self.removeSavedState(of: bundle)
+            return
+        }
+        try Self.writeSavedStateInfo(VMSavedState.Info(diskStamp: stamp), of: bundle)
+    }
+
+    /// Whether VM `recordID` awaits its first boot's setup and clean point.
+    func isFirstBootPending(recordID: String) -> Bool {
+        guard vmsExist, !recordID.hasPrefix(Self.goldenIDPrefix) else { return false }
+        return FileManager.default.fileExists(atPath: Self.firstBootMarker(of: bundle(forID: recordID)).path)
+    }
+
+    /// Whether a VM that just started here runs the first-boot setup: a worktree VM (not a golden)
+    /// created new and without its clean point yet, not already being set up, and without a
+    /// failed script awaiting "Run again" or "Skip".
+    nonisolated static func runsFirstBootSetup(
+        recordID: String, firstBootPending: Bool, setupRunning: Bool, setupFailed: Bool
+    ) -> Bool {
+        !recordID.hasPrefix(goldenIDPrefix) && firstBootPending && !setupRunning && !setupFailed
+    }
+
+    /// Whether creating a worktree also creates its macOS VM: the project turned it on, the
+    /// worktree is on this Mac, the Mac can run macOS guests, and a sealed golden image exists.
+    /// Without one, the VM is skipped silently and created on demand later.
+    nonisolated static func shouldCreateVM(
+        project: ProjectConfig, isAppleSilicon: Bool, goldenAvailable: Bool, isRemote: Bool
+    ) -> Bool {
+        project.vmForNewWorktrees == true && isAppleSilicon && goldenAvailable && !isRemote
+    }
+
+    /// Starts VM `id` again after a disk operation that stopped it. `done` says what succeeded,
+    /// for when it can't start.
+    private func startAgain(_ id: String, done: String) async throws {
+        let outcome: VMStartOutcome
+        do {
+            outcome = try await startRecorded(id: id, ensureRecord: nil, insideDiskOperation: true)
+        } catch let error as RestartFailed {
+            throw error
+        } catch {
+            // What the disk operation did still holds: only the start failed.
+            throw RestartFailed(message: "\(done), but the VM couldn't start again: \(error.localizedDescription)")
+        }
+        switch outcome {
+        case .running:
+            return
+        case .runningElsewhere(let label):
+            throw RestartFailed(message: "\(done), but the VM is now running in \(label).")
+        case .needsUserChoice:
+            throw RestartFailed(message: "\(done), but no VM slot is free to start it again.")
         }
     }
 
@@ -647,7 +1242,8 @@ final class WorktreeVMManager {
         if id.hasPrefix(Self.goldenIDPrefix) {
             return VMBundle(url: goldenBundleURL(build: String(id.dropFirst(Self.goldenIDPrefix.count))))
         }
-        let recorded = (try? registry.snapshot())?.first { $0.id == id }?.bundlePath
+        // A lockless read: a write here would drop the fields of records only newer builds know.
+        let recorded = (try? registry.read())?.records.first { $0.id == id }?.bundlePath
         let (worktree, guest) = VMIdentity.parse(recordID: id)
         return VMBundle(url: recorded.map { URL(fileURLWithPath: $0) }
             ?? Self.bundleURL(forWorktree: worktree, guest: guest, root: root))
@@ -924,6 +1520,240 @@ final class WorktreeVMManager {
         root.appendingPathComponent("golden", isDirectory: true).appendingPathComponent(build, isDirectory: true)
     }
 
+    // MARK: - Disk use
+
+    /// Base images and worktree VMs with the disk they use, and apart from them the orphaned VM
+    /// bundles: those under `worktrees/` no live worktree owns, because no record names them or
+    /// their record's worktree is neither on disk nor in a project. One any Alas runs, or one a
+    /// record this build can't decode names, never is. One scan; sizes are read off the main
+    /// actor. Throws when the registry can't be read, rather than taking every VM for an orphan.
+    func diskUse() async throws -> VMDiskUse {
+        let scanned = try scanBundles()
+        async let bundles = VMBundleSummary.measured(scanned.filter { !$0.isOrphan })
+        async let orphans = VMBundleSummary.measured(scanned.filter(\.isOrphan))
+        return await VMDiskUse(bundles: bundles, orphans: orphans)
+    }
+
+    /// Deletes the orphans among `ids` (`VMBundleSummary.id`s) that a fresh scan still finds
+    /// orphaned, with their records, then the leftovers of interrupted resets and clean points in
+    /// VMs no Alas runs. Returns why some were left, if any.
+    @discardableResult
+    func deleteOrphans(_ ids: [String]) -> String? {
+        guard vmsExist else { return nil }
+        // Listed a while ago: a VM started or a worktree came back since is kept, and what is
+        // deleted is what the registry says now.
+        let orphans: [VMBundleSummary]
+        do {
+            orphans = try scanBundles().filter { $0.isOrphan && ids.contains($0.id) }
+        } catch {
+            return "the VM registry couldn't be read (\(error.localizedDescription))"
+        }
+        var reasons: [String] = []
+        for orphan in orphans {
+            if let recordID = orphan.recordID {
+                if let reason = removeRecordAndBundle(recordID) {
+                    reasons.append("\(orphan.name): \(reason)")
+                } else {
+                    onVMDeleted(recordID)
+                }
+                continue
+            }
+            do {
+                // Under the registry lock, so a create cloning into this folder can't race it.
+                try registry.updateSeeingForeignBundles { records, foreign in
+                    let folder = orphan.url.lastPathComponent
+                    let named = records.map(\.bundlePath) + foreign
+                    guard !named.contains(where: { URL(fileURLWithPath: $0).lastPathComponent == folder }),
+                          FileManager.default.fileExists(atPath: orphan.url.path)
+                    else { return }
+                    try FileManager.default.removeItem(at: orphan.url)
+                }
+            } catch {
+                reasons.append("\(orphan.name): \(error.localizedDescription)")
+            }
+        }
+        do {
+            try registry.update { records in
+                for record in records where !record.id.hasPrefix(Self.goldenIDPrefix) && record.runOwner == nil
+                    && !isBusyHere(record.id)
+                {
+                    for leftover in VMDiskUsage.leftovers(in: URL(fileURLWithPath: record.bundlePath)) {
+                        do {
+                            try FileManager.default.removeItem(at: leftover)
+                        } catch {
+                            logger.error("Removing \(leftover.path, privacy: .public) failed: \(String(describing: error), privacy: .public)")
+                            reasons.append("\(leftover.lastPathComponent): \(error.localizedDescription)")
+                        }
+                    }
+                }
+            }
+        } catch {
+            reasons.append(error.localizedDescription)
+        }
+        return reasons.isEmpty ? nil : reasons.joined(separator: "; ")
+    }
+
+    /// Deletes base image `id` (a `VMBundleSummary.id`). Refused while VMs cloned from it exist,
+    /// while it runs, and while an install or setup holds its guest's install lock.
+    func deleteGolden(id: String) throws {
+        let guest: VMGuestOS
+        let name: String
+        if id.hasPrefix(Self.goldenIDPrefix) {
+            (guest, name) = (.macOS, String(id.dropFirst(Self.goldenIDPrefix.count)))
+        } else if id.hasPrefix(VMIdentity.linuxGoldenPrefix) {
+            (guest, name) = (.linux, String(id.dropFirst(VMIdentity.linuxGoldenPrefix.count)))
+        } else {
+            throw VMError(message: "Not a base image")
+        }
+        guard !name.isEmpty, !name.contains("/"), name != ".", name != ".." else {
+            throw VMError(message: "Not a base image")
+        }
+        let url = guest == .macOS
+            ? goldenBundleURL(build: name)
+            : root.appendingPathComponent("golden-linux", isDirectory: true).appendingPathComponent(name, isDirectory: true)
+        let lock = try installLock(guest, busy: "The base image is being set up. Try again once that finishes.")
+        defer { lock.release() }
+        // Clones record the macOS build as is, the Linux serial with its prefix.
+        let cloneBuild = guest == .macOS ? name : id
+        let goldenRecord = Self.goldenIDPrefix + name
+        // Under the registry lock `createVM` re-checks the golden under, so no clone starts from
+        // a half-deleted image.
+        try registry.update { records in
+            guard !records.contains(where: { !$0.id.hasPrefix(Self.goldenIDPrefix) && $0.goldenBuild == cloneBuild })
+            else { throw VMError(message: "Delete its worktree VMs first") }
+            if guest == .macOS {
+                if isBusyHere(goldenRecord) || records.contains(where: { $0.id == goldenRecord && $0.runOwner != nil }) {
+                    throw VMError(message: "The base image is running. Shut it down first.")
+                }
+                records.removeAll { $0.id == goldenRecord }
+            }
+            if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+        }
+    }
+
+    /// The allocated bytes of the downloaded installers under `ipsw/` and `linux-images/`.
+    func installerBytes() async -> Int64 {
+        let directories = installerDirectories
+        return await Task.detached(priority: .utility) {
+            directories.reduce(0) { $0 + VMDiskUsage.allocatedBytes(inTree: $1) }
+        }.value
+    }
+
+    /// Deletes the downloaded installers. Refused while an install holds either install lock,
+    /// which it does from its download through its setup.
+    func removeInstallers() throws {
+        guard vmsExist else { return }
+        let busy = "An install is downloading or setting up. Try again once it finishes."
+        let macOS = try installLock(.macOS, busy: busy)
+        defer { macOS.release() }
+        let linux = try installLock(.linux, busy: busy)
+        defer { linux.release() }
+        for directory in installerDirectories where FileManager.default.fileExists(atPath: directory.path) {
+            try FileManager.default.removeItem(at: directory)
+        }
+    }
+
+    private var installerDirectories: [URL] {
+        ["ipsw", "linux-images"].map { root.appendingPathComponent($0, isDirectory: true) }
+    }
+
+    /// Takes `guest`'s install lock without waiting, as the installers do; `busy` is the
+    /// refusal while an install holds it, in this Alas or another.
+    private func installLock(_ guest: VMGuestOS, busy: String) throws -> ComputerUseDriverLock {
+        let file = guest == .macOS ? "install.lock" : "install-linux.lock"
+        do {
+            return try ComputerUseDriverLock.acquire(at: root.appendingPathComponent(file), label: ownerLabel)
+        } catch {
+            switch error {
+            case .held: throw VMError(message: busy)
+            case .unavailable(let reason): throw VMError(message: reason)
+            }
+        }
+    }
+
+    /// Whether this process runs VM `id`, boots it, pauses it, or works on its disk.
+    private func isBusyHere(_ id: String) -> Bool {
+        runningVMs[id] != nil || starting.contains(id) || pausing.contains(id)
+            || diskClaims.contains(id) || diskOperations.contains(id)
+    }
+
+    /// Every base image and worktree VM bundle on disk, without sizes. Cheap enough for the main
+    /// actor: directory listings and one registry read.
+    private func scanBundles() throws -> [VMBundleSummary] {
+        guard vmsExist else { return [] }
+        // Read without writing, so fields only a newer build knows survive.
+        let (records, foreignBundlePaths) = try registry.read()
+        let foreignFolders = Set(foreignBundlePaths.map { URL(fileURLWithPath: $0).lastPathComponent })
+        let me = VMRunOwner.current(label: ownerLabel)
+        func elsewhere(_ owner: VMRunOwner?) -> String? {
+            owner.flatMap { me.map($0.isSameProcess(as:)) == true ? nil : $0.label }
+        }
+        let vmRecords = records.filter { !$0.id.hasPrefix(Self.goldenIDPrefix) }
+        func clones(of goldenBuild: String) -> Int {
+            vmRecords.filter { $0.goldenBuild == goldenBuild }.count
+        }
+        var bundles: [VMBundleSummary] = []
+        for golden in GoldenImageInstaller.goldenBundles(root: root) {
+            let build = golden.url.lastPathComponent
+            let id = Self.goldenIDPrefix + build
+            bundles.append(VMBundleSummary(
+                id: id, kind: .golden, guest: .macOS, name: build, worktreeID: nil, url: golden.url,
+                runningHere: isBusyHere(id), runningElsewhere: elsewhere(records.first { $0.id == id }?.runOwner),
+                isOrphan: false, leftovers: [], clones: clones(of: build)))
+        }
+        for url in Self.subdirectories(of: root.appendingPathComponent("golden-linux", isDirectory: true))
+            where !url.lastPathComponent.hasSuffix(".partial")
+        {
+            bundles.append(VMBundleSummary(
+                id: VMIdentity.linuxGoldenPrefix + url.lastPathComponent, kind: .golden, guest: .linux,
+                name: url.lastPathComponent, worktreeID: nil, url: url, runningHere: false, runningElsewhere: nil,
+                isOrphan: false, leftovers: [], clones: clones(of: VMIdentity.linuxGoldenPrefix + url.lastPathComponent)))
+        }
+        let folderOf = Dictionary(
+            vmRecords.map { ($0.id, URL(fileURLWithPath: $0.bundlePath).lastPathComponent) },
+            uniquingKeysWith: { first, _ in first })
+        let recordIn = Dictionary(folderOf.map { ($1, $0) }, uniquingKeysWith: { first, _ in first })
+        let folders = Self.subdirectories(of: root.appendingPathComponent("worktrees", isDirectory: true))
+        let orphaned = Set(VMOrphans.find(
+            bundleNames: folders.map(\.lastPathComponent).filter { !foreignFolders.contains($0) }, records: vmRecords,
+            worktreeExists: { FileManager.default.fileExists(atPath: $0) || worktreePath($0) != nil },
+            bundleName: { worktree, guest in
+                // A record's own bundle path wins over the name a create would give it.
+                folderOf[VMIdentity.recordID(worktree: worktree, guest: guest)]
+                    ?? Self.directoryName(forWorktree: worktree, guest: guest)
+            }))
+        for url in folders {
+            let folder = url.lastPathComponent
+            let record = recordIn[folder].flatMap { id in vmRecords.first { $0.id == id } }
+            let parsed = record.map { VMIdentity.parse(recordID: $0.id) }
+            let busyHere = record.map { isBusyHere($0.id) } ?? false
+            // A record this build can't decode may belong to a VM a newer Alas runs.
+            let fromOtherBuild = record == nil && foreignFolders.contains(folder)
+            let live = busyHere || record?.runOwner != nil || fromOtherBuild
+            bundles.append(VMBundleSummary(
+                id: "worktrees/" + folder, kind: .worktree,
+                guest: parsed?.guest ?? (folder.hasSuffix("-linux") ? .linux : .macOS), name: folder,
+                worktreeID: parsed?.worktree, url: url, runningHere: busyHere,
+                runningElsewhere: elsewhere(record?.runOwner),
+                isOrphan: orphaned.contains(folder) && !live, fromOtherBuild: fromOtherBuild,
+                leftovers: live || record == nil ? [] : VMDiskUsage.leftovers(in: url)))
+        }
+        return bundles
+    }
+
+    nonisolated private static func subdirectories(of directory: URL) -> [URL] {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+        return names.sorted().compactMap { name in
+            let url = directory.appendingPathComponent(name, isDirectory: true)
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue
+            else { return nil }
+            return url
+        }
+    }
+
     // MARK: - Internals
 
     /// `<root>/worktrees/<name>-<hash>[-linux]/`: a readable, filesystem-safe
@@ -951,7 +1781,9 @@ final class WorktreeVMManager {
     }
 
     private enum Admission {
-        case boot(VMBundle, generation: Int)
+        /// `restoringFrom` is a saved state still valid for the disk; `wasPaused` whether the
+        /// bundle had one at all.
+        case boot(VMBundle, generation: Int, restoringFrom: URL?, wasPaused: Bool)
         case outcome(VMStartOutcome)
     }
 
@@ -959,9 +1791,21 @@ final class WorktreeVMManager {
     /// process as owner before booting, so two processes cannot both take the
     /// last slot. The reservation is released if the boot fails.
     private func startRecorded(
-        id: String, ensureRecord: ((inout [WorktreeVMRecord]) throws -> Void)?
+        id: String, ensureRecord: ((inout [WorktreeVMRecord]) throws -> Void)?, insideDiskOperation: Bool = false
     ) async throws -> VMStartOutcome {
+        // A clean point or reset in progress starts the VM itself when it is done, and a VM being
+        // paused starts again once its state is saved, from that state. Both are checked again
+        // after every wait: a disk operation may begin while a pause runs, and the other way round.
+        while (!insideDiskOperation && diskOperations.contains(id)) || pauses[id] != nil {
+            if let pause = pauses[id] {
+                _ = await pause.value
+            } else {
+                await withCheckedContinuation { diskOperationWaiters[id, default: []].append($0) }
+            }
+        }
         if let vm = runningVMs[id] { return .running(vm) }
+        // Checked after the waits: a disk operation that ends during quit doesn't start it again.
+        guard !isQuitting else { throw VMError(message: "Alas is quitting") }
         guard !starting.contains(id) else {
             throw VMError(message: "This VM is already starting")
         }
@@ -989,20 +1833,31 @@ final class WorktreeVMManager {
                 records[index].lastUsedAt = Date()
                 let generation = (records[index].bootGeneration ?? 0) + 1
                 records[index].bootGeneration = generation
-                return .boot(VMBundle(url: URL(fileURLWithPath: records[index].bundlePath)), generation: generation)
+                let bundle = VMBundle(url: URL(fileURLWithPath: records[index].bundlePath))
+                let fm = FileManager.default
+                let wasPaused = fm.fileExists(atPath: Self.savedStateURL(of: bundle).path)
+                    || fm.fileExists(atPath: Self.savedStateInfoURL(of: bundle).path)
+                return .boot(
+                    bundle, generation: generation, restoringFrom: Self.restorableState(id, bundle: bundle),
+                    wasPaused: wasPaused)
             case .alreadyRunningHere:
                 throw VMError(message: "This VM is already starting")
             case .runningElsewhere(let label):
                 return .outcome(.runningElsewhere(label: label))
             case .needsUserChoice(let candidates):
-                return .outcome(.needsUserChoice(candidates: candidates.filter(localIDs.contains)))
+                return .outcome(.needsUserChoice(candidates: candidates.filter {
+                    localIDs.contains($0) && !isRunningSetup($0)
+                }))
             }
         }
         let bundle: VMBundle
         let generation: Int
+        let restoringFrom: URL?
+        let wasPaused: Bool
         switch admission {
         case .outcome(let outcome): return outcome
-        case .boot(let booting, let bootGeneration): (bundle, generation) = (booting, bootGeneration)
+        case .boot(let booting, let bootGeneration, let state, let paused):
+            (bundle, generation, restoringFrom, wasPaused) = (booting, bootGeneration, state, paused)
         }
 
         // `id` stays in `starting` until the VM is tracked or fully cleaned
@@ -1014,7 +1869,7 @@ final class WorktreeVMManager {
         cleanlyShutDown.removeValue(forKey: id)
         let booted: Result<RunningVM, Error>
         do {
-            booted = .success(try await start(id, bundle, try shares(forRecord: id)))
+            booted = .success(try await bootOrRestore(id, bundle: bundle, restoringFrom: restoringFrom))
         } catch {
             booted = .failure(error)
         }
@@ -1060,7 +1915,26 @@ final class WorktreeVMManager {
             throw VMError(message: "The VM was \(abort) while it was starting")
         }
         track(vm, id: id, generation: generation)
+        // A started VM no longer has a saved state: a later crash must not restore it.
+        if wasPaused { Self.removeSavedState(of: bundle) }
+        onVMStarted(id)
         return .running(vm)
+    }
+
+    /// Restores the VM from its saved state when it has one; a restore that fails is logged,
+    /// never surfaced, and the VM cold-boots instead.
+    private func bootOrRestore(_ id: String, bundle: VMBundle, restoringFrom state: URL?) async throws -> RunningVM {
+        let shares = try shares(forRecord: id)
+        guard let state else { return try await start(id, bundle, shares, nil) }
+        do {
+            let vm = try await start(id, bundle, shares, state)
+            logger.notice("Resumed VM \(id, privacy: .public) from its saved state")
+            return vm
+        } catch let failure as RestoreFailed {
+            logger.error("Restoring VM \(id, privacy: .public) failed, cold-booting it: \(String(describing: failure.underlying), privacy: .public)")
+            Self.removeSavedState(of: bundle)
+            return try await start(id, bundle, shares, nil)
+        }
     }
 
     private func track(_ vm: RunningVM, id: String, generation: Int) {
@@ -1077,6 +1951,7 @@ final class WorktreeVMManager {
             self?.didStop(id)
         }
         runningVMs[id] = vm
+        startedAt[id] = now()
     }
 
     /// Whether the record still exists with this process as owner. A registry
@@ -1094,12 +1969,14 @@ final class WorktreeVMManager {
 
     private func didStop(_ id: String) {
         helpersNeedingUpdate.remove(id)
+        startedAt.removeValue(forKey: id)
         if let client = guestClients.removeValue(forKey: id) {
             Task { await client.close() }
         }
         guard runningVMs.removeValue(forKey: id) != nil else { return }
-        clearOwner(id)
-        onVMStopped(id)
+        // A pause clears the owner itself, once it recorded the saved state.
+        if !pausing.contains(id) { clearOwner(id) }
+        if diskOperations.contains(id) { stoppedForDiskOperation.insert(id) } else { onVMStopped(id) }
     }
 
     private func clearOwner(_ id: String) {

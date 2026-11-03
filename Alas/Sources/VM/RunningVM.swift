@@ -19,6 +19,12 @@ protocol VMMachine: AnyObject {
     func stop() async throws
     /// Connects to a vsock port a process in the guest listens on.
     func openGuestConnection(port: UInt32) async throws -> VMGuestTransport
+    func pause() async throws
+    func resume() async throws
+    /// Writes the paused machine's state to `url`.
+    func saveMachineState(to url: URL) async throws
+    /// Restores a stopped machine from a state file; it is paused afterwards.
+    func restoreMachineState(from url: URL) async throws
 }
 
 @MainActor
@@ -40,6 +46,26 @@ final class VirtualizationMachine: NSObject, VMMachine, VZVirtualMachineDelegate
     func requestStop() throws { try vm.requestStop() }
 
     func stop() async throws { try await vm.stop() }
+
+    func pause() async throws { try await vm.pause() }
+
+    func resume() async throws { try await vm.resume() }
+
+    func saveMachineState(to url: URL) async throws {
+        #if arch(arm64)
+        try await vm.saveMachineStateTo(url: url)
+        #else
+        throw POSIXError(.ENOTSUP)
+        #endif
+    }
+
+    func restoreMachineState(from url: URL) async throws {
+        #if arch(arm64)
+        try await vm.restoreMachineStateFrom(url: url)
+        #else
+        throw POSIXError(.ENOTSUP)
+        #endif
+    }
 
     func openGuestConnection(port: UInt32) async throws -> VMGuestTransport {
         guard let device = vm.socketDevices.first as? VZVirtioSocketDevice else {
@@ -65,6 +91,9 @@ final class RunningVM {
     static let gracefulStopTimeout: Duration = .seconds(20)
 
     let worktreeID: String
+    /// Whether this VM's configuration can save and restore its machine state, as
+    /// `validateSaveRestoreSupport()` said when it booted.
+    let supportsSaveRestore: Bool
     private let machine: any VMMachine
     private var stopWaiters: [CheckedContinuation<Void, Never>] = []
     /// Set by the manager; fires once the guest has stopped by any route.
@@ -73,9 +102,10 @@ final class RunningVM {
     /// shutting down.
     private(set) var wasForcedOff = false
 
-    init(worktreeID: String, machine: any VMMachine) {
+    init(worktreeID: String, machine: any VMMachine, supportsSaveRestore: Bool = false) {
         self.worktreeID = worktreeID
         self.machine = machine
+        self.supportsSaveRestore = supportsSaveRestore
         machine.onGuestStop = { [weak self] error in self?.guestStopped(error) }
     }
 
@@ -83,6 +113,14 @@ final class RunningVM {
     var state: VZVirtualMachine.State { machine.state }
 
     func start() async throws { try await machine.start() }
+
+    func pause() async throws { try await machine.pause() }
+
+    func resume() async throws { try await machine.resume() }
+
+    func saveState(to url: URL) async throws { try await machine.saveMachineState(to: url) }
+
+    func restoreState(from url: URL) async throws { try await machine.restoreMachineState(from: url) }
 
     func openGuestConnection(port: UInt32) async throws -> VMGuestTransport {
         try await machine.openGuestConnection(port: port)

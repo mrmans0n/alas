@@ -247,6 +247,16 @@ struct VMComputerUseRouteTests {
         #expect(!takeOvers.isTakenOver("linux:/w"))
     }
 
+    /// While a new VM runs its first-boot setup, agent calls wait as for a VM still starting. A
+    /// cancel passes, and a take over still answers as one.
+    @Test func agentCallsWaitForTheFirstBootSetup() {
+        let starting = "computer_vm_starting: This worktree's VM is still running its setup script. Try again in a moment."
+        #expect(VMTakeOvers.refusal(action: .click, driver: .idle, setupRunning: true) == starting)
+        #expect(VMTakeOvers.refusal(action: nil, driver: .idle, setupRunning: true) == starting)
+        #expect(VMTakeOvers.refusal(action: .cancel, driver: .idle, setupRunning: true) == nil)
+        #expect(VMTakeOvers.refusal(action: .click, driver: .user, setupRunning: true) == VMAutoStartMessages.userDriving)
+    }
+
     /// A call the user took the VM over during answers `computer_user_active`, whatever the guest
     /// said; a cancel, or a call that finished before the take over, keeps its answer.
     @Test(arguments: [

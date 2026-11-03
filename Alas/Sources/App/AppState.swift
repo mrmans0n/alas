@@ -353,6 +353,31 @@ final class AppState {
     @ObservationIgnored var vmHandingBack: [String: Task<Void, Never>] = [:]
     /// The clock VM driving is read with; tests replace it.
     @ObservationIgnored var vmNow: () -> Date = Date.init
+    /// The last key or mouse event that reached each VM's screen, by registry id, for the idle
+    /// sweep. Written at most once a second per VM.
+    @ObservationIgnored var vmLastUserInput: [String: Date] = [:]
+    /// The setup run (its project's guest setup script, then its clean point) each VM is in, by
+    /// registry id. A stop releases it, so a run that outlives its VM publishes nothing into the
+    /// VM started after it. Observed so a VM tab shows it.
+    var vmSetupRuns: [String: UUID] = [:]
+    /// VMs in a setup run; they never idle-pause.
+    var vmSetupScriptsRunning: Set<String> { Set(vmSetupRuns.keys) }
+    /// VMs whose project setup script failed, by registry id, with its exit code: nil when it
+    /// timed out or its run failed. Cleared once the clean point is taken.
+    var vmSetupFailures: [String: Int32?] = [:]
+    /// VMs whose setup script succeeded but whose clean point wasn't taken, by registry id, with
+    /// the script's hash, so the next start goes straight to the clean point.
+    @ObservationIgnored var vmSetupScriptSucceeded: [String: String?] = [:]
+    /// Why a VM's clean point wasn't taken, or its VM didn't start again after it, by registry id.
+    var vmCleanPointIssues: [String: VMCleanPointIssue] = [:]
+    /// Pauses idle macOS VMs every `vmIdleSweepInterval`.
+    @ObservationIgnored private(set) lazy var vmIdleSweeper = VMIdleSweeper(
+        manager: vmManager,
+        // Without AppState nothing is known about the VM's use: never call it idle.
+        activity: { [weak self] in self?.vmActivity(recordID: $0) ?? VMIdleSweeper.Activity(takenOver: true) },
+        now: { [weak self] in self?.vmNow() ?? Date() }
+    )
+    @ObservationIgnored var vmIdleSweepInterval: Duration = .seconds(60)
     /// Starts a stopped worktree VM for agent calls and holds its slot cards. Observable itself.
     @ObservationIgnored private(set) lazy var vmAutoStarter = makeVMAutoStarter()
     /// The one installer; `vmManager` seals its golden image so no Alas
@@ -1890,7 +1915,15 @@ final class AppState {
             self?.projectAndWorktree(withWorktreeId: worktreeID)?.worktree.path
         }
         vmManager.onVMStopped = { [weak self] recordID in self?.vmStopped(recordID: recordID) }
-        vmManager.onVMDeleted = { [weak self] recordID in self?.vmAutoStarter.dismiss(recordID: recordID) }
+        vmManager.onVMDeleted = { [weak self] recordID in
+            self?.vmAutoStarter.dismiss(recordID: recordID)
+            // A VM created again is new: its next boot runs the setup script again.
+            self?.forgetVMSetup(recordID: recordID)
+        }
+        vmManager.onVMStarted = { [weak self] recordID in self?.vmStarted(recordID: recordID) }
+        vmManager.isRunningSetup = { [weak self] recordID in self?.vmSetupScriptsRunning.contains(recordID) ?? false }
+        vmManager.now = { [weak self] in self?.vmNow() ?? Date() }
+        vmIdleSweeper.start(interval: vmIdleSweepInterval)
         AlasTerminationCoordinator.shared.confirm = { [weak self] in
             await self?.confirmDiscardingUnsavedHostFiles(reason: "Quitting discards edits not saved to the host.") ?? true
         }
@@ -1906,7 +1939,8 @@ final class AppState {
             await self?.flushAllACPComposerDrafts()
             await PluginStorage.flushAll()
             await self?.awaitSessionSummaryCleanup()
-            // Clears this process from the VM registry so its slots free up.
+            // Clears this process from the VM registry so its slots free up; macOS VMs pause.
+            self?.vmIdleSweeper.stop()
             await self?.vmManager.stopAll()
         }
         Task.detached {
@@ -4917,6 +4951,7 @@ final class AppState {
                 if launchSurface != .delegated {
                     selectWorktree(id: newWorktree.id)
                 }
+                createVMForNewWorktree(newWorktree, projectId: projectId)
                 do {
                     try await self.launchWorktreeSurface(launchSurface, worktree: newWorktree, project: project)
                 } catch {

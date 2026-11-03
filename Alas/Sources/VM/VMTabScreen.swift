@@ -22,6 +22,8 @@ enum VMTabScreen: Equatable {
     case setup
     case createVM
     case stopped
+    /// The worktree's macOS VM is paused with its state saved.
+    case paused(savedAt: Date)
     /// The worktree's own VM is stopped while the base image is being
     /// customized, from another tab or before a relaunch.
     case stoppedWhileCustomizing
@@ -39,6 +41,8 @@ enum VMTabScreen: Equatable {
     /// A Linux tab follows `linuxInstallerPhase` alone: its image has no
     /// setup by hand and no customizing, and it takes no macOS VM slot. Its
     /// helper update keeps the VM running, so it shows only while it runs.
+    /// A paused VM shows paused wherever it would show stopped, except while the base image is
+    /// customized; Linux VMs never pause.
     static func resolve(
         guest: VMGuestOS = .macOS,
         runningHere: Bool,
@@ -52,7 +56,8 @@ enum VMTabScreen: Equatable {
         installerPhase: GoldenImageInstaller.Phase,
         linuxInstallerPhase: LinuxGoldenInstaller.Phase = .idle,
         helper: HelperUpdate,
-        goldenHelper: HelperUpdate
+        goldenHelper: HelperUpdate,
+        pausedAt: Date? = nil
     ) -> VMTabScreen {
         if guest == .linux {
             return resolveLinux(
@@ -66,12 +71,13 @@ enum VMTabScreen: Equatable {
         if let slotChoice { return .slotChoice(candidates: slotChoice) }
         if let runningElsewhere { return .runningElsewhere(label: runningElsewhere) }
         if !loaded { return .loading }
+        let pausedScreen = pausedAt.map { VMTabScreen.paused(savedAt: $0) }
         switch installerPhase {
         case .awaitingSetup(let build):
             if hasVM && !customizingHere { return .stoppedWhileCustomizing }
             if goldenHelper == .updating { return .updatingHelper }
             return .goldenSetup(build: build, updateHelper: goldenHelper == .available)
-        case _ where hasVM: return .stopped
+        case _ where hasVM: return pausedScreen ?? .stopped
         case .downloading, .installing, .provisioning, .failed: return .setup
         case .idle, .sealed: return goldenAvailable ? .createVM : .setup
         }
@@ -96,6 +102,35 @@ enum VMTabScreen: Equatable {
         case .downloading, .checking, .converting, .firstBoot, .verifying, .failed: return .setup
         case .idle, .sealed: return goldenAvailable ? .createVM : .setup
         }
+    }
+}
+
+extension VMTabScreen {
+    /// The Paused status bar's first detail: how long ago the state was saved.
+    static func pausedAge(savedAt: Date, now: Date) -> String {
+        let minutes = max(0, Int(now.timeIntervalSince(savedAt) / 60))
+        return switch minutes {
+        case 0: "saved just now"
+        case ..<60: "saved \(minutes) min ago"
+        case ..<(24 * 60): "saved \(minutes / 60) h ago"
+        default: "saved \(minutes / (24 * 60)) d ago"
+        }
+    }
+}
+
+extension VMTabScreen {
+    /// Whether to offer "Run the new setup script": the project has a script, and it isn't the
+    /// one the clean point was taken after.
+    static func offersNewSetupScript(cleanPoint: VMCleanPoint?, projectScript: String?) -> Bool {
+        guard let cleanPoint, let hash = VMCleanPoint.scriptHash(projectScript) else { return false }
+        return cleanPoint.setupScriptHash != hash
+    }
+
+    /// The setup-failure callout's message; `exitCode` is nil when the script timed out or its
+    /// run failed.
+    static func setupFailureMessage(exitCode: Int32?) -> String {
+        let how = exitCode.map { "exit \($0)" } ?? "it didn't finish"
+        return "The project's setup script failed (\(how)). Its clean point is taken once it succeeds."
     }
 }
 

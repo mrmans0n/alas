@@ -32,6 +32,7 @@ struct VirtualMachineTabView: View {
     /// A Stop of the VM running here is in progress.
     @State private var stopping = false
     @State private var confirmingDelete = false
+    @State private var confirmingResetFromScratch = false
     /// The VM whose Update helper awaits confirmation.
     @State private var confirmingHelperUpdate: String?
     /// Bumped when an agent call stops counting as driving, so the tab redraws then.
@@ -77,11 +78,15 @@ struct VirtualMachineTabView: View {
     /// The worktree VM's registry id, which helper state and slots use.
     private var recordID: String { VMIdentity.recordID(worktree: worktreeID, guest: guest) }
     private var guestName: String { isLinux ? "Ubuntu" : "macOS" }
+    /// This tab's VM running here, a pause in progress included: the screen stays until it stops.
+    private var ownVM: RunningVM? { vms.runningVMs[recordID] }
+    /// A clean point is taken from a VM running here or a paused one, never a stopped one.
+    private var canSaveCleanPoint: Bool { ownVM != nil || record.pausedAt != nil }
 
     private var screen: VMTabScreen {
         VMTabScreen.resolve(
             guest: guest,
-            runningHere: vms.running(worktreeID, guest: guest) != nil,
+            runningHere: ownVM != nil,
             startingHere: vms.isStarting(recordID),
             slotChoice: choice?.candidates,
             runningElsewhere: elsewhere?.label ?? record.runningElsewhere,
@@ -92,7 +97,8 @@ struct VirtualMachineTabView: View {
             installerPhase: installer.phase,
             linuxInstallerPhase: linuxInstaller.phase,
             helper: helperUpdate(recordID),
-            goldenHelper: customizedGoldenID.map(helperUpdate) ?? .none
+            goldenHelper: customizedGoldenID.map(helperUpdate) ?? .none,
+            pausedAt: record.pausedAt
         )
     }
 
@@ -131,6 +137,12 @@ struct VirtualMachineTabView: View {
             if let bannerMessage {
                 VMCallout(message: bannerMessage, onDismiss: dismissBanner)
             }
+            if case .running = screen, let failure = state.vmSetupFailures[recordID] {
+                setupFailureCallout(exitCode: failure)
+            }
+            if let issue = state.vmCleanPointIssues[recordID] {
+                cleanPointIssueCallout(issue)
+            }
             VStack(spacing: 0) { content }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -142,7 +154,9 @@ struct VirtualMachineTabView: View {
         // can change what the registry or disk say.
         .onChange(of: phaseKind) { _, _ in refresh() }
         // Starting or stopping changes the disk's size and the registry.
-        .onChange(of: vms.running(worktreeID, guest: guest) != nil) { _, _ in refresh() }
+        .onChange(of: ownVM != nil) { _, _ in refresh() }
+        // A pause records the VM as paused only after it stopped.
+        .onChange(of: vms.pausing.contains(recordID)) { _, _ in refresh() }
         .task(id: helperCheckTarget) { await checkHelper(helperCheckTarget) }
         .task(id: state.vmLastAgentCall[recordID]?.at) { await redrawWhenAgentWindowEnds() }
         .alert("Customize the base image?", isPresented: $confirmingCustomize) {
@@ -167,6 +181,12 @@ struct VirtualMachineTabView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Its disk and everything inside it are removed.")
+        }
+        .alert("Reset this VM from scratch?", isPresented: $confirmingResetFromScratch) {
+            Button("Reset", role: .destructive, action: resetFromScratch)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Everything in it is lost and it's cloned again from the base image.")
         }
     }
 
@@ -231,12 +251,22 @@ struct VirtualMachineTabView: View {
         case .createVM:
             VMStatusBar(tone: .off, title: "No VM")
         case .stopped:
-            VMStatusBar(tone: .off, title: "Stopped", details: diskDetails) {
+            VMStatusBar(tone: .off, title: "Stopped", details: diskDetails + cleanPointDetails) {
                 overflowMenu(customize: canCustomize, reveal: ownBundleURL, deletable: true)
             }
         case .stoppedWhileCustomizing:
             VMStatusBar(tone: .off, title: "Stopped", details: ["base image being customized"] + diskDetails) {
                 overflowMenu(reveal: ownBundleURL, deletable: true)
+            }
+        case .paused(let savedAt):
+            // Each minute, for "saved n min ago".
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                VMStatusBar(
+                    tone: .off, title: "Paused",
+                    details: [VMTabScreen.pausedAge(savedAt: savedAt, now: context.date)] + diskDetails + cleanPointDetails
+                ) {
+                    overflowMenu(customize: canCustomize, reveal: ownBundleURL, deletable: true)
+                }
             }
         }
     }
@@ -296,6 +326,10 @@ struct VirtualMachineTabView: View {
 
     private var diskDetails: [String] { diskSize.map { [$0] } ?? [] }
 
+    private var cleanPointDetails: [String] {
+        record.cleanPoint.map { ["clean point \($0.createdAt.formatted(date: .abbreviated, time: .shortened))"] } ?? []
+    }
+
     private var ownBundleURL: URL? { record.bundlePath.map { URL(fileURLWithPath: $0, isDirectory: true) } }
 
     private func goldenStatusBar(build: String, canUpdateHelper: Bool) -> some View {
@@ -321,12 +355,17 @@ struct VirtualMachineTabView: View {
         let current = driver(at: date)
         let status = VMDriverStatus.make(driver: current, agentName: agentName(current), now: date)
         let helperNote = canUpdateHelper ? ["helper needs an update"] : []
+        let setupNote = state.vmSetupScriptsRunning.contains(recordID) ? ["running the setup script"] : []
+        let pausing = vms.pausing.contains(recordID)
+        let busy = stopping || pausing
         return VMStatusBar(
-            tone: stopping ? .busy : status.tone,
-            title: stopping ? "Stopping" : status.title,
-            details: current == .idle || stopping ? helperNote + diskDetails : status.details + helperNote
+            tone: busy ? .busy : status.tone,
+            title: pausing ? "Pausing" : stopping ? "Stopping" : status.title,
+            details: current == .idle || busy
+                ? setupNote + helperNote + diskDetails + cleanPointDetails
+                : status.details + setupNote + helperNote
         ) {
-            if !stopping {
+            if !busy {
                 switch status.action {
                 case .takeOver:
                     AlasButton(title: "Take over", compact: true, action: takeOver)
@@ -337,21 +376,30 @@ struct VirtualMachineTabView: View {
                 }
             }
             ToolbarBtn(icon: "stop.fill", tooltip: "Stop VM", metrics: .vmStatusBar) { stop(recordID) }
-                .vmDisabled(stopping)
-            overflowMenu(updateHelper: canUpdateHelper ? recordID : nil, reveal: ownBundleURL, deletable: true)
+                .vmDisabled(busy)
+            overflowMenu(
+                updateHelper: canUpdateHelper ? recordID : nil, reveal: ownBundleURL, deletable: true,
+                newSetupScript: VMTabScreen.offersNewSetupScript(
+                    cleanPoint: record.cleanPoint, projectScript: state.vmGuestSetupScript(recordID: recordID)))
         }
     }
 
     /// The ⋯ menu of rare actions; nothing when none applies. `deletable`
-    /// offers deleting this worktree's own VM.
+    /// offers deleting this worktree's own VM, and its clean point and resets.
+    /// `newSetupScript` offers running the project's changed setup script.
     @ViewBuilder
     private func overflowMenu(
-        updateHelper id: String? = nil, customize: Bool = false, reveal bundle: URL? = nil, deletable: Bool = false
+        updateHelper id: String? = nil, customize: Bool = false, reveal bundle: URL? = nil, deletable: Bool = false,
+        newSetupScript: Bool = false
     ) -> some View {
         if id != nil || customize || bundle != nil || deletable {
             ToolbarMenuButton(
                 iconName: "ellipsis", metrics: .vmStatusBar, restingColorToken: "fg-muted", help: "More VM actions"
             ) {
+                if deletable {
+                    cleanPointItems(newSetupScript: newSetupScript)
+                    Divider()
+                }
                 if let id {
                     Button("Update helper…") { confirmingHelperUpdate = id }
                 }
@@ -369,6 +417,54 @@ struct VirtualMachineTabView: View {
         }
     }
 
+    /// The ⋯ menu's clean point and reset items, disabled while one is under way.
+    @ViewBuilder
+    private func cleanPointItems(newSetupScript: Bool) -> some View {
+        let busy = vms.diskOperations.contains(recordID) || state.vmSetupScriptsRunning.contains(recordID)
+        let hasCleanPoint = record.cleanPoint != nil
+        Button(action: resetToClean) {
+            Text("Reset to clean")
+            Text(hasCleanPoint ? "Back to the clean point · seconds" : "No clean point yet")
+        }
+        .disabled(busy || !hasCleanPoint)
+        .help(hasCleanPoint ? "Back to the clean point" : "No clean point yet")
+        Button { confirmingResetFromScratch = true } label: {
+            Text("Reset from scratch…")
+            Text("New clone of the base image")
+        }
+        .disabled(busy)
+        Button("Save clean point now", action: saveCleanPoint)
+            .disabled(busy || !canSaveCleanPoint)
+        if newSetupScript {
+            Button("Run the new setup script") { runSetup() }
+                .disabled(busy || ownVM == nil)
+        }
+    }
+
+    private func cleanPointIssueCallout(_ issue: VMCleanPointIssue) -> some View {
+        let busy = state.vmSetupScriptsRunning.contains(recordID) || vms.diskOperations.contains(recordID)
+        return VMCallout(message: issue.message, onDismiss: { state.vmCleanPointIssues[recordID] = nil }) {
+            EmptyView()
+        } actions: {
+            if case .notSaved = issue {
+                AlasButton(title: "Save clean point now", compact: true, action: saveCleanPoint)
+                    .vmDisabled(busy || !canSaveCleanPoint)
+            }
+        }
+    }
+
+    private func setupFailureCallout(exitCode: Int32?) -> some View {
+        let busy = state.vmSetupScriptsRunning.contains(recordID) || vms.diskOperations.contains(recordID)
+        return VMCallout(message: VMTabScreen.setupFailureMessage(exitCode: exitCode)) {
+            EmptyView()
+        } actions: {
+            AlasButton(title: "Run again", compact: true) { runSetup() }
+                .vmDisabled(busy)
+            AlasButton(title: "Skip and save clean point", compact: true, action: saveCleanPoint)
+                .vmDisabled(busy || !canSaveCleanPoint)
+        }
+    }
+
     // MARK: - Screens
 
     @ViewBuilder
@@ -377,9 +473,10 @@ struct VirtualMachineTabView: View {
         case .running:
             let current = driver(at: Date())
             VMDisplaySurface(
-                view: state.tabs.vmView(tabID: tab.id), virtualMachine: vms.running(worktreeID, guest: guest)?.vm,
+                view: state.tabs.vmView(tabID: tab.id), virtualMachine: ownVM?.vm,
                 allowsInput: VMDriver.allowsViewInput(current),
-                onBlockedClick: { lookOnlyHint = (lookOnlyHint ?? 0) + 1 }
+                onBlockedClick: { lookOnlyHint = (lookOnlyHint ?? 0) + 1 },
+                onUserInput: { [state, recordID] in state.noteVMUserInput(recordID: recordID) }
             )
             .overlay {
                 if current == .user {
@@ -460,6 +557,15 @@ struct VirtualMachineTabView: View {
                 EmptyView()
             } actions: {
                 AlasButton(title: "Start VM", icon: "play.fill", style: .primary) { start(.worktree(worktreeID, guest)) }
+            }
+        case .paused:
+            VMEmptyStateCard(
+                icon: "desktopcomputer", title: "This worktree's VM is paused",
+                subtitle: "Paused after 15 minutes idle to free its slot. It resumes where it was, in seconds, when you or an agent use it."
+            ) {
+                EmptyView()
+            } actions: {
+                AlasButton(title: "Resume", icon: "play.fill", style: .primary) { start(.worktree(worktreeID, guest)) }
             }
         case .stoppedWhileCustomizing:
             VMEmptyStateCard(
@@ -653,17 +759,11 @@ struct VirtualMachineTabView: View {
         }
         let disk = VMBundle(url: URL(fileURLWithPath: path, isDirectory: true)).diskImage
         diskSizeLoad = Task {
-            let bytes = await Task.detached { Self.allocatedBytes(of: disk) }.value
+            let bytes = await Task.detached { VMDiskUsage.allocatedBytes(of: disk) }.value
             // A read that finishes after a newer refresh (a delete, say) is stale.
             guard !Task.isCancelled, record.bundlePath == path else { return }
             diskSize = bytes.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) }
         }
-    }
-
-    private nonisolated static func allocatedBytes(of file: URL) -> Int64? {
-        var info = stat()
-        guard stat(file.path, &info) == 0 else { return nil }
-        return Int64(info.st_blocks) * 512
     }
 
     private func deleteVM() {
@@ -674,6 +774,57 @@ struct VirtualMachineTabView: View {
                 errorMessage = "Couldn't delete the VM: \(phrase)."
             }
             refresh()
+        }
+    }
+
+    /// Runs the project's setup script again, then takes the clean point if it succeeds.
+    private func runSetup() {
+        errorMessage = nil
+        Task {
+            await state.runVMSetup(recordID: recordID, rerunScript: true)
+            refresh()
+        }
+    }
+
+    /// Takes the clean point now, keeping the setup script the VM was last set up with.
+    private func saveCleanPoint() {
+        errorMessage = nil
+        let hash = record.cleanPoint?.setupScriptHash
+        Task {
+            do {
+                try await state.saveVMCleanPoint(recordID: recordID, setupScriptHash: hash)
+            } catch {
+                errorMessage = "Couldn't save the clean point: \(error.localizedDescription)"
+            }
+            refresh()
+        }
+    }
+
+    private func resetToClean() {
+        errorMessage = nil
+        Task {
+            do {
+                try await vms.resetToClean(worktreeID: worktreeID, guest: guest)
+            } catch {
+                errorMessage = "Couldn't reset the VM: \(error.localizedDescription)"
+            }
+            refresh()
+        }
+    }
+
+    /// Clones the VM again, then starts it: that boot is a first boot, which runs the setup
+    /// script and takes a new clean point.
+    private func resetFromScratch() {
+        errorMessage = nil
+        Task {
+            do {
+                try await vms.resetFromScratch(worktreeID: worktreeID, guest: guest)
+                refresh()
+                start(.worktree(worktreeID, guest))
+            } catch {
+                errorMessage = "Couldn't reset the VM: \(error.localizedDescription)"
+                refresh()
+            }
         }
     }
 
@@ -829,7 +980,7 @@ struct VirtualMachineTabView: View {
     /// `id` is a registry id: this tab's VM or a golden.
     private func stop(_ id: String) {
         let (worktree, guest) = VMIdentity.parse(recordID: id)
-        let ownVM = id == recordID && vms.running(worktree, guest: guest) != nil
+        let ownVM = id == recordID && self.ownVM != nil
         if ownVM { stopping = true }
         Task {
             await vms.stopVM(worktreeID: worktree, guest: guest)
