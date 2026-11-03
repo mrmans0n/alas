@@ -1727,6 +1727,18 @@ struct ACPSessionTests {
         #expect(ACPPlanFilePayload.from(metadata: metadata)?.isWellFormed == wellFormed)
     }
 
+    @Test("a permission is a plan review for ExitPlanMode or a well-formed planFile payload only",
+          arguments: [
+              ("switch_mode", nil, true as Bool),
+              ("read", Self.planFileMeta(), true),
+              ("read", AnyCodable(["planFile": AnyCodable([String: AnyCodable]())]), false),
+              ("read", nil, false),
+          ] as [(String, AnyCodable?, Bool)])
+    func planFilePermissionIsPlanReview(kind: String, metadata: AnyCodable?, expected: Bool) {
+        let toolCall = ACPPermissionToolCall(toolCallId: "toolu_1", title: "t", kind: kind, metadata: metadata)
+        #expect(toolCall.isPlanReview == expected)
+    }
+
     @Test("plan_removed hides the plan's row, a later snapshot shows it again, and both bump its revision")
     func planRemovedHides() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
