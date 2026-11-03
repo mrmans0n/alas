@@ -107,7 +107,7 @@ struct MarkdownTabView: View {
             scheduleRender(immediate: true)
         }
         .onChange(of: buffer.editGeneration) { _, _ in scheduleRender(immediate: false) }
-        // Re-render when the live theme or code font settings change — the
+        // Re-render when the live theme or the code/chat font settings change — the
         // renderer captures those when invoked, so a stale `renderResult`
         // would otherwise keep the previous colors/fonts until the next edit.
         // Watching `theme` directly catches every input that produces a new
@@ -115,7 +115,8 @@ struct MarkdownTabView: View {
         // not just config.themeId.
         .onChange(of: theme) { _, _ in scheduleRender(immediate: true) }
         .onChange(of: appState.config.code.fontFamily) { _, _ in scheduleRender(immediate: true) }
-        .onChange(of: appState.config.code.fontSize) { _, _ in scheduleRender(immediate: true) }
+        .onChange(of: appState.config.agents.chatFontFamily) { _, _ in scheduleRender(immediate: true) }
+        .onChange(of: appState.config.agents.chatFontSize) { _, _ in scheduleRender(immediate: true) }
         // Render kicks in when the user switches out of editor-only mode —
         // editor mode skips rendering to avoid parsing+rendering the whole
         // buffer on every keystroke when the preview isn't visible.
@@ -287,7 +288,12 @@ struct MarkdownTabView: View {
         }
         let theme = self.theme
         let fontFamily = appState.config.code.fontFamily
-        let fontSize = appState.config.code.fontSize
+        // Prose reads at the agent chat font, and code blocks scale with it
+        // instead of the editor size, so the document keeps one rhythm.
+        let typography = ACPChatTypography(
+            fontFamily: appState.config.agents.chatFontFamily,
+            fontSize: appState.config.agents.chatFontSize
+        )
         let baseDir = baseDirectory
         // External tabs have no worktree root context, so root-relative
         // paths (`/foo.md`) fall back to system-absolute resolution.
@@ -309,9 +315,10 @@ struct MarkdownTabView: View {
                 frontmatter: parsed.frontmatter,
                 theme: theme,
                 monospacedFontFamily: fontFamily,
-                monospacedFontSize: fontSize,
+                monospacedFontSize: Int(typography.codeSize),
                 baseDirectory: baseDir,
-                worktreeRoot: worktreeRootOrNil
+                worktreeRoot: worktreeRootOrNil,
+                typography: typography
             )
             if Task.isCancelled { return }
             renderCache.storeCompletedRender(result, for: renderIdentity)
