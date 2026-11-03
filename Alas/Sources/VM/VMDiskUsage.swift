@@ -48,6 +48,8 @@ struct VMBundleSummary: Identifiable, Equatable, Sendable {
     let guest: VMGuestOS
     /// A base image's build or serial; a VM's bundle folder name.
     let name: String
+    /// A macOS base image's version ("27.2"), when its install kept it.
+    var osVersion: String?
     /// The worktree a VM's record names; nil for base images and bundles no record names.
     let worktreeID: String?
     let url: URL
