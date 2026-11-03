@@ -1094,7 +1094,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
         // any state they touch that gates eligibility signals on its own.
         switch update {
         case .availableModelsUpdate, .currentModeUpdate, .currentModelUpdate, .sessionConfigOptionsUpdate,
-             .availableCommandsUpdate, .usageUpdate, .sessionInfoUpdate, .unknown:
+             .availableCommandsUpdate, .usageUpdate, .sessionInfoUpdate, .unknown,
+             // Inert until plan documents are applied to the transcript.
+             .planUpdate, .planRemoved:
             break
         default:
             nextPromptActivity.send()
