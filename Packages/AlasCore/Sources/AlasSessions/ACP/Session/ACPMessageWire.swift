@@ -18,12 +18,13 @@ public enum ACPMessageWire: Sendable, Equatable {
     case toolCall(ACPMessage.ToolCall)
     case fileEdit(ACPMessage.FileEdit)
     case plan([ACPMessage.PlanItem])
+    case planDocument(ACPPlanDocument)
     case systemNotice(text: String)
     case visualAid(ACPVisualAid)
 
     public var isAgentSideProgress: Bool {
         switch self {
-        case .agent, .thought, .toolCall, .fileEdit, .plan, .visualAid:
+        case .agent, .thought, .toolCall, .fileEdit, .plan, .planDocument, .visualAid:
             return true
         case .user, .systemNotice:
             return false
@@ -58,7 +59,8 @@ public enum ACPMessageWire: Sendable, Equatable {
         case "file_edit":
             return .fileEdit(try decoder.decode(ACPMessage.FileEdit.self, from: payload))
         case "plan":
-            return .plan(try decoder.decode(PlanPayload.self, from: payload).items)
+            let p = try decoder.decode(ACPPlanRowPayload.self, from: payload)
+            return p.document.map(ACPMessageWire.planDocument) ?? .plan(p.items)
         case "visual_aid":
             return .visualAid(try decoder.decode(ACPVisualAid.self, from: payload))
         case "system":
@@ -85,6 +87,8 @@ public enum ACPMessageWire: Sendable, Equatable {
             return .fileEdit(id: UUID(), fe)
         case .plan(let items):
             return .plan(id: UUID(), items)
+        case .planDocument(let document):
+            return .planDocument(id: UUID(), document)
         case .systemNotice(let text):
             return .systemNotice(id: UUID(), text: text)
         case .visualAid(let visual):
@@ -144,6 +148,8 @@ public enum ACPMessageWire: Sendable, Equatable {
             return fileEdit == existingFileEdit ? existing : .fileEdit(id: id, fileEdit)
         case let (.plan(items), .plan(id, existingItems)):
             return items == existingItems ? existing : .plan(id: id, items)
+        case let (.planDocument(document), .planDocument(id, existingDocument)):
+            return document == existingDocument ? existing : .planDocument(id: id, document)
         case let (.systemNotice(text), .systemNotice(id, existingText)):
             return text == existingText ? existing : .systemNotice(id: id, text: text)
         case let (.visualAid(visual), .visualAid(existingVisual)):
@@ -179,9 +185,4 @@ public enum ACPMessageWire: Sendable, Equatable {
             self.pastedSpans = pastedSpans
         }
     }
-    private struct PlanPayload: Decodable { let items: [ACPMessage.PlanItem]
-
-        public init(items: [ACPMessage.PlanItem]) {
-            self.items = items
-        }}
 }

@@ -73,7 +73,7 @@ public enum ACPSessionTranscriptReader: Sendable {
                 append("system", text)
             case .visualAid(let visual):
                 append("tool", visual.transcriptSummary)
-            case .thought, .plan:
+            case .thought, .plan, .planDocument:
                 continue
             }
         }

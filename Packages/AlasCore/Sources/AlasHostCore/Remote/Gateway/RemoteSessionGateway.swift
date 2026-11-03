@@ -1404,6 +1404,16 @@ public final class RemoteSessionGateway {
             )
         case .plan(_, let items):
             return .init(stableId: sid, kind: "plan", text: nil, json: Self.encodeJSON(items), index: index)
+        case .planDocument(_, let document):
+            // Peers cannot open host files, so the path only travels in `text`,
+            // which older peers show as plain text for this unknown kind.
+            var remote = document
+            remote.file = nil
+            return .init(
+                stableId: sid, kind: "planDocument",
+                text: document.kind == .file ? document.file.map { "Plan file: \($0.path)" } : document.markdown,
+                json: Self.encodeJSON(remote), index: index,
+                isHidden: document.hidden ? true : nil)
         case .visualAid(let visual):
             // Without json the phone falls back to a plain-text row with the title.
             return .init(

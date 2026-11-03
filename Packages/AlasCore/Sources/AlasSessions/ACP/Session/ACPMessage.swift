@@ -13,6 +13,9 @@ public enum ACPMessage: Equatable, Sendable {
     case toolCall(ToolCall)
     case fileEdit(id: UUID, FileEdit)
     case plan(id: UUID, [PlanItem])
+    /// A Markdown or file plan. Persisted under the `"plan"` kind, but never a
+    /// checklist: the plan pill, `currentPlan` and summaries ignore it.
+    case planDocument(id: UUID, ACPPlanDocument)
     case systemNotice(id: UUID, text: String)
     case visualAid(ACPVisualAid)
 
@@ -52,7 +55,7 @@ public enum ACPMessage: Equatable, Sendable {
             messageId.map(StableIdentityKey.thoughtMessageId) ?? .thoughtUUID(id)
         case .fileEdit(let id, _):
             .fileEdit(id)
-        case .plan(let id, _):
+        case .plan(let id, _), .planDocument(let id, _):
             .plan(id)
         case .systemNotice(let id, _):
             .systemNotice(id)
@@ -75,7 +78,7 @@ public enum ACPMessage: Equatable, Sendable {
     /// Mirrors `ACPMessageWire.isAgentSideProgress`.
     public var isAgentSideProgress: Bool {
         switch self {
-        case .agent, .thought, .toolCall, .fileEdit, .plan, .visualAid:
+        case .agent, .thought, .toolCall, .fileEdit, .plan, .planDocument, .visualAid:
             true
         case .user, .systemNotice:
             false
@@ -111,7 +114,7 @@ public enum ACPMessage: Equatable, Sendable {
             tc.content.utf8.count
         case .visualAid(let visual):
             visual.title.utf8.count + visual.html.utf8.count
-        case .fileEdit, .plan:
+        case .fileEdit, .plan, .planDocument:
             0
         }
     }
@@ -123,7 +126,7 @@ public enum ACPMessage: Equatable, Sendable {
         case .thought: "thought"
         case .toolCall: "tool_call"
         case .fileEdit: "file_edit"
-        case .plan: "plan"
+        case .plan, .planDocument: "plan"
         case .systemNotice: "system"
         case .visualAid: "visual_aid"
         }
@@ -695,7 +698,8 @@ public enum ACPMessageCodec: Sendable {
         case .thought(_, let messageId, let buf):          return try encoder.encode(TextPayload(messageId: messageId, text: buf.value, metadata: buf.metadata))
         case .toolCall(let tc):             return try encoder.encode(tc)
         case .fileEdit(_, let fe):          return try encoder.encode(fe)
-        case .plan(_, let items):           return try encoder.encode(PlanPayload(items: items))
+        case .plan(_, let items):           return try encoder.encode(ACPPlanRowPayload(items: items))
+        case .planDocument(_, let document): return try encoder.encode(ACPPlanRowPayload(document: document))
         case .systemNotice(_, let text):    return try encoder.encode(TextPayload(text: text))
         case .visualAid(let visual):        return try encoder.encode(visual)
         }
@@ -718,7 +722,8 @@ public enum ACPMessageCodec: Sendable {
         case "file_edit":
             return .fileEdit(id: UUID(), try JSONDecoder().decode(ACPMessage.FileEdit.self, from: payload))
         case "plan":
-            return .plan(id: UUID(), try JSONDecoder().decode(PlanPayload.self, from: payload).items)
+            let p = try JSONDecoder().decode(ACPPlanRowPayload.self, from: payload)
+            return p.document.map { .planDocument(id: UUID(), $0) } ?? .plan(id: UUID(), p.items)
         case "visual_aid":
             return .visualAid(try JSONDecoder().decode(ACPVisualAid.self, from: payload))
         case "system":
@@ -756,9 +761,4 @@ public enum ACPMessageCodec: Sendable {
             self.pastedSpans = pastedSpans
         }
     }
-    private struct PlanPayload: Codable { let items: [ACPMessage.PlanItem]
-
-        public init(items: [ACPMessage.PlanItem]) {
-            self.items = items
-        }}
 }

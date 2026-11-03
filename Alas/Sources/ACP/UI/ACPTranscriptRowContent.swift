@@ -359,7 +359,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             }
         case .fileEdit(_, let edit):
             ACPFileEditCard(edit: edit, onOpenDiff: onOpenDiff)
-        case .plan:
+        case .plan, .planDocument:
+            // Plan documents get their card in a later change.
             EmptyView()
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)

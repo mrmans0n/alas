@@ -171,7 +171,7 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
                     messageId: isSteeringSegment(wire) ? nil : messageId,
                     isSteeringSegment: isSteeringSegment(wire)
                 )
-            case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid:
+            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .visualAid:
                 nil
             }
         }
@@ -208,7 +208,7 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
         let next = decoded[(boundaryIndex + 1)...].first { wire in
             switch wire {
             case .user, .agent: true
-            case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid: false
+            case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .visualAid: false
             }
         }
         guard case .user = next else { return nil }
@@ -253,6 +253,8 @@ public enum ACPSessionForkSnapshotResolver: Sendable {
             liveVisual.id == storedVisual.id
         case (.fileEdit, .fileEdit), (.plan, .plan), (.systemNotice, .systemNotice):
             true
+        case let (.planDocument(_, liveDocument), .planDocument(storedDocument)):
+            liveDocument.planId == storedDocument.planId
         default:
             false
         }
@@ -292,7 +294,7 @@ public enum ACPSessionForkSourceCheck: Sendable {
                 ids.insert(id)
             case .toolCall(let call):
                 ids.insert(call.toolCallId)
-            case .user, .agent, .thought, .fileEdit, .plan, .systemNotice, .visualAid:
+            case .user, .agent, .thought, .fileEdit, .plan, .planDocument, .systemNotice, .visualAid:
                 break
             }
         }
@@ -307,7 +309,7 @@ extension ACPMessage {
             .user
         case .agent:
             .agent
-        case .thought, .toolCall, .fileEdit, .plan, .systemNotice, .visualAid:
+        case .thought, .toolCall, .fileEdit, .plan, .planDocument, .systemNotice, .visualAid:
             nil
         }
     }

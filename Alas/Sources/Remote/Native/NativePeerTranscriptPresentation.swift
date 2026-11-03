@@ -10,6 +10,7 @@ enum NativePeerRow: Equatable {
     case toolCall(ACPMessage.ToolCall)
     case fileEdit(ACPMessage.FileEdit)
     case plan([ACPMessage.PlanItem])
+    case planDocument(ACPPlanDocument)
     case systemNotice(String)
 
     init(message: RemoteWireMessage) {
@@ -40,6 +41,12 @@ enum NativePeerRow: Equatable {
                 self = .plan(items)
             } else {
                 self = .systemNotice("Plan details are unavailable.")
+            }
+        case "planDocument":
+            if let document: ACPPlanDocument = Self.decode(message.json) {
+                self = .planDocument(document)
+            } else {
+                self = .systemNotice(message.text ?? "Plan details are unavailable.")
             }
         default:
             self = .systemNotice(text)
@@ -135,6 +142,8 @@ final class NativePeerRowCache {
             .fileEdit(id: UUID(), edit)
         case .plan(let items):
             .plan(id: UUID(), items)
+        case .planDocument(let document):
+            .planDocument(id: UUID(), document)
         case .systemNotice(let text):
             .systemNotice(id: UUID(), text: text)
         }

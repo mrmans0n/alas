@@ -21,7 +21,7 @@ private extension ACPMessage {
         case .thought(let id, _, _): id
         case .fileEdit(let id, _): id
         case .visualAid(let visual): visual.id
-        case .plan(let id, _): id
+        case .plan(let id, _), .planDocument(let id, _): id
         case .systemNotice(let id, _): id
         case .toolCall(let toolCall): toolCall.toolCallId
         }
@@ -303,6 +303,9 @@ private struct ACPSubagentMessageRow: View {
             ACPFileEditCard(edit: edit, onOpenDiff: nil)
         case .plan(_, let items):
             ACPPlanChecklist(items: items, isTurnActive: isTurnActive)
+        case .planDocument:
+            // Never a checklist; shown by the plan document card once it exists.
+            EmptyView()
         case .systemNotice(_, let text):
             ACPSystemNoticeView(text: text)
         case .visualAid(let visual):

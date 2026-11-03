@@ -536,4 +536,69 @@ struct ACPMessageTests {
         #expect(try ACPMessageCodec.decode(kind: message.kind, payload: payload) == message)
         #expect(try ACPMessageWire.decode(kind: message.kind, payload: payload) == .visualAid(visual))
     }
+
+    @Test("plan rows persist under the plan kind and decode back", arguments: PlanRowCase.all)
+    func planRowsRoundTrip(row: PlanRowCase) throws {
+        let payload = try ACPMessageCodec.encode(row.message)
+        #expect(row.message.kind == "plan")
+        #expect(String(decoding: payload, as: UTF8.self) == row.payload)
+        let decoded = try ACPMessageCodec.decode(kind: "plan", payload: payload)
+        #expect(decoded.withPlanRowID(row.id) == row.message)
+    }
+
+    @Test("plan payloads without a document kind and id stay checklists", arguments: [
+        (#"{"items":[{"content":"a","status":"pending"}]}"#, [ACPMessage.PlanItem(content: "a", status: "pending")]),
+        (#"{"items":[],"kind":"markdown"}"#, []),
+        (#"{"items":[],"planId":"p"}"#, []),
+    ])
+    func legacyPlanPayloadIsChecklist(payload: String, items: [ACPMessage.PlanItem]) throws {
+        let decoded = try ACPMessageCodec.decode(kind: "plan", payload: Data(payload.utf8))
+        guard case .plan(_, let decodedItems) = decoded else {
+            Issue.record("expected a checklist, got \(decoded)")
+            return
+        }
+        #expect(decodedItems == items)
+    }
+}
+
+extension ACPPlanDocument {
+    static let markdownFixture = ACPPlanDocument(planId: "item_1", kind: .markdown, markdown: "# Plan", file: nil, hidden: false)
+    static let fileFixture = ACPPlanDocument(
+        planId: "p", kind: .file, markdown: nil, file: .init(path: "/p.md", sha256: "abc"), hidden: false)
+    static let hiddenFixture = ACPPlanDocument(planId: "item_1", kind: .markdown, markdown: "# Old", file: nil, hidden: true)
+}
+
+struct PlanRowCase: Sendable, CustomTestStringConvertible {
+    let name: String
+    let message: ACPMessage
+    let payload: String
+    var testDescription: String { name }
+
+    var id: UUID {
+        switch message {
+        case .plan(let id, _), .planDocument(let id, _): id
+        default: UUID()
+        }
+    }
+
+    static let all: [PlanRowCase] = [
+        .init(name: "checklist", message: .plan(id: UUID(), [.init(content: "a", status: "pending")]),
+              payload: #"{"items":[{"content":"a","status":"pending"}]}"#),
+        .init(name: "markdown", message: .planDocument(id: UUID(), .markdownFixture),
+              payload: ##"{"items":[],"kind":"markdown","markdown":"# Plan","planId":"item_1"}"##),
+        .init(name: "file", message: .planDocument(id: UUID(), .fileFixture),
+              payload: #"{"file":{"path":"\/p.md","sha256":"abc"},"items":[],"kind":"file","planId":"p"}"#),
+        .init(name: "hidden", message: .planDocument(id: UUID(), .hiddenFixture),
+              payload: ##"{"hidden":true,"items":[],"kind":"markdown","markdown":"# Old","planId":"item_1"}"##),
+    ]
+}
+
+private extension ACPMessage {
+    func withPlanRowID(_ id: UUID) -> ACPMessage {
+        switch self {
+        case .plan(_, let items): .plan(id: id, items)
+        case .planDocument(_, let document): .planDocument(id: id, document)
+        default: self
+        }
+    }
 }

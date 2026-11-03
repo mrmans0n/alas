@@ -13,7 +13,7 @@ import AlasACP
 /// for tool calls / file edits / plans the web client renders specially.
 public struct RemoteWireMessage: Codable, Equatable, Sendable {
     public let stableId: String
-    public let kind: String          // "user" | "agent" | "thought" | "toolCall" | "fileEdit" | "plan" | "visualAid" | "systemNotice"
+    public let kind: String          // "user" | "agent" | "thought" | "toolCall" | "fileEdit" | "plan" | "planDocument" | "visualAid" | "systemNotice"
     public let text: String?
     public let json: String?         // JSON string for structured kinds; nil otherwise
     public let index: Int            // transcript position; the client orders and windows by this
