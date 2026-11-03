@@ -1424,7 +1424,13 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
     /// ≥ 0.78 (#1122) and codex-acp ≥ 1.12 (#501). `diffStats` is nil when
     /// the adapter can't produce valid counts; callers fall back to
     /// computing their own.
-    case diff(path: String, oldText: String?, newText: String, kind: String?, diffStats: ACPDiffStats?)
+    ///
+    /// `patch` is the raw `_meta.diffPatch` payload of our adapter forks'
+    /// exact-diff extension (see `ACPDiffPatch.swift`). It is kept as sent;
+    /// `ACPToolCallDiff` validates it.
+    case diff(
+        path: String, oldText: String?, newText: String, kind: String?, diffStats: ACPDiffStats?,
+        patch: ACPDiffPatchPayload? = nil)
     case terminal(terminalId: String)
     /// Forward-compatibility bucket so a future spec variant doesn't get
     /// misdecoded as empty text (the previous bug pattern).
@@ -1440,12 +1446,34 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
     private struct DiffMeta: Codable {
         let kind: String?
         let jetbrains: Jetbrains?
+        let diffPatch: ACPDiffPatchPayload?
         struct Jetbrains: Codable { let air: Air? }
         struct Air: Codable { let diffStats: ACPDiffStats? }
 
-        public init(kind: String?, jetbrains: Jetbrains?) {
+        private enum CodingKeys: String, CodingKey {
+            case kind, jetbrains, diffPatch
+        }
+
+        init(kind: String?, jetbrains: Jetbrains?, diffPatch: ACPDiffPatchPayload?) {
             self.kind = kind
             self.jetbrains = jetbrains
+            self.diffPatch = diffPatch
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            kind = try c.decodeIfPresent(String.self, forKey: .kind)
+            jetbrains = try c.decodeIfPresent(Jetbrains.self, forKey: .jetbrains)
+            // Its own `try?`: a malformed patch payload must not drop `kind`
+            // or the AIR stats, let alone the block.
+            diffPatch = (try? c.decodeIfPresent(ACPDiffPatchPayload.self, forKey: .diffPatch)) ?? nil
+        }
+
+        func encode(to encoder: Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encodeIfPresent(kind, forKey: .kind)
+            try c.encodeIfPresent(jetbrains, forKey: .jetbrains)
+            try c.encodeIfPresent(diffPatch, forKey: .diffPatch)
         }
     }
 
@@ -1461,7 +1489,8 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
                 oldText: try? c.decode(String.self, forKey: .oldText),
                 newText: try c.decode(String.self, forKey: .newText),
                 kind: meta?.kind,
-                diffStats: meta?.jetbrains?.air?.diffStats)
+                diffStats: meta?.jetbrains?.air?.diffStats,
+                patch: meta?.diffPatch)
         case "terminal":
             self = .terminal(terminalId: try c.decode(String.self, forKey: .terminalId))
         case "text", "resource_link", "image", "resource":
@@ -1481,15 +1510,16 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
         case .content(let b):
             try c.encode("content", forKey: .type)
             try c.encode(b, forKey: .content)
-        case .diff(let path, let old, let new, let kind, let diffStats):
+        case .diff(let path, let old, let new, let kind, let diffStats, let patch):
             try c.encode("diff", forKey: .type)
             try c.encode(path, forKey: .path)
             try c.encodeIfPresent(old, forKey: .oldText)
             try c.encode(new, forKey: .newText)
-            if kind != nil || diffStats != nil {
+            if kind != nil || diffStats != nil || patch != nil {
                 let meta = DiffMeta(
                     kind: kind,
-                    jetbrains: diffStats.map { DiffMeta.Jetbrains(air: DiffMeta.Air(diffStats: $0)) })
+                    jetbrains: diffStats.map { DiffMeta.Jetbrains(air: DiffMeta.Air(diffStats: $0)) },
+                    diffPatch: patch)
                 try c.encode(meta, forKey: .meta)
             }
         case .terminal(let id):
@@ -1501,6 +1531,16 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
             // object is acceptable.
             try c.encode("unknown", forKey: .type)
         }
+    }
+
+    /// This item with its patch payload marked as seen on a connection that
+    /// did not negotiate `diffPatch`. Every other item is returned unchanged.
+    public func markingDiffPatchUnnegotiated() -> ACPToolCallContent {
+        guard case .diff(let path, let oldText, let newText, let kind, let diffStats, var patch?) = self else {
+            return self
+        }
+        patch.negotiated = false
+        return .diff(path: path, oldText: oldText, newText: newText, kind: kind, diffStats: diffStats, patch: patch)
     }
 }
 

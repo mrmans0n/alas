@@ -2120,8 +2120,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
             return true
         case (.terminal(let a), .terminal(let b)):
             return a == b
-        case (.diff(let p1, let o1, let n1, _, _), .diff(let p2, let o2, let n2, _, _)):
-            return p1 == p2 && o1 == o2 && n1 == n2
+        case (.diff(let p1, let o1, let n1, _, _, let patch1), .diff(let p2, let o2, let n2, _, _, let patch2)):
+            return p1 == p2 && o1 == o2 && n1 == n2 && patch1 == patch2
         case (.content(.image(let d1, let u1, let m1)),
               .content(.image(let d2, let u2, let m2))):
             return d1 == d2 && u1 == u2 && m1 == m2
@@ -3561,7 +3561,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 continue
             case .content(.resource(_, _, let text)):
                 out.append(text)
-            case .diff(let path, let old, let new, _, _):
+            case .diff(let path, let old, let new, _, _, _):
                 var lines: [String] = ["--- \(path)"]
                 if let old, !old.isEmpty {
                     for line in Self.diffLines(old) {
@@ -3608,7 +3608,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
     ) -> Set<Int> {
         var touched: Set<Int> = []
         for item in items {
-            guard case .diff(let path, let oldText, let newText, _, let diffStats?) = item else { continue }
+            guard case .diff(let path, let oldText, let newText, _, let diffStats?, _) = item else { continue }
             let relativePath = Self.relativeToWorktreeRoot(path, worktreeRoot: worktreeRoot)
             guard let index = transcript.messages.lastIndex(where: {
                 if case .fileEdit(_, let edit) = $0 {
