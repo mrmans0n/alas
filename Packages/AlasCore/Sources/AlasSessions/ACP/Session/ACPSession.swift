@@ -1350,8 +1350,10 @@ public final class ACPSession: ChangeTracking, Identifiable {
         // new update kinds are added.
         let contentTouches = touched.filter { i in
             guard transcript.messages.indices.contains(i) else { return false }
-            if case .plan = transcript.messages[i] { return false }
-            return true
+            switch transcript.messages[i] {
+            case .plan, .planDocument: return false
+            default: return true
+            }
         }
         if let latest = contentTouches.max() {
             transcript.lastContentTouchIndex = latest
@@ -3109,7 +3111,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             case .agent, .thought:
                 transcript.completedOutputBoundaryMessageIds.insert(message.stableId)
                 continue
-            case .plan:
+            case .plan, .planDocument:
                 continue
             default:
                 return

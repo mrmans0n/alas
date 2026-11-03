@@ -305,8 +305,10 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         let touched = applyLiveUpdate(update, at: timestamp)
         let contentTouches = touched.filter { i in
             guard messages.indices.contains(i) else { return false }
-            if case .plan = messages[i] { return false }
-            return true
+            switch messages[i] {
+            case .plan, .planDocument: return false
+            default: return true
+            }
         }
         if let latest = contentTouches.max() {
             lastContentTouchIndex = latest
