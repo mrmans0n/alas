@@ -680,6 +680,9 @@ public final class ACPSessionRunner {
             for await (id, params) in self.connection.client.permissionRequests {
                 guard self.isConnectionCurrent() else { continue }
                 self.flushPendingIncomingUpdates()
+                // Gated before anything reads it: `evaluate`, the pending
+                // card and the persisted decision all see the same request.
+                let params = self.session.diffPatch == nil ? params.markingDiffPatchesUnnegotiated() : params
                 if self.pendingCancelledRequestIDs.remove(id) != nil {
                     let response = ACPPermissionResponse(outcome: .cancelled)
                     self.connection.client.respondToPermission(id: id, response: response)
@@ -1220,6 +1223,11 @@ public final class ACPSessionRunner {
 
     private func enqueueIncomingUpdate(_ update: ACPSessionUpdateParams) {
         guard isConnectionCurrent() else { return }
+        // The diffPatch gate, at the one intake every live and broker-replayed
+        // update passes. `session.diffPatch` is this connection's own
+        // initialize result; a patch it never negotiated is shown as
+        // unavailable rather than trusted.
+        let update = session.diffPatch == nil ? update.markingDiffPatchesUnnegotiated() : update
         let receivedWhileHoldingLease = holdsLeaseForWrite()
         // A child session's update never touches a parent row, so it must
         // not capture a compare-and-swap base for one (its tool-call ids

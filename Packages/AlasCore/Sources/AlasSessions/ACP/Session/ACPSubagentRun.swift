@@ -569,6 +569,12 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
         return seqs[index]
     }
 
+    /// This child's tool-call row `id`, if it has one.
+    public func toolCall(id: String) -> ACPMessage.ToolCall? {
+        guard let index = toolCallIndex(id: id), case .toolCall(let toolCall) = messages[index] else { return nil }
+        return toolCall
+    }
+
     /// Merges a `session/request_permission` decision into this child's own
     /// transcript, mirroring `ACPSession.mergePermissionDecision` — the
     /// request named THIS child's session id, so its resulting row belongs
@@ -583,6 +589,7 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
     ) -> Int {
         if let index = toolCallIndex(id: toolCall.toolCallId), case .toolCall(var tc) = messages[index] {
             if let facts { tc.metadata = ACPSession.mergeMetadata(tc.metadata, facts) }
+            ACPSession.mergeProposedDiffs(from: toolCall.content, into: &tc)
             if wasCancelled, tc.status == "pending" || tc.status == "in_progress" {
                 tc.status = "canceled"
                 if tc.executionStartedAt != nil, tc.executionFinishedAt == nil {
@@ -605,6 +612,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
             metadata: toolCall.metadata,
             name: toolCall.name)
         var fresh = ACPSession.makeToolCall(from: payload, at: timestamp)
+        // `makeToolCall` read the same patches as written changes; they are
+        // only proposed.
+        fresh.diffs = ACPToolCallDiff.diffs(in: toolCall.content ?? [], source: .permissionRequest)
         if let facts {
             fresh.metadata = toolCall.metadata.map { ACPSession.mergeMetadata($0, facts) } ?? facts
         }

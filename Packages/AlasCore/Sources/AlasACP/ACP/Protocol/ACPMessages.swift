@@ -1463,9 +1463,9 @@ public enum ACPToolCallContent: Codable, Equatable, Sendable {
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             kind = try c.decodeIfPresent(String.self, forKey: .kind)
-            jetbrains = try c.decodeIfPresent(Jetbrains.self, forKey: .jetbrains)
-            // Its own `try?`: a malformed patch payload must not drop `kind`
-            // or the AIR stats, let alone the block.
+            // Each extension gets its own `try?`: a malformed one must not
+            // drop `kind` or the other extension, let alone the block.
+            jetbrains = (try? c.decodeIfPresent(Jetbrains.self, forKey: .jetbrains)) ?? nil
             diffPatch = (try? c.decodeIfPresent(ACPDiffPatchPayload.self, forKey: .diffPatch)) ?? nil
         }
 

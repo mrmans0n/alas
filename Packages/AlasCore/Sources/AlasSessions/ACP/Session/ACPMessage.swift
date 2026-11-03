@@ -448,7 +448,23 @@ public enum ACPMessage: Equatable, Sendable {
             executionStartedAt = try? c.decode(Date.self, forKey: .executionStartedAt)
             executionFinishedAt = try? c.decode(Date.self, forKey: .executionFinishedAt)
             name = try? c.decode(String.self, forKey: .name)
-            diffs = (try? c.decode([ACPToolCallDiff].self, forKey: .diffs)) ?? []
+            diffs = Self.decodeDiffs(c)
+        }
+
+        /// Element by element: a diff this build cannot read (say, a newer
+        /// peer's failure reason) drops only itself, not the whole array.
+        private static func decodeDiffs(_ c: KeyedDecodingContainer<CodingKeys>) -> [ACPToolCallDiff] {
+            guard var items = try? c.nestedUnkeyedContainer(forKey: .diffs) else { return [] }
+            struct Skipped: Decodable { init(from decoder: Decoder) {} }
+            var diffs: [ACPToolCallDiff] = []
+            while !items.isAtEnd {
+                if let diff = try? items.decode(ACPToolCallDiff.self) {
+                    diffs.append(diff)
+                } else if (try? items.decode(Skipped.self)) == nil {
+                    break
+                }
+            }
+            return diffs
         }
         public func encode(to encoder: Encoder) throws {
             var c = encoder.container(keyedBy: CodingKeys.self)

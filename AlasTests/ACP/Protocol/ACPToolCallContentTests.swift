@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import Alas
 
@@ -81,11 +82,12 @@ struct ACPToolCallContentTests {
         [
           {"type":"diff","path":"/repo/a.txt","oldText":null,"newText":"","_meta":{"diffPatch":\(patch)}},
           {"type":"diff","path":"/repo/a.txt","oldText":null,"newText":"","_meta":{"kind":"update","diffPatch":\(patch)}},
-          {"type":"diff","path":"/repo/b.txt","newText":"b","_meta":{"diffPatch":"x","kind":"add"}}
+          {"type":"diff","path":"/repo/b.txt","newText":"b","_meta":{"diffPatch":"x","kind":"add"}},
+          {"type":"diff","path":"/repo/a.txt","newText":"","_meta":{"jetbrains":{"air":{"diffStats":"x"}},"kind":"update","diffPatch":\(patch)}}
         ]
         """
         let items = try JSONDecoder().decode([ACPToolCallContent].self, from: Data(json.utf8))
-        #expect(items.count == 3)
+        #expect(items.count == 4)
         let expected = ACPDiffPatchPayload(version: 1, format: "git_patch", text: text)
 
         guard case .diff(_, let old, let new, let kind, _, let claudePatch) = items[0] else {
@@ -111,6 +113,15 @@ struct ACPToolCallContentTests {
         #expect(badPatch == nil)
         #expect(badKind == "add")
 
+        // Malformed AIR stats must not drop the patch or the kind.
+        guard case .diff(_, _, _, let airKind, let airStats, let airPatch) = items[3] else {
+            Issue.record("expected .diff")
+            return
+        }
+        #expect(airKind == "update")
+        #expect(airStats == nil)
+        #expect(airPatch == expected)
+
         let encoded = try JSONEncoder().encode(items)
         #expect(try JSONDecoder().decode([ACPToolCallContent].self, from: encoded) == items)
         let reencoded = try #require(JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
@@ -128,9 +139,17 @@ struct ACPToolCallContentTests {
             .diff(path: "/repo/a.txt", oldText: nil, newText: "", kind: "update", diffStats: nil, patch: patch),
             .terminal(terminalId: "term-1"),
         ]
-        let update = ACPSessionUpdate.toolCallUpdate(.init(toolCallId: "tc", status: "completed", content: content))
+        let acknowledgements = Mutex(0)
+        let params = ACPSessionUpdateParams(
+            sessionId: "s1",
+            update: .toolCallUpdate(.init(toolCallId: "tc", status: "completed", content: content)),
+            durableConsumptionAcknowledgement: { acknowledgements.withLock { $0 += 1 } })
 
-        guard case .toolCallUpdate(let marked) = update.markingDiffPatchesUnnegotiated() else {
+        let markedParams = params.markingDiffPatchesUnnegotiated()
+        #expect(markedParams.sessionId == "s1")
+        markedParams.durableConsumptionAcknowledgement?()
+        #expect(acknowledgements.withLock { $0 } == 1)
+        guard case .toolCallUpdate(let marked) = markedParams.update else {
             Issue.record("expected .toolCallUpdate")
             return
         }

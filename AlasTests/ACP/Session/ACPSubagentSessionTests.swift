@@ -145,6 +145,36 @@ struct ACPSubagentSessionTests {
         #expect(childRow.status == "canceled")
     }
 
+    enum ChildRow: Sendable { case existingRow, noRow }
+
+    @Test("a child's approval patch becomes its row's proposed diff", arguments: [ChildRow.existingRow, .noRow])
+    func childPermissionPreviewBecomesProposedDiff(_ childRow: ChildRow) throws {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+        if childRow == .existingRow {
+            session.applySubagentUpdate(
+                .toolCall(.init(toolCallId: "tc-1", title: "Edit", kind: "edit", status: "pending")),
+                subagentSessionId: "child-1")
+        }
+        let parentBefore = session.transcript.messages
+        let patch = ACPSessionTests.gitPatch()
+
+        let index = session.mergePermissionDecision(
+            toolCall: .init(toolCallId: "tc-1", title: "Edit", kind: "edit",
+                            content: [ACPSessionTests.patchItem(patch)]),
+            presentation: nil,
+            chosenOption: .init(optionId: "allow", name: "Allow", kind: "allow_once"),
+            mcpServerName: nil,
+            wasCancelled: false,
+            subagentSessionId: "child-1")
+
+        #expect(index == 0)
+        #expect(session.transcript.messages == parentBefore)
+        let row = try #require(session.toolCall(id: "tc-1", sessionId: "child-1"))
+        #expect(row.diffs.map(\.source) == [.permissionRequest])
+        #expect(row.diffs.first?.patch == patch)
+    }
+
     @Test("a live tool-call creation merges into a child's own permission placeholder instead of duplicating it")
     func liveToolCallMergesIntoChildPermissionPlaceholder() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")

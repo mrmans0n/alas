@@ -143,6 +143,14 @@ struct ACPMessageTests {
         let legacy = #"{"toolCallId":"tc-old","title":"Edit","status":"completed","content":"x"}"#
         let decoded = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(legacy.utf8))
         #expect(decoded.diffs.isEmpty)
+
+        // A newer peer's unknown failure drops only that diff, not the array.
+        let valid = try #require(String(data: try JSONEncoder().encode(diffs[0]), encoding: .utf8))
+        let future = #"{"path":"/repo/c.txt","source":"toolCall","failure":"future","added":0,"removed":0}"#
+        let mixed = #"{"toolCallId":"tc-new","title":"Edit","status":"completed","content":"x","diffs":["#
+            + future + "," + valid + "]}"
+        let lenient = try JSONDecoder().decode(ACPMessage.ToolCall.self, from: Data(mixed.utf8))
+        #expect(lenient.diffs == [diffs[0]])
     }
 
     @Test("tool call content revision advances only when displayed content changes")
