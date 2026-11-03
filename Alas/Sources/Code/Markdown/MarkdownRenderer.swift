@@ -40,6 +40,10 @@ final class MarkdownRenderer {
     private var mermaidSourceTotals: [String: Int] = [:]
     private var mermaidProfile: MermaidPresentationProfile = .full
     private var theme: Theme!
+    /// Prose font (family and size). The document preview passes the agent
+    /// chat typography so a markdown file reads at the transcript's size.
+    private var typography: ACPChatTypography = .default
+    private var fontCache: [FontKey: NSFont] = [:]
     private var monoFamily: String = "JetBrainsMono Nerd Font"
     private var monoSize: CGFloat = 13
     private var baseDirectory: URL = URL(fileURLWithPath: "/")
@@ -53,6 +57,17 @@ final class MarkdownRenderer {
     private var inStrikethrough: Bool = false
     private var subscriptDepth: Int = 0
     private var listDepth: Int = 0
+    /// Leading indent for block content, grown by each enclosing list item
+    /// so wrapped lines and nested blocks align with the item text.
+    private var blockIndent: CGFloat = 0
+
+    private struct FontKey: Hashable {
+        let size: CGFloat
+        let bold: Bool
+        let italic: Bool
+    }
+
+    private static let proseLineHeightMultiple: CGFloat = 1.25
     /// Counts how many times each base slug has been seen so duplicate
     /// headings get GitHub-style `-1`, `-2`, … suffixes instead of clobbering
     /// the earlier range in `anchorRanges`.
@@ -109,7 +124,8 @@ final class MarkdownRenderer {
         monospacedFontSize: Int,
         baseDirectory: URL,
         worktreeRoot: URL? = nil,
-        mermaidProfile: MermaidPresentationProfile = .full
+        mermaidProfile: MermaidPresentationProfile = .full,
+        typography: ACPChatTypography = .default
     ) -> MarkdownRenderResult {
         self.output = NSMutableAttributedString()
         self.anchorRanges = [:]
@@ -119,6 +135,8 @@ final class MarkdownRenderer {
         self.mermaidSourceTotals = Self.mermaidSourceTotals(in: document)
         self.mermaidProfile = mermaidProfile
         self.theme = theme
+        self.typography = typography
+        self.fontCache = [:]
         self.monoFamily = monospacedFontFamily
         self.monoSize = CGFloat(monospacedFontSize)
         self.baseDirectory = baseDirectory
@@ -127,6 +145,7 @@ final class MarkdownRenderer {
         self.inStrikethrough = false
         self.subscriptDepth = 0
         self.listDepth = 0
+        self.blockIndent = 0
         self.slugCounts = [:]
 
         if let frontmatter, !frontmatter.isEmpty {
@@ -157,7 +176,9 @@ final class MarkdownRenderer {
         case let c as InlineCode:       appendText(c.code, attributes: inlineCodeAttributes())
         case let h as InlineHTML:       visitInlineHTML(h)
         case _ as SoftBreak:            appendPlain(" ")
-        case _ as LineBreak:            appendPlain("\n")
+        // U+2028 keeps a hard break inside the paragraph, so the block's
+        // paragraph spacing applies after it and not between its lines.
+        case _ as LineBreak:            appendPlain("\u{2028}")
         case let l as Markdown.Link:    visitLink(l)
         case let img as Markdown.Image: visitImage(img)
         case let h as Heading:          visitHeading(h)
@@ -177,8 +198,13 @@ final class MarkdownRenderer {
     }
 
     private func visitParagraph(_ p: Paragraph) {
+        let start = output.length
         for child in p.children { visit(child) }
-        appendPlain("\n\n")
+        appendPlain("\n")
+        applyBlockStyle(
+            blockStyle(spacingAfter: listDepth > 0 ? listItemSpacing : paragraphSpacing),
+            from: start
+        )
     }
 
     private func visitLink(_ link: Markdown.Link) {
@@ -271,7 +297,7 @@ final class MarkdownRenderer {
         let plain = heading.plainText
         let size = headingFontSize(level: heading.level)
         let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: size, weight: .semibold),
+            .font: font(size: size, traits: .bold),
             .foregroundColor: NSColor(theme.color("fg"))
         ]
         output.append(NSAttributedString(string: plain, attributes: attrs))
@@ -286,38 +312,48 @@ final class MarkdownRenderer {
             anchorRanges[finalSlug] = NSRange(location: start, length: length)
             slugCounts[baseSlug] = count + 1
         }
-        appendPlain("\n\n")
+        output.append(NSAttributedString(string: "\n", attributes: attrs))
+        applyBlockStyle(
+            blockStyle(
+                spacingBefore: start == 0 ? 0 : headingSpacingBefore,
+                spacingAfter: headingSpacingAfter
+            ),
+            from: start
+        )
     }
 
+    /// Scales from the prose size so headings stay proportionate to the body
+    /// at any configured font size.
     private func headingFontSize(level: Int) -> CGFloat {
+        let scale: CGFloat
         switch level {
-        case 1: return 28
-        case 2: return 22
-        case 3: return 18
-        case 4: return 16
-        case 5: return 14
-        default: return 13
+        case 1: scale = 1.75
+        case 2: scale = 1.45
+        case 3: scale = 1.2
+        case 4: scale = 1.05
+        default: scale = 1
         }
+        return (bodySize * scale).rounded()
     }
 
     private func visitUnorderedList(_ list: UnorderedList) {
         listDepth += 1
-        defer { listDepth -= 1 }
         for item in list.listItems {
             appendListItem(item, marker: marker(for: item))
         }
-        if listDepth == 0 { appendPlain("\n") }
+        listDepth -= 1
+        if listDepth == 0 { setTrailingSpacing(paragraphSpacing) }
     }
 
     private func visitOrderedList(_ list: OrderedList) {
         listDepth += 1
-        defer { listDepth -= 1 }
         var n = 1
         for item in list.listItems {
             appendListItem(item, marker: "\(n). ")
             n += 1
         }
-        if listDepth == 0 { appendPlain("\n") }
+        listDepth -= 1
+        if listDepth == 0 { setTrailingSpacing(paragraphSpacing) }
     }
 
     private func visitBlockQuote(_ quote: BlockQuote) {
@@ -335,16 +371,21 @@ final class MarkdownRenderer {
             .foregroundColor: NSColor(theme.color("fg-muted")),
             .font: bodyFont()
         ]
-        let prefix = NSAttributedString(string: "│ ", attributes: prefixAttrs)
         let rebuilt = NSMutableAttributedString(attributedString: blockAttr)
         let raw = rebuilt.string as NSString
         var insertions: [Int] = [0]
         for i in 0..<raw.length where raw.character(at: i) == 0x0A && i + 1 < raw.length {
             insertions.append(i + 1)
         }
-        // Insert from end to start so earlier positions stay valid.
+        // Insert from end to start so earlier positions stay valid. The
+        // prefix opens its paragraph, so it carries that paragraph's style.
         for pos in insertions.reversed() {
-            rebuilt.insert(prefix, at: pos)
+            var attrs = prefixAttrs
+            if pos < rebuilt.length,
+               let style = rebuilt.attribute(.paragraphStyle, at: pos, effectiveRange: nil) {
+                attrs[.paragraphStyle] = style
+            }
+            rebuilt.insert(NSAttributedString(string: "│ ", attributes: attrs), at: pos)
         }
         output.replaceCharacters(in: blockNS, with: rebuilt)
     }
@@ -355,7 +396,9 @@ final class MarkdownRenderer {
             .foregroundColor: NSColor(theme.color("fg-faint")),
             .font: bodyFont()
         ]
-        output.append(NSAttributedString(string: line + "\n\n", attributes: attrs))
+        let start = output.length
+        output.append(NSAttributedString(string: line + "\n", attributes: attrs))
+        applyBlockStyle(blockStyle(spacingAfter: paragraphSpacing), from: start)
     }
 
     private func visitCodeBlock(_ block: CodeBlock) {
@@ -366,8 +409,10 @@ final class MarkdownRenderer {
                 source: source,
                 profile: mermaidProfile
             )
+            let start = output.length
             output.append(NSAttributedString(attachment: attachment))
             output.append(NSAttributedString(string: "\n"))
+            applyBlockStyle(blockStyle(spacingAfter: paragraphSpacing), from: start)
             mermaidAttachments.append(MermaidAttachmentReference(
                 id: id,
                 source: source,
@@ -403,7 +448,14 @@ final class MarkdownRenderer {
                 }
             }
         }
-        appendPlain("\n")
+        if !block.code.hasSuffix("\n") {
+            output.append(NSAttributedString(string: "\n", attributes: baseAttrs))
+        }
+        applyBlockStyle(
+            blockStyle(spacingAfter: 0, lineHeightMultiple: CenterTypography.lineHeightMultiple),
+            from: start
+        )
+        setTrailingSpacing(paragraphSpacing)
     }
 
     private func mermaidID(for source: String, block: CodeBlock) -> String {
@@ -698,7 +750,11 @@ final class MarkdownRenderer {
             output.append(mutable)
             output.append(NSAttributedString(string: "\n", attributes: [.paragraphStyle: style]))
         }
+        // An empty paragraph after the table keeps the next block's first
+        // line out of the table's text blocks and doubles as its gap.
+        let start = output.length
         appendPlain("\n")
+        applyBlockStyle(blockStyle(spacingAfter: 0), from: start)
     }
 
     private func marker(for item: ListItem) -> String {
@@ -710,17 +766,29 @@ final class MarkdownRenderer {
     }
 
     private func appendListItem(_ item: ListItem, marker: String) {
-        let indent = String(repeating: "  ", count: max(0, listDepth - 1))
-        appendPlain(indent + marker)
-        // Render the first Paragraph child inline (no surrounding blank line),
-        // so the marker sits on the same line as the text. Subsequent block
-        // children (nested lists, code blocks) are visited normally.
-        var firstParagraphConsumed = false
-        for child in item.children {
-            if !firstParagraphConsumed, let p = child as? Paragraph {
+        let start = output.length
+        let markerString = NSAttributedString(string: marker, attributes: bodyAttributes())
+        let markerIndent = blockIndent
+        let contentIndent = blockIndent + ceil(markerString.size().width)
+        output.append(markerString)
+        // Hang wrapped lines and nested blocks under the item text.
+        let itemStyle = blockStyle(
+            spacingAfter: listItemSpacing,
+            firstLineIndent: markerIndent,
+            headIndent: contentIndent
+        )
+        applyBlockStyle(itemStyle, from: start)
+        blockIndent = contentIndent
+        defer { blockIndent = markerIndent }
+        // Render a leading Paragraph child inline (no surrounding blank line),
+        // so the marker sits on the same line as the text. Other block
+        // children (nested lists, code blocks, later paragraphs) are visited
+        // normally under the item's indent.
+        for (index, child) in item.children.enumerated() {
+            if index == 0, let p = child as? Paragraph {
                 for inline in p.children { visit(inline) }
                 appendPlain("\n")
-                firstParagraphConsumed = true
+                applyBlockStyle(itemStyle, from: start)
             } else {
                 visit(child)
             }
@@ -766,39 +834,60 @@ final class MarkdownRenderer {
 
     // MARK: - Attributes
 
+    private var bodySize: CGFloat { typography.paragraphSize }
+    private var paragraphSpacing: CGFloat { (typography.baseSize * 0.85).rounded() }
+    private var listItemSpacing: CGFloat { (typography.baseSize * 0.3).rounded() }
+    /// Added to the previous block's `paragraphSpacing`, so a heading gets
+    /// roughly two lines of air above it and stays close to its own body.
+    private var headingSpacingBefore: CGFloat { (typography.baseSize * 1.1).rounded() }
+    private var headingSpacingAfter: CGFloat { (typography.baseSize * 0.5).rounded() }
+
     private func bodyAttributes() -> [NSAttributedString.Key: Any] {
         let isSubscript = subscriptDepth > 0
         var attrs: [NSAttributedString.Key: Any] = [
-            .font: bodyFont(size: isSubscript ? subscriptFontSize(base: NSFont.systemFontSize) : NSFont.systemFontSize),
+            .font: bodyFont(size: isSubscript ? subscriptFontSize(base: bodySize) : bodySize),
             .foregroundColor: NSColor(theme.color("fg"))
         ]
         if inStrikethrough {
             attrs[.strikethroughStyle] = NSUnderlineStyle.single.rawValue
         }
         if isSubscript {
-            attrs[.baselineOffset] = -max(1, subscriptFontSize(base: NSFont.systemFontSize) * 0.22)
+            attrs[.baselineOffset] = -max(1, subscriptFontSize(base: bodySize) * 0.22)
         }
         return attrs
     }
 
+    /// Inline code follows the prose size, not the editor's, so it sits on
+    /// the line like the surrounding text.
     private func inlineCodeAttributes() -> [NSAttributedString.Key: Any] {
         let isSubscript = subscriptDepth > 0
+        let size = typography.codeSize
         var attrs: [NSAttributedString.Key: Any] = [
-            .font: monospaceFont(size: isSubscript ? subscriptFontSize(base: monoSize - 1) : monoSize - 1),
+            .font: monospaceFont(size: isSubscript ? subscriptFontSize(base: size) : size),
             .foregroundColor: NSColor(theme.color("fg")),
             .backgroundColor: NSColor(theme.color("bg-2"))
         ]
         if isSubscript {
-            attrs[.baselineOffset] = -max(1, subscriptFontSize(base: monoSize - 1) * 0.22)
+            attrs[.baselineOffset] = -max(1, subscriptFontSize(base: size) * 0.22)
         }
         return attrs
     }
 
-    private func bodyFont(size: CGFloat = NSFont.systemFontSize) -> NSFont {
-        let base = NSFont.systemFont(ofSize: size)
-        if currentTraits.isEmpty { return base }
-        let desc = base.fontDescriptor.withSymbolicTraits(currentTraits)
-        return NSFont(descriptor: desc, size: base.pointSize) ?? base
+    private func bodyFont(size: CGFloat? = nil) -> NSFont {
+        font(size: size ?? bodySize, traits: currentTraits)
+    }
+
+    /// Resolves the prose font once per size and style: a custom chat font
+    /// family walks `NSFontManager`, too slow to repeat for every text run.
+    private func font(size: CGFloat, traits: NSFontDescriptor.SymbolicTraits) -> NSFont {
+        let key = FontKey(size: size, bold: traits.contains(.bold), italic: traits.contains(.italic))
+        if let cached = fontCache[key] { return cached }
+        var mask: NSFontTraitMask = []
+        if key.bold { mask.insert(.boldFontMask) }
+        if key.italic { mask.insert(.italicFontMask) }
+        let resolved = typography.appKitFont(size: size, traits: mask)
+        fontCache[key] = resolved
+        return resolved
     }
 
     private func subscriptFontSize(base: CGFloat) -> CGFloat {
@@ -806,7 +895,7 @@ final class MarkdownRenderer {
     }
 
     private func headerTableFont() -> NSFont {
-        NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: .semibold)
+        font(size: bodySize, traits: .bold)
     }
 
     private func applyHeaderTableFont(to mutable: NSMutableAttributedString, range: NSRange) {
@@ -844,5 +933,48 @@ final class MarkdownRenderer {
 
     private func appendPlain(_ s: String) {
         output.append(NSAttributedString(string: s, attributes: bodyAttributes()))
+    }
+
+    // MARK: - Block styles
+
+    private func blockStyle(
+        spacingBefore: CGFloat = 0,
+        spacingAfter: CGFloat,
+        firstLineIndent: CGFloat? = nil,
+        headIndent: CGFloat? = nil,
+        lineHeightMultiple: CGFloat = MarkdownRenderer.proseLineHeightMultiple
+    ) -> NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.lineHeightMultiple = lineHeightMultiple
+        style.paragraphSpacingBefore = spacingBefore
+        style.paragraphSpacing = spacingAfter
+        style.firstLineHeadIndent = firstLineIndent ?? blockIndent
+        style.headIndent = headIndent ?? blockIndent
+        return style
+    }
+
+    private func applyBlockStyle(_ style: NSParagraphStyle, from start: Int) {
+        guard output.length > start else { return }
+        output.addAttribute(
+            .paragraphStyle,
+            value: style,
+            range: NSRange(location: start, length: output.length - start)
+        )
+    }
+
+    /// Sets the space after the last paragraph written, so a list or code
+    /// block ends with paragraph-sized air while its inner lines stay tight.
+    private func setTrailingSpacing(_ spacing: CGFloat) {
+        guard output.length > 0 else { return }
+        let range = output.mutableString.paragraphRange(
+            for: NSRange(location: output.length - 1, length: 0)
+        )
+        guard let current = output.attribute(.paragraphStyle, at: range.location, effectiveRange: nil)
+                as? NSParagraphStyle,
+              current.textBlocks.isEmpty,
+              let style = current.mutableCopy() as? NSMutableParagraphStyle
+        else { return }
+        style.paragraphSpacing = spacing
+        output.addAttribute(.paragraphStyle, value: style, range: range)
     }
 }
