@@ -3031,10 +3031,14 @@ struct ACPSessionTests {
         let before = try #require(session.toolCall(id: "tc", sessionId: nil))
         #expect(before.diffs.map(\.source) == [.toolCall])
 
+        // A standard diff and a different patch: neither may reach the row.
         session.beginSuppressedReplaySideEffects()
         _ = session.applySuppressedReplaySideEffects(.toolCallUpdate(.init(
             toolCallId: "tc", status: "completed",
-            content: [.diff(path: "/repo/a.txt", oldText: nil, newText: "new\n", kind: nil, diffStats: nil)])))
+            content: [
+                .diff(path: "/repo/a.txt", oldText: nil, newText: "new\n", kind: nil, diffStats: nil),
+                Self.patchItem(Self.previewPatch),
+            ])))
         session.endSuppressedReplaySideEffects()
 
         let after = try #require(session.toolCall(id: "tc", sessionId: nil))

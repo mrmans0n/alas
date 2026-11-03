@@ -482,6 +482,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 // none — the "never reached storage" recovery case.
                 fresh.executionStartedAt = existing.executionStartedAt ?? fresh.executionStartedAt
                 fresh.executionFinishedAt = existing.executionFinishedAt ?? fresh.executionFinishedAt
+                // A replayed payload without a patch knows nothing about the
+                // stored diffs, written or proposed; keep them.
+                if fresh.diffs.isEmpty { fresh.diffs = existing.diffs }
                 messages[index] = .toolCall(fresh)
                 replayCursor = max(replayCursor, index + 1)
                 return [index]

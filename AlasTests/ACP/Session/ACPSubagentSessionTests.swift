@@ -175,6 +175,35 @@ struct ACPSubagentSessionTests {
         #expect(row.diffs.first?.patch == patch)
     }
 
+    @Test("a replayed child tool call without a patch keeps the row's stored diffs",
+          arguments: [ACPToolCallDiff.Source.toolCall, .permissionRequest])
+    func replayedChildToolCallKeepsDiffs(_ source: ACPToolCallDiff.Source) throws {
+        let session = makeSession()
+        session.apply(.subagentSpawned(.init(subagentSessionId: "child-1", name: "Explore")))
+        let patchContent = [ACPSessionTests.patchItem(ACPSessionTests.gitPatch())]
+        if source == .toolCall {
+            session.applySubagentUpdate(
+                .toolCall(.init(toolCallId: "tc-1", title: "Edit", kind: "edit", status: "in_progress",
+                                content: patchContent)),
+                subagentSessionId: "child-1")
+        } else {
+            _ = session.mergePermissionDecision(
+                toolCall: .init(toolCallId: "tc-1", title: "Edit", kind: "edit", content: patchContent),
+                presentation: nil, chosenOption: nil, mcpServerName: nil, wasCancelled: false,
+                subagentSessionId: "child-1")
+        }
+        let before = try #require(session.toolCall(id: "tc-1", sessionId: "child-1"))
+        #expect(before.diffs.map(\.source) == [source])
+
+        session.beginSuppressedReplaySideEffects()
+        _ = session.applySubagentReplayedUpdate(
+            .toolCall(.init(toolCallId: "tc-1", title: "Edit", kind: "edit", status: "in_progress")),
+            subagentSessionId: "child-1")
+        session.endSuppressedReplaySideEffects()
+
+        #expect(session.toolCall(id: "tc-1", sessionId: "child-1")?.diffs == before.diffs)
+    }
+
     @Test("a live tool-call creation merges into a child's own permission placeholder instead of duplicating it")
     func liveToolCallMergesIntoChildPermissionPlaceholder() {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
