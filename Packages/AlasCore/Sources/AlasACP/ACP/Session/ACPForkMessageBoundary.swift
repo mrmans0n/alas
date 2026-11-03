@@ -120,6 +120,25 @@ public enum ACPSessionForkCandidatePolicy: Sendable {
         if forkPoint != nil, let historicalTarget { return .nativeAtMessage(historicalTarget) }
         return .transcript
     }
+
+    /// Whether `candidate(...)` could choose a native fork once a detached
+    /// source is attached. Capabilities the source's agent hasn't reported since
+    /// launch (`nil`) don't rule a native fork out; reported ones do.
+    public static func mayForkNatively(
+        sourceAgentID: String,
+        targetAgentID: String,
+        boundaryIsRemoteHead: Bool,
+        sourceRemoteSessionID: String?,
+        forkCapability: Bool?,
+        supportsForkPoint: Bool?,
+        hasHistoricalTarget: Bool
+    ) -> Bool {
+        guard sourceAgentID == targetAgentID,
+              sourceRemoteSessionID?.isEmpty == false,
+              forkCapability != false
+        else { return false }
+        return boundaryIsRemoteHead || (supportsForkPoint != false && hasHistoricalTarget)
+    }
 }
 
 public struct ACPSessionForkConversationMessage: Equatable, Sendable {

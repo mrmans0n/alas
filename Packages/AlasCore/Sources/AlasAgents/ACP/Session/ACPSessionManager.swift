@@ -1473,6 +1473,9 @@ public final class ACPSessionManager: ChangeTracking {
     private let delegatedReasoningRefreshTimeout: Duration
     /// How long `answerVisualAid` waits for its prompt to register; tests shorten it.
     public var visualAidPromptRegistrationWait: Duration = ACPSessionManager.visualAidPromptRegistrationTimeout
+    /// How long `createFork` waits for a detached source to attach before
+    /// importing its transcript instead; tests shorten it.
+    public var forkSourceAttachWait: Duration = .seconds(30)
 #if DEBUG
     public func persistACPBrokerStateForTesting(sessionId: ACPSession.ID, state: ACPBrokerDurableState) {
         persistACPBrokerState(sessionId: sessionId, state: state)
@@ -2127,6 +2130,13 @@ public final class ACPSessionManager: ChangeTracking {
         }
         source.nextPromptWorkCount += 1
         defer { source.nextPromptWorkCount -= 1 }
+        let reportedForkPoint = source.forkPoint
+        let sourceCanForkNatively = await attachDetachedForkSourceIfNeeded(
+            source,
+            boundary: boundary,
+            targetAgentID: targetAgentID,
+            isEphemeral: isEphemeral
+        )
         let acquiredSnapshotLease: Bool
         if !_ownedLeases.contains(sourceSessionID) {
             guard await acquireWriterLease(sessionId: sourceSessionID) else {
@@ -2158,7 +2168,10 @@ public final class ACPSessionManager: ChangeTracking {
             let boundaryIsRemoteHead = snapshot.sourceBoundarySequence == storedMessages.last?.seq
             let sourceContextDeliveryPending = source.forkRecord?.mechanism == .transcriptTransfer
                 && source.forkRecord?.contextDeliveryPending == true
-            let candidate = sourceContextDeliveryPending
+            // A failed attach forgets what the agent reported before it; the
+            // import of a targeted fork still saves why.
+            let forkPointCapability = sourceCanForkNatively ? source.forkPoint : source.forkPoint ?? reportedForkPoint
+            let policyCandidate = sourceContextDeliveryPending
                 ? ACPSessionForkCandidate.transcript
                 : ACPSessionForkCandidatePolicy.candidate(
                     sourceAgentID: source.agentId,
@@ -2166,12 +2179,19 @@ public final class ACPSessionManager: ChangeTracking {
                     boundaryIsRemoteHead: boundaryIsRemoteHead,
                     sourceRemoteSessionID: source.remoteSessionId,
                     forkCapability: source.sessionCapabilities?.supportsFork,
-                    forkPoint: source.forkPoint,
+                    forkPoint: forkPointCapability,
                     historicalTarget: snapshot.forkPointTarget
                 )
-            let forkPoint: ACPSessionForkPoint? = if case .nativeAtMessage(let target) = candidate,
-                                                     let capability = source.forkPoint {
-                ACPSessionForkPoint(target: target, boundary: capability.boundary)
+            // A detached source that couldn't be attached is imported; a
+            // targeted fork saves why it wasn't forked at its message.
+            let candidate = sourceCanForkNatively ? policyCandidate : .transcript
+            let forkPoint: ACPSessionForkPoint? = if case .nativeAtMessage(let target) = policyCandidate,
+                                                     let capability = forkPointCapability {
+                ACPSessionForkPoint(
+                    target: target,
+                    boundary: capability.boundary,
+                    outcome: candidate == .transcript ? .unmatched(.unavailable) : nil
+                )
             } else {
                 nil
             }
@@ -2287,6 +2307,84 @@ public final class ACPSessionManager: ChangeTracking {
             await releaseWriterLease(sessionId: sourceSessionID)
         }
         return try result.get()
+    }
+
+    /// Only the source runner's native-fork barrier proves a source idle and
+    /// persisted, and a detached source (one whose tab hasn't attached since a
+    /// relaunch, say) may still be running in its broker. Such a source is
+    /// attached the way opening its tab attaches it, and stays attached, unless
+    /// the fork can't be native anyway. False when it was attached but can't
+    /// fork natively: the attach failed or didn't settle in time, another
+    /// instance holds the source, or its agent no longer had the session.
+    private func attachDetachedForkSourceIfNeeded(
+        _ source: ACPSession,
+        boundary: ACPForkMessageBoundary,
+        targetAgentID: String,
+        isEphemeral: Bool
+    ) async -> Bool {
+        let id = source.id
+        guard runners[id] == nil || source.agentState != .ready,
+              await detachedForkSourceMayForkNatively(
+                  source,
+                  boundary: boundary,
+                  targetAgentID: targetAgentID,
+                  isEphemeral: isEphemeral
+              )
+        else { return true }
+        let remoteSessionID = source.remoteSessionId
+        // The attach isn't cancelled on timeout: it settles as an opened tab's would.
+        let settled = await Self.raceWithTimeout({ [weak self] in
+            await self?.attach(to: id, freshlyCreated: false)
+        }, timeout: forkSourceAttachWait)
+        // An agent that lost the session gets a fresh one, which only has the
+        // transcript the attach sends it to recover.
+        return settled
+            && sessions[id] === source
+            && runners[id] != nil
+            && source.agentState == .ready
+            && source.remoteSessionId == remoteSessionID
+            && source.contextRecoveryStatus == nil
+    }
+
+    /// Whether a detached source's fork could be native, judged from what its
+    /// agent last reported: an agent not attached since launch might fork.
+    private func detachedForkSourceMayForkNatively(
+        _ source: ACPSession,
+        boundary: ACPForkMessageBoundary,
+        targetAgentID: String,
+        isEphemeral: Bool
+    ) async -> Bool {
+        if source.forkRecord?.mechanism == .transcriptTransfer, source.forkRecord?.contextDeliveryPending == true {
+            return false
+        }
+        let supportsForkPoint = source.sessionCapabilities == nil ? nil : source.forkPoint != nil
+        func mayForkNatively(boundaryIsRemoteHead: Bool, hasHistoricalTarget: Bool) -> Bool {
+            ACPSessionForkCandidatePolicy.mayForkNatively(
+                sourceAgentID: source.agentId,
+                targetAgentID: targetAgentID,
+                boundaryIsRemoteHead: boundaryIsRemoteHead,
+                sourceRemoteSessionID: source.remoteSessionId,
+                forkCapability: source.sessionCapabilities?.supportsFork,
+                supportsForkPoint: supportsForkPoint,
+                hasHistoricalTarget: hasHistoricalTarget
+            )
+        }
+        // Rule out what needs no transcript read first.
+        guard mayForkNatively(boundaryIsRemoteHead: true, hasHistoricalTarget: true) else { return false }
+        await awaitBackfill(id: source.id)
+        guard let storedMessages = try? await persistence.loadMessages(sessionId: source.id),
+              let snapshot = try? ACPSessionForkSnapshotResolver.resolve(
+                  boundary: boundary,
+                  liveMessages: source.transcript.messages,
+                  storedMessages: storedMessages,
+                  allowsUnpersistedTail: isEphemeral,
+                  remoteHistoryStart: source.forkRecord?.remoteHistoryStart ?? 0
+              )
+        else { return false }
+        return mayForkNatively(
+            boundaryIsRemoteHead: snapshot.sourceBoundarySequence == storedMessages.last?.seq,
+            hasHistoricalTarget: snapshot.forkPointTarget != nil
+        )
     }
 
     /// Queues a durable context transfer before optionally archiving the fork.
