@@ -167,10 +167,15 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public var availableProviders: [ACPProviderInfo] = []
     @Tracked public var currentModel: String?
     @Tracked public var contextUsage: ACPUsageInfo?
-    /// How many live `plan_update`/`plan_removed` updates each plan id has
-    /// received, with or without a row, so a review of an older revision can
-    /// tell it is stale. Runtime only; replayed history does not count.
+    /// How many live `plan_update`s that changed a plan id's content, and
+    /// `plan_removed`s, each plan id has received, with or without a row, so
+    /// a review of an older revision can tell it is stale. A repeated
+    /// identical snapshot is not a revision: Codex resends its final plan
+    /// right before asking to review it. Runtime only; replayed history does
+    /// not count.
     @Tracked public private(set) var planRevisions: [String: Int] = [:]
+    /// The content each plan id last received, for `planRevisions`.
+    private var planContents: [String: ACPPlanContent] = [:]
     /// How many times the agent reported an empty context (`usage_update`
     /// with `used == 0`), as Claude does when it restarts with cleared
     /// context after a plan is approved. Runtime only.
@@ -1311,7 +1316,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
             clearRestoredContextRecoveryStatus()
             return applyChecklist(entries)
         case .planUpdate(let plan):
-            planRevisions[plan.planId, default: 0] += 1
+            if planContents.updateValue(plan.content, forKey: plan.planId) != plan.content {
+                planRevisions[plan.planId, default: 0] += 1
+            }
             if case .items(let entries) = plan.content {
                 clearRestoredContextRecoveryStatus()
                 return applyChecklist(entries)
@@ -1340,6 +1347,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 return [transcript.messages.count - 1]
             }
         case .planRemoved(let planId):
+            planContents[planId] = nil
             planRevisions[planId, default: 0] += 1
             return hidePlanDocuments(planId: planId)
         case .availableModelsUpdate(let ms):

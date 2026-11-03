@@ -3725,6 +3725,49 @@ struct ACPSessionRunnerTests {
         #expect(runner.session.planReviewFiles["toolu_1"] == fileRead("new"))
     }
 
+    /// Codex sends its final plan snapshot right before the review, on the other stream. Whether that snapshot
+    /// repeats the plan or changes it, the review binds to it and parks approvable; one that only repeats the
+    /// plan keeps it approvable even when it lands after the review.
+    @Test("a plan review sent right after its plan's final snapshot parks approvable", arguments: [
+        ("# Plan\n- a", false), ("# Plan\n- b", false), ("# Plan\n- a", true),
+    ])
+    func planReviewBindsTheFinalSnapshotSentBeforeIt(finalPlan: String, afterRequest: Bool) async throws {
+        let (runner, mock) = try makeRunner()
+        runner.start()
+        defer { runner.stop() }
+        func plan(_ planId: String, _ text: String) -> ACPSessionUpdateParams {
+            .init(sessionId: "s", update: .planUpdate(.init(planId: planId, content: .markdown(text))))
+        }
+        mock.emit(plan("item_1", "# Plan\n- a"))
+        #expect(await awaitCondition { runner.session.planRevisions["item_1"] == 1 })
+
+        // The final snapshot is off the stream but not applied when the review is dequeued, or follows it.
+        let dequeue = AsyncGate()
+        var held = false
+        runner.beforeDequeueForTesting = {
+            held = true
+            await dequeue.wait()
+        }
+        if afterRequest {
+            mock.emitPermission(id: .number(1), params: ACPToolCallPresentationTests.codexReview())
+            #expect(await awaitCondition { runner.session.transcript.pendingPermission != nil })
+            mock.emit(plan("item_1", finalPlan))
+            #expect(await awaitCondition { held })
+        } else {
+            mock.emit(plan("item_1", finalPlan))
+            #expect(await awaitCondition { held })
+            mock.emitPermission(id: .number(1), params: ACPToolCallPresentationTests.codexReview())
+        }
+        await dequeue.open()
+        // Applied in order, so once this lands the final snapshot has too.
+        mock.emit(plan("sentinel", "x"))
+        #expect(await awaitCondition {
+            runner.session.planRevisions["sentinel"] == 1 && runner.session.transcript.pendingPermission != nil
+        })
+
+        #expect(runner.policy.refusesApproval(optionKind: "allow_once", planDigest: nil) == false)
+    }
+
     @Test("patches in updates and permission requests count only when this connection negotiated diffPatch",
           arguments: [false, true])
     func diffPatchGate(negotiated: Bool) async throws {

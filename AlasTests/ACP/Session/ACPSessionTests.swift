@@ -1770,6 +1770,19 @@ struct ACPSessionTests {
         #expect(session.transcript.messages.count == 2)
     }
 
+    @Test("a repeated identical plan snapshot is not a new revision", arguments: [
+        ACPPlanContent.markdown("# Plan"), .items([.init(content: "a", priority: "high", status: "pending")]),
+    ])
+    func identicalPlanSnapshotKeepsRevision(content: ACPPlanContent) {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "w", title: "t")
+        session.apply(.planUpdate(.init(planId: "item_1", content: content)))
+        session.apply(.planUpdate(.init(planId: "item_1", content: content)))
+        #expect(session.planRevisions["item_1"] == 1)
+
+        session.apply(.planUpdate(.init(planId: "item_1", content: .markdown("# Changed"))))
+        #expect(session.planRevisions["item_1"] == 2)
+    }
+
     @Test("a clear-context restart repeats the approved plan into its row and counts the reset")
     func clearContextRestartUpdatesPlanOnce() {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")

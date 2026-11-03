@@ -701,6 +701,21 @@ public final class ACPSessionRunner {
                     await self.persistPermissionDecision(params: params, response: response)
                     continue
                 }
+                if params.toolCall.isPlanReview {
+                    // A plan review parks without suspending, binding the
+                    // plan revision it sees, and Codex sends its final
+                    // plan_update right before the request on the other
+                    // stream: apply what is already yielded first, as
+                    // persistPermissionDecision does.
+                    await self.drainYieldedUpdates()
+                    guard self.isConnectionCurrent(), !Task.isCancelled else { continue }
+                    if self.pendingCancelledRequestIDs.remove(id) != nil {
+                        let response = ACPPermissionResponse(outcome: .cancelled)
+                        self.connection.client.respondToPermission(id: id, response: response)
+                        await self.persistPermissionDecision(params: params, response: response)
+                        continue
+                    }
+                }
                 if let path = self.planReviewFilePath(params) {
                     // Runs once evaluate below has parked the review, which
                     // it does before its first suspension.
@@ -1161,6 +1176,18 @@ public final class ACPSessionRunner {
         }
     }
 
+    /// Applies every update the client had yielded when this was called,
+    /// including ones `updatesTask` has not dequeued yet. Bounded by
+    /// cancellation (`stop()` cancels `updatesTask` too) and by the
+    /// connection being replaced: past either, nothing more would apply.
+    private func drainYieldedUpdates() async {
+        let updateWatermark = connection.client.yieldedUpdateCount
+        while appliedUpdateCount < updateWatermark, !Task.isCancelled, isConnectionCurrent() {
+            await Task.yield()
+            flushPendingIncomingUpdates()
+        }
+    }
+
     /// Folds the decoded `_meta.permission` presentation and the outcome
     /// (auto-run, remembered decision, or user click — `evaluate` already
     /// resolved all three the same way) into the matching persisted tool
@@ -1190,15 +1217,9 @@ public final class ACPSessionRunner {
         // deferCompletedOutputBoundaryUntilUpdatesDrain() uses) rather
         // than guessing an attempt count, so a materialized/merged tool
         // call row never jumps ahead of a preceding agent/thought message
-        // regardless of how many updates are queued. Bounded only by
-        // cancellation (stop() cancels updatesTask too, so nothing more
-        // would ever apply past that point).
-        let updateWatermark = connection.client.yieldedUpdateCount
-        while appliedUpdateCount < updateWatermark, !Task.isCancelled {
-            await Task.yield()
-            flushPendingIncomingUpdates()
-        }
-        guard !Task.isCancelled else { return }
+        // regardless of how many updates are queued.
+        await drainYieldedUpdates()
+        guard !Task.isCancelled, isConnectionCurrent() else { return }
         // Re-check: holdsLeaseForWrite() above can no longer speak for
         // "now" after the suspensions just above — a cross-window takeover
         // could have seized the lease in the interim. persistIndices below
