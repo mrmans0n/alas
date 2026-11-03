@@ -1,0 +1,16 @@
+{
+  "version": "0.23.0",
+  "headline": {
+    "title": "Worktree VMs",
+    "body": "Set up macOS or Linux VMs for any worktree, then let agents start them, run commands, and use the desktop while you can take over anytime.",
+    "media": "media/0.23.0-worktree-vms.png"
+  },
+  "also": [
+    {
+      "title": "Set up hosts over SSH"
+    },
+    {
+      "title": "Fork from earlier turns"
+    }
+  ]
+}

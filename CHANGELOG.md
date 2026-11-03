@@ -6,6 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-03
+
+### ✨ Features
+
+- Expand worktree VMs with one-click macOS setup, a polished management tab, Linux guests, Linux computer use through Cua Driver, automatic starts, driver status, and Take over / Hand back controls (#2271, #2280, #2309, #2314, #2326).
+- Install, configure, pair, update, and inspect a headless host over SSH from the Mac (#2330).
+- Browse a paired host file's history and stage or discard individual remote hunks from the Mac (#2270, #2272, #2273).
+- Open a paired host run's forwarded endpoint in the in-app preview and inspect image diffs across stashes, checkpoints, reviews, and pull requests, including images whose commits are absent on the host (#2274, #2305, #2313, #2319).
+- Keep remote web previews off the Mac and its private networks with a per-preview egress proxy that blocks loopback, local, tailnet, and own-address destinations (#2304, #2320, #2324).
+- Fork native agent sessions from an earlier message, let non-blocking Codex questions stay optional, allow Claude turns to finish while background children continue, and preserve native child configuration and delegation links (#2300, #2306, #2323, #2328).
+- Launch an agent directly from a folder schedule (#2268).
+
+### 🐛 Fixes
+
+- Close the update progress sheet before relaunching the app (#2267).
+- Recover interrupted paired-host restores, resolve missing worktrees under symlinked roots, refresh re-created worktrees before checkpoints, and print reachable host addresses (#2275, #2278, #2279).
+- Unstage a newly added file's hunk by removing it from the index (#2303).
+- Explain why either side of an image diff could not be loaded (#2318).
+- Read hook-review kinds and broker stderr from decoded ACP error data (#2331).
+
+### 🏗️ Internal
+
+- Continue the disabled-by-default ACP 2 durability and ownership foundation for prompt outcomes, inbound receipts, broker and stdio replies, response intents, and attachment runtime (#2269, #2276, #2281, #2299, #2302, #2308, #2311, #2317, #2325, #2329).
+- Reduce checkpoint latency by skipping redundant work and batching Git state and object reads (#2282, #2301, #2307).
+- Split right-pane state by area and update the CMake tree-sitter grammar (#2277, #2310).
+- Strengthen paired-host restore coverage and re-enable the Ghostty smoke, Bonjour, and SSH integration suites on CI while removing recurring flakes (#2312, #2316, #2321).
+
+### 📚 Docs
+
+- Document why HTTP/3 does not bypass the remote-preview egress proxy (#2322).
+
 ## [0.22.2] - 2026-10-30
 
 ### ✨ Features
