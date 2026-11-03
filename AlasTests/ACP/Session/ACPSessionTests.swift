@@ -1659,6 +1659,7 @@ struct ACPSessionTests {
          [.markdown("item_1", "first"), .markdown("item_2", "second")]),
         ("sameIdNextTurn", ["plan-mode:toolu_1=v1", "user"], "plan-mode:toolu_1", .markdown("v2"),
          [.markdown("plan-mode:toolu_1", "v2")]),
+        ("sharedClaudeIdSameTurn", ["plan-mode=v1"], "plan-mode", .markdown("v2"), [.markdown("plan-mode", "v2")]),
         ("sharedClaudeIdNextTurn", ["plan-mode=v1", "user"], "plan-mode", .markdown("v2"),
          [.markdown("plan-mode", "v1"), .markdown("plan-mode", "v2")]),
         ("fileUri", [], "p", .file(uri: "file:///tmp/p.md"),
@@ -1712,10 +1713,6 @@ struct ACPSessionTests {
         session.apply(.userMessageChunk(.text("Plan it")))
         session.apply(.usageUpdate(.init(used: 5_000, size: 200_000, cost: nil)))
         session.apply(.markdownPlan("plan-mode:toolu_1", "# Plan"))
-        session.transcript.pendingPermission = .init(id: .number(0), params: .init(
-            sessionId: "s", toolCall: .init(toolCallId: "toolu_1", title: "Ready to code?"),
-            options: [.init(optionId: "default", name: "Yes, and clear context", kind: "allow_once")]))
-        session.transcript.pendingPermission = nil
         #expect(session.contextResetCount == 0)
 
         session.apply(.currentModeUpdate(modeId: "default"))
@@ -1744,6 +1741,24 @@ struct ACPSessionTests {
         #expect(session.applySuppressedReplaySideEffects(update) == dirty)
         #expect(session.transcript.messages.count == 3)
         #expect(session.transcript.messages.planDocuments == [expected])
+    }
+
+    @Test("replaying Claude's shared plan id in two turns rewrites each turn's own row")
+    func replayedSharedPlanIdFollowsTheCursor() {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
+        session.transcript.replaceMessages(with: [
+            .user(id: UUID(), text: "First", attachments: []),
+            .planDocument(id: UUID(), .markdown("plan-mode", "old 1")),
+            .user(id: UUID(), text: "Second", attachments: []),
+            .planDocument(id: UUID(), .markdown("plan-mode", "old 2")),
+        ])
+        session.beginSuppressedReplaySideEffects()
+
+        #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("First"))).isEmpty)
+        #expect(session.applySuppressedReplaySideEffects(.markdownPlan("plan-mode", "new 1")) == [1])
+        #expect(session.applySuppressedReplaySideEffects(.userMessageChunk(.text("Second"))).isEmpty)
+        #expect(session.applySuppressedReplaySideEffects(.markdownPlan("plan-mode", "new 2")) == [3])
+        #expect(session.transcript.messages.planDocuments == [.markdown("plan-mode", "new 1"), .markdown("plan-mode", "new 2")])
     }
 
     @Test("permanent Codex error clears retryable status")

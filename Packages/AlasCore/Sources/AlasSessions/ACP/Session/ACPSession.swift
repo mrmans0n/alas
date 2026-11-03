@@ -1868,7 +1868,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
             }
             // Sessions saved before `plan` was declared hold the agent's
             // message fallback instead of a row, so a miss adds nothing.
-            guard let i = planDocumentIndex(planId: plan.planId),
+            guard let i = planDocumentIndex(planId: plan.planId, replayingAt: suppressedReplayInsertionCursor),
                   case .planDocument(_, let current) = transcript.messages[i],
                   let document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content)
             else { return [] }
@@ -4458,9 +4458,19 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return true
     }
 
-    /// The newest `.planDocument` row for `planId`, anywhere in the transcript.
-    private func planDocumentIndex(planId: String) -> Int? {
-        transcript.messages.lastIndex {
+    /// The newest `.planDocument` row for `planId`, at any position. When
+    /// replaying, Claude's shared id, reused by a row in each turn, resolves to
+    /// the first row at or after `cursor` instead, so an older turn's replay
+    /// neither lands on a later turn's row nor moves the cursor past it.
+    private func planDocumentIndex(planId: String, replayingAt cursor: Int? = nil) -> Int? {
+        if let cursor, planId == ACPPlanDocumentPlacement.sharedClaudePlanId,
+           let index = transcript.messages.indices.dropFirst(max(cursor, 0)).first(where: {
+               if case .planDocument(_, let document) = transcript.messages[$0] { return document.planId == planId }
+               return false
+           }) {
+            return index
+        }
+        return transcript.messages.lastIndex {
             if case .planDocument(_, let document) = $0 { return document.planId == planId }
             return false
         }
