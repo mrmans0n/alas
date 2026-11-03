@@ -174,18 +174,8 @@ public final class ACPV2RequestDecisionCoordinator {
             }
             try requireCurrent()
         }
-        let peers = entries.values.filter {
-            $0 !== entry && !$0.finished && !$0.withdrawn && Self.idKey($0.handle.request.header.id) == Self.idKey(typed.header.id)
-        }
-        // Stdio's capture registry owns ID occupancy through physical handoff.
-        // A completed write can release the ID before its observation COMMIT.
-        if case .broker = event.currentSource, !peers.isEmpty {
-            entry.withdrawn = true
-            for peer in peers { peer.withdrawn = true
-            onEvent(.withdrawn(peer.handle)) }
-            onEvent(.diagnostic(event.record, "Ambiguous simultaneous inbound request ID"))
-            return
-        }
+        // Current transport origins decide eligibility. Response observation
+        // persistence can outlive a completed write and legitimate ID reuse.
         for (key, source) in qualifiedCancellations where key == Self.idKey(typed.header.id) {
             if Self.follows(source, entry.source) { claimCancellation(entry)
             break }
@@ -290,9 +280,13 @@ public final class ACPV2RequestDecisionCoordinator {
             }.max { $0.handle.record.ordinal < $1.handle.record.ordinal }
             matches = latest.flatMap { $0.finished ? nil : $0 }.map { [$0] } ?? []
         } else {
-            matches = entries.values.filter { entry in
-                !entry.finished && Self.idKey(entry.handle.request.header.id) == key && Self.follows(event.currentSource, entry.source)
-            }
+            // Broker snapshots can arrive after their journal controls. Choose
+            // the latest origin preceding this control, then require fresh
+            // pending-origin inspection before any cancellation is sent.
+            let latest = entries.values.filter { entry in
+                Self.idKey(entry.handle.request.header.id) == key && Self.follows(event.currentSource, entry.source)
+            }.max { a, b in Self.follows(b.source, a.source) }
+            matches = latest.flatMap { $0.finished ? nil : $0 }.map { [$0] } ?? []
         }
         guard matches.count == 1, let entry = matches.first else {
             if matches.count > 1 { onEvent(.diagnostic(event.record, "Ambiguous cancellation target")) }

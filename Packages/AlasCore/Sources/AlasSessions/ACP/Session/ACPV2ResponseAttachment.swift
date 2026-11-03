@@ -51,10 +51,16 @@ public struct ACPV2ResponseAttachment: Sendable {
                 let view = try await client.currentRawPendingRequests()
                 guard view.connectionID == identity.connectionID, view.generation == generation,
                       view.brokerID.rawValue.utf8.elementsEqual(broker.rawValue.utf8) else { return .observationLost }
-                return view.requests.contains { candidate in
-                    candidate.requestId.utf8.elementsEqual(pending.utf8) && candidate.originCursor == provenance.cursor
-                        && candidate.rawFrame?.bytes == record.frame
-                } ? .eligible : .unavailable
+                guard let requestID = try record.decodeHeader().id else { return .unavailable }
+                let origins = try view.requests.filter { candidate in
+                    guard let bytes = candidate.rawFrame?.bytes, let id = try ACPV2InboundDelivery.decodeHeader(from: bytes).id else { return false }
+                    return responseIDsEqual(id, requestID)
+                }
+                // Distinct pending keys must not grant two reply authorities
+                // for one wire ID. Completed origins are absent from this view.
+                guard origins.count == 1, let candidate = origins.first else { return .unavailable }
+                return candidate.requestId.utf8.elementsEqual(pending.utf8) && candidate.originCursor == provenance.cursor
+                    && candidate.rawFrame?.bytes == record.frame ? .eligible : .unavailable
             } catch { return .observationLost }
         default: return .unavailable
         }
