@@ -137,17 +137,27 @@ public enum VMGuestProvisioning {
     // MARK: - Setup Assistant and login
 
     /// `com.apple.SetupAssistant.plist` marking every first-login pane seen,
-    /// keyed to the guest's own macOS version.
+    /// keyed to the guest's own macOS version. macOS 27.2 also shows the
+    /// accessibility, appearance, Screen Time, iCloud storage, age range,
+    /// diagnostics and glass tint panes; these are the keys it writes once
+    /// they are dismissed.
     public static func setupAssistantPreferences(productVersion: String, buildVersion: String) -> [String: Any] {
         [
+            "DidSeeAccessibility": true,
+            "DidSeeAppearanceSetup": true,
             "DidSeeCloudSetup": true,
             "DidSeePrivacy": true,
+            "DidSeeScreenTime": true,
             "DidSeeSiriSetup": true,
             "DidSeeTouchIDSetup": true,
             "DidSeeTrueToneSetup": true,
+            "DidSeeiCloudLoginForStorageServices": true,
             "GestureMovieSeen": "none",
+            "LastSeenAgeRangeSelectionProductVersion": productVersion,
             "LastSeenBuddyBuildVersion": buildVersion,
             "LastSeenCloudProductVersion": productVersion,
+            "LastSeenDiagnosticsProductVersion": productVersion,
+            "LastSeenGlassTintUpsellProductVersion": productVersion,
         ]
     }
 
