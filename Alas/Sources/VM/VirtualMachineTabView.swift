@@ -919,7 +919,7 @@ struct VirtualMachineTabView: View {
                 result = .failure(error as? VMGuestClient.Failure ?? .stopped)
             }
             guard !Task.isCancelled else { return }
-            var differs = false
+            var differs: Bool?
             if vm.guest == .linux, case .success(let hello) = result, hello.protocolRevision == VMGuestProtocol.revision {
                 differs = await vms.linuxHelperDiffers(client)
                 guard !Task.isCancelled else { return }
@@ -927,7 +927,7 @@ struct VirtualMachineTabView: View {
             let notUpYet = switch result {
             case .failure(.helperMissing), .failure(.helperUnresponsive): true
             // This build's Linux helper that can't do computer use yet may still be starting its driver.
-            case .success where vm.guest == .linux: !differs && WorktreeVMManager.helperNeedsUpdate(result, guest: .linux)
+            case .success where vm.guest == .linux: differs != true && WorktreeVMManager.helperNeedsUpdate(result, guest: .linux)
             default: false
             }
             guard notUpYet, ContinuousClock.now < deadline else {

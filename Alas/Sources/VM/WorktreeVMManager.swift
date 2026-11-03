@@ -184,6 +184,9 @@ final class WorktreeVMManager {
     private(set) var helpersNeedingUpdate: Set<String> = []
     /// VMs whose helper `updateHelper` is reinstalling.
     private(set) var updatingHelpers: Set<String> = []
+    /// Running Linux VMs whose installed helper was last found unlike the one this build shares.
+    /// Kept until a check compares them again, the helper is updated, or the VM stops.
+    @ObservationIgnored private var linuxHelpersDiffering: Set<String> = []
     /// Why the last helper update of a VM failed, until the next one or dismissal.
     private(set) var helperUpdateFailures: [String: String] = [:]
 
@@ -1163,12 +1166,18 @@ final class WorktreeVMManager {
 
     /// Records what the guest helper of a VM running here answered: missing
     /// or unresponsive, or of another protocol revision, offers an update.
+    /// `linuxHelperDiffers` is nil from a check that didn't compare the
+    /// installed Linux helper, which keeps the last comparison.
     func noteHelperCheck(
-        _ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>, linuxHelperDiffers: Bool = false
+        _ id: String, _ result: Result<VMGuestHello, VMGuestClient.Failure>, linuxHelperDiffers: Bool? = nil
     ) {
         guard runningVMs[id] != nil else { return }
+        if let linuxHelperDiffers {
+            if linuxHelperDiffers { linuxHelpersDiffering.insert(id) } else { linuxHelpersDiffering.remove(id) }
+        }
         let guest = VMIdentity.parse(recordID: id).guest
-        if Self.helperNeedsUpdate(result, guest: guest, linuxHelperDiffers: linuxHelperDiffers) {
+        let differs = linuxHelpersDiffering.contains(id)
+        if Self.helperNeedsUpdate(result, guest: guest, linuxHelperDiffers: differs) {
             helpersNeedingUpdate.insert(id)
         } else {
             helpersNeedingUpdate.remove(id)
@@ -1244,6 +1253,7 @@ final class WorktreeVMManager {
         switch outcome {
         case .updated:
             helpersNeedingUpdate.remove(id)
+            linuxHelpersDiffering.remove(id)
         case .failed(let reason):
             helperUpdateFailures[id] = "Couldn't update the helper (\(reason)). Restart the VM and try again."
         }
@@ -1982,6 +1992,7 @@ final class WorktreeVMManager {
 
     private func didStop(_ id: String) {
         helpersNeedingUpdate.remove(id)
+        linuxHelpersDiffering.remove(id)
         startedAt.removeValue(forKey: id)
         if let client = guestClients.removeValue(forKey: id) {
             Task { await client.close() }
