@@ -1054,6 +1054,140 @@ struct ACPSessionForkAttachTests {
         }
     }
 
+    @Test("forking a detached source attaches it, then forks natively through its barrier", arguments: [false, true])
+    func detachedSourceAttachesBeforeNativeFork(targeted: Bool) async throws {
+        let store = try seededForkStore(forkPoint: Self.targetedForkPoint(.message), seedsFork: false)
+        let sourceClient = ACPMockClient()
+        scriptInitialize(sourceClient, supportsFork: true, forkPoint: "message")
+        scriptSessionResult(sourceClient, method: "session/load", sessionId: "source-remote")
+        let targetClient = durableMockClient()
+        scriptInitialize(targetClient, supportsFork: true, forkPoint: "message")
+        scriptSessionResult(
+            targetClient, method: "session/fork", sessionId: "forked-remote",
+            echo: targeted ? Self.claudeEcho : nil
+        )
+        let (manager, source, _) = try await makeManagerWithDetachedSource(
+            store: store, clients: [sourceClient, targetClient]
+        )
+
+        let target = try await manager.createFork(
+            sourceSessionID: source.id, boundary: try forkBoundary(of: source, at: targeted ? 1 : 3),
+            targetAgentID: "claude", autoRunDefault: false
+        )
+        // The source stays attached, as opening its tab would leave it.
+        #expect(manager.runners[source.id] != nil)
+        #expect(target.forkRecord?.phase == .negotiatingNative)
+
+        await manager.attach(to: target.id, freshlyCreated: true)
+
+        #expect(targetClient.sent.map(\.method) == ["initialize", "session/fork"])
+        #expect(target.forkRecord?.mechanism == .nativeACP)
+        #expect(target.forkRecord?.forkPoint?.outcome == (targeted ? .matched(Self.claudeEcho) : nil))
+    }
+
+    enum DetachedSourceAttach: String, CaseIterable, Sendable {
+        case launchFails
+        case agentLostSession
+    }
+
+    @Test(
+        "a detached source that fails to attach, or whose agent lost the session, is imported; a targeted fork says why",
+        arguments: DetachedSourceAttach.allCases, [false, true]
+    )
+    func detachedSourceThatCannotForkNativelyIsImported(attach: DetachedSourceAttach, targeted: Bool) async throws {
+        let store = try seededForkStore(forkPoint: Self.targetedForkPoint(.message), seedsFork: false)
+        let sourceClient: ACPMockClient?
+        switch attach {
+        case .launchFails:
+            sourceClient = nil
+        case .agentLostSession:
+            let client = ACPMockClient()
+            scriptInitialize(client, supportsFork: true, forkPoint: "message")
+            client.script(method: "session/load") { _ in
+                throw ACPClientError.jsonrpc(.init(code: -32002, message: "Session not found", data: nil))
+            }
+            scriptSessionResult(client, method: "session/new", sessionId: "fresh-source-remote")
+            sourceClient = client
+        }
+        let (manager, source, launches) = try await makeManagerWithDetachedSource(store: store, clients: [sourceClient])
+        // What the agent reported when it was attached earlier this launch.
+        source.sessionCapabilities = .init(fork: .init())
+        source.forkPoint = .init(boundary: .message)
+
+        let target = try await manager.createFork(
+            sourceSessionID: source.id, boundary: try forkBoundary(of: source, at: targeted ? 1 : 3),
+            targetAgentID: "claude", autoRunDefault: false
+        )
+
+        #expect(launches.count == 1)
+        let saved = try #require(try store.loadFork(targetSessionID: target.id))
+        #expect(saved.phase == .ready)
+        #expect(saved.mechanism == .transcriptTransfer)
+        #expect(saved.contextDeliveryPending)
+        #expect(saved.forkPoint?.outcome == (targeted ? .unmatched(.unavailable) : nil))
+        #expect(target.forkRecord == saved)
+        switch attach {
+        case .launchFails:
+            // Nothing half-attached holds the source.
+            #expect(manager.runners[source.id] == nil)
+            #expect(try store.loadLease(sessionId: source.id) == nil)
+        case .agentLostSession:
+            #expect(source.remoteSessionId == "fresh-source-remote")
+        }
+    }
+
+    @Test("a detached source another live instance holds starts no agent and isn't forked")
+    func detachedSourceHeldElsewhereStartsNoAgent() async throws {
+        let store = try seededForkStore(forkPoint: Self.targetedForkPoint(.message), seedsFork: false)
+        let (manager, source, launches) = try await makeManagerWithDetachedSource(store: store, clients: [])
+        #expect(try store.claimLease(
+            sessionId: source.id, instanceId: "other-instance", pid: Int64(getpid()),
+            now: Int64(Date().timeIntervalSince1970), staleAfter: ACPSessionManager.leaseStaleAfter
+        ))
+
+        await #expect(throws: ACPSessionForkCreationError.sourceReadOnly) {
+            try await manager.createFork(
+                sourceSessionID: source.id, boundary: try forkBoundary(of: source, at: 3),
+                targetAgentID: "claude", autoRunDefault: false
+            )
+        }
+
+        #expect(launches.count == 0)
+        #expect(manager.runners[source.id] == nil)
+        #expect(manager.isMirror(sessionId: source.id))
+    }
+
+    enum IneligibleFork: String, CaseIterable, Sendable {
+        case otherAgent
+        case noForkSupport
+        case noForkPointSupport
+    }
+
+    @Test("a fork that can't be native doesn't start its detached source's agent", arguments: IneligibleFork.allCases)
+    func ineligibleForkLeavesSourceDetached(fork: IneligibleFork) async throws {
+        let store = try seededForkStore(forkPoint: Self.targetedForkPoint(.message), seedsFork: false)
+        let (manager, source, launches) = try await makeManagerWithDetachedSource(store: store, clients: [])
+        switch fork {
+        case .otherAgent:
+            break
+        case .noForkSupport:
+            source.sessionCapabilities = .init()
+        case .noForkPointSupport:
+            source.sessionCapabilities = .init(fork: .init())
+        }
+
+        let target = try await manager.createFork(
+            sourceSessionID: source.id,
+            boundary: try forkBoundary(of: source, at: fork == .noForkPointSupport ? 1 : 3),
+            targetAgentID: fork == .otherAgent ? "codex" : "claude",
+            autoRunDefault: false
+        )
+
+        #expect(launches.count == 0)
+        #expect(manager.runners[source.id] == nil)
+        #expect(target.forkRecord?.mechanism == .transcriptTransfer)
+    }
+
     private func nativeForkOperationKey() async throws -> String? {
         let store = try seededForkStore()
         let client = durableMockClient()
@@ -1075,11 +1209,12 @@ struct ACPSessionForkAttachTests {
     }
 
     /// A fork of a one-row source at its head, or, with `forkPoint`, a fork
-    /// of `[u, a1, u2, a2]` cut at `a1`.
+    /// of `[u, a1, u2, a2]` cut at `a1`. Without `seedsFork`, only the source.
     private func seededForkStore(
         sourceRemoteSessionID: String = "source-remote",
         agentId: String = "claude",
-        forkPoint: ACPSessionForkPoint? = nil
+        forkPoint: ACPSessionForkPoint? = nil,
+        seedsFork: Bool = true
     ) throws -> ACPSessionStore {
         let store = try ACPSessionStore(path: tmpStorePath())
         try store.upsertSession(row(
@@ -1105,6 +1240,7 @@ struct ACPSessionForkAttachTests {
                 createdAt: Int64(index)
             )
         }
+        guard seedsFork else { return store }
         let inherited = forkPoint == nil ? [] : try ACPSessionForkSnapshot(
             sourceBoundarySequence: 1,
             messages: [
@@ -1206,6 +1342,44 @@ struct ACPSessionForkAttachTests {
         await manager.attach(to: source.id, freshlyCreated: false)
         #expect(manager.runners[source.id] != nil)
         return manager
+    }
+
+    /// A manager whose source is hydrated but not attached, as after a relaunch
+    /// before its tab reattaches. Each launch takes the next client; a nil
+    /// client, or none left, fails the launch.
+    private func makeManagerWithDetachedSource(
+        store: ACPSessionStore,
+        clients: [ACPMockClient?]
+    ) async throws -> (ACPSessionManager, ACPSession, LaunchCount) {
+        let launches = LaunchCount()
+        var clients = clients
+        let manager = ACPSessionManager(
+            worktreeId: "wt",
+            worktreePath: "/tmp/wt",
+            store: store,
+            setupEvaluator: { _ in .ready },
+            connectionFactory: { _, _, _ in
+                launches.count += 1
+                guard !clients.isEmpty, let client = clients.removeFirst() else { throw ForkSourceLaunchFailure() }
+                return ACPConnection(client: client)
+            }
+        )
+        let source = try #require(manager.placeholderSession(id: "source"))
+        await manager.hydrateIfNeeded(id: source.id)
+        await manager.awaitBackfill(id: source.id)
+        #expect(manager.runners[source.id] == nil)
+        return (manager, source, launches)
+    }
+
+    private final class LaunchCount {
+        var count = 0
+    }
+
+    private struct ForkSourceLaunchFailure: Error {}
+
+    private func forkBoundary(of session: ACPSession, at index: Int) throws -> ACPForkMessageBoundary {
+        let message = session.transcript.messages[index]
+        return .init(stableID: message.stableId, kind: try #require(message.forkBoundaryKind))
     }
 
     private func makeManagerWithAttachedBrokerSource<Service: ACPBrokerServicing>(
