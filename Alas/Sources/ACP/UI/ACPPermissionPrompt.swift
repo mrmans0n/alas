@@ -449,6 +449,8 @@ struct ACPPlanReviewCard: View {
     let onOpenFile: ((String) -> Void)?
     let onChoose: (ACPPermissionCardContent.Option) -> Void
     @Environment(\.theme) private var theme
+    @State private var planHeight: CGFloat = 0
+    private static let maxPlanHeight: CGFloat = 360
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -510,13 +512,18 @@ struct ACPPlanReviewCard: View {
     @ViewBuilder
     private var planBody: some View {
         if review.hasPlanText, let text = review.planText {
-            // Plain while it fits, so a short plan stays compact; a
-            // ScrollView would take the whole cap.
-            ViewThatFits(in: .vertical) {
-                ACPMarkdownText(raw: text, typography: .default)
-                ScrollView { ACPMarkdownText(raw: text, typography: .default) }
+            // The transcript row is measured at its ideal height, which never
+            // bounds the proposal, so the cap is decided from the plan's own
+            // measured height: plain while it fits, scrolling past it.
+            let markdown = ACPMarkdownText(raw: text, typography: .default)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { planHeight = $0 }
+            if planHeight > Self.maxPlanHeight {
+                ScrollView { markdown }
+                    .frame(height: Self.maxPlanHeight)
+            } else {
+                markdown
             }
-            .frame(maxHeight: 360)
         } else {
             Text(ACPPlanReviewPresentation.noPlanTextNotice)
                 .font(.system(size: 12))
