@@ -59,7 +59,7 @@ struct ACPRequestAnswersTests {
         #expect(review?.persistScope == nil)
         let codex = ACPRequestAnswers.permission(pending(toolCallId: "plan-review:item_1", kind: nil), optionId: "keep", scope: scope)
         #expect(codex?.persistScope == nil)
-        let ordinary = ACPRequestAnswers.permission(pending(toolCallId: "toolu_2", kind: "execute"), optionId: "keep", scope: .optionDefault)
-        #expect(ordinary?.persistScope == .project)
+        let ordinary = ACPRequestAnswers.permission(pending(toolCallId: "toolu_2", kind: "execute"), optionId: "keep", scope: scope)
+        #expect(ordinary?.persistScope == (scope == .session ? .session : .project))
     }
 }

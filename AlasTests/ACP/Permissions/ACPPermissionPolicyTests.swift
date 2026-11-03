@@ -191,10 +191,7 @@ struct ACPPermissionPolicyTests {
             options: opts
         )
         async let decision = policy.evaluate(scopeKey: "tool:Read", options: opts, params: params, requestID: .number(1))
-        let deadline = ContinuousClock.now + .seconds(5)
-        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
-            await Task.yield()
-        }
+        await waitForPendingPermission(session)
         #expect(session.transcript.pendingPermission != nil)
         // The parked prompt must not offer the persistent allow either.
         #expect(session.transcript.pendingPermission?.params.options.map(\.kind) == ["reject_once"])
@@ -253,10 +250,7 @@ struct ACPPermissionPolicyTests {
         let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
         async let decision = policy.evaluate(
             scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
-        let deadline = ContinuousClock.now + .seconds(5)
-        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        await waitForPendingPermission(session)
 
         let answered = await policy.userDecided(
             scopeKey: "tool:bash", optionId: "allow", decision: .allow, persistScope: .session,
@@ -283,10 +277,7 @@ struct ACPPermissionPolicyTests {
         let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
         async let first = policy.evaluate(
             scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
-        let deadline = ContinuousClock.now + .seconds(5)
-        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        await waitForPendingPermission(session)
 
         await policy.userDecided(
             scopeKey: "tool:bash", optionId: "allow", decision: .allow, persistScope: .session)
@@ -304,10 +295,7 @@ struct ACPPermissionPolicyTests {
         let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
         async let decision = policy.evaluate(
             scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
-        let deadline = ContinuousClock.now + .seconds(5)
-        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
-            try await Task.sleep(for: .milliseconds(5))
-        }
+        await waitForPendingPermission(session)
 
         // `$/cancel_request` lands while the answer is still on its way.
         let answered = await policy.userDecided(
@@ -347,10 +335,7 @@ struct ACPPermissionPolicyTests {
         let opts: [ACPPermissionOption] = [.init(optionId: "allow", name: "Allow", kind: "allow_once")]
         async let decision = policy.evaluate(
             scopeKey: "tool:bash", options: opts, params: stubParams(), requestID: .number(7))
-        let deadline = ContinuousClock.now + .seconds(5)
-        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
-            await Task.yield()
-        }
+        await waitForPendingPermission(session)
         #expect(session.transcript.streamingState == .awaitingPermission)
 
         await policy.userDecided(scopeKey: "tool:bash", optionId: "allow", decision: .allow, persistScope: nil)
