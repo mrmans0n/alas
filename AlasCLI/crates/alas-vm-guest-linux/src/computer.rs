@@ -469,6 +469,8 @@ pub struct Computer<D: Driver> {
     /// The app of each pid named so far.
     identities: HashMap<u64, App>,
     canceller: Canceller,
+    /// Whether the current action went to the front after Cua refused it in the background.
+    went_foreground: bool,
 }
 
 impl<D: Driver> Computer<D> {
@@ -484,6 +486,7 @@ impl<D: Driver> Computer<D> {
             apps: None,
             identities: HashMap::new(),
             canceller: Canceller::default(),
+            went_foreground: false,
         }
     }
 
@@ -613,7 +616,13 @@ impl<D: Driver> Computer<D> {
                 payload["elements"] = Value::Array(read.elements);
             }
             _ => {
-                let delivery = self.input(action, params, call, &window)?;
+                self.went_foreground = false;
+                let input = self.input(action, params, call, &window)?;
+                let delivery = if self.went_foreground {
+                    "activation"
+                } else {
+                    input
+                };
                 self.clock.sleep(SETTLE_DELAY);
                 call.check()?;
                 payload["action"] = json!(action);
@@ -928,10 +937,6 @@ impl<D: Driver> Computer<D> {
         window: &Window,
     ) -> Result<&'static str, String> {
         let target = json!({"pid": window.pid, "window_id": window.id});
-        let foreground = |mut args: Value| {
-            args["delivery_mode"] = json!("foreground");
-            args
-        };
         match action {
             "click" => {
                 let button = params.button.as_deref().unwrap_or("left");
@@ -1206,6 +1211,21 @@ impl<D: Driver> Computer<D> {
         self.sessions.entry(session.to_string()).or_default()
     }
 
+    fn driver_call(
+        &mut self,
+        tool: &str,
+        args: Value,
+        timeout: Duration,
+        failed: &dyn Fn(&str) -> String,
+    ) -> Result<CuaResult, String> {
+        match self.driver.call(tool, args, timeout) {
+            Ok(result) => Ok(result),
+            Err(CuaError::Unavailable(_)) => Err(message::UNAVAILABLE.to_string()),
+            Err(CuaError::Timeout) => Err(failed("Cua Driver didn't answer in time.")),
+            Err(CuaError::Exited) => Err(failed("Cua Driver stopped before answering.")),
+        }
+    }
+
     /// Calls a Cua tool and maps a failure to the macOS error it stands for.
     fn cua(
         &mut self,
@@ -1221,12 +1241,23 @@ impl<D: Driver> Computer<D> {
             Kind::Input { .. } => message::action_failed(reason),
             Kind::Launch(open) => message::open_failed(open),
         };
-        let result = match self.driver.call(tool, args, timeout) {
-            Ok(result) => result,
-            Err(CuaError::Unavailable(_)) => return Err(message::UNAVAILABLE.to_string()),
-            Err(CuaError::Timeout) => return Err(failed("Cua Driver didn't answer in time.")),
-            Err(CuaError::Exited) => return Err(failed("Cua Driver stopped before answering.")),
-        };
+        let mut result = self.driver_call(tool, args.clone(), timeout, &failed)?;
+        // Chromium and Electron take input only at the front: Cua refuses it in the background
+        // and says to go to the front, which macOS input does anyway.
+        if matches!(kind, Kind::Input { .. })
+            && args.get("delivery_mode").is_none()
+            && result.structured.get("code").and_then(Value::as_str)
+                == Some("background_unavailable")
+            && result
+                .structured
+                .pointer("/escalation/recommended")
+                .and_then(Value::as_str)
+                == Some("foreground")
+        {
+            call.check()?;
+            result = self.driver_call(tool, foreground(args), timeout, &failed)?;
+            self.went_foreground = !result.is_error;
+        }
         if !result.is_error {
             return Ok(result);
         }
@@ -1453,6 +1484,12 @@ fn named_key(name: &str) -> Option<&'static str> {
         "f12" => "F12",
         _ => return None,
     })
+}
+
+/// `args` with Cua's foreground delivery: the window is activated and gets real input.
+fn foreground(mut args: Value) -> Value {
+    args["delivery_mode"] = json!("foreground");
+    args
 }
 
 /// What the field reads after Cua's targeted insert of `chunk` beyond ASCII left only part of it:
@@ -2155,6 +2192,37 @@ pub(crate) mod tests {
                 assert_eq!(payload(&response)["delivery"], "ax", "{text}");
             }
         }
+    }
+
+    /// Chromium takes input only at the front: Cua refuses it in the background and says to go
+    /// there, so the call goes again in the foreground.
+    #[test]
+    fn input_refused_in_the_background_goes_to_the_front() {
+        let fake = Fake::mousepad();
+        fake.script("get_window_state", vec![fixture("gws_elements")]);
+        let refused = fixture_with("type_fg", |result| {
+            result["isError"] = json!(true);
+            result["structuredContent"] = json!({
+                "code": "background_unavailable",
+                "escalation": {"recommended": "foreground"},
+            });
+        });
+        fake.script("type_text", vec![refused, fixture("type_fg")]);
+        let mut computer = new_computer(&fake);
+        inspect(&mut computer, None);
+
+        let result = payload(&computer.perform(
+            SESSION,
+            &request(
+                "type",
+                json!({"window_id": WINDOW, "ref": "e7", "text": "hi"}),
+            ),
+        ));
+
+        let at =
+            json!({"pid": PID, "window_id": WINDOW, "element_token": "s00000002:17", "text": "hi"});
+        assert_eq!(fake.calls("type_text"), vec![at.clone(), foreground(at)]);
+        assert_eq!(result["delivery"], "activation");
     }
 
     /// Long text goes in calls of at most 256 characters, never splitting an accent from its
