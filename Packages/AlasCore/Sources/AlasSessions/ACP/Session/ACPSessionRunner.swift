@@ -184,6 +184,8 @@ public final class ACPSessionRunner {
     /// — so each consumer checks and drains this set before starting work
     /// on a freshly dequeued id, instead of the id being silently dropped.
     private var pendingCancelledRequestIDs: Set<JSONRPCID> = []
+    /// Reads a parked plan review's plan file on this session's host.
+    var planFileReader = ACPPlanFileReader()
     private var authStatusTask: Task<Void, Never>?
     package var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
@@ -694,6 +696,13 @@ public final class ACPSessionRunner {
                     // presentation is silently lost.
                     await self.persistPermissionDecision(params: params, response: response)
                     continue
+                }
+                if params.toolCall.isPlanReview, self.session.planFile != nil,
+                   let path = ACPPlanFilePayload.from(metadata: params.toolCall.metadata)
+                       .flatMap({ $0.isWellFormed ? $0.path : nil }) {
+                    // Runs once evaluate below has parked the review, which
+                    // it does before its first suspension.
+                    Task { await self.refreshPlanReviewFile(id: id, toolCallId: params.toolCall.toolCallId, path: path) }
                 }
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(
@@ -5889,6 +5898,17 @@ extension ACPSessionRunner {
         trimLastPersistedPayloads()
         onPersist?()
         onMessageActivity?()
+    }
+
+    /// Reads the plan file a parked plan review names, at exactly its
+    /// payload path, and records the outcome only while that review is still
+    /// the one parked.
+    private func refreshPlanReviewFile(id: JSONRPCID, toolCallId: String, path: String) async {
+        let result = await planFileReader.read(path: path, host: effectiveRemoteHost())
+        guard policy.pendingPermissionRequestID == id,
+              session.transcript.pendingPermission?.params.toolCall.toolCallId == toolCallId
+        else { return }
+        session.planReviewFiles[toolCallId] = result
     }
 
     private func effectiveRemoteHost() -> String? {

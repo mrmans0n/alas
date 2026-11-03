@@ -461,4 +461,94 @@ struct ACPRemoteFileServerTests {
 
         #expect(result.exitCode == 7)
     }
+
+    // MARK: - Plan file reads
+
+    /// How each plan file read sets up its file and what it should report.
+    /// Local rows use a real temp file; remote rows inject the fetch.
+    enum PlanFileRow: String, CaseIterable, Sendable {
+        case localFile, localSymlink, localDirectory, localMissing, localTooLarge, localNotUTF8, relativePath
+        case remoteFile, remoteTooLarge, remoteUnreachable, remoteUnreadable
+    }
+
+    private final class FetchRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var calls: [(host: String?, maxBytes: Int)] = []
+        func record(_ host: String?, _ maxBytes: Int) { lock.withLock { calls.append((host, maxBytes)) } }
+        var recorded: [(host: String?, maxBytes: Int)] { lock.withLock { calls } }
+    }
+
+    @Test(arguments: PlanFileRow.allCases)
+    func planFileReadOutcomes(_ row: PlanFileRow) async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("alas-plan-file-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let text = "# Plan\n"
+        let plan = root.appendingPathComponent("plan.md")
+        let recorder = FetchRecorder()
+        func remote(_ outcome: Result<RemoteReadResult, RemoteFileAccessError>) -> ACPPlanFileReader {
+            ACPPlanFileReader { host, _, maxBytes in
+                recorder.record(host, maxBytes)
+                return try outcome.get()
+            }
+        }
+
+        let result: ACPPlanFileReadResult
+        switch row {
+        case .localFile:
+            try text.write(to: plan, atomically: true, encoding: .utf8)
+            result = await ACPPlanFileReader().read(path: plan.path, host: nil)
+        case .localSymlink:
+            try text.write(to: plan, atomically: true, encoding: .utf8)
+            let link = root.appendingPathComponent("link.md")
+            try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: plan.path)
+            result = await ACPPlanFileReader().read(path: link.path, host: nil)
+        case .localDirectory:
+            result = await ACPPlanFileReader().read(path: root.path, host: nil)
+        case .localMissing:
+            result = await ACPPlanFileReader().read(path: plan.path, host: nil)
+        case .localTooLarge:
+            try Data(repeating: 0x61, count: ACPPlanFileReader.maxBytes + 1).write(to: plan)
+            result = await ACPPlanFileReader().read(path: plan.path, host: nil)
+        case .localNotUTF8:
+            try Data([0xFF, 0xFE]).write(to: plan)
+            result = await ACPPlanFileReader().read(path: plan.path, host: nil)
+        case .relativePath:
+            result = await ACPPlanFileReader().read(path: "plan.md", host: nil)
+        case .remoteFile:
+            result = await remote(.success(.file(data: Data(text.utf8), mtime: Date()))).read(path: "/home/u/plan.md", host: "box")
+            #expect(recorder.recorded.map(\.host) == ["box"])
+            #expect(recorder.recorded.map(\.maxBytes) == [1_048_576])
+        case .remoteTooLarge:
+            result = await remote(.failure(.fileTooLarge)).read(path: "/home/u/plan.md", host: "box")
+        case .remoteUnreachable:
+            result = await remote(.failure(.connectionFailed("x"))).read(path: "/home/u/plan.md", host: "box")
+        case .remoteUnreadable:
+            result = await remote(.success(.unreadable("denied"))).read(path: "/home/u/plan.md", host: "box")
+        }
+
+        switch row {
+        case .localFile, .remoteFile:
+            guard case .file(let read, let digest, _) = result else {
+                Issue.record("expected a file, got \(result)")
+                return
+            }
+            #expect(read == text)
+            #expect(digest == ACPPlanReviewPresentation.sha256Hex(text))
+        case .localSymlink, .localDirectory, .relativePath:
+            #expect(result == .notRegularFile)
+        case .localMissing:
+            #expect(result == .missing)
+        case .localTooLarge, .remoteTooLarge:
+            #expect(result == .tooLarge)
+        case .localNotUTF8:
+            #expect(result == .notUTF8)
+        case .remoteUnreachable, .remoteUnreadable:
+            guard case .unreachable = result else {
+                Issue.record("expected unreachable, got \(result)")
+                return
+            }
+        }
+    }
 }
