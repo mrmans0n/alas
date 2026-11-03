@@ -7,6 +7,7 @@ import AlasCode
 
 public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sendable {
     private let transport: JSONRPCStdioTransporting
+    private let bootstrapClaims = ACPV2BootstrapClaims()
     private let v2Replies = ACPV2StdioReplyState()
     private let v2InboundCont: AsyncStream<ACPV2InboundDelivery>.Continuation
     private let rawRPCDiagnosticsCont: AsyncStream<ACPRawRPCDelivery>.Continuation
@@ -630,6 +631,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         _ request: ACPRequest,
         onRequestHandoff: @Sendable () -> Void
     ) async throws -> ACPResponse {
+        try bootstrapClaims.external(request.method)
         let id = nextRequestID()
 
         let body = try Self.encode(envelopeFor: request, id: id)
@@ -660,6 +662,53 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
         }
     }
 
+    public func claimV2Bootstrap() throws -> ACPV2BootstrapClaim {
+        guard sessionUpdateProtocolVersion == .v2, transport is any JSONRPCFrameWriting,
+              stateLock.withLock({ !didDrainPending }) else { throw ACPV2BootstrapClaimError.unavailable }
+        return try bootstrapClaims.claim()
+    }
+
+    public func sendV2Bootstrap(_ value: ACPV2BootstrapRequest, claim: ACPV2BootstrapClaim, operationKey: String? = nil,
+        authorize: @escaping @Sendable () -> Bool) async throws -> ACPResponse {
+        guard let writer = transport as? any JSONRPCFrameWriting else { throw ACPV2BootstrapClaimError.unavailable }
+        try bootstrapClaims.begin(claim, method: value.method)
+        let id = nextRequestID()
+        let body = try Self.encode(envelopeFor: value.request(operationKey: operationKey), id: id)
+        let gate = ACPV2PromptHandoffGate()
+        return try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await withCheckedThrowingContinuation { continuation in
+                stateLock.lock()
+                guard !didDrainPending, !Task.isCancelled, gate.isValid else {
+                    stateLock.unlock()
+                    continuation.resume(throwing: ACPV2BootstrapClaimError.invalidated)
+                    return
+                }
+                pending[id] = Pending(method: value.method, continuation: continuation)
+                stateLock.unlock()
+                Task {
+                    let result = await writer.writeFrame(body, authorize: {
+                        do {
+                            try claim.check()
+                            guard authorize() else { return false }
+                            try claim.check()
+                            try gate.claim()
+                            return true
+                        } catch { return false }
+                    })
+                    switch result {
+                    case .written: break // Only the actual response settles success.
+                    case .notWritten: self.cancelPreparedPrompt(id: id, error: ACPV2BootstrapClaimError.invalidated)
+                    case .writeUncertain(let message): self.cancelPreparedPrompt(id: id, error: ACPV2BootstrapClaimError.writeUncertain(message))
+                    }
+                }
+            }
+        } onCancel: {
+            gate.invalidate()
+            self.cancelPreparedPrompt(id: id, error: CancellationError())
+        }
+    }
+
     /// Historical or caller-created deliveries never populate the capture registry.
     public func canRespondToV2Request(_ delivery: ACPV2InboundDelivery) -> Bool {
         guard sessionUpdateProtocolVersion == .v2, transport is any JSONRPCFrameWriting,
@@ -687,6 +736,7 @@ public final class ACPStdioClient: ACPClient, ACPV2PromptSending, @unchecked Sen
     public func sendV2Prompt(_ params: ACPSessionPromptParams, operationKey: ACPBrokerOperationKey?,
         gate: ACPV2PromptHandoffGate,
         prepare: @escaping @Sendable (ACPV2PreparedPrompt) async throws -> Void) async throws -> ACPResponse {
+        try bootstrapClaims.external("session/prompt")
         guard let endpoint = v2PromptEndpoint else { throw ACPV2PromptDispatchError.unsupported }
         let id = nextRequestID()
         let body = try Self.encode(envelopeFor: ACPRequest(method: "session/prompt", params: params), id: id)

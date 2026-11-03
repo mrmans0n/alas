@@ -189,6 +189,10 @@ public actor ACPSessionPersistence: SessionSummaryStoring {
         } ?? false
     }
 
+    public func bindV2FreshSession(upstreamSessionId: String, source: ACPV2InboundLedgerSource,
+        fence: ACPSessionLeaseFence) throws -> ACPV2FreshSessionBinding {
+        try openedStore().bindV2FreshSession(upstreamSessionId: upstreamSessionId, source: source, fence: fence)
+    }
     public func registerV2UpdateJournal(sessionId: String, upstreamSessionId: String,
         source: ACPV2UpdateJournalSource, fence: ACPSessionLeaseFence) throws -> ACPV2UpdateJournalStream {
         try openedStore().registerV2UpdateJournal(sessionId: sessionId, upstreamSessionId: upstreamSessionId, source: source, fence: fence)

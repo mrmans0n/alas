@@ -87,6 +87,8 @@ actor ACPRawBrokerTransport {
     private var protected: Set<ACPBrokerEventCursor> = []
     private var completions: [ACPBrokerOperationKey: [(outcome: ACPBrokerRPCOutcome, cursor: ACPBrokerEventCursor)]] = [:]
     private var awaiting: [ACPBrokerOperationKey: Int] = [:]
+    private let bootstrapClaims = ACPV2BootstrapClaims()
+    private var bootstrapOpened: ACPBrokerOpenResult?
     private var initializeCache: ACPBrokerRawJSONPayload?
     private var sessionCache: ACPBrokerRawJSONPayload?
     private var terminated = false
@@ -146,6 +148,9 @@ actor ACPRawBrokerTransport {
             await endAttachment(generation: opened.snapshot.metadata.generation, close: requestedClose ?? false)
             throw CancellationError()
         }
+        if !opened.adopted, opened.snapshot.operations.isEmpty,
+           opened.snapshot.initializeRawResponse == nil, opened.snapshot.remoteSessionRawResponse == nil,
+           opened.snapshot.acknowledgedCursor.rawValue == 0 { bootstrapOpened = opened }
         generation = opened.snapshot.metadata.generation
         summary.withLock { $0.generation = generation
         $0.adopted = opened.adopted }
@@ -354,10 +359,22 @@ actor ACPRawBrokerTransport {
         })
     }
 
-    func send(method: String, params: ACPBrokerJSONValue, operationKey: String?,
+    func claimBootstrap(opened: ACPBrokerOpenResult) throws -> ACPV2BootstrapClaim {
+        guard !terminated, let actual = bootstrapOpened, actual == opened,
+              !actual.adopted, actual.snapshot.initializeRawResponse == nil,
+              actual.snapshot.remoteSessionRawResponse == nil, actual.snapshot.operations.isEmpty,
+              actual.snapshot.acknowledgedCursor.rawValue == 0 else { throw ACPV2BootstrapClaimError.unavailable }
+        let claim = try bootstrapClaims.claim()
+        bootstrapOpened = nil
+        return claim
+    }
+
+    func send(method: String, params: ACPBrokerJSONValue, operationKey: String?, bootstrapClaim: ACPV2BootstrapClaim? = nil,
               before: @Sendable (ACPBrokerGeneration?) async throws -> Void,
               handoff: @Sendable () throws -> Void) async throws -> ACPResponse {
         guard !terminated, let generation else { throw ACPClientError.notRunning }
+        if let bootstrapClaim { try bootstrapClaims.begin(bootstrapClaim, method: method) }
+        else { try bootstrapClaims.external(method) }
         try await before(generation)
         guard !terminated else { throw CancellationError() }
         try handoff()

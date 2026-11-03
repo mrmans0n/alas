@@ -125,6 +125,11 @@ public final class ACPV2AttachmentRuntime {
         input?.finish()
     }
 
+    public func establishFreshSessionDefault() throws {
+        guard !started, current() else { throw Failure.invalidated }
+        try updateOwner.establishFreshSessionDefault()
+    }
+
     @discardableResult
     public func start() -> Bool {
         guard !started, current() else { return false }
