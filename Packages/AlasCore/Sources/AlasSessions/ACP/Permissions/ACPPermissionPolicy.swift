@@ -74,6 +74,12 @@ public final class ACPPermissionPolicy {
                 )
             )
         }
+        // A plan review always asks: its "allow" options choose how the plan
+        // runs, and one remembered answer would approve every later plan.
+        if params.toolCall.isPlanReview {
+            if cancelledBeforeParked { return .init(outcome: .cancelled) }
+            return await awaitUserDecision(scopeKey: scopeKey, params: params)
+        }
         if session.autoRunEnabled, let allow = options.first(where: { $0.kind.hasPrefix("allow") }) {
             return .init(outcome: .selected(optionId: allow.optionId))
         }
@@ -102,6 +108,8 @@ public final class ACPPermissionPolicy {
     private var pendingContinuation: CheckedContinuation<ACPPermissionResponse, Never>?
     private var pendingRequestID: JSONRPCID?
     private var cancelledBeforeParked = false
+    /// Whether the parked request is a plan review, which is never remembered.
+    private var parkedPlanReview = false
     /// Remembered answers this policy delivered, so the agent's next request
     /// gets them at once rather than only after their record lands.
     private var deliveredDecisions: [String: ACPPermissionDecision] = [:]
@@ -120,6 +128,7 @@ public final class ACPPermissionPolicy {
     }
 
     private func awaitUserDecision(scopeKey: String, params: ACPPermissionRequestParams) async -> ACPPermissionResponse {
+        parkedPlanReview = params.toolCall.isPlanReview
         session.transcript.streamingState = .awaitingPermission
         session.transcript.pendingPermission = .init(id: .number(0), params: params)
         if let requestID = pendingRequestID {
@@ -170,12 +179,15 @@ public final class ACPPermissionPolicy {
         scopeKey: String,
         optionId: String,
         decision: ACPPermissionDecision,
-        persistScope: ACPPermissionScopeKind?,
+        persistScope requestedScope: ACPPermissionScopeKind?,
         stillAuthorized: (@MainActor () async -> Bool)? = nil
     ) async -> Bool {
         let wasPending = pendingContinuation != nil || session.transcript.pendingPermission != nil
         let cont = pendingContinuation
         pendingContinuation = nil
+        // Read before anything clears the parked request.
+        let persistScope = parkedPlanReview ? nil : requestedScope
+        parkedPlanReview = false
         session.transcript.pendingPermission = nil
         // A background child can ask after its parent's turn settled, so the
         // answer must not claim a turn that is no longer running.

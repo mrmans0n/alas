@@ -247,3 +247,10 @@ public struct ACPPermissionResponse: Codable, Equatable, Sendable {
         self.outcome = outcome
     }
 }
+
+extension ACPPermissionToolCall {
+    /// ExitPlanMode or a Codex plan review: never remembered, never auto-answered.
+    public var isPlanReview: Bool {
+        kind == "switch_mode" || toolCallId.hasPrefix("plan-review:")
+    }
+}

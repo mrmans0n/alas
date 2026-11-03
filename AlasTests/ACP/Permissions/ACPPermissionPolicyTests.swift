@@ -28,6 +28,84 @@ struct ACPPermissionPolicyTests {
         #expect(resp.outcome == .selected(optionId: "allow"))
     }
 
+    private func planReviewParams(
+        toolCallId: String = "toolu_1",
+        title: String = "Approve Plan",
+        kind: String? = "switch_mode"
+    ) -> (options: [ACPPermissionOption], params: ACPPermissionRequestParams) {
+        let options: [ACPPermissionOption] = [
+            .init(optionId: "clear", name: "Yes, clear context", kind: "allow_always"),
+            .init(optionId: "keep", name: "Yes, keep context", kind: "allow_always"),
+            .init(optionId: "default", name: "Yes, manual", kind: "allow_once"),
+            .init(optionId: "reject", name: "No", kind: "reject_once")
+        ]
+        return (options, ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: .init(toolCallId: toolCallId, title: title, kind: kind),
+            options: options
+        ))
+    }
+
+    private func waitForPendingPermission(_ session: ACPSession) async {
+        let deadline = ContinuousClock.now + .seconds(5)
+        while session.transcript.pendingPermission == nil, ContinuousClock.now < deadline {
+            await Task.yield()
+        }
+    }
+
+    @Test(
+        "a plan review ignores a remembered decision and asks",
+        arguments: [
+            ("Approve Plan", "toolu_1", "switch_mode"),
+            ("Implement this plan?", "plan-review:item_1", "switch_mode"),
+            ("Approve Plan", "plan-review:item_2", nil),
+        ] as [(String, String, String?)]
+    )
+    func planReviewIgnoresDecisionLog(title: String, toolCallId: String, kind: String?) async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let log = ACPPermissionDecisionLog(store: try makeStore())
+        try await log.record(sessionId: "s", scopeKey: "tool:\(title)", decision: .allow, scope: .project)
+        let policy = ACPPermissionPolicy(session: session, log: log)
+        let (options, params) = planReviewParams(toolCallId: toolCallId, title: title, kind: kind)
+        async let decision = policy.evaluate(scopeKey: "tool:\(title)", options: options, params: params, requestID: .number(1))
+        await waitForPendingPermission(session)
+        #expect(session.transcript.pendingPermission != nil)
+        policy.userCancelled()
+        #expect(await decision.outcome == .cancelled)
+    }
+
+    @Test("auto-run never approves a plan review")
+    func planReviewNeverAutoRuns() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        session.autoRunEnabled = true
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        let (options, params) = planReviewParams()
+        async let decision = policy.evaluate(scopeKey: "tool:Approve Plan", options: options, params: params, requestID: .number(1))
+        await waitForPendingPermission(session)
+        #expect(session.transcript.pendingPermission != nil)
+        policy.userCancelled()
+        #expect(await decision.outcome == .cancelled)
+    }
+
+    @Test("an always-allow answer to a plan review acts once")
+    func planReviewAllowAlwaysActsOnce() async throws {
+        let session = ACPSession(id: "s", agentId: "claude", worktreeId: "wt", title: "t")
+        let log = ACPPermissionDecisionLog(store: try makeStore())
+        let policy = ACPPermissionPolicy(session: session, log: log)
+        let (options, params) = planReviewParams()
+        async let first = policy.evaluate(scopeKey: "tool:Approve Plan", options: options, params: params, requestID: .number(1))
+        await waitForPendingPermission(session)
+        await policy.userDecided(scopeKey: "tool:Approve Plan", optionId: "keep", decision: .allow, persistScope: .project)
+        #expect(await first.outcome == .selected(optionId: "keep"))
+        #expect(try await log.lookup(sessionId: "s", scopeKey: "tool:Approve Plan") == nil)
+
+        async let second = policy.evaluate(scopeKey: "tool:Approve Plan", options: options, params: params, requestID: .number(2))
+        await waitForPendingPermission(session)
+        #expect(session.transcript.pendingPermission != nil)
+        policy.userCancelled()
+        #expect(await second.outcome == .cancelled)
+    }
+
     @Test("logged session-scope decision is replayed without UI")
     func remembered() async throws {
         let store = try makeStore()
