@@ -516,6 +516,14 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let isHeldByUsageLimit: Bool
         }
 
+        /// The pending approval card's inputs: the request plus the row's
+        /// diffs it previews when the request carries none (Codex).
+        private struct PendingPermissionTokenInputs: Equatable {
+            let pending: ACPSession.PendingPermission
+            let rowDiffs: [ACPToolCallDiff]?
+            let worktreeRoot: String?
+        }
+
         private struct ConnectionRecoveryTokenInputs: Equatable {
             let state: ACPConnectionRecoveryState
             let agentState: ACPSession.AgentState
@@ -1295,11 +1303,23 @@ struct ACPTranscriptScroller: NSViewRepresentable {
             let session = host.session
             var specs: [ACPTranscriptRowSpec] = []
 
-            if transcript.pendingPermission != nil, let policy = host.policy {
-                let pendingPermission = transcript.pendingPermission
+            if let pendingPermission = transcript.pendingPermission, let policy = host.policy {
+                // The prompt observes only the session, so a Codex row's
+                // diffs landing after the request must rebuild it from here.
+                let rowDiffs = session.toolCall(
+                    id: pendingPermission.params.toolCall.toolCallId,
+                    sessionId: pendingPermission.params.sessionId
+                )?.diffs
                 specs.append(ACPTranscriptRowSpec(
                     id: "__pending_perm__",
-                    equalityToken: token(pendingPermission, host: host),
+                    equalityToken: token(
+                        PendingPermissionTokenInputs(
+                            pending: pendingPermission,
+                            rowDiffs: rowDiffs,
+                            worktreeRoot: host.trustedImageRoot?.path
+                        ),
+                        host: host
+                    ),
                     build: {
                         wrapRow(host: host) {
                             ACPPermissionPrompt(
