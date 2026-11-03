@@ -30,11 +30,14 @@ struct VMFirstBootSetup {
     let waitForHelper: (_ recordID: String) async -> Bool
     /// Runs `script` in VM `recordID`'s guest shell, bounded by `timeoutSeconds`.
     let runScript: (_ recordID: String, _ script: String, _ timeoutSeconds: Int) async throws -> VMGuestRunResult
+    /// Whether this run still owns the VM's setup. A stop hands it to the VM's next start, so a
+    /// run that outlived its VM must not touch the one started after it.
+    var isCurrent: () -> Bool = { true }
 
     /// A nil or blank `script`, or one that already succeeded in this VM, goes straight to the
     /// clean point.
     func run(recordID: String, script: String?, scriptSucceeded: Bool = false) async -> Outcome {
-        guard await waitForHelper(recordID) else { return .interrupted }
+        guard await waitForHelper(recordID), isCurrent() else { return .interrupted }
         let vm = VMIdentity.parse(recordID: recordID)
         let hash = VMCleanPoint.scriptHash(script)
         if hash != nil, !scriptSucceeded, let script {
@@ -47,6 +50,7 @@ struct VMFirstBootSetup {
                 if error is TakenOver || manager.running(vm.worktree, guest: vm.guest) == nil { return .interrupted }
                 exitCode = nil
             }
+            guard isCurrent() else { return .interrupted }
             guard exitCode == 0 else { return .scriptFailed(exitCode: exitCode) }
         }
         do {

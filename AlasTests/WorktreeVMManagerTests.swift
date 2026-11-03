@@ -1211,6 +1211,37 @@ final class WorktreeVMManagerTests {
         #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
     }
 
+    /// A run that lost the VM's setup to a later start, after waiting for the helper or during
+    /// its script, neither runs the script nor takes a clean point in the VM started after it.
+    @Test(arguments: [false, true])
+    func aSupersededRunLeavesTheVMAlone(duringScript: Bool) async throws {
+        try addRecord("/repo/a")
+        let manager = makeManager()
+        let runs = SetupScriptRuns()
+        _ = try await manager.startVM(worktreeID: "/repo/a")
+        var current = true
+        var setup = makeFirstBootSetup(manager, runs: runs)
+        setup.isCurrent = { current }
+        if !duringScript { current = false }
+        let script = setup.runScript
+        if duringScript {
+            setup = VMFirstBootSetup(
+                manager: manager, waitForHelper: setup.waitForHelper,
+                runScript: { recordID, text, timeout in
+                    defer { current = false }
+                    return try await script(recordID, text, timeout)
+                },
+                isCurrent: { current }
+            )
+        }
+
+        let outcome = await setup.run(recordID: "/repo/a", script: "brew install jq")
+
+        #expect(outcome == .interrupted)
+        #expect(runs.runs.count == (duringScript ? 1 : 0))
+        #expect(manager.cleanPoint(recordID: "/repo/a") == nil)
+    }
+
     struct AutoVMCase: CustomTestStringConvertible, Sendable {
         let name: String
         var setting: Bool? = true

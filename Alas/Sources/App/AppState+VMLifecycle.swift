@@ -68,7 +68,9 @@ extension AppState {
         let script = vmGuestSetupScript(recordID: recordID)
         let succeeded = !rerunScript && vmSetupScriptSucceeded[recordID] == VMCleanPoint.scriptHash(script)
         vmCleanPointIssues.removeValue(forKey: recordID)
-        let outcome = await makeVMFirstBootSetup().run(recordID: recordID, script: script, scriptSucceeded: succeeded)
+        var setup = makeVMFirstBootSetup()
+        setup.isCurrent = { [weak self] in self?.vmSetupRuns[recordID] == run }
+        let outcome = await setup.run(recordID: recordID, script: script, scriptSucceeded: succeeded)
         // The VM stopped during the run, and maybe started again with a run of its own.
         guard vmSetupRuns[recordID] == run else { return }
         switch outcome {
