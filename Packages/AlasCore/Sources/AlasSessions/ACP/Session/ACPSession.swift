@@ -1296,6 +1296,9 @@ public final class ACPSession: ChangeTracking, Identifiable {
                 transcript.completedOutputBoundaryMessageIds.removeAll()
                 return [transcript.messages.count - 1]
             }
+        case .planUpdate, .planRemoved:
+            // Identified plans have no transcript row yet.
+            return []
         case .availableModelsUpdate(let ms):
             availableModels = ms
             return []

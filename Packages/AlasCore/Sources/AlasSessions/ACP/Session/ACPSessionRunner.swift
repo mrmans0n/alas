@@ -1293,7 +1293,8 @@ public final class ACPSessionRunner {
              .userMessageChunk, .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown,
+             .planUpdate, .planRemoved:
             return []
         }
     }
@@ -5528,7 +5529,8 @@ extension ACPSessionRunner {
              .plan, .availableModelsUpdate,
              .currentModeUpdate, .currentModelUpdate, .sessionInfoUpdate,
              .sessionConfigOptionsUpdate, .availableCommandsUpdate,
-             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown:
+             .usageUpdate, .notice, .subagentSpawned, .subagentStateUpdate, .asyncTask, .unknown,
+             .planUpdate, .planRemoved:
             return false
         }
     }

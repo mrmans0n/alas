@@ -420,6 +420,9 @@ public final class ACPSubagentRun: ChangeTracking, Identifiable {
                 return [index]
             }
             return [append(.plan(id: UUID(), items), at: timestamp)]
+        case .planUpdate, .planRemoved:
+            // Identified plans have no child transcript row yet.
+            return []
         case .sessionConfigOptionsUpdate:
             // An observation, not a row: `ACPSession.applySubagentSessionFacts`
             // records it, knowing whether it is live or replayed.
