@@ -72,21 +72,34 @@ extension ACPPlanDocument {
         /// The file's path on the session's host, and the open action's
         /// target; nil when unknown (a peer's copy carries no path).
         public let filePath: String?
+        /// The plan's review is parked: the row collapses to
+        /// `underReviewLabel` and the review card shows the plan.
+        public let isUnderReview: Bool
 
-        public init(markdown: String?, showsFile: Bool, filePath: String?) {
+        public init(markdown: String?, showsFile: Bool, filePath: String?, isUnderReview: Bool = false) {
             self.markdown = markdown
             self.showsFile = showsFile
             self.filePath = filePath
+            self.isUnderReview = isUnderReview
         }
+
+        public static let underReviewLabel = "Plan · under review below"
+        static let underReview = Display(markdown: nil, showsFile: false, filePath: nil, isUnderReview: true)
     }
 
     /// Nil when the row shows nothing: removed by `plan_removed`, or with
     /// neither text nor a file.
-    public var display: Display? {
+    public var display: Display? { display(underReview: nil) }
+
+    /// The row's display while the review of `reviewedPlanId` is parked. That
+    /// review shows the plan in full, so this row collapses to one line
+    /// rather than showing it twice.
+    public func display(underReview reviewedPlanId: String?) -> Display? {
         guard !hidden else { return nil }
         let text = kind == .markdown ? markdown.flatMap { $0.isEmpty ? nil : $0 } : nil
         let showsFile = kind == .file || file != nil
         guard text != nil || showsFile else { return nil }
+        if let reviewedPlanId, reviewedPlanId == planId { return .underReview }
         return Display(markdown: text, showsFile: showsFile, filePath: file?.path)
     }
 }

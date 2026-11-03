@@ -1026,8 +1026,18 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 forkTargets: host.forkTargets,
                 isLiveNarration: snapshot.liveNarrationIndex == row.index,
                 delegatedLabel: delegatedLabel(host: host, message: message),
-                delegationAction: delegationAction
+                delegationAction: delegationAction,
+                reviewedPlanId: reviewedPlanId(host: host, message: message)
             )
+        }
+
+        /// The plan id of the parked plan review, for a plan document row
+        /// only, so the row collapses while the review card shows the plan.
+        private static func reviewedPlanId(host: ACPTranscriptScroller, message: ACPMessage) -> String? {
+            guard case .planDocument = message, let pending = host.transcript.pendingPermission,
+                  pending.params.toolCall.isPlanReview
+            else { return nil }
+            return ACPPlanReviewPresentation.planId(pending.params, planFileNegotiated: host.session.planFile != nil)
         }
 
         /// The reveal button for a root tool call that sent a delegation
@@ -1200,6 +1210,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                 onRevealDelegation: onRevealDelegation,
                 delegatedLabel: delegatedLabel(host: host, message: message),
                 delegationAction: delegationAction,
+                reviewedPlanId: reviewedPlanId(host: host, message: message),
                 visualAidActions: host.visualAidActions,
                 isExpanded: isExpanded,
                 onExpandedChange: onExpandedChange,
@@ -1340,6 +1351,7 @@ struct ACPTranscriptScroller: NSViewRepresentable {
                             ACPPermissionPrompt(
                                 session: session, policy: policy, scopeKey: host.scopeKey,
                                 worktreeRoot: host.trustedImageRoot?.path,
+                                typography: host.typography,
                                 onOpenPlanFile: host.onOpenPlanFile
                             )
                         }

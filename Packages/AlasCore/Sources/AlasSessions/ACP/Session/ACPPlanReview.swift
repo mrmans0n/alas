@@ -141,11 +141,14 @@ public struct ACPPlanReviewPresentation: Equatable, Sendable {
         }
     }
 
-    /// The plan file's path when it can be opened.
-    public var openableFilePath: String? {
-        guard canOpenFile, case .file(let path, _) = source else { return nil }
+    /// The plan file's path, or nil when the review approves inline text only.
+    public var filePath: String? {
+        guard case .file(let path, _) = source else { return nil }
         return path
     }
+
+    /// The plan file's path when it can be opened.
+    public var openableFilePath: String? { canOpenFile ? filePath : nil }
 
     /// Whether the card disables an option of `kind`. A stale review
     /// withholds approval only; rejecting always stays possible, and the

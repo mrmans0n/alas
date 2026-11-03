@@ -294,7 +294,8 @@ struct ACPSideQuestionCard: View {
                         ACPPermissionPrompt(
                             session: side,
                             policy: policy,
-                            scopeKey: Self.scopeKey(for: transcript.pendingPermission)
+                            scopeKey: Self.scopeKey(for: transcript.pendingPermission),
+                            typography: typography
                         )
                     }
                 }

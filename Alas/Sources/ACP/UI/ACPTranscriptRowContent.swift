@@ -82,6 +82,10 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
     /// button that reveals it. Compared, because the link joins outside
     /// `message`.
     var delegationAction: ACPDelegationAction? = nil
+    /// The plan id of the parked plan review, set only on a plan document
+    /// row. Compared, because the review lives outside `message`: while it
+    /// is parked the row collapses rather than repeat the plan.
+    var reviewedPlanId: String? = nil
     /// Not compared, like the other callbacks. `canAnswer` is a closure the
     /// card re-reads (and re-reads when `changes` fires), so a mounted row
     /// follows writer ownership without a new value reaching this struct.
@@ -111,7 +115,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             isForkEligible: lhs.isForkEligible, forkTargets: lhs.forkTargets,
             isLiveNarration: lhs.isLiveNarration,
             delegatedLabel: lhs.delegatedLabel,
-            delegationAction: lhs.delegationAction
+            delegationAction: lhs.delegationAction,
+            reviewedPlanId: lhs.reviewedPlanId
         )
         == equalityKey(
             stableId: rhs.stableId, message: rhs.message,
@@ -125,7 +130,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             isForkEligible: rhs.isForkEligible, forkTargets: rhs.forkTargets,
             isLiveNarration: rhs.isLiveNarration,
             delegatedLabel: rhs.delegatedLabel,
-            delegationAction: rhs.delegationAction
+            delegationAction: rhs.delegationAction,
+            reviewedPlanId: rhs.reviewedPlanId
         )
     }
 
@@ -145,7 +151,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         forkTargets: [ACPSessionForkTarget] = [],
         isLiveNarration: Bool = false,
         delegatedLabel: String? = nil,
-        delegationAction: ACPDelegationAction? = nil
+        delegationAction: ACPDelegationAction? = nil,
+        reviewedPlanId: String? = nil
     ) -> EqualityKey {
         EqualityKey(
             stableId: stableId, message: message,
@@ -159,7 +166,8 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             isForkEligible: isForkEligible, forkTargets: forkTargets,
             isLiveNarration: isLiveNarration,
             delegatedLabel: delegatedLabel,
-            delegationAction: delegationAction
+            delegationAction: delegationAction,
+            reviewedPlanId: reviewedPlanId
         )
     }
 
@@ -182,6 +190,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
         let isLiveNarration: Bool
         let delegatedLabel: String?
         let delegationAction: ACPDelegationAction?
+        let reviewedPlanId: String?
     }
 
     static func presentationPhase(of message: ACPMessage) -> ACPMessagePhase? {
@@ -366,7 +375,7 @@ struct ACPTranscriptRowContent: View, @preconcurrency Equatable {
             // The toolbar pill shows checklists.
             EmptyView()
         case .planDocument(_, let document):
-            if let display = document.display {
+            if let display = document.display(underReview: reviewedPlanId) {
                 ACPPlanDocumentCard(
                     display: display,
                     cache: ACPTranscriptRenderCaches.of(transcript).cache(forMessage: stableId),
@@ -415,6 +424,21 @@ struct ACPPlanDocumentCard: View {
     @Environment(\.theme) private var theme
 
     var body: some View {
+        if display.isUnderReview {
+            HStack(spacing: 6) {
+                Image(systemName: "doc.text")
+                    .font(.system(size: 11))
+                Text(ACPPlanDocument.Display.underReviewLabel)
+                    .font(.system(size: 11.5))
+            }
+            .foregroundStyle(theme.color("fg-muted"))
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            card
+        }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Image(systemName: "doc.text")

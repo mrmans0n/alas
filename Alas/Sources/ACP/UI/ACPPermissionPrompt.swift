@@ -122,6 +122,8 @@ struct ACPPermissionPrompt: View {
     let policy: ACPPermissionPolicy
     let scopeKey: String
     var worktreeRoot: String? = nil
+    /// The plan review's Markdown typography.
+    var typography: ACPChatTypography = .default
     /// Opens the plan review's file by its path on the session's host. Nil
     /// hides the action.
     var onOpenPlanFile: ((String) -> Void)? = nil
@@ -141,6 +143,7 @@ struct ACPPermissionPrompt: View {
                     review: review,
                     options: ACPPermissionCardContent.options(of: pending.params),
                     defaultToNo: ACPPermissionPresentation(metadata: pending.params.metadata)?.defaultToNo ?? false,
+                    typography: typography,
                     onOpenFile: onOpenPlanFile
                 ) { option in
                     choose(option: option, planDigest: review.digest)
@@ -339,40 +342,12 @@ struct ACPPermissionCard: View {
         .padding(.horizontal, 12).padding(.vertical, 12)
     }
 
-    /// Compact horizontal button row when no option carries a
-    /// `_meta.permission.description` — pixel-identical to the pre-#1365
-    /// layout. Collapses to a vertical, per-option list with secondary
-    /// description text the moment any option has one.
     private var actionRow: some View {
-        let hasDescriptions = content.options.contains { $0.description != nil }
-        return Group {
-            if hasDescriptions {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(content.options) { option in
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack {
-                                Spacer()
-                                optionButton(option)
-                            }
-                            if let description = option.description {
-                                Text(description)
-                                    .font(.system(size: 10.5))
-                                    .foregroundStyle(theme.color("fg-faint"))
-                                    .frame(maxWidth: .infinity, alignment: .trailing)
-                                    .multilineTextAlignment(.trailing)
-                            }
-                        }
-                    }
-                }
-            } else {
-                HStack(spacing: 10) {
-                    Spacer()
-                    ForEach(content.options) { option in
-                        optionButton(option)
-                    }
-                }
-            }
-        }
+        ACPPermissionOptionList(
+            options: content.options, defaultToNo: content.defaultToNo,
+            isVertical: content.options.contains { $0.description != nil },
+            onChoose: onChoose
+        )
         .padding(.horizontal, 12).padding(.vertical, 10)
         .background(theme.color("bg-1").opacity(0.55))
         .overlay(alignment: .top) {
@@ -382,6 +357,51 @@ struct ACPPermissionCard: View {
 
     private func optionButton(_ option: ACPPermissionCardContent.Option) -> some View {
         ACPPermissionOptionButton(option: option, defaultToNo: content.defaultToNo) { onChoose(option) }
+    }
+}
+
+/// A request's options. Compact horizontal buttons, or, when `isVertical`,
+/// one option per line with its description text under it.
+struct ACPPermissionOptionList: View {
+    let options: [ACPPermissionCardContent.Option]
+    let defaultToNo: Bool
+    let isVertical: Bool
+    var isDisabled: (ACPPermissionCardContent.Option) -> Bool = { _ in false }
+    let onChoose: (ACPPermissionCardContent.Option) -> Void
+    @Environment(\.theme) private var theme
+
+    var body: some View {
+        if isVertical {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(options) { option in
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Spacer()
+                            button(option)
+                        }
+                        if let description = option.description {
+                            Text(description)
+                                .font(.system(size: 10.5))
+                                .foregroundStyle(theme.color("fg-faint"))
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                                .multilineTextAlignment(.trailing)
+                        }
+                    }
+                }
+            }
+        } else {
+            HStack(spacing: 10) {
+                Spacer()
+                ForEach(options) { option in
+                    button(option)
+                }
+            }
+        }
+    }
+
+    private func button(_ option: ACPPermissionCardContent.Option) -> some View {
+        ACPPermissionOptionButton(option: option, defaultToNo: defaultToNo) { onChoose(option) }
+            .disabled(isDisabled(option))
     }
 }
 
@@ -446,11 +466,10 @@ struct ACPPlanReviewCard: View {
     let review: ACPPlanReviewPresentation
     let options: [ACPPermissionCardContent.Option]
     let defaultToNo: Bool
+    let typography: ACPChatTypography
     let onOpenFile: ((String) -> Void)?
     let onChoose: (ACPPermissionCardContent.Option) -> Void
     @Environment(\.theme) private var theme
-    @State private var planHeight: CGFloat = 0
-    private static let maxPlanHeight: CGFloat = 360
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -458,18 +477,18 @@ struct ACPPlanReviewCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 planBody
                 if let label = review.fileLabel {
-                    ACPPlanFileLine(label: label, path: nil, onOpen: openAction)
+                    ACPPlanFileLine(label: label, path: review.filePath, onOpen: openAction)
                 }
             }
             .padding(12)
             VStack(alignment: .trailing, spacing: 6) {
-                HStack(spacing: 10) {
-                    Spacer()
-                    ForEach(options) { option in
-                        ACPPermissionOptionButton(option: option, defaultToNo: defaultToNo) { onChoose(option) }
-                            .disabled(review.disablesOption(kind: option.kind))
-                    }
-                }
+                // Claude's long review labels need a line each.
+                ACPPermissionOptionList(
+                    options: options, defaultToNo: defaultToNo,
+                    isVertical: options.count > 2 || options.contains { $0.description != nil },
+                    isDisabled: { review.disablesOption(kind: $0.kind) },
+                    onChoose: onChoose
+                )
                 if review.isStale {
                     Text(ACPPlanReviewPresentation.staleNotice)
                         .font(.system(size: 10.5))
@@ -512,18 +531,10 @@ struct ACPPlanReviewCard: View {
     @ViewBuilder
     private var planBody: some View {
         if review.hasPlanText, let text = review.planText {
-            // The transcript row is measured at its ideal height, which never
-            // bounds the proposal, so the cap is decided from the plan's own
-            // measured height: plain while it fits, scrolling past it.
-            let markdown = ACPMarkdownText(raw: text, typography: .default)
+            // Shown in full, like `ACPPlanApprovalPrompt`: the transcript
+            // scrolls, so a nested scroll area would only fight it.
+            ACPMarkdownText(raw: text, typography: typography)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { planHeight = $0 }
-            if planHeight > Self.maxPlanHeight {
-                ScrollView { markdown }
-                    .frame(height: Self.maxPlanHeight)
-            } else {
-                markdown
-            }
         } else {
             Text(ACPPlanReviewPresentation.noPlanTextNotice)
                 .font(.system(size: 12))

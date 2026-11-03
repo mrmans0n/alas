@@ -577,6 +577,17 @@ extension ACPMessageTests {
         #expect(document.display == expected)
         #expect(ACPTranscriptVisibleRow.isHidden(.planDocument(id: UUID(), document)) == (expected == nil))
     }
+
+    @Test("a plan document collapses to one line while its own review is parked", arguments: [
+        ("item_1", ACPPlanDocument.Display(markdown: nil, showsFile: false, filePath: nil, isUnderReview: true)),
+        ("item_2", ACPPlanDocument.Display(markdown: "# Plan", showsFile: false, filePath: nil)),
+        (nil, ACPPlanDocument.Display(markdown: "# Plan", showsFile: false, filePath: nil)),
+    ] as [(String?, ACPPlanDocument.Display)])
+    func displayUnderReview(reviewedPlanId: String?, expected: ACPPlanDocument.Display) {
+        #expect(ACPPlanDocument.markdownFixture.display(underReview: reviewedPlanId) == expected)
+        // A removed plan stays hidden even while a review names it.
+        #expect(ACPPlanDocument.hiddenFixture.display(underReview: reviewedPlanId) == nil)
+    }
 }
 
 extension ACPPlanDocument {
