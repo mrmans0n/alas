@@ -1,4 +1,5 @@
 import Foundation
+import AlasACP
 
 /// A plan file on the session's host.
 public struct ACPPlanFileReference: Codable, Equatable, Hashable, Sendable {
@@ -58,6 +59,48 @@ public struct ACPPlanDocument: Codable, Equatable, Hashable, Sendable {
         try c.encodeIfPresent(markdown, forKey: .markdown)
         try c.encodeIfPresent(file, forKey: .file)
         if hidden { try c.encode(true, forKey: .hidden) }
+    }
+}
+
+/// Where a Markdown or file `plan_update` lands in a transcript.
+public enum ACPPlanDocumentPlacement: Equatable, Sendable {
+    case replace(Int)
+    case append
+
+    /// Claude's shared id for clients without planFile: turn-scoped, never cross-turn.
+    public static let sharedClaudePlanId = "plan-mode"
+
+    /// `existing`: index of the newest .planDocument with this planId; `latestUserIndex`: the turn boundary.
+    public static func decide(planId: String, existing: Int?, latestUserIndex: Int?) -> ACPPlanDocumentPlacement {
+        guard let existing else { return .append }
+        if planId == sharedClaudePlanId, existing <= (latestUserIndex ?? -1) { return .append }
+        return .replace(existing)
+    }
+}
+
+extension ACPPlanDocument {
+    /// The document a Markdown or file plan update produces, or nil for a
+    /// checklist or an unknown plan type, which have no document row.
+    ///
+    /// Updating `existing` shows it again and keeps what this update does not
+    /// carry: a Markdown snapshot keeps an attached `file` and its digest. A
+    /// `file:` URI becomes a path without a digest; any other URI has no
+    /// local path, so it is kept as Markdown text.
+    public static func updated(
+        _ existing: ACPPlanDocument?, planId: String, content: ACPPlanContent
+    ) -> ACPPlanDocument? {
+        switch content {
+        case .markdown(let text):
+            return ACPPlanDocument(planId: planId, kind: .markdown, markdown: text, file: existing?.file)
+        case .file(let uri):
+            guard let url = URL(string: uri), url.isFileURL else {
+                return ACPPlanDocument(planId: planId, kind: .markdown, markdown: "Plan file: \(uri)", file: nil)
+            }
+            return ACPPlanDocument(
+                planId: planId, kind: .file, markdown: nil, file: ACPPlanFileReference(path: url.path, sha256: nil))
+        case .items, .unknown:
+            return nil
+        }
     }
 }
 

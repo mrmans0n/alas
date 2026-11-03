@@ -44,6 +44,8 @@ struct ACPConnectionTests {
             #expect(meta["parameterizedModelPicker"] as? Bool == true)
             #expect(meta["opencode/child-session-updates"] as? Bool == true)
             #expect(capabilities["terminal"] as? Bool == true)
+            // Standard Markdown and file plans (`plan_update`), a top-level key.
+            #expect((capabilities["plan"] as? [String: Any])?.isEmpty == true)
             #expect((capabilities["auth"] as? [String: Bool]) == ["terminal": true])
             #expect((capabilities["fs"] as? [String: Bool]) == ["readTextFile": true, "writeTextFile": true])
             return Data(#"{"protocolVersion":1}"#.utf8)

@@ -8,7 +8,7 @@ import Testing
 struct SessionSummaryActivityTests {
     @Test(arguments: [
         "prompt allocation", "queue", "transcript streaming", "permission", "question", "retry",
-        "recovery", "delegated work", "auto-run"
+        "recovery", "delegated work", "auto-run", "checklist plan", "repeated markdown plan"
     ])
     func mutationEntryPointsSignalSynchronously(_ mutation: String) {
         let session = ACPSession(id: "activity", agentId: "codex", worktreeId: "w", title: "Activity")
@@ -35,6 +35,12 @@ struct SessionSummaryActivityTests {
             ]))))
         case "recovery": _ = session.beginConnectionRecovery()
         case "delegated work": session.registerSubagent(.init(subagentSessionId: "child"))
+        case "checklist plan": session.apply(.planUpdate(.init(planId: "p", content: .items([]))))
+        case "repeated markdown plan":
+            // Unchanged, so only the update itself can signal, not a row write.
+            session.apply(.markdownPlan("p", "# Plan"))
+            signalled = false
+            session.apply(.markdownPlan("p", "# Plan"))
         default: session.autoRunEnabled = true
         }
 
@@ -43,7 +49,9 @@ struct SessionSummaryActivityTests {
     }
 
     /// Agents send these after a turn ends; signalling would consume the turn's next-prompt offer.
-    @Test(arguments: ["usage", "commands", "models", "mode", "model", "config", "title", "retry cleared"])
+    @Test(arguments: [
+        "usage", "commands", "models", "mode", "model", "config", "title", "retry cleared", "plan removed", "unknown plan"
+    ])
     func trailingMetadataUpdatesDoNotSignal(_ kind: String) {
         let session = ACPSession(id: "activity", agentId: "codex", worktreeId: "w", title: "Activity")
         var signalled = false
@@ -57,6 +65,9 @@ struct SessionSummaryActivityTests {
         case "model": session.apply(.currentModelUpdate(modelId: "model"))
         case "config": session.apply(.sessionConfigOptionsUpdate([]))
         case "title": session.apply(.sessionInfoUpdate(.init(title: "Renamed")))
+        // Without a row, so no row write signals.
+        case "plan removed": session.apply(.planRemoved(planId: "p"))
+        case "unknown plan": session.apply(.planUpdate(.init(planId: "p", content: .unknown(type: "_future"))))
         default:
             session.apply(.sessionInfoUpdate(.init(title: nil, metadata: AnyCodable([
                 "codex": AnyCodable(["error": AnyCodable(["willRetry": AnyCodable(false)])])

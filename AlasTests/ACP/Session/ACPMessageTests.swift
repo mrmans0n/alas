@@ -566,6 +566,23 @@ extension ACPPlanDocument {
     static let fileFixture = ACPPlanDocument(
         planId: "p", kind: .file, markdown: nil, file: .init(path: "/p.md", sha256: "abc"), hidden: false)
     static let hiddenFixture = ACPPlanDocument(planId: "item_1", kind: .markdown, markdown: "# Old", file: nil, hidden: true)
+
+    static func markdown(_ planId: String, _ text: String, hidden: Bool = false) -> ACPPlanDocument {
+        ACPPlanDocument(planId: planId, kind: .markdown, markdown: text, file: nil, hidden: hidden)
+    }
+}
+
+extension ACPSessionUpdate {
+    /// A standard Markdown `plan_update`.
+    static func markdownPlan(_ planId: String, _ text: String) -> ACPSessionUpdate {
+        .planUpdate(.init(planId: planId, content: .markdown(text)))
+    }
+}
+
+extension [ACPMessage] {
+    var planDocuments: [ACPPlanDocument] {
+        compactMap { if case .planDocument(_, let document) = $0 { document } else { nil } }
+    }
 }
 
 struct PlanRowCase: Sendable, CustomTestStringConvertible {

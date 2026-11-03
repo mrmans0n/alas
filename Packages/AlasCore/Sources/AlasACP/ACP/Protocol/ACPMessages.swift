@@ -40,6 +40,10 @@ public struct ACPClientCapabilities: Codable, Equatable, Sendable {
     /// forms (see `ACPSessionUpdateFrame`). Later ACP features negotiated the
     /// same way should be checked against that classification first.
     public let subagents: EmptyObject?
+    /// Standard Markdown and file plans (`plan_update`/`plan_removed`). `{}`
+    /// opts in; Codex stops sending a plan as agent message text once it
+    /// sees it.
+    public let plan: EmptyObject?
     public let meta: ACPClientCapabilitiesMeta
 
     public init(
@@ -49,6 +53,7 @@ public struct ACPClientCapabilities: Codable, Equatable, Sendable {
         session: ACPSessionCapabilities = .booleanConfigOptions,
         elicitation: ACPElicitationCapabilities? = .full,
         subagents: EmptyObject? = .init(),
+        plan: EmptyObject? = .init(),
         meta: ACPClientCapabilitiesMeta = .terminalAuth
     ) {
         self.fs = fs
@@ -57,11 +62,12 @@ public struct ACPClientCapabilities: Codable, Equatable, Sendable {
         self.session = session
         self.elicitation = elicitation
         self.subagents = subagents
+        self.plan = plan
         self.meta = meta
     }
 
     public enum CodingKeys: String, CodingKey, Sendable {
-        case fs, terminal, auth, session, elicitation, subagents
+        case fs, terminal, auth, session, elicitation, subagents, plan
         case meta = "_meta"
     }
 
@@ -75,6 +81,7 @@ public struct ACPClientCapabilities: Codable, Equatable, Sendable {
             ?? .init(configOptions: .init(boolean: nil))
         elicitation = try c.decodeIfPresent(ACPElicitationCapabilities.self, forKey: .elicitation)
         subagents = try? c.decodeIfPresent(EmptyObject.self, forKey: .subagents)
+        plan = try? c.decodeIfPresent(EmptyObject.self, forKey: .plan)
         meta = try c.decodeIfPresent(ACPClientCapabilitiesMeta.self, forKey: .meta)
             ?? .init(terminalAuth: false)
     }

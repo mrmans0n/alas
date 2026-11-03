@@ -167,6 +167,14 @@ public final class ACPSession: ChangeTracking, Identifiable {
     @Tracked public var availableProviders: [ACPProviderInfo] = []
     @Tracked public var currentModel: String?
     @Tracked public var contextUsage: ACPUsageInfo?
+    /// How many live `plan_update`/`plan_removed` updates each plan id has
+    /// received, with or without a row, so a review of an older revision can
+    /// tell it is stale. Runtime only; replayed history does not count.
+    @Tracked public private(set) var planRevisions: [String: Int] = [:]
+    /// How many times the agent reported an empty context (`usage_update`
+    /// with `used == 0`), as Claude does when it restarts with cleared
+    /// context after a plan is approved. Runtime only.
+    @Tracked public private(set) var contextResetCount = 0
     /// Latest Claude rate-limit info seen on `usage_update`; read by usage-limit
     /// detection for a structured reset time. Runtime only.
     @Tracked public private(set) var latestClaudeRateLimit: ACPClaudeRateLimit?
@@ -1092,11 +1100,14 @@ public final class ACPSession: ChangeTracking, Identifiable {
         // Metadata updates (usage, commands, models, modes, titles) routinely
         // trail a finished turn and must not consume its next-prompt offer;
         // any state they touch that gates eligibility signals on its own.
+        // A plan with content is agent output; a removal, or a plan type
+        // this build cannot show, is not.
+        let isPlanContent = Self.isPlanContentUpdate(update)
         switch update {
         case .availableModelsUpdate, .currentModeUpdate, .currentModelUpdate, .sessionConfigOptionsUpdate,
-             .availableCommandsUpdate, .usageUpdate, .sessionInfoUpdate, .unknown,
-             // Inert until plan documents are applied to the transcript.
-             .planUpdate, .planRemoved:
+             .availableCommandsUpdate, .usageUpdate, .sessionInfoUpdate, .unknown, .planRemoved:
+            break
+        case .planUpdate where !isPlanContent:
             break
         default:
             nextPromptActivity.send()
@@ -1104,6 +1115,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
         if tracksRetryStatus {
             switch update {
             case .agentMessageChunk, .agentThoughtChunk, .toolCall, .toolCallUpdate, .plan:
+                clearRetryStatus()
+            case .planUpdate where isPlanContent:
                 clearRetryStatus()
             default:
                 break
@@ -1131,6 +1144,8 @@ public final class ACPSession: ChangeTracking, Identifiable {
             switch update {
             case .toolCall, .plan, .compactionUpdate, .compactionSummaryChunk,
                  .subagentSpawned:
+                kindsToFlush = [.agent, .thought]
+            case .planUpdate where isPlanContent:
                 kindsToFlush = [.agent, .thought]
             default:
                 kindsToFlush = []
@@ -1283,24 +1298,38 @@ public final class ACPSession: ChangeTracking, Identifiable {
             return []
         case .plan(let entries):
             clearRestoredContextRecoveryStatus()
-            let items = planItems(from: entries)
-            // Overwrite the existing plan in place only if it belongs to
-            // the current turn (i.e. sits after the latest user prompt).
-            // Otherwise append a fresh plan so the previous turn's plan
-            // stays at its original position and the new one is current.
-            if let i = transcript.currentPlanMessageIndex,
-               case .plan(let existingId, _) = transcript.messages[i] {
-                transcript.replaceMessage(at: i, with: .plan(id: existingId, items))
-                return [i]
+            return applyChecklist(entries)
+        case .planUpdate(let plan):
+            planRevisions[plan.planId, default: 0] += 1
+            if case .items(let entries) = plan.content {
+                clearRestoredContextRecoveryStatus()
+                return applyChecklist(entries)
+            }
+            let existing = planDocumentIndex(planId: plan.planId)
+            let placement = ACPPlanDocumentPlacement.decide(
+                planId: plan.planId, existing: existing, latestUserIndex: transcript.latestUserMessageIndex)
+            let current: ACPPlanDocument? = if case .replace(let i) = placement,
+                                               case .planDocument(_, let document) = transcript.messages[i] {
+                document
             } else {
-                transcript.appendMessage(.plan(id: UUID(), items))
+                nil
+            }
+            guard let document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content) else {
+                return []
+            }
+            clearRestoredContextRecoveryStatus()
+            switch placement {
+            case .replace(let i):
+                return replacePlanDocument(at: i, with: document)
+            case .append:
+                transcript.appendMessage(.planDocument(id: UUID(), document))
                 didAppendTranscriptMessage()
                 transcript.completedOutputBoundaryMessageIds.removeAll()
                 return [transcript.messages.count - 1]
             }
-        case .planUpdate, .planRemoved:
-            // Identified plans have no transcript row yet.
-            return []
+        case .planRemoved(let planId):
+            planRevisions[planId, default: 0] += 1
+            return hidePlanDocuments(planId: planId)
         case .availableModelsUpdate(let ms):
             availableModels = ms
             return []
@@ -1327,6 +1356,7 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .usageUpdate(let info):
             // size <= 0 is unusable (divide-by-zero); treat as "no data".
             contextUsage = (info.size > 0) ? info : nil
+            if info.used == 0 { contextResetCount += 1 }
             if let rateLimit = info.claudeRateLimit {
                 latestClaudeRateLimit = rateLimit
             }
@@ -1830,6 +1860,22 @@ public final class ACPSession: ChangeTracking, Identifiable {
         case .plan:
             dirty = []
             matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
+        case .planUpdate(let plan):
+            if case .items = plan.content {
+                dirty = []
+                matchedIndex = firstPlanMatch(atOrAfter: suppressedReplayInsertionCursor)
+                break
+            }
+            // Sessions saved before `plan` was declared hold the agent's
+            // message fallback instead of a row, so a miss adds nothing.
+            guard let i = planDocumentIndex(planId: plan.planId),
+                  case .planDocument(_, let current) = transcript.messages[i],
+                  let document = ACPPlanDocument.updated(current, planId: plan.planId, content: plan.content)
+            else { return [] }
+            matchedIndex = i
+            dirty = replacePlanDocument(at: i, with: document)
+        case .planRemoved(let planId):
+            dirty = hidePlanDocuments(planId: planId)
         default:
             return []
         }
@@ -4403,6 +4449,57 @@ public final class ACPSession: ChangeTracking, Identifiable {
             if case .plan = transcript.messages[i] { return i }
         }
         return nil
+    }
+
+    /// A `plan_update` that has a checklist, Markdown or file to show.
+    static func isPlanContentUpdate(_ update: ACPSessionUpdate) -> Bool {
+        guard case .planUpdate(let plan) = update else { return false }
+        if case .unknown = plan.content { return false }
+        return true
+    }
+
+    /// The newest `.planDocument` row for `planId`, anywhere in the transcript.
+    private func planDocumentIndex(planId: String) -> Int? {
+        transcript.messages.lastIndex {
+            if case .planDocument(_, let document) = $0 { return document.planId == planId }
+            return false
+        }
+    }
+
+    /// A checklist overwrites the current turn's checklist in place (one
+    /// after the latest user prompt); otherwise it is appended, so the
+    /// previous turn's plan stays where it was and the new one is current.
+    private func applyChecklist(_ entries: [ACPPlanEntry]) -> Set<Int> {
+        let items = planItems(from: entries)
+        if let i = transcript.currentPlanMessageIndex,
+           case .plan(let existingId, _) = transcript.messages[i] {
+            transcript.replaceMessage(at: i, with: .plan(id: existingId, items))
+            return [i]
+        }
+        transcript.appendMessage(.plan(id: UUID(), items))
+        didAppendTranscriptMessage()
+        transcript.completedOutputBoundaryMessageIds.removeAll()
+        return [transcript.messages.count - 1]
+    }
+
+    private func replacePlanDocument(at index: Int, with document: ACPPlanDocument) -> Set<Int> {
+        guard case .planDocument(let id, let current) = transcript.messages[index] else { return [] }
+        guard current != document else { return [] }
+        transcript.replaceMessage(at: index, with: .planDocument(id: id, document))
+        return [index]
+    }
+
+    /// `plan_removed` hides every row of the plan; none is deleted.
+    private func hidePlanDocuments(planId: String) -> Set<Int> {
+        var touched: Set<Int> = []
+        for i in transcript.messages.indices {
+            guard case .planDocument(let id, var document) = transcript.messages[i],
+                  document.planId == planId, !document.hidden else { continue }
+            document.hidden = true
+            transcript.replaceMessage(at: i, with: .planDocument(id: id, document))
+            touched.insert(i)
+        }
+        return touched
     }
 
     private enum TextMessageKind: Hashable {

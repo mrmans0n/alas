@@ -104,6 +104,33 @@ struct ACPTranscriptCurrentPlanTests {
         #expect(session.transcript.currentPlan == [.init(content: "Review", status: "in_progress")])
     }
 
+    @Test("a Markdown plan and a checklist keep separate rows, and only the checklist is the current plan")
+    func markdownAndChecklistCoexist() {
+        let session = makeSession()
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.markdownPlan("m", "v1"))
+        session.apply(.plan([.init(content: "a", priority: nil, status: "pending")]))
+        session.apply(.markdownPlan("m", "v2"))
+        session.apply(.plan([.init(content: "a", priority: nil, status: "completed")]))
+
+        let messages = session.transcript.messages
+        #expect(messages.planDocuments == [.markdown("m", "v2")])
+        let checklists = messages.compactMap { if case .plan(_, let items) = $0 { items } else { nil } }
+        #expect(checklists == [[.init(content: "a", status: "completed")]])
+        #expect(session.transcript.currentPlan == [.init(content: "a", status: "completed")])
+    }
+
+    @Test("a turn with only Markdown plans has no current plan")
+    func markdownNeverFeedsCurrentPlan() {
+        let session = makeSession()
+        session.apply(.userMessageChunk(.text("Go")))
+        session.apply(.markdownPlan("m", "v1"))
+        session.apply(.markdownPlan("m", "v2"))
+
+        #expect(session.transcript.messages.planDocuments.count == 1)
+        #expect(session.transcript.currentPlan == nil)
+    }
+
     @Test("returns nil when no plan message has arrived")
     func nilWhenNoPlan() {
         let session = makeSession()

@@ -307,13 +307,52 @@ struct ACPSubagentSessionTests {
         #expect(run.lastContentTouchIndex == 1)
     }
 
-    @Test("a plan update does not move the child's lastContentTouchIndex")
-    func planUpdateDoesNotMoveChildContentTouch() {
+    @Test("a plan update does not move the child's lastContentTouchIndex", arguments: [
+        ACPSessionUpdate.plan([.init(content: "Step 1", priority: nil, status: "pending")]),
+        .markdownPlan("m", "# Plan"),
+    ])
+    func planUpdateDoesNotMoveChildContentTouch(update: ACPSessionUpdate) {
         let run = ACPSubagentRun(subagentSessionId: "child-1")
-        run.apply(.agentThoughtChunk(.text("thinking")))
+        run.apply(.toolCall(.init(toolCallId: "t1", title: "Read", kind: "read", status: "in_progress")))
         #expect(run.lastContentTouchIndex == 0)
-        run.apply(.plan([.init(content: "Step 1", priority: nil, status: "pending")]))
+        // Twice: the first appends the plan row, the second rewrites it.
+        run.apply(update)
+        run.apply(update)
+        #expect(run.messages.count == 2)
         #expect(run.lastContentTouchIndex == 0)
+    }
+
+    @Test("a child's Markdown plan and checklist keep separate rows")
+    func childMarkdownAndChecklistCoexist() {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.apply(.userMessageChunk(.text("Go")))
+        run.apply(.markdownPlan("m", "v1"))
+        run.apply(.plan([.init(content: "a", priority: nil, status: "pending")]))
+        run.apply(.markdownPlan("m", "v2"))
+        run.apply(.plan([.init(content: "a", priority: nil, status: "completed")]))
+
+        #expect(run.messages.planDocuments == [.markdown("m", "v2")])
+        let checklists = run.messages.compactMap { if case .plan(_, let items) = $0 { items } else { nil } }
+        #expect(checklists == [[.init(content: "a", status: "completed")]])
+    }
+
+    @Test("a child's replayed Markdown plan rewrites its row by id and never adds one", arguments: [
+        (ACPSessionUpdate.markdownPlan("m", "new"), ACPPlanDocument.markdown("m", "new")),
+        (.markdownPlan("other", "new"), .markdown("m", "old")),
+        (.planRemoved(planId: "m"), .markdown("m", "old", hidden: true)),
+    ])
+    func childReplayReconcilesPlanById(update: ACPSessionUpdate, expected: ACPPlanDocument) {
+        let run = ACPSubagentRun(subagentSessionId: "child-1")
+        run.restore(messages: [
+            .user(id: UUID(), text: "Plan it", attachments: []),
+            .planDocument(id: UUID(), .markdown("m", "old")),
+            .agent(id: UUID(), StreamingText("Done")),
+        ], createdAts: Array(repeating: Date(), count: 3))
+        run.beginReplayReconciliation()
+        run.applyReplayed(update)
+
+        #expect(run.messages.count == 3)
+        #expect(run.messages.planDocuments == [expected])
     }
 
     @Test("replay reconciles a historical prompt, not only the newest one")
