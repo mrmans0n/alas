@@ -3624,6 +3624,107 @@ struct ACPSessionRunnerTests {
         #expect(toolCalls.first?.status == "canceled")
     }
 
+    /// A reader whose reads each wait for their own gate, recording paths.
+    private final class PlanFileFetches: @unchecked Sendable {
+        private let lock = NSLock()
+        private var paths: [String] = []
+        private let gates: [AsyncGate]
+        private let texts: [String]
+
+        init(gates: [AsyncGate], texts: [String]) {
+            self.gates = gates
+            self.texts = texts
+        }
+
+        var recorded: [String] { lock.withLock { paths } }
+
+        var reader: ACPPlanFileReader {
+            ACPPlanFileReader { _, path, _ in
+                let index = self.lock.withLock {
+                    self.paths.append(path)
+                    return self.paths.count - 1
+                }
+                await self.gates[index].wait()
+                return .file(data: Data(self.texts[index].utf8), mtime: Date(timeIntervalSince1970: 0))
+            }
+        }
+    }
+
+    private func fileRead(_ text: String) -> ACPPlanFileReadResult {
+        .file(text: text, sha256: ACPPlanReviewPresentation.sha256Hex(text), modified: Date(timeIntervalSince1970: 0))
+    }
+
+    @Test("a plan review reads its file only when the payload names its inline plan", arguments: [true, false])
+    func planReviewReadsOnlyMatchingFile(matches: Bool) async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.planFile = ACPPlanFileCapability()
+        let open = AsyncGate()
+        await open.open()
+        let fetches = PlanFileFetches(gates: [open], texts: ["# Plan\n- a"])
+        runner.planFileReader = fetches.reader
+        runner.start()
+        defer { runner.stop() }
+
+        let params = ACPToolCallPresentationTests.claudeReview(
+            sha256: matches ? ACPToolCallPresentationTests.planReviewDigest : ACPToolCallPresentationTests.otherDigest)
+        mock.emitPermission(id: .number(1), params: params)
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+        // The hook starts its read before evaluate parks the review.
+        await runner.planFileReadTask?.value
+
+        #expect(fetches.recorded == (matches ? [ACPToolCallPresentationTests.planReviewPath] : []))
+        #expect(runner.session.planReviewFiles["toolu_1"] == (matches ? fileRead("# Plan\n- a") : nil))
+    }
+
+    @Test("a plan file read that finishes after its review was answered records nothing")
+    func latePlanFileReadAfterAnswer() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.planFile = ACPPlanFileCapability()
+        let gate = AsyncGate()
+        runner.planFileReader = PlanFileFetches(gates: [gate], texts: ["# Plan\n- a"]).reader
+        runner.start()
+        defer { runner.stop() }
+
+        mock.emitPermission(id: .number(1), params: ACPToolCallPresentationTests.claudeReview())
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+        let read = try #require(runner.planFileReadTask)
+        #expect(runner.session.planReviewFiles.isEmpty)
+
+        await runner.policy.userDecided(scopeKey: "tool:Ready to code?", optionId: "plan", decision: .deny, persistScope: nil)
+        try await waitUntil { mock.permissionResponses[.number(1)] != nil }
+        await gate.open()
+        await read.value
+
+        #expect(runner.session.planReviewFiles.isEmpty)
+    }
+
+    @Test("a stale plan file read never overwrites the read of a review parked after it")
+    func stalePlanFileReadOnReparkedReview() async throws {
+        let (runner, mock) = try makeRunner()
+        runner.session.planFile = ACPPlanFileCapability()
+        let stale = AsyncGate()
+        let fresh = AsyncGate()
+        await fresh.open()
+        runner.planFileReader = PlanFileFetches(gates: [stale, fresh], texts: ["old", "new"]).reader
+        runner.start()
+        defer { runner.stop() }
+
+        // The same request id and tool call parked twice, as after a
+        // reconnect: only the generation tells the reads apart.
+        mock.emitPermission(id: .number(1), params: ACPToolCallPresentationTests.claudeReview())
+        try await waitUntil { runner.session.transcript.pendingPermission != nil }
+        let first = try #require(runner.planFileReadTask)
+        await runner.policy.userDecided(scopeKey: "tool:Ready to code?", optionId: "plan", decision: .deny, persistScope: nil)
+        try await waitUntil { runner.session.transcript.pendingPermission == nil }
+
+        mock.emitPermission(id: .number(1), params: ACPToolCallPresentationTests.claudeReview())
+        try await waitUntil { runner.session.planReviewFiles["toolu_1"] != nil }
+        await stale.open()
+        await first.value
+
+        #expect(runner.session.planReviewFiles["toolu_1"] == fileRead("new"))
+    }
+
     @Test("patches in updates and permission requests count only when this connection negotiated diffPatch",
           arguments: [false, true])
     func diffPatchGate(negotiated: Bool) async throws {

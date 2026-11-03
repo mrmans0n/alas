@@ -186,6 +186,10 @@ public final class ACPSessionRunner {
     private var pendingCancelledRequestIDs: Set<JSONRPCID> = []
     /// Reads a parked plan review's plan file on this session's host.
     var planFileReader = ACPPlanFileReader()
+    /// The latest plan file read, so tests can await it.
+    private(set) var planFileReadTask: Task<Void, Never>?
+    /// Bumped per plan file read; only the latest read may record its result.
+    private var planFileReadGeneration = 0
     private var authStatusTask: Task<Void, Never>?
     package var seq: Int64 = 0
     private var scheduledQueueWakeTask: Task<Void, Never>?
@@ -697,12 +701,15 @@ public final class ACPSessionRunner {
                     await self.persistPermissionDecision(params: params, response: response)
                     continue
                 }
-                if params.toolCall.isPlanReview, self.session.planFile != nil,
-                   let path = ACPPlanFilePayload.from(metadata: params.toolCall.metadata)
-                       .flatMap({ $0.isWellFormed ? $0.path : nil }) {
+                if let path = self.planReviewFilePath(params) {
                     // Runs once evaluate below has parked the review, which
                     // it does before its first suspension.
-                    Task { await self.refreshPlanReviewFile(id: id, toolCallId: params.toolCall.toolCallId, path: path) }
+                    self.planFileReadGeneration += 1
+                    let generation = self.planFileReadGeneration
+                    self.planFileReadTask = Task {
+                        await self.refreshPlanReviewFile(
+                            id: id, toolCallId: params.toolCall.toolCallId, path: path, generation: generation)
+                    }
                 }
                 let scopeKey = "tool:\(params.toolCall.title ?? params.toolCall.toolCallId)"
                 let response = await self.policy.evaluate(
@@ -5900,12 +5907,25 @@ extension ACPSessionRunner {
         onMessageActivity?()
     }
 
+    /// The path to read for a plan review, nil unless the negotiated payload
+    /// is well formed and names this review's own inline plan text: the
+    /// agent chooses the path, and only a file the card would offer is read.
+    private func planReviewFilePath(_ params: ACPPermissionRequestParams) -> String? {
+        guard params.toolCall.isPlanReview, session.planFile != nil,
+              let payload = ACPPlanFilePayload.from(metadata: params.toolCall.metadata), payload.isWellFormed,
+              let path = payload.path,
+              let text = ACPPlanReviewPresentation.planText(params),
+              payload.sha256 == ACPPlanReviewPresentation.sha256Hex(text)
+        else { return nil }
+        return path
+    }
+
     /// Reads the plan file a parked plan review names, at exactly its
     /// payload path, and records the outcome only while that review is still
     /// the one parked.
-    private func refreshPlanReviewFile(id: JSONRPCID, toolCallId: String, path: String) async {
+    private func refreshPlanReviewFile(id: JSONRPCID, toolCallId: String, path: String, generation: Int) async {
         let result = await planFileReader.read(path: path, host: effectiveRemoteHost())
-        guard policy.pendingPermissionRequestID == id,
+        guard generation == planFileReadGeneration, policy.pendingPermissionRequestID == id,
               session.transcript.pendingPermission?.params.toolCall.toolCallId == toolCallId
         else { return }
         session.planReviewFiles[toolCallId] = result

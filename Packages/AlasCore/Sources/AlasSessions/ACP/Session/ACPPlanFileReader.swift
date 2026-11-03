@@ -1,4 +1,5 @@
 import AlasPlatform
+import CryptoKit
 import Darwin
 import Foundation
 
@@ -21,15 +22,16 @@ public struct ACPPlanFileReader: Sendable {
     }
 
     public func read(path: String, host: String?) async -> ACPPlanFileReadResult {
-        guard path.hasPrefix("/") else { return .notRegularFile }
+        guard Self.isPlanPath(path) else { return .notRegularFile }
         do {
             switch try await fetch(host, path, Self.maxBytes) {
             case .file(let data, let mtime):
                 guard data.count <= Self.maxBytes else { return .tooLarge }
                 guard let text = String(data: data, encoding: .utf8) else { return .notUTF8 }
-                // Hashed like the inline plan text, so the card compares
-                // one definition of the digest.
-                return .file(text: text, sha256: ACPPlanReviewPresentation.sha256Hex(text), modified: mtime)
+                // The raw bytes, as the adapter hashed them: decoding drops a
+                // byte-order mark that the inline plan text keeps.
+                let digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                return .file(text: text, sha256: digest, modified: mtime)
             case .missing: return .missing
             case .directory, .symlink: return .notRegularFile
             case .unreadable(let message): return .unreachable(message)
@@ -39,6 +41,15 @@ public struct ACPPlanFileReader: Sendable {
         } catch {
             return .unreachable(String(describing: error))
         }
+    }
+
+    /// The agent names the path, so only a plain absolute path to a Markdown
+    /// file is read: no `.`, `..` or empty components.
+    static func isPlanPath(_ path: String) -> Bool {
+        guard path.hasPrefix("/") else { return false }
+        let components = path.split(separator: "/", omittingEmptySubsequences: false).dropFirst()
+        guard !components.contains(where: { $0.isEmpty || $0 == "." || $0 == ".." }) else { return false }
+        return (path as NSString).pathExtension.lowercased() == "md"
     }
 
     /// Local disk when `host` is nil, else a bounded read on that host.
