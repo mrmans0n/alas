@@ -294,6 +294,14 @@ public final class ACPSession: ChangeTracking, Identifiable {
     /// Whether the adapter names the approved plan's file, from its
     /// `planFile` advertisement. Runtime only; relearned on attach.
     @Tracked public var planFile: ACPPlanFileCapability?
+    /// The pending plan review's plan file, as read on the session's host,
+    /// keyed by the request's `toolCallId`. Runtime only; cleared when the
+    /// review is answered or cancelled.
+    @Tracked public var planReviewFiles: [String: ACPPlanFileReadResult] = [:]
+    /// The well-formed `_meta.planFile` of each plan review that parked, by
+    /// `toolCallId`, so the approved plan finds its file even when its tool
+    /// call row carried none. Runtime only.
+    private var reviewedPlanFiles: [String: ACPPlanFilePayload] = [:]
     /// Whether a foreground turn is running. Installed by the session's
     /// runner; a turn that settled at its result no longer counts, even while
     /// its children still run.
@@ -4463,20 +4471,33 @@ public final class ACPSession: ChangeTracking, Identifiable {
         return true
     }
 
+    /// Records the well-formed `_meta.planFile` of a plan review as it parks,
+    /// before any answer can reach the agent, for `attachPlanFile`.
+    public func noteReviewedPlanFile(_ toolCall: ACPPermissionToolCall) {
+        guard let payload = ACPPlanFilePayload.from(metadata: toolCall.metadata), payload.isWellFormed else { return }
+        reviewedPlanFiles[toolCall.toolCallId] = payload
+    }
+
     /// With `planFile` negotiated, an approved plan (`plan-mode:<toolUseId>`)
-    /// gets the file its ExitPlanMode tool call named, when that call's
-    /// payload is well formed, carries the same plan id and has a path.
+    /// gets the file its plan review or, failing that, its ExitPlanMode tool
+    /// call named, when that payload is well formed, carries the same plan id
+    /// and has a path.
     private func attachPlanFile(to document: inout ACPPlanDocument) {
         guard planFile != nil, document.kind == .markdown,
               document.planId.hasPrefix(ACPPlanFilePayload.planIdPrefix) else { return }
         let toolCallId = String(document.planId.dropFirst(ACPPlanFilePayload.planIdPrefix.count))
-        for message in transcript.messages.reversed() {
-            guard case .toolCall(let row) = message, row.toolCallId == toolCallId else { continue }
-            if let payload = ACPPlanFilePayload.from(metadata: row.metadata), payload.isWellFormed,
-               payload.planId == document.planId, let path = payload.path, let sha256 = payload.sha256 {
+        let row = transcript.messages.last { message in
+            if case .toolCall(let row) = message { return row.toolCallId == toolCallId }
+            return false
+        }
+        var rowPayload: ACPPlanFilePayload?
+        if case .toolCall(let row) = row { rowPayload = ACPPlanFilePayload.from(metadata: row.metadata) }
+        for payload in [reviewedPlanFiles[toolCallId], rowPayload].compactMap({ $0 }) {
+            if payload.isWellFormed, payload.planId == document.planId,
+               let path = payload.path, let sha256 = payload.sha256 {
                 document.file = ACPPlanFileReference(path: path, sha256: sha256)
+                return
             }
-            return
         }
     }
 

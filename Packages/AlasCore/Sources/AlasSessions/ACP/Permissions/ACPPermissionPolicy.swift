@@ -110,6 +110,14 @@ public final class ACPPermissionPolicy {
     private var cancelledBeforeParked = false
     /// Whether the parked request is a plan review, which is never remembered.
     private var parkedPlanReview = false
+    /// The options of the parked request, as offered.
+    private var parkedOptions: [ACPPermissionOption] = []
+    /// What the parked plan review was asked about; nil unless a plan review
+    /// is parked. One policy answers the root and its subagents, whose plan
+    /// updates and usage do not move the root's counters, so a subagent's
+    /// review goes stale only on a root context reset; the digest check and
+    /// the one-request binding still hold for it.
+    public private(set) var planReviewBinding: ACPPlanReviewBinding?
     /// Remembered answers this policy delivered, so the agent's next request
     /// gets them at once rather than only after their record lands.
     private var deliveredDecisions: [String: ACPPermissionDecision] = [:]
@@ -129,6 +137,15 @@ public final class ACPPermissionPolicy {
 
     private func awaitUserDecision(scopeKey: String, params: ACPPermissionRequestParams) async -> ACPPermissionResponse {
         parkedPlanReview = params.toolCall.isPlanReview
+        parkedOptions = params.options
+        planReviewBinding = parkedPlanReview
+            ? ACPPlanReviewBinding(
+                requestID: pendingRequestID ?? .number(0), params: params, planFileNegotiated: session.planFile != nil,
+                planRevisions: session.planRevisions, contextResetCount: session.contextResetCount)
+            : nil
+        // Before any answer can go out: Claude sends the approved plan as
+        // soon as it reads one, and that plan looks for this file.
+        if parkedPlanReview { session.noteReviewedPlanFile(params.toolCall) }
         session.transcript.streamingState = .awaitingPermission
         session.transcript.pendingPermission = .init(id: .number(0), params: params)
         if let requestID = pendingRequestID {
@@ -165,6 +182,19 @@ public final class ACPPermissionPolicy {
         return true
     }
 
+    /// Whether approving the parked plan review with an option of
+    /// `optionKind` must be refused: its plan or context changed since it
+    /// parked, or `planDigest`, the digest of the plan text the approver saw,
+    /// is not the parked one. Nil means the approver saw no plan text (a
+    /// peer). Rejections are never refused, so the agent is never stuck.
+    public func refusesApproval(optionKind: String, planDigest: String?) -> Bool {
+        guard let binding = planReviewBinding, optionKind.hasPrefix("allow") else { return false }
+        if binding.isStale(planRevisions: session.planRevisions, contextResetCount: session.contextResetCount) {
+            return true
+        }
+        return planDigest != nil && planDigest != binding.digest
+    }
+
     /// Called by the UI when the user clicks a button. `persistScope` is
     /// .session for Allow/Deny, .project for "Always for this tool", and nil
     /// for Allow-once. Decision recorded if non-nil.
@@ -174,20 +204,30 @@ public final class ACPPermissionPolicy {
     /// asked right before the agent resumes, can withhold the answer: the
     /// request is then cancelled. Returns whether a request was pending and
     /// the answer reached it.
+    ///
+    /// `planDigest` is the digest of the plan text a plan review's approver
+    /// was shown. An approval `refusesApproval` refuses returns false and
+    /// leaves the request parked.
     @discardableResult
     public func userDecided(
         scopeKey: String,
         optionId: String,
         decision: ACPPermissionDecision,
         persistScope requestedScope: ACPPermissionScopeKind?,
+        planDigest: String? = nil,
         stillAuthorized: (@MainActor () async -> Bool)? = nil
     ) async -> Bool {
+        if let option = parkedOptions.first(where: { $0.optionId == optionId }),
+           refusesApproval(optionKind: option.kind, planDigest: planDigest) {
+            return false
+        }
         let wasPending = pendingContinuation != nil || session.transcript.pendingPermission != nil
         let cont = pendingContinuation
         pendingContinuation = nil
         // Read before anything clears the parked request.
         let persistScope = parkedPlanReview ? nil : requestedScope
         parkedPlanReview = false
+        clearParkedReview()
         session.transcript.pendingPermission = nil
         // A background child can ask after its parent's turn settled, so the
         // answer must not claim a turn that is no longer running.
@@ -220,10 +260,17 @@ public final class ACPPermissionPolicy {
     }
 
     public func userCancelled() {
+        clearParkedReview()
         session.transcript.pendingPermission = nil
         session.settleWaitingState()
         let cont = pendingContinuation
         pendingContinuation = nil
         cont?.resume(returning: .init(outcome: .cancelled))
+    }
+
+    private func clearParkedReview() {
+        parkedOptions = []
+        planReviewBinding = nil
+        session.planReviewFiles = [:]
     }
 }

@@ -344,6 +344,53 @@ struct ACPPermissionPolicyTests {
         #expect(session.transcript.streamingState == expected)
     }
 
+    @Test("a plan review whose plan or context changed since it parked refuses approval but accepts a rejection",
+          arguments: ["planUpdate", "contextReset"])
+    func staleReviewRefusesApproval(staleness: String) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        session.apply(.usageUpdate(.init(used: 0, size: 1000, cost: nil)))
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        let params = ACPToolCallPresentationTests.codexReview()
+        async let decision = policy.evaluate(
+            scopeKey: "tool:Implement this plan?", options: params.options, params: params, requestID: .number(1))
+        await waitForPendingPermission(session)
+        session.apply(staleness == "planUpdate"
+            ? .markdownPlan("item_1", "# Revised") : .usageUpdate(.init(used: 0, size: 1000, cost: nil)))
+
+        #expect(await !policy.userDecided(
+            scopeKey: "tool:Implement this plan?", optionId: "implement_plan", decision: .allow, persistScope: nil))
+        #expect(session.transcript.pendingPermission != nil)
+        #expect(policy.pendingPermissionRequestID == .number(1))
+
+        #expect(await policy.userDecided(
+            scopeKey: "tool:Implement this plan?", optionId: "revise_plan", decision: .deny, persistScope: nil))
+        #expect(await decision.outcome == .selected(optionId: "revise_plan"))
+    }
+
+    @Test("a plan review approval must name the plan text the review parked with, unless it names none",
+          arguments: [
+              (digest: String(repeating: "0", count: 64) as String?, accepted: false),
+              (digest: ACPToolCallPresentationTests.planReviewDigest, accepted: true),
+              (digest: nil, accepted: true),
+          ])
+    func reviewApprovalNeedsDisplayedDigest(digest: String?, accepted: Bool) async throws {
+        let session = ACPSession(id: "s", agentId: "codex", worktreeId: "wt", title: "t")
+        let policy = ACPPermissionPolicy(session: session, log: .init(store: try makeStore()))
+        let params = ACPToolCallPresentationTests.codexReview()
+        async let decision = policy.evaluate(
+            scopeKey: "tool:Implement this plan?", options: params.options, params: params, requestID: .number(1))
+        await waitForPendingPermission(session)
+
+        #expect(await policy.userDecided(
+            scopeKey: "tool:Implement this plan?", optionId: "implement_plan", decision: .allow, persistScope: nil,
+            planDigest: digest) == accepted)
+        if !accepted {
+            #expect(policy.pendingPermissionRequestID == .number(1))
+            policy.userCancelled()
+        }
+        #expect(await decision.outcome == (accepted ? .selected(optionId: "implement_plan") : .cancelled))
+    }
+
     @Test("persisted user decisions commit before userDecided returns")
     func persistedUserDecisionIsAwaited() async throws {
         let store = try makeStore()

@@ -1695,15 +1695,23 @@ struct ACPSessionTests {
         return AnyCodable(["planFile": AnyCodable(payload)])
     }
 
-    @Test("an approved plan carries its plan file only when planFile was negotiated",
-          arguments: [(negotiated: true, attached: true), (negotiated: false, attached: false)])
-    func approvedPlanAttachesPlanFile(negotiated: Bool, attached: Bool) {
+    @Test("an approved plan carries the plan file its tool call or review named, only when planFile was negotiated",
+          arguments: [
+              (negotiated: true, fromReview: false, attached: true),
+              (negotiated: false, fromReview: false, attached: false),
+              (negotiated: true, fromReview: true, attached: true),
+          ])
+    func approvedPlanAttachesPlanFile(negotiated: Bool, fromReview: Bool, attached: Bool) {
         let session = ACPSession(id: "s", agentId: "claude", worktreeId: "w", title: "t")
         if negotiated { session.planFile = .init() }
         session.apply(.userMessageChunk(.text("Plan it")))
         session.apply(.toolCall(.init(
             toolCallId: "toolu_1", title: "Ready to code?", kind: "switch_mode", status: "pending",
-            metadata: Self.planFileMeta())))
+            metadata: fromReview ? nil : Self.planFileMeta())))
+        if fromReview {
+            session.noteReviewedPlanFile(ACPPermissionToolCall(
+                toolCallId: "toolu_1", title: "Ready to code?", kind: "switch_mode", metadata: Self.planFileMeta()))
+        }
         session.apply(.markdownPlan("plan-mode:toolu_1", "# Plan"))
 
         let document = session.transcript.messages.planDocuments.first

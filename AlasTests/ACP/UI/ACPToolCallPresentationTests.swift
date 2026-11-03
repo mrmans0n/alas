@@ -1,4 +1,5 @@
 import AppKit
+import CryptoKit
 import Foundation
 import Testing
 @testable import Alas
@@ -501,6 +502,108 @@ struct ACPToolCallPresentationTests {
             assets: assets,
             name: name
         )
+    }
+
+    struct PlanReviewCase: Sendable, CustomTestStringConvertible {
+        let name: String
+        let params: ACPPermissionRequestParams
+        var negotiated = true
+        var read: ACPPlanFileReadResult?
+        var source: ACPPlanReviewPresentation.Source?
+        var canOpen = false
+        var planId: String?
+        var testDescription: String { name }
+    }
+
+    nonisolated static let planReviewText = "# Plan\n- a"
+    nonisolated static let planReviewDigest = SHA256.hash(data: Data(planReviewText.utf8))
+        .map { String(format: "%02x", $0) }.joined()
+    nonisolated static let planReviewPath = "/Users/u/.claude/plans/a.md"
+    nonisolated static let otherDigest = String(repeating: "0", count: 64)
+
+    nonisolated static func codexReview() -> ACPPermissionRequestParams {
+        ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: .init(toolCallId: "plan-review:item_1", title: "Implement this plan?", kind: "switch_mode",
+                            rawInput: AnyCodable(["plan": AnyCodable(planReviewText)])),
+            options: [
+                .init(optionId: "implement_plan", name: "Yes", kind: "allow_once"),
+                .init(optionId: "revise_plan", name: "No", kind: "reject_once"),
+            ])
+    }
+
+    nonisolated static func claudeReview(sha256: String = planReviewDigest, kind: String = "switch_mode")
+        -> ACPPermissionRequestParams {
+        let payload: [String: AnyCodable] = [
+            "version": AnyCodable(1), "planId": AnyCodable("plan-mode:toolu_1"),
+            "path": AnyCodable(planReviewPath), "sha256": AnyCodable(sha256),
+        ]
+        return ACPPermissionRequestParams(
+            sessionId: "s",
+            toolCall: .init(toolCallId: "toolu_1", title: "Ready to code?", kind: kind,
+                            content: [.content(.text(planReviewText))],
+                            metadata: kind == "switch_mode" ? AnyCodable(["planFile": AnyCodable(payload)]) : nil),
+            options: [
+                .init(optionId: "default", name: "Yes", kind: "allow_once"),
+                .init(optionId: "plan", name: "No", kind: "reject_once"),
+            ])
+    }
+
+    nonisolated static func fileRead(_ sha256: String) -> ACPPlanFileReadResult {
+        .file(text: planReviewText, sha256: sha256, modified: Date(timeIntervalSince1970: 0))
+    }
+
+    @Test("a plan review shows its inline plan and the negotiated file's state", arguments: [
+        PlanReviewCase(name: "codex", params: codexReview(), source: .inline, planId: "item_1"),
+        PlanReviewCase(name: "claudeCurrent", params: claudeReview(), read: fileRead(planReviewDigest),
+                       source: .file(path: planReviewPath, state: .current), canOpen: true, planId: "plan-mode:toolu_1"),
+        PlanReviewCase(name: "claudeChanged", params: claudeReview(), read: fileRead(otherDigest),
+                       source: .file(path: planReviewPath, state: .changed), canOpen: true, planId: "plan-mode:toolu_1"),
+        PlanReviewCase(name: "claudeMissing", params: claudeReview(), read: .missing,
+                       source: .file(path: planReviewPath, state: .missing), planId: "plan-mode:toolu_1"),
+        PlanReviewCase(name: "claudeSymlink", params: claudeReview(), read: .notRegularFile,
+                       source: .file(path: planReviewPath, state: .unavailable), planId: "plan-mode:toolu_1"),
+        PlanReviewCase(name: "claudeChecking", params: claudeReview(), read: nil,
+                       source: .file(path: planReviewPath, state: .checking), planId: "plan-mode:toolu_1"),
+        PlanReviewCase(name: "digestMismatch", params: claudeReview(sha256: otherDigest), read: fileRead(otherDigest),
+                       source: .inline, planId: "plan-mode:toolu_1"),
+        PlanReviewCase(name: "notNegotiated", params: claudeReview(), negotiated: false, read: fileRead(planReviewDigest),
+                       source: .inline, planId: nil),
+        PlanReviewCase(name: "notAPlanReview", params: claudeReview(kind: "edit"), source: nil),
+    ])
+    func planReviewPresentation(_ row: PlanReviewCase) {
+        let presentation = ACPPlanReviewPresentation.make(
+            params: row.params, planFileNegotiated: row.negotiated, fileRead: row.read, binding: nil,
+            planRevisions: [:], contextResetCount: 0, foregroundTurnActive: true)
+        guard let source = row.source else {
+            #expect(presentation == nil)
+            return
+        }
+        #expect(presentation?.source == source)
+        #expect(presentation?.canOpenFile == row.canOpen)
+        #expect(presentation?.planId == row.planId)
+        #expect(presentation?.planText == Self.planReviewText)
+        #expect(presentation?.digest == Self.planReviewDigest)
+        #expect(presentation?.isStale == false)
+    }
+
+    @Test("a plan review is out of turn without a foreground turn and stale once its plan or context changed",
+          arguments: [
+              (foreground: false, revisions: [:], resets: 0, outOfTurn: true, stale: false),
+              (foreground: true, revisions: ["item_1": 1], resets: 0, outOfTurn: false, stale: true),
+              (foreground: true, revisions: [:], resets: 1, outOfTurn: false, stale: true),
+              (foreground: true, revisions: ["other": 3], resets: 0, outOfTurn: false, stale: false),
+          ] as [(foreground: Bool, revisions: [String: Int], resets: Int, outOfTurn: Bool, stale: Bool)])
+    func planReviewPresentationFlags(foreground: Bool, revisions: [String: Int], resets: Int,
+                                     outOfTurn: Bool, stale: Bool) {
+        let binding = ACPPlanReviewBinding(
+            requestID: .number(1), toolCallId: "plan-review:item_1", planId: "item_1",
+            digest: Self.planReviewDigest, planRevision: 0, contextResetCount: 0)
+        let presentation = ACPPlanReviewPresentation.make(
+            params: Self.codexReview(), planFileNegotiated: false, fileRead: nil, binding: binding,
+            planRevisions: revisions, contextResetCount: resets, foregroundTurnActive: foreground)
+        #expect(presentation?.isOutOfTurn == outOfTurn)
+        #expect(presentation?.isStale == stale)
     }
 
     private func writePNG(width: Int, height: Int, to url: URL) throws {
