@@ -65,6 +65,42 @@ public final class ACPSession: ChangeTracking, Identifiable {
     nonisolated public let owner: SessionOwnerID
     nonisolated public let createdAt: Date
     nonisolated public let restoredFromPersistence: Bool
+    public private(set) var v2Projection: ACPV2SessionProjection.State?
+    private(set) var v2ProjectionEpoch: UUID?
+    private var legacyProjectors: Set<UUID> = []
+
+    func reserveV2Projection(epoch: UUID) throws {
+        guard v2ProjectionEpoch == nil, legacyProjectors.isEmpty else { throw ACPV2SessionProjection.Failure.invalidDestination }
+        v2ProjectionEpoch = epoch
+    }
+
+    func storeV2Projection(_ value: ACPV2SessionProjection.State, authorize: () -> Bool) -> Bool {
+        guard authorize() else { return false }
+        willChange.send()
+        guard authorize() else { return false }
+        v2Projection = value
+        return true
+    }
+
+    func releaseV2Projection(epoch: UUID) {
+        guard v2ProjectionEpoch == epoch else { return }
+        v2ProjectionEpoch = nil
+        willChange.send()
+        // An observer can install a successor while the old reservation is
+        // released. Never overwrite its display state on return.
+        guard v2ProjectionEpoch == nil, v2Projection?.epoch == epoch else { return }
+        v2Projection?.isObserving = false
+        v2Projection?.foreground = .unknown
+    }
+
+    func reserveLegacyProjection(epoch: UUID) -> Bool {
+        guard v2ProjectionEpoch == nil else { return false }
+        legacyProjectors.insert(epoch)
+        return true
+    }
+
+    func releaseLegacyProjection(epoch: UUID) { legacyProjectors.remove(epoch) }
+
     public let transcript = ACPTranscript()
     public let composer = ACPComposerState()
     public let terminalHost: ACPTerminalHost = ACPTerminalHost(sessionCwd: "/", sessionEnv: [:])

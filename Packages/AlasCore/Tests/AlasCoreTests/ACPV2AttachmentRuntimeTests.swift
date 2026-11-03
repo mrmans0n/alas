@@ -6,6 +6,118 @@ import AlasCore
 
 @MainActor
 struct ACPV2AttachmentRuntimeTests {
+    @Test func canonicalProjectionCannotSkipBurstCompletions() async throws {
+        let fixture = try await RuntimeFixture()
+        let session = ACPSession(id: "local", agentId: "fixture", worktreeId: "w", title: "V2")
+        var ended: [Int] = []
+        let projection = try ACPV2SessionProjection(session: session, upstreamSessionId: "upstream", connectionID: fixture.client.updateConnectionID,
+            isCurrent: { fixture.current }, onChange: { ended += $0.liveCompletions.map(\.generation) })
+        let runtime = try fixture.runtime(onCanonicalChange: projection.apply)
+        defer { projection.stop()
+        runtime.stop()
+        fixture.transport.terminate() }
+        #expect(runtime.start())
+        try await eventually { await MainActor.run { runtime.status == .ready } }
+        let rowID = UUID()
+        try projection.registerOptimisticRow(.user(id: rowID, text: "prompt", attachments: []))
+        let accepted = try await runtime.submit(id: UUID(), localRowID: rowID, params: .init(sessionId: "upstream", prompt: []))
+        #expect(session.v2Projection?.submissions[accepted.registration.sequence] == .accepted(messageID: "u1"))
+        #expect(ended.isEmpty)
+        for _ in 0..<3 { fixture.update(state: "running")
+        fixture.update(state: "idle", extra: #", "stopReason":"end_turn""#) }
+        try await eventually { await MainActor.run { ended.count == 3 } }
+        #expect(ended == [1, 2, 3])
+        fixture.transport.terminate()
+        try await eventually { await MainActor.run { runtime.status == .observationLost } }
+        #expect(session.v2Projection?.foreground == .unknown)
+        #expect(ended == [1, 2, 3])
+    }
+
+    @Test(arguments: [false, true])
+    func postInstallationPromptCanReconcileItsAcceptedEcho(registered: Bool) async throws {
+        let fixture = try await RuntimeFixture()
+        let session = ACPSession(id: "local", agentId: "fixture", worktreeId: "w", title: "V2")
+        let projection = try ACPV2SessionProjection(session: session, upstreamSessionId: "upstream", connectionID: fixture.client.updateConnectionID, isCurrent: { fixture.current })
+        let runtime = try fixture.runtime(onCanonicalChange: projection.apply)
+        defer { projection.stop()
+        runtime.stop()
+        fixture.transport.terminate() }
+        _ = runtime.start()
+        try await eventually { await MainActor.run { runtime.status == .ready } }
+        let rowID = UUID()
+        if !registered {
+            await #expect(throws: (any Error).self) {
+                try await runtime.submit(id: UUID(), localRowID: rowID, params: .init(sessionId: "upstream", prompt: []))
+            }
+            #expect(fixture.transport.writes.withLock { $0 }.isEmpty)
+            #expect(session.transcript.messages.isEmpty)
+            return
+        }
+        try projection.registerOptimisticRow(.user(id: rowID, text: "prompt", attachments: []))
+        _ = try await runtime.submit(id: UUID(), localRowID: rowID, params: .init(sessionId: "upstream", prompt: []))
+        fixture.transport.emit(Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"user_message","messageId":"u1","content":[{"type":"text","text":"prompt"}]}}}"#.utf8))
+        try await eventually { await MainActor.run {
+            if case .user(_, let id, _, _, _, _)? = session.transcript.messages.first, id == "u1" { return true }
+            return runtime.status != .ready
+        } }
+        #expect(runtime.status == .ready)
+        #expect(session.transcript.messages.count == 1)
+        if case .user(let id, let remote, _, _, _, _)? = session.transcript.messages.first { #expect(id == rowID && remote == "u1") }
+        #expect(fixture.transport.writes.withLock { $0.count } == 1)
+    }
+
+    @Test func runtimeStopWithdrawsProjectedActivitySynchronously() async throws {
+        let fixture = try await RuntimeFixture()
+        let session = ACPSession(id: "local", agentId: "fixture", worktreeId: "w", title: "V2")
+        let projection = try ACPV2SessionProjection(session: session, upstreamSessionId: "upstream", connectionID: fixture.client.updateConnectionID, isCurrent: { true })
+        let runtime = try fixture.runtime(onCanonicalChange: projection.apply)
+        defer { projection.stop()
+        runtime.stop()
+        fixture.transport.terminate() }
+        _ = runtime.start()
+        fixture.update(state: "running")
+        try await eventually { await MainActor.run { session.v2Projection?.foreground == .running } }
+        runtime.stop()
+        #expect(session.v2Projection?.isObserving == false)
+        #expect(session.v2Projection?.foreground == .unknown)
+        #expect(session.v2Projection?.canonical.lifecycle.lastForegroundCompletion == nil)
+    }
+
+    @Test(arguments: ["stop", "throw", "ownership"])
+    func projectionWithdrawalStopsSiblingEffects(loss: String) async throws {
+        let fixture = try await RuntimeFixture()
+        let reference = ProjectionRuntimeReference()
+        let consumed = Mutex(0)
+        let submissions = RuntimeSubmissionGate(base: fixture.persistence)
+        let runtime = try fixture.runtime(journals: .init(persistence: fixture.persistence, submissions: submissions), onCanonicalChange: { publication in
+            guard case .update = publication.change else { return }
+            if loss == "stop" { reference.runtime?.stop() }
+            else if loss == "ownership" { fixture.current = false }
+            else { throw ProjectionRuntimeError.injected }
+        })
+        reference.runtime = runtime
+        defer { reference.runtime = nil
+        runtime.stop()
+        fixture.transport.terminate() }
+        #expect(runtime.start())
+        try await eventually { await MainActor.run { runtime.status == .ready } }
+        let finished = Mutex(false)
+        let sending = Task { defer { finished.withLock { $0 = true } }
+        return try await runtime.submit(id: UUID(), localRowID: UUID(), params: .init(sessionId: "upstream", prompt: [])) }
+        defer { sending.cancel()
+        submissions.release() }
+        try await eventually { submissions.entered.withLock { $0 } }
+        fixture.transport.emit(Data(#"{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"upstream","update":{"sessionUpdate":"state_update","state":"running"}}}"#.utf8), consumed: { consumed.withLock { $0 += 1 } })
+        try await eventually { await MainActor.run { runtime.status != .ready } }
+        submissions.release()
+        try await eventually { finished.withLock { $0 } }
+        await #expect(throws: (any Error).self) { try await sending.value }
+        #expect(consumed.withLock { $0 } == 0)
+        #expect(fixture.transport.writes.withLock { $0 }.isEmpty)
+        if loss == "throw" { guard case .blocked(.updates(.projection)) = runtime.status else { Issue.record("Lost projection cause")
+        return } }
+    }
+
     @Test func everyCommittedRequestIsOfferedWithItsOriginalCaptureAcrossABurst() async throws {
         let fixture = try await RuntimeFixture()
         let runtime = try fixture.runtime()
@@ -287,12 +399,13 @@ private final class RuntimeFixture {
         _ = try await persistence.seizeLease(sessionId: "local", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
         try client.start()
     }
-    func runtime(journals: ACPV2AttachmentRuntime.Journals? = nil) throws -> ACPV2AttachmentRuntime {
+    func runtime(journals: ACPV2AttachmentRuntime.Journals? = nil,
+        onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil) throws -> ACPV2AttachmentRuntime {
         try .init(sessionId: "local", upstreamSessionId: "upstream", attachment: .init(stdioClient: client), fence: fence,
             journals: journals ?? .init(persistence: persistence), isCurrent: { [weak self] in self?.onCurrentCheck?()
             return self?.current == true },
             onRequest: { [weak self] offer in self?.offers.append(offer)
-            self?.onOffer?(offer) })
+            self?.onOffer?(offer) }, onCanonicalChange: onCanonicalChange)
     }
     func request(id: Int) {
         let count = consumed
@@ -413,3 +526,6 @@ private final class RuntimeSubmissionGate: ACPV2SubmissionPersisting, Sendable {
         try await base.loadV2SubmissionPage(sessionId: sessionId, upstreamSessionId: upstreamSessionId, source: source, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
     }
 }
+
+@MainActor private final class ProjectionRuntimeReference { var runtime: ACPV2AttachmentRuntime? }
+private enum ProjectionRuntimeError: Error { case injected }

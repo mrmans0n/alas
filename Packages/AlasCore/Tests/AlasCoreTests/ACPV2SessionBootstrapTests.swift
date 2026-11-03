@@ -7,6 +7,31 @@ import AlasCore
 
 @MainActor
 struct ACPV2SessionBootstrapTests {
+    @Test func setupAndReplayPopulateProjectionWithoutLiveCompletion() async throws {
+        let persistence = try await Self.persistence()
+        let transport = BootstrapTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        let session = ACPSession(id: "local", agentId: "fixture", worktreeId: "w", title: "Projection")
+        var ended = 0
+        var defaults = 0
+        let projection = try ACPV2SessionProjection(session: session, upstreamSessionId: "upstream", connectionID: client.updateConnectionID,
+            isCurrent: { true }, onChange: { notification in
+                ended += notification.liveCompletions.count
+                if case .setupDefault = notification.publication.change { defaults += 1 }
+            })
+        let bootstrap = try ACPV2SessionBootstrap(attachment: .init(stdioClient: client), fence: Self.fence,
+            persistence: persistence, deadline: .now.advanced(by: .seconds(60)), isCurrent: { true }, onRequest: { _ in }, onCanonicalChange: projection.apply)
+        defer { projection.stop()
+        bootstrap.stop()
+        transport.terminate() }
+        _ = try await bootstrap.initialize()
+        let installed = try await bootstrap.createSession(.init(cwd: "/w", mcpServers: []))
+        #expect(defaults == 1 && ended == 0)
+        #expect(session.v2Projection?.foreground == .idle)
+        #expect(installed.runtime.state.lifecycle.lastForegroundCompletion == nil)
+    }
+
     @Test func freshSetupKeepsRawEvidenceAndRequiresAdvertisedSessionMethods() throws {
         let bytes = Data(#" {"sessionId":"upstream","configOptions":[{"type":"future","n":1e999}],"availableCommands":[],"future":true} "#.utf8)
         let result = try ACPV2SessionNewResult.decode(bytes)

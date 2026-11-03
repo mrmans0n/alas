@@ -72,6 +72,16 @@ public final class TrackedValue<Value> {
     init(_ value: Value) {
         self.value = value
     }
+    /// A synchronous observer may withdraw ownership before the proposed value
+    /// is stored. Callers send their owner's willChange before invoking this.
+    @MainActor
+    public func setIfCurrent(_ newValue: Value, authorize: () -> Bool) -> Bool {
+        guard authorize() else { return false }
+        signal.send(newValue)
+        guard authorize() else { return false }
+        value = newValue
+        return true
+    }
 }
 
 /// A stored property of a `ChangeTracking` object that announces changes:

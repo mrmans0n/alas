@@ -231,6 +231,37 @@ public final class ACPTranscript: ChangeTracking {
     /// through it, so restored state can watch a reattached turn resume here.
     public var onMessageAdded: ((ACPMessage) -> Void)?
 
+    /// Commit one projected entity after synchronous observers have had a
+    /// chance to withdraw the epoch. No timestamp/cache changes precede that.
+    func projectMessage(_ message: ACPMessage, at index: Int, replacing: Bool,
+        removingIndices: [Int], authorize: @escaping () -> Bool) -> Bool {
+        guard authorize(), index >= 0 else { return false }
+        let old = messages
+        var next = old
+        for removal in removingIndices.sorted(by: >) { next.remove(at: removal) }
+        guard index <= next.count else { return false }
+        if replacing {
+            guard next.indices.contains(index) else { return false }
+            next[index] = message
+        } else { next.insert(message, at: index) }
+        onNextPromptActivity?()
+        guard authorize() else { return false }
+        willChange.send()
+        guard $messages.setIfCurrent(next, authorize: authorize) else { return false }
+        let mutation: MessagesMutation?
+        if removingIndices.isEmpty, replacing { mutation = .replace(index: index, old: old[index], new: message) }
+        else if removingIndices.isEmpty, index == old.count { mutation = .append(message) }
+        else { mutation = nil }
+        synchronizeMessageCreatedAts()
+        messagesGeneration &+= 1
+        guard updatePlanCaches(for: mutation, authorize: authorize) else { return false }
+        updateMessageIndexCaches(for: mutation)
+        recordMessagesDiff(old: old)
+        guard authorize() else { return false }
+        if !replacing { onMessageAdded?(message) }
+        return authorize()
+    }
+
     public func appendMessage(_ message: ACPMessage, createdAt: Date = Date()) {
         messageCreatedAts[stableId(for: message)] = createdAt
         pendingMessagesMutation = .append(message)
@@ -432,7 +463,8 @@ public final class ACPTranscript: ChangeTracking {
         return toolCall.toolCallId
     }
 
-    private func updatePlanCaches(for mutation: MessagesMutation?) {
+    @discardableResult
+    private func updatePlanCaches(for mutation: MessagesMutation?, authorize: (() -> Bool)? = nil) -> Bool {
         switch mutation {
         case .append(let message):
             let index = messages.count - 1
@@ -441,17 +473,17 @@ public final class ACPTranscript: ChangeTracking {
             } else if case .plan = message {
                 latestPlanMessageIndex = index
             }
-            publishPlanCaches()
+            return publishPlanCaches(authorize: authorize)
         case .replace(let index, let old, let new):
             switch (old, new) {
             case (.user, .user):
                 break
             case (.plan, .plan):
                 if index == latestPlanMessageIndex {
-                    publishPlanCaches()
+                    return publishPlanCaches(authorize: authorize)
                 }
             case (.user, _), (_, .user), (.plan, _), (_, .plan):
-                rebuildPlanCaches()
+                return rebuildPlanCaches(authorize: authorize)
             default:
                 break
             }
@@ -470,7 +502,7 @@ public final class ACPTranscript: ChangeTracking {
                     return false
                 }
             }
-            publishPlanCaches()
+            return publishPlanCaches(authorize: authorize)
         case .insert(let index):
             // Unlike `.prepend`, only indices AT OR AFTER the insertion
             // point shift — an insertion elsewhere in the array leaves an
@@ -482,15 +514,17 @@ public final class ACPTranscript: ChangeTracking {
             case .user where latestUserMessageIndex == nil: latestUserMessageIndex = index
             default: break
             }
-            publishPlanCaches()
+            return publishPlanCaches(authorize: authorize)
         case .planNeutral:
             break
         case nil:
-            rebuildPlanCaches()
+            return rebuildPlanCaches(authorize: authorize)
         }
+        return authorize?() ?? true
     }
 
-    private func rebuildPlanCaches() {
+    @discardableResult
+    private func rebuildPlanCaches(authorize: (() -> Bool)? = nil) -> Bool {
         #if DEBUG
         planCacheRebuildCountForTests += 1
         #endif
@@ -502,10 +536,10 @@ public final class ACPTranscript: ChangeTracking {
             if case .user = $0 { return true }
             return false
         }
-        publishPlanCaches()
+        return publishPlanCaches(authorize: authorize)
     }
 
-    private func publishPlanCaches() {
+    private func publishPlanCaches(authorize: (() -> Bool)? = nil) -> Bool {
         let newCurrentPlan: [ACPMessage.PlanItem]?
         if let index = currentPlanMessageIndex,
            case .plan(_, let items) = messages[index] {
@@ -514,8 +548,13 @@ public final class ACPTranscript: ChangeTracking {
             newCurrentPlan = nil
         }
         if currentPlan != newCurrentPlan {
+            if let authorize {
+                willChange.send()
+                return $currentPlan.setIfCurrent(newCurrentPlan, authorize: authorize)
+            }
             currentPlan = newCurrentPlan
         }
+        return authorize?() ?? true
     }
 
     // MARK: - Remote change tracking
