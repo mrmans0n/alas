@@ -3,9 +3,76 @@ import Synchronization
 import Testing
 import AlasCore
 @testable import AlasSessions
+@testable import AlasFoundation
 
 @MainActor
 struct ACPV2AttachmentRuntimeTests {
+    @Test func retainedInboundCallbacksPreserveRequestsNotificationsAndDiagnostics() async throws {
+        let fixture = try await RuntimeFixture()
+        let historical = try await fixture.persistence.registerV2InboundLedger(sessionId: "local", upstreamSessionId: "upstream", source: .stdio(connectionID: fixture.client.updateConnectionID), fence: fixture.fence)
+        _ = try await fixture.persistence.retainV2Inbound(.init(frame: Data(#"{"jsonrpc":"2.0","id":99,"method":"peer/history"}"#.utf8), connectionID: fixture.client.updateConnectionID, source: .stdio), to: historical, fence: fixture.fence)
+        var events: [ACPV2AttachmentRuntime.InboundEvent] = []
+        let runtime = try fixture.runtime(onInbound: { event in
+            let rows = try ACPSessionStore(path: fixture.persistence.path).loadV2InboundLedgerPage(stream: historical).records
+            #expect(rows.contains(event.record))
+            events.append(event)
+        })
+        defer { runtime.stop()
+        fixture.transport.terminate() }
+        _ = runtime.start()
+        fixture.request(id: 7)
+        fixture.transport.emit(Data(#"{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":7}}"#.utf8))
+        fixture.transport.emit(Data([255]))
+        try await eventually { await MainActor.run { events.count == 3 } }
+        #expect(events.filter { $0.request != nil }.count == 1)
+        #expect(events.filter(\.isDiagnostic).count == 1)
+        #expect(events.allSatisfy { $0.attachmentID == runtime.attachmentID && $0.record.ordinal > 1 })
+    }
+
+    @Test(arguments: ["restoring", "ready"])
+    func lifecycleCallbackStopCannotStartSuccessorWork(phase: String) async throws {
+        let fixture = try await RuntimeFixture()
+        let reference = ProjectionRuntimeReference()
+        let runtime = try fixture.runtime(onLifecycleChange: { event in
+            if (phase == "restoring" && event.status == .restoring) || (phase == "ready" && event.status == .ready) { reference.runtime?.stop() }
+        })
+        reference.runtime = runtime
+        defer { reference.runtime = nil
+        runtime.stop()
+        fixture.transport.terminate() }
+        #expect(runtime.start() == (phase == "ready"))
+        try await eventually { await MainActor.run { runtime.status == .stopped } }
+        #expect(fixture.transport.writes.withLock { $0 }.isEmpty)
+    }
+
+    @Test func terminalLifecycleWithdrawsWriterAuthorityBeforeCallingObservers() async throws {
+        let persistence = try await ACPV2SessionBootstrapTests.persistence()
+        let transport = BootstrapSerializedTransport()
+        let client = ACPStdioClient(transport: transport, sessionUpdateProtocolVersion: .v2)
+        try client.start()
+        var offers: [ACPV2AttachmentRuntime.Request] = []
+        let runtime = try ACPV2AttachmentRuntime(sessionId: "local", upstreamSessionId: "upstream", attachment: .init(stdioClient: client), fence: ACPV2SessionBootstrapTests.fence,
+            journals: .init(persistence: persistence), isCurrent: { true }, onRequest: { offers.append($0) },
+            onLifecycleChange: { event in if event.status == .stopped { transport.release.signal() } })
+        defer { runtime.stop()
+        transport.release.signal()
+        Task { await client.shutdown() } }
+        _ = runtime.start()
+        transport.emit(Data(#"{"jsonrpc":"2.0","id":7,"method":"peer/request"}"#.utf8))
+        try await eventually { await MainActor.run { runtime.status == .ready && offers.count == 1 } }
+        let blocker = Task { await transport.writeFrame(BootstrapSerializedTransport.blocker, authorize: { true }) }
+        try await eventually { transport.blocked.withLock { $0 } }
+        let request = try #require(offers.first)
+        let sending = Task { try await runtime.respond(to: request, intentID: UUID(), attemptID: UUID(), operationKey: .init(rawValue: "answer"), frame: Self.answer) }
+        defer { sending.cancel() }
+        try await eventually { transport.attempted.withLock { $0 } }
+        runtime.stop()
+        await #expect(throws: (any Error).self) { try await sending.value }
+        #expect(await blocker.value == .written)
+        try await eventually { transport.settled.withLock { $0 } }
+        #expect(transport.bytes.withLock { $0 } == [BootstrapSerializedTransport.blocker])
+    }
+
     @Test func canonicalProjectionCannotSkipBurstCompletions() async throws {
         let fixture = try await RuntimeFixture()
         let session = ACPSession(id: "local", agentId: "fixture", worktreeId: "w", title: "V2")
@@ -400,12 +467,14 @@ private final class RuntimeFixture {
         try client.start()
     }
     func runtime(journals: ACPV2AttachmentRuntime.Journals? = nil,
-        onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil) throws -> ACPV2AttachmentRuntime {
+        onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil,
+        onInbound: (@MainActor (ACPV2AttachmentRuntime.InboundEvent) throws -> Void)? = nil,
+        onLifecycleChange: (@MainActor (ACPV2AttachmentRuntime.LifecycleEvent) -> Void)? = nil) throws -> ACPV2AttachmentRuntime {
         try .init(sessionId: "local", upstreamSessionId: "upstream", attachment: .init(stdioClient: client), fence: fence,
             journals: journals ?? .init(persistence: persistence), isCurrent: { [weak self] in self?.onCurrentCheck?()
             return self?.current == true },
             onRequest: { [weak self] offer in self?.offers.append(offer)
-            self?.onOffer?(offer) }, onCanonicalChange: onCanonicalChange)
+            self?.onOffer?(offer) }, onCanonicalChange: onCanonicalChange, onInbound: onInbound, onLifecycleChange: onLifecycleChange)
     }
     func request(id: Int) {
         let count = consumed

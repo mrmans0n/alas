@@ -3,6 +3,7 @@ import Synchronization
 import Testing
 import AlasCore
 @testable import AlasACP
+@testable import AlasSessions
 
 struct ACPBrokerRawClientTests {
     @Test func currentPendingViewRefreshesWithoutConsumingOrRevivingDetachedOrigins() async throws {
@@ -970,6 +971,71 @@ struct ACPBrokerRawClientTests {
         await client.detach()
     }
 
+    @MainActor
+    @Test(arguments: ["delayed", "laterOrigin", "otherGeneration", "acknowledged"])
+    func qualifiedCancellationMatchesDelayedPendingOrigins(reason: String) async throws {
+        let cancel = Data(#"{"jsonrpc":"2.0","method":"$/cancel_request","params":{"requestId":"p"}}"#.utf8)
+        let service = RawBrokerFixture(rawBytes: cancel)
+        var pending = ACPBrokerPendingRequest(requestId: "p", adapterRequestId: .string("p"), kind: .permission, payload: .null)
+        pending.rawFrame = .init(bytes: Data(#"{"jsonrpc":"2.0","id":"p","method":"session/request_permission","params":{"sessionId":"upstream","title":"Choose","options":[{"optionId":"allow","name":"Allow","kind":"allow_once"}]}}"#.utf8))
+        pending.originCursor = .init(rawValue: reason == "laterOrigin" ? 2 : 1)
+        await service.setPendingOverride([pending])
+        if reason == "acknowledged" { await service.preloadAcknowledgement(2) }
+        let client = reason == "acknowledged" ? ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
+            command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test", initialBrokerGeneration: .init(rawValue: 7),
+            initialAcknowledgedCursor: .init(rawValue: 2), wireContext: .rawV2) : makeClient(service)
+        let opened = try await client.start()
+        defer { Task { await client.detach() } }
+        let persistence = ACPSessionPersistence(path: FileManager.default.temporaryDirectory.appendingPathComponent("decisions-broker-\(UUID()).sqlite").path)
+        var row = ACPSessionRow(id: "s", agentId: "fixture", title: "Decisions", autoRun: false, createdAt: 1, updatedAt: 1, lastOpenedAt: 1, archived: false)
+        row.acpBrokerId = "raw"
+        row.acpBrokerGeneration = 7
+        row.acpBrokerAcknowledgedCursor = reason == "acknowledged" ? 2 : 0
+        row.acpBrokerWireContextJSON = try ACPBrokerWireContext.rawV2.persistedJSON()
+        try await persistence.upsertSession(row)
+        _ = try await persistence.seizeLease(sessionId: "s", instanceId: "A", pid: 1, now: 1, leaseToken: "owner")
+        let control = DecisionControl()
+        let coordinator = ACPV2RequestDecisionCoordinator(upstreamSessionId: "upstream", support: .init(), isCurrent: { true },
+            onEvent: { control.events.append($0) })
+        var delayed: ACPV2AttachmentRuntime.InboundEvent?
+        var cancelled = false
+        let runtime = try ACPV2AttachmentRuntime(sessionId: "s", upstreamSessionId: "upstream", attachment: .init(brokerClient: client, opened: opened),
+            fence: .init(sessionId: "s", ownerInstance: "A", token: "owner"), journals: .init(persistence: persistence), isCurrent: { true }, onRequest: { _ in },
+            onInbound: { event in
+                if event.request != nil { delayed = event
+                return }
+                if reason == "laterOrigin" && event.currentSource.cursorForDecisionTest == 2 { return }
+                if reason == "otherGeneration", case .broker(let source, let pendingID) = event.currentSource {
+                    try coordinator.receive(.init(attachmentID: event.attachmentID, record: event.record,
+                        currentSource: .broker(provenance: .init(brokerID: source.brokerID, generation: .init(rawValue: 8), cursor: source.cursor, origin: source.origin), pendingRequestID: pendingID),
+                        receiptID: event.receiptID, isDiagnostic: event.isDiagnostic, request: nil))
+                } else { try coordinator.receive(event) }
+                if event.currentSource.cursorForDecisionTest == 2 || reason == "laterOrigin" { cancelled = true }
+            }, onLifecycleChange: coordinator.runtimeDidChange)
+        defer { coordinator.stop()
+        runtime.stop() }
+        try coordinator.bind(to: runtime)
+        #expect(runtime.start())
+        do { try await eventually { await MainActor.run { delayed != nil && runtime.status == .ready && (cancelled || reason == "acknowledged") } } }
+        catch { Issue.record("Broker setup: \(runtime.status), delayed=\(delayed != nil), cancelled=\(cancelled)")
+        throw error }
+        let capture = try #require(delayed)
+        try coordinator.receive(capture)
+        try coordinator.receive(capture)
+        if reason == "delayed" {
+            try await eventually { await service.exactReplies.count == 1 }
+            #expect(control.handles.isEmpty)
+            let frame = try #require(await service.exactReplies.first?.frame.bytes)
+            #expect(String(decoding: frame, as: UTF8.self).contains("cancelled"))
+        } else {
+            try await eventually { await MainActor.run { control.handles.count == 1 } }
+            #expect(await service.exactReplies.isEmpty)
+            _ = try await coordinator.decide(control.handles[0], decision: .selectPermission(optionID: "allow"))
+            #expect(await service.exactReplies.count == 1)
+        }
+        #expect(await service.closeCount == 0)
+    }
+
     private func makeClient(_ service: RawBrokerFixture, context: ACPBrokerWireContext = .rawV2) -> ACPBrokerClient {
         ACPBrokerClient(service: service, brokerId: .init(rawValue: "raw"), sessionId: "s",
             command: "fixture", args: [], cwd: "/tmp", env: [:], operationKeyPrefix: "test",
@@ -1024,6 +1090,7 @@ private actor RawBrokerFixture: ACPBrokerServicing {
     func releaseOpen() { openGate.continuation.yield(()) }
     let pending: Bool
     private var pendingOverride: [ACPBrokerPendingRequest]?
+    func preloadAcknowledgement(_ value: UInt64) { acks = [value] }
     func setPendingOverride(_ value: [ACPBrokerPendingRequest]) { pendingOverride = value }
     let isError: Bool
     let adapterError: Data?
@@ -1328,4 +1395,8 @@ private final class NSLockState<Value: Sendable>: @unchecked Sendable {
     func read() -> Value { lock.lock()
     defer { lock.unlock() }
     return value }
+}
+
+private extension ACPV2InboundDelivery.Source {
+    var cursorForDecisionTest: UInt64? { if case .broker(let source, _) = self { source.cursor.rawValue } else { nil } }
 }

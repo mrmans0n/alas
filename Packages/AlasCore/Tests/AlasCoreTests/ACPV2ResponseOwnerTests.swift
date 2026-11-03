@@ -6,6 +6,24 @@ import AlasCore
 
 @MainActor
 struct ACPV2ResponseOwnerTests {
+    @Test(arguments: ["available", "intent", "removed", "read-failure"])
+    func responseInspectionObservesAuthorityWithoutWriting(reason: String) async throws {
+        let fixture = try await ResponseFixture()
+        defer { fixture.transport.terminate() }
+        if reason == "intent" { _ = try await fixture.persistence.registerV2ResponseIntent(id: UUID(), request: fixture.request, in: fixture.stream, frame: ResponseFixture.answer, fence: fixture.fence) }
+        if reason == "removed" { await fixture.client.shutdown() }
+        let owner = try fixture.owner(journal: ResponseJournal(base: fixture.persistence, fail: reason == "read-failure" ? "inspection" : nil))
+        let result = try await owner.inspect(request: fixture.request, delivery: fixture.delivery)
+        switch reason {
+        case "available": #expect(result == .available)
+        case "removed": #expect(result == .unavailable)
+        case "read-failure": #expect(result == .observationLost)
+        default: guard case .alreadyChosen = result else { Issue.record("Missing chosen evidence")
+        return }
+        }
+        #expect(fixture.transport.frames.withLock { $0 }.isEmpty)
+    }
+
     @Test func exactResponseCommitsBeforeHandoffAndCopiedCallsNeverWriteAgain() async throws {
         let fixture = try await ResponseFixture()
         defer { fixture.transport.terminate() }
@@ -346,6 +364,11 @@ actor ResponseJournal: ACPV2ResponseLedgerPersisting {
         await withCheckedContinuation { waiter = $0 }
     }
     private func check(_ phase: String) throws { if fail == phase { throw ACPV2ResponseOwner.Failure.persistence(message: "injected") } }
+    func loadV2ResponseIntentPage(stream: ACPV2InboundLedgerStream, after: ACPV2ResponseLedgerContinuation?, maxRecords: Int, maxBytes: Int) async throws -> ACPV2ResponseLedgerPage<ACPV2ResponseIntent> {
+        try check("inspection")
+        await pause("inspection")
+        return try await base.loadV2ResponseIntentPage(stream: stream, after: after, maxRecords: maxRecords, maxBytes: maxBytes)
+    }
     func registerV2ResponseIntent(id: UUID, request: ACPV2InboundLedgerRecord, in stream: ACPV2InboundLedgerStream,
         frame: Data, fence: ACPSessionLeaseFence) async throws -> ACPV2ResponseLedgerReceipt<ACPV2ResponseIntent> {
         try check("intent")

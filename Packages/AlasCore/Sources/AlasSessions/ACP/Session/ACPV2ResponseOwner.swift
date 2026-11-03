@@ -3,6 +3,8 @@ import Synchronization
 import AlasACP
 
 public protocol ACPV2ResponseLedgerPersisting: Sendable {
+    func loadV2ResponseIntentPage(stream: ACPV2InboundLedgerStream, after: ACPV2ResponseLedgerContinuation?,
+        maxRecords: Int, maxBytes: Int) async throws -> ACPV2ResponseLedgerPage<ACPV2ResponseIntent>
     func registerV2ResponseIntent(id: UUID, request: ACPV2InboundLedgerRecord, in stream: ACPV2InboundLedgerStream,
         frame: Data, fence: ACPSessionLeaseFence) async throws -> ACPV2ResponseLedgerReceipt<ACPV2ResponseIntent>
     func registerV2ResponseAttempt(id: UUID, for intent: ACPV2ResponseIntent, operationKey: ACPV2ReplyOperationKey,
@@ -24,6 +26,46 @@ public final class ACPV2ResponseOwner {
         /// verified. This is never a durable receipt or permission to resend.
         case outcomePersistence(attemptID: UUID, fact: ACPV2ResponseFact, message: String)
     }
+    public enum ResponseAvailability: Equatable, Sendable {
+        case available, unavailable, observationLost
+        /// Nil means a local operation claimed the origin before its intent
+        /// COMMIT. A nonnil value is historical evidence, never reply authority.
+        case alreadyChosen(ACPV2ResponseIntent?)
+    }
+
+    public func inspect(request: ACPV2InboundLedgerRecord, delivery: ACPV2InboundDelivery? = nil) async throws -> ResponseAvailability {
+        try requireCurrent()
+        guard request.streamID == stream.id else { return .unavailable }
+        if operations[request.ordinal] != nil { return .alreadyChosen(nil) }
+        let reconciled = await attachment.reconcile(request, in: stream, delivery: delivery)
+        try requireCurrent()
+        switch reconciled {
+        case .unavailable: return .unavailable
+        case .observationLost: return .observationLost
+        case .eligible: break
+        }
+        var after: ACPV2ResponseLedgerContinuation?
+        repeat {
+            let page: ACPV2ResponseLedgerPage<ACPV2ResponseIntent>
+            do { page = try await journal.loadV2ResponseIntentPage(stream: stream, after: after, maxRecords: 128, maxBytes: 1_048_576) }
+            catch { try requireCurrent()
+            return .observationLost }
+            try requireCurrent()
+            guard !page.containsOversizedRecord, page.records.count <= 128, page.isAtEnd == (page.next == nil),
+                  page.next == nil || page.next != after else { return .observationLost }
+            for intent in page.records {
+                guard intent.stream == stream else { return .observationLost }
+                if intent.request.ordinal == request.ordinal {
+                    guard responseRequestsEqual(intent.request, request) else { return .observationLost }
+                    return .alreadyChosen(intent)
+                }
+            }
+            after = page.next
+        } while after != nil
+        if operations[request.ordinal] != nil { return .alreadyChosen(nil) }
+        return .available
+    }
+
     public typealias Receipt = ACPV2ResponseLedgerReceipt<ACPV2ResponseObservation>
     public struct Event: Sendable {
         public let ordinal: Int64
@@ -34,9 +76,20 @@ public final class ACPV2ResponseOwner {
     public private(set) var isStopped = false
 
     private final class CallerCancellation: Sendable {
-        private let cancelled = Mutex(false)
-        func cancel() { cancelled.withLock { $0 = true } }
-        var isCancelled: Bool { cancelled.withLock { $0 } }
+        private struct State { var cancelled = false
+        var worker: Task<Void, Never>? }
+        private let state = Mutex(State())
+        func install(_ worker: Task<Void, Never>) {
+            let cancelled = state.withLock { value in value.worker = worker
+            return value.cancelled }
+            if cancelled { worker.cancel() }
+        }
+        func cancel() {
+            let worker = state.withLock { value in value.cancelled = true
+            return value.worker }
+            worker?.cancel()
+        }
+        var isCancelled: Bool { state.withLock { $0.cancelled } }
     }
 
     private final class Operation {
@@ -123,12 +176,15 @@ public final class ACPV2ResponseOwner {
                     operation.waiters[caller] = waiter
                     operations[request.ordinal] = operation
                     publish(operation)
-                    operation.worker = Task { [weak self] in await self?.run(operation) }
+                    let worker = Task<Void, Never> { [weak self] in await self?.run(operation) }
+                    operation.worker = worker
+                    cancellation.install(worker)
                 } catch { waiter.resume(throwing: error) }
             }
         } onCancel: {
             // The worker has a different Task. Publish cancellation before the
-            // actor hop so an await resumption cannot miss the initiator's loss.
+            // actor hop and propagate it to the handoff worker synchronously.
+            // A queued physical writer cannot depend on that actor hop.
             cancellation.cancel()
             Task { @MainActor [weak self] in self?.cancel(ordinal: request.ordinal, caller: caller) }
         }

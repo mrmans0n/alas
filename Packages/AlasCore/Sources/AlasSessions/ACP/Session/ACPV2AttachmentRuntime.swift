@@ -8,6 +8,7 @@ import AlasPlatform
 public final class ACPV2AttachmentRuntime {
     public enum Failure: Error, Equatable, Sendable {
         case invalidAttachment, invalidHandle, notReady, invalidated, ownershipLost
+        case decisions(message: String)
         case updates(ACPV2SessionUpdateOwner.Failure)
         case inbound(ACPV2InboundReceiptOwner.Failure)
     }
@@ -20,6 +21,21 @@ public final class ACPV2AttachmentRuntime {
         fileprivate let epoch: UUID
         fileprivate let delivery: ACPV2InboundDelivery
     }
+    public typealias ResponseAvailability = ACPV2ResponseOwner.ResponseAvailability
+    public struct InboundEvent: Sendable {
+        public let attachmentID: UUID
+        public let record: ACPV2InboundLedgerRecord
+        public let currentSource: ACPV2InboundDelivery.Source
+        public let receiptID: UUID
+        public let isDiagnostic: Bool
+        public let request: Request?
+    }
+    public struct LifecycleEvent: Sendable {
+        public let attachmentID: UUID
+        public let status: Status
+    }
+    public var attachmentID: UUID { epoch }
+
     public struct Journals: Sendable {
         public let updates: any ACPV2UpdateJournalPersisting
         public let inbound: any ACPV2InboundLedgerPersisting
@@ -83,6 +99,8 @@ public final class ACPV2AttachmentRuntime {
     private let journals: Journals
     private let isCurrent: @MainActor () -> Bool
     private let onRequest: @MainActor (Request) -> Void
+    private let onInbound: (@MainActor (InboundEvent) throws -> Void)?
+    private let onLifecycleChange: (@MainActor (LifecycleEvent) -> Void)?
     private let onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)?
     private var active = true
     private var started = false
@@ -107,7 +125,9 @@ public final class ACPV2AttachmentRuntime {
 
     public init(sessionId: String, upstreamSessionId: String, attachment: Attachment, fence: ACPSessionLeaseFence,
         journals: Journals, isCurrent: @escaping @MainActor () -> Bool, onRequest: @escaping @MainActor (Request) -> Void,
-        onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil) throws {
+        onCanonicalChange: (@MainActor (ACPV2SessionUpdateOwner.CanonicalPublication) throws -> Void)? = nil,
+        onInbound: (@MainActor (InboundEvent) throws -> Void)? = nil,
+        onLifecycleChange: (@MainActor (LifecycleEvent) -> Void)? = nil) throws {
         guard !sessionId.isEmpty, !upstreamSessionId.isEmpty, sessionId.utf8.elementsEqual(fence.sessionId.utf8),
               attachment.localSessionId.map({ $0.utf8.elementsEqual(sessionId.utf8) }) ?? true else { throw Failure.invalidAttachment }
         self.sessionId = sessionId
@@ -118,6 +138,8 @@ public final class ACPV2AttachmentRuntime {
         self.isCurrent = isCurrent
         self.onRequest = onRequest
         self.onCanonicalChange = onCanonicalChange
+        self.onInbound = onInbound
+        self.onLifecycleChange = onLifecycleChange
         let stream = AsyncStream<Status>.makeStream(bufferingPolicy: .bufferingNewest(1))
         observations = stream.stream
         continuation = stream.continuation
@@ -139,6 +161,7 @@ public final class ACPV2AttachmentRuntime {
         guard !started, current() else { return false }
         started = true
         setStatus(.restoring)
+        guard current() else { return false }
         guard updateOwner.start(attachment.updateInput) else { finish(.blocked(.invalidAttachment))
         return false }
         switch attachment.client {
@@ -197,6 +220,16 @@ public final class ACPV2AttachmentRuntime {
         let result = try await updateOwner.submit(id: id, localRowID: localRowID, params: params, operationKey: operationKey)
         try requireReady()
         return result
+    }
+
+    /// Inspection is an observation only. Respond performs its own fresh
+    /// origin reconciliation and insert-only durable attempt gate.
+    public func inspectResponse(to request: Request) async throws -> ResponseAvailability {
+        guard current(), request.epoch == epoch, request.record.streamID == inboundStream?.id,
+              offered.contains(request.record.ordinal), let responseOwner else { throw Failure.invalidHandle }
+        let value = try await responseOwner.inspect(request: request.record, delivery: request.delivery)
+        guard current() else { throw Failure.invalidated }
+        return value
     }
 
     public func respond(to request: Request, intentID: UUID, attemptID: UUID, operationKey: ACPV2ReplyOperationKey,
@@ -267,10 +300,22 @@ public final class ACPV2AttachmentRuntime {
     }
     private func retained(_ delivery: ACPV2InboundDelivery, receipt: ACPV2InboundLedgerReceipt) throws {
         guard current(), receipt.record.streamID == inboundStream?.id else { throw Failure.invalidated }
-        if diagnostics.remove(delivery.receiptID) != nil { return }
-        guard let header = try? delivery.decodeHeader(), header.id != nil,
-              offered.insert(receipt.record.ordinal).inserted else { return }
-        onRequest(.init(record: receipt.record, epoch: epoch, delivery: delivery))
+        let diagnostic = diagnostics.remove(delivery.receiptID) != nil
+        let header = try? delivery.decodeHeader()
+        let request: Request?
+        if !diagnostic, header?.id != nil, offered.insert(receipt.record.ordinal).inserted {
+            request = .init(record: receipt.record, epoch: epoch, delivery: delivery)
+        } else { request = nil }
+        do {
+            try onInbound?(.init(attachmentID: epoch, record: receipt.record, currentSource: delivery.source,
+                receiptID: delivery.receiptID, isDiagnostic: diagnostic, request: request))
+        } catch {
+            finish(.blocked(.decisions(message: String(describing: error))))
+            throw error
+        }
+        guard current() else { throw Failure.invalidated }
+        if let request { onRequest(request) }
+        guard current() else { throw Failure.invalidated }
     }
     private func synchronize() {
         guard active, started else { return }
@@ -279,15 +324,16 @@ public final class ACPV2AttachmentRuntime {
         setStatus(updateOwner.status == .live && inboundOwner.status == .receiving && responseOwner != nil ? .ready : .restoring)
     }
     private func sourceEnded() { if active { finish(.observationLost) } }
-    private func setStatus(_ status: Status) {
+    private func setStatus(_ status: Status, notifyLifecycle: Bool = true) {
         guard self.status != status else { return }
         self.status = status
         continuation.yield(status)
+        if notifyLifecycle { onLifecycleChange?(.init(attachmentID: epoch, status: status)) }
     }
     private func finish(_ status: Status) {
         guard active else { return }
         active = false
-        setStatus(status)
+        setStatus(status, notifyLifecycle: false)
         responseOwner?.stop()
         inboundOwner.stop()
         updateOwner.stop()
@@ -295,5 +341,6 @@ public final class ACPV2AttachmentRuntime {
         for task in monitors { task.cancel() }
         input?.finish()
         continuation.finish()
+        onLifecycleChange?(.init(attachmentID: epoch, status: status))
     }
 }
