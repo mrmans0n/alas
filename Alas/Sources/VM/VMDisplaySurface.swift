@@ -12,10 +12,14 @@ import Virtualization
 /// `onBlockedClick`.
 ///
 /// `onUserInput` hears, at most once a second, that a key or mouse event reached the guest.
+///
+/// `capturesSystemKeys` gives the guest system shortcuts such as Command-Tab and the screenshot
+/// keys; otherwise they stay with the Mac.
 struct VMDisplaySurface: NSViewRepresentable {
     let view: VZVirtualMachineView
     let virtualMachine: VZVirtualMachine?
     var allowsInput = true
+    var capturesSystemKeys = false
     var onBlockedClick: () -> Void = {}
     var onUserInput: (() -> Void)?
 
@@ -72,6 +76,9 @@ struct VMDisplaySurface: NSViewRepresentable {
             view.virtualMachine = virtualMachine
         }
         guard view.superview === container else { return }
+        if view.capturesSystemKeys != capturesSystemKeys {
+            view.capturesSystemKeys = capturesSystemKeys
+        }
         if shield.superview !== container {
             shield.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(shield, positioned: .above, relativeTo: view)

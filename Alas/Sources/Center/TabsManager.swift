@@ -1202,7 +1202,6 @@ final class TabsManager {
     func vmView(tabID: TabID) -> VZVirtualMachineView {
         if let view = vmViews[tabID] { return view }
         let view = VZVirtualMachineView()
-        view.capturesSystemKeys = true
         view.automaticallyReconfiguresDisplay = true
         vmViews[tabID] = view
         return view

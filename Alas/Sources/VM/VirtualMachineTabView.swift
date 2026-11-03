@@ -474,7 +474,7 @@ struct VirtualMachineTabView: View {
             let current = driver(at: Date())
             VMDisplaySurface(
                 view: state.tabs.vmView(tabID: tab.id), virtualMachine: ownVM?.vm,
-                allowsInput: VMDriver.allowsViewInput(current),
+                allowsInput: VMDriver.allowsViewInput(current), capturesSystemKeys: current == .user,
                 onBlockedClick: { lookOnlyHint = (lookOnlyHint ?? 0) + 1 },
                 onUserInput: { [state, recordID] in state.noteVMUserInput(recordID: recordID) }
             )
