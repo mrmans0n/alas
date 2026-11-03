@@ -563,18 +563,22 @@ struct ACPMessageTests {
 
 extension ACPMessageTests {
     @Test("a plan document row shows its Markdown and its file, and nothing once hidden", arguments: [
-        (ACPPlanDocument.markdownFixture, ACPPlanDocument.Display(markdown: "# Plan", showsFile: false, filePath: nil)),
-        (.fileFixture, .init(markdown: nil, showsFile: true, filePath: "/p.md")),
+        (ACPPlanDocument.markdownFixture, ACPPlanDocument.Display(markdown: "# Plan", showsFile: false, filePath: nil), nil),
+        (.fileFixture, .init(markdown: nil, showsFile: true, filePath: "/p.md"), "/p.md"),
         (ACPPlanDocument(planId: "plan-mode:t", kind: .markdown, markdown: "# A", file: .init(path: "/a.md", sha256: "s")),
-         .init(markdown: "# A", showsFile: true, filePath: "/a.md")),
+         .init(markdown: "# A", showsFile: true, filePath: "/a.md"), "/a.md"),
         // A peer's file plan arrives without its host path.
         (ACPPlanDocument(planId: "p", kind: .file, markdown: nil, file: nil),
-         .init(markdown: nil, showsFile: true, filePath: nil)),
-        (.hiddenFixture, nil),
-        (.markdown("p", ""), nil),
-    ] as [(ACPPlanDocument, ACPPlanDocument.Display?)])
-    func display(document: ACPPlanDocument, expected: ACPPlanDocument.Display?) {
+         .init(markdown: nil, showsFile: true, filePath: nil), nil),
+        // Shown, but never opened: the plan file reader would refuse it.
+        (ACPPlanDocument(planId: "p", kind: .file, markdown: nil, file: .init(path: "/a/../etc/b.md", sha256: nil)),
+         .init(markdown: nil, showsFile: true, filePath: "/a/../etc/b.md"), nil),
+        (.hiddenFixture, nil, nil),
+        (.markdown("p", ""), nil, nil),
+    ] as [(ACPPlanDocument, ACPPlanDocument.Display?, String?)])
+    func display(document: ACPPlanDocument, expected: ACPPlanDocument.Display?, openable: String?) {
         #expect(document.display == expected)
+        #expect(document.display?.openableFilePath == openable)
         #expect(ACPTranscriptVisibleRow.isHidden(.planDocument(id: UUID(), document)) == (expected == nil))
     }
 

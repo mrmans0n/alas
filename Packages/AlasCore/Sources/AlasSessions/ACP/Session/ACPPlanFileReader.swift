@@ -62,6 +62,15 @@ public struct ACPPlanFileReader: Sendable {
 
     /// Opens without following a final symlink and checks the opened file,
     /// so a swap between the check and the read cannot redirect it.
+    ///
+    /// `O_NOFOLLOW` covers only the last path component: a symlink in a
+    /// parent directory is still followed. That is acceptable because this
+    /// read is no containment boundary. The agent already chooses the
+    /// absolute path, usually outside the worktree, so a parent symlink
+    /// reaches nothing it could not name directly; the read stays bounded to
+    /// a regular file of at most `maxBytes`, its bytes only decide the local
+    /// card's file state and are never sent anywhere, and an approval
+    /// approves the inline plan text, not the file.
     /// Anything but a regular file (a FIFO would block a plain read) reports
     /// as a directory, which the reader maps to not-a-regular-file.
     static func readLocal(path: String, maxBytes: Int) throws -> RemoteReadResult {

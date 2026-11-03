@@ -473,7 +473,7 @@ struct ACPPlanDocumentCard: View {
     }
 
     private var openAction: (() -> Void)? {
-        guard let onOpenFile, let path = display.filePath else { return nil }
+        guard let onOpenFile, let path = display.openableFilePath else { return nil }
         return { onOpenFile(path) }
     }
 }

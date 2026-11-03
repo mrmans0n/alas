@@ -83,6 +83,12 @@ extension ACPPlanDocument {
             self.isUnderReview = isUnderReview
         }
 
+        /// `filePath` when "Open plan file" may open it: the agent names the
+        /// path, so only one the plan file reader would read.
+        public var openableFilePath: String? {
+            filePath.flatMap { ACPPlanFileReader.isPlanPath($0) ? $0 : nil }
+        }
+
         public static let underReviewLabel = "Plan · under review below"
         static let underReview = Display(markdown: nil, showsFile: false, filePath: nil, isUnderReview: true)
     }
