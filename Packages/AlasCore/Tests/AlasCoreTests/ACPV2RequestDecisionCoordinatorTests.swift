@@ -6,43 +6,54 @@ import AlasCore
 
 @MainActor
 struct ACPV2RequestDecisionCoordinatorTests {
-    @Test(arguments: ["unanswered", "beforeHandoff", "written", "writtenThenCancelled"])
+    @Test(.timeLimit(.minutes(1)), arguments: ["unanswered", "beforeHandoff", "written", "writtenThenCancelled"])
     func stdioIDReuseFollowsTransportAuthorityWhileResponsePersistenceIsPending(phase: String) async throws {
         let wasWritten = phase.hasPrefix("written")
         let fixture = try await DecisionFixture(hold: wasWritten ? "observation" : (phase == "beforeHandoff" ? "attempt" : nil))
-        defer { fixture.stop()
+        let events = AsyncStream<ACPV2RequestDecisionCoordinator.Event>.makeStream()
+        fixture.control.onEvent = { events.continuation.yield($0) }
+        defer { events.continuation.finish()
+        fixture.stop()
         Task { await fixture.journal.release() } }
+        var incoming = events.stream.makeAsyncIterator()
         fixture.permission()
-        let first = try await fixture.firstHandle()
-        try await eventually { await MainActor.run { fixture.runtime.status == .ready } }
+        guard case .offer(let first)? = await incoming.next() else { Issue.record("Missing initial offer")
+        return }
+        if fixture.runtime.status != .ready {
+            for await status in fixture.runtime.observations { if status == .ready { break } }
+        }
+        try #require(fixture.runtime.status == .ready)
         let finished = Mutex(false)
         var sending: Task<ACPV2ResponseOwner.Receipt, Error>?
         defer { sending?.cancel() }
         if phase != "unanswered" {
             sending = Task { defer { finished.withLock { $0 = true } }
             return try await fixture.coordinator.decide(first, decision: .selectPermission(optionID: "allow")) }
-            try await eventually { await fixture.journal.reached }
+            await fixture.journal.waitUntilReached()
         }
         fixture.permission()
-        try await eventually { fixture.consumed.value.withLock { $0 } == 2 }
         if wasWritten {
             #expect(!finished.withLock { $0 })
-            try await eventually { await MainActor.run { fixture.control.handles.count == 2 } }
-            let successor = fixture.control.handles[1]
+            guard case .offer(let successor)? = await incoming.next() else { Issue.record("Missing reused-ID offer")
+            return }
+            #expect(fixture.consumed.value.withLock { $0 } == 2)
             #expect(successor.record.receiptID != first.record.receiptID && successor.record.ordinal != first.record.ordinal)
             if phase == "writtenThenCancelled" {
                 fixture.emit("$/cancel_request", params: .object(["requestId": .number("7")]))
-                try await eventually { await MainActor.run { fixture.control.events.contains { event in
-                    if case .response(let handle, .success(let receipt)) = event { return handle.record == successor.record && receipt.value.fact == .stdio(.written) }
-                    return false
-                } } }
+                var response: Result<ACPV2ResponseOwner.Receipt, any Error>?
+                while let event = await incoming.next() {
+                    if case .response(let handle, let result) = event, handle.record == successor.record { response = result
+                    break }
+                }
+                #expect(try #require(response).get().value.fact == .stdio(.written))
             } else { #expect(try await fixture.coordinator.decide(successor, decision: .cancelPermission).value.fact == .stdio(.written)) }
             #expect(fixture.transport.frames.withLock { $0.count } == 2)
             await fixture.journal.release()
             #expect(try await #require(sending).value.value.fact == .stdio(.written))
         } else {
-            try await eventually { await MainActor.run { fixture.control.events.contains { if case .withdrawn(let handle) = $0 { return handle.record == first.record }
-            return false } } }
+            guard case .withdrawn(let handle)? = await incoming.next() else { Issue.record("Missing overlap withdrawal")
+            return }
+            #expect(handle.record == first.record)
             #expect(fixture.control.handles.count == 1)
             await #expect(throws: (any Error).self) { try await fixture.coordinator.decide(first, decision: .cancelPermission) }
             await fixture.journal.release()

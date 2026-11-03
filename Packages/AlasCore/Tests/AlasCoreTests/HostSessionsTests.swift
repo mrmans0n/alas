@@ -366,26 +366,31 @@ struct HostSessionsTests {
 
     /// A Remote client whose prompt fails hears why with the rejection, as
     /// the sessionConfig saying so may come later or not at all.
-    @Test func aRejectedRemotePromptCarriesItsReason() async throws {
+    @Test(.timeLimit(.minutes(1))) func aRejectedRemotePromptCarriesItsReason() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
+        var attaching: Task<Void, Never>?
+        fixture.core.sessionAttachScheduler = { manager, id in attaching = Task { await manager.attach(to: id, freshlyCreated: true) } }
+        defer { attaching?.cancel() }
         let sessions = fixture.host.sessions
         let id = try await sessions.create(.worktree(fixture.ref), agentID: "gemini", caller: .app).id
+        await (try #require(attaching)).value
         let manager = try #require(fixture.core.sessionManagers.values.first)
-        try await eventually { await manager.liveSession(for: id)?.agentState == .ready }
-        // The gateway refuses a non-writer's prompt at once, with no reason.
-        try await eventually { await sessions.list().first { $0.id == id }?.isWriter == true }
+        #expect(manager.liveSession(for: id)?.agentState == .ready)
+        #expect(sessions.isWriter(id))
         fixture.agent.script(method: "session/prompt") { _ in throw JSONRPCError(code: -32603, message: "boom", data: nil) }
-        let sent = Mutex<[RemoteServerMessage]>([])
-        let gateway = RemoteSessionGateway(host: fixture.host) { message in sent.withLock { $0.append(message) } }
-        defer { gateway.close() }
-
+        let responses = AsyncStream<RemoteServerMessage>.makeStream()
+        let gateway = RemoteSessionGateway(host: fixture.host) { responses.continuation.yield($0) }
+        defer { gateway.close()
+        responses.continuation.finish() }
         await gateway.handle(.sendPrompt(sessionId: id, text: "hi", attachments: [], intent: "auto"))
-        try await eventually {
-            sent.withLock {
-                $0.contains { if case .promptRejected(id, let reason) = $0 { reason?.hasPrefix("prompt failed:") == true } else { false } }
+        for await message in responses.stream {
+            if case .promptRejected(let rejectedID, let reason) = message, rejectedID == id {
+                #expect(reason?.hasPrefix("prompt failed:") == true)
+                return
             }
         }
+        Issue.record("Missing prompt rejection")
     }
 
     @Test(arguments: [

@@ -378,6 +378,12 @@ actor ResponseJournal: ACPV2ResponseLedgerPersisting {
     let corruptFact: Bool
     private(set) var reached = false
     private var waiter: CheckedContinuation<Void, Never>?
+    private let reachedEvents = AsyncStream<Void>.makeStream()
+    func waitUntilReached() async {
+        if reached { return }
+        var incoming = reachedEvents.stream.makeAsyncIterator()
+        _ = await incoming.next()
+    }
     init(base: ACPSessionPersistence, hold: String? = nil, fail: String? = nil, corruptFact: Bool = false) { self.base = base
     self.hold = hold
     self.fail = fail
@@ -387,6 +393,7 @@ actor ResponseJournal: ACPV2ResponseLedgerPersisting {
     private func pause(_ phase: String) async {
         guard hold == phase, !reached else { return }
         reached = true
+        reachedEvents.continuation.yield(())
         await withCheckedContinuation { waiter = $0 }
     }
     private func check(_ phase: String) throws { if fail == phase { throw ACPV2ResponseOwner.Failure.persistence(message: "injected") } }
