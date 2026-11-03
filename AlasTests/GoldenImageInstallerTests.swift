@@ -233,6 +233,22 @@ struct GoldenImageInstallerTests {
         LeaseCase(name: "no lease for the MAC", mac: "a2:04:5e:00:01:03", expected: nil),
     ]
 
+    @Test(
+        "a base image keeps the macOS version it installed; one installed before that has none",
+        arguments: [(27, 0, 0, "27.0"), (27, 2, 0, "27.2"), (27, 2, 1, "27.2.1")]
+    )
+    func osVersionIsKeptBesideTheBaseImage(major: Int, minor: Int, patch: Int, text: String) throws {
+        let bundle = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        #expect(GoldenImageInstaller.osVersion(of: bundle) == nil)
+
+        try Data(GoldenImageInstaller.osVersionText(major: major, minor: minor, patch: patch).utf8)
+            .write(to: GoldenImageInstaller.osVersionURL(of: bundle))
+
+        #expect(GoldenImageInstaller.osVersion(of: bundle) == text)
+    }
+
     @Test("guest IP from the host's DHCP leases", arguments: leaseCases)
     func leasedIP(_ c: LeaseCase) {
         #expect(GoldenProvisioner.leasedIP(forMAC: c.mac, leases: Self.leases) == c.expected)

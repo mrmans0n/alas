@@ -1699,7 +1699,8 @@ final class WorktreeVMManager {
             let build = golden.url.lastPathComponent
             let id = Self.goldenIDPrefix + build
             bundles.append(VMBundleSummary(
-                id: id, kind: .golden, guest: .macOS, name: build, worktreeID: nil, url: golden.url,
+                id: id, kind: .golden, guest: .macOS, name: build,
+                osVersion: GoldenImageInstaller.osVersion(of: golden.url), worktreeID: nil, url: golden.url,
                 runningHere: isBusyHere(id), runningElsewhere: elsewhere(records.first { $0.id == id }?.runOwner),
                 isOrphan: false, leftovers: [], clones: clones(of: build)))
         }

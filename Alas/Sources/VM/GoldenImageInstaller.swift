@@ -249,6 +249,10 @@ final class GoldenImageInstaller: ObservableObject {
             let partial = goldenRoot.appendingPathComponent(build + Self.partialSuffix, isDirectory: true)
             partialBundle = partial
             let bundle = try createBundle(at: partial, hardwareModel: requirements.hardwareModel)
+            // Only the restore image knows the marketing version; the bundle keeps it for Settings.
+            let version = image.operatingSystemVersion
+            try? Data(Self.osVersionText(major: version.majorVersion, minor: version.minorVersion, patch: version.patchVersion).utf8)
+                .write(to: Self.osVersionURL(of: partial))
             let defaults = VMConfigurationFactory.defaultResources(
                 hostCPUs: ProcessInfo.processInfo.processorCount,
                 hostMemory: ProcessInfo.processInfo.physicalMemory)
@@ -388,6 +392,23 @@ final class GoldenImageInstaller: ObservableObject {
             }
         }
         return destination
+    }
+
+    /// The macOS version a base image installed, beside its disk. Older base images have none.
+    nonisolated static func osVersionURL(of bundleURL: URL) -> URL {
+        bundleURL.appendingPathComponent("os-version")
+    }
+
+    /// "27.0", "27.2", "27.2.1": the minor version always, the patch only when there is one.
+    nonisolated static func osVersionText(major: Int, minor: Int, patch: Int) -> String {
+        patch > 0 ? "\(major).\(minor).\(patch)" : "\(major).\(minor)"
+    }
+
+    /// The macOS version base image `bundleURL` installed; nil for one installed before it was kept.
+    nonisolated static func osVersion(of bundleURL: URL) -> String? {
+        guard let data = try? Data(contentsOf: osVersionURL(of: bundleURL)) else { return nil }
+        let text = String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? nil : text
     }
 
     private func createBundle(at url: URL, hardwareModel: VZMacHardwareModel) throws -> VMBundle {
